@@ -72,7 +72,7 @@ Usage
     scripts/test262_subset.py --root vendor/test262 --all-features
     scripts/test262_subset.py --root vendor/test262 --dir staging   # TC39 proposals (#5299)
 
-See test-compat/test262/README.md.
+See tests/compat/test262/README.md.
 """
 
 from __future__ import annotations
@@ -92,7 +92,7 @@ from pathlib import Path
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-TEST262_DIR = REPO_ROOT / "test-compat" / "test262"
+TEST262_DIR = REPO_ROOT / "tests/compat" / "test262"
 PREAMBLE = TEST262_DIR / "preamble.js"
 # Node host shim: runs an assembled case as a *global script* (via
 # vm.runInThisContext) rather than a CommonJS module, matching a real Test262

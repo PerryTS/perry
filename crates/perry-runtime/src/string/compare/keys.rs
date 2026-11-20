@@ -188,7 +188,7 @@ mod tests_sso_helpers {
         for stored in [
             JSValue::undefined(),
             JSValue::null(),
-            JSValue::int32(42),
+            JSValue::number(f64::from(42)),
             JSValue::bool(true),
         ] {
             unsafe {
@@ -263,7 +263,10 @@ mod tests_sso_helpers {
                 js_string_key_bytes(heap, &mut buf),
                 Some(b"longish".as_ref())
             );
-            assert_eq!(js_string_key_bytes(JSValue::int32(7), &mut buf), None);
+            assert_eq!(
+                js_string_key_bytes(JSValue::number(f64::from(7)), &mut buf),
+                None
+            );
         }
     }
 }

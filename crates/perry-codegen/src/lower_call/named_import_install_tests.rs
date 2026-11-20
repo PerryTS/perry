@@ -34,6 +34,7 @@ fn compile_lookup(module_name: &str, property: &str) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let bytes = compile_module(
         &module,
@@ -143,6 +144,7 @@ fn native_package_reexport_emits_a_value_getter() {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,

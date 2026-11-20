@@ -82,9 +82,9 @@ mod tests {
                 js_async_hooks_execution_async_resource().to_bits(),
                 resource.get_nanbox_f64().to_bits()
             );
-            crate::exception::js_throw(41.0)
+            crate::exception::test_throw(41.0)
         });
-        assert_eq!(outcome.unwrap_err(), 41.0);
+        assert_eq!(outcome.unwrap_err().value(), 41.0);
         assert_eq!(execution_async_id_u64(), 0);
         assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
         assert_eq!(crate::async_context::get_store(token), Some(22.0));
@@ -191,7 +191,7 @@ mod tests {
         _this: crate::closure::JsThis,
         _async_id: f64,
     ) -> f64 {
-        crate::exception::js_throw(73.0)
+        crate::exception::test_throw(73.0)
     }
 
     fn enable_throwing_lifecycle_hook(before_phase: bool) {
@@ -251,7 +251,7 @@ mod tests {
                 TAG_UNDEFINED_F64
             });
 
-            assert_eq!(outcome.unwrap_err().to_bits(), 73.0f64.to_bits());
+            assert_eq!(outcome.unwrap_err().value().to_bits(), 73.0f64.to_bits());
             assert_eq!(completion_ran, !before_phase);
             assert_eq!(execution_async_id_u64(), 0);
             assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
@@ -267,9 +267,9 @@ mod tests {
         let ids = init_resource("double-faulting-scope", TAG_UNDEFINED_F64, true);
         enable_throwing_lifecycle_hook(false);
 
-        let outcome = try_run_resource_scope(ids, || crate::exception::js_throw(41.0));
+        let outcome = try_run_resource_scope(ids, || crate::exception::test_throw(41.0));
 
-        assert_eq!(outcome.unwrap_err().to_bits(), 41.0f64.to_bits());
+        assert_eq!(outcome.unwrap_err().value().to_bits(), 41.0f64.to_bits());
         assert_eq!(execution_async_id_u64(), 0);
         assert!(EXECUTION_STACK.with(|stack| stack.borrow().is_empty()));
         reset_for_tests();

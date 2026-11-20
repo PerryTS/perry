@@ -228,6 +228,7 @@ pub fn scan_stmt_for_user_class_instances(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_stmt_for_user_class_instances(s, user_classes);
@@ -323,6 +324,7 @@ pub fn fix_class_field_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 fix_class_field_stmt(s, class_field_natives, user_classes, current_class);
@@ -627,7 +629,7 @@ pub fn fix_class_field_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_class_field_expr(value, class_field_natives, user_classes, current_class);
             }
         }
@@ -719,6 +721,7 @@ pub fn scan_stmt_for_field_native_instances(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_stmt_for_field_native_instances(s, field_instances);
@@ -789,6 +792,7 @@ pub fn scan_stmt_for_native_instances(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_stmt_for_native_instances(s, local_names, local_ids);
@@ -883,6 +887,7 @@ pub fn fix_native_instance_stmt_with_locals(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 fix_native_instance_stmt_with_locals(s, native_instances, local_id_instances);
@@ -1172,7 +1177,7 @@ pub fn fix_native_instance_expr_with_locals(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_native_instance_expr_with_locals(value, native_instances, local_id_instances);
             }
         }

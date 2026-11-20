@@ -378,3 +378,61 @@ fn explicit_commonjs_entry_gets_bindings_without_source_tokens() {
         assert_eq!(prepared.was_cjs_wrapped, wrapped, "{filename}");
     }
 }
+
+#[test]
+fn commonjs_worker_entries_survive_preparation_and_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write(
+        &root,
+        "main.js",
+        "const { Worker } = require('node:worker_threads'); new Worker('./a.cjs');",
+    );
+    write(
+        &root,
+        "a.cjs",
+        "const { Worker: Child } = require('worker_threads'); new Child('./b.cjs');",
+    );
+    write(
+        &root,
+        "b.cjs",
+        "require('node:worker_threads').parentPort.postMessage('leaf');",
+    );
+    let mut ctx = fixture_ctx(&root, 0);
+    collect_modules(
+        &root.join("main.js"),
+        &mut ctx,
+        &mut HashSet::new(),
+        OutputFormat::Text,
+        None,
+        &mut 1,
+        false,
+        &VerboseProgress::new(OutputFormat::Text, 0),
+        None,
+    )
+    .unwrap();
+    for (importer, target) in [("main.js", "a.cjs"), ("a.cjs", "b.cjs")] {
+        let target = root.join(target);
+        assert!(
+            ctx.native_modules.contains_key(&target),
+            "missing {}",
+            target.display()
+        );
+        assert!(ctx
+            .worker_url_entries
+            .iter()
+            .any(|(_, path)| path == &target));
+        let module = &ctx.native_modules[&root.join(importer)];
+        assert!(module
+            .imports
+            .iter()
+            .any(|edge| { edge.resolved_path.as_deref() == target.to_str() && edge.is_dynamic }));
+        assert!(format!("{module:?}").contains("NewDynamic"));
+    }
+    let (fresh, _, _) = collect_twice(&root, 0, false);
+    for workers in [0, 1, 4] {
+        let (reused, _, left) = collect_twice(&root, workers, true);
+        assert_eq!(reused, fresh);
+        assert_eq!(left, 0);
+    }
+}

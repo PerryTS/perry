@@ -43,7 +43,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         imported_classes: Vec::new(),
         constructor_param_counts: Default::default(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -75,11 +74,14 @@ fn empty_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -136,7 +138,12 @@ fn key_changes_with_gc_effects_table() {
             ("other", perry_gc_effects::Class::Reenters, true),
         ]
         .into_iter()
-        .map(|(sym, class, throws)| (sym.to_string(), perry_gc_effects::Entry { class, throws }))
+        .map(|(sym, class, throws)| {
+            (
+                sym.to_string(),
+                perry_gc_effects::Entry::unknown(class, throws),
+            )
+        })
         .collect();
         std::sync::Arc::new(perry_codegen::GcEffects::from_sidecar(&table))
     };
@@ -876,9 +883,9 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
         cache.lookup_path_with_ffi(key).is_none(),
         "an entry without its seed sidecar must miss"
     );
-    let line = perry_codegen::encode_static_seed(
+    let seed = (
         0x1000_0042,
-        &perry_codegen::BirthShape {
+        perry_codegen::BirthShape {
             keys: b"u\0v\0".to_vec(),
             key_count: 2,
             live: 2,
@@ -891,14 +898,64 @@ fn static_seeds_round_trip_and_an_entry_without_them_misses() {
             attrs: Vec::new(),
         },
     );
-    cache.store_static_seeds(key, &[line.as_str()]);
+    assert!(cache.store_static_seeds(key, std::slice::from_ref(&seed)));
     let (_, _, seeds) = cache.lookup_path_with_ffi(key).expect("complete entry");
-    assert_eq!(seeds, vec![line.clone()]);
-    let (id, shape) = perry_codegen::decode_static_seed(&seeds[0]).expect("decodes");
-    assert_eq!(
-        (id, shape.keys.as_slice(), shape.key_count, shape.rep),
-        (0x1000_0042, &b"u\0v\0"[..], 2, 0b0101)
-    );
+    assert_eq!(seeds, vec![seed]);
+}
+
+/// A seed sidecar that does not decode (truncated, a flipped byte) makes the
+/// entry unreadable, and an unreadable entry is a miss like a missing one.
+#[test]
+fn undecodable_seed_sidecar_is_a_miss() {
+    let dir = tempdir().unwrap();
+    let cache = ObjectCache::new(dir.path(), "test-target", true);
+    let key = 0x1165_3003;
+    cache.store_ffi_manifest(key, &[]);
+    cache.store(key, b"object bytes");
+    let sidecar = dir
+        .path()
+        .join("objects")
+        .join("test-target")
+        .join(format!("{key:016x}.seeds"));
+    for damaged in [
+        "2147483864 2 2 6a00",
+        "2147483864 2 2 6a007465787400 0x\u{1} -\n",
+    ] {
+        fs::write(&sidecar, damaged).unwrap();
+        assert!(cache.lookup_path_with_ffi(key).is_none(), "{damaged:?}");
+    }
+    assert_eq!(cache.hits(), 0);
+    assert_eq!(cache.misses(), 2);
+}
+
+/// A seed the sidecar line cannot carry (here a typed layout) is never
+/// stored as another seed: the store refuses, removes an older sidecar, and
+/// the entry is a miss.
+#[test]
+fn seed_without_an_exact_sidecar_line_is_not_stored() {
+    let dir = tempdir().unwrap();
+    let cache = ObjectCache::new(dir.path(), "test-target", true);
+    let key = 0x1165_3004;
+    let plain = perry_codegen::BirthShape {
+        keys: b"u\0".to_vec(),
+        key_count: 1,
+        live: 1,
+        proto: perry_codegen::BirthProto::Literal,
+        typed: None,
+        rep: 0,
+        constfn: Vec::new(),
+        private: Vec::new(),
+        brands: Vec::new(),
+        attrs: Vec::new(),
+    };
+    cache.store_ffi_manifest(key, &[]);
+    assert!(cache.store_static_seeds(key, &[(7, plain.clone())]));
+    cache.store(key, b"object bytes");
+    assert!(cache.lookup_path_with_ffi(key).is_some());
+    let mut attributed = plain;
+    attributed.attrs = vec![1];
+    assert!(!cache.store_static_seeds(key, &[(7, attributed)]));
+    assert!(cache.lookup_path_with_ffi(key).is_none());
 }
 
 /// A cache entry's stable body symbol must survive the cold write and warm
@@ -924,16 +981,11 @@ fn constfn_body_sidecar_survives_a_warm_cache_hit_without_publishing_it() {
         brands: Vec::new(),
         attrs: Vec::new(),
     };
-    let line = perry_codegen::encode_static_seed(0x1000_0044, &shape);
     cache.store_ffi_manifest(key, &[]);
-    cache.store_static_seeds(key, &[line.as_str()]);
+    assert!(cache.store_static_seeds(key, &[(0x1000_0044, shape.clone())]));
     cache.store(key, b"object bytes");
-    let (_, _, warm_lines) = cache.lookup_path_with_ffi(key).expect("warm hit");
-    assert_eq!(warm_lines, vec![line]);
-    assert_eq!(
-        perry_codegen::decode_static_seed(&warm_lines[0]),
-        Some((0x1000_0044, shape))
-    );
+    let (_, _, warm_seeds) = cache.lookup_path_with_ffi(key).expect("warm hit");
+    assert_eq!(warm_seeds, vec![(0x1000_0044, shape)]);
     assert_eq!(perry_codegen::STATIC_SEED_FORMAT, "3");
 }
 
@@ -1454,4 +1506,16 @@ fn namespace_owner_is_part_of_the_object_key() {
         .namespace_source_prefixes
         .insert("ns".into(), "owner".into());
     assert_ne!(before, compute_object_cache_key(&options, 1, "0.5.156"));
+}
+
+#[test]
+fn key_changes_with_module_stack_source_path() {
+    let mut a = empty_opts();
+    let mut b = empty_opts();
+    a.app_metadata.module_source_path = Some("/one/dependency.mts".into());
+    b.app_metadata.module_source_path = Some("/two/dependency.mts".into());
+    assert_ne!(
+        compute_object_cache_key(&a, 1, "0.5.156"),
+        compute_object_cache_key(&b, 1, "0.5.156")
+    );
 }

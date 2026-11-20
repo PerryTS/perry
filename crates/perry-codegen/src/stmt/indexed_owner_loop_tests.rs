@@ -5,6 +5,7 @@ fn get(id: u32) -> Expr {
 }
 fn index(a: u32, i: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(get(a)),
@@ -84,6 +85,7 @@ fn ir_with_param_type(
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     for (id, f) in &facts.numeric_functions {
         let mut def = m.functions[0].clone();
@@ -121,6 +123,7 @@ fn rmw() -> Vec<Stmt> {
             object: Box::new(get(4)),
             index: Box::new(get(5)),
             value: Box::new(bin(BinaryOp::Add, index(4, get(5)), get(2))),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -224,6 +227,7 @@ fn fractional_and_unbounded_indices_do_not_receive_an_interval_proof() {
         object: Box::new(get(1)),
         index: Box::new(bin(BinaryOp::Div, get(3), Expr::Integer(2))),
         value: Box::new(Expr::Integer(7)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })];
@@ -319,6 +323,7 @@ fn nested_numeric_loops_keep_scalar_recurrences_in_native_slots() {
                 object: Box::new(get(7)),
                 index: Box::new(get(3)),
                 value: Box::new(get(9)),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -364,6 +369,7 @@ fn certified_numeric_leaf_calls_are_emitted_without_a_call_in_the_region() {
                 type_args: vec![],
                 byte_offset: 0,
             }),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -581,6 +587,7 @@ fn string_array_length_region_rejects_stores_and_calls_before_any_body_effect() 
             object: Box::new(get(1)),
             index: Box::new(get(3)),
             value: Box::new(Expr::String("x".into())),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],

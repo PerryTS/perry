@@ -58,8 +58,7 @@ fn is_callable_value(value: f64) -> bool {
 /// Throw a `TypeError` with the given message. Never returns.
 fn throw_type_error(msg: &str) -> ! {
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// GetDisposeMethod(V, hint) — read the disposer method off a resource value.
@@ -150,16 +149,37 @@ fn bool_f64(b: bool) -> f64 {
     f64::from_bits(if b { TAG_TRUE } else { TAG_FALSE })
 }
 
-/// Allocate an empty stack instance with the given class id.
+/// Allocate an empty stack instance with the given class id, inheriting from
+/// the realm's `%DisposableStack.prototype%` / `%AsyncDisposableStack.prototype%`
+/// (which `move()` also requires). The prototype holds the reflective methods,
+/// the `disposed` getter and `@@toStringTag`; a reserved class id names no
+/// prototype of its own (#12629).
 fn alloc_stack(class_id: u32) -> *mut ObjectHeader {
     let obj = js_object_alloc(class_id, STACK_FIELD_COUNT);
     if obj.is_null() {
         return obj;
     }
-    let arr = js_array_alloc(0);
-    js_object_set_field_f64(obj, FIELD_DISPOSERS, js_nanbox_pointer(arr as i64));
-    js_object_set_field_f64(obj, FIELD_DISPOSED, bool_f64(false));
-    obj
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
+    let name = if class_id == CLASS_ID_ASYNC_DISPOSABLE_STACK {
+        "AsyncDisposableStack"
+    } else {
+        "DisposableStack"
+    };
+    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(name));
+    obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+        crate::object::prototype_chain::object_link_class_default_prototype(
+            ptr as usize,
+            proto.get_nanbox_u64(),
+        )
+    });
+    let arr = scope.root_raw_mut_ptr(js_array_alloc(0));
+    obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+        let arr = arr.get_raw_mut_ptr::<ArrayHeader>();
+        js_object_set_field_f64(ptr, FIELD_DISPOSERS, js_nanbox_pointer(arr as i64));
+        js_object_set_field_f64(ptr, FIELD_DISPOSED, bool_f64(false));
+    });
+    obj.get_raw_mut_ptr()
 }
 
 /// Resolve a NaN-boxed receiver to a stack `ObjectHeader`, or null.
@@ -197,8 +217,7 @@ fn throw_disposed() -> ! {
         b"Cannot add values to a disposed stack".as_ptr(),
         "Cannot add values to a disposed stack".len() as u32,
     );
-    let err = crate::error::js_referenceerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::reference_error(msg))
 }
 
 /// Invoke a single disposer value (a closure) with no arguments. Non-callable
@@ -404,18 +423,23 @@ pub extern "C" fn js_disposable_stack_move(stack: *mut ObjectHeader) -> f64 {
         throw_disposed();
     }
     let class_id = unsafe { (*obj).class_id };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_raw_mut_ptr(obj);
     let fresh = alloc_stack(class_id);
     if fresh.is_null() {
         return undefined();
     }
+    let fresh = scope.root_raw_mut_ptr(fresh);
     // Transfer the disposers array wholesale.
-    let arr = js_object_get_field_f64(obj, FIELD_DISPOSERS);
-    js_object_set_field_f64(fresh, FIELD_DISPOSERS, arr);
+    let arr = js_object_get_field_f64(obj.get_raw_mut_ptr(), FIELD_DISPOSERS);
+    js_object_set_field_f64(fresh.get_raw_mut_ptr(), FIELD_DISPOSERS, arr);
     // Empty + mark the source disposed (without running anything).
     let empty = js_array_alloc(0);
-    js_object_set_field_f64(obj, FIELD_DISPOSERS, js_nanbox_pointer(empty as i64));
-    js_object_set_field_f64(obj, FIELD_DISPOSED, bool_f64(true));
-    js_nanbox_pointer(fresh as i64)
+    obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
+        js_object_set_field_f64(ptr, FIELD_DISPOSERS, js_nanbox_pointer(empty as i64));
+        js_object_set_field_f64(ptr, FIELD_DISPOSED, bool_f64(true));
+    });
+    js_nanbox_pointer(fresh.get_raw_mut_ptr::<ObjectHeader>() as i64)
 }
 
 /// `asyncStack.disposeAsync()` → Promise<undefined>. Synchronously runs the
@@ -593,3 +617,29 @@ static KEEP_ASYNC_DISPOSABLE_STACK_SYMBOL_ASYNC_DISPOSE: extern "C" fn(*mut Obje
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_SUPPRESSED_ERROR_NEW: extern "C" fn(f64, f64, f64) -> f64 = js_suppressed_error_new;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A stack born by the runtime (`new`, an aliased constructor, `move()`)
+    /// inherits the realm prototype, so `instanceof`, `stack.use` read as a
+    /// value and `Object.prototype.toString` see what node sees (#12629).
+    #[test]
+    fn a_new_stack_inherits_its_intrinsic_prototype() {
+        let births: [(extern "C" fn() -> *mut ObjectHeader, &str); 2] = [
+            (js_disposable_stack_new, "DisposableStack"),
+            (js_async_disposable_stack_new, "AsyncDisposableStack"),
+        ];
+        for (birth, name) in births {
+            let want = crate::object::builtin_prototype_value(name);
+            assert_ne!(want.to_bits(), TAG_UNDEFINED, "{name}.prototype exists");
+            let stack = birth();
+            let proto = crate::object::js_object_get_prototype_of(js_nanbox_pointer(stack as i64));
+            assert_eq!(proto.to_bits(), want.to_bits(), "new {name}()");
+            let moved = js_disposable_stack_move(stack);
+            let proto = crate::object::js_object_get_prototype_of(moved);
+            assert_eq!(proto.to_bits(), want.to_bits(), "{name}.prototype.move()");
+        }
+    }
+}

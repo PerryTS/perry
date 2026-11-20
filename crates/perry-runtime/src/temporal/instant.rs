@@ -57,10 +57,7 @@ fn require_ns(v: f64) -> i128 {
 fn throw_bigint_syntax() -> ! {
     let msg = b"Cannot convert string to a BigInt";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_syntaxerror_new(msg_str);
-    crate::exception::js_throw(f64::from_bits(
-        JSValue::pointer(err_ptr as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg_str))
 }
 
 /// `ToNumber(epochMilliseconds)` then `NumberToBigInt`: a BigInt or Symbol is a

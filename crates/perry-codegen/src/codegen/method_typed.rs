@@ -43,6 +43,8 @@ pub(in crate::codegen) fn compile_typed_f64_method(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -84,6 +86,8 @@ pub(in crate::codegen) fn compile_typed_f64_receiver_method(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -130,6 +134,8 @@ pub(in crate::codegen) fn compile_typed_i1_method(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -176,6 +182,8 @@ pub(in crate::codegen) fn compile_typed_i32_method(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -222,6 +230,8 @@ pub(in crate::codegen) fn compile_typed_string_method(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();

@@ -132,6 +132,10 @@ pub(crate) fn emit_function(
             capture_flags: header.capture_flags,
             props: has_bag.then_some(bag.as_str()),
             captures: &captures,
+            // A realm function's info is a runtime export, born with the ABI
+            // default `own_slots: 0` (perry-abi JsFunctionInfo): its own
+            // values (`prototype` among them) are image bag/state cells.
+            own_slots: 0,
         },
     ));
     Ok(fixups)
@@ -201,12 +205,14 @@ mod tests {
                     emit_function(&mut module, cell, &layouts, &atoms).unwrap();
                     count += 1;
                 }
-                // A vacuity guard, measured: hello reaches 274 functions (#12774
+                // A vacuity guard, measured: hello reaches 229 functions (274 before the
+                // builtin prototypes stopped owning copies of Object.prototype members;
+                // #12774
                 // dropped six Object own copies of Object.prototype methods,
                 // hasOwnProperty, isPrototypeOf, propertyIsEnumerable, toString,
                 // toLocaleString and valueOf; they are inherited, not own), and
-                // the full realm reaches 2584.
-                assert!(count >= if reach.is_full() { 2500 } else { 274 });
+                // the full realm reaches 2499 (2584 before the copies went).
+                assert!(count >= if reach.is_full() { 2490 } else { 229 });
                 let ir = module.to_ir();
                 assert!(
                     ir.contains("_props_meta"),

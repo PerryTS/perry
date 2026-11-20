@@ -26,7 +26,7 @@ fn builtin_constructor_header_fact_survives_real_evacuation() {
         );
         assert_eq!(
             crate::closure::js_closure_get_capture_bits(after, 0),
-            crate::JSValue::int32(declaration.identity as i32).bits()
+            crate::object::builtin_constructor_identity_word(declaration.identity as u32)
         );
     }
 }

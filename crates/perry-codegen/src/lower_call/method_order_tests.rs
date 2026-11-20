@@ -69,6 +69,7 @@ fn module_with(body: Expr) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_strict: true,
     });
     m.init_kind = ModuleInitKind::Eager;

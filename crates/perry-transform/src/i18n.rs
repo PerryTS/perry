@@ -394,6 +394,7 @@ fn collect_keys_from_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_keys_from_stmts(body, key_to_idx, keys);
             if let Some(catch_clause) = catch {
@@ -622,6 +623,7 @@ fn replace_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             replace_in_stmts(body, key_to_idx, plural_info, plural_param_map, anon_shapes);
             if let Some(catch_clause) = catch {
@@ -781,6 +783,7 @@ mod tests {
                 object: Box::new(Expr::This),
                 index: Box::new(Expr::String("slot".into())),
                 value: Box::new(t("index")),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -790,6 +793,7 @@ mod tests {
                 value: Box::new(t("put-value")),
                 receiver: Box::new(Expr::This),
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -836,6 +840,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -880,6 +885,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         };
@@ -972,6 +978,7 @@ mod tests {
                 object: Box::new(Expr::This),
                 index: Box::new(Expr::String("b".into())),
                 value: Box::new(t("next")),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -981,6 +988,7 @@ mod tests {
                 value: Box::new(t("repeat")),
                 receiver: Box::new(Expr::This),
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -1013,6 +1021,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,

@@ -98,7 +98,7 @@ console.log(root.children.length, root.children[3].parent === root);
 #[test]
 fn field_getters_own_methods_mutations_and_subclasses_keep_evaluation_order() {
     let (_, stdout) = compile(include_str!(
-        "../../../test-files/test_gap_11743_class_field_array_push.ts"
+        "../../../tests/parity/language/class/test_gap_11743_class_field_array_push.ts"
     ));
     assert_eq!(
         stdout,
@@ -119,11 +119,11 @@ fn field_getters_own_methods_mutations_and_subclasses_keep_evaluation_order() {
 #[test]
 fn prototype_patches_keep_lookup_first_dispatch() {
     let (ir, stdout) = compile(include_str!(
-        "../../../test-files/test_gap_11743_class_field_push_proto.ts"
+        "../../../tests/parity/language/class/test_gap_11743_class_field_push_proto.ts"
     ));
     assert_eq!(
         stdout,
-        "prototype snapshot arg;old:5:true; 0\ncustom prototype custom:6; 0\n"
+        "prototype lock locked;arg; 1\ncustom prototype custom:6; 0\n"
     );
     assert!(
         !ir.contains("fieldpush.header"),

@@ -356,6 +356,7 @@ pub fn collect_closure_captured_local_ids(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     visit_stmt(s, out);
@@ -467,6 +468,7 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     visit_stmt(s, out);
@@ -780,6 +782,7 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     check_stmt(s, max_id);
@@ -860,6 +863,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -977,6 +981,7 @@ pub fn collect_declared_local_ids(stmts: &[Stmt], out: &mut std::collections::Ha
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_declared_local_ids(body, out);
                 if let Some(catch) = catch {

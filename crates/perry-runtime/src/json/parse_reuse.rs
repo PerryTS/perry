@@ -142,7 +142,7 @@ unsafe fn parse_template_value(value: JSValue) -> Option<ParseTemplateValue> {
         .cast::<u8>()
         .sub(crate::gc::GC_HEADER_SIZE)
         .cast::<crate::gc::GcHeader>());
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || (*array).length as usize > PARSE_OBJECT_TEMPLATE_MAX_ARRAY
     {
         return None;

@@ -14,6 +14,7 @@
 // Native file reads initialize only the bytes written into final string storage.
 #![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
+#![feature(stmt_expr_attributes)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.
@@ -116,6 +117,7 @@ pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_coerce;
 mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
@@ -124,6 +126,8 @@ pub(crate) mod dyn_eval_hooks;
 pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
+/// The array-type predicates, defined once in `perry_abi::array_type`.
+pub use perry_abi::{gc_array_type_pat, gc_type_is_array, gc_type_is_not_array};
 /// The object-type predicates, defined once in `perry_abi::object_type`.
 pub use perry_abi::{
     gc_object_type_pat, gc_type_is_not_object, gc_type_is_object, object_has_meta_word,
@@ -148,9 +152,14 @@ pub mod color_parse;
 #[cfg(perry_contract_checks)]
 pub(crate) mod contracts;
 pub mod date;
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dgram_reactor;
+// A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+pub mod async_module;
+#[cfg(target_os = "wasi")]
+#[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
 pub mod disposable;
 pub mod dns;
@@ -170,6 +179,7 @@ pub mod error;
 pub mod event_pump;
 pub mod event_target;
 pub mod exception;
+pub mod external_family;
 pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
@@ -180,6 +190,7 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+pub mod layout_slot;
 pub mod loop_interrupt;
 pub mod macos_bundle;
 pub mod map;
@@ -246,6 +257,7 @@ pub mod promise;
 pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
+pub mod record_array;
 pub mod regex;
 pub mod registry_latch;
 #[cfg(test)]
@@ -516,16 +528,17 @@ pub(crate) mod stdlib_pump {
     /// the count is non-zero, other threads may join the same logical tick.
     static OUTER_PUMP_ENTRY: Mutex<()> = Mutex::new(());
 
-    crate::perry_thread_local! {
-        /// `await` inside a pump callback can synchronously re-enter the host
-        /// pump. Lifecycle hooks belong to the outer tick only.
-        /// One entry per pump level in flight, with the frame mark of the
-        /// level's owner (`crate::exception::marks`): a throw that abandons
-        /// a level skips its guard's drop, and the catching landing pad pops
-        /// the level instead.
-        static PUMP_DEPTH: std::cell::RefCell<crate::exception::CatchStack<()>> =
-            const { std::cell::RefCell::new(crate::exception::CatchStack::new()) };
-    }
+    /// `await` inside a pump callback can synchronously re-enter the host
+    /// pump. Lifecycle hooks belong to the outer tick only.
+    /// One entry per pump level in flight, with the frame mark of the
+    /// level's owner (`crate::exception::marks`): a throw that abandons
+    /// a level skips its guard's drop, and the catching landing pad pops
+    /// the level instead.
+    ///
+    /// A field of the per-thread record of frame-marked stacks
+    /// ([`crate::exception::marks::CatchStacks`]).
+    static PUMP_DEPTH: crate::exception::marks::CatchStackKey<()> =
+        crate::exception::marks::CatchStackKey::new(|stacks| &stacks.pump);
 
     struct PumpDepthGuard {
         depth_before: usize,
@@ -587,7 +600,7 @@ pub(crate) mod stdlib_pump {
     }
 
     /// The re-entrant stdlib-pump depth.
-    #[cfg(any(test, target_os = "wasi"))]
+    #[cfg(test)]
     pub(crate) fn pump_depth() -> u32 {
         PUMP_DEPTH.with(|depth| depth.borrow().len() as u32)
     }
@@ -1146,7 +1159,7 @@ pub(crate) mod stdlib_pump {
             let outcome = crate::exception::catch_js_throw(|| -> () {
                 let (_skipped_guard, outermost) = PumpDepthGuard::enter();
                 assert!(outermost);
-                crate::exception::js_throw(thrown);
+                crate::exception::test_throw(thrown);
             });
             match outcome {
                 Err(value) => assert_eq!(value.to_bits(), thrown.to_bits()),
@@ -1438,7 +1451,7 @@ mod node_test_hook_slots;
 pub mod temporal_hook_slots;
 mod temporal_layout;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 mod dgram_registry_owner;
 
 mod wasm_hook_slots;
@@ -1453,3 +1466,8 @@ mod diagnostic_report_roots;
 
 mod dyn_eval_hook_roots;
 mod interp_proto_guard;
+
+mod family_never;
+pub mod snap_census;
+
+mod snap_image;

@@ -103,7 +103,7 @@ services: {
 },
 ```
 
-See [Networking → Cross-service DNS](./networking.md#cross-service-dns) for the
+See [Networking → Cross-service DNS](networking.md#cross-service-dns) for the
 backend-specific behavior and strict-mode handling.
 
 ## OpenSSH on :22 + `START_SSH_SERVER=false`
@@ -297,8 +297,8 @@ FORGEJO_DESTROY_ON_EXIT=1 ./forgejo_app --down
 
 ## See also
 
-- [Compose orchestration](./compose.md) — `up()` / `down()` reference.
-- [Networking](./networking.md) — the internal-net + public-net split.
-- [Volumes](./volumes.md) — preservation across `down()`.
-- [Security](./security.md) — capability hardening + image
+- [Compose orchestration](compose.md) — `up()` / `down()` reference.
+- [Networking](networking.md) — the internal-net + public-net split.
+- [Volumes](volumes.md) — preservation across `down()`.
+- [Security](security.md) — capability hardening + image
   verification.

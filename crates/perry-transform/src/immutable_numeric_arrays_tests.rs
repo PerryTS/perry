@@ -18,12 +18,14 @@ fn function(body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 fn read(index: Expr) -> Expr {
     Expr::IndexGet {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(index),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }

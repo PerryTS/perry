@@ -239,6 +239,7 @@ pub fn collect_local_refs_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_local_refs_stmt(s, refs, visited);
@@ -351,6 +352,7 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_assigned_locals_stmt(s, assigned);
@@ -603,6 +605,7 @@ fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
             body,
             catch,
             finally,
+            ..
         } => {
             substitute_lexical_this_in_stmts(body, replacement);
             if let Some(c) = catch {
@@ -760,6 +763,7 @@ fn remap_local_ids_in_stmt_propagating(
             body,
             catch,
             finally,
+            ..
         } => {
             remap_local_ids_in_stmts_with_field_propagation(body, map, fp);
             if let Some(c) = catch {
@@ -907,6 +911,7 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
             body,
             catch,
             finally,
+            ..
         } => {
             remap_local_ids_in_stmts(body, map);
             if let Some(c) = catch {
@@ -1118,6 +1123,7 @@ fn replace_this_in_stmt(stmt: &mut Stmt, this_id: LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             replace_this_in_stmts(body, this_id);
             if let Some(c) = catch {
@@ -1241,7 +1247,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter_mut().flatten() {
                 replace_this_in_expr(e, this_id);
             }
         }

@@ -10,6 +10,12 @@ impl WasmModuleEmitter {
         &mut self,
         modules: &[(String, perry_hir::ir::Module)],
     ) -> WasmCompileOutput {
+        let classes: BTreeMap<&str, &perry_hir::ir::Class> = modules
+            .iter()
+            .flat_map(|(_, module)| &module.classes)
+            .map(|class| (class.name.as_str(), class))
+            .collect();
+
         // First pass: collect all string literals
         for (_, module) in modules {
             self.collect_strings(module);
@@ -562,16 +568,16 @@ impl WasmModuleEmitter {
             Vec<Stmt>,
             Vec<LocalId>,
             Vec<LocalId>,
+            ClosureThis,
             usize,
         )> = Vec::new();
+        // The class whose constructor, instance method, accessor or field initializer
+        // holds an arrow: `super` inside it resolves from that class. Any other closure
+        // (an object literal's method) has its own home object.
+        let mut closure_class: std::collections::HashMap<(usize, FuncId), String> =
+            Default::default();
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            let mut module_closures: Vec<(
-                FuncId,
-                Vec<Param>,
-                Vec<Stmt>,
-                Vec<LocalId>,
-                Vec<LocalId>,
-            )> = Vec::new();
+            let mut module_closures: Vec<CollectedClosure> = Vec::new();
             collect_closures_from_stmts(&module.init, &mut module_closures);
             for global in &module.globals {
                 if let Some(init) = &global.init {
@@ -587,6 +593,7 @@ impl WasmModuleEmitter {
                 collect_closures_from_stmts(&func.body, &mut module_closures);
             }
             for class in &module.classes {
+                let instance_start = module_closures.len();
                 if let Some(ctor) = &class.constructor {
                     for param in &ctor.params {
                         if let Some(default) = &param.default {
@@ -603,6 +610,7 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
+                let statics_start = module_closures.len();
                 for method in &class.static_methods {
                     for param in &method.params {
                         if let Some(default) = &param.default {
@@ -611,6 +619,7 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
+                let statics_end = module_closures.len();
                 for (_, getter) in &class.getters {
                     for param in &getter.params {
                         if let Some(default) = &param.default {
@@ -627,19 +636,36 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&setter.body, &mut module_closures);
                 }
+                for member in &class.computed_members {
+                    collect_closures_from_stmts(&member.function.body, &mut module_closures);
+                }
                 for field in &class.fields {
                     if let Some(init) = &field.init {
                         collect_closures_from_expr(init, &mut module_closures);
                     }
                 }
+                let instance_end = module_closures.len();
                 for field in &class.static_fields {
                     if let Some(init) = &field.init {
                         collect_closures_from_expr(init, &mut module_closures);
                     }
                 }
+                for closure in module_closures[instance_start..statics_start]
+                    .iter()
+                    .chain(&module_closures[statics_end..instance_end])
+                {
+                    if closure.6 {
+                        closure_class.insert((mod_idx, closure.0), class.name.clone());
+                    }
+                }
             }
-            for (fid, params, body, caps, mut_caps) in module_closures {
-                closure_funcs.push((fid, params, body, caps, mut_caps, mod_idx));
+            // One function per FuncId: a closure the HIR reaches by two paths (a static
+            // field initializer is also in `init`) is emitted once.
+            let mut seen = std::collections::HashSet::new();
+            for (fid, params, body, caps, mut_caps, this, _) in module_closures {
+                if seen.insert(fid) {
+                    closure_funcs.push((fid, params, body, caps, mut_caps, this, mod_idx));
+                }
             }
         }
 
@@ -667,6 +693,7 @@ impl WasmModuleEmitter {
                     // `(i64, i64, i64) -> i64`. Validator fails with
                     // "expected i64 but nothing on stack" (#1081 sibling instance).
                     self.func_param_counts.insert(async_import_idx, param_count);
+                    self.record_rest_param(async_import_idx, 0, &func.params);
                     self.async_func_imports.push((
                         func.name.clone(),
                         async_import_idx,
@@ -760,6 +787,7 @@ impl WasmModuleEmitter {
                     self.void_funcs.insert(user_func_idx);
                 }
                 self.func_param_counts.insert(user_func_idx, param_count);
+                self.record_rest_param(user_func_idx, 0, &func.params);
                 // Build func_name_map for ExternFuncRef resolution. Exported
                 // functions win the name; module-local helpers only fill a
                 // vacant slot (see exported_names above).
@@ -778,13 +806,17 @@ impl WasmModuleEmitter {
         // Register class constructors, methods, and static methods
         for (_, module) in modules {
             for class in &module.classes {
+                self.user_classes.insert(class.name.clone());
+                if declares_no_constructor(class, &classes) {
+                    self.implicit_ctor_classes.insert(class.name.clone());
+                }
                 // Record parent class relationship
                 if let Some(parent) = &class.extends_name {
                     self.class_parent_map
                         .insert(class.name.clone(), parent.clone());
                 }
                 // Constructor: params = this + declared params, returns f64 (this)
-                if let Some(ctor) = &class.constructor {
+                if let Some(ctor) = constructor_of(class, &classes) {
                     let param_count = 1 + ctor.params.len();
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
@@ -807,6 +839,7 @@ impl WasmModuleEmitter {
                         .or_default()
                         .insert(method.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &method.params);
                     user_func_idx += 1;
                 }
                 // Static methods: no this param
@@ -824,6 +857,7 @@ impl WasmModuleEmitter {
                     self.func_name_map
                         .insert(format!("{}_{}", class.name, method.name), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 0, &method.params);
                     user_func_idx += 1;
                 }
                 // Getters: like methods with 0 params + this
@@ -854,14 +888,31 @@ impl WasmModuleEmitter {
                     let _ = setter;
                     user_func_idx += 1;
                 }
+                // Computed members take `this` + params; the class definition installs
+                // each under its evaluated key.
+                for member in &class.computed_members {
+                    let param_count = 1 + member.function.params.len();
+                    // The type section is emitted before the bodies: intern the signature now.
+                    self.get_type_idx(vec![ValType::I64; param_count], vec![ValType::I64]);
+                    self.class_computed_map.insert(
+                        (class.name.clone(), member.function.name.clone()),
+                        user_func_idx,
+                    );
+                    self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &member.function.params);
+                    user_func_idx += 1;
+                }
             }
         }
 
         // Register closure functions into their per-module func_maps
-        for (func_id, params, body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, params, body, captures, mutable_captures, this, mod_idx) in &closure_funcs {
             if !self.module_func_maps[*mod_idx].contains_key(func_id) {
-                // Closure params: captures first (as f64), then declared params
-                let total_params = captures.len() + mutable_captures.len() + params.len();
+                // Closure params: captures, then the captured `this`, then declared params
+                let leading = captures.len()
+                    + mutable_captures.len()
+                    + usize::from(*this == ClosureThis::Captured);
+                let total_params = leading + params.len();
                 let wasm_params = vec![ValType::I64; total_params];
                 let results = if body.iter().any(has_return) {
                     vec![ValType::I64]
@@ -871,7 +922,61 @@ impl WasmModuleEmitter {
                 let type_idx = self.get_type_idx(wasm_params, results);
                 let _ = type_idx;
                 self.module_func_maps[*mod_idx].insert(*func_id, user_func_idx);
+                self.record_rest_param(user_func_idx, leading, params);
                 user_func_idx += 1;
+            }
+        }
+
+        // Register globals from all modules. This precedes the async JS generation below,
+        // which reads `global_map` to tell a declared global from the unresolved-global
+        // sentinel.
+        for (_, module) in modules {
+            for global in &module.globals {
+                self.global_map.insert(global.id, self.num_globals);
+                self.num_globals += 1;
+            }
+        }
+
+        // Promote module-level Let bindings to WASM globals so cross-function
+        // references work and so different modules' identical LocalIds don't collide.
+        // This also precedes the async JS generation, whose bodies reach a module-level
+        // `let` through the exported global this map names.
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            collect_module_let_ids(
+                &module.init,
+                mod_idx,
+                &mut self.module_let_globals,
+                &mut self.num_globals,
+            );
+        }
+        // Module-level lets are wasm globals, already shared by every closure.
+        let mut boxed: Vec<(usize, LocalId)> = Vec::new();
+        for (_, _, body, _, mutable_captures, _, mod_idx) in &closure_funcs {
+            let ids = mutable_captures
+                .iter()
+                .chain(generator_record_captures(body));
+            boxed.extend(ids.map(|id| (*mod_idx, *id)));
+        }
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            let methods = module.classes.iter().flat_map(|class| {
+                let computed = class.computed_members.iter().map(|m| &m.function);
+                class
+                    .methods
+                    .iter()
+                    .chain(&class.static_methods)
+                    .chain(computed)
+            });
+            for func in module.functions.iter().chain(methods) {
+                boxed.extend(
+                    generator_record_captures(&func.body)
+                        .iter()
+                        .map(|id| (mod_idx, *id)),
+                );
+            }
+        }
+        for key in boxed {
+            if !self.module_let_globals.contains_key(&key) {
+                self.boxed_locals.insert(key);
             }
         }
 
@@ -879,6 +984,7 @@ impl WasmModuleEmitter {
         // generate the JS code for async functions with correct FuncRef resolution.
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
             self.func_map = self.module_func_maps[mod_idx].clone();
+            self.current_mod_idx = mod_idx;
             for func in &module.functions {
                 if func.is_async {
                     let js_code = self.emit_js_async_function(func);
@@ -892,25 +998,6 @@ impl WasmModuleEmitter {
         // reads the counter.
         let start_idx = user_func_idx;
         let start_type = t_void;
-
-        // Register globals from all modules
-        for (_, module) in modules {
-            for global in &module.globals {
-                self.global_map.insert(global.id, self.num_globals);
-                self.num_globals += 1;
-            }
-        }
-
-        // Promote module-level Let bindings to WASM globals so cross-function
-        // references work and so different modules' identical LocalIds don't collide.
-        for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            collect_module_let_ids(
-                &module.init,
-                mod_idx,
-                &mut self.module_let_globals,
-                &mut self.num_globals,
-            );
-        }
 
         // Issue #1071: build cross-module imported-variable → WASM global map.
         // The HIR lowers `import { FOO } from './m'` value reads (where FOO is
@@ -1137,7 +1224,7 @@ impl WasmModuleEmitter {
         // Class constructors, methods, static methods, getters, setters
         for (_, module) in modules {
             for class in &module.classes {
-                if let Some(ctor) = &class.constructor {
+                if let Some(ctor) = constructor_of(class, &classes) {
                     let param_count = 1 + ctor.params.len();
                     let params = vec![ValType::I64; param_count];
                     let results = vec![ValType::I64];
@@ -1170,12 +1257,20 @@ impl WasmModuleEmitter {
                     let type_idx = self.get_type_idx(params, results);
                     func_section.function(type_idx);
                 }
+                for member in &class.computed_members {
+                    let params = vec![ValType::I64; 1 + member.function.params.len()];
+                    let type_idx = self.get_type_idx(params, vec![ValType::I64]);
+                    func_section.function(type_idx);
+                }
             }
         }
         // Closure functions
-        for (func_id, _params, _body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, _params, _body, captures, mutable_captures, this, mod_idx) in &closure_funcs {
             if self.module_func_maps[*mod_idx].contains_key(func_id) {
-                let total_params = captures.len() + mutable_captures.len() + _params.len();
+                let total_params = captures.len()
+                    + mutable_captures.len()
+                    + usize::from(*this == ClosureThis::Captured)
+                    + _params.len();
                 let wasm_params = vec![ValType::I64; total_params];
                 let results = vec![ValType::I64]; // closures always return f64
                 let type_idx = self.get_type_idx(wasm_params, results);
@@ -1217,7 +1312,12 @@ impl WasmModuleEmitter {
                     }
                 }
             }
-            for (func_id, _, _, _, _, mod_idx) in &closure_funcs {
+            for idx in self.class_computed_map.values() {
+                if !indices.contains(idx) {
+                    indices.push(*idx);
+                }
+            }
+            for (func_id, _, _, _, _, _, mod_idx) in &closure_funcs {
                 if let Some(&idx) = self.module_func_maps[*mod_idx].get(func_id) {
                     if !indices.contains(&idx) {
                         indices.push(idx);
@@ -1283,6 +1383,17 @@ impl WasmModuleEmitter {
                     );
                 }
             }
+            // One constant per rest parameter, exported below for the runtime.
+            for &slot in self.rest_params.values() {
+                global_section.global(
+                    GlobalType {
+                        val_type: ValType::I32,
+                        mutable: false,
+                        shared: false,
+                    },
+                    &wasm_encoder::ConstExpr::i32_const(slot as i32),
+                );
+            }
             wasm_module.section(&global_section);
         }
 
@@ -1314,6 +1425,15 @@ impl WasmModuleEmitter {
             for gidx in exported_globals {
                 export_section.export(&format!("__wasm_global_{}", gidx), ExportKind::Global, gidx);
             }
+        }
+        // `__wasm_rest_<idx>`: the rest parameter's slot of function `idx`, which the
+        // runtime reads to pack the arguments of a call through the function table.
+        for (k, &idx) in self.rest_params.keys().enumerate() {
+            export_section.export(
+                &format!("__wasm_rest_{}", idx),
+                ExportKind::Global,
+                self.num_globals + k as u32,
+            );
         }
         wasm_module.section(&export_section);
 
@@ -1367,12 +1487,12 @@ impl WasmModuleEmitter {
             self.func_map = self.module_func_maps[mod_idx].clone();
             self.current_mod_idx = mod_idx;
             for class in &module.classes {
-                if let Some(ctor) = &class.constructor {
-                    let func = self.compile_class_constructor(class, ctor);
+                if let Some(ctor) = constructor_of(class, &classes) {
+                    let func = self.compile_class_constructor(class, &ctor);
                     code_section.function(&func);
                 }
                 for method in &class.methods {
-                    let func = self.compile_class_method(method);
+                    let func = self.compile_class_method(&class.name, method);
                     code_section.function(&func);
                 }
                 for method in &class.static_methods {
@@ -1384,26 +1504,38 @@ impl WasmModuleEmitter {
                     // falls through) produces a WASM body whose `return`
                     // instructions leave an empty operand stack — V8 rejects
                     // with "expected i64 but nothing on stack".
-                    let func = self.compile_function_with_signature(method, true);
+                    let func = self.compile_static_method(class, method);
                     code_section.function(&func);
                 }
                 for (_name, getter) in &class.getters {
-                    let func = self.compile_class_method(getter);
+                    let func = self.compile_class_method(&class.name, getter);
                     code_section.function(&func);
                 }
                 for (_name, setter) in &class.setters {
-                    let func = self.compile_class_method(setter);
+                    let func = self.compile_class_method(&class.name, setter);
+                    code_section.function(&func);
+                }
+                for member in &class.computed_members {
+                    let func = self.compile_class_method(&class.name, &member.function);
                     code_section.function(&func);
                 }
             }
         }
 
         // Closure functions — swap in the parent module's func_map for each closure
-        for (func_id, params, body, captures, mutable_captures, mod_idx) in &closure_funcs {
+        for (func_id, params, body, captures, mutable_captures, this, mod_idx) in &closure_funcs {
             if self.module_func_maps[*mod_idx].contains_key(func_id) {
                 self.func_map = self.module_func_maps[*mod_idx].clone();
                 self.current_mod_idx = *mod_idx;
-                let func = self.compile_closure(params, body, captures, mutable_captures);
+                let home_class = closure_class.get(&(*mod_idx, *func_id)).map(String::as_str);
+                let func = self.compile_closure(
+                    params,
+                    body,
+                    captures,
+                    mutable_captures,
+                    *this,
+                    home_class,
+                );
                 code_section.function(&func);
             }
         }
@@ -1424,16 +1556,9 @@ impl WasmModuleEmitter {
                         collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
                     }
                 }
-                for class in &module.classes {
-                    for field in &class.static_fields {
-                        if let Some(init) = &field.init {
-                            collect_expr_locals(init, &mut mod_map, &mut total_count, 0);
-                        }
-                    }
-                }
                 per_module_init_locals.push(mod_map);
             }
-            // Global and static-field initializers use the module activation locals.
+            // Global initializers use the module activation locals.
 
             let num_locals = total_count;
             let start_temp_local = num_locals;
@@ -1462,6 +1587,7 @@ impl WasmModuleEmitter {
                             start_temp_local,
                             start_temp_i32,
                         );
+                        ctx.returns_value = false;
                         ctx.emit_expr(&mut func, init);
                         let gidx = self.global_map[&global.id];
                         func.instruction(&Instruction::GlobalSet(gidx));
@@ -1487,53 +1613,62 @@ impl WasmModuleEmitter {
                         .unwrap_or(0);
                     let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
 
-                    // Register instance methods in classMethodTable (including getters/setters)
-                    if let Some(methods) = self.class_method_map.get(&class.name) {
-                        for (method_name, &func_idx) in methods {
-                            let real_name = method_name.as_str();
-                            let method_name_id =
-                                self.string_map.get(real_name).copied().unwrap_or(0);
-                            let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
-                            let table_idx = self
-                                .func_to_table_idx
-                                .get(&func_idx)
-                                .copied()
-                                .unwrap_or(func_idx);
-                            // Store args to memory for mem_call (Firefox NaN-safe: use I64Store)
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::I64Const(class_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            func.instruction(&Instruction::I32Const(0xFF08));
-                            func.instruction(&Instruction::I64Const(method_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            func.instruction(&Instruction::I32Const(0xFF10));
-                            func.instruction(&Instruction::I64Const(
-                                (table_idx as f64).to_bits() as i64
-                            ));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            let csm_id = self
-                                .string_map
-                                .get("class_set_method")
-                                .copied()
-                                .unwrap_or(0);
-                            func.instruction(&f64_const(csm_id as f64));
-                            func.instruction(&f64_const(3.0));
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::Call(rt.mem_call));
-                            func.instruction(&Instruction::Drop);
-                        }
+                    // Register instance methods in classMethodTable (including getters/setters),
+                    // and named static methods, which a class value carries as properties.
+                    let methods = self.class_method_map.get(&class.name).into_iter().flatten();
+                    // A static block (`__perry_static_init_N`) is not a property of the class.
+                    let statics = self
+                        .class_static_map
+                        .get(&class.name)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(name, _)| !name.starts_with("__perry_static_init_"));
+                    let registrations: Vec<(&str, String, u32)> = methods
+                        .map(|(name, &idx)| ("class_set_method", name.clone(), idx))
+                        .chain(
+                            statics
+                                .map(|(name, &idx)| ("class_set_static_method", name.clone(), idx)),
+                        )
+                        .collect();
+                    for (bridge, method_name, func_idx) in registrations {
+                        let real_name = method_name.as_str();
+                        let method_name_id = self.string_map.get(real_name).copied().unwrap_or(0);
+                        let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
+                        let table_idx = self
+                            .func_to_table_idx
+                            .get(&func_idx)
+                            .copied()
+                            .unwrap_or(func_idx);
+                        // Store args to memory for mem_call (Firefox NaN-safe: use I64Store)
+                        func.instruction(&Instruction::I32Const(0xFF00));
+                        func.instruction(&Instruction::I64Const(class_bits as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        func.instruction(&Instruction::I32Const(0xFF08));
+                        func.instruction(&Instruction::I64Const(method_bits as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        func.instruction(&Instruction::I32Const(0xFF10));
+                        func.instruction(&Instruction::I64Const(
+                            (table_idx as f64).to_bits() as i64
+                        ));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        let csm_id = self.string_map.get(bridge).copied().unwrap_or(0);
+                        func.instruction(&f64_const(csm_id as f64));
+                        func.instruction(&f64_const(3.0));
+                        func.instruction(&Instruction::I32Const(0xFF00));
+                        func.instruction(&Instruction::Call(rt.mem_call));
+                        func.instruction(&Instruction::Drop);
                     }
 
                     // Set up inheritance
@@ -1558,73 +1693,34 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        // A user parent's constructor slot, as `Expr::ClassRef` passes it, so
+                        // the child's class value inherits from the parent's; undefined for a
+                        // built-in parent (`extends Error`), which has no class value here.
+                        let parent_slot = if self.user_classes.contains(parent_name) {
+                            self.class_ctor_slot(parent_name).to_bits()
+                        } else {
+                            TAG_UNDEFINED
+                        };
+                        func.instruction(&Instruction::I32Const(0xFF10));
+                        func.instruction(&Instruction::I64Const(parent_slot as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csp_id = self
                             .string_map
                             .get("class_set_parent")
                             .copied()
                             .unwrap_or(0);
                         func.instruction(&f64_const(csp_id as f64));
-                        func.instruction(&f64_const(2.0));
+                        func.instruction(&f64_const(3.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);
                     }
 
-                    // Register static fields
-                    for field in &class.static_fields {
-                        if let Some(init) = &field.init {
-                            let field_name_id = self
-                                .string_map
-                                .get(field.name.as_str())
-                                .copied()
-                                .unwrap_or(0);
-                            let field_bits = (STRING_TAG << 48) | (field_name_id as u64);
-                            // Store class name
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::I64Const(class_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            // Store field name
-                            func.instruction(&Instruction::I32Const(0xFF08));
-                            func.instruction(&Instruction::I64Const(field_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            // Store value
-                            let mut ctx = FuncEmitCtx::new(
-                                self,
-                                &per_module_init_locals[mod_idx],
-                                start_temp_local,
-                                start_temp_i32,
-                            );
-                            ctx.emit_expr(&mut func, init);
-                            // Use temp local to store the value
-                            func.instruction(&Instruction::LocalSet(start_temp_local));
-                            func.instruction(&Instruction::I32Const(0xFF10));
-                            func.instruction(&Instruction::LocalGet(start_temp_local));
-                            // Value is already i64, no conversion needed
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            let css_id = self
-                                .string_map
-                                .get("class_set_static")
-                                .copied()
-                                .unwrap_or(0);
-                            func.instruction(&f64_const(css_id as f64));
-                            func.instruction(&f64_const(3.0));
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::Call(rt.mem_call));
-                            func.instruction(&Instruction::Drop);
-                        }
-                    }
+                    // Static field initializers run where the HIR places them, in source order.
                 }
             }
 
@@ -1636,6 +1732,7 @@ impl WasmModuleEmitter {
                 self.current_mod_idx = mod_idx;
                 let mod_locals = &per_module_init_locals[mod_idx];
                 let mut ctx = FuncEmitCtx::new(self, mod_locals, start_temp_local, start_temp_i32);
+                ctx.returns_value = false;
                 for stmt in &module.init {
                     ctx.emit_stmt(&mut func, stmt, false);
                 }
@@ -1671,4 +1768,35 @@ impl WasmModuleEmitter {
             ffi_imports: ffi_import_names,
         }
     }
+
+    /// Records function `idx`'s rest parameter, if `params` has one, at its slot
+    /// after the `leading` receiver and capture parameters.
+    fn record_rest_param(&mut self, idx: u32, leading: usize, params: &[Param]) {
+        if let Some(i) = params.iter().position(|p| p.is_rest) {
+            self.rest_params.insert(idx, leading + i);
+        }
+    }
+
+    /// The arguments a direct call of WASM function `idx` passes: a rest parameter
+    /// receives the source arguments from its slot on as one array.
+    pub(super) fn with_rest_packed<'e>(
+        &self,
+        idx: Option<u32>,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = idx.and_then(|idx| self.rest_params.get(&idx)) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
+    }
 }
+
+#[cfg(test)]
+#[path = "tests.rs"]
+mod tests;

@@ -1,0 +1,1 @@
+Tests: the `locate_or_fetch` unit tests in `perry --bin` no longer depend on the environment. They locate an archive name no build writes, so a `PERRY_RUNTIME_DIR` / `PERRY_LIB_DIR` override holding the real runtime (as `main`'s cargo-test job sets) cannot answer for them. No behavior change.

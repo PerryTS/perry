@@ -196,16 +196,6 @@ pub enum FirewallStatus {
     Unavailable,
 }
 
-impl FirewallStatus {
-    /// Whether network traffic was actually scanned. Only `Active` counts —
-    /// `OptedOut` and `Unavailable` are both unfirewalled installs, they
-    /// differ only in whether the user asked for it.
-    #[cfg_attr(not(test), allow(dead_code))]
-    pub fn is_active(&self) -> bool {
-        matches!(self, FirewallStatus::Active { .. })
-    }
-}
-
 /// The stderr line for a fail-open, naming the rack path so a contributor who
 /// ran `tools:install` knows what to point `PERRY_SFW` at.
 pub fn unavailable_notice(rack_hint: Option<&Path>) -> String {
@@ -374,21 +364,10 @@ mod tests {
     }
 
     #[test]
-    fn firewall_status_only_active_counts_as_scanned() {
-        assert!(FirewallStatus::Active {
-            sfw: "/usr/bin/sfw".into()
-        }
-        .is_active());
-        assert!(!FirewallStatus::OptedOut.is_active());
-        assert!(!FirewallStatus::Unavailable.is_active());
-    }
-
-    #[test]
     fn firewall_status_defaults_to_unavailable() {
         // A code path that forgets to record the firewall must not end up
         // claiming the install was protected.
         assert_eq!(FirewallStatus::default(), FirewallStatus::Unavailable);
-        assert!(!FirewallStatus::default().is_active());
     }
 
     #[test]

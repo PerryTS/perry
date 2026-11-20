@@ -143,8 +143,7 @@ unsafe fn value_is_null_proto_object(value: f64) -> bool {
 pub(crate) fn throw_cannot_convert_to_primitive() -> ! {
     let msg = b"Cannot convert object to primitive value";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Spec-faithful `OrdinaryToPrimitive(O, hint)` (ES2024 §7.1.1.1) for the
@@ -331,7 +330,6 @@ pub(crate) fn is_primitive_value(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
     jsval.is_any_string()
         || jsval.is_number()
-        || (jsval.is_int32() && crate::object::class_ref_id(value).is_none())
         || jsval.is_bool()
         || jsval.is_null()
         || jsval.is_undefined()
@@ -477,6 +475,11 @@ unsafe fn call_own_method_for_primitive(method: f64, receiver: f64) -> Option<f6
 pub(crate) unsafe fn to_primitive_number(value: f64) -> OrdinaryToPrimitiveOutcome {
     if is_primitive_value(value) {
         return OrdinaryToPrimitiveOutcome::Primitive(value);
+    }
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return OrdinaryToPrimitiveOutcome::Primitive(crate::proxy_hooks::proxy_to_primitive(
+            value, 1,
+        ));
     }
 
     match custom_to_primitive(value, b"number") {
@@ -636,7 +639,6 @@ unsafe fn call_method_for_primitive(
     let ret_jsv = JSValue::from_bits(ret.to_bits());
     let is_primitive = ret_jsv.is_any_string()
         || ret_jsv.is_number()
-        || ret_jsv.is_int32()
         || ret_jsv.is_bool()
         || ret_jsv.is_null()
         || ret_jsv.is_undefined()

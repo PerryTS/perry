@@ -18,8 +18,6 @@
 0 1 crates/perry-ext-http/src/server/response_turnloop.rs
 1 2 crates/perry-ext-http/src/server/server.rs
 2 0 crates/perry-ext-http/src/server/turnloop_h2/conn.rs
-1 0 crates/perry-ext-http/src/server/turnloop_h2/mod.rs
-1 0 crates/perry-ext-http/src/server/turnloop_serve/conn.rs
 0 1 crates/perry-ext-http/src/server/turnloop_serve/mod.rs
 1 2 crates/perry-ext-parcel-watcher/src/lib.rs
 2 1 crates/perry-ext-pdf/src/lib.rs

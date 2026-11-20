@@ -66,7 +66,7 @@ pub fn class_chain_has_field(
         }
         // A computed or dynamically-keyed member means the declared list is not
         // authoritative for this class.
-        if !class.computed_members.is_empty() || class.fields.iter().any(|f| f.key_expr.is_some()) {
+        if class.has_evaluated_members() || class.fields.iter().any(|f| f.key_expr.is_some()) {
             return true;
         }
         cur = class.extends_name.clone();
@@ -122,6 +122,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -147,6 +148,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             static_accessor_names: Vec::new(),

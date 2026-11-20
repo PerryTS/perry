@@ -174,7 +174,7 @@ extern "C" fn throw_exclude(
     _: f64,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(991.0)
+    crate::exception::test_throw(991.0)
 }
 
 #[test]

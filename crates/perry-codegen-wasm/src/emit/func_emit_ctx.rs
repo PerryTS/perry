@@ -6,11 +6,19 @@
 
 use super::*;
 
+#[derive(Clone, Copy)]
+pub(super) struct FinallyTarget {
+    pub(super) depth: u32,
+    pub(super) id: usize,
+}
+
 /// Context for emitting a single function body
 pub(super) struct FuncEmitCtx<'a> {
     pub(super) emitter: &'a WasmModuleEmitter,
     /// Compiler-only lexical binding stack; emitted storage is WASM locals.
     pub(super) scoped_temp_ids: Vec<LocalId>,
+    /// Boxed locals whose cell a `PreallocateBoxes` already created; their `Let` fills it.
+    pub(super) preallocated: std::collections::BTreeSet<LocalId>,
     pub(super) local_map: &'a BTreeMap<LocalId, u32>,
     /// Block nesting depth for break/continue
     pub(super) break_depth: Vec<u32>,
@@ -21,14 +29,20 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) label_stack: Vec<(String, u32, u32)>,
     /// Pending label to attach to the next loop encountered.
     pub(super) pending_label: Option<String>,
+    /// Set while a Set/Map cursor loop is emitted inside its releasing `finally`.
+    pub(super) cursor_loop_wrapped: bool,
     /// Current class name (set when compiling class methods/constructors)
     pub(super) current_class: Option<String>,
+    /// The local holding `this`: local 0 in a class constructor, method or
+    /// accessor, or an arrow's captured `this`.
+    pub(super) this_local: Option<u32>,
+    /// The class of a static method or static block, which is its `this`.
+    pub(super) static_class: Option<String>,
+    /// The local a static method that reads `this` loads it into on entry.
+    pub(super) static_this_local: Option<u32>,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
-    /// Index of a temp i32 local (for mem_call base address)
-    // #854: reserved temp-local slot for the mem_call base-address path;
-    // assigned in `new()` but not consumed by the current emitter.
-    #[allow(dead_code)]
+    /// Completion kind while transferring to a shared finalizer.
     pub(super) temp_local_i32: u32,
     /// Index of a second temp i64 local for emit_store_arg
     pub(super) temp_store_local: u32,
@@ -39,6 +53,10 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) current_frame_size: u32,
     /// Stack of saved frame sizes for nested frame support
     pub(super) frame_stack: Vec<u32>,
+    /// Catch targets: absolute block depth and outstanding bridge-frame bytes.
+    pub(super) exception_handlers: Vec<(u32, u32, Option<FinallyTarget>)>,
+    pub(super) returns_value: bool,
+    pub(super) finalizer_jumps: Vec<Vec<u32>>,
 }
 
 impl<'a> FuncEmitCtx<'a> {
@@ -52,18 +70,26 @@ impl<'a> FuncEmitCtx<'a> {
             emitter,
             local_map,
             scoped_temp_ids: Vec::new(),
+            preallocated: Default::default(),
             break_depth: Vec::new(),
             loop_depth: Vec::new(),
             block_depth: 0,
             label_stack: Vec::new(),
             pending_label: None,
+            cursor_loop_wrapped: false,
             current_class: None,
+            this_local: None,
+            static_class: None,
+            static_this_local: None,
             temp_local,
             temp_local_i32,
             temp_store_local: temp_local + 1,
             temp_result_local: temp_local + 2,
             current_frame_size: 0,
             frame_stack: Vec::new(),
+            exception_handlers: Vec::new(),
+            returns_value: true,
+            finalizer_jumps: Vec::new(),
         }
     }
 }

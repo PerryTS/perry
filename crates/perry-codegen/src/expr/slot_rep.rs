@@ -60,13 +60,18 @@
 //!   Both are real range arguments, not compatibility bounds: there is no
 //!   reachable state in which the value leaves i32. Unknown loop counts and
 //!   step expressions remain boxed; see `collectors/loop_bounded_i32.rs`.
-//! - `integer_locals ∩ index_used_locals`: admission accepts `Add/Sub/Mul`
-//!   chains that can in principle exceed i32 — but under the pre-phase shadow
-//!   model every `LocalGet` of such a local ALREADY reads the i32 slot
-//!   (`literals_vars.rs`), so canonical-i32 storage preserves the shipped,
-//!   byte-exact-validated semantics for exactly the same set of locals. No new
-//!   overflow surface is introduced; tightening further would drop the loop
-//!   counters and index chains this phase exists for.
+//! - `integer_locals ∩ index_used_locals`: every write's EXACT value is
+//!   proven inside i32 (`collectors/integer_locals.rs` exactness invariant):
+//!   `Add/Sub/Mul` only by interval arithmetic over known operand ranges, a
+//!   `for` step only by the loop guard that bounds it — statically, or through
+//!   the overflow-exit lowering (`stmt/loops.rs::lower_overflow_exit_for`),
+//!   which leaves the loop where the exact value would fail the guard. This
+//!   bullet used to
+//!   accept unproven `Add/Sub/Mul` chains on the argument that the pre-phase
+//!   shadow model already read the i32 slot at every `LocalGet`. That made the
+//!   wrap equally wrong in both models, not safe in either: `j = i * i` with
+//!   `i = 46349` stored `-2146737495`, so `for (…; j <= n; j += i)` ran 46318
+//!   times instead of zero and indexed with the wrapped value.
 //!
 //! Gated by `PERRY_CANONICAL_I32_LOCALS` (default on; `0`/`off`/`false`
 //! reverts to the parallel-shadow model — keyed into the object cache).
@@ -317,9 +322,10 @@ pub(crate) struct CanonicalI32Denial {
     pub closure_referenced: bool,
     pub array_row_alias: bool,
     pub not_index_used_or_bounded: bool,
-    /// #7128: every range proof passed, and the promotion would still emit
-    /// more work than the box. Distinct from every other field here, which
-    /// records a *provability* failure.
+    /// The whole-program facts cover the local and give it no `I32`: its
+    /// value has no int demand (#7128's `15_mandelbrot` counter), or the
+    /// facts do not prove it an int32. Distinct from every other field
+    /// here, which records a failure of the per-function proof.
     pub no_i32_consuming_use: bool,
     pub context: Option<&'static str>,
 }
@@ -406,14 +412,12 @@ impl CanonicalI32Denial {
         if self.no_i32_consuming_use {
             return Some((
                 "no_i32_consuming_use",
-                "provable, but not profitable: the local is written after its \
-                 declaration, no read of it anywhere is consumed as an i32 (no \
-                 array index, no bitwise operand, no `Math.imul`), and at least \
-                 one read inside a loop needs the double back. The i32 slot \
-                 would emit a `sitofp` per iteration and buy nothing — this is \
-                 the +14.87% instructions #7128 measured on 15_mandelbrot, \
-                 where the mixed representation also costs the loop its fused \
-                 single-block exit test",
+                "the whole-program facts give the local no I32 representation: \
+                 no int consumer (an array index, a bitwise operand, \
+                 `Math.imul`) is reachable from its value, or the facts do not \
+                 prove it an int32. An i32 slot for a value that only feeds \
+                 double arithmetic emits a `sitofp` per read and buys nothing \
+                 (the +14.87% instructions #7128 measured on 15_mandelbrot)",
                 Tier::CompilerLimitation,
                 Some(NO_BENEFIT_ISSUE),
             ));
@@ -680,6 +684,12 @@ pub(crate) fn store_canonical_local_from_double(
     let Some((slot, _rep)) = canonical_local_i32_slot(ctx, id) else {
         return false;
     };
+    // An interval-proven int32 local: the value is an exact int32.
+    if let Some(v_i32) = crate::codegen::facts_int32_locals::store_from_double(ctx, value, id, rhs)
+    {
+        ctx.block().store(I32, &v_i32, &slot);
+        return true;
+    }
     let known_i32_range = rhs.is_some_and(|e| super::is_known_i32_range(ctx, e));
     let v_i32 = if known_i32_range {
         let v_i64 = ctx.block().fptosi(DOUBLE, value, I64);
@@ -761,6 +771,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     scan_declared(body, out);
                     if let Some(c) = catch {
@@ -927,6 +938,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.stmts(body);
                     if let Some(c) = catch {
@@ -1096,7 +1108,7 @@ mod repsel_denial_tests {
     }
 
     /// #7128: a local that passed every range proof and lost only to the
-    /// profitability model names that, and not the context gate — otherwise
+    /// facts' int demand names that, and not the context gate — otherwise
     /// `15_mandelbrot`'s `iter` would report `module_init_context`, which is
     /// exactly the rule #7121 removed, sending the next reader back to a bug
     /// that is already fixed.

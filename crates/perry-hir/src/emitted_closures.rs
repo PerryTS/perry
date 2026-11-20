@@ -72,6 +72,7 @@ pub fn collect_closure_refs_in_stmts<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_closure_refs_in_stmts(body, seen, out);
                 if let Some(c) = catch {

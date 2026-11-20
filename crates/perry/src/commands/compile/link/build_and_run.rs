@@ -196,6 +196,19 @@ pub(crate) fn build_and_run_link(
         is_cross_macos,
     )?;
 
+    // `PERRY_LINK_LLD=1`: lld instead of GNU ld for a native glibc Linux
+    // executable built on Linux with the default function layout
+    // (`elf_linker`).
+    let lld = super::elf_linker::use_lld(
+        cfg!(target_os = "linux")
+            && is_linux
+            && !is_musl
+            && matches!(target, None | Some("linux"))
+            && matches!(
+                perry_codegen::program_function_layout(),
+                perry_codegen::FunctionLayout::Default
+            ),
+    );
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
@@ -236,6 +249,28 @@ pub(crate) fn build_and_run_link(
             {
                 cmd.arg("-no-pie");
             }
+            if let Some(mode) = lld {
+                super::elf_linker::add_link_args(&mut cmd, mode);
+            }
+            // An Android program is a shared object, and a shared object
+            // exports every default-visibility symbol: each one is a
+            // --gc-sections root, so nothing in the runtime or stdlib is ever
+            // collected, and references from adapters that only a linked
+            // wrapper archive installs (perry-ext-http's `js_ext_http_*`,
+            // `common::wrapper_imports`) stay as undefined symbols that make
+            // `System.loadLibrary` fail. The Java side reaches the library
+            // only through JNI, so it exports exactly that and everything
+            // else is local, as in an executable. Patterns, not names: lld
+            // rejects a named global the program doesn't define.
+            if is_android {
+                let script = ctx.cache_dir.join("android-exports.map");
+                fs::create_dir_all(&ctx.cache_dir)?;
+                fs::write(
+                    &script,
+                    "{\n  global:\n    Java_*;\n    JNI_On*;\n    ANativeActivity_on*;\n  local:\n    *;\n};\n",
+                )?;
+                cmd.arg(format!("-Wl,--version-script={}", script.display()));
+            }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
             cmd.arg("-dead_strip");
@@ -257,6 +292,20 @@ pub(crate) fn build_and_run_link(
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }
+        // The runtime archives this link may pull from, for the default
+        // hot-text order (`hot_text_order`).
+        let stdlib_archive = stdlib_lib.as_deref().filter(|_| ctx.needs_stdlib);
+        let runtime_archives: Vec<&Path> =
+            std::iter::once(runtime_lib).chain(stdlib_archive).collect();
+        // The script must fit the linker that runs: the native lld switch,
+        // or a link line that picks lld itself (the cross links to Linux,
+        // `PERRY_EXTRA_LINK_ARGS`, appended last below).
+        let extra_args = super::extra_link_args();
+        let runs_lld = lld.is_some()
+            || super::elf_linker::driver_runs_lld(
+                cmd.get_args()
+                    .chain(extra_args.iter().map(std::ffi::OsStr::new)),
+            );
         super::function_layout::add_link_args(
             &mut cmd,
             &ctx.cache_dir,
@@ -265,12 +314,28 @@ pub(crate) fn build_and_run_link(
             is_harmonyos,
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+            &runtime_archives,
+            runs_lld,
+            // The default hot-data order: native glibc Linux executables,
+            // where it was recorded and measured (`hot_data_order`).
+            cfg!(target_os = "linux")
+                && is_linux
+                && !is_musl
+                && matches!(target, None | Some("linux")),
+            verbose,
         )?;
         super::runtime_layouts::add_link_args(
             &mut cmd,
             !(is_linux || is_android || is_harmonyos),
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+        );
+        super::wrapper_hooks::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+            well_known_libs,
         );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
@@ -566,7 +631,20 @@ pub(crate) fn build_and_run_link(
                     cmd.arg(wk);
                 }
             }
-            cmd.arg(stdlib);
+            // The stdlib (linked first) bundles its own `jni` crate copy; left
+            // global, its AttachGuard functions shadow perry-ui-android's and
+            // the jni frame-level check aborts in PerryBridge.nativeInit.
+            let ndk_bin = std::env::var_os("ANDROID_NDK_HOME").and_then(|ndk| {
+                std::path::Path::new(&ndk_clang_path(&ndk.to_string_lossy()))
+                    .parent()
+                    .map(|p| p.to_path_buf())
+            });
+            let stdlib = if is_android {
+                localize_bundled_jni_in_stdlib(stdlib, ndk_bin.as_deref())
+            } else {
+                stdlib.clone()
+            };
+            cmd.arg(&stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
             for wk in &well_known_libs {

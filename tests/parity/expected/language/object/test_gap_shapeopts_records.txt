@@ -1,0 +1,37 @@
+source 2,10,label,accessor,__proto__ 2 true false
+2 true true true 2 undefined undefined
+10 false true false 10 undefined undefined
+label false false true record undefined undefined
+accessor undefined true true undefined function function
+__proto__ true true true 77 undefined undefined
+symbols 31 false false false true
+created 2,10,label,accessor,__proto__ 2 true false
+2 true true true 2 undefined undefined
+10 false true false 10 undefined undefined
+label false false true record undefined undefined
+accessor undefined true true undefined function function
+__proto__ true true true 77 undefined undefined
+symbols 31 false false false true
+defined 2,10,label,accessor,__proto__ 2 true false
+2 true true true 2 undefined undefined
+10 false true false 10 undefined undefined
+label false false true record undefined undefined
+accessor undefined true true undefined function function
+__proto__ true true true 77 undefined undefined
+symbols 31 false false false true
+getters-before-read 0 true
+receiver-access 19 1 19
+edited 202 false 303 true true
+restricted-source 1 false false true
+extra 4
+restricted-source 2 true false true
+extra 4
+restricted-source 3 true true true
+extra 4
+DEC 250: Cannot add member Object.prototype.recordKey: built-in objects are read-only in a compiled program
+reflection-create 0 true 47 true 53 true
+bags true undefined missing 67 true
+revalidated first,last 101 103 false false
+current-slot 131 127
+complete-data TypeError 139 157 0 replace
+snapshot-owned a,c,e 1 3 5 undefined

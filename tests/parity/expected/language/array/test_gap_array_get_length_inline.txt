@@ -1,0 +1,53 @@
+11 undefined 33 undefined undefined
+negative fraction nan 11 leading 3
+11 undefined undefined undefined
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+undefined 9 undefined 0
+72 24
+1 81 3 3
+5 3
+3 2
+5 undefined
+8
+1 undefined
+6 3
+4 95 104
+6
+zero custom
+91 2
+b 3
+4 5 2 6
+9 10 undefined 2
+123 2
+8 NaN NaN NaN NaN
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+NaN NaN
+192
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot add member Object.prototype.24: built-in objects are read-only in a compiled program
+inherited holes undefined undefined
+inherited oob undefined undefined undefined
+DEC 250: Cannot add member Object.prototype.23: built-in objects are read-only in a compiled program
+precedence undefined
+custom holes 99 undefined
+custom oob 99 undefined
+null proto undefined
+proxy proto 117
+array proto 100
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+intrinsic relink undefined
+DEC 250: Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+prototype data holes undefined undefined
+prototype data oob undefined undefined
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+undefined getter shadows undefined
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+intrinsic object after global replace undefined
+own algorithm getter 21 11,21,33
+own sparse algorithm 41 undefined
+own shifted algorithm 4,5
+own setter shadows undefined undefined
+frozen prototype data 45

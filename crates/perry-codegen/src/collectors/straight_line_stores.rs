@@ -68,6 +68,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n);
@@ -120,6 +121,7 @@ mod tests {
             value: Box::new(Expr::Number(1.0)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }
@@ -174,6 +176,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,

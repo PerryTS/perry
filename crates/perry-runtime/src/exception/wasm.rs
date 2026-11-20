@@ -5,23 +5,24 @@ use perry_abi::WasmEhCheckpoint;
 #[no_mangle]
 pub unsafe extern "C" fn js_wasm_eh_checkpoint_save(out: *mut WasmEhCheckpoint) {
     let shadow = crate::gc::frame_root_savepoint();
+    let stacks = super::marks::catch_stack_depths();
     // GC_STORE_AUDIT(STACK): caller-owned checkpoint of stack depths, not managed pointers.
     out.write(WasmEhCheckpoint {
         handles: crate::gc::runtime_handle_stack_len() as u64,
         shadow_frame_top: shadow.frame_top as u64,
         shadow_len: shadow.len as u64,
-        async_context: crate::async_context::context_guard_depth() as u64,
+        async_context: stacks.context_guards as u64,
         temp_roots: crate::gc::temp_root_len() as u64,
-        call_method: crate::object::call_method_depth() as u64,
-        pump: crate::stdlib_pump::pump_depth() as u64,
-        set_foreach: crate::set::set_foreach_depth() as u64,
-        map_foreach: crate::map::map_foreach_depth() as u64,
-        prototype_resolution: crate::object::prototype_chain::resolution_stack_depth() as u64,
-        static_private_owner: crate::object::static_private_owner_depth() as u64,
-        private_lexical_brand: crate::object::private_lexical_brand_depth() as u64,
-        derived_super_binding: crate::object::derived_super_binding_len() as u64,
-        private_member_access_hints: crate::object::private_member_access_hints_depth() as u64,
-        namespace_override: crate::object::namespace_override_depth() as u64,
+        call_method: stacks.call_method as u64,
+        pump: stacks.pump as u64,
+        set_foreach: stacks.set_foreach as u64,
+        map_foreach: stacks.map_foreach as u64,
+        prototype_resolution: stacks.prototype_resolution as u64,
+        static_private_owner: stacks.static_private_owner as u64,
+        private_lexical_brand: stacks.private_lexical_brand as u64,
+        derived_super_binding: stacks.derived_super_binding as u64,
+        private_member_access_hints: stacks.private_member_access_hints as u64,
+        namespace_override: stacks.namespace_override as u64,
     });
 }
 

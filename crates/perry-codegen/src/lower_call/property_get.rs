@@ -24,11 +24,15 @@ use crate::types::{DOUBLE, I1, I64};
 mod builtin_kind_guard;
 pub(crate) mod completed_object;
 mod dynamic_dispatch;
-pub(crate) use dynamic_dispatch::method_target_is_cased;
+pub(crate) use dynamic_dispatch::try_lower_proven_method_call;
+pub(crate) use dynamic_dispatch::{
+    lower_function_spread_call, method_target_is_cased, try_lower_instance_method_spread_call,
+};
 mod fetch_chain;
 mod helpers;
 mod imported_object;
 mod map_set;
+pub(crate) use map_set::try_lower_certified_map;
 mod number_string;
 pub(crate) mod own_override_guard;
 pub(crate) mod patched_proto;
@@ -265,7 +269,7 @@ fn lower_tag_guarded_string_entry(
         property,
         &recv,
         &arg_vals,
-        patched_before.as_deref(),
+        crate::lower_string_method::EntryGuard::from_pre_read(patched_before.as_deref()),
         Some(&generic_label),
     )?;
     let string_end = ctx.block().label.clone();
@@ -308,6 +312,28 @@ pub fn try_lower_property_get_method_call(
     // `js_set_call_location` from this captured value, immediately before the
     // throwing dispatch. `0` (and the default build) → no emission.
     let call_byte_offset = ctx.strings.pending_call_offset();
+    // A deferred namespace evaluates its module in `[[Get]]`, so the receiver
+    // must be resolved before the arguments run. Every arm below binds the
+    // call to a native builtin from the property name alone and reads the
+    // receiver afterwards, so a deferred receiver takes the generic split
+    // dispatch (callee first) that `ns.export(arg())` already uses.
+    if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+        if ctx.deferred_namespace_imports.contains(name) {
+            return Ok(None);
+        }
+    }
+    // A receiver annotated a typed array whose values the facts do not prove
+    // typed arrays (`method_site`): the ordinary method call, before any arm
+    // binds the call to a built-in from the annotation.
+    if crate::method_site::unproven_typed_array_call(
+        ctx,
+        perry_hir::folded_call::callee_site(callee),
+        object,
+        property,
+    )? {
+        return own_override_guard::emit_dispatcher(ctx, object, property, args, call_byte_offset)
+            .map(Some);
+    }
     if property == "apply"
         && args.len() == 2
         && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),

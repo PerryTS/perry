@@ -195,19 +195,6 @@ impl ElementShapeFacts {
         self.arrays.is_empty()
     }
 
-    /// Test-only: are ALL fact maps empty? `is_empty` gates every consumer and
-    /// keys on `arrays` alone; the other three are kept consistent with it by
-    /// construction, and `tests::is_empty_covers_every_fact_map` is what holds
-    /// that invariant in place.
-    #[cfg(test)]
-    pub(crate) fn debug_all_maps_empty(&self) -> bool {
-        self.arrays.is_empty()
-            && self.array_roots.is_empty()
-            && self.pushed.is_empty()
-            && self.element_reads.is_empty()
-            && self.callback_params.is_empty()
-    }
-
     /// Is `value_local`'s push into `array_local` covered by a proven array,
     /// so rule 2 may treat that element position as contained?
     pub(crate) fn push_is_contained(&self, value_local: u32, array_local: u32) -> bool {
@@ -571,9 +558,7 @@ pub(crate) fn collect_element_shape_facts(
                     && !module_globals.contains_key(&carrier)
             }
         };
-        if !index_ok
-            || boxed_vars.contains(&read.index)
-            || module_globals.contains_key(&read.index)
+        if !index_ok || boxed_vars.contains(&read.index) || module_globals.contains_key(&read.index)
         {
             continue;
         }
@@ -728,7 +713,10 @@ fn runtime_call<'e>(e: &'e Expr, name: &str) -> Option<&'e [Expr]> {
 }
 
 fn is_record_index_zero(e: &Expr) -> bool {
-    matches!(runtime_call(e, "arrayRecordIndex"), Some([Expr::Integer(0)]))
+    matches!(
+        runtime_call(e, "arrayRecordIndex"),
+        Some([Expr::Integer(0)])
+    )
 }
 
 /// `arrayRecordPayload(s, p := mode ? GetIterator(s) : s, s := undefined)`
@@ -810,7 +798,11 @@ impl<'a> ArrayWalk<'a> {
     /// `v = ForValue(mode, v, A[arrayRecordIndex(i)]); state = n; const r = v`.
     /// On a match the read is licensed (with `v` as its carrier) and the rest
     /// of the body is returned for the ordinary walk.
-    fn record_binding_prefix<'b>(&mut self, body: &'b [Stmt], bound: (u32, u32)) -> Option<&'b [Stmt]> {
+    fn record_binding_prefix<'b>(
+        &mut self,
+        body: &'b [Stmt],
+        bound: (u32, u32),
+    ) -> Option<&'b [Stmt]> {
         let (index, root) = bound;
         let [Stmt::Expr(Expr::LocalSet(value, read)), Stmt::Expr(Expr::LocalSet(state, state_value)), Stmt::Let {
             id: local,
@@ -820,8 +812,9 @@ impl<'a> ArrayWalk<'a> {
         else {
             return None;
         };
-        let [mode, Expr::LocalGet(previous), Expr::IndexGet { object, index: key, .. }] =
-            runtime_call(read, "arrayRecordForValue")?
+        let [mode, Expr::LocalGet(previous), Expr::IndexGet {
+            object, index: key, ..
+        }] = runtime_call(read, "arrayRecordForValue")?
         else {
             return None;
         };
@@ -1097,6 +1090,7 @@ impl<'a> ArrayWalk<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {
@@ -1602,6 +1596,7 @@ pub(super) fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, f);
                 if let Some(c) = catch {

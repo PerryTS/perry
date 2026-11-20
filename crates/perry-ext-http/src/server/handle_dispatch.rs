@@ -30,7 +30,6 @@ use perry_ffi::{
 use crate::server::http2_server::Http2SecureServer;
 use crate::server::https_server::HttpsServer;
 use crate::server::request::IncomingMessage;
-#[cfg(test)]
 use crate::server::response::ServerResponse;
 use crate::server::server::HttpServer;
 use crate::server::types::{read_string_header, POINTER_TAG, PTR_MASK, TAG_NULL, TAG_UNDEFINED};
@@ -225,6 +224,31 @@ pub extern "C" fn js_ext_http_server_response_is_handle(handle: i64) -> i32 {
     } else {
         0
     }
+}
+
+/// Classify a live server-side request/response registry handle for the
+/// runtime's `Object.getPrototypeOf` (#13802): the discriminant of
+/// `perry_runtime::object::HttpServerHandleKind` naming the constructor whose
+/// `.prototype` node gives it, or 0. A heap response (`new ServerResponse(req)`)
+/// is an ordinary object with its own prototype and is not a handle here.
+pub(crate) extern "C" fn http_server_handle_kind(handle: i64) -> u8 {
+    if let Some(response) = get_handle::<ServerResponse>(handle) {
+        return if response.http2_compat {
+            3 // Http2ServerResponse
+        } else if response.outgoing_message_only {
+            5 // OutgoingMessage
+        } else {
+            1 // ServerResponse
+        };
+    }
+    if let Some(request) = get_handle::<IncomingMessage>(handle) {
+        return if request.http2_compat {
+            4 // Http2ServerRequest
+        } else {
+            2 // IncomingMessage
+        };
+    }
+    0
 }
 
 fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
@@ -1168,7 +1192,7 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
             .map(|message| message.connection_bytes_written as f64)
             .unwrap_or(0.0),
         "rawBody" => js_node_http_im_raw_body(handle),
-        "constructor" => constructor_object("IncomingMessage"),
+        "constructor" => handle_constructor(handle, "IncomingMessage"),
         _ => undef,
     }
 }
@@ -1207,6 +1231,12 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
     }
 
     match property.as_str() {
+        "writable"
+            if super::response::response_state(response_root.get())
+                .is_some_and(|sr| sr.http2_compat) =>
+        {
+            bool_value(true)
+        }
         "statusCode" => js_node_http_res_get_status(response_root.get()),
         "statusMessage" => js_node_http_res_get_status_message(response_root.get()),
         "headersSent" => bool_value(js_node_http_res_headers_sent(response_root.get()) != 0),
@@ -1232,9 +1262,26 @@ pub unsafe extern "C" fn js_ext_http_server_response_dispatch_property(
         "socket" | "connection" => response_socket_value(response_root.get()),
         // #4909 — `out.constructor.name` discrimination (corpus
         // outgoing-message tests branch on it).
-        "constructor" => constructor_object("ServerResponse"),
+        "constructor" => handle_constructor(response_root.get(), "ServerResponse"),
         _ => undef,
     }
+}
+
+/// `<handle>.constructor`: the constructor whose `.prototype` the handle has
+/// (`Http2ServerResponse` for an HTTP/2 compat response, #13802), else the
+/// `{ name }` stand-in below.
+fn handle_constructor(handle: i64, fallback_name: &str) -> f64 {
+    extern "C" {
+        fn js_http_server_handle_constructor(kind: u8) -> f64;
+    }
+    let kind = http_server_handle_kind(handle);
+    if kind != 0 {
+        let constructor = unsafe { js_http_server_handle_constructor(kind) };
+        if JsValue::from_bits(constructor.to_bits()).is_pointer() {
+            return constructor;
+        }
+    }
+    constructor_object(fallback_name)
 }
 
 /// `{ name: <class name> }` — stands in for `<handle>.constructor` so
@@ -1458,6 +1505,52 @@ mod response_socket_tests {
         );
         drop_handle(standalone);
         perry_ext_net::native_transport::destroy(socket);
+    }
+
+    /// #13802: the runtime gives each server handle the prototype of the
+    /// constructor this classifier names, so the HTTP/2 compat pair must not
+    /// read as `http.IncomingMessage` / `http.ServerResponse`.
+    #[test]
+    fn server_handle_kind_names_the_compat_constructors() {
+        perry_ffi::initialize_runtime_fixture();
+        unsafe { crate::server::native_dispatch::js_ext_http_nm_install() };
+        let scope = perry_ffi::TransientRootScope::enter();
+        let incoming = || {
+            IncomingMessage::new(
+                "GET".into(),
+                "/".into(),
+                HashMap::new(),
+                Vec::new(),
+                Vec::new(),
+                "127.0.0.1".into(),
+                1234,
+            )
+        };
+        let http1_request = alloc_incoming_message(incoming());
+        let http1_response = crate::server::response::alloc_http1_server_response_for_turnloop(
+            f64::from_bits(TAG_UNDEFINED),
+            0,
+            http1_request,
+            0.0,
+        );
+        let http1_response = scope.root_nanbox(http1_response);
+        let mut compat = incoming();
+        compat.http2_compat = true;
+        let http2_request = alloc_incoming_message(compat);
+        let http2_response =
+            crate::server::response::alloc_server_response_for_turnloop(0, 0, http2_request);
+
+        let http1_response = crate::server::server::object_handle(http1_response.get());
+        assert_eq!(http_server_handle_kind(http1_response), 0);
+        assert_eq!(http_server_handle_kind(http1_request), 2);
+        assert_eq!(http_server_handle_kind(http2_response), 3);
+        assert_eq!(http_server_handle_kind(http2_request), 4);
+        assert_eq!(http_server_handle_kind(0), 0);
+
+        crate::server::response_payload::close(http1_response);
+        for handle in [http2_response, http2_request, http1_request] {
+            drop_handle(handle);
+        }
     }
 
     #[test]

@@ -324,6 +324,7 @@ fn lower_constructor_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -379,6 +380,7 @@ pub fn collect_method_captures(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_let_ids(body, out);
                     if let Some(c) = catch {
@@ -424,6 +426,11 @@ pub fn lower_class_method(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
 ) -> Result<Function> {
+    if let ast::PropName::Computed(computed) = &method.key {
+        if let Some(key) = crate::lower_decl::helpers::literal_computed_key(&computed.expr) {
+            return lower_class_method_with_name(ctx, method, format!("{}", key));
+        }
+    }
     let name = match &method.key {
         ast::PropName::Ident(ident) => ident.sym.to_string(),
         ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
@@ -725,6 +732,7 @@ fn lower_class_method_in_scope(
         decorators,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     })
 }
 
@@ -733,6 +741,11 @@ pub fn lower_getter_method(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
 ) -> Result<Function> {
+    if let ast::PropName::Computed(computed) = &method.key {
+        if let Some(key) = crate::lower_decl::helpers::literal_computed_key(&computed.expr) {
+            return lower_getter_method_with_name(ctx, method, format!("get_{}", key));
+        }
+    }
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("get_{}", ident.sym),
         ast::PropName::Str(s) => format!("get_{}", s.value.as_str().unwrap_or("")),
@@ -853,6 +866,7 @@ fn lower_getter_method_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -864,6 +878,11 @@ pub fn lower_setter_method(
     ctx: &mut LoweringContext,
     method: &ast::ClassMethod,
 ) -> Result<Function> {
+    if let ast::PropName::Computed(computed) = &method.key {
+        if let Some(key) = crate::lower_decl::helpers::literal_computed_key(&computed.expr) {
+            return lower_setter_method_with_name(ctx, method, format!("set_{}", key));
+        }
+    }
     let name = match &method.key {
         ast::PropName::Ident(ident) => format!("set_{}", ident.sym),
         ast::PropName::Str(s) => format!("set_{}", s.value.as_str().unwrap_or("")),
@@ -1036,6 +1055,7 @@ fn lower_setter_method_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),

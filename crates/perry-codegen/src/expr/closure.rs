@@ -53,6 +53,7 @@ pub(crate) fn plain_async_step_release_ids(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out);
                     if let Some(catch) = catch {
@@ -410,17 +411,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Fresh closures can install boxed and ordinary captures in bulk.
             // The runtime roots and refreshes every word on its collecting arm.
             let bulk_fresh_init = !no_capture_singleton && !captured_singleton && total_caps > 0;
-            // An `async function(){}` *expression* closure (one with no
-            // `await` — bodies that await are rewritten to a state machine
-            // upstream and arrive with `is_async: false`) is async in its
-            // info, so `IsConstructor`/`util.types.isAsyncFunction` recognize
-            // it and its ShapeId names %AsyncFunction.prototype% at birth.
-            // Generators are hoisted to top-level and described elsewhere.
-            // (Test262 subclass/superclass-async-function.)
-            if *is_async {
-                ctx.block()
-                    .note_fn_info(&func_name, |facts| facts.set_async());
-            }
+            // The function object's kind (`%AsyncFunction.prototype%` and the
+            // generator kinds) is in its info from `artifacts.rs`, which reads
+            // `perry_hir::fn_proto::FnProtoKind` for every closure body.
             // A small fresh birth passes the complete header image and its
             // capture words in registers. The shared helper stores directly in
             // the final payload; there is no per-site bump path or stack copy.
@@ -453,6 +446,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 );
                 let async_generator = blk.icmp_ne(I32, &async_generator, "0");
                 let kind = blk.select(crate::types::I1, &async_generator, I32, "3", &kind);
+                // A plain body that cannot construct (arrow, method,
+                // FN_NON_CONSTRUCTOR) has its own family: no `prototype` key.
+                let nonctor = blk.and(
+                    I32,
+                    &flags,
+                    &(crate::runtime_abi::FN_ARROW | crate::runtime_abi::FN_NON_CONSTRUCTOR)
+                        .to_string(),
+                );
+                let nonctor = blk.icmp_ne(I32, &nonctor, "0");
+                let plain = blk.icmp_eq(I32, &kind, "0");
+                let nonctor = blk.and(crate::types::I1, &nonctor, &plain);
+                let kind = blk.select(
+                    crate::types::I1,
+                    &nonctor,
+                    I32,
+                    &crate::runtime_abi::NON_CONSTRUCTOR_FAMILY_INDEX.to_string(),
+                    &kind,
+                );
                 blk.add(
                     I32,
                     &kind,
@@ -508,65 +519,83 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             .unwrap_or_else(|| crate::nanbox::TAG_UNDEFINED_I64.to_string())
                     })
                     .collect();
-                super::inline_birth::closure(ctx, &info_ref, &birth_header, &words, |ctx| {
-                    if small_fresh_birth {
-                        let words: Vec<&str> = (0..3)
-                            .map(|i| {
-                                captured_value_bits.get(i).map(String::as_str).unwrap_or(
-                                    if i < total_caps {
-                                        crate::nanbox::TAG_UNDEFINED_I64
-                                    } else {
-                                        "0"
-                                    },
-                                )
-                            })
-                            .collect();
-                        ctx.block().call(
-                            I64,
-                            "js_closure_alloc_small",
-                            &[
-                                (PTR, &info_ref),
-                                (I64, &birth_header),
-                                (I64, words[0]),
-                                (I64, words[1]),
-                                (I64, words[2]),
-                            ],
-                        )
-                    } else if bulk_fresh_init {
-                        // Fresh (identity-carrying) closure with bulk captures:
-                        // ONE runtime call does allocation + slots + layout instead of
-                        // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
-                        // capture (each re-resolving the header, forwarding, kind
-                        // dispatch and the barrier's page classification). The reserved
-                        // `this` / `new.target` slots are pre-filled with the pointer-free
-                        // sentinel the per-slot path relied on `js_closure_alloc` writing;
-                        // the post-create patch below fills them exactly as before.
-                        let buf = ctx.func.alloca_entry_array(I64, total_caps);
-                        {
-                            let blk = ctx.block();
-                            for i in 0..total_caps {
-                                let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
-                                match captured_value_bits.get(i) {
-                                    Some(v_bits) => blk.store(I64, v_bits, &slot),
-                                    None => blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot),
+                // The cell holds the body's own slots after the captures: the
+                // count its info will carry (`fn_info::own_slots_for_flags`).
+                // A cell born without them keeps its own values in its bag.
+                let own_slots = if *is_arrow {
+                    0
+                } else {
+                    crate::fn_info::own_slots_for_flags(ctx.block().fn_info_flags(&func_name))
+                        as usize
+                };
+                super::inline_birth::closure(
+                    ctx,
+                    &info_ref,
+                    &birth_header,
+                    &words,
+                    own_slots,
+                    |ctx| {
+                        if small_fresh_birth {
+                            let words: Vec<&str> = (0..3)
+                                .map(|i| {
+                                    captured_value_bits.get(i).map(String::as_str).unwrap_or(
+                                        if i < total_caps {
+                                            crate::nanbox::TAG_UNDEFINED_I64
+                                        } else {
+                                            "0"
+                                        },
+                                    )
+                                })
+                                .collect();
+                            ctx.block().call(
+                                I64,
+                                "js_closure_alloc_small",
+                                &[
+                                    (PTR, &info_ref),
+                                    (I64, &birth_header),
+                                    (I64, words[0]),
+                                    (I64, words[1]),
+                                    (I64, words[2]),
+                                ],
+                            )
+                        } else if bulk_fresh_init {
+                            // Fresh (identity-carrying) closure with bulk captures:
+                            // ONE runtime call does allocation + slots + layout instead of
+                            // `js_closure_alloc` plus a `js_closure_set_capture_bits` per
+                            // capture (each re-resolving the header, forwarding, kind
+                            // dispatch and the barrier's page classification). The reserved
+                            // `this` / `new.target` slots are pre-filled with the pointer-free
+                            // sentinel the per-slot path relied on `js_closure_alloc` writing;
+                            // the post-create patch below fills them exactly as before.
+                            let buf = ctx.func.alloca_entry_array(I64, total_caps);
+                            {
+                                let blk = ctx.block();
+                                for i in 0..total_caps {
+                                    let slot = blk.gep(I64, &buf, &[(I64, &format!("{}", i))]);
+                                    match captured_value_bits.get(i) {
+                                        Some(v_bits) => blk.store(I64, v_bits, &slot),
+                                        None => {
+                                            blk.store(I64, crate::nanbox::TAG_UNDEFINED_I64, &slot)
+                                        }
+                                    }
                                 }
                             }
+                            let blk = ctx.block();
+                            blk.call(
+                                I64,
+                                "js_closure_alloc_fixed",
+                                &[(PTR, &info_ref), (I64, &birth_header), (PTR, &buf)],
+                            )
+                        } else {
+                            let blk = ctx.block();
+                            blk.call(
+                                I64,
+                                "js_closure_alloc_empty",
+                                &[(PTR, &info_ref), (I32, &shape)],
+                            )
                         }
-                        let blk = ctx.block();
-                        blk.call(
-                            I64,
-                            "js_closure_alloc_fixed",
-                            &[(PTR, &info_ref), (I64, &birth_header), (PTR, &buf)],
-                        )
-                    } else {
-                        let blk = ctx.block();
-                        blk.call(
-                            I64,
-                            "js_closure_alloc_empty",
-                            &[(PTR, &info_ref), (I32, &shape)],
-                        )
-                    }
-                })
+                    },
+                )
             };
 
             // The captured-singleton helper writes captures internally. Boxed

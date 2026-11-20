@@ -99,7 +99,7 @@ impl<'s> GlobProgram<'s> {
 /// callers propagate it after dropping native filesystem temporaries.
 pub(crate) fn js_error(error: EngineError) -> f64 {
     match api::caught(|| api::finish::<()>(Err(error))) {
-        Err(EngineError::Abrupt(value)) => value,
+        Err(EngineError::Abrupt(value)) => value.value(),
         _ => unreachable!("the common error boundary must throw"),
     }
 }

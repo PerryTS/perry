@@ -10,6 +10,7 @@ pub mod capability;
 mod class_accessors;
 pub mod crypto_chain;
 pub mod deferral;
+pub mod descriptor;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
 pub mod egress;
@@ -18,6 +19,8 @@ pub use emitted_closures::emitted_closures;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
+pub mod fn_proto;
+pub mod folded_call;
 pub mod fx;
 pub mod ir;
 pub mod js_transform;
@@ -41,6 +44,7 @@ pub fn is_typescript_source(path: &std::path::Path) -> bool {
         Some("ts" | "tsx" | "mts" | "cts")
     )
 }
+pub mod namespace_pairs;
 pub mod patched_builtins;
 pub mod private_names;
 pub mod solid_jsx;
@@ -104,6 +108,7 @@ pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTabl
 mod iterator_record;
 
 pub mod dynamic_code;
+pub mod method_call;
 pub mod realm_reach;
 pub mod static_dynamic_code;
 

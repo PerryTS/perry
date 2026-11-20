@@ -1,0 +1,1 @@
+Eight `perry-wpfacts` test modules that `tests.rs` no longer named are registered again, so 30 of their tests run in CI; five that fail on `main`, including a callee-grown literal reported fixed-length and a String object element read reported primitive, are ignored with the observed failure.

@@ -148,10 +148,13 @@ impl<'a> FuncEmitCtx<'a> {
             }
             // Array methods
             "push" if !args.is_empty() => {
-                self.emit_frame_begin(func, 2);
+                let argc = 1 + args.len() as u32;
+                self.emit_frame_begin(func, argc);
                 self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_memcall(func, "array_push", 2);
+                for (slot, arg) in (1..).zip(args) {
+                    self.emit_store_arg(func, slot, arg);
+                }
+                self.emit_memcall(func, "array_push", argc);
                 // result is the handle; now get length
                 self.emit_frame_begin(func, 1);
                 func.instruction(&Instruction::LocalSet(self.temp_local));
@@ -178,13 +181,13 @@ impl<'a> FuncEmitCtx<'a> {
                 true
             }
             "join" => {
+                self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, object);
                 if !args.is_empty() {
                     self.emit_store_arg(func, 1, &args[0]);
                 } else {
                     let comma_id = self.emitter.string_map.get(",").copied().unwrap_or(0);
                     let bits = (STRING_TAG << 48) | (comma_id as u64);
-                    self.emit_frame_begin(func, 2);
                     self.emit_store_const(func, 1, f64::from_bits(bits));
                 }
                 self.emit_memcall(func, "array_join", 2);

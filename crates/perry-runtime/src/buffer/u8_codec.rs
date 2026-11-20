@@ -115,14 +115,14 @@ unsafe fn string_bytes(str_handle: i64) -> Option<crate::string::OwnedStringByte
 
 fn throw_syntax(message: &[u8]) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(s);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *mut u8).bits()))
+    let err = crate::error::CoreError::syntax_error(s);
+    crate::exception::throw_core(err)
 }
 
 fn throw_type(message: &[u8]) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *mut u8).bits()))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 /// Build a `{ read, written }` result object as Node returns for `setFrom*`.

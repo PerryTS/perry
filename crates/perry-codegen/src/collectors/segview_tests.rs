@@ -86,6 +86,7 @@ fn for_stmt(destructure: Vec<Stmt>, body: Vec<Stmt>) -> Stmt {
             body: vec![Stmt::Throw(Expr::LocalGet(12))],
         }),
         finally: None,
+        forof_completion: None,
     });
     Stmt::For {
         init: Some(Box::new(let_(RESULT, "__result_7", for_of_next()))),
@@ -206,6 +207,7 @@ fn a_record_use_inside_a_closure_rejects() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

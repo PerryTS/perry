@@ -113,7 +113,7 @@ fn serialize_supported_values_still_transfer() {
                 SerializedValue::Inline(b) if b == bits
             ));
         }
-        let int_bits = INT32_TAG | 42u64;
+        let int_bits = INTERNAL_WORD_TAG | 42u64;
         assert!(matches!(
             serialize_nanbox_for_thread(int_bits),
             SerializedValue::Inline(b) if b == int_bits

@@ -1,109 +1,338 @@
 //! Unit tests: small programs lowered from source, facts checked directly.
 
+mod absent_key;
+mod accessor_after_data_store;
 mod accessor_keys;
+mod accessor_layout_exit;
+mod accessor_reach;
 mod accessor_receiver;
+mod activation_paths;
+mod annexb_accessors;
+mod annexb_known_accessor;
+mod annexb_method_value;
+mod annexb_own_accessor;
+mod any_key_builtin_read;
+mod args_beside_rest;
+mod arguments_instances;
 mod arguments_object;
+mod arr_floor;
 mod array_ctor;
 mod array_elements;
+mod array_helper_nodes;
+mod array_holes;
 mod array_index_store;
 mod array_iteration;
-mod absent_key;
-mod host_objects;
-mod array_holes;
-mod for_of_yield;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
 mod array_record;
+mod array_reps;
 mod array_search;
+mod assign_inherited_setter;
+mod assign_to_object;
+mod at_rest;
+mod audit1;
+mod audit2;
 mod binding_write_gap;
 mod birth_elements;
 mod birth_site;
 mod body_activation;
 mod body_identity;
+mod body_packets;
+mod bool_field_guard;
+mod booleans;
+mod bound_call_memo;
+mod bound_class;
 mod bound_in_summary;
+mod box_chain;
+pub(crate) mod box_computed_read;
+mod boxed_primitive_methods;
+mod bufeq_pointsto;
+mod buffer_view_reads;
+mod builtin_ctor_call;
+mod builtin_fn_absent_member;
+mod builtin_fn_identity;
+mod builtin_fn_keys;
+mod builtin_member_call;
 mod builtin_members;
+mod builtin_program_fields;
+mod builtin_proto_value;
+mod builtin_spread;
+mod builtin_value_call;
+mod cache_key_runs;
+mod call_kinds;
 mod call_shadow;
-mod callable_contract;
 mod callback_origin;
+mod called_param_runs;
 mod captured;
+mod chw2_date_statics;
+mod chw4_has_instance;
 mod cjs_require;
+mod class_call_throws;
+mod class_capture_forwarding;
 mod class_statics;
 mod closed_marker_load;
 mod closed_world;
 mod closure_context;
+mod computed_delete_absent;
+pub(crate) mod computed_key_members;
+mod computed_method_key;
+mod computed_table_fn;
+mod const_arrays;
+mod const_key_read;
 mod const_key_set_store;
+mod const_numbers;
 mod ctor_observed;
 mod ctor_return;
+mod data_define_named;
+mod dce_reach;
 mod dead_dynamic_import;
+mod dead_fn;
+mod declared_effects;
+mod declared_getter_results;
 mod default_params;
+mod define_through_unknown;
+pub(crate) mod delivery_boundaries;
+pub(crate) mod described_holder_computed_read;
+mod descriptor_reads;
 mod diagnostics;
 mod dynamic_code;
 mod dynamic_import;
+mod dynamic_import_options;
+mod elem_undef;
+mod element_reads;
+mod element_sites;
+mod enum_member_type;
+mod error_proto_data_keys;
+mod error_to_string;
+mod escape_roots;
+mod escaped_active;
+mod escaped_beside_top;
 mod escaped_constructor;
 mod escaped_contract_result;
+mod escaped_fn_own_return;
 mod escaped_method_this;
 mod export_star;
+mod family_reach;
+mod fetch_headers;
 mod field_array_push;
-mod rest_elements;
+mod field_test_narrowing;
+mod field_truthy_filter;
+mod fill_births;
+mod first_store_order;
+mod fn_inst_default_proto;
+mod fn_intrinsic_proto;
+mod folded_call_own;
+mod for_in_enumerable_keys;
+mod for_in_key_read_enumerable;
+mod for_in_key_store;
 mod for_in_keys;
+mod for_in_runs_per_key;
+mod for_of_next_argument;
+mod for_of_yield;
+mod forin_key_string;
+mod fresh_static_blocks;
+mod function_call_value;
+mod function_ctor_without_interp;
 mod function_values;
+mod gen_members;
 mod getter_contract;
 mod global_gc;
 mod global_namespace_store;
+mod global_sentinel;
+mod gopd_key;
+mod held_lengths;
+mod host_objects;
 mod hub_tokens;
+mod identity_routes;
+mod idx_prim_call;
+mod in_bounds;
+mod in_bounds_read;
+mod index_key_read;
+mod indexed_callees;
 mod indexed_owner;
-mod inherited_layout;
+mod indirect_eval_call;
+mod inspect1;
+mod instance_nodes;
+mod instanceof_buffer_false;
+mod instanceof_class_has_instance;
+mod int32_reads;
+mod int_demand;
+mod int_ranges;
+mod internal_slot_no_property;
 mod interp_from_facts;
+mod iter_close;
+mod iter_realm_value;
+mod json_callbacks;
+mod json_object_proto_members;
+mod json_positions;
+mod json_protocol;
+mod key_signs;
+mod key_strings;
 mod layout_key;
 mod ledger;
+mod list_caps;
 mod lit_accessor;
+mod literal_strings;
+mod locked_builtins;
+mod locked_delete;
+mod locked_store;
+mod locked_top_define;
+mod locked_top_store;
+mod logical_and;
+mod map_entry_pairs;
+mod map_identity_ops;
+mod map_values;
+mod mathb1;
+mod e20g_global_name;
+mod e20g2_self_store;
+mod member_heritage;
 mod memo_context;
+mod method_sites;
+mod name_folds;
 mod named_accessors;
+mod named_lengths;
+mod named_method_on_class_value;
+mod namespace_own_members;
+mod namespace_own_static;
+mod native_accessor_get;
+mod native_array_proto;
+mod native_coercion;
+mod native_construct;
 mod native_fs;
 mod native_given_proto;
+mod native_given_runtime;
 mod native_member;
 mod native_proto;
+mod native_regexp_proto;
+mod native_target_accessor;
+mod native_user_code;
+mod null_proto_box_key;
 mod num_key;
+mod numeric_key_names;
+mod objproto_protocol;
+mod opaque_models;
+mod option_name_merge;
+mod own_data_stops_chain;
+mod own_guarded_read;
+mod own_helper_guard;
 mod own_key_shadow;
 mod own_length;
+mod own_prop_trap;
+mod own_store_read;
+mod own_values_proto;
 mod parent_value;
 mod plus_string;
+mod predicate_operands;
+mod prim_absent_member;
 mod prim_result;
+mod private_accessor_reach;
 mod private_field;
+mod private_method_flow;
+mod private_method_read;
 mod process_argv;
+mod promise_adopts_thenable;
+mod promise_all_positions;
+mod promise_all_result_instance;
 mod proof_receivers;
+mod proto_key_read;
+mod proto_lock_keys;
 mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
+mod protocol_touch_births;
+mod px1;
+mod quiet_sites;
+mod quiet_strings;
+mod r6defprop;
+mod range_tightening;
+mod raw1;
 mod reach_accessor;
+mod reach_proto_members;
+mod reach_thenable;
+mod realm_accessor_call;
+mod realm_chain_computed_key;
+mod realm_chain_members;
+mod realm_present;
 mod receiver_slots;
 mod receiver_this;
+mod records;
+mod recv_call_cycle;
+mod reflect_construct;
+mod reflect_new_target;
+mod regex_capture_suffix;
+mod regex_track_build;
+mod regexp_chain_methods;
 mod regexp_exec;
-mod relinked_parent;
+mod registry_prefix_runs;
+mod response_body;
 mod rest_element;
-mod run_once_closed;
+mod rest_elements;
+mod rest_elems;
+mod rest_fields;
+mod rest_instances;
+mod rest_positions;
+mod rest_shift;
+mod root4162;
+mod runtime_errors;
 mod runtime_helpers;
+mod set_proto_result;
+mod slice_call_array_like;
+mod sloppy_this_wrapper;
+mod specialized_prototype;
+mod spread_arguments;
+mod spread_callbacks;
+mod spread_compose_elems;
 mod spread_elements;
+mod spread_enumerable;
+mod spread_iterable_args;
+mod spread_root;
+mod st2;
+mod static_call_value;
+mod step_done;
+mod string_prefix_keys;
 mod summary;
 mod super_heritage;
+mod super_home_proto;
+mod super_key;
+mod switch_const_runs;
+mod switch_mask_union;
+mod switch_param_runs;
+mod sync_require;
+mod tdz_seed;
 mod top_element_key;
+mod track_key;
 mod type_export;
+mod typed_array_element_store;
 mod typed_array_exact;
+mod typed_array_key_bigint;
+mod typed_array_in_bounds;
+mod typed_array_key_read;
+mod typed_array_length;
+mod typed_array_names;
+mod typed_array_numeric_key;
+mod typed_array_symbol_absent;
+mod typed_array_this_throws;
+mod typed_elem;
 mod unheld_key;
-mod unit_alias;
-mod unit_cjs;
-mod unit_ctor;
-mod unit_effects;
-mod unit_extends;
-mod unit_mode;
-mod unit_namespace;
-mod unit_shared;
-mod unit_this;
 mod unknown_accessor_key;
-mod unrun_param_call;
+mod usound2;
+mod uuid_infix_keys;
+mod value_run_context;
+mod work_bound_widen;
+mod wrapper_realm_chain;
+mod written_prim_method_receiver;
+mod zero_sign;
 
-use crate::{compute, FactsConfig, ProgramFacts, Verdict};
+use crate::{compute, FactsConfig, ProgramFacts, SiteFacts, Verdict};
+
+/// The program `src` loaded beside an unseen module: `import "unseen-host"`
+/// names a file the program does not contain, so its code runs at load and
+/// may write any global (whole-program rule G). A control whose unknown value
+/// comes from an undeclared global takes it from there.
+pub(super) fn unseen(src: &str) -> String {
+    format!("import \"unseen-host\";\n{src}")
+}
 
 fn facts(src: &str) -> ProgramFacts {
     facts_with(src, FactsConfig::default())
@@ -123,25 +352,6 @@ fn tmpl<'a>(pf: &'a ProgramFacts, name: &str) -> &'a crate::TemplateFacts {
         .iter()
         .find(|t| t.display.ends_with(&format!(":{name}")))
         .unwrap_or_else(|| panic!("template {name} in\n{}", pf.dump_text()))
-}
-
-/// Some layout's field `key` holds a function, and never ⊤.
-fn holds_fn(pf: &ProgramFacts, key: &str) -> bool {
-    let fs: Vec<_> = pf
-        .templates
-        .iter()
-        .flat_map(|t| &t.fields)
-        .filter(|f| f.key == key)
-        .collect();
-    fs.iter().any(|f| f.kind.funcs > 0) && fs.iter().all(|f| !f.kind.top)
-}
-
-/// Every site of `key` is refused, for `why`.
-fn refused(pf: &ProgramFacts, key: &str, why: &str) -> bool {
-    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
-    !s.is_empty()
-        && s.iter()
-            .all(|s| matches!(&s.verdict, Verdict::No(r) if r.starts_with(why)))
 }
 
 fn field<'a>(t: &'a crate::TemplateFacts, k: &str) -> &'a crate::FieldFacts {
@@ -255,7 +465,8 @@ fn closure_writer_is_post_construction() {
 #[test]
 fn unknown_callee_escapes_argument() {
     let pf = facts(
-        r#"
+        r#"import "unseen-host";
+
         class P { x = 1; }
         declare const ext: any;
         const p = new P(); ext(p); console.log(p.x);
@@ -318,42 +529,6 @@ fn sabotage_plants_the_fact() {
     assert!(field(tmpl(&pf2, "P"), "x").readonly);
     assert!(pf2.dump_text().contains("# sabotage readonly:P.x"));
     assert_ne!(pf.digest_for("t.ts"), pf2.digest_for("t.ts"));
-}
-
-/// Writes `<dir>/t.facts` and `<dir>/t.facts.rel` for the checker scripts
-/// when `WPFACTS_TEST_DUMP_DIR` is set (developer aid; a no-op otherwise).
-#[test]
-fn write_dump_for_checker() {
-    let Some(dir) = std::env::var_os("WPFACTS_TEST_DUMP_DIR") else {
-        return;
-    };
-    let src = std::env::var("WPFACTS_TEST_SRC").unwrap_or_else(|_| {
-        r#"
-        class P { x: number; y = "s"; constructor(x: number) { this.x = x; } m() { return this.x; } }
-        class Q extends P { z = 1; get g() { return this.z; } }
-        function f(p: P) { return p.x + p.m(); }
-        const o = { a: 1, b: [1, 2] };
-        const q = new Q(2);
-        q.z = 3;
-        console.log(f(new P(1)), f(q), q.g, o.a, o.b.length);
-        "#
-        .to_string()
-    });
-    let pf = facts_with(
-        &src,
-        FactsConfig {
-            relations: true,
-            sabotage: std::env::var("WPFACTS_TEST_SABOTAGE").ok(),
-            dynamic_code: None,
-            budget_secs: None,
-            profile: false,
-            max_pts: None,
-            ..Default::default()
-        },
-    );
-    let dir = std::path::PathBuf::from(dir);
-    std::fs::write(dir.join("t.facts"), pf.dump_text()).unwrap();
-    std::fs::write(dir.join("t.facts.rel"), pf.relations_text().unwrap()).unwrap();
 }
 
 /// Decision 150: dynamic code naming the global scope is no kill. The class
@@ -439,7 +614,8 @@ fn interpreted_function_is_a_summary_node() {
 #[test]
 fn top_call_connects_only_top_values() {
     let pf = facts_with(
-        r#"
+        r#"import "unseen-host";
+
         class Kept { x: number; constructor(x: number) { this.x = x; } }
         const u: any = (globalThis as any).someUnknown;
         const r = u("a", 1);
@@ -668,7 +844,7 @@ fn dense_prototype_copies_preserve_all_values_within_work_bound() {
         assert!(
             !m.aborted,
             "{count}-value copies aborted at {} work",
-            m.work
+            m.work.get()
         );
         for n in reads {
             for &v in &values {
@@ -719,7 +895,7 @@ fn copying_a_base_into_a_superset_keeps_extra_values_and_primitives() {
     m.add_prim(src, prim::NUM);
     m.max_work = 100;
     m.solve();
-    assert!(!m.aborted, "base copy used {} work", m.work);
+    assert!(!m.aborted, "base copy used {} work", m.work.get());
     for t in values {
         assert!(m.nodes[dst as usize].pts.contains_tok(t));
     }
@@ -803,13 +979,13 @@ fn observed_bases_avoid_recopying_pending_prefixes_and_keep_independent_members(
         let later = m.tok(TokKind::ModNs(40));
         m.add(src, &[later], prim::STR);
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = 6000;
         m.solve();
         assert!(
             !m.aborted,
             "observed-base copies used {} work (own={own_members})",
-            m.work
+            m.work.get()
         );
         for (i, &dst) in destinations.iter().enumerate() {
             let n = &m.nodes[dst as usize];
@@ -844,10 +1020,10 @@ fn observed_relay_bases_share_new_batches_without_enumerating_each_transfer() {
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "batch sharing used {} work", m.work);
+    assert!(!m.aborted, "batch sharing used {} work", m.work.get());
     for dst in destinations {
         for &t in first.iter().chain(&next) {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -903,10 +1079,10 @@ fn small_observed_sets_preserve_superset_members_without_recopying_values() {
         extras.push(extra);
     }
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 1500;
     m.solve();
-    assert!(!m.aborted, "small supersets used {} work", m.work);
+    assert!(!m.aborted, "small supersets used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         for t in [a, b, extras[i]] {
             assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -943,10 +1119,10 @@ fn equal_snapshot_groups_keep_old_owners_covered_after_coalescing() {
     let added = m.tok(TokKind::ModNs(40));
     m.add_tok(src, added);
     // The bound measures the solve's deliveries, not setup.
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 5000;
     m.solve();
-    assert!(!m.aborted, "coalesced snapshots used {} work", m.work);
+    assert!(!m.aborted, "coalesced snapshots used {} work", m.work.get());
     for dst in first {
         assert!(m.nodes[dst as usize].pts.contains_tok(added));
     }
@@ -984,10 +1160,10 @@ fn delivered_cardinality_proves_batch_adoption_with_independent_storage() {
     m.add_tok(destinations[999], own);
     let next: Vec<_> = (40..80).map(|i| m.tok(TokKind::ModNs(i))).collect();
     m.add(src, &next, 0);
-    m.work = 0;
+    m.work.set(0);
     m.max_work = 2000;
     m.solve();
-    assert!(!m.aborted, "cardinality batches used {} work", m.work);
+    assert!(!m.aborted, "cardinality batches used {} work", m.work.get());
     for (i, dst) in destinations.into_iter().enumerate() {
         let n = &m.nodes[dst as usize];
         for &t in first.iter().chain(&next) {
@@ -1017,10 +1193,10 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
             }
         }
         // The bound measures the solve's deliveries, not setup.
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 9;
         m.solve();
-        assert!(!m.aborted, "late subscribers used {} work", m.work);
+        assert!(!m.aborted, "late subscribers used {} work", m.work.get());
         for &dst in &destinations {
             for t in [a, b, c] {
                 assert!(m.nodes[dst as usize].pts.contains_tok(t));
@@ -1028,7 +1204,7 @@ fn new_subscribers_receive_current_values_once_and_then_later_deliveries() {
         }
         let d = m.tok(TokKind::ModNs(4));
         m.add_tok(src, d);
-        m.work = 0;
+        m.work.set(0);
         m.max_work = group as u64 * 4;
         m.solve();
         assert!(!m.aborted);
@@ -1148,8 +1324,11 @@ fn cjs_cache_slot_holds_its_own_record() {
 /// store on what such a read returns (the loader's `child.parent = module`)
 /// is then a store on a record, not on a builtin (E20), and a call of it is
 /// no `Function(...)` call (E14). With `Object.prototype` as the prototype
-/// (`__perry_declared_keys_object`) the same read reaches the builtins.
-fn null_proto_read(births: &str) -> Option<String> {
+/// (`__perry_declared_keys_object`) the same read reaches the builtins: a
+/// store of `__proto__` relinks one and the value's members escape (E6); a
+/// store under a key the realm does not read back (`name`, `parent`) is
+/// their own field (rule R1, `realm_reads_store`).
+fn null_proto_read(births: &str, key: &str) -> Option<String> {
     let pf = facts(&format!(
         r#"
         class Parent {{ x = 1; }}
@@ -1159,7 +1338,7 @@ fn null_proto_read(births: &str) -> Option<String> {
         function read(path) {{ return cache[path]; }}
         const parent = new Parent();
         const got = read(String(Math.random()));
-        if (got !== undefined) got.parent = parent;
+        if (got !== undefined) got.{key} = parent;
         console.log(parent.x);
     "#
     ));
@@ -1168,11 +1347,21 @@ fn null_proto_read(births: &str) -> Option<String> {
 
 #[test]
 fn a_computed_read_of_a_null_prototype_record_stops_at_the_record() {
-    assert_eq!(null_proto_read("__perry_declared_keys"), None);
-    let escape = null_proto_read("__perry_declared_keys_object");
+    assert_eq!(null_proto_read("__perry_declared_keys", "parent"), None);
+    assert_eq!(null_proto_read("__perry_declared_keys", "name"), None);
+    assert_eq!(null_proto_read("__perry_declared_keys", "__proto__"), None);
+    assert_eq!(
+        null_proto_read("__perry_declared_keys_object", "name"),
+        None
+    );
+    let escape = null_proto_read("__perry_declared_keys_object", "__proto__");
     assert!(
-        escape.as_deref().is_some_and(|e| e.contains("E20")),
+        escape.as_deref().is_some_and(|e| e.contains("E6")),
         "{escape:?}"
+    );
+    assert_eq!(
+        null_proto_read("__perry_declared_keys_object", "parent"),
+        None
     );
 }
 
@@ -1283,498 +1472,69 @@ fn own_descriptor_enumeration_observes_late_accessor_constraints() {
     );
 }
 
-#[test]
-fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
-    use crate::model::{TokKind, TOP};
-    // DECISIONS 42: `d` holds ⊤, so the marker `mk` (reads as ⊤) is left
-    // out of it; `d` no longer holds all of `s`. Equal sizes then prove
-    // nothing: sharing `s`'s set would drop ⊤ from `d` (`copy_to`), and
-    // so would adopting a later delivery (`try_copy_delivery`). `e` has no
-    // ⊤: the marker reaches it as before.
-    let mut m = copy_solver_model();
-    let mk = m.tok(TokKind::ModNs(900));
-    let a = m.tok(TokKind::ModNs(901));
-    let b = m.tok(TokKind::ModNs(902));
-    let (s, d, e) = (m.node_l("s"), m.node_l("d"), m.node_l("e"));
-    m.set_marker_top(mk);
-    m.add(s, &[mk, a], 0);
-    m.add_tok(d, TOP);
-    m.edge(s, d);
-    m.edge(s, e);
-    m.solve();
-    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
-    assert!(
-        has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk),
-        "copy_to"
-    );
-    assert!(has(&m, e, mk) && has(&m, e, a), "no ⊤ beside: delivered");
-    m.add_tok(s, b);
-    m.solve();
-    assert!(has(&m, d, TOP) && has(&m, d, b), "try_copy_delivery");
-}
+mod markers;
+use markers::marker_model;
 
-#[test]
-fn a_delivery_never_adopts_a_marker_that_turned_top_beside_a_top() {
-    use crate::model::{TokKind, TOP};
-    // DECISIONS 42: `x` serves its successors before its rules, so `mk`
-    // reaches `s` beside ⊤ while it does not read as ⊤ yet; then `x`'s
-    // sink records the escape and `mk` reads as ⊤. `d` holds `s`'s old
-    // set, ⊤ included, so sizes allow adopting `s`'s set, which would put
-    // `mk` beside ⊤ in `d`. The delivery goes through `add_tokens`, which
-    // leaves it out.
-    let mut m = copy_solver_model();
-    let mk = m.tok(TokKind::ModNs(900));
-    let a = m.tok(TokKind::ModNs(901));
-    m.param_marker.insert(mk, (0, 0));
-    let (x, s, d) = (m.node_l("x"), m.node_l("s"), m.node_l("d"));
-    // The nodes of one run: a contract parameter's marker is a token there
-    // (in storage it would cross as a member of the node's marker, MRK).
-    for n in [x, s, d] {
-        m.nodes[n as usize].frame = 1;
-    }
-    m.add(s, &[a], 0);
-    m.add_tok(s, TOP);
-    m.edge(s, d);
-    m.edge(x, s);
-    m.sink_node(x, 0);
-    m.solve();
-    m.add(x, &[mk], 0);
-    m.solve();
-    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
-    assert!(m.marker_is_top(mk), "the sink made the marker read as ⊤");
-    assert!(has(&m, s, mk), "it reached s before it read as ⊤");
-    assert!(
-        has(&m, d, TOP) && has(&m, d, a) && !has(&m, d, mk),
-        "left out beside ⊤"
-    );
-}
-
-#[test]
-fn a_parameter_node_holds_its_argument_marker() {
-    use crate::model::{FuncInfo, TokKind, MARK_READ, NO_CTX, NO_FN};
-    // DECISIONS 44, the rule itself: a function's parameter node `p` holds
-    // its argument marker in place of the markers that arrive, through a
-    // delivery too (`try_copy_delivery` would adopt `s`'s set: `p` held all
-    // of it). A marker that arrives after the argument marker was used
-    // takes the uses so far.
-    let mut m = copy_solver_model();
-    let (this, ret, args, p) = (
-        m.node_l("this"),
-        m.node_l("ret"),
-        m.node_l("args"),
-        m.node_l("p"),
-    );
-    let token = m.tok(TokKind::Func(0, NO_CTX));
-    m.funcs.push(FuncInfo {
-        module: 0,
-        func_id: 0,
-        name: "f".into(),
-        params: vec![p],
-        rest: None,
-        this,
-        ret,
-        args_all: args,
-        has_arguments: false,
-        token,
-        ctor_of: None,
-        lexical_this: false,
-        no_summary: true,
-        gen_step: false,
-        gen_async: false,
-        gen_reyields: false,
-        captures: Vec::new(),
-        forwards_super: false,
-        parent: NO_FN,
-        forwarded: false,
-    });
-    let (m1, m2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
-    let a = m.tok(TokKind::ModNs(7));
-    let s = m.node_l("s");
-    m.add_tok(s, a);
-    m.edge(s, p);
-    m.solve();
-    let has = |m: &crate::model::Model, n, t| m.nodes[n as usize].pts.contains_tok(t);
-    assert!(has(&m, p, a), "a real token passes");
-    m.add_tok(s, m1);
-    m.solve();
-    let r = m.arg_marker_of[&p];
-    assert!(
-        has(&m, p, r) && !has(&m, p, m1),
-        "the argument marker in place of the marker"
-    );
-    assert_eq!(m.marker_members(r), vec![m1]);
-    m.mark_use(r, MARK_READ);
-    assert_eq!(
-        m.marker_use[&m1] & MARK_READ,
-        MARK_READ,
-        "a member takes the uses"
-    );
-    m.add_tok(s, m2);
-    m.solve();
-    assert!(!has(&m, p, m2));
-    assert_eq!(
-        m.marker_use[&m2] & MARK_READ,
-        MARK_READ,
-        "a late member takes the uses so far"
-    );
-}
-
-#[test]
-fn a_store_into_a_marker_makes_no_field_of_it() {
-    use crate::model::{FuncInfo, Key, TokKind, MARK_ESCAPE, NO_CTX, NO_FN};
-    // DECISIONS 41, the rule itself (the unit-level growth test,
-    // unit_mode::a_store_into_an_argument_keeps_no_field_of_the_marker, is
-    // also held by DECISIONS 42): a marker stands for another unit's value,
-    // this unit has no storage for it. DECISIONS 84 refines "the store is
-    // its escape": the store is a key of its contract (the reader stores
-    // an unknown value there), and the stored value escapes.
-    let mut m = copy_solver_model();
-    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
-    let token = m.tok(TokKind::Func(0, NO_CTX));
-    m.funcs.push(FuncInfo {
-        module: 0,
-        func_id: 0,
-        name: "f".into(),
-        params: Vec::new(),
-        rest: None,
-        this,
-        ret,
-        args_all: args,
-        has_arguments: false,
-        token,
-        ctor_of: None,
-        lexical_this: false,
-        no_summary: true,
-        gen_step: false,
-        gen_async: false,
-        gen_reyields: false,
-        captures: Vec::new(),
-        forwards_super: false,
-        parent: NO_FN,
-        forwarded: false,
-    });
-    let mk = m.param_marker_tok(0, 0);
-    let v = m.node_l("v");
-    let o = m.tok(TokKind::ModNs(7));
-    m.add_tok(v, o);
-    let x = m.atom("x");
-    let site = m.anon_post_site("test store");
-    m.store_into(mk, Key::Named(x), v, site);
-    m.solve();
-    assert!(!m.marker_use.get(&mk).is_some_and(|u| u & MARK_ESCAPE != 0));
-    assert_eq!(m.param_stores.get(&(0, 0)), Some(&vec![x]));
-    // DECISIONS 176: a value of this unit stored into the argument goes to
-    // the reader as a result does: the flow holds it, and the contract
-    // check after the solve (`Gen::contract_check`, none in this bare
-    // model) describes it or lets it escape alone.
-    let vals = m.store_flows.values().find_map(|fl| fl.vals);
-    assert!(
-        vals.is_some_and(|n| m.nodes[n as usize].pts.to_sorted().contains(&o)),
-        "the stored value is the flow's"
-    );
-    assert!(!m.fields.contains_key(&(mk, x)), "a field of the marker");
-}
-
-#[test]
-fn an_argument_marker_leaves_beside_when_a_valued_member_links() {
-    use crate::model::{Cons, FuncInfo, TokKind, NO_CTX, NO_FN};
-    // DECISIONS 75: an argument marker stands for its members alone. With
-    // none (or only described closed parameter markers) it adds no kinds to
-    // arithmetic; once a member that stands for real values links in (`f`
-    // is not a described closed function here), the arithmetic result it
-    // skipped takes the object kinds (ToPrimitive), monotone.
-    let mut m = copy_solver_model();
-    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
-    let token = m.tok(TokKind::Func(0, NO_CTX));
-    m.funcs.push(FuncInfo {
-        module: 0,
-        func_id: 0,
-        name: "f".into(),
-        params: Vec::new(),
-        rest: None,
-        this,
-        ret,
-        args_all: args,
-        has_arguments: false,
-        token,
-        ctor_of: None,
-        lexical_this: false,
-        no_summary: true,
-        gen_step: false,
-        gen_async: false,
-        gen_reyields: false,
-        captures: Vec::new(),
-        forwards_super: false,
-        parent: NO_FN,
-        forwarded: false,
-    });
-    let mk = m.param_marker_tok(0, 0);
-    // `r2` is a member of `r1` (an instance parameter passed on); `mk`
-    // links into `r2` later, so `r1` leaves with it.
-    let (n1, n2) = (m.node_l("p1"), m.node_l("p2"));
-    let (src, dst) = (m.node_l("src"), m.node_l("dst"));
-    let r1 = m.arg_marker(n1);
-    let r2 = m.arg_marker(n2);
-    m.link_marker(r2, r1);
-    m.cons(src, Cons::Arith { dst });
-    m.add_tok(src, r1);
-    m.solve();
-    assert_eq!(m.nodes[dst as usize].prim, 0, "beside: no kinds of its own");
-    m.link_marker(mk, r2);
-    m.solve();
-    let k = m.nodes[dst as usize].prim;
-    assert!(
-        k & crate::model::prim::NUM != 0 && k & crate::model::prim::BIGINT != 0,
-        "a valued member: the skipped result takes the object kinds ({k:#x})"
-    );
-}
-
-/// A model with one function `f` whose parameter markers the tests make.
-fn marker_model() -> crate::model::Model {
-    use crate::model::{FuncInfo, TokKind, NO_CTX, NO_FN};
-    let mut m = copy_solver_model();
-    let (this, ret, args) = (m.node_l("this"), m.node_l("ret"), m.node_l("args"));
-    let token = m.tok(TokKind::Func(0, NO_CTX));
-    m.funcs.push(FuncInfo {
-        module: 0,
-        func_id: 0,
-        name: "f".into(),
-        params: Vec::new(),
-        rest: None,
-        this,
-        ret,
-        args_all: args,
-        has_arguments: false,
-        token,
-        ctor_of: None,
-        lexical_this: false,
-        no_summary: true,
-        gen_step: false,
-        gen_async: false,
-        gen_reyields: false,
-        forwards_super: false,
-        parent: NO_FN,
-        captures: Vec::new(),
-        forwarded: false,
-    });
-    m
-}
-
-#[test]
-fn a_use_through_an_argument_marker_is_solve_work() {
-    use crate::model::MARK_ESCAPE;
-    // 113-CWL3: a use of an argument marker (DECISIONS 44), under a key
-    // too (design §18.4), walks every marker it stands for. The walk is
-    // solve work, so the work bound sees it: uncounted, checker.ts#u18
-    // took 4.4x main's solve time for the same counted work.
-    let mut m = copy_solver_model();
-    // A parameter marker exists (else no use is recorded at all).
-    m.param_marker.insert(u32::MAX - 1, (0, 0));
-    let n0 = m.node_l("p0");
-    let r = m.arg_marker(n0);
-    let n = 64u64;
-    for _ in 0..n {
-        let ni = m.node_l("p");
-        let ri = m.arg_marker(ni);
-        m.link_marker(ri, r);
-    }
-    let a = m.atom("k");
-    let k = m.keyed_reach_of(r, a);
-    let w = m.work;
-    m.mark_use(k, MARK_ESCAPE);
-    assert!(
-        m.work - w >= n,
-        "a keyed use walked {n} members for {} work",
-        m.work - w
-    );
-    let w = m.work;
-    m.mark_use(r, MARK_ESCAPE);
-    assert!(
-        m.work - w >= n,
-        "a use walked {n} members for {} work",
-        m.work - w
-    );
-}
-
-#[test]
-fn a_keyed_use_reaches_every_marker_an_argument_marker_stands_for() {
-    use crate::model::{MARK_ESCAPE, MARK_READ};
-    // Design §18.4: argument marker `r2` stands for `r1` and `r3`, and `r1`
-    // for `r2` (a recursion passing its argument on): `mk1` and `mk3`, the
-    // markers they stand for, take every use of what `r1` and `r2` reach
-    // under a key. `r1` is linked after the use of `inner` (the callee read
-    // `p.inner` before the second caller's marker arrived), `r3` before.
-    let mut m = marker_model();
-    let (mk1, mk3) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
-    let (n1, n2, n3) = (m.node_l("p1"), m.node_l("p2"), m.node_l("p3"));
-    let r1 = m.arg_marker(n1);
-    let r2 = m.arg_marker(n2);
-    let r3 = m.arg_marker(n3);
-    let (inner, other) = (m.atom("inner"), m.atom("other"));
-    m.link_marker(mk1, r1);
-    m.link_marker(mk3, r3);
-    m.link_marker(r3, r2);
-    let k = m.keyed_reach_of(r2, inner);
-    m.mark_use(k, MARK_ESCAPE);
-    m.link_marker(r1, r2);
-    m.link_marker(r2, r1);
-    let k = m.keyed_reach_of(r1, other);
-    m.mark_use(k, MARK_READ);
-    m.settle_keyed_uses();
-    for mk in [mk1, mk3] {
-        assert_eq!(
-            m.keyed_uses.get(&mk),
-            Some(&vec![(inner, MARK_ESCAPE), (other, MARK_READ)]),
-            "{:?}",
-            m.keyed_uses
-        );
-    }
-    // A keyed use is the contract's fact alone: the marker itself is not ⊤.
-    assert!(!m.marker_is_top(mk1) && !m.marker_is_top(mk3));
-}
-
-#[test]
-fn a_keyed_use_is_a_use_of_each_reach_marker_it_stands_for() {
-    use crate::model::MARK_ESCAPE;
-    // Design §18.4 with DECISIONS 42: what a parameter reaches arrives at a
-    // shared body (`r` stands for the reach marker `pr`); the body lets
-    // `p.k` escape, so `pr`, which reaches itself under every key, escaped
-    // and reads as ⊤ during the solve. A member that links in after the
-    // use (`pr2`) takes it too.
-    let mut m = marker_model();
-    let (mk, mk2) = (m.param_marker_tok(0, 0), m.param_marker_tok(0, 1));
-    let (pr, pr2) = (m.marker_reach[&mk], m.marker_reach[&mk2]);
-    let n0 = m.node_l("p");
-    let r = m.arg_marker(n0);
-    m.link_marker(pr, r);
-    let a = m.atom("k");
-    let k = m.keyed_reach_of(r, a);
-    m.mark_use(k, MARK_ESCAPE);
-    assert!(m.marker_is_top(pr), "the reach member escaped");
-    assert!(!m.marker_is_top(pr2));
-    m.link_marker(pr2, r);
-    assert!(
-        m.marker_is_top(pr2),
-        "a late reach member takes the keyed use"
-    );
-}
-
-#[test]
-fn a_repeated_keyed_use_costs_one_step() {
-    use crate::model::MARK_READ;
-    // A keyed use costs what the use names: once `p.k` was read, reading
-    // it again (each `p.k.x` reads it) is the step on its keyed reach
-    // marker alone, not a walk to the argument marker and its members.
-    let mut m = marker_model();
-    let mk = m.param_marker_tok(0, 0);
-    let n0 = m.node_l("p");
-    let r = m.arg_marker(n0);
-    for _ in 0..64 {
-        let ni = m.node_l("pi");
-        let ri = m.arg_marker(ni);
-        m.link_marker(mk, ri);
-        m.link_marker(ri, r);
-    }
-    let a = m.atom("k");
-    let k = m.keyed_reach_of(r, a);
-    m.mark_use(k, MARK_READ);
-    let reps = 100;
-    let w = m.work;
-    for _ in 0..reps {
-        m.mark_use(k, MARK_READ);
-    }
-    assert!(
-        m.work - w <= reps,
-        "{reps} repeated uses cost {} work",
-        m.work - w
-    );
-}
-
-#[test]
-fn a_keyed_use_in_a_recursion_walks_each_member_once_per_bit() {
-    use crate::model::MARK_ESCAPE;
-    // The checker.ts#u18 / typescript.js createTypeChecker fan-out: a ring
-    // of `n` argument markers (helpers passing their argument around a
-    // recursion) each stand for every other; `keys` keys of it are used.
-    // Each key costs its own use; the bits cross each member once, so the
-    // work is keys + n, not keys x n. After the solve every parameter
-    // marker in the ring has every key.
-    let mut m = marker_model();
-    let n = 32u32;
-    let keys = 64u64;
-    let rs: Vec<_> = (0..n)
-        .map(|_| {
-            let p = m.node_l("p");
-            m.arg_marker(p)
-        })
-        .collect();
-    let mks: Vec<_> = (0..n).map(|i| m.param_marker_tok(0, i)).collect();
-    for i in 0..n as usize {
-        m.link_marker(mks[i], rs[i]);
-        m.link_marker(rs[(i + 1) % n as usize], rs[i]);
-    }
-    let w = m.work;
-    let atoms: Vec<_> = (0..keys).map(|i| m.atom(&format!("k{i}"))).collect();
-    for &a in &atoms {
-        let k = m.keyed_reach_of(rs[0], a);
-        m.mark_use(k, MARK_ESCAPE);
-    }
-    let spent = m.work - w;
-    assert!(
-        spent <= 3 * keys + 2 * n as u64 + 4,
-        "{keys} keys on a ring of {n} cost {spent} work"
-    );
-    m.settle_keyed_uses();
-    for mk in mks {
-        let v = m.keyed_uses.get(&mk).map_or(0, |v| v.len());
-        assert_eq!(v as u64, keys, "a ring member has {v} of {keys} keys");
-    }
-}
-
-#[test]
-fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
-    use crate::model::{Protocol, MARK_ESCAPE, MARK_TOUCH};
-    // A marker has no accessors: a touch reads nothing off it (a read node
-    // per touch would take a fresh marker each, `Model::crosses`, and JSON
-    // would touch that one in turn without end). JSON's nested values are
-    // what the marker reaches, touched; `toJSON` is what it reaches under
-    // that key, called: an escape (DECISIONS 111).
-    let mut m = copy_solver_model();
-    m.param_marker.insert(u32::MAX - 1, (0, 0));
-    let n0 = m.node_l("p0");
-    let r = m.arg_marker(n0);
-    let nodes = m.nodes.len();
-    for p in [Protocol::Json, Protocol::IterResult, Protocol::ToPrimitive] {
-        m.implicit(r, 0, p);
-    }
-    let reads = (nodes..m.nodes.len())
-        .filter(|&n| m.labels[n].starts_with("implicit"))
-        .count();
-    assert_eq!(reads, 0, "a touch of a marker made read or call nodes");
-    let reach = m.reach_of(r);
-    assert!(m
-        .marker_use
-        .get(&reach)
-        .is_some_and(|&u| u & MARK_TOUCH != 0));
-    let a = m.atom("toJSON");
-    let tj = m.marker_load(r, Some(a));
-    assert!(m.marker_use.get(&tj).is_some_and(|&u| u & MARK_ESCAPE != 0));
-}
+mod array_iter_lock;
+mod async_result;
+mod builtin_ctor_statics;
 mod collection_entries;
+mod concat_elements;
+mod console_output_arguments;
+mod console_protocol;
 mod constructor_values;
+mod cycle_e20_own_field;
+mod cycle_locked_member;
 mod date_methods;
-mod delegate_step;
+mod declared_constructor;
+mod declared_global_write;
+mod ek;
+mod field_read_calls;
+mod gen_next;
+mod gen_proto_lock;
+mod gen_proto_members;
 mod generator_results;
+mod generator_resume_arguments;
+mod gk;
+mod gk3b;
+mod gl2;
+mod gl3;
+mod gl4;
+mod global_handed_writes_no_global;
+mod global_unresolved;
+mod guard_presence;
 mod helper_protocols;
 mod host_helpers;
+mod inspkey;
+mod iter_result_array;
+mod iterdone;
+mod key_fn_shape;
+mod key_shape;
+mod keycall1;
 mod method_this_escape;
+mod native_parent;
+mod native_proto_member;
 mod native_push;
+mod native_value_call;
+mod ns_receiver;
+mod param_key_shape;
+mod primitive_this;
+mod promise_capability_executor;
 mod proto_own_call;
-mod receiver_param_call;
+mod realm_read_static;
 mod regexp_results;
+mod signatures;
+mod static_native_parent;
+mod stepout;
+mod string_iter_lock;
 mod string_methods;
 mod string_results;
+mod string_this;
+mod top_store_handed_builtins;
 mod typed_array_methods;
+mod typed_locale_args;
+mod w3e;
+mod w3g;
 mod web_timer_methods;
 
 /// Export the exact facts fixtures for an independent runtime/Node oracle.
@@ -1808,11 +1568,164 @@ fn borrowed_function_method_fact_fails_closed_on_alias_and_top_writes() {
             .fnproto_borrow_written
             .is_some()
     );
-    assert!(facts("const p = missing(); p.call = function() {}; ")
-        .fnproto_borrow_written
-        .is_some());
+    assert!(
+        facts("import \"unseen-host\"; const p = missing(); p.call = function() {}; ")
+            .fnproto_borrow_written
+            .is_some()
+    );
     // A bind-specific write must not prevent a call/apply proof.
     assert!(facts("Function.prototype.bind = function() {}; ")
         .fnproto_borrow_written
         .is_none());
 }
+
+mod builtin_fn_storage;
+mod numeric_property_store;
+mod shared_sets;
+
+mod builtin_missing_member;
+
+mod annexb_alias;
+mod primitive_operand_to_primitive;
+mod shaped_key_proto_methods;
+mod uri_coercion;
+
+mod accessor_lookup_values;
+mod buffer_iterator_absent;
+mod buffer_namespaces;
+mod error_namespaces;
+mod fresh_proto_chain;
+mod fs_path_operand;
+mod host_browser_effects;
+mod host_fs_effects;
+mod host_fs_read_effects;
+mod host_inspector_effects;
+mod host_performance_intl;
+mod host_stream_effects;
+mod native_fs_effects;
+mod native_fs_watch;
+mod native_module_ref;
+mod native_process;
+mod native_util_types_effects;
+mod number_bigint_ns;
+mod realm_object_proto_member;
+
+mod accessor_from_census;
+mod accown1;
+mod accsite1;
+mod an11;
+mod an13;
+mod an4;
+mod an6;
+mod an8;
+mod animoom5;
+mod arr_absent;
+mod birth1;
+mod birthdef1;
+mod bns_recv;
+mod builtin_ctor_number_key;
+mod cover3;
+mod d1;
+mod elems1;
+mod env1;
+mod ev1;
+mod fn_number_key;
+mod forin1;
+mod getter_result_decls;
+mod given_proto_census;
+mod given_proto_members;
+mod gs1;
+mod gs2;
+mod held_realm_flow;
+mod held_realm_verdicts;
+mod in1;
+mod key2;
+mod key_inherit;
+mod ledg1;
+mod ledg2;
+mod ledg3;
+mod lit_fact;
+mod local_versions;
+mod multi_run;
+mod native_dispatch;
+mod native_dispatch_builtin;
+mod navigator_decl;
+mod navigator_store;
+mod new_verdicts;
+mod nocall1;
+mod not_unit;
+mod object_prototype_method_calls;
+mod onchange1;
+mod onchg2;
+mod optimistic_json_key;
+mod peelk18;
+mod peelk19;
+mod peelk20;
+mod peelk21;
+mod peelk22;
+mod peelk23;
+mod prim_recv;
+mod proto_recv;
+mod r6next;
+mod r9birth1;
+mod r9birth2;
+mod r9birth3;
+mod r9birth4;
+mod r9birth5;
+mod r9birth6;
+mod r9birth7;
+mod r9birth8;
+mod r9key1;
+mod r9key2;
+mod r9read1;
+mod r9read10;
+mod r9read11;
+mod r9read2;
+mod r9read3;
+mod r9read4;
+mod r9read5;
+mod r9read6;
+mod r9read7;
+mod r9read8;
+mod r9read9;
+mod r9sites1;
+mod r9sites3;
+mod r9sites5;
+mod r9sites6;
+mod r9sites7;
+mod r9store1;
+mod r9store2;
+mod r9store3;
+mod r9store4;
+mod r9store5;
+mod r9store6;
+mod raybox15;
+mod raybox2;
+mod rb8;
+mod refold1;
+mod scope_a;
+mod skinfa1;
+mod skinfa3;
+mod skinfa8;
+mod skinforin1;
+mod skinroot10;
+mod skinroot11;
+mod skinroot14;
+mod skinroot17;
+mod skinroot19;
+mod skinroot24;
+mod skinroot31;
+mod skinroot32;
+mod skinroot35;
+mod skinroot39;
+mod skinroot6;
+mod skinroot9;
+mod sound1;
+mod spread_from_census;
+mod thisbind1;
+mod topc;
+mod w3h;
+mod w3j;
+mod w3k;
+mod w3l;
+mod whyhold1;

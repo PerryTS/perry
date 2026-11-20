@@ -63,6 +63,7 @@ pub(crate) fn cp_reactor_scan_roots_mut(visitor: &mut crate::gc::RuntimeRootVisi
             if let Some(exec) = child.exec.as_mut() {
                 visitor.visit_nanbox_u64_slot(&mut exec.cb_bits);
             }
+            #[cfg(not(unix))]
             if let Some(stdin) = child.stdin.as_mut() {
                 for callback in &mut stdin.callbacks {
                     visitor.visit_nanbox_u64_slot(callback);

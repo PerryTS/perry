@@ -48,8 +48,7 @@ pub extern "C" fn js_regexp_escape(input: f64) -> f64 {
     let jsv = crate::value::JSValue::from_bits(input.to_bits());
     if !jsv.is_any_string() {
         let msg = js_string_from_str("input argument must be a string");
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg));
     }
 
     let str_ptr = crate::value::js_get_string_pointer_unified(input) as *const StringHeader;

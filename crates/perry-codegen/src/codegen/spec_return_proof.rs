@@ -944,6 +944,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -956,6 +957,10 @@ mod tests {
                 descriptor_name: "test_guard".to_string(),
                 descriptor: vec![1],
             })],
+            signature: None,
+            sig_defaults: Vec::new(),
+            sig_public: Default::default(),
+            record: None,
         }
     }
 
@@ -1091,6 +1096,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         };
         let mut module = Module::new("return_proof.ts");
         module.functions = vec![identity, forward, liar, escaping, one_pass_number];

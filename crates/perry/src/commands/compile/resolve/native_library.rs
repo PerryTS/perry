@@ -603,7 +603,34 @@ fn parse_native_abi_descriptor(
                     other => other,
                 })
         }
-        "buffer+len" => Ok(NativeAbiType::BufferAndLen),
+        "buffer+len" => {
+            for key in object.keys() {
+                if !["kind", "nullable"].contains(&key.as_str()) {
+                    return Err(invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        &format!("unknown buffer+len descriptor field `{key}`"),
+                    ));
+                }
+            }
+            let nullable = match object.get("nullable") {
+                Some(v) => v.as_bool().ok_or_else(|| {
+                    invalid_native_abi_error(
+                        package_json,
+                        function_index,
+                        function_name,
+                        slot,
+                        &value.to_string(),
+                        "buffer+len descriptor `nullable` must be a boolean",
+                    )
+                })?,
+                None => false,
+            };
+            Ok(NativeAbiType::BufferAndLen { nullable })
+        }
         _ => NativeAbiType::parse_str(kind).map_err(|err| {
             invalid_native_abi_error(
                 package_json,

@@ -1,0 +1,1 @@
+snap census: process.env/process.argv read sites classify themselves against their own parent expression, not address-keyed site lists, so a later module can no longer read a stale site kind; this also covers literal operands on the scalar-replacement path of let.

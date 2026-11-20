@@ -32,7 +32,7 @@ fn workspace_root() -> PathBuf {
 }
 
 fn fixture_dir() -> PathBuf {
-    workspace_root().join("test-files/fixtures/issue_8775_imported_object")
+    workspace_root().join("tests/fixtures/programs/fixtures/issue_8775_imported_object")
 }
 
 fn target_debug_dir() -> PathBuf {

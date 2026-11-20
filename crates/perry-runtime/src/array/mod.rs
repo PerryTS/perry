@@ -5,6 +5,9 @@ pub use append::js_array_append_set;
 #[cfg(test)]
 mod append_tests;
 mod buffer_receiver;
+/// The length floor's capacity-write classification (wpfacts `solve::arr_len`).
+#[cfg(test)]
+mod capacity_writes_tests;
 mod concat_reverse;
 /// #10593: a retargeted array's prototype is a per-array fact.
 #[cfg(test)]
@@ -18,6 +21,10 @@ pub(crate) use element_kind::{
     ek_prefix_after_splice, ek_set_prefix,
 };
 mod element_shape;
+mod exotic_snapshot;
+pub(crate) use exotic_snapshot::array_for_each_own_element;
+mod fill_birth;
+pub use fill_birth::js_array_fill_birth;
 mod fill_extend;
 mod flat_clone;
 mod forwarding;
@@ -56,6 +63,8 @@ mod iter_object;
 mod iterator;
 mod iterator_brand;
 pub(crate) use iterator_brand::{has_materialized_iterator_brand, mark_materialized_iterator};
+#[cfg(test)]
+mod growth_in_place_tests;
 mod join;
 mod jsvalue_api;
 /// Own named (non-index) properties stored with the array (#10166 brief 4).
@@ -74,9 +83,14 @@ mod shift_queue_tests;
 #[cfg(test)]
 mod small_capacity_tests;
 mod sort;
+pub(crate) use sort::ScratchWorkspace;
 mod sort_numeric;
 pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
+#[cfg(test)]
+mod sparse_reader_tests;
 mod species;
+#[cfg(test)]
+mod species_tests;
 mod splice_slice;
 mod storage;
 #[cfg(test)]
@@ -84,6 +98,7 @@ mod storage;
 mod tagged_template_tests;
 pub use storage::array_elements_ptr;
 pub(crate) use storage::{array_front_offset, array_physical_capacity, array_truncate_length};
+pub(crate) mod plain_elements;
 mod subclass;
 pub(crate) mod subclass_elements;
 pub(crate) mod subclass_init;
@@ -99,9 +114,11 @@ mod dynamic_numeric_key_tests;
 #[cfg(test)]
 mod forwarding_tests;
 #[cfg(test)]
-mod identity_growth_tests;
+mod from_primitive_tests;
 #[cfg(test)]
 mod hole_tail_tests;
+#[cfg(test)]
+mod identity_growth_tests;
 #[cfg(test)]
 mod index_get_exit_tests;
 #[cfg(test)]
@@ -119,6 +136,8 @@ mod strict_store_tests;
 #[cfg(test)]
 mod subclass_elements_tests;
 #[cfg(test)]
+mod subclass_stamp_tests;
+#[cfg(test)]
 mod subclass_tests;
 #[cfg(test)]
 mod tests;
@@ -128,9 +147,10 @@ mod tests;
 mod typed_array_receiver_tests;
 
 pub(crate) use self::alloc::{
-    array_length_range_error, js_array_alloc_canonical_keys, js_array_alloc_key_list,
-    js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
-    js_array_alloc_with_length_exact,
+    array_length_range_error, fill_capacity_with_holes_from, js_array_alloc_canonical_keys,
+    js_array_alloc_key_list, js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
+    js_array_alloc_tag_scanned, js_array_alloc_with_length_exact,
+    js_array_try_alloc_tag_scanned_unfilled, publish_newborn_elements,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
@@ -159,7 +179,7 @@ pub(crate) use self::element_shape::{
 pub use self::flat_clone::{
     js_array_clone, js_array_clone_for_spread, js_array_destructure_needs_iterator,
     js_array_entries, js_array_flat, js_array_flat_depth, js_array_keys, js_array_values,
-    js_arraylike_flat, js_short_packed_spread_values,
+    js_arraylike_flat,
 };
 pub(crate) use self::forwarding::clean_owned_arr_ptr;
 pub(crate) use self::forwarding::{
@@ -169,7 +189,12 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
+pub(crate) use self::from_concat::{define_constructed_index, finish_constructed_length};
 pub use self::generic::array_proto_mutator;
+pub(crate) use self::generic::{
+    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
+    value_is_own_user_method,
+};
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
     js_arraylike_find, js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
@@ -178,17 +203,13 @@ pub use self::generic::{
     js_arraylike_reduceRight, js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
     try_object_arraylike_mutator,
 };
-pub(crate) use self::generic::{
-    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
-    value_is_own_user_method,
-};
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,
 };
 pub use self::generic_object::{js_arraylike_concat, js_arraylike_sort, js_arraylike_splice};
 pub(crate) use self::generic_object::{
-    object_pop as generic_object_pop, object_shift as generic_object_shift, object_sort,
-    object_splice,
+    object_pop as generic_object_pop, object_reverse as generic_object_reverse,
+    object_shift as generic_object_shift, object_sort, object_splice, restricted_array_value,
 };
 pub(crate) use self::header::canonical_raw_f64;
 pub(crate) use self::header::{
@@ -224,6 +245,7 @@ pub use self::indexing::{
 };
 pub(crate) use self::indexing::{
     js_array_set_f64_extend_sloppy, js_array_set_index_or_string_with_strictness,
+    perry_array_read_cold_shared,
 };
 #[cfg(test)]
 pub(crate) use self::indexing_support::test_keys_array_slot_fallbacks;
@@ -251,12 +273,15 @@ pub use self::iter_object::{
     js_array_values_iter_obj, ARRAY_ITERATOR_CLASS_ID,
 };
 pub(crate) use self::iterator::iter_bt_dump;
-pub(crate) use self::iterator::{array_from_spread_value, is_builtin_iterator_class_id};
+pub(crate) use self::iterator::{
+    entries_array_for_small_handle_value, intrinsic_array_like_iteration,
+    is_builtin_iterator_class_id, spread_values,
+};
 pub use self::iterator::{
-    js_array_spread_append, js_for_of_to_array, js_get_async_iterator,
-    js_iterator_close_if_not_done, js_iterator_close_on_throw, js_iterator_delegate_kind,
-    js_iterator_delegate_return, js_iterator_delegate_step, js_iterator_delegate_throw,
-    js_iterator_to_array,
+    js_array_spread_append, js_array_spread_append_iterator, js_for_of_to_array,
+    js_get_async_iterator, js_iterator_close_if_not_done, js_iterator_close_on_throw,
+    js_iterator_delegate_kind, js_iterator_delegate_return, js_iterator_delegate_step,
+    js_iterator_delegate_throw, js_iterator_to_array,
 };
 pub use self::join::{js_array_join, js_array_join_value};
 /// The element kind a realm array birth declares.
@@ -268,11 +293,12 @@ pub use self::numeric_range::{
 pub use self::prototype_addr::scan_prototype_addr_cache_roots_mut;
 pub(crate) use self::prototype_addr::{
     array_prototype_addr, array_prototype_addr_if_resolved, forget_object_prototype_intrinsic,
-    function_prototype_addr, intrinsic_constructor_addr, intrinsic_prototype_addr,
-    note_object_prototype_intrinsic, note_realm_intrinsic,
+    function_prototype_addr, intrinsic_constructor_addr, intrinsic_constructor_addr_if_bound,
+    intrinsic_prototype_addr, intrinsic_prototype_addr_if_bound, note_object_prototype_intrinsic,
+    note_realm_array_values, note_realm_intrinsic, note_realm_restricted_callee_pair,
     object_prototype_addr, object_prototype_addr_if_resolved, object_prototype_addr_matches,
     object_prototype_cell, prime_prototype_addr_cache, primitive_wrapper_prototype_addr,
-    RealmIntrinsics,
+    realm_array_values_addr, realm_restricted_callee_pair_addr, RealmIntrinsics,
 };
 #[cfg(test)]
 pub(crate) use self::prototype_addr::{
@@ -313,12 +339,17 @@ pub use self::jsvalue_api::{
     js_array_from_jsvalue, js_array_get, js_array_get_jsvalue, js_array_push,
     js_array_push_jsvalue, js_array_set, js_array_set_jsvalue, js_array_set_jsvalue_extend,
 };
+pub(crate) use self::push_pop::array_set_length_reflect;
+pub(crate) use self::push_pop::reserve_capacity;
+#[cfg(test)]
+pub(crate) use self::push_pop::GrowInPlaceTestGuard;
 pub(crate) use self::push_pop::{guard_writable_length, push_guard};
 pub use self::push_pop::{
-    js_array_delete, js_array_grow, js_array_numeric_push_f64_unboxed, js_array_pop_f64,
-    js_array_push_f64, js_array_push_f64_spec, js_array_push_hole, js_array_push_spread_f64,
-    js_array_push_u31_with_length, js_array_set_length, js_array_set_length_strict,
-    js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue, js_array_unshift_variadic,
+    js_array_delete, js_array_grow, js_array_grow_for_push, js_array_numeric_push_f64_unboxed,
+    js_array_pop_f64, js_array_push_f64, js_array_push_f64_spec, js_array_push_hole,
+    js_array_push_spread_f64, js_array_push_u31_with_length, js_array_set_length,
+    js_array_set_length_strict, js_array_shift_f64, js_array_unshift_f64, js_array_unshift_jsvalue,
+    js_array_unshift_variadic,
 };
 pub(crate) use self::push_pop::{push_spec_declined, push_spec_if_plain};
 pub use self::reduce_right::js_array_reduce_right;
@@ -331,6 +362,7 @@ pub use self::sort::{
 };
 #[cfg(test)]
 pub(crate) use self::splice_slice::test_collect_after_splice_roots_once;
+pub(crate) use self::splice_slice::{array_slice_value_to_index, index_operand_across};
 pub use self::splice_slice::{
     js_array_slice, js_array_slice_values, js_array_splice, js_array_splice_delete_count,
 };
@@ -345,12 +377,12 @@ pub(crate) use self::flat_clone::{
     dense_spread_copy, dense_spread_source, flattenable_array_ptr, plain_call_spread_source,
 };
 pub(crate) use self::header::{
-    array_byte_size, array_has_element_descriptors, array_has_element_descriptors_resolved,
-    array_has_named_layout, array_has_plain_shape_resolved, array_is_frozen,
-    array_is_sealed_or_no_extend, array_numeric_layout_resolved, array_numeric_raw_f64_get,
-    array_numeric_raw_f64_push_inbounds_resolved, array_numeric_raw_f64_set_inbounds,
-    array_object_flags, array_object_flags_from_tag, array_object_flags_resolved,
-    array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
+    array_byte_size, array_gc_header, array_has_element_descriptors,
+    array_has_element_descriptors_resolved, array_has_named_layout, array_has_plain_shape_resolved,
+    array_is_frozen, array_is_sealed_or_no_extend, array_numeric_layout_resolved,
+    array_numeric_raw_f64_get, array_numeric_raw_f64_push_inbounds_resolved,
+    array_numeric_raw_f64_set_inbounds, array_object_flags, array_object_flags_from_tag,
+    array_object_flags_resolved, array_ptr_as_proxy, array_receiver_addr, array_receiver_gc_tag,
     buffer_receiver_as_uint8_typed_array, canonicalize_array_numeric_store_value_from_flags,
     clean_arr_ptr, clean_arr_ptr_mut, clean_headed_arr_ptr, clear_array_numeric_layout,
     clear_array_numeric_layout_ptr, finish_array_dense_move_layout, gc_element_slot_range,

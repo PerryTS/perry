@@ -182,6 +182,10 @@ pub struct ResponseState {
     /// request after the first one was destroyed. `None` for a standalone
     /// `new http.ServerResponse(req)` and a bare `OutgoingMessage`.
     pub(crate) turnloop: Option<(crate::server::turnloop_route::ResponseConnection, u64)>,
+    /// The `http2` compat API's response: its prototype is
+    /// `Http2ServerResponse.prototype`, not `ServerResponse.prototype`
+    /// (#13802).
+    pub(crate) http2_compat: bool,
     /// P5: the head has gone out and further writes stream straight to the
     /// socket.
     pub turnloop_streaming: bool,
@@ -282,6 +286,7 @@ impl ResponseState {
             standalone_req_method: None,
             destroyed: false,
             turnloop: None,
+            http2_compat: false,
             turnloop_streaming: false,
             corked: 0,
             chunked_buffer: Vec::new(),

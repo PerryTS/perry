@@ -71,17 +71,11 @@ fn registered_post_message_preserves_absence_and_explicit_undefined() {
         crate::closure::js_closure_call0(method_ptr(), receiver())
     });
     assert!(missing.is_err());
-    assert!(with_port_states(|map| map
-        [&(second.get_raw_mut_ptr::<ObjectHeader>() as usize)]
-        .queue
-        .is_empty()));
+    assert!(!port_transport::pending(
+        runtime_port_lease(boxed_object(second.get_raw_mut_ptr())).unwrap()
+    ));
     crate::closure::js_closure_call1(method_ptr(), receiver(), js_undefined());
-    let packet = with_port_states(|map| {
-        map.get_mut(&(second.get_raw_mut_ptr::<ObjectHeader>() as usize))
-            .unwrap()
-            .queue
-            .pop_front()
-    });
+    let packet = take_runtime_port_message(boxed_object(second.get_raw_mut_ptr()));
     assert_eq!(packet.map(f64::to_bits), Some(js_undefined().to_bits()));
     close(std::ptr::null(), receiver(), js_undefined());
     close(

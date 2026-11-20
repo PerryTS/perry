@@ -17,7 +17,9 @@ fn reads(pf: &ProgramFacts, key: &str) -> Vec<Verdict> {
 
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let v = reads(pf, key);
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 fn open(pf: &ProgramFacts, key: &str) -> bool {
@@ -34,8 +36,15 @@ const SEARCH: &str = r#"
 
 #[test]
 fn a_key_no_literal_layout_holds_reads_undefined() {
-    let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }}), search());"));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }}), search());"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
     // `{ level }` holds it, `{}` does not: two outcomes.
     assert_eq!(
         reads(&pf, "level"),
@@ -47,9 +56,21 @@ fn a_key_no_literal_layout_holds_reads_undefined() {
 
 #[test]
 fn an_absent_key_on_one_layout_is_proven() {
-    let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }}), search({{ level: 4 }}));"));
-    assert!(proven(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
-    assert!(proven(&pf, "level"), "{:?}\n{}", reads(&pf, "level"), pf.dump_text());
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }}), search({{ level: 4 }}));"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "level"),
+        "{:?}\n{}",
+        reads(&pf, "level"),
+        pf.dump_text()
+    );
 }
 
 /// Soundness: each of these may give `maxDepth` a value on the receiver or
@@ -57,15 +78,47 @@ fn an_absent_key_on_one_layout_is_proven() {
 #[test]
 fn a_key_something_may_write_stays_open() {
     for (what, extra) in [
-        ("an Object.prototype store", "(Object.prototype as any).maxDepth = 7;"),
         ("a store after birth", "const o: Opts = { level: 2 }; o.maxDepth = 1; console.log(search(o));"),
         ("a computed store", "const o: any = { level: 2 }; o[String(Date.now() % 2)] = 1; console.log(search(o));"),
-        ("an escape", "const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
-        ("a store into ⊤", "const t: any = (globalThis as any).someHost; t.maxDepth = 3;"),
+        ("an escape", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; console.log(search(o));"),
+        ("a store into ⊤ that may be the receiver", "import \"unseen-host\"; const o: Opts = { level: 2 }; (globalThis as any).out = o; const t: any = (globalThis as any).someHost; t.maxDepth = 3; console.log(search(o));"),
     ] {
         let pf = facts(&format!("{SEARCH} console.log(search({{ level: 2 }})); {extra}"));
         assert!(open(&pf, "maxDepth"), "{what}: {:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
     }
+}
+
+/// DEC 250: `Object.prototype.maxDepth = 7` is an add to an add-locked
+/// prototype: the runtime throws a TypeError at the store and writes
+/// nothing (`members::store_admitted`), so the read stays `undefined`.
+#[test]
+fn an_object_prototype_add_is_refused_so_the_read_stays_proven() {
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }})); try {{ (Object.prototype as any).maxDepth = 7; }} catch {{}} console.log(search());"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
+}
+
+/// A store into ⊤ reaches only what reached unknown code, and an add to
+/// `Object.prototype` is refused at the store (DEC 250,
+/// `perry_abi::lock::refuses`): the literal that never escaped and its
+/// chain cannot gain `maxDepth`, so the read stays proven.
+#[test]
+fn a_store_into_top_with_no_path_to_the_receiver_is_proven() {
+    let pf = facts(&format!(
+        "{SEARCH} console.log(search({{ level: 2 }})); import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.maxDepth = 3;"
+    ));
+    assert!(
+        proven(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
 }
 
 /// An intrinsic member of `Object.prototype` is no absent key.
@@ -78,8 +131,18 @@ fn an_object_prototype_member_is_not_absent() {
         console.log(typeof f, (o as any).constructor === Object);
         "#,
     );
-    assert!(open(&pf, "hasOwnProperty"), "{:?}\n{}", reads(&pf, "hasOwnProperty"), pf.dump_text());
-    assert!(open(&pf, "constructor"), "{:?}\n{}", reads(&pf, "constructor"), pf.dump_text());
+    assert!(
+        open(&pf, "hasOwnProperty"),
+        "{:?}\n{}",
+        reads(&pf, "hasOwnProperty"),
+        pf.dump_text()
+    );
+    assert!(
+        open(&pf, "constructor"),
+        "{:?}\n{}",
+        reads(&pf, "constructor"),
+        pf.dump_text()
+    );
 }
 
 /// A literal with its own prototype is not a plain chain.
@@ -92,5 +155,10 @@ fn a_literal_with_a_prototype_is_not_absent() {
         console.log(o.maxDepth);
         "#,
     );
-    assert!(open(&pf, "maxDepth"), "{:?}\n{}", reads(&pf, "maxDepth"), pf.dump_text());
+    assert!(
+        open(&pf, "maxDepth"),
+        "{:?}\n{}",
+        reads(&pf, "maxDepth"),
+        pf.dump_text()
+    );
 }

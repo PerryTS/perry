@@ -51,18 +51,22 @@ fn a_key_stored_into_the_given_prototype_later_is_written() {
 }
 
 #[test]
-fn an_unknown_prototype_writes_every_key() {
+fn an_unknown_prototype_writes_no_index_key() {
+    // DEC 250: the runtime refuses the relink of a builtin prototype and an
+    // index add on it, so a prototype of unknown keys is no index read's
+    // source (the named `greet` tests above stay open).
     let v = verdict("const P: any = (globalThis as any).hostProto();", "size");
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
-fn a_computed_store_into_the_given_prototype_writes_every_key() {
+fn a_computed_store_into_the_given_prototype_writes_no_index_key() {
+    // DEC 250: see `an_unknown_prototype_writes_no_index_key`.
     let v = verdict(
         "declare const name: string; const P: any = { k: 1 }; P[name] = 2;",
         "size",
     );
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }
 
 /// debug.ts `attachFlowNodeDebugInfo`: an `Object.create` prototype whose
@@ -84,31 +88,31 @@ fn a_defined_key_of_a_created_prototype_is_written() {
 }
 
 #[test]
-fn a_created_prototype_defined_under_a_computed_key_writes_every_key() {
+fn a_created_prototype_defined_under_a_computed_key_writes_no_index_key() {
     let v = verdict(
         "declare const name: string; const P: any = Object.create(Object.prototype);
          Object.defineProperty(P, name, { value: 1 });",
         "size",
     );
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
-fn a_created_prototype_with_a_computed_accessor_writes_every_key() {
+fn a_created_prototype_with_a_computed_accessor_writes_no_index_key() {
     // No getter value reaches the define: the key is still unknown.
     let v = verdict(
         "declare const name: string; const P: any = Object.create(Object.prototype);
          Object.defineProperty(P, name, { get: undefined });",
         "size",
     );
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
-fn a_created_prototype_from_unknown_descriptors_writes_every_key() {
+fn a_created_prototype_from_unknown_descriptors_writes_no_index_key() {
     let v = verdict(
         "const P: any = Object.create(Object.prototype, (globalThis as any).hostDescs());",
         "size",
     );
-    assert!(!proven(&v), "{v:?}");
+    assert!(proven(&v), "{v:?}");
 }

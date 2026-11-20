@@ -128,7 +128,7 @@ extern "C" {
 /// We surface 192 here so callers can `const_assert!` against it.
 pub const JMP_BUF_MIN_BYTES: usize = 192;
 
-#[cfg(test)]
+#[cfg(all(test, not(target_os = "wasi")))]
 mod tests {
     use super::*;
 

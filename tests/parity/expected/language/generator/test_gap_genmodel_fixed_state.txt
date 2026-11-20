@@ -1,0 +1,127 @@
+generator-apply-hot 496
+generator-apply-shadow 1003
+generator-apply-parent 2000
+generator-apply-restored 5
+own 
+same-next true
+prototype true
+a1 2 false
+b1 5 false
+a2 7 false
+finally 2
+a3 13 true
+a4 undefined true
+finally 5
+b-return 17 true
+b-done undefined true
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched 8 false
+finally 3
+patched-for-of 3 0
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+finally 8
+brand true
+prototype-brand true
+unstarted-return 23 true
+closed-throw closed
+catch1 1 false
+catch2 2 false
+catch3 3 false
+catch4 4 true
+return1 1 false
+return2 3 false
+return3 7 true
+delegate1 1 false
+delegate2 6 false
+delegate3 3 false
+delegate4 14 true
+method1 30 false
+method2 31 true
+capture1 40 false
+capture2 50 false
+escaped 51
+expando1 4 false
+finally 4
+expando-return 80 true
+own-next override true
+private-return 90 true
+class-prototype true
+class-next 60 false
+replaced-prototype true
+changed-next 12 false
+finally 12
+primitive-prototype true
+primitive-next 13 false
+finally 13
+fresh-methods true
+fresh-method-prototype true true
+array-from 2,3
+param1 80 false
+param2 91 false
+param-shared 91
+undefined-prototype true true
+symbol-method-prototype true true
+symbol-method-for-of 101
+borrowed-prototype true
+borrowed-next 102 false
+static-prototype true
+static-next 103 false
+computed-prototype true
+computed-next 104 false
+ordered-method-prototype true
+ordered-method-next 60 false
+super-prototype true
+super-prototype true
+super-values 106 106
+custom-method-prototypes true true
+static-symbol-prototype true
+custom-instance 108 false
+custom-static 109 false
+static-symbol 110 false
+inherited-computed-prototype true
+inherited-computed-next 104 false
+evaluation-symbols true true undefined undefined
+evaluation-symbol-names [a] [b]
+evaluation-symbol-prototypes true true
+ordered-computed-prototype true
+ordered-computed-next 104 false
+erased-computed-prototype true
+erased-computed-next 113 false
+generator-log 114
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+protocol-result 115 more
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+protocol-primitive { value: undefined, done: true } true
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+protocol-getter undefined true
+protocol-order arg,
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+protocol-builtin { value: 115, done: false }
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+selected-warm 122 false
+selected-brand true
+selected-before-argument 122 false
+selected-detached-done 123 true
+state-local-yield 124 false
+state-local-return 126 true
+state-local-finally 127
+state-local-abrupt 128 true
+hot-resume 496
+hot-shadow 130 false
+hot-restored 32 false
+hot-relinked 131 true
+hot-link-restored 33 false
+reentry next true
+reentry return true
+reentry throw true
+guarded-next 133 false
+reentry next true
+reentry return true
+reentry throw true
+guarded-return 134 false
+guarded-complete 135 true
+escaping-error 137
+escaping-done undefined true

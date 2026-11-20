@@ -69,7 +69,7 @@ unsafe fn admitted_receiver(obj: *mut ObjectHeader) -> Option<super::shapes::Sha
     }
     let record = super::shapes::shape_record_for_word(LayoutWord(id))?;
     if crate::process::is_process_env_ptr(addr)
-        || super::is_arguments_object(obj)
+        || header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
         || crate::object::url_layout::is_url_object_shape(obj)
         || crate::array::object_prototype_addr_matches(addr)
     {

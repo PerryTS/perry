@@ -13,6 +13,7 @@ fn closure(id: u32, this: bool) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: this,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: !this,
         is_async: false,
@@ -297,6 +298,7 @@ fn empty_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -320,6 +322,7 @@ fn anonymous_record_admission_uses_the_full_constructor_proof() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     assert!(anon_props(&class, &[]).is_none());
     class.constructor.as_mut().unwrap().body.clear();
@@ -378,6 +381,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     assert!(
         class.is_literal_shape(),
@@ -457,6 +461,7 @@ fn constructor(body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -935,6 +940,7 @@ fn final_literal_visitor_harvests_static_import_member_writes() {
         key: Box::new(Expr::String("loggingHost".into())),
         value: Box::new(Expr::Object(Vec::new())),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));
@@ -961,7 +967,7 @@ fn fused_private_method_probe_never_matches_a_zero_word() {
     c.methods.push(method);
     let mut module = Module::new("private_probe.ts");
     module.classes = vec![c];
-        module.init.push(Stmt::Let {
+    module.init.push(Stmt::Let {
         id: 1,
         name: "o".into(),
         ty: Type::Any,

@@ -6,6 +6,7 @@ fn bounds_proof_label(proof: &BoundsProof) -> &'static str {
         BoundsProof::MinLength => "min_length",
         BoundsProof::ExplicitGuard => "explicit_guard",
         BoundsProof::ExplicitAssume => "explicit_assume",
+        BoundsProof::EntryGuard => "entry_guard",
     }
 }
 

@@ -201,9 +201,14 @@ unsafe fn submit_request(identifier: &str, content: &AnyObject, trigger: &AnyObj
 use perry_ffi::copy_string_from_raw as str_from_header;
 
 /// Ask the user for alert + badge + sound permission (options bitmask = 7).
-/// Called once from app bootstrap (`PerryAppDelegate.application:didFinishLaunchingWithOptions:`)
-/// so the permission prompt fires at launch, not on every `notificationSend` call.
+/// Requested lazily, once, by the first notification API the app actually
+/// uses: prompting at launch made every perry/ui iOS app ask for
+/// notifications even when it never sends one (an App Review red flag).
 pub fn request_authorization() {
+    static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ASKED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return;
+    }
     unsafe {
         let Some(center_cls) = AnyClass::get(c"UNUserNotificationCenter") else {
             return;
@@ -224,6 +229,7 @@ pub fn request_authorization() {
 /// matching provisioning profile; without it the fail-to-register delegate
 /// fires (logged to stderr).
 pub fn register_remote(callback: f64) {
+    request_authorization();
     ON_REMOTE_TOKEN_CALLBACK.with(|c| *c.borrow_mut() = Some(callback));
     unsafe {
         let Some(app_cls) = AnyClass::get(c"UIApplication") else {
@@ -527,6 +533,7 @@ pub fn schedule_interval(
     seconds: f64,
     repeats: f64,
 ) {
+    request_authorization();
     let id = unsafe { str_from_header(id_ptr) };
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
@@ -559,6 +566,7 @@ pub fn schedule_calendar(
     body_ptr: *const u8,
     timestamp_ms: f64,
 ) {
+    request_authorization();
     let id = unsafe { str_from_header(id_ptr) };
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
@@ -610,6 +618,7 @@ pub fn schedule_location(
     lon: f64,
     radius: f64,
 ) {
+    request_authorization();
     let id = unsafe { str_from_header(id_ptr) };
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
@@ -726,6 +735,7 @@ pub fn cancel(id_ptr: *const u8) {
 /// Send a local notification. Relies on authorization already having been granted
 /// via `request_authorization()` at app bootstrap.
 pub fn send(title_ptr: *const u8, body_ptr: *const u8) {
+    request_authorization();
     let title = unsafe { str_from_header(title_ptr) };
     let body = unsafe { str_from_header(body_ptr) };
 

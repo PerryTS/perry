@@ -6,11 +6,15 @@ use super::*;
 /// strict `<`, every taken update ends at most at `n`, so no overflow edge is
 /// reachable in the integer version. Larger bounds use doubles from entry.
 ///
-/// Deliberately limited to straight-line expression bodies, outside try and
-/// labelled regions: every normal exit reaches the double resynchronization,
-/// and there is no catch / labelled break that can observe a stale slot.
-/// Captures and async contexts retain their existing storage protocol. The
-/// literal initializer also excludes -0, which an i32 view cannot preserve.
+/// The body may branch, call and nest loops, but every edge that leaves the
+/// integer copy while the frame lives must reach the double
+/// resynchronization at its exit: unlabelled `break` and labels declared in
+/// the body stay inside the loop (`jumps_stay_in_loop`), `return` / `throw`
+/// leave the frame (no `try` around the loop here, so no catch observes a
+/// stale slot), and the loop itself carries no label. Captures and async
+/// contexts retain their existing storage protocol. The literal initializer
+/// (`let i = 0`, `i = 0`, `i = 0, n = a.length`) also excludes -0, which an
+/// i32 view cannot preserve.
 pub(super) fn lower(
     ctx: &mut FnCtx<'_>,
     init: Option<&Stmt>,
@@ -44,6 +48,7 @@ pub(super) fn lower(
         "for.iv.slow",
         None,
         false,
+        None,
     )?;
     ctx.block().br(&merge_label);
     ctx.current_block = merge_idx;
@@ -62,15 +67,12 @@ pub(super) fn prepare(
     bindings: bool,
 ) -> Option<(u32, DynamicI32Bound)> {
     use perry_hir::{CompareOp, Expr};
-    let Some(Stmt::Let {
-        id,
-        init: Some(Expr::Integer(start)),
-        ..
-    }) = init
+    let Some((counter_id, bound_id, CompareOp::Lt)) =
+        condition.and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
     else {
         return None;
     };
-    let counter_id = *id;
+    let start = for_init_literal_counter(init, counter_id)?;
     let canonical = bindings
         && ctx.local_slot_reps.get(&counter_id) == Some(&crate::expr::SlotRep::I32)
         && ctx.i32_counter_slots.contains_key(&counter_id);
@@ -82,7 +84,6 @@ pub(super) fn prepare(
         }) if *id == counter_id)
         && !stmts_mutate_local(body, counter_id);
     if !crate::expr::canonical_i32_locals_enabled()
-        || i32::try_from(*start).is_err()
         || !ctx.repsel_context_allows_canonical_i32
         || ctx.try_depth != 0
         || !ctx.pending_labels.is_empty()
@@ -90,19 +91,10 @@ pub(super) fn prepare(
         || ctx.closure_captures.contains_key(&counter_id)
         || (!bindings && ctx.i32_counter_slots.contains_key(&counter_id))
         || (ctx.local_slot_reps.contains_key(&counter_id) && !canonical)
-        || !body.iter().all(|stmt| {
-            matches!(stmt, Stmt::Expr(_)) || (bindings && matches!(stmt, Stmt::Let { .. }))
-        })
+        || !jumps_stay_in_loop(body)
         || !(private_update || dynamic_bound_private_counter_is_safe(ctx, counter_id, update, body))
+        || ctx.closure_captures.contains_key(&bound_id)
     {
-        return None;
-    }
-    let Some((matched_counter, bound_id, CompareOp::Lt)) =
-        condition.and_then(|cond| classify_for_local_bound_dynamic(cond, update, body, ctx))
-    else {
-        return None;
-    };
-    if matched_counter != counter_id || ctx.closure_captures.contains_key(&bound_id) {
         return None;
     }
     // A native i32 bound already carries the range/integrality contract.
@@ -128,7 +120,7 @@ pub(super) fn prepare(
                 counter_is_private,
             }
         } else {
-            emit_guarded_i32_bound(
+            emit_guarded_i32_bound_with_start(
                 ctx,
                 counter_id,
                 bound_id,
@@ -137,6 +129,7 @@ pub(super) fn prepare(
                 body,
                 "for.iv",
                 None,
+                Some(start),
             )?
         };
     if canonical {
@@ -176,7 +169,16 @@ pub(super) fn lower_proven(
     let previous_rep = ctx
         .local_slot_reps
         .insert(counter_id, crate::expr::SlotRep::I32);
-    lower_for_after_init_impl(
+    // The i32 slot is the counter's only storage inside this copy, exactly
+    // as for a canonical-i32 local (which has no `ctx.locals` entry): a
+    // nested loop, call argument or branch in the body can then never read
+    // the double slot, which is stale until the exit below.
+    let double_slot = if previous_rep != Some(crate::expr::SlotRep::I32) {
+        ctx.locals.remove(&counter_id)
+    } else {
+        None
+    };
+    let lowered = lower_for_after_init_impl(
         ctx,
         init,
         condition,
@@ -185,12 +187,17 @@ pub(super) fn lower_proven(
         "for.iv.fast",
         Some((counter_id, bound)),
         false,
-    )?;
-    if previous_rep != Some(crate::expr::SlotRep::I32) {
-        let counter = ctx.block().load(I32, &guard.counter_i32_slot);
-        let counter_double = ctx.block().sitofp(I32, &counter, DOUBLE);
-        let double_slot = ctx.locals[&counter_id].clone();
-        ctx.block().store(DOUBLE, &counter_double, &double_slot);
+        None,
+    );
+    if let Some(double_slot) = double_slot {
+        // The copy's one exit block: the failed cond, `break`, and labels
+        // declared in the body all land here (`jumps_stay_in_loop`).
+        if lowered.is_ok() && !ctx.block().is_terminated() {
+            let counter = ctx.block().load(I32, &guard.counter_i32_slot);
+            let counter_double = ctx.block().sitofp(I32, &counter, DOUBLE);
+            ctx.block().store(DOUBLE, &counter_double, &double_slot);
+        }
+        ctx.locals.insert(counter_id, double_slot);
     }
     match previous_rep {
         Some(rep) => {
@@ -203,5 +210,19 @@ pub(super) fn lower_proven(
     if guard.counter_is_private {
         ctx.i32_counter_slots.remove(&counter_id);
     }
-    Ok(())
+    lowered
+}
+
+/// Every labelled `break` / `continue` in `body` (closures excluded: they
+/// cannot jump out of this frame) names a label declared inside `body`, so
+/// no jump bypasses the loop's own exit or update block.
+fn jumps_stay_in_loop(body: &[Stmt]) -> bool {
+    let mut declared = Vec::new();
+    let mut targets = Vec::new();
+    perry_hir::tdz_check::for_each_stmt_shallow(body, &mut |stmt| match stmt {
+        Stmt::Labeled { label, .. } => declared.push(label.clone()),
+        Stmt::LabeledBreak(label) | Stmt::LabeledContinue(label) => targets.push(label.clone()),
+        _ => {}
+    });
+    targets.iter().all(|label| declared.contains(label))
 }

@@ -29,3 +29,43 @@ entire process, including memory managed by other allocators. Embedders that
 share mimalloc with a host must configure it before the host's first allocation;
 loading Perry later cannot retroactively change the initial heap policy. Setting
 `MIMALLOC_ALLOW_THP=0` at host process launch makes that intent explicit.
+
+## Realm population
+
+Native compilation enables two-phase realm population by default. A static read
+of a core global initializes the core builtins; observing the global object or
+a builtin outside the core completes the realm. If the first access requires
+the complete realm, the runtime populates it in one pass. Both entries refer to
+the same global object, and each retained copy is registered as a GC root.
+
+The deferred Web families are `DOMException`, `Event`, `CustomEvent`,
+`MessageEvent`, `AbortController`, and `AbortSignal`. Their constructors and
+prototypes use the same birth routines and property order in either phase.
+Runtime-created objects materialize their intrinsic family before exposing it.
+`EventTarget` stays in the core because `Performance` inherits from it;
+`Storage` and its global accessors also stay in the core. `Response`, `WebSocket`,
+`URL`, `URLSearchParams`, and `SubtleCrypto` stay in phase A while their prototype
+surfaces and property order need Node parity work.
+
+Population rows derive their phase and sealing eligibility from the canonical
+lists at compile time. Completing a realm reads those flags without matching
+each constructor name again or calling sealing helpers for ineligible families.
+Population passes borrowed name bytes to the descriptor installer instead of
+allocating temporary owned copies of the static names.
+
+To compile with one-pass population throughout, set the compiler environment:
+
+```sh
+PERRY_REALM_TWO_PHASE=0 perry compile app.ts -o app
+```
+
+`off` and `false` also disable two-phase population. This is a compile-time
+setting and participates in the compilation cache key; setting it when launching
+an already compiled executable does not select another population strategy.
+The one-pass executable omits the two-phase runtime path.
+
+On Linux, the two-phase population occupies a separate tail section after the
+program's generated text. This keeps that code out of the common runtime text
+layout. It adds executable bytes, so memory gains depend on which builtins the
+program observes. Compare warm peak RSS and startup instructions on the same
+workload when assessing the tradeoff.

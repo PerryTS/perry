@@ -1,0 +1,16 @@
+warm 49
+prototype proto:10:7
+prototype-restored 17
+class-errors 40
+generator 10,39
+max 39
+push-call 40 39
+proxy 149
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+patched 17 18
+restored 17 18
+own-push 40 1 0
+async 49

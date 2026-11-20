@@ -48,12 +48,6 @@ pub extern "C" fn js_bigint_from_f64(value: f64) -> *mut BigIntHeader {
         return js_bigint_from_i64(if jsval.as_bool() { 1 } else { 0 });
     }
 
-    // If it's an INT32 (NaN-boxed i32), extract and convert
-    if jsval.is_int32() {
-        let int_value = jsval.as_int32() as i64;
-        return js_bigint_from_i64(int_value);
-    }
-
     // If it's a string, parse as BigInt (e.g., BigInt("1000000")).
     // #1781: accept inline SSO short strings too — `BigInt("123")` is a
     // 3-byte SSO value that `is_string()` (STRING_TAG-only) would reject,

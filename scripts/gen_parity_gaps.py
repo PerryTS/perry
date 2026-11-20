@@ -264,7 +264,7 @@ def compute():
 BEHAVIORAL_NOTE = (
     "> **Behavioral status.** This list counts individual API *surface* gaps, not\n"
     "> behavioral pass rate. Measured against Node's own test suite\n"
-    "> (`test-parity/node-suite/`, run by `scripts/parity.py`),\n"
+    "> (`tests/parity/node-suite/`, run by `scripts/parity.py`),\n"
     "> Perry's runtime passes **~97%**; overall Node.js/TypeScript compatibility is\n"
     "> around **95%**. Heavily-used modules (`fs`, `http`/`https`/`http2`,\n"
     "> `net`/`tls`, `crypto`, `stream`, `events`, `child_process`,\n"

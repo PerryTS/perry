@@ -97,7 +97,7 @@ fn date_replaced_method_stays_conservative() {
 #[test]
 fn date_unknown_receiver_stays_conservative() {
     check(
-        "const x: any = (globalThis as any).unknown; x.setTime(o);",
+        "import \"unseen-host\"; const x: any = (globalThis as any).unknown; x.setTime(o);",
         false,
     );
 }

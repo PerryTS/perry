@@ -253,6 +253,30 @@ fn hidden_image_literals_keep_cross_module_coalescing() {
     assert_eq!(make_unique_owner_global(&definition), definition);
 }
 
+/// fn_record's image descriptor is `linkonce_odr` in every module, one copy per
+/// program. In a split module its owner must keep it weak: a strong owner and
+/// the other modules' weak copies share one COMDAT group, which lld rejects.
+#[test]
+fn cross_module_linkonce_owner_stays_weak() {
+    use super::make_unique_owner_global;
+    for format in [
+        crate::fn_record::RecordFormat::Elf,
+        crate::fn_record::RecordFormat::MachO,
+    ] {
+        for (_, line) in crate::fn_record::image_lines(format) {
+            if !line.contains(" = linkonce_odr ") {
+                continue;
+            }
+            let owned = make_unique_owner_global(&line);
+            assert_eq!(owned, line.replacen(" = linkonce_odr ", " = weak_odr ", 1));
+        }
+    }
+    assert_eq!(
+        make_unique_owner_global("@g = linkonce hidden constant i32 0"),
+        "@g = weak hidden constant i32 0"
+    );
+}
+
 #[test]
 fn mach_o_offset_alias_has_one_hidden_owner() {
     fn fixture() -> LlModule {

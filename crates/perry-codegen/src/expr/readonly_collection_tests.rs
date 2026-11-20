@@ -48,6 +48,7 @@ fn has_method() -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -87,6 +88,7 @@ fn archetype_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -146,6 +148,7 @@ fn executor_class() -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -158,6 +161,7 @@ fn executor_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -310,6 +314,7 @@ fn compile_nested_map_get_ir() -> String {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -322,6 +327,7 @@ fn compile_nested_map_get_ir() -> String {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });

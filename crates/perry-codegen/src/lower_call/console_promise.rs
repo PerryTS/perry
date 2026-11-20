@@ -25,7 +25,7 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 
-use super::try_emit_buffer_read_intrinsic;
+use super::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 
 #[path = "console_promise/util_types.rs"]
 mod util_types;
@@ -37,49 +37,14 @@ pub fn try_lower_console_call(
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    // console.log(<args...>) sink.
-    //
-    // JS spec: console.log can take any number of args, separated by
-    // single spaces. We approximate by emitting a separate dispatch
-    // call per arg with a literal " " in between, then a final "\n".
-    // The runtime functions take a NaN-boxed double and print it
-    // followed by a single trailing space (for the inter-arg form)
-    // or newline (for the final/single-arg form). For now we use the
-    // existing js_console_log_dynamic for every arg — the runtime
-    // already adds a newline, so multi-arg console.log will be
-    // separated by newlines instead of spaces. Spec-compliant
-    // separator handling lives in a future Phase I tweak.
-    if let Expr::PropertyGet {
-        object, property, ..
-    } = callee
-    {
-        if matches!(object.as_ref(), Expr::GlobalGet(_))
-            && matches!(
-                property.as_str(),
-                "log"
-                    | "info"
-                    | "warn"
-                    | "error"
-                    | "debug"
-                    | "dir"
-                    | "dirxml"
-                    | "profile"
-                    | "profileEnd"
-                    | "timeStamp"
-                    | "table"
-                    | "trace"
-                    | "group"
-                    | "groupEnd"
-                    | "groupCollapsed"
-                    | "time"
-                    | "timeEnd"
-                    | "timeLog"
-                    | "count"
-                    | "countReset"
-                    | "clear"
-                    | "assert"
-            )
-        {
+    if let Expr::PropertyGet { property, .. } = callee {
+        if perry_hir::method_call::console_method(callee).is_some() {
+            // The intrinsic is what `console.<m>` holds only where the facts
+            // prove it; elsewhere read the property and call its value.
+            if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                return crate::builtin_proto::lower_console_generic_call(ctx, property, args)
+                    .map(Some);
+            }
             // Catch-all for the entire console.* surface. Most of
             // them are best-effort: we route the args through
             // js_console_log_dynamic so the user at least sees the
@@ -892,20 +857,34 @@ pub(crate) fn lower_split_method_call(
             ctx.current_block = call_idx;
             (undef_idx, merge_idx)
         });
+        // G8: `f.apply(x, arguments)` on a deferred binding reads its slot
+        // at the site: the bundle while the object is unborn.
+        let apply_bundle = (property == "apply" && args.len() == 2)
+            .then(|| crate::codegen::arguments::deferred_forward_apply_binding(ctx, &args[1]))
+            .flatten();
         let mut arg_idx = Vec::with_capacity(args.len());
         for (i, a) in args.iter().enumerate() {
+            if i == 1 && apply_bundle.is_some() {
+                continue;
+            }
             let collects = arg_collects[i + 1..].iter().any(|&c| c);
             arg_idx.push(group.lower(ctx, a, collects)?);
         }
         let recv_box = group.reread(ctx, recv_i)?;
         let value = group.reread_emitted(ctx, value_root);
         let mut lowered_args = Vec::with_capacity(args.len());
-        for i in arg_idx {
+        for &i in &arg_idx {
             lowered_args.push(group.reread(ctx, i)?);
         }
-        let forward = property == "apply"
-            && args.len() == 2
-            && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
+        if let Some(id) = apply_bundle {
+            lowered_args.push(crate::codegen::arguments::emit_deferred_binding_value(
+                ctx, id,
+            ));
+        }
+        let forward = apply_bundle.is_some()
+            || property == "apply"
+                && args.len() == 2
+                && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
                 Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object");
         let r = if forward {
             let result = ctx.block().call(
@@ -929,6 +908,25 @@ pub(crate) fn lower_split_method_call(
             let merge_label = ctx.block_label(merge);
             ctx.block().cond_br(&miss, &cold_label, &merge_label);
             ctx.current_block = cold;
+            // An unborn binding's object is born here, for the ordinary call
+            // (the bundle was only ever passed to the intrinsic apply); the
+            // birth collects, so every operand is read again below it.
+            let (recv_box, value, lowered_args) = match apply_bundle {
+                Some(id) => {
+                    crate::codegen::arguments::ensure_arguments_object(ctx, id);
+                    let recv_box = group.reread(ctx, recv_i)?;
+                    let value = group.reread_emitted(ctx, value_root);
+                    let mut lowered = Vec::with_capacity(2);
+                    for &i in &arg_idx {
+                        lowered.push(group.reread(ctx, i)?);
+                    }
+                    lowered.push(crate::codegen::arguments::emit_deferred_binding_value(
+                        ctx, id,
+                    ));
+                    (recv_box, value, lowered)
+                }
+                None => (recv_box, value, lowered_args),
+            };
             let value = emit_split_call_half(
                 ctx,
                 &lookup,
@@ -1234,7 +1232,18 @@ pub fn try_lower_native_method_str_dispatch(
                 if ctx.receiver_descriptors.byte_view_param(*id).is_some_and(|access|
                     access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
             if is_buffer_class || guarded_buffer_param {
-                if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)?
+                if let Some(lowered) =
+                    try_emit_buffer_equals_intrinsic(ctx, callee, object, property, args)?
+                {
+                    let materialized = crate::expr::materialize_js_value(
+                        ctx,
+                        lowered,
+                        crate::native_value::MaterializationReason::FunctionAbi,
+                    );
+                    return Ok(Some(materialized));
+                }
+                if let Some(lowered) =
+                    try_emit_buffer_read_intrinsic(ctx, callee, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(
                         ctx,
@@ -1789,10 +1798,20 @@ fn lower_closure_call_rooted<'a>(
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &obj_bits), (I64, &key_handle)],
+        // The receiver is any value: a Number whose top 16 bits are clear
+        // must not reach the handle entry, which reads it as a raw pointer.
+        crate::expr::index_get::named_get_on_unproven_receiver(
+            ctx,
+            &obj_bits,
+            &key_handle,
+            "0",
+            |ctx| {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_field_by_name_f64",
+                    &[(I64, &obj_bits), (I64, &key_handle)],
+                )
+            },
         )
     } else {
         lower_expr(ctx, callee)?

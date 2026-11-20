@@ -1372,3 +1372,408 @@ fn generated_native_namespaces_compile_without_package_opt_ins() {
         }));
     }
 }
+
+#[test]
+fn package_aliases_apply_to_every_reexport_form() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let root = dir.path();
+    let package_entry = |name: &str| {
+        let package = root.join("node_modules").join(name);
+        std::fs::create_dir_all(&package).expect("create package");
+        std::fs::write(
+            package.join("package.json"),
+            format!(r#"{{"name":"{name}","version":"1.0.0","main":"./index.js"}}"#),
+        )
+        .expect("write package json");
+        let index = package.join("index.js");
+        std::fs::write(&index, "exports.x = 1;\n").expect("write package entry");
+        index.canonicalize().unwrap()
+    };
+    let unaliased: Vec<_> = ["from-all", "from-named", "from-ns"]
+        .into_iter()
+        .map(package_entry)
+        .collect();
+    let aliased: Vec<_> = ["to-all", "to-named", "to-ns"]
+        .into_iter()
+        .map(package_entry)
+        .collect();
+    let untouched = package_entry("plain");
+
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        "export * from \"from-all\";\n\
+         export { x } from \"from-named\";\n\
+         export * as ns from \"from-ns\";\n\
+         export { x as plain } from \"plain\";\n",
+    )
+    .expect("write entry");
+
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".to_string());
+    for (from, to) in [
+        ("from-all", "to-all"),
+        ("from-named", "to-named"),
+        ("from-ns", "to-ns"),
+    ] {
+        ctx.package_aliases.insert(from.to_string(), to.to_string());
+    }
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut next_class_id: perry_hir::ClassId = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    collect_modules(
+        &entry.to_path_buf(),
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut next_class_id,
+        false,
+        &progress,
+        None,
+    )
+    .expect("collect re-exports through aliased packages");
+
+    let collected = |path: &std::path::PathBuf| {
+        ctx.native_modules.contains_key(path)
+            || ctx.js_modules.values().any(|module| &module.path == path)
+    };
+    for path in &aliased {
+        assert!(collected(path), "aliased target not collected: {path:?}");
+    }
+    for path in &unaliased {
+        assert!(!collected(path), "unaliased package collected: {path:?}");
+    }
+    assert!(collected(&untouched), "non-aliased re-export source lost");
+    let module = &ctx.native_modules[&entry.canonicalize().unwrap()];
+    for (source, kind) in [("to-all", 0), ("to-named", 1), ("to-ns", 2), ("plain", 1)] {
+        assert!(
+            module.exports.iter().any(|export| match export {
+                perry_hir::Export::ExportAll { source: actual } => kind == 0 && actual == source,
+                perry_hir::Export::ReExport { source: actual, .. } => kind == 1 && actual == source,
+                perry_hir::Export::NamespaceReExport { source: actual, .. } =>
+                    kind == 2 && actual == source,
+                _ => false,
+            }),
+            "stored export source missing: {source}"
+        );
+    }
+}
+
+#[test]
+fn package_aliases_preserve_reexport_initialization_order() {
+    for aliased in [false, true] {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let target = if aliased {
+            root.join("node_modules/to/index.js")
+        } else {
+            root.join("a.ts")
+        };
+        std::fs::create_dir_all(target.parent().unwrap()).unwrap();
+        if aliased {
+            std::fs::write(
+                target.parent().unwrap().join("package.json"),
+                r#"{"name":"to","main":"index.js","type":"module"}"#,
+            )
+            .unwrap();
+            let original = root.join("node_modules/from");
+            std::fs::create_dir_all(&original).unwrap();
+            std::fs::write(
+                original.join("package.json"),
+                r#"{"name":"from","main":"index.js","type":"module"}"#,
+            )
+            .unwrap();
+            std::fs::write(
+                original.join("index.js"),
+                "console.log('wrong'); export const x = 0;",
+            )
+            .unwrap();
+        }
+        std::fs::write(&target, "console.log('a'); export const x = 1;").unwrap();
+        let b = root.join("b.ts");
+        std::fs::write(&b, "console.log('b');").unwrap();
+        let source = if aliased { "from" } else { "./a" };
+        let hub = root.join("hub.ts");
+        std::fs::write(
+            &hub,
+            format!("export * from \"{source}\";\nimport \"./b\";\nconsole.log('hub');"),
+        )
+        .unwrap();
+        let entry = root.join("entry.ts");
+        std::fs::write(&entry, "import { x } from './hub'; console.log(x);").unwrap();
+        let before: Vec<_> = [&target, &b, &hub, &entry]
+            .into_iter()
+            .map(|p| (p.clone(), std::fs::read(p).unwrap()))
+            .collect();
+        let mut ctx = CompilationContext::new(root.to_path_buf());
+        ctx.allow_compile_packages.push("*".into());
+        if aliased {
+            ctx.package_aliases.insert("from".into(), "to".into());
+        }
+        ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+        let mut visited = HashSet::new();
+        let mut class_id = 1;
+        let progress = VerboseProgress::new(OutputFormat::Text, 0);
+        collect_modules(
+            &entry,
+            &mut ctx,
+            &mut visited,
+            OutputFormat::Text,
+            None,
+            &mut class_id,
+            false,
+            &progress,
+            None,
+        )
+        .unwrap();
+        let hub_module = &ctx.native_modules[&hub.canonicalize().unwrap()];
+        let expected = if aliased { "to" } else { "./a" };
+        assert_eq!(hub_module.requested_modules, [expected, "./b"]);
+        assert!(hub_module.exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == expected
+        )));
+        let order = super::super::init_order::topo_sort_non_entry_modules(
+            &ctx,
+            &entry.canonicalize().unwrap(),
+            OutputFormat::Text,
+            0,
+        );
+        let position = |path: &std::path::Path| {
+            let module = &ctx.native_modules[&path.canonicalize().unwrap()];
+            order.iter().position(|name| name == &module.name).unwrap()
+        };
+        assert!(
+            position(&target) < position(&b),
+            "export must initialize before the later import"
+        );
+        assert!(position(&b) < position(&hub));
+        for (path, bytes) in before {
+            assert_eq!(std::fs::read(path).unwrap(), bytes);
+        }
+    }
+}
+
+#[test]
+fn package_aliases_keep_first_request_and_erase_type_only_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let package = root.join("node_modules/to");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(
+        package.join("package.json"),
+        r#"{"name":"to","main":"index.js","type":"module"}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        package.join("index.js"),
+        "console.log('target'); export const x = 1;",
+    )
+    .unwrap();
+    let b = root.join("b.ts");
+    std::fs::write(&b, "console.log('b');").unwrap();
+    let entry = root.join("entry.ts");
+    std::fs::write(
+        &entry,
+        "import 'from'; import './b'; import 'second'; import type { T } from 'types';",
+    )
+    .unwrap();
+    let input = std::fs::read(&entry).unwrap();
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".into());
+    ctx.package_aliases.insert("from".into(), "to".into());
+    ctx.package_aliases.insert("second".into(), "to".into());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut class_id = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    collect_modules(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut class_id,
+        false,
+        &progress,
+        None,
+    )
+    .unwrap();
+    let module = &ctx.native_modules[&entry.canonicalize().unwrap()];
+    assert_eq!(module.requested_modules, ["to", "./b"]);
+    assert_eq!(
+        module
+            .imports
+            .iter()
+            .filter(|i| !i.type_only)
+            .map(|i| i.source.as_str())
+            .collect::<Vec<_>>(),
+        ["to", "./b", "to"]
+    );
+    assert_eq!(std::fs::read(&entry).unwrap(), input);
+}
+
+fn package_aliases_collect_pruning_case(
+    files: &[(&str, &str)],
+    recollect: bool,
+) -> (CompilationContext, tempfile::TempDir) {
+    use clap::Parser;
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    let mut inputs = Vec::new();
+    for (name, source) in files {
+        let path = root.join(name);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, source).unwrap();
+        inputs.push((path, source.as_bytes().to_vec()));
+    }
+    let entry = root.join("entry.ts");
+    let mut ctx = CompilationContext::new(root.to_path_buf());
+    ctx.allow_compile_packages.push("*".into());
+    ctx.package_aliases.insert("from".into(), "to".into());
+    ctx.entry_canonical = Some(entry.canonicalize().unwrap());
+    let mut visited = HashSet::new();
+    let mut class_id = 1;
+    let progress = VerboseProgress::new(OutputFormat::Text, 0);
+    let mut sources = super::PreparedSources::default();
+    super::collect_modules_with_sources(
+        &entry,
+        &mut ctx,
+        &mut visited,
+        OutputFormat::Text,
+        None,
+        &mut class_id,
+        false,
+        &progress,
+        None,
+        super::WalkSources::Keep(&mut sources),
+    )
+    .unwrap();
+    if recollect {
+        #[derive(Parser)]
+        struct Args {
+            #[command(flatten)]
+            compile: super::super::CompileArgs,
+        }
+        let args =
+            Args::try_parse_from([std::ffi::OsString::from("perry"), entry.into_os_string()])
+                .unwrap();
+        super::super::bootstrap::rerun_collect_with_class_field_types(
+            &args.compile,
+            &mut ctx,
+            &mut visited,
+            &mut class_id,
+            false,
+            &progress,
+            None,
+            OutputFormat::Text,
+            sources,
+        )
+        .unwrap();
+    }
+    for (path, source) in inputs {
+        assert_eq!(std::fs::read(path).unwrap(), source);
+    }
+    (ctx, dir)
+}
+
+#[test]
+fn package_aliases_keep_transitive_star_exports_and_effectful_forwarding_dependencies() {
+    for forwarded in [false, true] {
+        let outer = if forwarded {
+            "import { helper } from './pure.js'; export { helper }; export * from './inner.js';"
+        } else {
+            "export * from './inner.js';"
+        };
+        let entry = if forwarded {
+            "import { a, helper } from './outer.js'; console.log(a, helper);"
+        } else {
+            "import { a } from './outer.js'; console.log(a);"
+        };
+        let (ctx, dir) = package_aliases_collect_pruning_case(
+            &[
+                ("entry.ts", entry),
+                ("outer.js", outer),
+                ("inner.js", "export * from 'from';"),
+                ("pure.js", "export const helper = 'H';"),
+                (
+                    "node_modules/from/package.json",
+                    r#"{"name":"from","main":"index.js","type":"module"}"#,
+                ),
+                ("node_modules/from/index.js", "export const b = 'wrong';"),
+                (
+                    "node_modules/to/package.json",
+                    r#"{"name":"to","main":"index.js","type":"module"}"#,
+                ),
+                (
+                    "node_modules/to/index.js",
+                    "console.log('target'); export const a = 'A';",
+                ),
+            ],
+            false,
+        );
+        let module =
+            |path: &str| &ctx.native_modules[&dir.path().join(path).canonicalize().unwrap()];
+        assert!(module("outer.js").exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == "./inner.js"
+        )));
+        assert!(module("inner.js").exports.iter().any(|e| matches!(
+            e, perry_hir::Export::ExportAll { source } if source == "to"
+        )));
+        assert!(module("node_modules/to/index.js")
+            .exports
+            .iter()
+            .any(|e| matches!(
+                e, perry_hir::Export::Named { exported, .. } if exported == "a"
+            )));
+        if forwarded {
+            assert!(module("outer.js")
+                .imports
+                .iter()
+                .any(|i| i.source == "./pure.js"));
+        }
+    }
+}
+
+#[test]
+fn package_aliases_propagate_reexport_demand_through_the_second_walk() {
+    let (ctx, dir) = package_aliases_collect_pruning_case(
+        &[
+            (
+                "entry.ts",
+                "import { a } from './hub.js'; import { b } from 'to'; console.log(a, b);",
+            ),
+            ("hub.js", "export { a } from 'from';"),
+            (
+                "node_modules/to/package.json",
+                r#"{"name":"to","main":"index.js","type":"module"}"#,
+            ),
+            (
+                "node_modules/to/index.js",
+                "export const a = 'A'; export const b = 'B'; export const unused = 'U';",
+            ),
+        ],
+        true,
+    );
+    assert!(!dir.path().join("node_modules/from").exists());
+    let target = &ctx.native_modules[&dir
+        .path()
+        .join("node_modules/to/index.js")
+        .canonicalize()
+        .unwrap()];
+    let exports: HashSet<_> = target
+        .exports
+        .iter()
+        .filter_map(|e| match e {
+            perry_hir::Export::Named { exported, .. } => Some(exported.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(exports.contains("a"));
+    assert!(exports.contains("b"));
+    assert!(
+        !exports.contains("unused"),
+        "the second walk must actually apply pruning"
+    );
+}

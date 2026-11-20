@@ -41,6 +41,11 @@ const QNAN_PREFIX_I64: &str = "9221120237041090560";
 /// a function call but produces correct results across the entire JS
 /// truthiness table.
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
+    // A local or a field read the whole-program facts prove a Boolean
+    // (`expr::booleans`): a proof about the values, not the annotation.
+    if let Some(truthy) = crate::expr::booleans::truthy(ctx, cond_val, cond_expr) {
+        return truthy;
+    }
     if is_numeric_expr(ctx, cond_expr)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
         // Keep bare binding truthiness independent of binding-level type
@@ -220,6 +225,17 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bits = ctx.block().bitcast_double_to_i64(&value);
                 return Ok(ctx.block().icmp_eq(I64, &bits, crate::nanbox::TAG_TRUE_I64));
             }
+        }
+    }
+    // N1: a test of two exact int32 chains is one integer compare.
+    if let Some(bit) = crate::expr::i32_temps::try_lower_compare(ctx, expr)? {
+        return Ok(bit);
+    }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers.
+    if let Expr::Compare { op, left, right } = expr {
+        if let Some(bit) = crate::expr::int_product::try_lower_compare(ctx, *op, left, right)? {
+            return Ok(bit);
         }
     }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
@@ -446,6 +462,13 @@ pub(crate) fn lower_logical(
     // value is "nullish" and we return the right side; otherwise return
     // the left.
     if matches!(op, LogicalOp::Coalesce) {
+        // An element read below a dense floor that is a proven Number is
+        // never nullish (`proven_array`, PR-C2): the right side never runs.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_expr(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
         let l = lower_expr(ctx, left)?;
         let l_block_label = ctx.block().label.clone();
         let blk = ctx.block();

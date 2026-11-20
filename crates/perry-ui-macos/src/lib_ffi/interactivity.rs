@@ -10,6 +10,10 @@ pub extern "C" fn perry_ui_textfield_focus(handle: i64) {
     widgets::textfield::focus(handle);
 }
 
+// The input type selects a browser keyboard (web only); a native field keeps its own.
+#[no_mangle]
+pub extern "C" fn perry_ui_textfield_set_input_type(_handle: i64, _input_type: i64) {}
+
 /// Set a UTF-16 selection range, including a cursor (start == end).
 #[no_mangle]
 pub extern "C" fn perry_ui_textfield_set_selection_range(handle: i64, start: f64, end: f64) {

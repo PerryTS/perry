@@ -66,6 +66,7 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         value: Box::new(Expr::LocalGet(1)),
         receiver: Box::new(Expr::This),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })];
@@ -85,6 +86,7 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -112,6 +114,7 @@ fn class(id: u32, name: &str, extends_name: Option<&str>, ctor_tail: Vec<Stmt>) 
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

@@ -1,0 +1,12 @@
+test_typed_own: "own"
+exec_typed_own: ["own"]
+test_method_before_argument: throw TypeError DEC 250: Cannot replace built-in member RegExp.prototype.test: built-in objects are read-only in a compiled program (adding a new member is allowed)
+source_typed_getter: throw TypeError DEC 250: Cannot redefine built-in member RegExp.prototype.source: built-in objects are read-only in a compiled program (adding a new member is allowed)
+flags_typed_getter: throw TypeError DEC 250: Cannot redefine built-in member RegExp.prototype.flags: built-in objects are read-only in a compiled program (adding a new member is allowed)
+lastIndex_typed_value: true
+lastIndex_typed_assignment_result: [3,3]
+lastIndex_typed_strict: throw TypeError
+test_typed_collecting_argument_and_coercion: [true,1]
+exec_typed_collecting_argument_and_coercion: [["a"],1]
+test_literal_collecting_argument_and_coercion: true
+lastIndex_typed_collecting_rhs: [true,"stored"]

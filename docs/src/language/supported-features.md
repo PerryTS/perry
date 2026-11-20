@@ -251,6 +251,48 @@ perry compile src/main.js -o myapp
 
 Dynamic evaluation and CommonJS have supported paths, with limits on interpreter behavior and runtime module loading. See [Limitations](limitations.md) for the current boundaries.
 
+## Build-time macro imports
+
+An import with `with { type: "macro" }` calls its exported functions during
+compilation and replaces each call with its JSON result:
+
+```typescript,no-test
+import { readTemplates } from "./templates.macro.ts" with { type: "macro" };
+const templates = await readTemplates();
+```
+
+Perry compiles a temporary native runner using its own compiler and host
+runtime; Node and Bun are not required. The runner awaits Promise results.
+Calls in one importing module share the macro module instance and execute in
+syntax traversal order, with nested calls evaluated before their consumers. Each result is captured
+before later calls can mutate the macro module's objects; static arguments
+receive JSON values rather than references into an earlier result.
+Macro calls run on every compilation, so changes to build-time input files are
+observed even when ordinary compilation caching is enabled. The macro import
+and its initializer do not enter the application's runtime
+module graph.
+
+Arguments must be statically known. JSON literals, arrays, objects, constant
+bindings, arithmetic, conditionals, templates and earlier macro results have
+supported paths. Object-valued constants must be used only in static macro
+arguments; aliases or other uses are conservatively refused. Dynamic calls,
+spread arguments, and escaping macro function bindings are compile errors
+naming the import. Type annotations do not establish static values.
+
+Results support null, booleans, Unicode scalar strings, finite numbers other
+than negative zero, dense arrays and
+plain objects. Object property order and own data keys are preserved. Functions,
+undefined, symbols, BigInt, cycles, accessors, non-enumerable properties and
+unsupported object instances fail compilation. Bun extensions such as Blob
+and Response serialization are not supported. A thrown error, rejected Promise
+or recursive macro expansion also fails compilation with the import identified.
+
+Macro file reads access the build machine's files. A macro's `import.meta.url`
+identifies its real source file while the native runner executes, including
+when the application uses `--source-root`. Inline the contents that the installed
+application needs; an ordinary runtime file read is not packaged by this feature.
+Runtime `import.meta` lowering is unchanged.
+
 ## Node.js Compatibility
 
 Perry implements a large, real (non-stub) slice of the Node.js standard library —

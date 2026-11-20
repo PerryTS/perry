@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod declared_tests;
+
 /// Whether `method` is a backing-store collection method for a `class … extends
 /// Map/Set` instance whose backing is `backing`. Map-only vs Set-only methods
 /// are kept distinct (mirrors the codegen `is_collection_method_for_kind`). The

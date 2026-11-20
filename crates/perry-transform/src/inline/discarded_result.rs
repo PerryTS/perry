@@ -275,6 +275,7 @@ mod tests {
 
     use crate::inline::call_inliner::try_inline_simple_call;
     use crate::inline::{inline_functions, ExactReceiverFact, ExactReceiverFacts, MethodCandidate};
+    use crate::local_occurrences::WriteCensus;
     use perry_hir::types::{FuncId, LocalId, Type};
     use perry_hir::{CompareOp, Function, Module, Param};
     use std::collections::HashMap;
@@ -305,6 +306,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_strict: false,
         }
     }
@@ -489,6 +491,7 @@ mod tests {
                 &HashMap::new(),
                 &facts,
                 &mut next_local_id,
+                &WriteCensus::unwritten(),
                 None,
                 &HashMap::new(),
                 false,

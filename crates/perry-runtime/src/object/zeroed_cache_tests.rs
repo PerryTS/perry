@@ -13,7 +13,7 @@ fn fresh_thread_transition_cache_reads_empty_everywhere() {
             for entry in (*table).iter() {
                 assert_eq!(
                     (
-                        entry.key_ptr,
+                        entry.key_id,
                         entry.next_keys,
                         entry.prev_shape_id,
                         entry.target_shape_id,

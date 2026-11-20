@@ -54,8 +54,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // Declared class fields commonly CREATE; retain their key-add-first
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
-        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE) < crate::codegen_abi::LAYOUT_RECORD_SPAN
     {
         // `obj`'s own header word: the receiver carries its row.
         super::shapes::shape_record_of_receiver(id)
@@ -63,7 +62,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
         None
     };
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -98,7 +97,7 @@ unsafe fn define_other(
     }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -250,7 +249,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
             configurable,
         );
         let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
-        super::builtin_proto::note_write_addr(addr, "descriptor");
+        super::builtin_proto::note_write_addr(
+            addr,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+            "descriptor",
+        );
         crate::typedarray_named::note_named_mutation(addr, key_bytes());
         super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
         // Claims the absent key with its entry and marks the receiver.
@@ -282,7 +285,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
     let set = scope.root_nanbox_u64(half(has_set, DESC_SET));
     let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
     let name = String::from_utf8_lossy(key_bytes()).into_owned();
-    super::builtin_proto::note_write_addr(addr, "descriptor");
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(addr, name.as_bytes());
     // A new accessor keeps its internal writable bit (as the general
     // definition's `writable = has_accessor` does).
@@ -399,7 +406,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let obj = addr as *const ObjectHeader;
     let record = super::shapes::object_shape_record(obj)?;
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
+    if !record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {
         return None;
@@ -482,7 +489,11 @@ unsafe fn define_fresh_overflow_data(
         descriptor.flag(b"enumerable").unwrap_or(false),
         descriptor.flag(b"configurable").unwrap_or(false),
     );
-    super::builtin_proto::note_write_addr(addr, "descriptor");
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key)),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(addr, bytes);
     super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
     super::descriptor_state::note_attrs_born_with_keys(addr);

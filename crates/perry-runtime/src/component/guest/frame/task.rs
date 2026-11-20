@@ -10,7 +10,7 @@ pub(super) struct TaskContext {
 
 impl Frame {
     fn task_guard<T: Default>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
-        if self.failed {
+        if self.is_failed() {
             return T::default();
         }
         let Some(task) = &self.task else {
@@ -79,7 +79,7 @@ pub unsafe extern "C" fn perry_component_frame_task_call(
 pub unsafe extern "C" fn perry_component_frame_task_checkpoint(pointer: *mut c_void) -> i32 {
     let owner = frame(pointer);
     let count = owner.task_guard(|_| crate::promise::microtasks::guest_task_checkpoint());
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         count
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn perry_component_frame_task_ready(pointer: *mut c_void) 
         );
         i32::from(hint || queued)
     });
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         ready
@@ -134,7 +134,7 @@ pub unsafe extern "C" fn perry_component_frame_task_cancel(pointer: *mut c_void)
         task.domain.cancel();
         crate::promise::discard_cancelled_guest_jobs();
     });
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         0
@@ -159,7 +159,7 @@ pub unsafe extern "C" fn perry_component_frame_task_resume(
         let callback = callback.unwrap_or_else(|| fail("Missing component task callback"));
         callback(data);
     });
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         0

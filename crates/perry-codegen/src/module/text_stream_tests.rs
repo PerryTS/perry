@@ -50,3 +50,43 @@ fn named_module_proofs_and_their_operands_survive_unit_splitting() {
         }
     }
 }
+
+/// A direct call into another unit is satisfied by an `available_externally`
+/// copy of the callee, and the layout then omits the callee's `declare`. The
+/// streamed renderer (the transport of `--debug-symbols` and
+/// `PERRY_LLVM_INPROCESS=0`) once dropped the copies, so the caller's unit
+/// named a symbol it neither defined nor declared: clang rejected it with
+/// "use of undefined value '@perry_checked_number_remainder'".
+#[test]
+fn streamed_units_carry_cross_unit_inline_copies() {
+    use crate::types::DOUBLE;
+    fn module() -> LlModule {
+        let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+        let f = m.define_function("perry_fn_m__caller", DOUBLE, vec![]);
+        let e = f.create_block("entry");
+        let r = e.call(DOUBLE, "perry_fn_m__callee", &[]);
+        e.ret(DOUBLE, &r);
+        let f = m.define_function("perry_fn_m__callee", DOUBLE, vec![]);
+        f.create_block("entry").ret(DOUBLE, "1.0");
+        m
+    }
+    let expected = module().render_codegen_units(2);
+    let streamed: Vec<_> = module().into_codegen_unit_texts(2).collect();
+    assert_eq!(
+        streamed, expected,
+        "both text transports render the same units"
+    );
+    let caller = streamed
+        .iter()
+        .find(|u| u.contains("define double @perry_fn_m__caller("))
+        .expect("caller unit");
+    assert!(
+        !caller.contains("define double @perry_fn_m__callee("),
+        "the fixture needs the callee in another unit:\n{caller}"
+    );
+    assert!(
+        caller.contains("define available_externally double @perry_fn_m__callee(")
+            || caller.contains("declare double @perry_fn_m__callee("),
+        "the caller's unit defines or declares every callee:\n{caller}"
+    );
+}

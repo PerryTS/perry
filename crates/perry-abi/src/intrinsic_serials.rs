@@ -54,5 +54,7 @@ pub const INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH: u64 = 29;
 pub const INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE: u64 = 30;
 pub const INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE: u64 = 31;
 pub const INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE: u64 = 32;
-const _: () =
-    assert!(INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE < FIRST_DYNAMIC_PROTOTYPE_SERIAL);
+/// `%DataView.prototype%`, sealed at its birth: its shadow bit is what lets a
+/// direct `dv.get*` / `dv.set*` call skip the member read (`buffer::dataview`).
+pub const INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE: u64 = 33;
+const _: () = assert!(INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE < FIRST_DYNAMIC_PROTOTYPE_SERIAL);

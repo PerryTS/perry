@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{anyhow, Result};
 
@@ -212,6 +212,7 @@ pub(super) struct PreparedSource {
     pub(super) class_family_syntax: Option<perry_hir::ir::ClassFamilySyntax>,
     pub(super) source: String,
     pub(super) was_cjs_wrapped: bool,
+    pub(super) cjs_worker_filenames: Vec<String>,
     /// Recoverable parse warnings from the CommonJS wrap, printed by the walk.
     pub(super) messages: Vec<String>,
     /// Computed-`require` warnings from the CommonJS wrap, printed by the
@@ -237,6 +238,7 @@ impl PreparedSource {
                 .messages
                 .iter()
                 .chain(&self.computed_require_warnings)
+                .chain(&self.cjs_worker_filenames)
                 .chain(&self.wrap_dump)
                 .map(String::len)
                 .sum::<usize>()
@@ -291,6 +293,11 @@ pub(super) fn prepare_from_raw(
             .and_then(|extension| extension.to_str())
             == Some("cjs");
     let was_cjs_wrapped = class.wrap_eligible && (is_cjs_entry || is_commonjs(&raw_source));
+    let cjs_worker_filenames = if was_cjs_wrapped {
+        super::worker_url::cjs_filenames(&raw_source, canonical)
+    } else {
+        Vec::new()
+    };
     let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
@@ -384,6 +391,7 @@ pub(super) fn prepare_from_raw(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,
@@ -552,10 +560,18 @@ impl PrepSettings {
 }
 
 /// A plain module's prepared source as a walk consumed it.
-struct KeptSource {
-    class: PrepClass,
-    read: KeptRead,
-    prepared: PreparedSource,
+enum KeptSource {
+    Prepared {
+        class: PrepClass,
+        read: KeptRead,
+        prepared: PreparedSource,
+    },
+    // The module's semantic syntax, before context-dependent re-lowering.
+    // Its build-time effects have already happened in this compilation.
+    Normalized {
+        prepared_source: String,
+        module: Arc<swc_ecma_ast::Module>,
+    },
 }
 
 enum KeptRead {
@@ -600,7 +616,7 @@ impl PreparedSources {
         {
             self.modules.insert(
                 canonical.to_path_buf(),
-                KeptSource {
+                KeptSource::Prepared {
                     class,
                     read: KeptRead::Plain {
                         require_specs: require_specs.clone(),
@@ -626,7 +642,7 @@ impl PreparedSources {
         }
         self.modules.insert(
             canonical.to_path_buf(),
-            KeptSource {
+            KeptSource::Prepared {
                 class,
                 read: KeptRead::AfterRewrite { raw_source },
                 prepared: prepared.clone(),
@@ -639,24 +655,31 @@ impl PreparedSources {
     /// started). A source prepared after the rewrite stays for
     /// [`Self::take_after_rewrite`].
     pub(super) fn take(&mut self, canonical: &Path, class: PrepClass) -> Option<ReadSource> {
-        if matches!(
-            self.modules.get(canonical)?.read,
-            KeptRead::AfterRewrite { .. }
+        if !matches!(
+            self.modules.get(canonical)?,
+            KeptSource::Prepared {
+                read: KeptRead::Plain { .. },
+                ..
+            }
         ) {
             return None;
         }
-        let kept = self.modules.remove(canonical)?;
-        let KeptRead::Plain {
-            require_specs,
-            node_targets,
-        } = kept.read
+        let KeptSource::Prepared {
+            class: kept_class,
+            read:
+                KeptRead::Plain {
+                    require_specs,
+                    node_targets,
+                },
+            prepared,
+        } = self.modules.remove(canonical)?
         else {
             unreachable!("checked above");
         };
-        (kept.class == class).then(|| ReadSource::Prepared {
+        (kept_class == class).then(|| ReadSource::Prepared {
             require_specs,
             node_targets,
-            prepared: Ok(kept.prepared),
+            prepared: Ok(prepared),
         })
     }
 
@@ -669,13 +692,59 @@ impl PreparedSources {
         class: PrepClass,
         raw_source: &str,
     ) -> Option<PreparedSource> {
-        let kept = self.modules.remove(canonical)?;
-        match kept.read {
-            KeptRead::AfterRewrite {
-                raw_source: kept_raw,
-            } if kept.class == class && kept_raw == raw_source => Some(kept.prepared),
+        if matches!(self.modules.get(canonical)?, KeptSource::Normalized { .. }) {
+            return None;
+        }
+        match self.modules.remove(canonical)? {
+            KeptSource::Prepared {
+                class: kept_class,
+                read:
+                    KeptRead::AfterRewrite {
+                        raw_source: kept_raw,
+                    },
+                prepared,
+            } if kept_class == class && kept_raw == raw_source => Some(prepared),
             _ => None,
         }
+    }
+
+    pub(super) fn keep_normalized(
+        &mut self,
+        canonical: &Path,
+        source: &str,
+        module: Arc<swc_ecma_ast::Module>,
+    ) {
+        self.modules.insert(
+            canonical.to_path_buf(),
+            KeptSource::Normalized {
+                prepared_source: source.to_owned(),
+                module,
+            },
+        );
+    }
+
+    pub(super) fn take_normalized(
+        &mut self,
+        canonical: &Path,
+        source: &str,
+    ) -> Result<Option<Arc<swc_ecma_ast::Module>>> {
+        if !matches!(
+            self.modules.get(canonical),
+            Some(KeptSource::Normalized { .. })
+        ) {
+            return Ok(None);
+        }
+        let Some(KeptSource::Normalized {
+            prepared_source,
+            module,
+        }) = self.modules.remove(canonical)
+        else {
+            unreachable!("checked above")
+        };
+        if prepared_source != source {
+            return Err(anyhow!("prepared source of {} changed after macro expansion; build-time effects cannot be repeated", canonical.display()));
+        }
+        Ok(Some(module))
     }
 }
 
@@ -698,7 +767,9 @@ impl WalkSources<'_> {
             WalkSources::Keep(sources) => {
                 let config = PrepConfig::of(ctx, target);
                 if sources.config != config {
-                    sources.modules.clear();
+                    sources
+                        .modules
+                        .retain(|_, phase| matches!(phase, KeptSource::Normalized { .. }));
                     sources.config = config;
                 }
             }
@@ -708,11 +779,15 @@ impl WalkSources<'_> {
                     (Some(new), Some(old)) if new.same_except_demand(old) => {
                         // Re-prepare only the modules whose demanded exports
                         // changed; every other kept source still applies.
-                        sources.modules.retain(|path, _| {
-                            new.cjs_demanded_exports.get(path) == old.cjs_demanded_exports.get(path)
+                        sources.modules.retain(|path, phase| {
+                            matches!(phase, KeptSource::Normalized { .. })
+                                || new.cjs_demanded_exports.get(path)
+                                    == old.cjs_demanded_exports.get(path)
                         });
                     }
-                    _ => sources.modules.clear(),
+                    _ => sources
+                        .modules
+                        .retain(|_, phase| matches!(phase, KeptSource::Normalized { .. })),
                 }
                 sources.config = config;
             }

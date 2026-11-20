@@ -1,0 +1,35 @@
+class-proxy-heap 552 class-heap-field-24 24
+class function true false
+template-class-0 function true false
+proxy-template-class-0 function true false
+template-class-1 function true false
+proxy-template-class-1 function true false
+template-class-2 function true false
+proxy-template-class-2 function true false
+template-class-3 function true false
+proxy-template-class-3 function true false
+bound function true false
+async function true false
+generator function true false
+async-generator function true false
+native function true false
+native-bound function true false
+function-prototype function true false
+proxy-function-prototype function true false
+proxy-class function true false
+proxy-function function true false
+proxy-object object false true
+revoked-function function true false
+revoked-object object false true
+nested-revoked function true false
+null-proto object false true
+mutated-class function true false
+mutated-object object false true
+call-trap-object object false true
+symbol symbol false false
+null object false true
+DEC 250: Cannot add member Function.prototype.extra: built-in objects are read-only in a compiled program
+DEC 250: Cannot change the prototype of built-in Function.prototype: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.apply: built-in objects are read-only in a compiled program
+mutated-function-prototype function true false
+proxy-mutated-function-prototype function true false

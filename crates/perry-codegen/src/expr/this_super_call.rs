@@ -1704,6 +1704,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
                 // inlined body itself.
                 let caller_try_depth = ctx.try_depth;
                 ctx.try_depth = 0;
+                crate::verify_facts::body_entry(ctx, parent_ctor.id, "");
                 let lower_result = crate::stmt::lower_stmts(ctx, &parent_ctor.body);
                 ctx.try_depth = caller_try_depth;
                 lower_result?;

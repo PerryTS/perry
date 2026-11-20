@@ -74,9 +74,6 @@ fn store_handle(store: f64) -> Option<i64> {
         return Some(token);
     }
     let bits = store.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
-        return Some((bits & crate::value::INT32_MASK) as i32 as i64);
-    }
     if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
         let raw = (bits & crate::value::POINTER_MASK) as i64;
         if raw > 0 && raw < 0x10000 {
@@ -145,13 +142,13 @@ pub(crate) extern "C" fn diag_channel_with_store_scope(
                 }) {
                     Ok(context) => context,
                     Err(err) => {
-                        schedule_uncaught(err);
+                        schedule_uncaught(UncaughtError::Caught(err));
                         continue;
                     }
                 }
             }
             StoreTransform::NonCallable => {
-                schedule_uncaught(make_transform_not_a_function_error());
+                schedule_uncaught(UncaughtError::Core(make_transform_not_a_function_error()));
                 continue;
             }
             StoreTransform::None => data,
@@ -280,7 +277,7 @@ pub(crate) extern "C" fn diag_bounded_run(
         }
         Err(err) => {
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }

@@ -31,7 +31,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for name in ["host.ts", "world.wit"]:
-        shutil.copyfile(root / "test-wasi/components/http" / name, out / name)
+        shutil.copyfile(root / "tests/integration/wasi/components/http" / name, out / name)
     env = os.environ.copy()
     env.update(PERRY_RUNTIME_DIR=str(args.runtime_dir.resolve()),
                PERRY_NO_AUTO_OPTIMIZE="1", PERRY_CODEGEN_CPU_SLOTS="4")

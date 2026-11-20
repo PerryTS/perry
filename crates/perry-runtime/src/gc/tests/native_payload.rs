@@ -207,9 +207,8 @@ fn native_payload_is_slot_zero_of_a_meta_free_instance() {
         let value = native_payload::alloc(&FAMILY, Probe { value: 4 }, 0, &[(b"_options", 1.0)]);
         std::env::remove_var("PERRY_TEST_CALLBACK_SABOTAGE");
         let obj = native_payload::any_object(value).expect("an ordinary object");
-        let position = unsafe {
-            crate::object::shaped_symbols::position(obj, native_payload::payload_key())
-        };
+        let position =
+            unsafe { crate::object::shaped_symbols::position(obj, native_payload::payload_key()) };
         let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
         let reached = unsafe { native_payload::payload_mut::<Probe>(value, &FAMILY) }
             .map(|p| p.value)

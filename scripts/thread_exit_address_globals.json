@@ -20,6 +20,11 @@
    "type": "Hook",
    "verdict": "no_heap_address",
    "why": "the link-time feature slot (perry-runtime/src/feature_hooks.rs, also used by perry-stdlib): an AtomicUsize holding only the bits of a plain `fn` pointer (set() asserts size_of::<F>() == usize and stores a code address; 0 = uninstalled). It never holds a heap or arena address, so thread exit cannot leave it dangling."
+  },
+  {
+   "type": "CatchStackKey",
+   "verdict": "per_thread",
+   "why": "exception/marks.rs: the static is a const selector `fn(&CatchStacks) -> &RefCell<CatchStack<T>>`; every `with` resolves it inside CATCH_STACKS, a perry_thread_local! record, so the stack (and any address on it) belongs to the calling thread and dies with it. The 11 statics replaced per-file thread_local! stacks in 167d6a95a5."
   }
  ],
  "entries": [
@@ -41,10 +46,10 @@
     "region::map",
     "region::unmap"
    ],
-   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged. Re-audited 2026-10-30 after #13463/#13479. `unmap` still removes the start key from `REGIONS` before any physical release (`.remove(&(data as usize)).expect(...)`, then `debug_assert_eq!` on the extent length, then `reservation::unmap` / `apple::unmap` / `dealloc`), so removal still precedes release on every target. #13463 changed the map's value from a bare end offset to `BackingExtent { end, alignment }` \u2014 extent bookkeeping only; the removal still comes first. The new pinned source is a boundary caller the same two commits created: `arena/young_large.rs` now allocates large-object backings through `region::map`, and its release path (`release_arena_block` -> `region::unmap`) keeps removal ahead of release too. It is pinned so the next change to it forces this re-audit. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: region.rs and young_large.rs changed formatting only (rustfmt of map's alignment selection, register's insert, unmap's remove/dealloc, a test call, and young_large's for_each_young_small_header/copying_capacity_bytes). unmap still removes the REGIONS key before any physical release; registration, pooling and the release paths are unchanged.",
+   "why": "Non-Linux mapping extents, not object identities. region::register records each native map; region::unmap removes its start key before apple::unmap or allocator dealloc. arena/block.rs routes pool overflow, pool drain, allocation failure and TLS teardown through that release path. Pooled mappings remain live and listed across agent reuse. The source pins bind the registry and all production region allocation/release callers to this audit. WRT3a re-audit: current Linux reservation branch never uses REGIONS; non-Linux map/register and all block.rs release paths still remove the extent before physical unmap/dealloc. Reuse keeps live pooled maps registered. Release re-audit 2026-10-28: all four production block release paths still call region::unmap; non-Linux removes REGIONS before apple::unmap/dealloc, while pooling and test-only retained mappings stay registered. Warning cleanup re-audit: ALIGN and mapped_len are now compiled only on Linux, matching their existing Linux-only callers. Registry insertion, removal-before-unmap, pooled mapping custody, and thread-exit release paths are unchanged. Re-audited #13405: block.rs delegates the bump bound to inline::allocation_limit, which closes the fast path during black allocation. Region allocation, registration, pooling, removal-before-unmap and TLS teardown are unchanged. Re-audited 2026-10-30 after #13463/#13479. `unmap` still removes the start key from `REGIONS` before any physical release (`.remove(&(data as usize)).expect(...)`, then `debug_assert_eq!` on the extent length, then `reservation::unmap` / `apple::unmap` / `dealloc`), so removal still precedes release on every target. #13463 changed the map's value from a bare end offset to `BackingExtent { end, alignment }` \u2014 extent bookkeeping only; the removal still comes first. The new pinned source is a boundary caller the same two commits created: `arena/young_large.rs` now allocates large-object backings through `region::map`, and its release path (`release_arena_block` -> `region::unmap`) keeps removal ahead of release too. It is pinned so the next change to it forces this re-audit. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: region.rs and young_large.rs changed formatting only (rustfmt of map's alignment selection, register's insert, unmap's remove/dealloc, a test call, and young_large's for_each_young_small_header/copying_capacity_bytes). unmap still removes the REGIONS key before any physical release; registration, pooling and the release paths are unchanged. Re-audited 2026-11-04 (budgeted-full purge): block.rs drain_block_pool_if_requested now returns None when no drain was requested instead of empty stats; a requested drain still runs drain_block_pool, the same release path. Registration, pooling, removal-before-unmap and TLS teardown are unchanged. Re-audited 2026-11-15 against f648648270/777244c494..64257c3159 (905560e600, b1845c6367, 00fb540ce7): Windows now maps one VirtualAlloc reservation per block and registers it in REGIONS like Apple; `unmap` still removes the start key from REGIONS before any physical release (`.remove(...).expect`, then reservation::unmap / apple::unmap / windows::unmap / dealloc). Windows `release` decommits a pooled block's pages but keeps the extent registered with `released = true`, and `contains` stops admitting it before the pages fault; `reuse` recommits it. block.rs discard_empty_block_pages is a no-op on Windows (only pooled blocks are released), and the bump allocator gained the instr-only snap_census::birth note. `map` now asserts page alignment through map_extent. Registration, pooling, removal-before-unmap and the TLS-teardown release paths are unchanged.",
    "source_pins": {
-    "crates/perry-runtime/src/arena/region.rs": "bb3988070b2f3a51080669c053e18c904439c9506fc5f0b00770117d43774616",
-    "crates/perry-runtime/src/arena/block.rs": "a1e171218952b59e7d8479f613586d7841c0245cb90f896919946852c48a726e",
+    "crates/perry-runtime/src/arena/region.rs": "7a984c12895f793da4a89309a653b803290b492a01d4a290194d11e26a2cc02a",
+    "crates/perry-runtime/src/arena/block.rs": "49b2676f707ae2749345fde1045d40097095805ae95d64cbe028e6bad0309f26",
     "crates/perry-runtime/src/arena/young_large.rs": "b86f56c49912ac67956f8dbfd3463c3ae0bdcf21bb7e634b63b703fe52523dc8"
    }
   },
@@ -773,6 +778,14 @@
    ],
    "verdict": "process_global_allocation",
    "why": "Set of BufferHeader addresses of SharedArrayBuffer backings allocated with std::alloc::alloc_zeroed in shared_sab.rs (never freed, not in any thread arena), so thread exit cannot free them."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/input.rs",
+   "names": [
+    "READER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Owns a Unix cancellation socket and a Rust JoinHandle. The worker owns an OS input descriptor and queues plain bytes; neither the reader nor its thread captures a JS value or an arena pointer. Shutdown wakes and joins the worker before dropping the reader."
   },
   {
    "file": "crates/perry-runtime/src/tui/input.rs",
@@ -3861,20 +3874,20 @@
    "why": "Process-global list of the function-record images registered so far (it replaced the old OWNERS map). Each element is either a &'static FunctionRecordBounds (the linker-owned record section of a permanent image) or a leaked &'static [&'static OwnerState] for an unloadable image, whose CopiedEntry holds a static code address and Arc<[u8]> name/source bytes, with overrides keyed by owner ordinal. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
   },
   {
-   "file": "crates/perry-runtime/src/builtins/fn_metadata_owner.rs",
-   "names": [
-    "INDEX"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Function-local cache of (owner key, entries sorted by code address) plus an Arc of (code address, &'static [u8]) pairs: code addresses and static name/source bytes of the image or of a leaked owner, rebuilt when the owner key changes. Nothing in it is allocated in a thread Arena or is a GC-managed pointer, so Arena::drop at thread exit cannot leave it stale."
-  },
-  {
    "file": "crates/perry-runtime/src/feature_hooks.rs",
    "names": [
     "FEATURE_INSTALLERS"
    ],
    "verdict": "no_heap_address",
    "why": "Slots of extern \"C\" fn() installers registered by static constructors of linked images: code addresses only, no heap or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_sea.rs",
+   "names": [
+    "SEA_BLOB_FACTORY"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Stores only the stdlib Blob factory function address installed through js_sea_install_blob_factory; the AtomicUsize is loaded and transmuted back to that code pointer."
   },
   {
    "file": "crates/perry-runtime/src/object/layout_desc/literal_birth.rs",
@@ -3900,6 +3913,205 @@
    ],
    "verdict": "no_heap_address",
    "why": "Holds the code address of the one perry-stdlib router (JsNativeSubclassInitFn) installed at startup, or null; a function pointer, never a heap address."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/alloc_life.rs",
+   "names": [
+    "INTERVAL"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Allocation-census sampling interval (bytes between samples), stored once from the parsed census knob and loaded as a stride; an integer setting, never an address. The counter-only rule cannot discharge it mechanically because it matches mentions by name across both crates (a computed store, and `alloc_sample.rs` has its own `INTERVAL`)."
+  },
+  {
+   "file": "crates/perry-runtime/src/arena/alloc_life.rs",
+   "names": [
+    "SHAPE_SHARED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Two-element array of census totals (count and bytes of shape key/attribute storage): only `fetch_add` and `load` for the report line; counters, never an address. Arrays are outside the scalar counter-only rule."
+  },
+  {
+   "file": "crates/perry-runtime/src/contracts.rs",
+   "names": [
+    "CLAIMS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Whole-program class claims parsed once from the image's facts sections: HashMap<u32 class id, Claim{name: String, flags, ancestors: Vec<u32>, keys: Vec<KeyClaim{Vec<u8>, bool, bool, u16}>}>; Rust-owned data, no address. It became a candidate only because the type index resolves `Claim` by name and wpfacts_check/life.rs added an unrelated `struct Claim` with a u64 field."
+  },
+  {
+   "file": "crates/perry-runtime/src/family_never.rs",
+   "names": [
+    "NEVER",
+    "INSTALLED",
+    "IMAGE_NEVER"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Family bit sets (one bit per family in the build.rs family table): each image's never-claim, the union of installed families, and their difference. Stored from codegen's i64 claim constant and combined with fetch_or/fetch_and; bit masks, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/messaging/port_transport.rs",
+   "names": [
+    "TRANSPORT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "MessagePort endpoint table: u64 endpoint ids and generations, AgentId owners, worker ids and an inbox of owned SerializedValue deep copies (arena-independent, as the other SerializedValue queues in this inventory). The module states no heap addresses, callbacks or JS values live here; retire() (registered with agent::register_retire_hook) drops a dying agent's endpoints."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_api_host/loader.rs",
+   "names": [
+    "LINKED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "WASI only: set once before main by the generated registration object to the compile-time Node-API manifest and entry table, both `&'static` slices in the program's static data; never a GC or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/node_stream_constructors/web_adapter.rs",
+   "names": [
+    "WEB_READABLE_FROM_SOURCE_PTR",
+    "WEB_WRITABLE_FROM_SINK_PTR",
+    "WEB_TRANSFORM_FROM_TRANSFORMER_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Holds a stdlib Web Streams constructor callback fn pointer, stored only by js_register_node_stream_web_adapter_callbacks and loaded via load_web_callback!, like the WEB_*_PTR siblings already classified; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/class_handles.rs",
+   "names": [
+    "HTTP_SERVER_HANDLE_KIND_PROBE_PTR"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding a single extern \"C\" probe function pointer, written only by js_register_http_server_handle_kind_probe (`.store(f as *mut ())`) and transmuted back to HttpServerHandleKindProbeFn on load, like TLS_HANDLE_KIND_PROBE_PTR; code address."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_census/inventory.rs",
+   "names": [
+    "BASELINE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Instrumented snapshot census only: points to a Box<Baseline> leaked with Box::into_raw at census start and never freed (at_init only clears the pointer); Rust global-allocator memory no thread's arena owns. Baseline holds copies of the data/bss and TLS words and their range bounds."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_census/runner.rs",
+   "names": [
+    "ANCHOR"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Instrumented snapshot census only: flags, the program's static TLS range bounds, and `state`, the address of the census State Box leaked with mem::forget at census start (runner.rs `Box::new(State` ... `ANCHOR.state.store`); Rust heap memory no thread's arena owns, never a GC object."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_census/runner.rs",
+   "names": [
+    "EXE_TEXT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumented snapshot census only: (non-PIE flag, text lo, text hi) of the main executable's executable PT_LOAD, filled once from dl_iterate_phdr; code addresses."
+  },
+  {
+   "file": "crates/perry-runtime/src/string/short_pair.rs",
+   "names": [
+    "TAKEN",
+    "DECLINED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Diagnostic counters of the short-pair concat fast path: `&TAKEN`/`&DECLINED` select which one gets fetch_add(1), and load prints them; counters, never an address. The borrow is what defeats the mechanical counter-only rule."
+  },
+  {
+   "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
+   "names": [
+    "FAILED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop pool lifetime total, initialized 0, only `fetch_add(1)` on `Delivery::Failed` and `load` for the PERRY_LOOP_STATS line, like its CANCELLED/REFUSED siblings. The counter-only rule cannot discharge it mechanically because it matches mentions by name across both crates: async_module.rs `const FAILED: u64` (module status, #14413) is compared and assigned."
+  },
+  {
+   "file": "crates/perry-runtime/src/wpfacts_check/family.rs",
+   "names": [
+    "NEVER",
+    "SITE",
+    "SITE_LEN"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Check-mode family claim: NEVER is the family bit set from codegen's i64 constant; SITE/SITE_LEN are the address and length of the claim's witness metadata, a compile-time global in the image's static data (codegen entry.rs raw_entry_site), read only to report a failure. Never a GC or arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/wpfacts_check/life.rs",
+   "names": [
+    "DEATHS",
+    "UNBORN",
+    "NON_YOUNG",
+    "EXACT",
+    "CHECKED_MINORS",
+    "DROPPED_UNOBSERVED",
+    "DIED_IN_CALL",
+    "BETS_FAILED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Check-mode lifetime claim totals in `mod totals`: only `bump(&X, n)` (fetch_add) and `get(&X)` (load) for the summary line; counters, never an address. Passing them by reference is what defeats the mechanical counter-only rule."
+  },
+  {
+   "file": "crates/perry-runtime/src/wpfacts_check/life_regions.rs",
+   "names": [
+    "R"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The `OnceLock<u64>` R in why_n(): the PERRY_LIFE_REGIONS_WHY_N knob (how many dirty instances get holder chains), parsed once; a count, never an address."
+  },
+  {
+   "file": "crates/perry-stdlib/src/crypto/uuid.rs",
+   "names": [
+    "SEQUENCE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "UUIDv7 monotonic state: Sequence{millis: u64 Unix time, counter: u64 seeded random counter}; never an address. New to the scan since perry-uuid moved into perry-stdlib (#14482)."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "DECLINED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop fetch engine lifetime statistics counter (declined requests): fetch_add(1) and load for PERRY_LOOP_STATS, like REUSED/CONNECTED. The counter-only rule cannot discharge it mechanically because it matches mentions by name across both crates: string/short_pair.rs borrows its own `&DECLINED`."
+  },
+  {
+   "file": "crates/perry-stdlib/src/turnloop_client/mod.rs",
+   "names": [
+    "FAILED"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Turnloop fetch engine lifetime statistics counter (failed requests): fetch_add(1) on Outcome::Err and load for PERRY_LOOP_STATS, like REUSED/CONNECTED. The counter-only rule cannot discharge it mechanically because it matches mentions by name across both crates: async_module.rs `const FAILED: u64` (module status, #14413) is compared and assigned."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_census/inventory.rs",
+   "names": [
+    "TRANS"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Instrumented snapshot census only: the owning ThreadId, a reliability flag, and (malloc-tracked object list length, init id) pairs pushed by frame_changed; lengths and ids, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/snap_image.rs",
+   "names": [
+    "BASELINE"
+   ],
+   "verdict": "process_global_allocation",
+   "why": "Execution-prefix image capture (Linux x86-64, build knob): points to a Box<Baseline> leaked with Box::into_raw in `begin` and never freed (the cut only clears the pointer); Rust global-allocator memory no thread's arena owns. Baseline holds byte copies of data/bss and the main TLS block, their bounds, and table sizes and counters."
+  },
+  {
+   "file": "crates/perry-runtime/src/tui/ffi.rs",
+   "names": [
+    "GRID"
+   ],
+   "verdict": "no_heap_address",
+   "why": "The TUI cell grid: width, height and two Vec<Cell>, where Cell is a char, two Color enums and a u8 Style; no field holds an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/value/addr_class/image_checks.rs",
+   "names": [
+    "IMAGE",
+    "COUNTERFEIT_DATA"
+   ],
+   "verdict": "no_heap_address",
+   "why": "Test and wasm-image-selftest builds only: immutable string-literal images (GcHeader, StringHeader, eight literal bytes, hash 0) built by the const fn literal_image; scalar headers and bytes in static data, never an arena address."
   }
  ]
 }

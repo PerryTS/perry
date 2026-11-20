@@ -5,7 +5,7 @@ w = Path(__file__).resolve().parent
 root = w.parents[3]
 head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
 assert not subprocess.check_output(['git', 'status', '--porcelain'], cwd=root)
-paths = ['crates/perry-runtime/src/json/replacer.rs', 'crates/perry-runtime/src/json/stringify_record_output_tests.rs', 'test-files/test_json_zero_spacing.ts']
+paths = ['crates/perry-runtime/src/json/replacer.rs', 'crates/perry-runtime/src/json/stringify_record_output_tests.rs', 'tests/fixtures/programs/test_json_zero_spacing.ts']
 hashes = {p: hashlib.sha256((root / p).read_bytes()).hexdigest() for p in paths}
 command = ['cargo', 'test', '--release', '-p', 'perry-runtime', '--lib', 'json']
 record = {'source_commit': head, 'command': command, 'env': {'RUST_TEST_THREADS': '1'}, 'hashes': hashes}

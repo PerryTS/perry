@@ -368,11 +368,8 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewShouldNavigat
         });
 
         // Allowlist gate.
-        if !allowed.is_empty() {
-            let host = host_of_url(&url_str);
-            if !host_in_allowlist(&host, &allowed) {
-                return false; // cancel
-            }
+        if !perry_ui::webview_navigation::navigation_allowed(&url_str, &allowed) {
+            return false; // cancel
         }
 
         if on_should == 0.0 {
@@ -500,30 +497,6 @@ pub extern "system" fn Java_com_perry_app_PerryBridge_nativeWebViewEvalResult(
             unsafe { js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, nb) };
         }));
     });
-}
-
-fn host_of_url(s: &str) -> String {
-    let after_scheme = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => return String::new(),
-    };
-    let host_end = after_scheme
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_scheme.len());
-    let host_with_port = &after_scheme[..host_end];
-    match host_with_port.find(':') {
-        Some(i) => host_with_port[..i].to_string(),
-        None => host_with_port.to_string(),
-    }
-}
-
-fn host_in_allowlist(host: &str, allowlist: &[String]) -> bool {
-    if allowlist.is_empty() {
-        return true;
-    }
-    allowlist
-        .iter()
-        .any(|d| host == d || host.ends_with(&format!(".{}", d)))
 }
 
 pub fn clear_cookies(_handle: i64) {

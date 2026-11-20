@@ -8,7 +8,7 @@ use super::*;
 /// `TypeError` rather than be silently invoked as a no-op.
 pub(crate) fn is_callable_function(value: f64) -> bool {
     let bits = value.to_bits();
-    // Class-ref constructors (INT32-tagged, top16 == 0x7FFE) are callable.
+    // Class constructor function objects and flagged class-reference dispatch.
     if (bits >> 48) == 0x7FFE || crate::object::class_value::class_value_id(value).is_some() {
         return crate::object::class_ref_id(value).is_some();
     }
@@ -16,8 +16,8 @@ pub(crate) fn is_callable_function(value: f64) -> bool {
     if lookup(value).is_some() {
         return proxy_wraps_callable(value);
     }
-    // Capturing/per-evaluation classes are heap class objects, not closures
-    // or INT32 class refs. They still have [[Call]] (which throws when used
+    // Capturing/per-evaluation classes are heap class objects rather than
+    // constructor closures. They still have [[Call]] (which throws when used
     // without `new`), so a Proxy must retain their callable classification.
     if crate::object::is_class_object_value(value) {
         return true;

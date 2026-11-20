@@ -3,6 +3,7 @@
 //! CLI driver for compiling TypeScript to native executables.
 
 mod apple_jwt;
+mod cli;
 mod commands;
 mod compat_reports;
 mod install_channel;
@@ -16,7 +17,7 @@ mod test_env_lock;
 mod update_checker;
 mod update_policy;
 
-use perry_cli_support::{dotenv, logger, terminal_progress, utc};
+use crate::cli::{dotenv, logger, terminal_progress, utc};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -114,9 +115,8 @@ enum Commands {
     /// Wraps `bun install --ignore-scripts` (or `npm install --ignore-scripts`
     /// as fallback) so no package code executes during install. After
     /// extraction, scans `node_modules/` with bundled offline rules and
-    /// only then runs lifecycle scripts — and only for packages on a
-    /// curated trust allowlist. Works on any standard npm project; no
-    /// Perry-specific config required.
+    /// only then runs lifecycle scripts explicitly approved through
+    /// `perry.allowScripts`, `--run-scripts`, or `--run-scripts-all`.
     Install(commands::install::InstallArgs),
 
     /// Check environment and dependencies

@@ -37,7 +37,7 @@ spec-level fields, so both APIs hand the backend identical flags.
 > deployments that demand cross-backend parity, set
 > `EnforcementMode::Strict` on the engine — any unsupported security
 > field becomes a hard `up()` failure rather than a silent drop. Full
-> matrix at [Cross-Backend Determinism](./determinism.md).
+> matrix at [Cross-Backend Determinism](determinism.md).
 
 ## Recommended baseline
 
@@ -119,7 +119,7 @@ the path of least resistance — `cgr.dev/chainguard/<tool>` is signed.
 
 For one-off command execution against an untrusted image (CI helper,
 build tool, code-evaluation sandbox), use the
-[`run_capability` pattern](./containers.md#hardened-single-container-run)
+[`run_capability` pattern](containers.md#hardened-single-container-run)
 which wraps `run()` with the maximum-isolation defaults:
 
 - `read_only: true`
@@ -190,17 +190,17 @@ Stacking patterns for production:
    ["ALL"]` + minimal `cap_add`).
 4. **Read-only root filesystem** (`read_only: true`).
 5. **Internal networks for the database side** (`internal: true` on the
-   db's network — see [Networking](./networking.md#internal-only-networks-internal-true)).
+   db's network — see [Networking](networking.md#internal-only-networks-internal-true)).
 6. **No published ports for private services** (omit `ports:` on
    internal-only services).
 7. **Resource limits** (planned: `mem_limit`, `cpu_limit` on Service).
 
 ## See also
 
-- [Compose orchestration](./compose.md) — applying these knobs in a
+- [Compose orchestration](compose.md) — applying these knobs in a
   stack spec.
-- [Production patterns](./production-patterns.md) — Forgejo example
+- [Production patterns](production-patterns.md) — Forgejo example
   uses several of these (internal-only db net, published web port,
   USER_UID/GID).
-- [Networking](./networking.md) — internal-only networks for
+- [Networking](networking.md) — internal-only networks for
   database isolation.

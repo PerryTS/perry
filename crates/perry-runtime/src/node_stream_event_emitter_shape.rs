@@ -487,7 +487,7 @@ pub(super) fn remove_only_listener_fast(target: f64, event: f64, listener: f64) 
     let deleted =
         unsafe { crate::object::delete_last_key::try_delete_last_added_key_at(events_obj, slot) };
     if deleted.is_none() {
-        let _ = crate::object::js_object_delete_dynamic_value(view.events, event);
+        let _ = crate::object::delete_dynamic_value(view.events, event);
     }
     true
 }

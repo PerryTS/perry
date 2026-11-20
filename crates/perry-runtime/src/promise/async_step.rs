@@ -150,15 +150,6 @@ fn suspend_on_awaited(
     )
 }
 
-#[inline]
-fn closure_ptr_to_arg(ptr: ClosurePtr) -> f64 {
-    if ptr.is_null() {
-        f64::from_bits(crate::value::TAG_UNDEFINED)
-    } else {
-        f64::from_bits(crate::value::JSValue::pointer(ptr as *const u8).bits())
-    }
-}
-
 #[no_mangle]
 pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
     bump(&MT_PROMISE_RESOLVED_COUNT);
@@ -205,12 +196,31 @@ pub extern "C" fn js_promise_resolved(value: f64) -> *mut Promise {
         let inner = crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise;
         if !inner.is_null() {
             // PromiseResolve(%Promise%, x) performs Get(x, "constructor")
-            // before its identity short-cut.  An own accessor can throw, and
-            // an own non-intrinsic constructor prevents returning x itself.
+            // before its identity short-cut, and only that Get decides: x is
+            // reused exactly when the answer is %Promise%. An own accessor can
+            // throw, and an own non-intrinsic constructor prevents returning x
+            // itself. A recorded prototype answers through its chain (the
+            // generic getter per hop, accessors with x as receiver): a user
+            // prototype below Promise.prototype answers %Promise%, so x is
+            // reused and a `then` there is never called; a `class X extends
+            // Promise` answers X and takes the thenable path. A `then` on the
+            // chain plays no part.
             let addr = inner as usize;
             let same_intrinsic_constructor =
-                if super::then::promise_inherited_user_then(addr).is_some() {
-                    false
+                if crate::object::prototype_chain::object_static_prototype(addr).is_some()
+                    && !super::promise_has_own_constructor(addr)
+                {
+                    let key = crate::string::js_string_from_bytes(b"constructor".as_ptr(), 11);
+                    // Allocating the key can move x: re-read it from its root.
+                    let addr =
+                        crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as usize;
+                    let ctor = if key.is_null() {
+                        None
+                    } else {
+                        crate::object::prototype_chain::resolve_inherited_field(addr, key)
+                    };
+                    let intrinsic = crate::object::builtin_constructor_value("Promise");
+                    ctor.is_some_and(|c| c.bits() == intrinsic.to_bits())
                 } else if super::promise_has_own_constructor(addr) {
                     let ctor = unsafe {
                         crate::object::exotic_expando::exotic_get_own_property(
@@ -294,13 +304,27 @@ pub extern "C" fn js_promise_resolved_then(
     on_fulfilled: ClosurePtr,
     on_rejected: ClosurePtr,
 ) -> *mut Promise {
+    // Every path allocates before it hands the handlers and `value` on
+    // (`js_promise_new`, `capture_context`, the `then` key the inherited-then
+    // probe interns, `js_promise_resolved`, which can also run a user
+    // `constructor` or `then` getter), and a copying minor there moves them:
+    // each path reads them back from these handles after its last such call.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value_h = scope.root_nanbox_f64(value);
+    let fulfilled_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_fulfilled));
+    let rejected_h = scope.root_nanbox_f64(boxed_closure_or_undef(on_rejected));
+
     // The primitive fast path below bypasses `js_promise_new`/`then`, so it
     // would never fire `v8.promiseHooks` (#3139). When hooks are active, route
     // through the real resolve+then path instead.
     if crate::v8::promise_hooks_active() || crate::async_hook_slots::promise_hooks_active() {
         bump(&MT_FAST_PATH_MISS);
         let p1 = js_promise_resolved(value);
-        return js_promise_then(p1, on_fulfilled, on_rejected);
+        return js_promise_then(
+            p1,
+            unboxed_closure(&fulfilled_h),
+            unboxed_closure(&rejected_h),
+        );
     }
 
     if is_definitely_primitive(value) {
@@ -308,21 +332,21 @@ pub extern "C" fn js_promise_resolved_then(
         // FAST PATH (primitive) — skip Promise.resolve()'s allocation
         // entirely. The callback runs once during the next microtask
         // drain via the `Task::Inline` arm.
-        let next = js_promise_new();
+        let next_h = scope.root_nanbox_f64(boxed_promise_or_undef(js_promise_new()));
+        let context = capture_context();
         TASK_QUEUE.with(|q| {
             q.borrow_mut().enqueue_promise_job(Task::Inline(
-                on_fulfilled,
+                unboxed_closure(&fulfilled_h),
                 value,
-                next,
+                unboxed_promise(&next_h),
                 true,
-                capture_context(),
+                context,
             ));
         });
         crate::event_pump::js_notify_promise_progress();
-        // Suppress the rejection-handler bookkeeping: it would only
-        // matter if `value` were a Promise, which it isn't here.
-        let _ = on_rejected;
-        return next;
+        // No rejection handler is attached: it would only matter if `value`
+        // were a Promise, which it isn't here.
+        return unboxed_promise(&next_h);
     }
 
     // FAST PATH (already-a-Promise) — `Promise.resolve(P)` is the
@@ -351,23 +375,39 @@ pub extern "C" fn js_promise_resolved_then(
                 || super::then::promise_inherited_user_then(inner_addr).is_some()
             {
                 bump(&MT_FAST_PATH_MISS);
-                let promise_val = box_promise_ptr(inner);
-                let fulfilled_val = closure_ptr_to_arg(on_fulfilled);
-                let rejected_val = closure_ptr_to_arg(on_rejected);
-                let result =
-                    super::js_promise_then_checked(promise_val, fulfilled_val, rejected_val);
+                // `Promise.resolve(inner)` is `inner` only when its
+                // `constructor` is %Promise%; otherwise it is a new promise
+                // whose PromiseResolveThenableJob calls `inner.then`, so an
+                // abrupt `then` (a non-object `constructor` failing
+                // SpeciesConstructor) rejects it instead of throwing here
+                // (#13556, test262 Promise/resolve/arg-uniq-ctor).
+                let resolved = js_promise_resolved(value_h.get_nanbox_f64());
+                let promise_val = box_promise_ptr(resolved);
+                let result = super::js_promise_then_checked(
+                    promise_val,
+                    fulfilled_h.get_nanbox_f64(),
+                    rejected_h.get_nanbox_f64(),
+                );
                 return crate::value::js_nanbox_get_pointer(result) as *mut Promise;
             }
             bump(&MT_FAST_PATH_HIT);
-            return js_promise_then(inner, on_fulfilled, on_rejected);
+            return js_promise_then(
+                crate::value::js_nanbox_get_pointer(value_h.get_nanbox_f64()) as *mut Promise,
+                unboxed_closure(&fulfilled_h),
+                unboxed_closure(&rejected_h),
+            );
         }
     }
 
     bump(&MT_FAST_PATH_MISS);
     // Pointer-tagged but not a Promise — could be a thenable. Take
     // the unfused path so the assimilation probes can run on it.
-    let p1 = js_promise_resolved(value);
-    js_promise_then(p1, on_fulfilled, on_rejected)
+    let p1 = js_promise_resolved(value_h.get_nanbox_f64());
+    js_promise_then(
+        p1,
+        unboxed_closure(&fulfilled_h),
+        unboxed_closure(&rejected_h),
+    )
 }
 
 /// Specialized version of `js_promise_resolved_then` for the async-step
@@ -416,12 +456,12 @@ fn then_backpatch_result(
             super::then::js_promise_new_with_parent(unboxed_promise(&awaited_h)),
         ));
         let result = unboxed_promise(&result_h);
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_ref(
             unboxed_closure(&fulfill_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_ref(
             unboxed_closure(&reject_h) as *mut crate::closure::ClosureHeader,
             1,
             result as i64,
@@ -1032,9 +1072,7 @@ fn build_async_step_thunks(
     trap_next: *mut Promise,
     box_activation: *mut crate::r#box::AsyncBoxActivation,
 ) -> (ClosurePtr, ClosurePtr) {
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
     let box_activation_id = crate::r#box::async_box_activation_id(box_activation);
     let key = step_closure as usize;
     let cached = LAST_ASYNC_STEP_THUNKS.with(|c| c.get());
@@ -1042,10 +1080,10 @@ fn build_async_step_thunks(
         // #5485: refresh the captured activation `trap_next`. The step
         // closure (cache key) is per-activation, so this is normally the
         // same pointer; refreshing keeps us correct if the slot is reused.
-        js_closure_set_capture_ptr(cached.1, 1, trap_next as i64);
-        js_closure_set_capture_ptr(cached.2, 1, trap_next as i64);
-        js_closure_set_capture_ptr(cached.1, 2, box_activation as i64);
-        js_closure_set_capture_ptr(cached.2, 2, box_activation as i64);
+        crate::closure::closure_set_capture_ref(cached.1, 1, trap_next as i64);
+        crate::closure::closure_set_capture_ref(cached.2, 1, trap_next as i64);
+        crate::closure::js_closure_set_capture_ptr(cached.1, 2, box_activation as i64);
+        crate::closure::js_closure_set_capture_ptr(cached.2, 2, box_activation as i64);
         js_closure_set_capture_f64(cached.1, 3, box_activation_id as f64);
         js_closure_set_capture_f64(cached.2, 3, box_activation_id as f64);
         return (cached.1 as ClosurePtr, cached.2 as ClosurePtr);
@@ -1054,14 +1092,14 @@ fn build_async_step_thunks(
     // stable_box_activation_ptr, generation]. Token storage is never freed;
     // pointer + generation rejects a capture after the token is recycled.
     let fulfill = js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
-    js_closure_set_capture_ptr(fulfill, 0, step_closure as i64);
-    js_closure_set_capture_ptr(fulfill, 1, trap_next as i64);
-    js_closure_set_capture_ptr(fulfill, 2, box_activation as i64);
+    crate::closure::closure_set_capture_ref(fulfill, 0, step_closure as i64);
+    crate::closure::closure_set_capture_ref(fulfill, 1, trap_next as i64);
+    crate::closure::js_closure_set_capture_ptr(fulfill, 2, box_activation as i64);
     js_closure_set_capture_f64(fulfill, 3, box_activation_id as f64);
     let reject = js_closure_alloc(crate::fn_info!(async_step_reject_thunk, 1), 4);
-    js_closure_set_capture_ptr(reject, 0, step_closure as i64);
-    js_closure_set_capture_ptr(reject, 1, trap_next as i64);
-    js_closure_set_capture_ptr(reject, 2, box_activation as i64);
+    crate::closure::closure_set_capture_ref(reject, 0, step_closure as i64);
+    crate::closure::closure_set_capture_ref(reject, 1, trap_next as i64);
+    crate::closure::js_closure_set_capture_ptr(reject, 2, box_activation as i64);
     js_closure_set_capture_f64(reject, 3, box_activation_id as f64);
     LAST_ASYNC_STEP_THUNKS.with(|c| c.set((key, fulfill, reject)));
     (fulfill as ClosurePtr, reject as ClosurePtr)
@@ -1074,8 +1112,8 @@ extern "C" fn async_step_fulfill_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let step =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
     // #5485: the activation's own trap_next, captured when this thunk was
     // built (at the `await`), not the ambient INLINE_TRAP.trap_next at
     // resume time — which may belong to an UNRELATED outer activation and,
@@ -1084,7 +1122,7 @@ extern "C" fn async_step_fulfill_thunk(
     // (intermediate await) value. Restoring the captured per-activation
     // value keeps same-activation settlement working while preventing the
     // cross-activation leak.
-    let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let captured_trap_next = crate::closure::closure_capture_ref(closure, 1) as *mut Promise;
     let box_activation = crate::closure::js_closure_get_capture_ptr(closure, 2)
         as *mut crate::r#box::AsyncBoxActivation;
     let box_activation_id = crate::closure::js_closure_get_capture_f64(closure, 3) as u64;
@@ -1202,11 +1240,11 @@ extern "C" fn async_step_reject_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let step = crate::closure::js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let step =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
     // #5485: restore the captured per-activation trap_next (see
     // async_step_fulfill_thunk for the full rationale).
-    let captured_trap_next = crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let captured_trap_next = crate::closure::closure_capture_ref(closure, 1) as *mut Promise;
     let box_activation = crate::closure::js_closure_get_capture_ptr(closure, 2)
         as *mut crate::r#box::AsyncBoxActivation;
     let box_activation_id = crate::closure::js_closure_get_capture_f64(closure, 3) as u64;
@@ -1225,7 +1263,10 @@ const AFA_THIS_ARG: u32 = 6;
 const AFA_INDEX: u32 = 7;
 const AFA_VALUE_CLOSURE: u32 = 8;
 const AFA_MAPPED_CLOSURE: u32 = 9;
-const AFA_STATE_CAPTURES: u32 = 10;
+/// The result `Construct(C)` built for a constructor receiver; `undefined`
+/// when the result is the plain `AFA_RESULT_ARRAY` accumulator.
+const AFA_CONSTRUCTED: u32 = 10;
+const AFA_STATE_CAPTURES: u32 = 11;
 
 #[inline]
 fn undefined_value() -> f64 {
@@ -1295,7 +1336,7 @@ fn array_value_ptr(input: f64) -> Option<*const crate::array::ArrayHeader> {
     }
     unsafe {
         let gc = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        ((*gc).obj_type == crate::gc::GC_TYPE_ARRAY)
+        (crate::gc_type_is_array!((*gc).obj_type))
             .then_some(raw as *const crate::array::ArrayHeader)
     }
 }
@@ -1327,10 +1368,15 @@ fn iterator_value_for_from_async(input: f64) -> Option<f64> {
 /// conversion stack as `Array.from`.
 #[no_mangle]
 pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) -> f64 {
+    array_from_async_full(undefined_value(), input, map_fn, this_arg)
+}
+
+/// [`js_array_from_async`] called with `c` as its receiver: a constructor
+/// `c` builds the result (`Construct(C)` for an iterable, `Construct(C,
+/// «len»)` for an array-like), anything else leaves it a plain array.
+pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f64) -> f64 {
     use crate::array::{js_array_alloc, ArrayHeader};
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     if let Some(rejected) = array_from_async_nullish_error(input) {
         return rejected;
@@ -1341,7 +1387,14 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
         Err(reason) => return boxed_promise(js_promise_rejected(reason)),
     };
 
-    let iter_value = iterator_value_for_from_async(input);
+    // The iterator probes and `Construct(C)` run user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_nanbox_f64(input);
+    let map_fn = scope.root_nanbox_f64(map_fn);
+    let this_arg = scope.root_nanbox_f64(this_arg);
+    let c = scope.root_nanbox_f64(c);
+    let iter_value = iterator_value_for_from_async(input.get_nanbox_f64());
+    let input = input.get_nanbox_f64();
     let source_arr = if iter_value.is_some() {
         std::ptr::null_mut()
     } else if let Some(arr) = array_value_ptr(input) {
@@ -1351,7 +1404,26 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
             crate::value::js_nanbox_get_pointer(input) as *const ArrayHeader
         )
     };
-    let iter_value = iter_value.unwrap_or_else(undefined_value);
+    let iter_value = scope.root_nanbox_f64(iter_value.unwrap_or_else(undefined_value));
+    let source = scope.root_nanbox_f64(if source_arr.is_null() {
+        undefined_value()
+    } else {
+        crate::value::js_nanbox_pointer(source_arr as i64)
+    });
+    let c = c.get_nanbox_f64();
+    let constructed = if crate::object::js_value_is_constructor(c) {
+        let len = (!source_arr.is_null()).then(|| unsafe { (*source_arr).length as f64 });
+        let args = len.as_slice();
+        match crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_new_function_construct(c, args.as_ptr(), args.len())
+        }) {
+            Ok(target) => target,
+            Err(reason) => return boxed_promise(js_promise_rejected(reason)),
+        }
+    } else {
+        undefined_value()
+    };
+    let constructed = scope.root_nanbox_f64(constructed);
 
     let result_promise = js_promise_new();
     let result_arr = js_array_alloc(0);
@@ -1367,20 +1439,26 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
     let value_closure = js_closure_alloc(crate::fn_info!(array_from_async_value_step, 1), 1);
     let mapped_closure = js_closure_alloc(crate::fn_info!(array_from_async_mapped_step, 1), 1);
 
-    js_closure_set_capture_ptr(reject_closure, 0, result_promise as i64);
-    js_closure_set_capture_ptr(value_closure, 0, state as i64);
-    js_closure_set_capture_ptr(mapped_closure, 0, state as i64);
+    crate::closure::closure_set_capture_ref(reject_closure, 0, result_promise as i64);
+    crate::closure::closure_set_capture_ref(value_closure, 0, state as i64);
+    crate::closure::closure_set_capture_ref(mapped_closure, 0, state as i64);
 
-    js_closure_set_capture_ptr(state, AFA_RESULT_PROMISE, result_promise as i64);
-    js_closure_set_capture_ptr(state, AFA_RESULT_ARRAY, result_arr as i64);
-    js_closure_set_capture_ptr(state, AFA_SOURCE_ARRAY, source_arr as i64);
+    crate::closure::closure_set_capture_ref(state, AFA_RESULT_PROMISE, result_promise as i64);
+    crate::closure::closure_set_capture_ref(state, AFA_RESULT_ARRAY, result_arr as i64);
+    let source_arr = match source.get_nanbox_f64() {
+        s if s.to_bits() == crate::value::TAG_UNDEFINED => std::ptr::null_mut(),
+        s => crate::value::js_nanbox_get_pointer(s) as *mut ArrayHeader,
+    };
+    let iter_value = iter_value.get_nanbox_f64();
+    crate::closure::closure_set_capture_ref(state, AFA_SOURCE_ARRAY, source_arr as i64);
     js_closure_set_capture_f64(state, AFA_ITERATOR_VALUE, iter_value);
-    js_closure_set_capture_ptr(state, AFA_REJECT_CLOSURE, reject_closure as i64);
-    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn);
-    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg);
+    crate::closure::closure_set_capture_ref(state, AFA_REJECT_CLOSURE, reject_closure as i64);
+    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn.get_nanbox_f64());
+    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg.get_nanbox_f64());
     js_closure_set_capture_f64(state, AFA_INDEX, 0.0);
-    js_closure_set_capture_ptr(state, AFA_VALUE_CLOSURE, value_closure as i64);
-    js_closure_set_capture_ptr(state, AFA_MAPPED_CLOSURE, mapped_closure as i64);
+    js_closure_set_capture_f64(state, AFA_CONSTRUCTED, constructed.get_nanbox_f64());
+    crate::closure::closure_set_capture_ref(state, AFA_VALUE_CLOSURE, value_closure as i64);
+    crate::closure::closure_set_capture_ref(state, AFA_MAPPED_CLOSURE, mapped_closure as i64);
 
     if source_arr.is_null() {
         array_from_async_call_next(iter_value, state, reject_closure);
@@ -1439,7 +1517,7 @@ extern "C" fn array_from_async_reject(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result_promise = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if !result_promise.is_null() {
         js_promise_reject(result_promise, reason);
     }
@@ -1455,11 +1533,10 @@ extern "C" fn array_from_async_step(
     _this: crate::closure::JsThis,
     iter_result: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
-    let result_promise = js_closure_get_capture_ptr(closure, AFA_RESULT_PROMISE) as *mut Promise;
-    let result_arr =
-        js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY) as *mut crate::array::ArrayHeader;
+    let result_promise =
+        crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE) as *mut Promise;
+    let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
+        as *mut crate::array::ArrayHeader;
     let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
 
     if result_promise.is_null() || result_arr.is_null() {
@@ -1479,9 +1556,7 @@ extern "C" fn array_from_async_step(
     };
 
     if result_obj_ptr.is_null() {
-        // No more values — resolve the output promise with the collected array.
-        let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        array_from_async_finish(closure);
         return 0.0;
     }
 
@@ -1494,9 +1569,7 @@ extern "C" fn array_from_async_step(
     let value_f64 = f64::from_bits(value_jv.bits());
 
     if crate::value::js_is_truthy(done_f64) != 0 {
-        // Iteration complete — resolve with the accumulated array.
-        let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        array_from_async_finish(closure);
         return 0.0;
     }
 
@@ -1508,11 +1581,11 @@ extern "C" fn array_from_async_step(
 }
 
 fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
-    let source_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_SOURCE_ARRAY)
+    let source_arr = crate::closure::closure_capture_ref(closure, AFA_SOURCE_ARRAY)
         as *const crate::array::ArrayHeader;
     let result_promise =
-        crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_PROMISE) as *mut Promise;
-    let result_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY)
+        crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE) as *mut Promise;
+    let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
         as *mut crate::array::ArrayHeader;
     if source_arr.is_null() || result_promise.is_null() || result_arr.is_null() {
         return;
@@ -1520,20 +1593,45 @@ fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
     let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
     let length = unsafe { (*source_arr).length as usize };
     if index >= length {
-        js_promise_resolve(
-            result_promise,
-            crate::value::js_nanbox_pointer(result_arr as i64),
-        );
+        array_from_async_finish(closure);
         return;
     }
     let value = crate::array::js_array_get_f64(source_arr, index as u32);
     array_from_async_await_value(closure, value);
 }
 
+/// Resolves the result promise with the collected values: the accumulator,
+/// or the constructed result once `Set(A, "length", k, true)` closed it.
+fn array_from_async_finish(closure: *const crate::closure::ClosureHeader) {
+    let result_promise = crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
+    let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
+    if constructed.to_bits() == crate::value::TAG_UNDEFINED {
+        let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY);
+        js_promise_resolve(
+            result_promise as *mut Promise,
+            crate::value::js_nanbox_pointer(result_arr),
+        );
+        return;
+    }
+    let len = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
+    // A `length` setter on the result runs user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(result_promise));
+    let settled = crate::exception::catch_js_throw(|| {
+        crate::array::finish_constructed_length(constructed, len)
+    });
+    let result_promise =
+        crate::value::js_nanbox_get_pointer(result_promise.get_nanbox_f64()) as *mut Promise;
+    match settled {
+        Ok(result) => js_promise_resolve(result_promise, result),
+        Err(reason) => js_promise_reject(result_promise, reason),
+    }
+}
+
 fn array_from_async_await_value(closure: *const crate::closure::ClosureHeader, value: f64) {
-    let value_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_VALUE_CLOSURE)
+    let value_closure = crate::closure::closure_capture_ref(closure, AFA_VALUE_CLOSURE)
         as *const crate::closure::ClosureHeader;
-    let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+    let reject = crate::closure::closure_capture_ref(closure, AFA_REJECT_CLOSURE)
         as *const crate::closure::ClosureHeader;
     let promise = js_promise_resolved(value);
     js_promise_then(promise, value_closure, reject);
@@ -1544,8 +1642,8 @@ extern "C" fn array_from_async_value_step(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let state =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
     if !state.is_null() {
         array_from_async_map_or_push(state, value);
     }
@@ -1569,9 +1667,9 @@ fn array_from_async_map_or_push(closure: *const crate::closure::ClosureHeader, v
         args_arr,
     );
 
-    let mapped_closure = crate::closure::js_closure_get_capture_ptr(closure, AFA_MAPPED_CLOSURE)
+    let mapped_closure = crate::closure::closure_capture_ref(closure, AFA_MAPPED_CLOSURE)
         as *const crate::closure::ClosureHeader;
-    let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+    let reject = crate::closure::closure_capture_ref(closure, AFA_REJECT_CLOSURE)
         as *const crate::closure::ClosureHeader;
     js_promise_then(mapped_promise, mapped_closure, reject);
 }
@@ -1581,35 +1679,64 @@ extern "C" fn array_from_async_mapped_step(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let state = crate::closure::js_closure_get_capture_ptr(closure, 0)
-        as *const crate::closure::ClosureHeader;
+    let state =
+        crate::closure::closure_capture_ref(closure, 0) as *const crate::closure::ClosureHeader;
     if !state.is_null() {
         array_from_async_push_and_continue(state, value);
     }
     0.0
 }
 
-fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHeader, value: f64) {
-    let mut result_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_RESULT_ARRAY)
-        as *mut crate::array::ArrayHeader;
-    if result_arr.is_null() {
-        return;
+fn array_from_async_push_and_continue(
+    mut closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) {
+    let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX);
+    let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
+    if constructed.to_bits() == crate::value::TAG_UNDEFINED {
+        let mut result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
+            as *mut crate::array::ArrayHeader;
+        if result_arr.is_null() {
+            return;
+        }
+        result_arr = crate::array::js_array_push_f64(result_arr, value);
+        crate::closure::closure_set_capture_ref(
+            closure as *mut _,
+            AFA_RESULT_ARRAY,
+            result_arr as i64,
+        );
+    } else {
+        // The define reaches the result's own traps and setters: user code.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+        let defined = crate::exception::catch_js_throw(|| {
+            crate::array::define_constructed_index(constructed, index as usize, value)
+        });
+        closure = crate::value::js_nanbox_get_pointer(state.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
+        match defined {
+            Ok(result) => crate::closure::js_closure_set_capture_f64(
+                closure as *mut _,
+                AFA_CONSTRUCTED,
+                result,
+            ),
+            Err(reason) => {
+                let result_promise =
+                    crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
+                js_promise_reject(result_promise as *mut Promise, reason);
+                return;
+            }
+        }
     }
-    result_arr = crate::array::js_array_push_f64(result_arr, value);
-    crate::closure::js_closure_set_capture_ptr(
-        closure as *mut _,
-        AFA_RESULT_ARRAY,
-        result_arr as i64,
-    );
 
-    let next_index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) + 1.0;
+    let next_index = index + 1.0;
     crate::closure::js_closure_set_capture_f64(closure as *mut _, AFA_INDEX, next_index);
 
-    let source_arr = crate::closure::js_closure_get_capture_ptr(closure, AFA_SOURCE_ARRAY)
+    let source_arr = crate::closure::closure_capture_ref(closure, AFA_SOURCE_ARRAY)
         as *const crate::array::ArrayHeader;
     if source_arr.is_null() {
         let iter_value = crate::closure::js_closure_get_capture_f64(closure, AFA_ITERATOR_VALUE);
-        let reject = crate::closure::js_closure_get_capture_ptr(closure, AFA_REJECT_CLOSURE)
+        let reject = crate::closure::closure_capture_ref(closure, AFA_REJECT_CLOSURE)
             as *const crate::closure::ClosureHeader;
         array_from_async_call_next(iter_value, closure, reject);
     } else {
@@ -1650,7 +1777,9 @@ mod tests {
     unsafe fn copy_closure_to_old(
         source: *const crate::closure::ClosureHeader,
     ) -> *mut crate::closure::ClosureHeader {
-        let size = crate::closure::closure_payload_size((*source).capture_count as usize);
+        let size = crate::closure::closure_payload_size(
+            (*source).capture_count as usize + crate::closure::closure_own_slot_count(source),
+        );
         let destination = crate::arena::arena_alloc_gc_old(
             size,
             std::mem::align_of::<crate::closure::ClosureHeader>(),
@@ -1729,8 +1858,8 @@ mod tests {
             let step = crate::closure::js_closure_alloc(crate::fn_info!(relocating_step, 2), 0);
             let thunk =
                 crate::closure::js_closure_alloc(crate::fn_info!(async_step_fulfill_thunk, 1), 4);
-            crate::closure::js_closure_set_capture_ptr(thunk, 0, step as i64);
-            crate::closure::js_closure_set_capture_ptr(thunk, 1, captured_from as i64);
+            crate::closure::closure_set_capture_ref(thunk, 0, step as i64);
+            crate::closure::closure_set_capture_ref(thunk, 1, captured_from as i64);
             crate::closure::closure_set_capture_word(thunk, 2, 0);
             crate::closure::js_closure_set_capture_f64(thunk, 3, 0.0);
 

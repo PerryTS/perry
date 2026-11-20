@@ -63,10 +63,7 @@ fn regex_receiver_or_throw(this: crate::closure::JsThis, getter: &str) -> RegexR
 fn throw_regex_brand_error(getter: &str) -> ! {
     let msg = format!("get RegExp.prototype.{getter} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Read the already branded immutable data. This leaf performs no allocation
@@ -178,24 +175,29 @@ pub(super) extern "C" fn regex_proto_flags_getter(
         }
         let recv_bits = receiver.bits();
         let recv_f64 = f64::from_bits(recv_bits);
-        let mut out = String::with_capacity(8);
-        for (name, ch) in [
-            ("hasIndices", 'd'),
-            ("global", 'g'),
-            ("ignoreCase", 'i'),
-            ("multiline", 'm'),
-            ("dotAll", 's'),
-            ("unicode", 'u'),
-            ("unicodeSets", 'v'),
-            ("sticky", 'y'),
+        // Node's Get order (`sticky` before `unicodeSets`); the text keeps
+        // the canonical `d g i m s u v y` order.
+        let mut present = [false; 8];
+        for (name, slot) in [
+            ("hasIndices", 0),
+            ("global", 1),
+            ("ignoreCase", 2),
+            ("multiline", 3),
+            ("dotAll", 4),
+            ("unicode", 5),
+            ("sticky", 7),
+            ("unicodeSets", 6),
         ] {
             let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
             let key_val = crate::js_nanbox_string(key as i64);
             let v = crate::value::js_dyn_index_get(recv_f64, key_val);
-            if crate::value::js_is_truthy(v) != 0 {
-                out.push(ch);
-            }
+            present[slot] = crate::value::js_is_truthy(v) != 0;
         }
+        let out: String = "dgimsuvy"
+            .chars()
+            .zip(present)
+            .filter_map(|(ch, on)| on.then_some(ch))
+            .collect();
         let s = crate::string::js_string_from_bytes(out.as_ptr(), out.len() as u32);
         f64::from_bits(crate::js_nanbox_string(s as i64).to_bits())
     }
@@ -362,10 +364,7 @@ fn regex_instance_or_throw(
     }
     let msg = format!("RegExp.prototype.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[cfg(feature = "regex-engine")]
@@ -495,51 +494,51 @@ pub(crate) fn install_regex_proto_accessors(proto_obj: *mut ObjectHeader) {
     install_getter(
         proto_obj,
         "flags",
-        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.flags.<get>", constructible = true, effects = { reads(field(this, hasIndices), field(this, global), field(this, ignoreCase), field(this, multiline), field(this, dotAll), field(this, unicode), field(this, unicodeSets), field(this, sticky)); returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_flags_getter, 0; with_name("get flags"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "source",
-        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.source.<get>", constructible = true, effects = { returns(prim(str)) })] export crate::object::regex_proto_thunks::regex_proto_source_getter, 0; with_name("get source"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "global",
-        crate::fn_info!(#[realm("RegExp.prototype.global.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_global_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.global.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_global_getter, 0; with_name("get global"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "ignoreCase",
-        crate::fn_info!(#[realm("RegExp.prototype.ignoreCase.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_ignore_case_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.ignoreCase.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_ignore_case_getter, 0; with_name("get ignoreCase"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "multiline",
-        crate::fn_info!(#[realm("RegExp.prototype.multiline.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_multiline_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.multiline.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_multiline_getter, 0; with_name("get multiline"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "dotAll",
-        crate::fn_info!(#[realm("RegExp.prototype.dotAll.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_dot_all_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.dotAll.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_dot_all_getter, 0; with_name("get dotAll"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "sticky",
-        crate::fn_info!(#[realm("RegExp.prototype.sticky.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_sticky_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.sticky.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_sticky_getter, 0; with_name("get sticky"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicode",
-        crate::fn_info!(#[realm("RegExp.prototype.unicode.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_unicode_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.unicode.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_unicode_getter, 0; with_name("get unicode"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "unicodeSets",
-        crate::fn_info!(#[realm("RegExp.prototype.unicodeSets.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_unicode_sets_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.unicodeSets.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_unicode_sets_getter, 0; with_name("get unicodeSets"), with_declared(0)),
     );
     install_getter(
         proto_obj,
         "hasIndices",
-        crate::fn_info!(#[realm("RegExp.prototype.hasIndices.<get>", constructible = true)] export crate::object::regex_proto_thunks::regex_proto_has_indices_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("RegExp.prototype.hasIndices.<get>", constructible = true, effects = { returns(prim(bool | undefined)) })] export crate::object::regex_proto_thunks::regex_proto_has_indices_getter, 0; with_name("get hasIndices"), with_declared(0)),
     );
 }

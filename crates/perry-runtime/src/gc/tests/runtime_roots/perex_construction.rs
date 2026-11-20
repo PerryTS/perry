@@ -300,7 +300,7 @@ extern "C" fn flags_collect_then_throw(
     _this: crate::closure::JsThis,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(812.0)
+    crate::exception::test_throw(812.0)
 }
 
 extern "C" fn flags_collect_then_return(

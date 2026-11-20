@@ -39,21 +39,40 @@ pub(crate) unsafe fn set_lazy_index(
         .get()
         .map_or(value, |set| set(array, index, value, strict))
 }
-static PARSE_RESULT: Hook<unsafe fn(*const StringHeader) -> Result<JSValue, f64>> = Hook::empty();
+static PARSE_RESULT: Hook<
+    unsafe fn(*const StringHeader) -> Result<JSValue, crate::error::CoreError>,
+> = Hook::empty();
 static PARSE: Hook<unsafe extern "C" fn(*const StringHeader) -> JSValue> = Hook::empty();
+static SCAN_PARSE: Hook<fn(&mut crate::gc::RuntimeRootVisitor<'_>)> = Hook::empty();
 static NOTE_CARRIERS: Hook<fn()> = Hook::empty();
 static AFTER_COLD_READ: Hook<unsafe fn(*mut LazyArrayHeader, bool, bool)> = Hook::empty();
 
 pub(crate) unsafe fn parse_result(text: *const StringHeader) -> Result<JSValue, f64> {
-    PARSE_RESULT.get().map_or_else(
+    parse_core_result(text).map_or_else(
         || Err(f64::from_bits(crate::value::TAG_UNDEFINED)),
-        |parse| parse(text),
+        |result| result.map_err(|error| error.value()),
     )
+}
+
+pub(crate) unsafe fn parse_core_result(
+    text: *const StringHeader,
+) -> Option<Result<JSValue, crate::error::CoreError>> {
+    PARSE_RESULT.get().map(|parse| parse(text))
 }
 pub(crate) unsafe fn parse(text: *const StringHeader) -> JSValue {
     PARSE
         .get()
         .map_or_else(JSValue::undefined, |parse| parse(text))
+}
+pub(crate) fn scan_parser_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    let scan = SCAN_PARSE.peek();
+    // Scanner fixtures control their root registry. Hook::get's test fallback
+    // would install unrelated scanners in the middle of that collection.
+    #[cfg(test)]
+    let scan = scan.or(Some(crate::json::scan_parser_roots_mut));
+    if let Some(scan) = scan {
+        scan(visitor);
+    }
 }
 pub(crate) fn note_carriers() {
     if let Some(note) = NOTE_CARRIERS.get() {
@@ -71,7 +90,8 @@ pub(crate) fn install() {
     FORCE.set(crate::json_tape::force_materialize_lazy_impl);
     COLD_GET.set(crate::json_tape::lazy_get_rooted_impl);
     PARSE.set(crate::json::js_json_parse);
-    PARSE_RESULT.set(crate::json::js_json_parse_result);
+    PARSE_RESULT.set(crate::json::js_json_parse_core_result);
+    SCAN_PARSE.set(crate::json::scan_parser_roots_mut);
     NOTE_CARRIERS.set(crate::json::note_parse_shape_cache_carriers);
     AFTER_COLD_READ.set(crate::json::traversal_feedback::after_cold_read);
 }

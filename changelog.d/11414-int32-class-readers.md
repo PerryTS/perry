@@ -1,0 +1,1 @@
+Fix runtime readers that treated INT32 numbers as class constructors when their values matched class ids. Class values use their constructor function objects, preserving numeric coercion, stringification, Node-API classification, and constructor identity.

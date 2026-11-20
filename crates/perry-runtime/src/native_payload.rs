@@ -215,6 +215,16 @@ pub fn adopt_prototype(
     })
 }
 
+/// The prototype the family `class_id` adopted in this realm, or null before
+/// its first adoption.
+#[inline]
+pub(crate) fn adopted_prototype(class_id: u32) -> *mut ObjectHeader {
+    let Some(index) = slot_index_if_payload(class_id) else {
+        return std::ptr::null_mut();
+    };
+    PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire)) as *mut ObjectHeader
+}
+
 pub(crate) fn adopt_prototype_with(
     class_id: u32,
     proto: *mut ObjectHeader,
@@ -405,8 +415,7 @@ extern "C" fn payload_ctor_thunk(
 ) -> f64 {
     let message = b"Illegal constructor";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// The cell's type tag: the family id plus the payload's layout. One family
@@ -489,16 +498,18 @@ pub(crate) fn is_payload_state_word(word: u64) -> bool {
 }
 
 /// The process-lifetime private key of an object's payload slot,
-/// `[[NativePayload]]`: one symbol for every agent (a key a shape lists is a
-/// process fact, like the layouts' runtime symbols). Unset until the first
-/// payload attaches, so no object can list the key before then.
-static PAYLOAD_KEY: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-
-/// The payload key, created on first use.
+/// `[[NativePayload]]`: one symbol for every agent, the runtime symbol atom
+/// `NP_SYMBOL_NATIVE_PAYLOAD`, so a layout can list the key (a layout born
+/// with it takes the payload in its slot). Created on first use, so no object
+/// can list the key before then.
 #[inline]
 pub(crate) fn payload_key() -> usize {
-    *PAYLOAD_KEY.get_or_init(|| crate::symbol::persistent_symbol("[[NativePayload]]") as usize)
+    // SAFETY: a static atom.
+    unsafe { crate::object::runtime_layouts::runtime_symbol_of_atom(&PAYLOAD_ATOM) }
+        .expect("the payload key is a runtime symbol atom") as usize
 }
+
+use crate::object::runtime_layouts::NP_SYMBOL_NATIVE_PAYLOAD as PAYLOAD_ATOM;
 
 /// The entry attributes of the payload slot: runtime-only (no reflection,
 /// copy or clone reaches it) and non-enumerable.
@@ -536,7 +547,7 @@ pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
 /// sequence instead of the local-dynamic one.
 #[inline(never)]
 pub unsafe fn payload_cell_of_object(obj: *const ObjectHeader) -> Option<*mut NativeHandleHeader> {
-    let key = *PAYLOAD_KEY.get()?;
+    let key = crate::object::runtime_layouts::bound_runtime_symbol(&PAYLOAD_ATOM)?;
     payload_cell_of_word(crate::object::shaped_symbols::own_private(obj, key)?)
 }
 
@@ -701,12 +712,12 @@ fn alloc_with_cell(
 
 #[path = "native_payload_attach.rs"]
 mod attach;
-use attach::{link_cell, new_cell, store_payload_word};
 pub(crate) use attach::{any_object, attach_external_rooted, set_own};
 pub use attach::{
     attach_stream_to_object, attach_to_object, define_own_accessor, iter_result_done_value,
     iterator_prototype, prototype, state_get, state_set,
 };
+use attach::{link_cell, new_cell, store_payload_word};
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
 /// with `slots` live inline slots.
@@ -1325,7 +1336,7 @@ unsafe fn state_slot_set(obj: *mut ObjectHeader, i: usize, value: f64) {
 }
 
 unsafe fn state_inline_limit(obj: *mut ObjectHeader) -> usize {
-    (crate::object::object_live_slot_count(obj) as usize).max(crate::object::INLINE_SLOT_FLOOR)
+    crate::object::object_inline_capacity(obj) as usize
 }
 
 unsafe fn state_key_index(obj: *const ObjectHeader, name: &[u8]) -> Option<usize> {

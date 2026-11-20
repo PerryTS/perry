@@ -151,7 +151,7 @@ fn plain_numbers_and_primitives_need_no_bookkeeping() {
         crate::value::TAG_NULL,
         crate::value::TAG_TRUE,
         crate::value::TAG_FALSE,
-        crate::value::INT32_TAG | 42,
+        crate::value::INTERNAL_WORD_TAG | 42,
     ];
     for bits in barrier_free {
         assert!(

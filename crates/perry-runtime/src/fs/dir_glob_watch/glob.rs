@@ -982,7 +982,8 @@ pub extern "C" fn js_fs_glob_sync(pattern_value: f64) -> f64 {
 pub extern "C" fn js_fs_glob_sync_options(pattern_value: f64, options_value: f64) -> f64 {
     match glob_sync_value_result(pattern_value, options_value) {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        // Native validation/regex errors and caught glob callback failures share this channel.
+        Err(error) => crate::exception::throw_open(error),
     }
 }
 

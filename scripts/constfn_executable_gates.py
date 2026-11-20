@@ -402,7 +402,7 @@ def main():
     env.pop("PERRY_SAVE_LL", None)
     version = subprocess.check_output([str(args.node.resolve()), "--version"], text=True).strip()
     require(version == "v" + (repo / ".node-version").read_text().strip(), "Node oracle is not the exact repository pin")
-    fixtures = repo / "test-files/constfn-executable-gates"
+    fixtures = repo / "tests/fixtures/programs/constfn-executable-gates"
     summary = []
 
     def compile_fixture(name, arm, tag, trace=False, fail=False, regions=True):

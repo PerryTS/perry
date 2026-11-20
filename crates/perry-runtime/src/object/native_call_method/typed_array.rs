@@ -37,7 +37,7 @@ pub(super) unsafe fn dispatch_absent_typed_array_array_method(
 /// NaN-boxed POINTER_TAG receiver paths so a `Uint8Array` local reaches the
 /// element-typed `js_typed_array_*` helpers regardless of how codegen boxed
 /// the receiver. Issues #2797 / #2798 / #2799 added the callback-bearing arms.
-pub(crate) unsafe fn dispatch_typed_array_method(
+pub(crate) unsafe fn typed_array_method_tower(
     ta: *mut crate::typedarray_hook_slots::TypedArrayHeader,
     method_name: &str,
     args_ptr: *const f64,

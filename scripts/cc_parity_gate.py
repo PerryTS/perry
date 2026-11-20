@@ -16,7 +16,7 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-CORPUS = ROOT / "tests/cc-parity"
+CORPUS = ROOT / "tests/compat/cc-parity"
 SANDBOX = ["/usr/bin/sandbox-exec", "-p", "(version 1) (allow default) (deny network*)"]
 CASES = ("help", "version")
 
@@ -164,7 +164,7 @@ def check(work, manifest, corpus=CORPUS, timeout=60, node=None):
         print(f"{case}: {'PASS' if result['passed'] else 'FAIL'} {json.dumps(result)}", flush=True)
     write_json(work / f"logs/{prefix}parity.json", report)
     if not all(result["passed"] for result in report["cases"].values()):
-        raise ValueError("Claude Code parity failed; compare logs/*.stdout with tests/cc-parity/*.stdout")
+        raise ValueError("Claude Code parity failed; compare logs/*.stdout with tests/compat/cc-parity/*.stdout")
 
 
 def main():

@@ -1,0 +1,167 @@
+#!/usr/bin/env python3
+"""LIFE G1 controls: lifetime claims under PERRY_VERIFY_FACTS=1.
+
+Every fixture compiled in check mode (sampling N=1) must print node's output
+with rc 0; a fixture with census claims must execute deaths, and one whose
+statement list is left only by `break` / `continue` must carry exit death
+points (death `exit` in the binary's claim records). Each `fate:`
+sabotage plants a Proven Dropped fate on a parameter the callee keeps: the run
+must exit 86 with one JSON line naming the expected holder. The `fatebet:`
+sabotage must print one PERRY_BET_FAILED line, rc 0 and node's output.
+
+The life hooks live only in the instrumented runtime variant, which a
+compile with an instrument knob (PERRY_GC_INSTRUMENTS=1, compile time only)
+links; the default archives carry neither the hooks nor the life check. Offered under the instrumented names (the default
+archives beside the perry binary), they must make the check build of a
+fixture with deaths fail to link on the life entry points: a check build
+without the hooks never runs silently unchecked. PERRY_VERIFY_FACTS=1 alone
+(no instrument knob) links the default archives and emits no life claim: the
+binary has no life symbol and runs as node does.
+"""
+import argparse
+import json
+import os
+import shutil
+from pathlib import Path
+import subprocess
+
+# (fixture, needs deaths, needs exit death points) -- the correct arm.
+FIXTURES = [
+    ("c1_global", False, False),
+    ("c3_other_param", False, False),
+    ("c5_pass_on", False, False),
+    ("c8_recursion", False, False),
+    ("c9_dropped", True, False),
+    ("c10_bet", False, False),
+    ("c11_returned", False, False),
+    ("c12_exit", True, True),
+]
+EXIT_DEATH = b'"death":{"at":"exit"'
+# (fixture, sabotage, holder phase the report must name), written before any run.
+SABOTAGES = [
+    ("c1_global", "fate:keep#0", ("global_root",)),
+    ("c3_other_param", "fate:put#1", ("worklist_drain", "remembered_set", "global_root")),
+    ("c5_pass_on", "fate:outer#0", ("worklist_drain", "remembered_set", "global_root")),
+    ("c11_returned", "fate:id#0", ("native_stack", "shadow_stack")),
+]
+BET = ("c10_bet", "fatebet:keep#0")
+
+
+def run(args, **kw):
+    return subprocess.run(args, timeout=600, capture_output=True, **kw)
+
+
+def totals(stderr):
+    for line in stderr.decode(errors="replace").splitlines():
+        if "PERRY_LIFE_TOTALS" in line:
+            return json.loads(line)
+    return None
+
+
+def main():
+    parser = argparse.ArgumentParser(__doc__)
+    parser.add_argument("--perry", type=Path, required=True)
+    parser.add_argument("--out", type=Path, required=True)
+    args = parser.parse_args()
+    perry = args.perry.resolve()
+    out = args.out.resolve()
+    out.mkdir(parents=True, exist_ok=True)
+    fixtures = Path(__file__).with_name("verify_facts_life").resolve()
+    env = dict(os.environ, PERRY_VERIFY_FACTS="1", PERRY_VERIFY_FACTS_LIFE_EVERY="1",
+               PERRY_VERIFY_FACTS_LIFE_REPORT="1", PERRY_NO_CACHE="1",
+               PERRY_DISABLE_BUILD_CACHE="1", PERRY_NO_LINK_CACHE="1",
+               PERRY_NO_ARCHIVE_CACHE="1", PERRY_ALLOW_PERRY_FEATURES="1")
+    env.pop("PERRY_FACTS_SABOTAGE", None)
+    failures = []
+    # The instrument knob selects the instrumented archives at compile time;
+    # the run does not see it.
+    knob = {"PERRY_GC_INSTRUMENTS": "1"}
+
+    def build(name, sabotage=None):
+        e = dict(env)
+        if sabotage:
+            e["PERRY_FACTS_SABOTAGE"] = sabotage
+        exe = out / (name + ("." + sabotage.replace(":", "_").replace("#", "_") if sabotage else ""))
+        c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
+                 str(fixtures / (name + ".ts")), "-o", str(exe)], env=dict(e, **knob))
+        (out / (exe.name + ".compile")).write_bytes(c.stdout + c.stderr)
+        assert c.returncode == 0, (name, sabotage, c.stderr[-2000:])
+        return run([str(exe)], env=e), exe
+
+    for name, needs_deaths, needs_exit in FIXTURES:
+        want = (fixtures / (name + ".node.txt")).read_bytes()
+        r, exe = build(name)
+        t = totals(r.stderr)
+        exits = exe.read_bytes().count(EXIT_DEATH)
+        ok = (r.returncode == 0 and r.stdout == want
+              and (not needs_deaths or (t and t["deaths_executed"] > 0))
+              and (not needs_exit or exits > 0))
+        print(f"fixture {name}: rc={r.returncode} out_eq={r.stdout == want} exit_sites={exits} totals={t} "
+              f"{'OK' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(name)
+    for name, sabotage, holders in SABOTAGES:
+        r, _ = build(name, sabotage)
+        lines = [l for l in r.stderr.decode(errors="replace").splitlines() if "PERRY_FALSE_PROOF" in l]
+        phase = None
+        if len(lines) == 1:
+            value = json.loads(lines[0])
+            phase = (value.get("holder") or {}).get("phase")
+            ok = (r.returncode == 86 and value.get("verdict") == "Lifetime"
+                  and any(h in (phase or "") for h in holders))
+        else:
+            ok = False
+        print(f"sabotage {name} {sabotage}: rc={r.returncode} lines={len(lines)} holder={phase} "
+              f"want={holders} {'OK' if ok else 'FAIL'}")
+        if not ok:
+            failures.append(name + ":" + sabotage)
+            (out / (name + ".sabotage.stderr")).write_bytes(r.stderr)
+    name, sabotage = BET
+    want = (fixtures / (name + ".node.txt")).read_bytes()
+    r, _ = build(name, sabotage)
+    bets = [l for l in r.stderr.decode(errors="replace").splitlines() if "PERRY_BET_FAILED" in l]
+    ok = r.returncode == 0 and r.stdout == want and len(bets) == 1
+    print(f"bet {name} {sabotage}: rc={r.returncode} out_eq={r.stdout == want} bet_lines={len(bets)} "
+          f"{'OK' if ok else 'FAIL'}")
+    if not ok:
+        failures.append(name + ":" + sabotage)
+    # The default archives under the instrumented names: the hooks are absent.
+    plain = out / "default-as-instr"
+    plain.mkdir(exist_ok=True)
+    for stem in ("libperry_runtime", "libperry_stdlib"):
+        for suffix in (".a", ".a.gc-effects"):
+            src = perry.parent / (stem + suffix)
+            if src.exists():
+                shutil.copyfile(src, plain / (stem + "_instr" + suffix))
+    e = dict(env, PERRY_RUNTIME_DIR=str(plain))
+    exe = out / "c9_dropped.default-runtime"
+    c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
+             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=dict(e, **knob))
+    ok = c.returncode != 0 and b"perry_verify_facts_life_" in c.stdout + c.stderr
+    r = run([str(exe)], env=e) if c.returncode == 0 else None
+    print(f"no-hooks c9_dropped on the default runtime: compile rc={c.returncode} "
+          f"run rc={r.returncode if r else None} {'OK' if ok else 'FAIL'}")
+    if not ok:
+        failures.append("no-hooks:c9_dropped")
+        (out / "no-hooks.stderr").write_bytes(c.stdout + c.stderr + (r.stderr if r else b""))
+    # PERRY_VERIFY_FACTS=1 alone: default archives, no life claim, node's output.
+    exe = out / "c9_dropped.verify-only"
+    c = run([str(perry), "compile", "--cache-dir", str(out / "cache"),
+             str(fixtures / "c9_dropped.ts"), "-o", str(exe)], env=env)
+    r = run([str(exe)], env=env) if c.returncode == 0 else None
+    nm = subprocess.run(["nm", str(exe)], capture_output=True) if r else None
+    life_syms = [l for l in nm.stdout.decode(errors="replace").splitlines() if "life" in l] if nm else None
+    want = (fixtures / "c9_dropped.node.txt").read_bytes()
+    ok = (c.returncode == 0 and r.returncode == 0 and r.stdout == want
+          and life_syms == [])
+    print(f"verify-facts-only c9_dropped: compile rc={c.returncode} "
+          f"run rc={r.returncode if r else None} life symbols="
+          f"{len(life_syms) if life_syms is not None else None} {'OK' if ok else 'FAIL'}")
+    if not ok:
+        failures.append("verify-only:c9_dropped")
+    print("FAILURES:", failures if failures else "none")
+    return 1 if failures else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

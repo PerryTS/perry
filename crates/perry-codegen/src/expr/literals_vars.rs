@@ -24,6 +24,8 @@ use super::{
     TrustedBoxCapturePtr,
 };
 
+mod facts_const_number;
+
 /// Only TDZ-capable source bindings need a named accessor. Ordinary boxes
 /// retain their existing ABI; trusted inline loads pass the name only on
 /// their cold TDZ arm. Names come from permanent, GC-rooted string globals.
@@ -404,21 +406,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             //     the namespace-member class case `Lib.A`) lower as
             //     INT32-tagged class ids → typeof reads "number". Emit
             //     "function" to match JS spec for class objects.
-            if let Expr::PropertyGet {
-                object, property, ..
-            } = operand.as_ref()
-            {
-                if matches!(object.as_ref(), Expr::GlobalGet(_))
-                    && super::is_global_this_builtin_name(property)
-                {
-                    super::property_get::globalget::emit_global_value_installs(ctx, property);
-                    let value =
-                        super::property_get::globalget::lower_optional_global_read(ctx, property)?;
-                    let handle = ctx
-                        .block()
-                        .call(I64, "js_value_typeof", &[(DOUBLE, &value)]);
-                    return Ok(nanbox_string_inline(ctx.block(), &handle));
-                }
+            if let Some(value) = lower_typeof_global_operand(ctx, operand)? {
+                let handle = ctx
+                    .block()
+                    .call(I64, "js_value_typeof", &[(DOUBLE, &value)]);
+                return Ok(nanbox_string_inline(ctx.block(), &handle));
             }
             let typeof_short_circuit = typeof_compile_time_answer(ctx, operand.as_ref());
             if let Some(s) = typeof_short_circuit {
@@ -438,6 +430,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // site we just load the cached NaN-boxed handle from the pool's
         // `.handle` global. ONE instruction, no per-use allocation.
         Expr::String(s) => {
+            // A marked short literal is its inline string (`short_string`).
+            if let Some(inline) = super::short_string::inline_literal(expr, s) {
+                return Ok(inline);
+            }
             let idx = ctx.strings.intern(s);
             let entry = ctx.strings.entry(idx);
             // Clone the global name out so we don't keep `entry` borrowed
@@ -473,6 +469,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::LocalGet(id) => {
             crate::codegen::arguments::ensure_arguments_object(ctx, *id);
+            if let Some(value) = facts_const_number::read(ctx, *id) {
+                return Ok(value);
+            }
             if let Some(value) = crate::array_record_stack::read_local(ctx, *id) {
                 return Ok(value);
             }
@@ -546,6 +545,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     let value = ctx.block().bitcast_i64_to_double(&bits);
                     demote_extracted_string_binding(ctx, *id, &value);
                     return Ok(value);
+                }
+            }
+            // A packed clone's element binding has no local slot until the
+            // slow clone declares one; inside the clone it lives only in its
+            // F64 alloca (`stmt::let_stmt`).
+            if !ctx.locals.contains_key(id) {
+                if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
+                    return Ok(ctx.block().load(DOUBLE, &f64_slot));
                 }
             }
             // Repsel Phase 1: a canonical-i32 local's ONLY storage is the i32
@@ -626,6 +633,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // carry no heap edge). Exits write the value back.
             if let Some(f64_slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let v = lower_expr(ctx, value)?;
+                // Check mode: the redirected write of a proven local is
+                // witnessed like its slot's (`accept_let_value`).
+                let v = if crate::verify_facts::enabled() {
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, *id, value, v)
+                } else {
+                    v
+                };
                 ctx.block().store(DOUBLE, &v, &f64_slot);
                 return Ok(v);
             }
@@ -704,7 +718,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // via one sitofp per write so non-int readers (e.g. `acc / K`)
             // still see the current value.
             if let Some(i32_slot) = ctx.i32_counter_slots.get(id).cloned() {
-                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value);
+                let structurally_i32 = can_lower_expr_as_i32_in_current_region(ctx, value)
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 // Within a stable-packed numeric clone, when `x` is a
                 // canonical raw Number, `x | 0` may feed the canonical i32
                 // slot directly: materializing a double here only to convert
@@ -726,7 +741,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ..
                     } if matches!(right.as_ref(), Expr::Integer(0))
                         && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
-                ) && !ctx.stable_packed_loop_facts.is_empty();
+                ) && !ctx.stable_packed_loop_facts.is_empty()
+                    // Check mode witnesses a proven int32 local's interval
+                    // on the double path.
+                    && !crate::codegen::facts_int32_locals::checked(ctx, *id);
                 if !ctx.closure_captures.contains_key(id)
                     && !(ctx.boxed_vars.contains(id) && !ctx.module_globals.contains_key(id))
                     && (structurally_i32 || explicit_numeric_toint32)
@@ -1048,6 +1066,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Unboxed Number scopes redirect every read and write to this
             // F64 slot. Updating the tagged slot instead leaves the induction
             // value unchanged and makes the guarded loop repeat forever.
+            let increment = matches!(op, UpdateOp::Increment);
             if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(id).cloned() {
                 let blk = ctx.block();
                 let old = blk.load(DOUBLE, &slot);
@@ -1057,6 +1076,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 // GC_STORE_AUDIT(STACK): this admitted Number slot has no heap edge.
                 blk.store(DOUBLE, &new, &slot);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1079,6 +1099,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 blk.store(I32, &new_i32, &i32_slot);
                 let old = blk.sitofp(I32, &old_i32, DOUBLE);
                 let new = blk.sitofp(I32, &new_i32, DOUBLE);
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
                 super::record_int_facts_for_update(ctx, *id, *op);
                 return Ok(if *prefix { new } else { old });
             }
@@ -1100,6 +1121,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         blk.store(I32, &new_i32, &i32_slot);
                         (old_i32, new_i32)
                     };
+                    if crate::codegen::facts_int32_locals::checked(ctx, *id) {
+                        let old = ctx.block().sitofp(I32, &old_i32, DOUBLE);
+                        crate::codegen::facts_int32_locals::witness_update(
+                            ctx, *id, &old, increment,
+                        );
+                    }
                     super::record_int_facts_for_update(ctx, *id, *op);
                     let ret_i32 = if *prefix { &new_i32 } else { &old_i32 };
                     return Ok(ctx.block().sitofp(I32, ret_i32, DOUBLE));
@@ -1187,6 +1214,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 };
                 let new_i32 = blk.add(I32, &old_i32, delta);
                 blk.store(I32, &new_i32, &i32_slot);
+            }
+            if !storage_is_root {
+                crate::codegen::facts_int32_locals::witness_update(ctx, *id, &old, increment);
             }
             super::record_int_facts_for_update(ctx, *id, *op);
             Ok(if *prefix { new } else { old })
@@ -1363,6 +1393,15 @@ pub(crate) fn note_born_local_write(ctx: &mut FnCtx<'_>, id: u32, value: &Expr) 
 /// plain-slot store with its shadow-frame mirror and i32 mirror, module
 /// globals, the arena owner, buffer views and int facts.
 ///
+/// `id = v` for a value lowering holds already (a value record lane,
+/// `codegen::record_sig`): the write obligations of the `LocalSet` arm, then
+/// the one binding. `hint` is the expression the boxed program assigns.
+pub(crate) fn bind_local(ctx: &mut FnCtx<'_>, id: u32, v: &str, hint: &Expr) -> Result<()> {
+    super::invalidate_local_write_facts(ctx, id);
+    super::record_local_value_alias_for_write(ctx, id, hint);
+    bind_lowered_value_to_local(ctx, id, v, hint)
+}
+
 /// Extracted from `Expr::LocalSet`'s arm VERBATIM (#10946 follow-up) so that
 /// a caller holding a value it did not lower through `lower_expr` — a
 /// region's fast arm, which loads the slot directly — binds it through the
@@ -1381,6 +1420,7 @@ pub(crate) fn bind_lowered_value_to_local(
     v: &str,
     value: &Expr,
 ) -> Result<()> {
+    let v = &crate::codegen::facts_number_locals::accept_let_value(ctx, id, value, v.to_string());
     crate::codegen::arguments::note_arguments_assignment(ctx, id);
     // `target = source` creates the same string-buffer alias as a
     // `let target = source` initializer. The declaration path has
@@ -1395,7 +1435,11 @@ pub(crate) fn bind_lowered_value_to_local(
     // A guarded scalar lane or the all-writes numeric fixed point proves
     // this alias cannot share a string buffer. An annotation alone never
     // satisfies is_numeric_expr for a local read.
-    if string_alias && !fixed_slot && !crate::type_analysis::is_numeric_expr(ctx, value) {
+    if string_alias
+        && !fixed_slot
+        && !crate::type_analysis::is_numeric_expr(ctx, value)
+        && !super::literal_strings::alias(ctx, id, value, v)
+    {
         super::helpers::emit_string_addref_if_heap_string(ctx, v);
     }
     if crate::array_record_stack::write_local(ctx, id, v, value) {
@@ -1520,4 +1564,28 @@ pub(crate) fn bind_lowered_value_to_local(
     // Soft fallback: drop the store on the floor for missing
     // locals. See LocalGet for the rationale.
     Ok(())
+}
+
+/// The operand of `typeof` when it is a bare global name the runtime may
+/// install (`PropertyGet { GlobalGet, name }`): an optional read that never
+/// throws. `typeof` of an unresolvable reference is "undefined" (ECMA-262
+/// 13.5.3.1 step 2.a), so the fused `typeof x === "..."` compare lowers the
+/// operand through this too.
+pub(crate) fn lower_typeof_global_operand(
+    ctx: &mut FnCtx<'_>,
+    operand: &Expr,
+) -> Result<Option<String>> {
+    let Expr::PropertyGet {
+        object, property, ..
+    } = operand
+    else {
+        return Ok(None);
+    };
+    if !(matches!(object.as_ref(), Expr::GlobalGet(_))
+        && super::is_global_this_builtin_name(property))
+    {
+        return Ok(None);
+    }
+    super::property_get::globalget::emit_global_value_installs(ctx, property);
+    super::property_get::globalget::lower_optional_global_read(ctx, property).map(Some)
 }

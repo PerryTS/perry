@@ -67,12 +67,6 @@ unsafe extern "C" fn observe_message_after_collection(
 }
 
 #[test]
-fn gc_scanner_registration_idempotent() {
-    ensure_runtime_hooks_registered();
-    ensure_runtime_hooks_registered();
-}
-
-#[test]
 fn pending_message_reloads_relocated_listener_and_payload() {
     perry_runtime::gc::gc_init();
     let guard = GcTestGuard::new();

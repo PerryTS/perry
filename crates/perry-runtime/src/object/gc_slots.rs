@@ -68,9 +68,25 @@ pub(crate) unsafe fn gc_field_slot_range(
     // escapes (`object/alloc.rs`), and every bound change is mint-then-stamp
     // (`shapes::publish_object_live_slot_count`), so a live object is never
     // observed here without one.
-    let field_count = record
-        .map(|record| record.live_inline_slot_count() as usize)
-        .unwrap_or(0);
+    let field_count = match record {
+        // An arguments object traces its whole payload: the named record and
+        // the inline elements after it (count from the GcHeader size word).
+        Some(record)
+            if (*crate::gc::header_from_trusted_user_ptr(obj.cast()))._reserved
+                & crate::gc::OBJ_FLAG_ARGUMENTS
+                != 0
+                && matches!(
+                    record.object_kind(),
+                    shapes::ShapeObjectKind::Arguments | shapes::ShapeObjectKind::ArgumentsStrict
+                ) =>
+        {
+            let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
+            ((*gc).size as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ObjectHeader>())
+                / 8
+        }
+        Some(record) => record.live_inline_slot_count() as usize,
+        None => 0,
+    };
     if field_count > 1_000_000 {
         return None;
     }

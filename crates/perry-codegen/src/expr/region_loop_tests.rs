@@ -61,6 +61,7 @@ fn put(key: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::LocalGet(O)),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -117,6 +118,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")
@@ -286,12 +288,12 @@ fn a_bare_pointer_store_keeps_the_store_ics_gc_bookkeeping() {
         bl[l]
             .0
             .iter()
-            .any(|i| i.contains("call void @js_write_barrier_slot_validated_parent("))
+            .any(|i| i.contains("call void @js_slot_store_obligations("))
     });
     assert!(
         barrier_in_f,
         "a bare store of an `any` value in F-body must carry the remembered-set \
-         / incremental-mark barrier; F-body blocks: {f:?}"
+         / incremental-mark barrier (the store's obligations call); F-body blocks: {f:?}"
     );
 }
 

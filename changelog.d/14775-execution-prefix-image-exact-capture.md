@@ -1,0 +1,1 @@
+Execution-prefix image capture (build knob, off by default): changed statics are judged as a whole, the class-table stop names the tables that grew, and literal-shape class registrations run before the image baseline.

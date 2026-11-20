@@ -1,0 +1,40 @@
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+any.pair=3:4
+call.pair=10:12
+call.loop=4000
+assign.pair=p:q
+assign.swap=q:p
+hole.values=1:undefined:3:undefined
+hole.defaults=d0:5
+length.only=x:y
+short=0:s1:undefined
+default.nan=NaN
+default.undefined=42
+default.null=null
+shrink=k0:k1:k2
+grow=g0:pushed
+grown=0:3:100
+mixed=s:1.5:1:2
+nested=7:8:n2
+elision=3
+string=h:2
+set=4:5
+map=k:1
+gen=1:2
+typedarray=9:8
+arguments=6:7
+custom=10:20:2:1
+bad=true
+bad=true
+bad=true
+bad=true
+subclass.iter=2:4
+subclass.plain=4:5
+proxy=1:2:length,0,length,1
+accessor=got:2:1
+async=41:42:42:41
+inherited=0:undefined:2
+patched.any=1:2:0
+restored=1:2

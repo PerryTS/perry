@@ -119,9 +119,7 @@ pub(super) fn timer_handle_id(value: f64) -> Option<i64> {
 
 fn throw_timer_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// The receiver of a prototype method and, when it is one of ours, its id.

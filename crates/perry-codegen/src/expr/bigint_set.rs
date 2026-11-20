@@ -489,9 +489,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bits = blk.bitcast_double_to_i64(&keys_arr_boxed);
                 blk.and(I64, &bits, POINTER_MASK_I64)
             };
+            // `js_object_rest` takes an object POINTER. The source is any
+            // value: only a heap pointer (POINTER_TAG / STRING_TAG) is
+            // masked down to one; a primitive (a Number above all, whose
+            // low bits are no address) has no own properties to copy and is
+            // passed as null, which answers the empty object.
             let obj_handle = {
                 let bits = blk.bitcast_double_to_i64(&obj_box);
-                blk.and(I64, &bits, POINTER_MASK_I64)
+                let top16 = blk.lshr(I64, &bits, "48");
+                let masked_tag = blk.and(I64, &top16, "65533"); // 0xFFFD
+                let is_heap_ptr = blk.icmp_eq(I64, &masked_tag, "32765"); // 0x7FFD
+                let masked = blk.and(I64, &bits, POINTER_MASK_I64);
+                blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, "0")
             };
             let rest_ptr = blk.call(
                 I64,
@@ -1517,7 +1526,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_write_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }
@@ -1541,7 +1550,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_append_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }

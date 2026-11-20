@@ -95,7 +95,13 @@ pub(crate) unsafe fn object_field_at_with_live(
     if val.bits() == 0x7FFD_0000_0000_0000 {
         return null_pointer_field(obj, field_index, live);
     }
-    val
+    // I32 at rest (PR C): an I32 lane's word reads as its canonical double,
+    // through the layout accessor (one compare for every other word).
+    JSValue::from_bits(crate::layout_slot::slot_word_value(
+        obj,
+        field_index,
+        val.bits(),
+    ))
 }
 
 /// A field past the inline bound: the spill.
@@ -272,7 +278,7 @@ unsafe fn own_property_slot(
     let keys_gc = (keys as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     if !matches!(
         (*keys_gc).obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_OVERFLOW
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_OVERFLOW
     ) {
         return None;
     }

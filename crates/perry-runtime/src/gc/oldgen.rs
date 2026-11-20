@@ -8,6 +8,29 @@ pub(super) const RSS_HARD_PRESSURE_BYTES: u64 = 256 * 1024 * 1024;
 pub(super) const MAX_PREVIOUS_PAUSE_US: u64 = 20_000;
 pub(super) const EVACUATION_POLICY_DISABLED_REASON: &str = "disabled";
 pub(super) const EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON: &str = "low_pause_non_moving";
+pub(super) const EVACUATION_POLICY_IMPRECISE_POINT_REASON: &str = "imprecise_point";
+
+/// Why a minor starting now may not move existing objects out of place, or
+/// `None` when it may. Every such move (tenured-nursery evacuation, old-page
+/// defrag, idle compaction) runs only under `EvacuationPolicyDecision::enabled`,
+/// which this veto keeps false.
+///
+/// - A budgeted cycle stays non-moving (`low_pause_non_moving`).
+/// - A move rewrites every root to the new address, so it is sound only where
+///   the root set is complete: at a precise point
+///   ([`super::roots::collection_point_is_precise`]). At an allocation-point
+///   valve on wasm the conservative scan was asked for and cannot run, so
+///   `CONS_PINNED` holds nothing and an old object held only in a runtime
+///   helper's local would move under it (`imprecise_point`).
+pub(super) fn evacuation_veto(budgeted: bool) -> Option<&'static str> {
+    if budgeted {
+        return Some(EVACUATION_POLICY_LOW_PAUSE_NON_MOVING_REASON);
+    }
+    if !super::roots::collection_point_is_precise() {
+        return Some(EVACUATION_POLICY_IMPRECISE_POINT_REASON);
+    }
+    None
+}
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct EvacuationPolicySnapshot {
@@ -1467,6 +1490,15 @@ pub(super) fn evacuate_tenured_nursery_objects_collecting(
             let total = (*header).size as usize;
             let payload = total - GC_HEADER_SIZE;
             let new_user = crate::arena::arena_alloc_gc_old(payload, 8, (*header).obj_type);
+            #[cfg(perry_gc_instruments)]
+            if crate::arena::alloc_life::on() {
+                crate::arena::alloc_life::evacuated(
+                    total,
+                    (*header).obj_type,
+                    user_ptr as usize,
+                    new_user as usize,
+                );
+            }
             // Copy the user payload bytes verbatim. The new
             // GcHeader was set up by arena_alloc_gc_old; we don't
             // copy the OLD header (its flags / size match the

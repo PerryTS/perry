@@ -1,6 +1,8 @@
 //! Regression coverage for the Array.prototype.reverse exotic-index cluster
 //! in #5898. Reverse must observe inherited indices and getter side effects in
-//! specification order instead of swapping raw dense slots.
+//! specification order instead of swapping raw dense slots. DEC 250 (Q2): a
+//! program adds no index key to `Array.prototype`, so the inherited index
+//! lives on the array's own prototype (refused add asserted).
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -19,12 +21,16 @@ fn reverse_observes_inherited_indices_and_live_presence() {
         r#"
 declare function gc(): void;
 
-(Array.prototype as any)[1] = 1;
+const inheritedProto: any = Object.create(Array.prototype);
+inheritedProto[1] = 1;
 const inherited = [0];
+Object.setPrototypeOf(inherited, inheritedProto);
 inherited.length = 2;
 inherited.reverse();
 console.log("inherited", inherited[0], inherited[1]);
-delete (Array.prototype as any)[1];
+let indexAddRefused = false;
+try { (Array.prototype as any)[1] = 1; } catch (e) { indexAddRefused = e instanceof TypeError; }
+console.log("refused", indexAddRefused, ([0] as any)[1]);
 
 const live = ["first", "second"];
 Object.defineProperty(live, 0, {
@@ -90,6 +96,6 @@ console.log(
     );
     assert_eq!(
         String::from_utf8_lossy(&run.stdout),
-        "inherited 1 0\nlive false true first\nsparse 0 false\nregrown false false\n"
+        "inherited 1 0\nrefused true undefined\nlive false true first\nsparse 0 false\nregrown false false\n"
     );
 }

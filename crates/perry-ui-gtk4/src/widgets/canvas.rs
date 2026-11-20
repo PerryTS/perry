@@ -303,37 +303,48 @@ pub fn create(width: f64, height: f64) -> i64 {
 
 #[cfg(test)]
 mod tests {
-    fn init_precedes_drawing_area(source: &str) -> bool {
-        let start = source
-            .find("pub fn create(width: f64, height: f64) -> i64")
-            .expect("Canvas create function must exist");
-        let body = &source[start..];
-        let end = body
-            .find("\n/// Clear all drawing commands.")
-            .expect("Canvas create function terminator must exist");
-        let body = &body[..end];
+    use gtk4::prelude::*;
 
-        let init = body.find("crate::app::ensure_gtk_init();");
-        let constructor = body.find("DrawingArea::new();");
-        matches!((init, constructor), (Some(init), Some(constructor)) if init < constructor)
-    }
+    const CHILD_ENV: &str = "PERRY_GTK4_CANVAS_FIRST_CALL_CHILD";
 
+    /// A canvas can be a program's first GTK call, so `create` initializes GTK
+    /// before constructing its `DrawingArea` (#7995). The body runs in a
+    /// re-executed child so no other test has initialized GTK first. Without a
+    /// display the child runs under `xvfb-run`; with neither, the test fails
+    /// rather than passing without exercising GTK.
     #[test]
-    fn canvas_initializes_gtk_before_constructing_drawing_area() {
+    fn create_as_first_gtk_call_returns_a_drawing_area() {
+        if std::env::var_os(CHILD_ENV).is_some() {
+            let handle = super::create(64.0, 32.0);
+            let widget = super::super::get_widget(handle).expect("create returned no widget");
+            assert!(widget.is::<gtk4::DrawingArea>());
+            return;
+        }
+        let exe = std::env::current_exe().unwrap();
+        let has_display =
+            std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        let mut child = if has_display {
+            std::process::Command::new(&exe)
+        } else {
+            let mut xvfb = std::process::Command::new("xvfb-run");
+            xvfb.arg("-a").arg(&exe);
+            xvfb
+        };
+        let status = child
+            .args([
+                "--exact",
+                "widgets::canvas::tests::create_as_first_gtk_call_returns_a_drawing_area",
+                "--test-threads=1",
+                "--nocapture",
+            ])
+            .env(CHILD_ENV, "1")
+            .status()
+            .unwrap_or_else(|e| {
+                panic!("this test needs a display: no DISPLAY or WAYLAND_DISPLAY, and xvfb-run failed to start ({e})")
+            });
         assert!(
-            init_precedes_drawing_area(include_str!("canvas.rs")),
-            "Canvas must initialize GTK before DrawingArea::new() (#7995)"
-        );
-        assert!(
-            !init_precedes_drawing_area(
-                "pub fn create(width: f64, height: f64) -> i64 {\n\
-                 let area = DrawingArea::new();\n\
-                 crate::app::ensure_gtk_init();\n\
-                 area\n\
-                 }\n\
-                 /// Clear all drawing commands."
-            ),
-            "the ordering check must reject the pre-fix constructor order"
+            status.success(),
+            "canvas create as the first GTK call failed: {status}"
         );
     }
 }

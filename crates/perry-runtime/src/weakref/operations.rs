@@ -142,6 +142,31 @@ pub(crate) fn get(map: f64, key: f64, receiver: Receiver) -> f64 {
     let Some(view) = View::prove(map, receiver.brand()) else {
         return receiver.reject(map, "get", &[key]);
     };
+    get_in(view, key)
+}
+
+/// [`get`] for a WeakMap whose header word is its birth layout, which the
+/// caller has read (`builtin_method::weak_ok`): that word is the brand proof
+/// [`View::prove`] would make again.
+///
+/// # Safety
+/// `map` is a live, unforwarded WeakMap on its birth layout.
+pub(crate) unsafe fn get_birth_layout(map: f64, key: f64) -> f64 {
+    let object = js_nanbox_get_pointer(map) as *mut ObjectHeader;
+    debug_assert_eq!(
+        (*object).parent_class_id,
+        crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD
+    );
+    get_in(
+        View {
+            storage: storage::owned_storage(object),
+        },
+        key,
+    )
+}
+
+#[inline(always)]
+fn get_in(view: View, key: f64) -> f64 {
     if is_valid_weak_target(key) {
         unsafe {
             if let Some((_, entry)) = view.find(key.to_bits()) {

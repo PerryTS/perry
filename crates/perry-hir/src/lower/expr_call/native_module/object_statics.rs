@@ -61,7 +61,10 @@ pub(super) fn try_object_statics(
     // computed key does not fall through to generic dispatch (→
     // `TypeError: value is not a function`).
     // A spread call declines: see `call_has_spread_arg`.
-    if obj_name == "Object" && !super::super::call_has_spread_arg(call) {
+    if obj_name == "Object"
+        && !ctx.shadows_unqualified_global("Object")
+        && !super::super::call_has_spread_arg(call)
+    {
         if let Some(method_name) = super::super::static_call_prop_name(&member.prop) {
             match method_name {
                 "keys" => {

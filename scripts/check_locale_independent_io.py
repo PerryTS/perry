@@ -33,7 +33,7 @@ subcommand CI does not invoke, warns nobody and ships. The scan below reads the
 AST, so an unexecuted branch is caught exactly like a hot one.
 
 Strings are not code: an `open(...)` inside a probe's source-code *literal* (as
-in `tests/test_gc_ratchet.py`, which writes Python probes as text) is invisible
+in `tests/tooling/infrastructure/test_gc_ratchet.py`, which writes Python probes as text) is invisible
 to the AST and correctly not flagged. That is the second reason not to grep.
 
 THIS CHECK IS DESIGNED TO BE ABLE TO FAIL
@@ -65,7 +65,7 @@ SCANNED = (
     "scripts/check_gc_doc_claims.py",
     "scripts/gc_runtime_root_holders.py",
     "benchmarks/gc_ratchet/gc_ratchet.py",
-    "tests/test_gc_ratchet.py",
+    "tests/tooling/infrastructure/test_gc_ratchet.py",
 )
 
 # `open(...)` and the `Path` text helpers. `Path.open()` is included: it is the

@@ -25,7 +25,7 @@ pub(in super::super) unsafe fn own_field_by_key_bytes(
     if keys.is_null() || keys_ptr < 0x10000 {
         return None;
     }
-    if gc_type_for_ptr(keys_ptr) != Some(crate::gc::GC_TYPE_ARRAY) {
+    if gc_type_for_ptr(keys_ptr) != Some(crate::gc_array_type_pat!()) {
         return None;
     }
 

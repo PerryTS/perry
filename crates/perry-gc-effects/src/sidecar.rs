@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 /// First line of every sidecar. A different version reads as a missing sidecar.
-pub const SIDECAR_MAGIC: &str = "# perry-gc-effects sidecar v1";
+pub const SIDECAR_MAGIC: &str = "# perry-gc-effects sidecar v2";
 /// File name extension appended to the runtime archive file name.
 pub const SIDECAR_SUFFIX: &str = ".gc-effects";
 
@@ -217,6 +217,9 @@ impl Sidecar {
                     sha256: hash.to_owned(),
                 });
             } else {
+                if !l.starts_with('#') && !l.trim().is_empty() && l.split('\t').count() != 5 {
+                    bail!("{label}: v2 row must carry throw_class and passes: {l:?}");
+                }
                 cur.2.push_str(l);
                 cur.2.push('\n');
             }
@@ -428,13 +431,9 @@ mod tests {
     fn unicode_symbol_names_round_trip_through_sidecars() {
         let name = "perry_fn_module_ts__gr.uC3.uBC.uC3.u9Fe.u24m.uC3.uA9thode";
         let mut sidecar = sample();
-        sidecar.combinations[0].table.insert(
-            name.into(),
-            Entry {
-                class: Class::Leaf,
-                throws: false,
-            },
-        );
+        sidecar.combinations[0]
+            .table
+            .insert(name.into(), Entry::unknown(Class::Leaf, false));
         let decoded = Sidecar::parse(&sidecar.render(), "unicode").unwrap();
         assert_eq!(decoded, sidecar);
         assert!(decoded.combinations[0].table.contains_key(name));
@@ -442,28 +441,10 @@ mod tests {
 
     fn sample() -> Sidecar {
         let mut t = Table::new();
-        t.insert(
-            "js_a".into(),
-            Entry {
-                class: Class::Leaf,
-                throws: false,
-            },
-        );
-        t.insert(
-            "js_b".into(),
-            Entry {
-                class: Class::Reenters,
-                throws: true,
-            },
-        );
+        t.insert("js_a".into(), Entry::unknown(Class::Leaf, false));
+        t.insert("js_b".into(), Entry::unknown(Class::Reenters, true));
         let mut t2 = t.clone();
-        t2.insert(
-            "js_c".into(),
-            Entry {
-                class: Class::AllocOnly,
-                throws: false,
-            },
-        );
+        t2.insert("js_c".into(), Entry::unknown(Class::AllocOnly, false));
         let key = |n: &str, s: u64| ArchiveKey {
             name: n.into(),
             size: s,
@@ -490,21 +471,21 @@ mod tests {
     fn format_round_trips_and_has_no_target_or_archives_header() {
         let s = sample();
         let text = s.render();
-        assert!(text.starts_with("# perry-gc-effects sidecar v1\n# analyzer 0.5.0 abc123\n# target linux-x86_64\n[combination runtime]\narchive libperry_runtime.a 10 sha256:"));
+        assert!(text.starts_with("# perry-gc-effects sidecar v2\n# analyzer 0.5.0 abc123\n# target linux-x86_64\n[combination runtime]\narchive libperry_runtime.a 10 sha256:"));
         assert_eq!(
             text.matches("# target").count(),
             1,
             "table header target line dropped"
         );
         assert!(!text.contains("# archives:"));
-        assert!(text.contains("js_a\tLeaf\tno\njs_b\tReenters\tyes\n"));
+        assert!(text.contains("js_a\tLeaf\tno\topen\t-\njs_b\tReenters\tyes\topen\t-\n"));
         assert_eq!(Sidecar::parse(&text, "t").unwrap(), s);
         assert_eq!(Sidecar::parse(&text, "t").unwrap().render(), text);
     }
     #[test]
     fn other_versions_and_damage_do_not_parse() {
         let text = sample().render();
-        assert!(Sidecar::parse(&text.replace("sidecar v1", "sidecar v2"), "t").is_err());
+        assert!(Sidecar::parse(&text.replace("sidecar v2", "sidecar v999"), "t").is_err());
         assert!(Sidecar::parse("", "t").is_err());
         assert!(Sidecar::parse(&text.replace("sha256:", "md5:"), "t").is_err());
         assert!(Sidecar::parse(&text.replace("js_a\tLeaf\tno", "js_a\tLeaf"), "t").is_err());

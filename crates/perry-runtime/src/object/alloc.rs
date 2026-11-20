@@ -61,7 +61,7 @@ pub(crate) fn prune_dead_class_keys_entries(is_dead_owner: &dyn Fn(usize) -> boo
             match crate::value::addr_class::try_read_tracked_gc_header(addr) {
                 Some(gc) => {
                     let ty = (*gc.as_ptr()).obj_type;
-                    ty == crate::gc::GC_TYPE_ARRAY || ty == crate::gc::GC_TYPE_LAZY_ARRAY
+                    crate::gc_type_is_array!(ty) || ty == crate::gc::GC_TYPE_LAZY_ARRAY
                 }
                 None => false,
             }
@@ -354,6 +354,9 @@ pub(crate) unsafe fn build_keys_source_array(
     keys: &[&[u8]],
 ) -> *mut ArrayHeader {
     let total = prefix_len as usize + keys.len();
+    // A class keys cache fill on first use (the temporary list and its key
+    // atoms): the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
     let scope = crate::gc::RuntimeHandleScope::new();
     let prefix_handle = scope.root_raw_mut_ptr(prefix);
     let (arr, _) = prefix_handle.across_mut::<ArrayHeader, _>(|| {

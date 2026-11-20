@@ -392,8 +392,12 @@ fn final_record_names_receiver(
         && d.hole_count == 0
         && d.summary == 0
         && d.rep == rep
-        && d.deprecation_targets() == (0, 0)
-        && d.special_constfn_mask == infos.iter().fold(0, |mask, i| mask | (1 << i.slot))
+        && !d.deprecation_pending()
+        && d.special_constfn_mask
+            == infos
+                .iter()
+                .filter(|i| i.slot < super::field_rep::REP_SLOTS)
+                .fold(0, |mask, i| mask | (1 << i.slot))
         && d.constfn_infos() == infos
 }
 
@@ -430,10 +434,10 @@ unsafe fn finalized_constfn_facts(
         || current.proto_id != shapes::class_proto_id(class_id)
         || (!rebuilt
             && current.rep
-                != infos.iter().fold(rep, |r, i| {
-                    super::field_rep::with_slot_rep(r, i.slot as u32, super::field_rep::REP_ANY)
-                }))
-        || current.special_constfn_mask != 0
+                != infos
+                    .iter()
+                    .fold(rep, |r, i| super::field_rep::without_lane(r, i.slot)))
+        || current.has_constfn_lane()
     {
         return None;
     }
@@ -481,8 +485,10 @@ unsafe fn finalized_constfn_facts(
         }
     }
     for entry in infos {
-        if entry.slot as u32 >= count
-            || super::field_rep::slot_rep(rep, entry.slot as u32) != super::field_rep::REP_SPECIAL
+        // A body past word 0 has no bit in `rep`: the list entry is its lane.
+        if entry.slot >= count
+            || (entry.slot < super::field_rep::REP_SLOTS
+                && super::field_rep::slot_rep(rep, entry.slot) != super::field_rep::REP_SPECIAL)
         {
             return None;
         }
@@ -545,7 +551,7 @@ fn parse_constfn_static_entries(
     entries: *const ConstFnStaticEntry,
     entry_count: u32,
 ) -> Option<Vec<shapes::ConstFnSlotInfo>> {
-    if entries.is_null() || entry_count == 0 || entry_count > super::field_rep::REP_SLOTS {
+    if entries.is_null() || entry_count == 0 {
         return None;
     }
     // SAFETY: compiler-owned static data of `entry_count` ABI entries.
@@ -553,10 +559,7 @@ fn parse_constfn_static_entries(
     let mut infos = Vec::with_capacity(entries.len());
     let mut previous = None;
     for entry in entries {
-        if entry.slot >= super::field_rep::REP_SLOTS
-            || previous.is_some_and(|slot| entry.slot <= slot)
-            || entry.info.is_null()
-        {
+        if previous.is_some_and(|slot| entry.slot <= slot) || entry.info.is_null() {
             return None;
         }
         // SAFETY: codegen names a `JsFunctionInfo` in its permanent image.
@@ -565,7 +568,7 @@ fn parse_constfn_static_entries(
             return None;
         }
         infos.push(shapes::ConstFnSlotInfo {
-            slot: entry.slot as u8,
+            slot: entry.slot,
             info: entry.info as usize as u64,
         });
         previous = Some(entry.slot);
@@ -618,6 +621,8 @@ pub extern "C" fn js_shape_run_static_seed() {
     // under its atoms, and a by-names mint stores the atoms the pools find.
     // Descriptors still follow the seeds and share their ids.
     super::layout_desc::seed_static_atoms();
+    // The function family records take their info keys before any closure is observed.
+    crate::state::state().shapes.key_function_families();
     // SAFETY: a valid layout image names the program's table (never null).
     let program = unsafe { &*super::class_image::layout_image().program };
     install_image_seeds(program);
@@ -763,6 +768,44 @@ pub(crate) unsafe fn canonical_keys_for_names(names: &[&[u8]]) -> super::ObjectK
         names.len() as u32,
     )
     .view()
+}
+
+/// The function family records' own keys `[length, name]`
+/// (`length`, `name`, in that order), each non-writable,
+/// non-enumerable and configurable: the keys node all nine family records
+/// share. The atoms are image strings, so the canonical list is the one
+/// allocation; `None` when the image does not carry them.
+///
+/// # Safety
+/// The agent's shape table exists; collection is suppressed.
+pub(crate) unsafe fn function_family_keys(constructing: bool) -> Option<super::ObjectKeys> {
+    use super::key_attrs::{ENTRY_NON_ENUMERABLE, ENTRY_NON_WRITABLE};
+    use super::layout_desc::{layout_key_off, PerryLayoutKey, StaticAtom};
+    const ATTRS: u8 = ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE;
+    let key = |atom: *const StaticAtom, slot: u32| PerryLayoutKey {
+        atom,
+        slot,
+        attrs: ATTRS,
+        _pad: 0,
+        off: layout_key_off(slot),
+    };
+    let keys = [
+        key(&raw const super::runtime_layouts::FAMILY_ATOM_LENGTH, 0),
+        key(&raw const super::runtime_layouts::FAMILY_ATOM_NAME, 1),
+        // A constructing family's `prototype`: writable, non-enumerable,
+        // non-configurable (`closure::shape::FAMILY_PROTOTYPE_POS`).
+        PerryLayoutKey {
+            attrs: ENTRY_NON_ENUMERABLE | super::key_attrs::ENTRY_NON_CONFIGURABLE,
+            ..key(&raw const super::runtime_layouts::BP_ATOM_PROTOTYPE, 2)
+        },
+    ];
+    let keys = if constructing { &keys[..] } else { &keys[..2] };
+    super::canonical_keys::static_seed::from_static_layout(
+        &super::canonical_keys::SharedLayout::shape_cache_entry(),
+        keys,
+        false,
+    )
+    .map(|c| c.view())
 }
 
 #[cfg(feature = "keepalive-anchors")]

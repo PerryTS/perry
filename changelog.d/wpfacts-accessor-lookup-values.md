@@ -1,0 +1,1 @@
+Accessor lookup now returns installed getter and setter function values without running accessors or unrelated receiver methods. Key coercion, prototype shadowing, late installs and conservative unknown descriptors remain modeled.

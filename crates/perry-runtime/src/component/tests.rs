@@ -73,7 +73,7 @@ extern "C-unwind" fn throwing_getter(
     _: *const crate::closure::ClosureHeader,
     _: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(77.0)
+    crate::exception::test_throw(77.0)
 }
 
 #[test]

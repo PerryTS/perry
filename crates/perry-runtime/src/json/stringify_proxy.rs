@@ -57,8 +57,7 @@ pub(super) unsafe fn try_stringify(
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&id)) {
         let msg = "Converting circular structure to JSON";
         let key = crate::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let error = crate::error::js_typeerror_new(key);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(key));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(id));
 

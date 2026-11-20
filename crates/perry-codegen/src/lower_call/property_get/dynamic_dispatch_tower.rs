@@ -68,10 +68,16 @@ pub(super) fn tower_pshape_route(
     } else {
         (pshape_fn, fname.to_string())
     };
+    let number_index = (!index_proven)
+        .then(|| {
+            crate::lower_call::index_split::number_index_positions(ctx, owner, property, args, 0)
+        })
+        .flatten();
     Some(TowerPshapeRoute {
         clone_fn,
         generic_fn,
         keys_global,
+        number_index,
     })
 }
 
@@ -105,6 +111,10 @@ pub(super) fn tower_layout_proven(ctx: &FnCtx<'_>, owner: &str, cid: u32) -> boo
             .is_some_and(|class| class.fixed_layout)
         && crate::lower_call::direct_method_guard::births_match_clone_layout(ctx, owner, cid);
     if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::FixedLayout,
+            || serde_json::json!({"class":cid}),
+        );
         crate::facts_consumed::used();
     }
     proved
@@ -150,7 +160,19 @@ pub(super) fn emit_tower_pshape_call(
 ) -> String {
     // A facts-verification build keeps the recheck: its miss is the witness.
     let verify = layout_proven && crate::verify_facts::enabled();
+    if verify {
+        crate::verify_facts::tick(ctx);
+    }
     if layout_proven && !verify {
+        if let Some((positions, params)) = &route.number_index {
+            return crate::lower_call::index_split::emit_number_index_split(
+                ctx,
+                &route.clone_fn,
+                positions,
+                params,
+                case_arg_slices,
+            );
+        }
         return ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
     }
     // The global is read ONCE per function (entry-hoisted); the case block only
@@ -182,14 +204,26 @@ pub(super) fn emit_tower_pshape_call(
     let generic_label = ctx.block_label(generic_idx);
     let join_label = ctx.block_label(join_idx);
 
-    crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
-        ctx,
-        recv_handle,
-        &expected_shape_id,
-        &proven_label,
-        &generic_label,
-        family_id.as_deref(),
-    );
+    if crate::expr::rest_fields::lanes_of(ctx, owner) != 0 {
+        // I32 at rest (PR C): an instance of a class with I32 lanes carries
+        // the lanes' successor of the static layout (`js_object_rest_lanes`):
+        // the same keys and slots, so the clone serves it; check mode tests
+        // the receiver's class id (no class extends one with lanes).
+        let blk = ctx.block();
+        let ptr = blk.inttoptr(I64, recv_handle);
+        let cid_word = blk.load(I32, &ptr);
+        let ok = blk.icmp_eq(I32, &cid_word, &cid.to_string());
+        blk.cond_br(&ok, &proven_label, &generic_label);
+    } else {
+        crate::expr::class_field_inline_guard::emit_proven_shape_recheck(
+            ctx,
+            recv_handle,
+            &expected_shape_id,
+            &proven_label,
+            &generic_label,
+            family_id.as_deref(),
+        );
+    }
 
     ctx.current_block = proven_idx;
     let v_proven = ctx.block().call(DOUBLE, &route.clone_fn, case_arg_slices);
@@ -198,18 +232,26 @@ pub(super) fn emit_tower_pshape_call(
 
     ctx.current_block = generic_idx;
     if verify {
+        crate::verify_facts::covered(
+            crate::verify_facts::Fact::FixedLayout,
+            || serde_json::json!({"class":cid}),
+        );
         let site = crate::verify_facts::site_arg(
             ctx,
             &format!(
                 "method {} layout proven: shape {expected_shape_id} ({})",
                 route.clone_fn, route.keys_global
             ),
+            crate::verify_facts::Fact::FixedLayout,
+            &[],
         );
         let recv_box = crate::expr::nanbox_pointer_inline(ctx.block(), recv_handle);
-        let _ = ctx.block().call(
+        let _ = crate::verify_facts::check(
+            ctx,
             crate::types::I32,
             "perry_wpfacts_check_miss",
-            &[(DOUBLE, &recv_box), (crate::types::I64, &site)],
+            &[(DOUBLE, &recv_box)],
+            &site,
         );
     }
     let v_generic = ctx.block().call(DOUBLE, &route.generic_fn, case_arg_slices);

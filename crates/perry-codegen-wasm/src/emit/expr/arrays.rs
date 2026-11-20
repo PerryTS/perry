@@ -26,6 +26,28 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
+            // The host returns one frozen strings array per call site, the same
+            // object on every evaluation; the arrays built here seed it once.
+            Expr::TaggedTemplateStrings {
+                site_id,
+                cooked,
+                raw,
+            } => {
+                let cooked = Expr::Array(cooked.clone(), None);
+                let raw = Expr::Array(raw.iter().cloned().map(Expr::String).collect(), None);
+                self.emit_frame_begin(func, 4);
+                self.emit_store_const(func, 0, (site_id >> 32) as f64);
+                self.emit_store_const(func, 1, (site_id & 0xFFFF_FFFF) as f64);
+                self.emit_store_arg(func, 2, &cooked);
+                self.emit_store_arg(func, 3, &raw);
+                self.emit_memcall(func, "tagged_template", 4);
+            }
+            Expr::TemplateRaw(strings) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, strings);
+                self.emit_memcall(func, "template_raw", 1);
+            }
+
             // --- Array spread ---
             Expr::ArraySpread(elements) => {
                 self.emit_frame_begin(func, 0);
@@ -221,7 +243,8 @@ impl<'a> FuncEmitCtx<'a> {
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
-                self.emit_frame_begin(func, 3);
+                let arg_count = 3 + items.len() as u32;
+                self.emit_frame_begin(func, arg_count);
                 func.instruction(&Instruction::LocalSet(self.temp_local));
                 self.emit_slot_addr(func, 2);
                 func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -246,10 +269,12 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                self.emit_memcall(func, "array_splice", 3);
-                // Returns removed elements array handle
-                // TODO: insert items if present
-                let _ = items;
+                // Stage every argument before splice mutates the receiver. Nested
+                // calls reserve their own frames, preserving earlier item values.
+                for (index, item) in items.iter().enumerate() {
+                    self.emit_store_arg(func, 3 + index as u32, item);
+                }
+                self.emit_memcall(func, "array_splice", arg_count);
             }
             Expr::ArrayJoin { array, separator } => {
                 self.emit_expr(func, array);
@@ -358,7 +383,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, callback);
-                self.emit_memcall_void(func, "array_for_each", 2);
+                self.emit_memcall_void(func, "array_forEach", 2);
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             Expr::ArrayFind { array, callback } => {
@@ -430,15 +455,18 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, name, 3);
             }
             Expr::ArrayToReversed { array } => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_to_reversed", 1);
             }
             Expr::ArrayToSorted { array, comparator } => {
                 if let Some(cmp) = comparator {
+                    self.emit_frame_begin(func, 2);
                     self.emit_store_arg(func, 0, array);
                     self.emit_store_arg(func, 1, cmp);
                     self.emit_memcall(func, "array_to_sorted_cmp", 2);
                 } else {
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_arg(func, 0, array);
                     self.emit_memcall(func, "array_to_sorted", 1);
                 }
@@ -449,6 +477,7 @@ impl<'a> FuncEmitCtx<'a> {
                 delete_count,
                 items: _,
             } => {
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, start);
                 self.emit_store_arg(func, 2, delete_count);
@@ -460,6 +489,7 @@ impl<'a> FuncEmitCtx<'a> {
                 index,
                 value,
             } => {
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, index);
                 self.emit_store_arg(func, 2, value);
@@ -471,6 +501,7 @@ impl<'a> FuncEmitCtx<'a> {
                 start,
                 end,
             } => {
+                self.emit_frame_begin(func, if end.is_some() { 4 } else { 3 });
                 // emit local get for array_id
                 func.instruction(&Instruction::LocalGet(*array_id));
                 func.instruction(&Instruction::LocalSet(self.temp_local));
@@ -491,14 +522,17 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
             Expr::ArrayEntries(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_entries", 1);
             }
             Expr::ArrayKeys(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_keys", 1);
             }
             Expr::ArrayValues(array) => {
+                self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, array);
                 self.emit_memcall(func, "array_values", 1);
             }

@@ -298,19 +298,23 @@ fn stringify_shape_cache_keys_array_is_marked_and_rewritten() {
     crate::json::test_clear_parse_roots();
 }
 
-/// A scanner that is not in the registry is documentation. `scan_parse_roots_mut`
-/// rides on the JSON installer registered `json_parse_mutable_root_scanner`; this asserts the
-/// shape cache is covered by a REGISTERED scanner rather than by one only this
-/// file calls.
+/// Formatting alone must root the stringify cache, even without a parser.
 #[test]
 fn stringify_shape_cache_scanner_is_registered() {
     crate::gc::gc_init();
-    crate::feature_hooks::js_runtime_install_json_engine();
+    // Test gc_init installs all features. Remove that registration so this
+    // assertion observes the formatting installer itself.
+    let previous = crate::gc::roots::MUTABLE_ROOT_SCANNERS
+        .with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
+    crate::feature_hooks::js_runtime_install_json_format();
     let registered = crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow().iter().any(|entry| {
             entry.scanner as usize
                 == crate::gc::roots::json_parse_mutable_root_scanner as MutableRootScanner as usize
         })
+    });
+    crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        *scanners.borrow_mut() = previous;
     });
     assert!(
         registered,

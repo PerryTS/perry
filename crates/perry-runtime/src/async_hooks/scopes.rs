@@ -18,25 +18,25 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
         )
     });
     let outcome = try_run_resource_scope(ids, completion);
-    let (threw, result) = match outcome {
-        Ok(value) => (false, scope.root_nanbox_f64(value)),
-        Err(error) => (true, scope.root_nanbox_f64(error)),
+    let result = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
     };
-    let destroy_outcome = crate::exception::js_call_catching(|| {
+    let destroy_outcome = crate::exception::catch_thrown(|| {
         destroy(ids.async_id);
         TAG_UNDEFINED_F64
     });
     let destroy_error = match destroy_outcome {
         Ok(_) => None,
-        Err(error) => Some(scope.root_nanbox_f64(error)),
+        Err(error) => Some(error.root(&scope)),
     };
-    if threw {
-        crate::exception::js_throw(result.get_nanbox_f64());
+    if result.is_err() {
+        crate::exception::rethrow_caught(result.as_ref().err().unwrap().caught());
     }
     if let Some(error) = destroy_error {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_caught(error.caught());
     }
-    result.get_nanbox_f64()
+    result.ok().unwrap().get_nanbox_f64()
 }
 
 /// Enter an existing provider's captured AsyncLocalStorage and execution-id
@@ -45,12 +45,15 @@ pub fn run_provider_completion(type_name: &'static str, completion: impl FnOnce(
 /// The scope's restore guards belong to the calling frame (or, called from a
 /// helper the owner calls directly, the owner's: `crate::exception::frame_mark`).
 #[inline(always)]
-pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), f64> {
+pub fn try_enter_resource_scope(ids: AsyncResourceIds) -> Result<(), crate::exception::Caught> {
     try_enter_resource_scope_at(crate::exception::frame_mark(), ids)
 }
 
 /// [`try_enter_resource_scope`] for the scope owned by the frame `mark` names.
-pub fn try_enter_resource_scope_at(mark: usize, ids: AsyncResourceIds) -> Result<(), f64> {
+pub fn try_enter_resource_scope_at(
+    mark: usize,
+    ids: AsyncResourceIds,
+) -> Result<(), crate::exception::Caught> {
     let context = super::resource_state::get(ids.async_id)
         .map(|meta| unsafe { (*meta).context.clone() })
         .unwrap_or_default();
@@ -62,7 +65,7 @@ fn try_enter_scope_at(
     ids: AsyncResourceIds,
     context: crate::async_context::AsyncContextSnapshot,
     promise: bool,
-) -> Result<(), f64> {
+) -> Result<(), crate::exception::Caught> {
     let previous = crate::async_context::enter_context(&context);
     drop(context);
     crate::async_context::push_context_guard_at(
@@ -73,7 +76,7 @@ fn try_enter_scope_at(
         mark,
         crate::async_context::ContextGuardAction::RestoreExecutionIds,
     );
-    let outcome = crate::exception::js_call_catching(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         if promise {
             super::before_promise(ids.async_id, ids.trigger_async_id);
         } else {
@@ -83,14 +86,14 @@ fn try_enter_scope_at(
     });
     if let Err(error) = outcome {
         let scope = crate::gc::RuntimeHandleScope::new();
-        let error = scope.root_nanbox_f64(error);
+        let error = error.root(&scope);
         if let Some(action) = crate::async_context::pop_context_guard() {
             crate::async_context::apply_context_guard(action);
         }
         if let Some(action) = crate::async_context::pop_context_guard() {
             crate::async_context::apply_context_guard(action);
         }
-        return Err(error.get_nanbox_f64());
+        return Err(error.caught());
     }
     Ok(())
 }
@@ -98,17 +101,17 @@ fn try_enter_scope_at(
 #[inline(always)]
 pub fn enter_resource_scope(ids: AsyncResourceIds) {
     if let Err(error) = try_enter_resource_scope(ids) {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
 /// Leave a provider scope entered by [`enter_resource_scope`].
-pub fn try_leave_resource_scope(async_id: u64) -> Result<(), f64> {
+pub fn try_leave_resource_scope(async_id: u64) -> Result<(), crate::exception::Caught> {
     try_leave_scope(async_id, false)
 }
 
-fn try_leave_scope(async_id: u64, promise: bool) -> Result<(), f64> {
-    let outcome = crate::exception::js_call_catching(|| {
+fn try_leave_scope(async_id: u64, promise: bool) -> Result<(), crate::exception::Caught> {
+    let outcome = crate::exception::catch_thrown(|| {
         if promise {
             super::after_promise(async_id);
         } else {
@@ -117,20 +120,20 @@ fn try_leave_scope(async_id: u64, promise: bool) -> Result<(), f64> {
         TAG_UNDEFINED_F64
     });
     let scope = crate::gc::RuntimeHandleScope::new();
-    let (threw, result) = match outcome {
-        Ok(value) => (false, scope.root_nanbox_f64(value)),
-        Err(error) => (true, scope.root_nanbox_f64(error)),
+    let result = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
     };
     if let Some(action) = crate::async_context::pop_context_guard() {
-        if threw {
+        if result.is_err() {
             crate::async_context::apply_context_guard(action);
         }
     }
     if let Some(action) = crate::async_context::pop_context_guard() {
         crate::async_context::apply_context_guard(action);
     }
-    if threw {
-        Err(result.get_nanbox_f64())
+    if result.is_err() {
+        Err(result.as_ref().err().unwrap().caught())
     } else {
         Ok(())
     }
@@ -138,7 +141,7 @@ fn try_leave_scope(async_id: u64, promise: bool) -> Result<(), f64> {
 
 pub fn leave_resource_scope(async_id: u64) {
     if let Err(error) = try_leave_resource_scope(async_id) {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
@@ -154,7 +157,7 @@ pub fn run_resource_scope(ids: AsyncResourceIds, completion: impl FnOnce()) {
 pub fn try_run_resource_scope(
     ids: AsyncResourceIds,
     completion: impl FnOnce() -> f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     try_enter_resource_scope(ids)?;
     try_run_entered_scope(ids, false, completion)
 }
@@ -165,7 +168,7 @@ pub fn try_run_resource_scope(
 pub(crate) unsafe fn try_run_promise_scope(
     promise: *mut crate::promise::Promise,
     completion: impl FnOnce() -> f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     let ids = AsyncResourceIds {
         async_id: (*promise).async_id,
         trigger_async_id: (*promise).trigger_async_id,
@@ -184,7 +187,7 @@ pub(crate) fn try_run_captured_promise_scope(
     ids: AsyncResourceIds,
     context: crate::async_context::AsyncContextSnapshot,
     completion: impl FnOnce() -> f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     try_enter_scope_at(crate::exception::frame_mark(), ids, context, true)?;
     try_run_entered_scope(ids, true, completion)
 }
@@ -196,30 +199,30 @@ fn try_run_entered_scope(
     ids: AsyncResourceIds,
     promise: bool,
     completion: impl FnOnce() -> f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let outcome = crate::exception::js_call_catching(completion);
-    let (threw, result) = match outcome {
-        Ok(value) => (false, scope.root_nanbox_f64(value)),
-        Err(error) => (true, scope.root_nanbox_f64(error)),
+    let outcome = crate::exception::catch_thrown(completion);
+    let result = match outcome {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
     };
     if let Err(error) = try_leave_scope(ids.async_id, promise) {
-        if threw {
-            return Err(result.get_nanbox_f64());
+        if result.is_err() {
+            return Err(result.as_ref().err().unwrap().caught());
         }
-        let error = scope.root_nanbox_f64(error);
-        return Err(error.get_nanbox_f64());
+        let error = error.root(&scope);
+        return Err(error.caught());
     }
-    if threw {
-        Err(result.get_nanbox_f64())
+    if result.is_err() {
+        Err(result.as_ref().err().unwrap().caught())
     } else {
-        Ok(result.get_nanbox_f64())
+        Ok(result.ok().unwrap().get_nanbox_f64())
     }
 }
 
 pub fn run_resource_scope_catching(ids: AsyncResourceIds, completion: impl FnOnce() -> f64) -> f64 {
     match try_run_resource_scope(ids, completion) {
         Ok(value) => value,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }

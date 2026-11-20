@@ -34,8 +34,8 @@ pub(super) fn relocated_keys(a: &[u8], b: &[u8]) -> (Vec<u64>, usize, usize) {
 fn transition_slots_distinguish_content_at_old_pointer_collision() {
     let (_storage, a, b) = relocated_keys(b"first-property", b"other-property");
     assert_ne!(
-        transition_cache_slot(LayoutWord(0x8000_0042), a, 0),
-        transition_cache_slot(LayoutWord(0x8000_0042), b, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), interned_key_id(a), 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), interned_key_id(b), 0),
         "an exact pointer-table period must not force different names to collide"
     );
 }
@@ -45,8 +45,8 @@ fn slots_follow_content_when_a_key_moves() {
     let (_storage, a, b) = relocated_keys(b"same-property", b"same-property");
     assert_eq!(interned_key_slot_hash(a), interned_key_slot_hash(b));
     assert_eq!(
-        transition_cache_slot(LayoutWord(0x8000_0042), a, 0),
-        transition_cache_slot(LayoutWord(0x8000_0042), b, 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), interned_key_id(a), 0),
+        transition_cache_slot(LayoutWord(0x8000_0042), interned_key_id(b), 0),
     );
     // These are deliberately noncanonical strings. Equal content chooses a
     // slot but must not let one pointer borrow the other's store verdict.

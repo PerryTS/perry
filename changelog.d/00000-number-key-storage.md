@@ -1,0 +1,1 @@
+Preserve Number-valued property keys on non-array receivers. Numeric writes no longer supply nonnumeric named members, while numeric names (including NaN, Infinity and exponent forms), numeric reads and spreads retain their values. String, symbol and object key alternatives keep their existing coercion and arbitrary-key behavior.

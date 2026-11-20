@@ -232,22 +232,22 @@ fn bundled_package_named_reexports_lower_to_synthetic_native_imports() {
 /// cannot tell a node-core-scoped existence check apart from an
 /// unconditional one. `bcrypt` IS a
 /// recognized `NATIVE_MODULES` entry (a real bundled native wrapper, not a
-/// Node builtin) with manifest rows for `hash`/`compare` only — real
-/// `bcrypt` also exports `genSalt`, `hashSync`, `compareSync`, `getRounds`,
-/// none of which are in the manifest at all, so
-/// `module_has_public_named_export("bcrypt", "genSalt")` is `false`. Before
+/// Node builtin) whose manifest rows cover `hash`/`compare`, the sync forms
+/// and `genSalt`/`genSaltSync` — real `bcrypt` also exports `getRounds`,
+/// which is not in the manifest at all, so
+/// `module_has_public_named_export("bcrypt", "getRounds")` is `false`. Before
 /// this fix, `is_native_module` gated straight into that existence check for
 /// every native module (not just node-core ones), so this exact re-export
-/// hit `lower_bail!` and failed to compile even though `bcrypt.genSalt` is a
-/// real export. Scoping the existence check to `is_node_core_module` — this
+/// hit `lower_bail!` and failed to compile even though `bcrypt.getRounds` is
+/// a real export. Scoping the existence check to `is_node_core_module` — this
 /// PR's only remaining delta from what `origin/main`'s independent #11044
 /// fix (b8c2457e4) already landed — skips that check for `bcrypt` and falls
 /// through to the same permissive synthetic-import treatment `hash` gets.
 #[test]
 fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_import() {
-    let module = lower_result(r#"export { genSalt } from "bcrypt";"#).expect(
-        "bcrypt.genSalt is a real export of the bcrypt package but has no \
-         perry-api-manifest row (only hash/compare are documented); its \
+    let module = lower_result(r#"export { getRounds } from "bcrypt";"#).expect(
+        "bcrypt.getRounds is a real export of the bcrypt package but has no \
+         perry-api-manifest row; its \
          existence cannot be checked from the manifest, so lowering must \
          fall back to the permissive synthetic-import treatment instead of \
          lower_bail!-ing on a false negative",
@@ -259,7 +259,7 @@ fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_
             && matches!(
                 import.specifiers.as_slice(),
                 [perry_hir::ImportSpecifier::Named { imported, local }]
-                    if imported == "genSalt"
+                    if imported == "getRounds"
                         && local.starts_with("__perry_builtin_reexport_")
             )
     }));
@@ -268,7 +268,7 @@ fn native_npm_package_export_missing_from_manifest_reexports_lower_to_synthetic_
             export,
             perry_hir::Export::Named { local, exported }
                 if local.starts_with("__perry_builtin_reexport_")
-                    && exported == "genSalt"
+                    && exported == "getRounds"
         )
     }));
 }
@@ -360,8 +360,10 @@ fn global_worker_messaging_constructors_lower_to_builtin_new() {
 
 #[test]
 fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
-    // The genuinely-imported forms keep the stdlib NativeMethodCall routing —
-    // the import anchors `js_worker_threads_*_new` in the link.
+    use perry_hir::{Expr, Stmt};
+
+    // MessageChannel calls its native factory directly. BroadcastChannel uses
+    // constructor dispatch to preserve missing versus supplied arguments.
     let module = lower_result(
         r#"
         import { MessageChannel, BroadcastChannel } from "node:worker_threads";
@@ -372,12 +374,25 @@ fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
     )
     .expect("imported messaging constructors should lower");
 
-    let debug = format!("{module:#?}");
+    let initializer = |binding: &str| {
+        module.init.iter().find_map(|stmt| match stmt {
+            Stmt::Let { name, init, .. } if name == binding => init.as_ref(),
+            _ => None,
+        })
+    };
     assert!(
-        debug.contains("module: \"worker_threads\"")
-            && debug.contains("method: \"MessageChannel\"")
-            && debug.contains("method: \"BroadcastChannel\""),
-        "imported messaging constructors should route through worker_threads native constructors: {debug}"
+        matches!(initializer("a"), Some(Expr::NativeMethodCall {
+            module, class_name: None, object: None, method, args,
+        }) if module == "worker_threads" && method == "MessageChannel" && args.is_empty()),
+        "MessageChannel should call the worker_threads native factory: {module:#?}"
+    );
+    assert!(
+        matches!(initializer("b"), Some(Expr::NewDynamic { callee, args, .. })
+            if matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "worker_threads")
+                    && property == "BroadcastChannel")
+                && matches!(args.as_slice(), [Expr::String(name)] if name == "b")),
+        "BroadcastChannel should construct the worker_threads export with its name argument: {module:#?}"
     );
 }
 

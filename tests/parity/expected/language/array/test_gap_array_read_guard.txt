@@ -1,0 +1,22 @@
+pop 2 undefined 2
+splice 2 undefined undefined p,s,undefined,undefined,
+shift 2 undefined y,z,undefined,
+length= undefined undefined 1,2,undefined,undefined,undefined,
+pop+grow undefined true
+stale alias 150 19900 200
+hole undefined undefined undefined 1,undefined,3,undefined,
+negative index negative undefined
+overlong five undefined far undefined undefined 1200000
+typed array 2.5 undefined
+subclass m1 undefined
+array-like one undefined
+string t undefined
+accessor getter 1 1
+frozen f1 undefined
+setPrototypeOf own0 from proto undefined
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+Array.prototype getter ||1|4
+vacated slot sees the prototype |3
+DEC 250: Cannot add an array index to built-in Object.prototype: built-in objects are read-only in a compiled program
+Object.prototype index undefined 7 undefined
+after delete undefined

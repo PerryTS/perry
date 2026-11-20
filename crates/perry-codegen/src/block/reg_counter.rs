@@ -35,6 +35,11 @@ pub struct RegCounter {
     /// to find the loads that rewrite makes stale. See
     /// `docs/src/internals/gc-rooting-invariant.md`.
     shadow_slot_allocas: RefCell<HashSet<String>>,
+    /// The number of emitted calls that may run user code, change a
+    /// shape or collect (every call `LlBlock::dirty_revalidations_before_call`
+    /// does not exempt). A receiver run (`expr::layout_read::RecvRun`) is
+    /// continued only while this is unchanged since its last access.
+    call_epoch: Cell<u64>,
     /// Whether any `js_shadow_slot_bind` / `js_shadow_slot_set` was emitted in
     /// this function, through the same choke points as `shadow_slot_allocas`.
     /// A shadow frame nothing writes holds only zeroed slots, so it roots
@@ -99,6 +104,7 @@ impl RegCounter {
             byte_owner_root_slots: RefCell::new(Vec::new()),
             eh_scopes: RefCell::new(Vec::new()),
             shadow_slot_allocas: RefCell::new(HashSet::new()),
+            call_epoch: Cell::new(0),
             shadow_slot_written: Cell::new(false),
             preserve_none_fns: RefCell::new(None),
             fn_infos: RefCell::new(None),
@@ -217,6 +223,14 @@ impl RegCounter {
         match &*self.fn_infos.borrow() {
             Some(infos) => infos.borrow_mut().request(body),
             None => format!("@{}", crate::fn_info::info_symbol(body)),
+        }
+    }
+
+    /// The body-kind flags recorded for `body` so far (0: none known).
+    pub(crate) fn fn_info_flags(&self, body: &str) -> u32 {
+        match &*self.fn_infos.borrow() {
+            Some(infos) => infos.borrow().flags_of(body),
+            None => 0,
         }
     }
 
@@ -341,3 +355,18 @@ impl RegCounter {
         self.byte_owner_root_slots.borrow().clone()
     }
 }
+
+impl RegCounter {
+    /// See the `call_epoch` field.
+    pub fn call_epoch(&self) -> u64 {
+        self.call_epoch.get()
+    }
+
+    pub(crate) fn bump_call_epoch(&self) {
+        self.call_epoch.set(self.call_epoch.get() + 1);
+    }
+}
+
+#[path = "owned_counter.rs"]
+mod owned_counter;
+pub(crate) use owned_counter::OwnedCounter;

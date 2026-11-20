@@ -138,6 +138,16 @@ unsafe fn try_data_lookup_key(
     if FORCE_SLOW.with(|value| value.get()) {
         return None;
     }
+    // Census builds: a lookup on the realm global names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let _gkey = crate::snap_census::global_key(
+        if receiver.is_pointer() {
+            receiver.as_pointer::<u8>() as usize
+        } else {
+            0
+        },
+        || Some(key),
+    );
     if !receiver.is_pointer() || key.first() == Some(&b'#') || key == b"constructor" {
         return None;
     }
@@ -158,8 +168,7 @@ unsafe fn try_data_lookup_key(
         // Non-object cells, unstamped receivers and dictionary/exotic shapes
         // cannot supply this proof. Decline from the owner word before paying
         // for the agent directory; no registry determines this classification.
-        let ordinary_id = shape_id.wrapping_sub(shapes::SHAPE_ID_BASE)
-            < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG;
+        let ordinary_id = crate::codegen_abi::is_ordinary_record_word(shape_id);
         if !ordinary_id {
             // The data walk needs an ordinary-band descriptor. Unstamped
             // cells have none; dictionary and function namespaces never
@@ -204,10 +213,45 @@ unsafe fn try_data_lookup_key(
                 }
                 own_absent = true;
             }
-            let lookup = if shadowed {
+            let plain = if shadowed {
                 None
             } else {
                 shape.plain_lookup(key_bits, key)
+            };
+            // A family object without overflow: its layout names every own
+            // key, a late key included (its slot holds the hole while the key
+            // is absent), so the descriptor index answers what the positional
+            // list leaves open (a key past its position bound).
+            let family = if shadowed || plain.is_some() {
+                None
+            } else {
+                super::layout_desc::family_own_data_slot(object, key)
+            };
+            if let Some(Some(slot)) = family {
+                let live = shape.live_inline_slot_count;
+                let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
+                // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
+                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
+                if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                    || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+                    || (!meta.is_null() && (*meta).elements != 0)
+                {
+                    return None;
+                }
+                let value = super::field_get_set::object_field_at_with_live(object, slot, live);
+                if value.bits() != crate::value::TAG_HOLE {
+                    if value.is_undefined()
+                        && super::native_this_alias::object_alias(object).is_some()
+                    {
+                        return None;
+                    }
+                    return Some(Some(value));
+                }
+            }
+            let lookup = match family {
+                // The hole: no own key of that name; the walk continues.
+                Some(_) => Some(None),
+                None => plain,
             };
             own_absent |= lookup == Some(None);
             if let Some(Some((slot, live))) = lookup {
@@ -234,13 +278,28 @@ unsafe fn try_data_lookup_key(
     // Descriptor summaries use the same byte hash. Invalid UTF-8 stays on
     // the WTF-8-aware slow path; no String is allocated for ordinary keys.
     let key_value = JSValue::from_bits(key_bits);
-    if key_value.is_string() {
-        crate::string::header_str_checked(key_value.as_string_ptr())?;
+    // A property atom carries its creation hash (the same byte hash): no
+    // second hash of its text per read.
+    let key_hash = if key_value.is_string() {
+        let header = key_value.as_string_ptr();
+        crate::string::header_str_checked(header)?;
+        if crate::string::is_property_atom(header) {
+            crate::string::property_atom_hash(header)
+        } else {
+            super::key_bytes_hash(key.as_ptr(), key.len())
+        }
     } else {
         // Inline keys and the borrowed-byte ABI have no header proof.
         std::str::from_utf8(key).ok()?;
-    }
-    let key_hash = super::key_bytes_hash(key.as_ptr(), key.len());
+        super::key_bytes_hash(key.as_ptr(), key.len())
+    };
+    // The probe's own word: a hop whose list holds this very string answers
+    // without reading key bytes (`keys_find_slot_by_bytes_resolved_hashed`).
+    let key_word = if key_value.is_string() || key_value.is_short_string() {
+        key_bits
+    } else {
+        0
+    };
     let mut object = receiver.as_pointer::<ObjectHeader>();
     let mut inherited = false;
     for _ in 0..32 {
@@ -343,6 +402,7 @@ unsafe fn try_data_lookup_key(
                     super::keys_lookup::keys_find_slot_by_bytes_resolved_hashed(
                         crate::object::ObjectKeys::new(keys as *mut _, key_count),
                         key_count,
+                        key_word,
                         key,
                         key_hash,
                     )
@@ -350,6 +410,7 @@ unsafe fn try_data_lookup_key(
                     super::keys_lookup::keys_find_property_slot_by_bytes_resolved_hashed(
                         crate::object::ObjectKeys::new(keys as *mut _, key_count),
                         key_count,
+                        key_word,
                         key,
                         key_hash,
                     )

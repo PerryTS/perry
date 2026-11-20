@@ -114,6 +114,7 @@ fn add_named_imports(module: &mut Module, path: String, names: Vec<String>) {
                 type_only: false,
                 runtime_erased: false,
                 is_dynamic: false,
+                is_deferred: false,
                 is_dynamic_target: false,
                 is_deferred_require: true,
                 is_adopted_require: false,
@@ -243,6 +244,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, out);
             if let Some(catch) = catch {

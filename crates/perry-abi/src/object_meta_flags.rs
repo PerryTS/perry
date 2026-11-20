@@ -45,12 +45,32 @@ pub const OBJECT_META_FLAG_NATIVE_ALIAS: u64 = 1;
 /// a cleared family field reads as family 0, `Object`, which withdraws every
 /// family.
 pub const OBJECT_META_FLAG_SEALED_INTRINSIC: u64 = 1 << 3;
-/// Shift of the sealed intrinsic's family (6 bits): a `BuiltinProto`
-/// (0..16), a builtin namespace (16..31, `builtin_namespace`), the realm
-/// global (31), or a runtime prototype (32, `builtin_proto::RUNTIME_FAMILY`).
+/// `ObjectMeta::elements` holds a PLAIN object's index store: a holey
+/// `GC_TYPE_ARRAY` whose element `i` is own data property `i` (writable,
+/// enumerable, configurable), with no exotic `length`. Clear on an
+/// Array-subclass instance, whose store is its Array elements and `length`.
+/// Set and cleared only with the store itself (`array::subclass_elements`),
+/// and projected into the shape kind (`ShapeObjectKind::OrdinaryIndexed`).
+pub const OBJECT_META_FLAG_PLAIN_ELEMENTS: u64 = 1 << 4;
+/// Shift of the sealed intrinsic's family (6 bits): a realm `BuiltinProto`
+/// (0..16; the host family Buffer is sealed as a runtime prototype), a
+/// builtin namespace (17..32, `builtin_namespace`), the realm
+/// global (32), the locked iterator/generator prototypes (33..41), or a
+/// runtime prototype (41, `builtin_proto::RUNTIME_FAMILY`).
 pub const OBJECT_META_SEALED_FAMILY_SHIFT: u32 = 8;
 /// Mask of the sealed intrinsic's family after the shift.
 pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
+/// DEC 250 (locked built-ins): on a sealed intrinsic (bit 3), bits 16..31
+/// hold the number of own keys the realm image gave it, PLUS ONE (0 = not
+/// yet recorded). The runtime records it at the program's first mutation of
+/// the object, while its layout is still the image's; from then on a key at
+/// a position below the count is an image member the program never writes
+/// (`builtin_proto::note_sealed_write`). Like the family field, it lives in
+/// the verified-prefix-bound bits an Array-subclass instance uses, which a
+/// sealed intrinsic never is.
+pub const OBJECT_META_IMAGE_KEYS_SHIFT: u32 = 16;
+/// Mask of the image key count (plus one) after the shift.
+pub const OBJECT_META_IMAGE_KEYS_MASK: u64 = 0xFFFF;
 //
 // `ObjectMeta::flags` bit map (u64), verified against #8690's comment in
 // `array/subclass.rs` and every reader in the tree:
@@ -58,14 +78,14 @@ pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
 //   bit 1      packed-numeric payload valid       (#8690)
 //   bit 2      packed-numeric u32 entity proof    (#8690)
 //   bit 3      sealed intrinsic prototype         (here, #11915)
-//   bit 4      free (was the class-evaluation bit)  how a prototype was linked
-//                                                   is not a fact: its shape is
+//   bit 4      plain-object index store           (here)
 //   bit 5      this object is a prototype         (here)
 //   bit 6      exotic read receiver               (here)
 //   bit 7      *** THE LAST FREE BIT IN THIS WORD ***
 //   bits 8..31 verified prefix bound              (#8690)
 //              — on a sealed intrinsic (bit 3), bits 8..13 are its
-//              family instead (#11915; never both)
+//              family instead (#11915; never both) and bits 16..31 its
+//              image key count + 1 (DEC 250; 0 = not yet recorded)
 //   bits 32..63 exact semantic ShapeId            (#8690)
 //
 // `PACKED_NUMERIC_META_MASK` clears only bits 1, 2 and 8..63, so bits 0 and
@@ -82,7 +102,5 @@ pub const OBJECT_META_SEALED_FAMILY_MASK: u64 = 0x3F;
 // per-object fact needs a new word, not a new flag — and #10826 returning
 // `OBJ_FLAG_STABLE_TOMBSTONES` is the only bit expected back from either.
 //
-// Note also that bit 4 is absent from #8690's own bit map in
-// `array/subclass.rs`: it was added later and that comment was not updated.
-// The same documentation failure one layer down from the one that put a mark
-// on `_reserved` bit 13. If you add a bit here, update BOTH maps.
+// If you add a bit here, update BOTH maps (this one and #8690's in
+// `array/subclass.rs`).

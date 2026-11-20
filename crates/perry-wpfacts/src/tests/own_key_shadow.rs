@@ -72,7 +72,8 @@ fn a_deleted_key_reads_the_prototype() {
     let v = size_verdict(&format!(
         "{P} const p: any = new P(new Svc()); delete p.svc; console.log(p.total());"
     ));
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: the read past the key finds nothing more.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
@@ -80,7 +81,8 @@ fn a_computed_delete_reads_the_prototype() {
     let v = size_verdict(&format!(
         "{P} const p: any = new P(new Svc()); delete p[name]; console.log(p.total());"
     ));
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: the read past the key finds nothing more.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
@@ -116,15 +118,17 @@ fn a_define_property_through_top_revokes_the_key() {
         "{P} Object.defineProperty(h, name, {{ get() {{ return 1; }} }}); \
          console.log(new P(new Svc()).total());"
     ));
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: the read past the key finds nothing more.
+    assert!(proven(&v), "{v:?}");
 }
 
 #[test]
 fn a_define_property_on_the_receiver_revokes_the_key() {
     let v = size_verdict(&format!(
         "{P} const p: any = new P(new Svc()); \
-         Object.defineProperty(p, \"svc\", {{ get() {{ return 1; }} }}); console.log(p.total());"
+         Object.defineProperty(p, \"svc\", {{ get() {{ return (globalThis as any).hostGet(); }} }}); console.log(p.total());"
     ));
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there; the getter's unknown value is what revokes the proof.
     assert!(!proven(&v), "{v:?}");
 }
 
@@ -142,5 +146,6 @@ fn a_receiver_without_the_key_reads_the_prototype() {
         "declare const c: boolean; \
          const o: any = c ? { svc: new Svc() } : { k: 1 }; console.log(o.svc.size);",
     );
-    assert!(!proven(&v), "{v:?}");
+    // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there: the read past the key finds nothing more.
+    assert!(proven(&v), "{v:?}");
 }

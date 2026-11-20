@@ -31,47 +31,74 @@ fn key(expr: &Expr, has_operand: &impl Fn(u32) -> bool) -> Option<Key> {
         _ => None,
     }
 }
+/// `expr` as a store into `this`: its key (`None` when the prefix cannot
+/// name it) and its value.
+fn this_store<'e>(
+    expr: &'e Expr,
+    has_operand: &impl Fn(u32) -> bool,
+) -> Option<(Option<Key>, &'e Expr)> {
+    match expr {
+        Expr::PropertySet {
+            object,
+            property,
+            value,
+            ..
+        } if matches!(object.as_ref(), Expr::This) => {
+            Some((Some(Key::String(property.clone())), value))
+        }
+        Expr::IndexSet {
+            object,
+            index,
+            value,
+            ..
+        } if matches!(object.as_ref(), Expr::This) => Some((key(index, has_operand), value)),
+        Expr::PutValueSet {
+            target,
+            receiver,
+            key: k,
+            value,
+            ..
+        } if matches!(target.as_ref(), Expr::This) && matches!(receiver.as_ref(), Expr::This) => {
+            Some((key(k, has_operand), value))
+        }
+        _ => None,
+    }
+}
 fn prefix(body: &[Stmt], has_operand: &impl Fn(u32) -> bool) -> Vec<Key> {
+    /// Append the keys the store `expr` adds, in the order it adds them. The
+    /// value is evaluated before the store, so a chained `this.a = this.b =
+    /// v` adds `b` first: a layout listing `a` first would send every birth
+    /// to the overflow as an out-of-order add. `false` ends the prefix.
+    fn store(expr: &Expr, has_operand: &impl Fn(u32) -> bool, keys: &mut Vec<Key>) -> bool {
+        let Some((k, value)) = this_store(expr, has_operand) else {
+            return false;
+        };
+        if this_store(value, has_operand).is_some() && !store(value, has_operand, keys) {
+            return false;
+        }
+        let Some(k) = k else {
+            return false;
+        };
+        if matches!(&k, Key::String(s) if s == "__proto__" || !super::key_is_atom(s)) {
+            return false;
+        }
+        if !keys.contains(&k) {
+            keys.push(k);
+        }
+        keys.len() < 64
+    }
     fn scan(body: &[Stmt], has_operand: &impl Fn(u32) -> bool, keys: &mut Vec<Key>) -> bool {
         for stmt in body {
             match stmt {
                 Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::Let { .. } => {
                     continue
                 }
-                _ => {}
-            }
-            let k = match stmt {
-                Stmt::Expr(Expr::PropertySet {
-                    object, property, ..
-                }) if matches!(object.as_ref(), Expr::This) => Some(Key::String(property.clone())),
-                Stmt::Expr(Expr::IndexSet { object, index, .. })
-                    if matches!(object.as_ref(), Expr::This) =>
-                {
-                    key(index, has_operand)
+                Stmt::Expr(e) => {
+                    if !store(e, has_operand, keys) {
+                        return false;
+                    }
                 }
-                Stmt::Expr(Expr::PutValueSet {
-                    target,
-                    receiver,
-                    key: k,
-                    ..
-                }) if matches!(target.as_ref(), Expr::This)
-                    && matches!(receiver.as_ref(), Expr::This) =>
-                {
-                    key(k, has_operand)
-                }
-                _ => None,
-            };
-            let Some(k) = k else {
-                return false;
-            };
-            if matches!(&k, Key::String(s) if s == "__proto__" || !super::key_is_atom(s)) {
-                return false;
-            }
-            if !keys.contains(&k) {
-                keys.push(k);
-            }
-            if keys.len() == 64 {
-                return false;
+                _ => return false,
             }
         }
         true
@@ -81,6 +108,22 @@ fn prefix(body: &[Stmt], has_operand: &impl Fn(u32) -> bool) -> Vec<Key> {
     keys
 }
 thread_local! { static PLANS: std::cell::RefCell<Vec<Plan>> = const { std::cell::RefCell::new(Vec::new()) }; }
+
+/// The module's constructor-layout plans as a parallel lowering worker must
+/// see them (`codegen::callable_workers`): a store site reads them while its
+/// body is lowered, so a worker without them would lower the generic store.
+#[derive(Clone)]
+pub(crate) struct CallableState(Vec<Plan>);
+
+pub(crate) fn callable_state() -> CallableState {
+    CallableState(PLANS.with(|p| p.borrow().clone()))
+}
+
+impl CallableState {
+    pub(crate) fn install(&self) {
+        PLANS.with(|p| *p.borrow_mut() = self.0.clone());
+    }
+}
 
 fn plan(body: String, stmts: &[Stmt], operand: impl Fn(u32) -> Option<Operand>) -> Option<Plan> {
     let keys = prefix(stmts, &|id| operand(id).is_some());
@@ -365,6 +408,7 @@ mod tests {
             key: Box::new(Expr::LocalGet(7)),
             value: Box::new(Expr::Undefined),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         });
@@ -373,6 +417,39 @@ mod tests {
             vec![Key::Binding(7)]
         );
         assert!(prefix(&[captured], &|_| false).is_empty());
+    }
+
+    #[test]
+    fn a_chained_store_lists_its_keys_in_the_order_it_adds_them() {
+        let store = |k: &str, value: Expr| Expr::PutValueSet {
+            target: Box::new(Expr::This),
+            receiver: Box::new(Expr::This),
+            key: Box::new(Expr::String(k.into())),
+            value: Box::new(value),
+            strict: false,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+        };
+        // this.tag = 1; this.a = this.b = this.c = null; this.d = 0
+        let chain = store("a", store("b", store("c", Expr::Null)));
+        let body = [
+            Stmt::Expr(store("tag", Expr::Integer(1))),
+            Stmt::Expr(chain),
+            Stmt::Expr(store("d", Expr::Integer(0))),
+        ];
+        let keys: Vec<Key> = ["tag", "c", "b", "a", "d"]
+            .iter()
+            .map(|k| Key::String((*k).into()))
+            .collect();
+        assert_eq!(prefix(&body, &|_| false), keys);
+        // A nested key the prefix cannot hold ends it before the outer key.
+        let body = [
+            Stmt::Expr(store("tag", Expr::Integer(1))),
+            Stmt::Expr(store("a", store("__proto__", Expr::Null))),
+            Stmt::Expr(store("d", Expr::Integer(0))),
+        ];
+        assert_eq!(prefix(&body, &|_| false), vec![Key::String("tag".into())]);
     }
 }
 

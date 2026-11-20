@@ -1,0 +1,2 @@
+DEC 250: Cannot replace built-in member Object.prototype.toLocaleString: built-in objects are read-only in a compiled program
+[object Object] 16 number

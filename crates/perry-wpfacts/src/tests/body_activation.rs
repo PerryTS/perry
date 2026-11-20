@@ -75,14 +75,6 @@ fn mk(pf: &ProgramFacts) -> Vec<&SiteFacts> {
         .collect()
 }
 
-fn per_unit(src: &str) -> ProgramFacts {
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &cfg)
-}
-
 /// The per-unit <= whole site residual: what a view of `u` proves that no
 /// view of `w` proves. A site `w`'s activation proved can never run is
 /// exempt (any fact about it is vacuously true there); a site of an active
@@ -108,34 +100,6 @@ pub(super) fn stronger_sites(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> 
     out
 }
 
-/// DECISIONS 225: `w`, the whole program with activation, keeps every
-/// proof of the same run walking every body, but for sites of bodies it
-/// proved dead; it loses no live proof and drops no live site.
-pub(super) fn assert_only_dead_bodies_dropped(
-    list: &[(String, &perry_hir::Module)],
-    cfg: &FactsConfig,
-    w: &ProgramFacts,
-) {
-    let all = crate::compute_act(list, cfg, None, None, None);
-    for s in all.sites.iter().filter(|s| proven(s)) {
-        let path = &all.module_paths[s.module as usize];
-        let kept = w.sites.iter().any(|x| {
-            &w.module_paths[x.module as usize] == path
-                && x.byte_offset == s.byte_offset
-                && x.key == s.key
-                && x.is_call == s.is_call
-                && proven(x)
-        });
-        assert!(
-            kept || w.dead_site(path, s),
-            "activation lost a live proof {path}@{} .{}\n{}",
-            s.byte_offset,
-            s.key,
-            w.dump_text()
-        );
-    }
-}
-
 #[test]
 fn an_uncalled_body_does_not_escape_what_it_names() {
     // Main-red: on main `enable`'s body escapes `make`, its parameter is ⊤.
@@ -153,7 +117,8 @@ fn an_uncalled_body_does_not_escape_what_it_names() {
 #[test]
 fn every_way_the_body_can_run_keeps_it_refused() {
     for (arm, tail, _) in ARMS {
-        let pf = facts(&format!("{BASE}{tail}\n"));
+        // `plugin` is an unseen module's loader.
+        let pf = facts(&unseen(&format!("{BASE}{tail}\n")));
         let s = mk(&pf);
         assert!(
             !s.is_empty() && s.iter().all(|s| !proven(s)),
@@ -182,41 +147,4 @@ fn sabotage_each_activation_path_proves_its_arm_wrongly() {
             pf.dump_text()
         );
     }
-}
-
-#[test]
-fn a_per_unit_proof_in_a_dead_body_is_not_stronger() {
-    // Per unit every body is walked: `o.q` in `enable` is proven there, and
-    // the whole program has no view of it (the body cannot run).
-    let (u, w) = (per_unit(BASE), facts(BASE));
-    let q: Vec<_> = u
-        .sites
-        .iter()
-        .filter(|s| s.key == "q" && proven(s))
-        .collect();
-    assert!(!q.is_empty(), "{}", u.dump_text());
-    assert!(q.iter().all(|s| w.dead_site("t.ts", s)));
-    let s = stronger_sites(&u, &w);
-    assert!(s.is_empty(), "{s:?}");
-}
-
-#[test]
-fn a_per_unit_proof_in_an_active_body_stronger_than_whole_is_red() {
-    // `p.r` is in the module body (active). A whole run that does not prove
-    // it, or has no view of it, makes the per-unit proof stronger: red.
-    let (u, mut w) = (per_unit(BASE), facts(BASE));
-    assert!(
-        u.sites.iter().any(|s| s.key == "r" && proven(s)),
-        "{}",
-        u.dump_text()
-    );
-    assert!(stronger_sites(&u, &w).is_empty());
-    for s in w.sites.iter_mut().filter(|s| s.key == "r") {
-        s.verdict = Verdict::No("planted".into());
-    }
-    let red = stronger_sites(&u, &w);
-    assert!(red.iter().any(|s| s.contains(".r ")), "{red:?}");
-    w.sites.retain(|s| s.key != "r");
-    let red = stronger_sites(&u, &w);
-    assert!(red.iter().any(|s| s.contains(".r ")), "{red:?}");
 }

@@ -33,6 +33,18 @@ pub(super) unsafe fn dispatch_string(
     } else if crate::builtins::boxed_primitive_to_string_tag(object_handle.get_nanbox_f64())
         == Some("String")
     {
+        // A String wrapper is an ordinary object: its own keys and its own
+        // `[[Prototype]]` decide the method (`Call(Get(w, name), w, args)`),
+        // so only the builtin itself continues to the native arms below.
+        let args = refreshed_args();
+        if let Some(value) = crate::object::builtin_proto::redirect_call(
+            object_handle.get_nanbox_f64(),
+            method_name.as_bytes(),
+            args.as_ptr(),
+            args.len(),
+        ) {
+            return Some(value);
+        }
         crate::builtins::boxed_primitive_payload(object_handle.get_nanbox_f64())
             .map(|(_, payload)| payload)
     } else {
@@ -89,6 +101,35 @@ pub(super) unsafe fn dispatch_string(
                     return Some(dispatch(
                         b"keyObjectToCryptoKey".as_ptr(),
                         "keyObjectToCryptoKey".len(),
+                        dispatch_args.as_ptr(),
+                        dispatch_args.len(),
+                    ));
+                }
+                "export"
+                    if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some()
+                        && arg_at(0).is_some_and(|options| {
+                            super::super::buffer_dispatch::buffer_secret_export_format(options)
+                                .as_deref()
+                                == Some("jwk")
+                        }) =>
+                {
+                    // `format: "jwk"` builds a plain JWK object; the PEM-backed
+                    // surrogate cannot express it, so the stdlib encoder owns it.
+                    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        return Some(f64::from_bits(JSValue::undefined().bits()));
+                    }
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    // Reading `options.format` can run a getter, so take the
+                    // rooted receiver rather than the pre-call `s_ptr`.
+                    let key_value =
+                        f64::from_bits(JSValue::string_ptr(receiver_string() as *mut _).bits());
+                    let dispatch_args = [key_value];
+                    return Some(dispatch(
+                        b"keyObjectExportJwk".as_ptr(),
+                        "keyObjectExportJwk".len(),
                         dispatch_args.as_ptr(),
                         dispatch_args.len(),
                     ));
@@ -342,7 +383,7 @@ pub(super) unsafe fn dispatch_string(
                         .unwrap_or(std::ptr::null());
                     let s_ptr = receiver_string();
                     // Integer-returning methods MUST return raw `i as f64` (not
-                    // NaN-boxed INT32_TAG) — otherwise downstream comparisons
+                    // NaN-boxed INTERNAL_WORD_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values
                     // are NaN and any comparison with NaN returns false. The
                     // typed string-method path in `lower_string_method.rs`

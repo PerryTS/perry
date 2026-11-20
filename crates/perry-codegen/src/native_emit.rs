@@ -288,7 +288,11 @@ fn freeze_unit(
     external_declarations: &[(String, String)],
 ) -> Result<FrozenUnit> {
     let crate::module::OwnedCodegenUnitPart {
-        pre, post, funcs, ..
+        pre,
+        post,
+        funcs,
+        copies,
+        ..
     } = part;
     let mut skeleton = format!("{pre}{post}");
     // Text units minimize declarations with a rendered-reference scan. Typed
@@ -318,7 +322,7 @@ fn freeze_unit(
         }
     }
     let function_count = funcs.len();
-    let mut functions = Vec::with_capacity(function_count);
+    let mut functions = Vec::with_capacity(function_count + copies.len());
     for entry in funcs {
         match entry.body? {
             FrozenBody::Skeleton(text) => {
@@ -334,6 +338,22 @@ fn freeze_unit(
                 functions.push(function);
             }
         }
+    }
+    // `available_externally` bodies of other units' callees: the identical
+    // final text, streamed as text items like a stack-map function's body.
+    for copy in copies {
+        let mut lines = copy.text.lines();
+        let header = lines.next().unwrap_or_default().to_string();
+        skeleton.push_str(&copy.declaration);
+        skeleton.push('\n');
+        functions.push(FrozenFunction {
+            name: copy.name,
+            header,
+            items: lines
+                .filter(|line| *line != "}")
+                .map(|line| FrozenItem::Text(line.to_string()))
+                .collect(),
+        });
     }
     Ok(FrozenUnit {
         skeleton,
@@ -1473,7 +1493,11 @@ mod tests {
             let f = module.define_function(
                 "region_loops",
                 VOID,
-                vec![(PTR, "%p".to_string()), (PTR, "%q".to_string()), (I1, "%ok".to_string())],
+                vec![
+                    (PTR, "%p".to_string()),
+                    (PTR, "%q".to_string()),
+                    (I1, "%ok".to_string()),
+                ],
             );
             let entry = f.create_block("entry").label.clone();
             let fast_label = f.create_block("fast").label.clone();
@@ -1483,7 +1507,10 @@ mod tests {
                 f: &'f mut crate::function::LlFunction,
                 label: &str,
             ) -> &'f mut crate::block::LlBlock {
-                f.blocks_mut().into_iter().find(|b| b.label == label).unwrap()
+                f.blocks_mut()
+                    .into_iter()
+                    .find(|b| b.label == label)
+                    .unwrap()
             }
             block(f, &entry).cond_br_byte_view_version("%ok", &fast_label, &orig_label);
             let fast = block(f, &fast_label);
@@ -1557,9 +1584,11 @@ mod tests {
             2,
             "each latch keeps its own loop ID:\n{text}"
         );
-        assert_eq!(native, text, "native construction must build the text path's metadata");
+        assert_eq!(
+            native, text,
+            "native construction must build the text path's metadata"
+        );
     }
-
 
     /// #8087: the same construction-path comparison, pinned to an **ELF**
     /// target rather than the host's.

@@ -348,12 +348,20 @@ DISPATCH_CHECKS = (
      r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);",
      "read probe resolves the receiver's current layout word"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
-     r"if\s+r\.is_null\(\)\s*\{\s*return\s+array_named_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
-     "nonordinary read routes to the checked array path"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "set_plan",
-     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+Stored\(0\);",
+     r"if\s+r\.is_null\(\)\s*\{(?:\s*//[^\n]*)*\s*return\s+bag_first_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
+     "nonordinary read routes to the bag-first own-key path"),
+    # The bag-first arm answers only from the bag's OWN descriptor record;
+    # every decline goes on to the checked array path.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_own",
+     r"let\s+word\s*=\s*\(\*bag\)\.parent_class_id;[\s\S]*?let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\{\s*return\s+Err\(false\);",
+     "bag-first read resolves the bag's own layout record"),
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_first_get",
+     r"Err\(true\)\s*=>\s*array_named_get_past_bag::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),\s*Err\(false\)\s*=>\s*array_named_get::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),",
+     "a bag decline routes to the checked array path"),
+    ("crates/perry-runtime/src/object/layout_probe.rs", "set_front",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*!\(\*r\)\.kind_is\(super::ShapeObjectKind::Ordinary\)\s*\{\s*return\s+Stored\(0\);",
      "store probe rejects a missing or nonordinary receiver record"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "set_plan",
+    ("crates/perry-runtime/src/object/layout_probe.rs", "record_plan",
      r"key_storage_slot\(keys,\s*pos\)",
      "store slot comes from the receiver's descriptor entry"),
     ("crates/perry-runtime/src/object/shape_store.rs", "dynamic_store_receiver",
@@ -371,14 +379,16 @@ DISPATCH_CHECKS = (
     ("crates/perry-codegen/src/expr/property_get/generic_dispatch.rs", "lower_property_site_tail",
      r'cond_br\(&served,\s*&merge_label,\s*&call_label\)',
      "declined reads enter complete property semantics"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'icmp_ne\(I32,\s*&stored,\s*"0"\)',
+    # The static-key store site is one out-of-line call, `perry_store_or_put`:
+    # the store probe, then complete `[[Set]]` when the probe declines.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"if\s+perry_probe_set\(dir,\s*obj_bits,\s*key_bits,\s*hash,\s*value\)\s*!=\s*0\s*\{\s*return\s+value;",
      "only an admitted store probe succeeds"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'cond_br\(&hit,\s*&merge_label,\s*&slow_label\)',
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"put_value::js_put_value_set\(\s*obj,\s*f64::from_bits\(key_bits\),\s*value,\s*obj,\s*strict,?\s*\)",
      "declined stores enter complete Set semantics"),
     ("crates/perry-codegen/src/expr/proxy_reflect.rs", "lower_put_value_dyn_ic_inline",
-     r'"js_put_value_set_dynamic",\s*&\[\(DOUBLE,\s*t\),\s*\(DOUBLE,\s*k\),\s*\(DOUBLE,\s*v\),\s*\(I32,\s*strict_i32\)\]',
+     r'"js_put_value_set_dynamic",\s*&\[\s*\(crate::types::PTR,\s*&dir\),\s*\(DOUBLE,\s*t\),\s*\(DOUBLE,\s*k\),\s*\(DOUBLE,\s*v\),\s*\(I32,\s*strict_i32\),?\s*\]',
      "dynamic store forwards receiver/key/value/strictness"),
 )
 
@@ -397,7 +407,10 @@ def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
     for name, absence in (("perry_probe_get", "true"), ("perry_probe_get_binding", "false")):
         body = blank_rust_comments_and_literals(function_body(probe, name))
         if not re.fullmatch(
-            r"\s*probe_get::<" + absence + r">\(dir,\s*obj_biased,\s*key_bits,\s*hash\)\s*", body
+            # An instrumented build (`perry_gc_instruments`) first names a global key.
+            r"\s*(?:#\[cfg\(perry_gc_instruments\)\]\s*let\s+mut\s+scratch\s*=\s*\[0;[^\]]*\];\s*"
+            r"#\[cfg\(perry_gc_instruments\)\]\s*let\s+_gkey\s*=[^;]*;\s*)?"
+            r"probe_get::<" + absence + r">\(dir,\s*obj_biased,\s*key_bits,\s*hash\)\s*", body
         ):
             raise CensusError(name + " bypasses the receiver-layout authority")
     for path, name, calls in (
@@ -407,7 +420,7 @@ def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
          "lower_property_site_tail", ("perry_probe_get", "perry_probe_get_binding",
                                      "perry_probe_get_length", "js_object_get_field_slow")),
         ("crates/perry-codegen/src/expr/put_value_store_ic.rs",
-         "emit_static_store_ic_site", ("perry_probe_set", "js_put_value_set")),
+         "emit_static_store_ic_site", ("perry_store_or_put",)),
     ):
         body = function_body(sources[path], name)
         for callee in calls:

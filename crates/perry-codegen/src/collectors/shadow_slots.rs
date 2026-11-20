@@ -116,6 +116,7 @@ pub fn collect_declared_shadow_locals_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for stmt in body {
                 collect_declared_shadow_locals_in_stmt(stmt, shadow_slot_map, out);

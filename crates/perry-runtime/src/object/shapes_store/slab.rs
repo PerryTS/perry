@@ -171,6 +171,8 @@ impl ShapeSlab {
         record.refresh_positional();
         record.refresh_symbol_presence();
         record.refresh_element_kind();
+        record.refresh_function_method_absence();
+        record.refresh_enum_facts();
         record.probe = 0;
         unsafe {
             crate::object::layout_probe::mint_colour_masks(&mut record);
@@ -216,9 +218,25 @@ impl ShapeSlab {
         if self.agent {
             // The directory buffers were published by `publish` when they
             // moved; only the receivers' row bound grows with every mint.
-            AGENT_SHAPE_DIR[0].flat_ids.set(self.row_bound as usize);
+            AGENT_SHAPE_DIR[0]
+                .flat_ids
+                .set(Self::flat_ids_of(self.row_bound));
         }
         Ok(published)
+    }
+
+    /// The flat directory starts at row [`FUNCTION_FAMILY_ROWS`]: its base.
+    fn flat_base_of(rows: *mut ShapeRecord) -> *mut ShapeRecord {
+        if rows.is_null() {
+            rows
+        } else {
+            rows.wrapping_add(crate::codegen_abi::FUNCTION_FAMILY_ROWS as usize)
+        }
+    }
+
+    /// The flat directory's bound: the issued rows above the family rows.
+    fn flat_ids_of(row_bound: u32) -> usize {
+        row_bound.saturating_sub(crate::codegen_abi::FUNCTION_FAMILY_ROWS) as usize
     }
 
     pub(super) fn word_for(
@@ -230,12 +248,23 @@ impl ShapeSlab {
         if band >= 3 || !super::super::shape_id_kind_admits(identity.0, record.proto_id) {
             return Err(PublishError::InvalidWord);
         }
-        LayoutWord::new(
-            LayoutRow(row),
-            band as u32,
-            super::super::proto_id_kind(record.proto_id),
-        )
-        .ok_or(PublishError::Capacity)
+        // The function family records keep their identities in the exotic
+        // identity band; their closure header words are the dictionary band,
+        // kind 3, physical rows 0..9: the top row bits, the last words below
+        // the exotic band (see `FUNCTION_LAYOUT_WORD`).
+        let family = identity
+            .0
+            .wrapping_sub(crate::codegen_abi::FUNCTION_SHAPE_BASE)
+            < crate::codegen_abi::FUNCTION_FAMILY_ROWS;
+        let (band, kind) = if family {
+            (
+                crate::codegen_abi::LAYOUT_BAND_DICTIONARY,
+                crate::codegen_abi::LAYOUT_KIND_MIXED,
+            )
+        } else {
+            (band as u32, super::super::proto_id_kind(record.proto_id))
+        };
+        LayoutWord::new(LayoutRow(row), band, kind).ok_or(PublishError::Capacity)
     }
 
     #[inline(always)]
@@ -427,8 +456,12 @@ impl ShapeSlab {
             AGENT_SHAPE_DIR[band].pages.set(dir.as_ptr());
             AGENT_SHAPE_DIR[band].len.set(dir.len());
         }
-        AGENT_SHAPE_DIR[0].flat_base.set(self.region.base());
-        AGENT_SHAPE_DIR[0].flat_ids.set(self.row_bound as usize);
+        AGENT_SHAPE_DIR[0]
+            .flat_base
+            .set(Self::flat_base_of(self.region.base()));
+        AGENT_SHAPE_DIR[0]
+            .flat_ids
+            .set(Self::flat_ids_of(self.row_bound));
         AGENT_SHAPE_DIR[0]
             .proto_cell
             .set(crate::array::object_prototype_cell());
@@ -456,6 +489,26 @@ impl ShapeSlab {
         &AGENT_SHAPE_DIR[0] as *const BandDir as *const u8
     }
 
+    /// The agent's atom index lives at `table` from now on.
+    ///
+    /// Never inlined: a copy of this body in another codegen unit (its caller
+    /// is `string::intern`) names `AGENT_SHAPE_DIR` from outside the unit
+    /// that defines it, which exports the thread-local and turns every access
+    /// to it from local-dynamic into general-dynamic TLS (one more
+    /// instruction at each directory read of the whole runtime).
+    #[inline(never)]
+    pub(crate) fn publish_agent_atoms(table: *const u8) {
+        AGENT_SHAPE_DIR[0].atoms.set(table);
+    }
+
+    /// `table` is being dropped: the directory names it no longer.
+    #[inline(never)]
+    pub(crate) fn retract_agent_atoms(table: *const u8) {
+        if AGENT_SHAPE_DIR[0].atoms.get() == table {
+            AGENT_SHAPE_DIR[0].atoms.set(std::ptr::null());
+        }
+    }
+
     /// The record of ShapeId `id` in the ordinary directory at `dir` (this
     /// thread's [`Self::ordinary_dir_addr`], or `PERRY_EMPTY_SHAPE_DIR`), or
     /// `None` past its pages: the ordinary band of [`Self::agent_record`], for
@@ -480,8 +533,8 @@ impl ShapeSlab {
         word: LayoutWord,
     ) -> Option<&'a ShapeRecord> {
         let dir = &*(dir as *const BandDir);
-        let row = LayoutWord(word.0).ordinary_row(dir.flat_ids.get())?;
-        Some(&*dir.flat_base.get().add(row.0 as usize))
+        let rel = LayoutWord(word.0).flat_index(dir.flat_ids.get())?;
+        Some(&*dir.flat_base.get().add(rel))
     }
 
     /// The record `id` names in THIS agent's slab — never null. An id that
@@ -520,10 +573,28 @@ impl ShapeSlab {
         Self::agent_record_for_word_present(word)
             .unwrap_or(std::ptr::addr_of!(EMPTY_RECORD.0).cast_mut())
     }
-    #[inline]
+    #[inline(always)]
     pub(in super::super) fn agent_record_for_word_present(
         word: LayoutWord,
     ) -> Option<*mut ShapeRecord> {
+        Self::agent_record_for_word_in::<true>(word)
+    }
+
+    /// [`Self::agent_record_for_word_present`] for a word that is no function
+    /// family word (a runtime layout word: its row bits are below
+    /// `RUNTIME_LAYOUT_ROWS - LAYOUT_ROW_BIAS`): only the flat rows can hold
+    /// its record, so row bits at or above the directory bound answer absent.
+    #[inline(always)]
+    pub(in super::super) fn agent_record_for_flat_word_present(
+        word: LayoutWord,
+    ) -> Option<*mut ShapeRecord> {
+        Self::agent_record_for_word_in::<false>(word)
+    }
+
+    /// The checked record read; `FAMILY` also answers the function family
+    /// words (row bits at or above the bound, physical rows below `flat_base`).
+    #[inline]
+    fn agent_record_for_word_in<const FAMILY: bool>(word: LayoutWord) -> Option<*mut ShapeRecord> {
         if word.0 & crate::codegen_abi::LAYOUT_TAG == 0 {
             return None;
         }
@@ -540,8 +611,42 @@ impl ShapeSlab {
         if w.band() >= 3 {
             return None;
         }
+        // Row bits = directory index (physical row - LAYOUT_ROW_BIAS) below
+        // the bound; only the function family words (top row bits) name a
+        // physical row below `flat_base`, read out of line.
+        let idx = w.row_bits() as usize;
+        if idx >= dir.flat_ids.get() {
+            return if FAMILY {
+                Self::family_record_for_word_present(w)
+            } else {
+                None
+            };
+        }
+        if !flat::RESERVATION_READABLE
+            && !unsafe {
+                flat::committed_in(
+                    AGENT_COMMIT.0.get(),
+                    AGENT_COMMIT.1.get(),
+                    AGENT_COMMIT.2.get(),
+                    idx + crate::codegen_abi::FUNCTION_FAMILY_ROWS as usize,
+                )
+            }
+        {
+            return None;
+        }
+        // SAFETY: an issued row of this agent's published directory.
+        let p = unsafe { base.add(idx) };
+        unsafe { (*p).present() }.then_some(p)
+    }
+
+    /// [`Self::agent_record_for_word_present`] for a word whose row bits are
+    /// at or above the directory bound: present only for a function family
+    /// word (physical rows `0..FUNCTION_FAMILY_ROWS`, below `flat_base`).
+    #[inline(never)]
+    fn family_record_for_word_present(w: LayoutWord) -> Option<*mut ShapeRecord> {
+        let family = crate::codegen_abi::FUNCTION_FAMILY_ROWS as usize;
         let row = w.row().0 as usize;
-        if row >= dir.flat_ids.get()
+        if row >= family
             || !flat::RESERVATION_READABLE
                 && !unsafe {
                     flat::committed_in(
@@ -554,7 +659,11 @@ impl ShapeSlab {
         {
             return None;
         }
-        let p = unsafe { base.add(row) };
+        let p = AGENT_SHAPE_DIR[0]
+            .flat_base
+            .get()
+            .wrapping_sub(family)
+            .wrapping_add(row);
         unsafe { (*p).present() }.then_some(p)
     }
 
@@ -594,13 +703,16 @@ impl ShapeSlab {
         use crate::codegen_abi::{LAYOUT_KIND_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG};
         let dir = &AGENT_SHAPE_DIR[0];
         let bound = dir.flat_ids.get();
-        let band0 = ((word ^ LAYOUT_TAG) & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)) as usize;
-        if band0 >= bound {
+        // The flat directory starts at physical row LAYOUT_ROW_BIAS: a band-0
+        // word's row bits are its index there; the other bands (the family
+        // words among them) take the out-of-line read.
+        let rel =
+            (word & !(LAYOUT_SHADOW_BIT | LAYOUT_KIND_MASK)).wrapping_sub(LAYOUT_TAG) as usize;
+        if rel >= bound {
             return Self::receiver_row_record_banded(word, bound);
         }
-        let row = band0;
         // SAFETY: an issued row of this agent's readable reservation.
-        Some(unsafe { dir.flat_base.get().add(row) })
+        Some(unsafe { dir.flat_base.get().add(rel) })
     }
     /// [`Self::receiver_row_record`] for a word outside band 0 (dictionary,
     /// exotic) or no issued row: out of line, so the inlined ordinary read
@@ -608,6 +720,21 @@ impl ShapeSlab {
     #[cold]
     #[inline(never)]
     pub(super) fn receiver_row_record_banded(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
+        Self::row_record_any_band(word, bound)
+    }
+    /// A live closure's own word, read in line: function words name family
+    /// rows (below `flat_base`) or other bands, so the band-0 compare of
+    /// [`Self::receiver_row_record`] would always miss for them.
+    #[inline(always)]
+    pub(in super::super) fn agent_record_for_function_receiver_present(
+        word: u32,
+    ) -> Option<*mut ShapeRecord> {
+        let p = Self::row_record_any_band(word, AGENT_SHAPE_DIR[0].flat_ids.get())?;
+        unsafe { (*p).present() }.then_some(p)
+    }
+    /// The row cell of a word in any band 0..=2, or `None`.
+    #[inline(always)]
+    fn row_record_any_band(word: u32, bound: usize) -> Option<*mut ShapeRecord> {
         use crate::codegen_abi::{
             LAYOUT_BAND_SHIFT, LAYOUT_ROW_MASK, LAYOUT_SHADOW_BIT, LAYOUT_TAG,
         };
@@ -615,12 +742,19 @@ impl ShapeSlab {
         if w.wrapping_sub(LAYOUT_TAG) >= 3 << LAYOUT_BAND_SHIFT {
             return None;
         }
-        let row = (w & LAYOUT_ROW_MASK) as usize;
-        if row >= bound {
+        let row = (w.wrapping_add(crate::codegen_abi::LAYOUT_ROW_BIAS) & LAYOUT_ROW_MASK) as usize;
+        let family = crate::codegen_abi::FUNCTION_FAMILY_ROWS as usize;
+        if row >= bound + family {
             return None;
         }
-        // SAFETY: an issued row of this agent's readable reservation.
-        Some(unsafe { AGENT_SHAPE_DIR[0].flat_base.get().add(row) })
+        // `flat_base` is row FUNCTION_FAMILY_ROWS; this read names every row.
+        Some(
+            AGENT_SHAPE_DIR[0]
+                .flat_base
+                .get()
+                .wrapping_sub(family)
+                .wrapping_add(row),
+        )
     }
     /// Requires an existing owner/carrier; never use for identity absence checks.
     pub(in super::super) fn handle_record_ptr(&self, word: LayoutWord) -> Option<*mut ShapeRecord> {
@@ -731,5 +865,17 @@ impl ShapeSlab {
             page.release();
         }
         dir.clear();
+    }
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+impl ShapeSlab {
+    pub(in super::super) fn snap22_counts(&self) -> (usize, u32, u32, usize) {
+        (
+            self.len,
+            self.next_row,
+            self.chunk_end,
+            self.region.capacity(),
+        )
     }
 }

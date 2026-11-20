@@ -488,7 +488,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape(
     let current = unsafe { *record };
     // A method slot can become TAG_HOLE at this mutation. Keeping its id
     // would let a ConstFn site call the old body after `delete`.
-    if current.special_constfn_mask() != 0 {
+    if current.has_constfn_lane() {
         return None;
     }
     // A stable id may never silently retarget its collector-owned keys edge.
@@ -574,7 +574,7 @@ pub(crate) unsafe fn try_update_stable_tombstone_shape_cached(
         return None;
     }
     let record = &mut *live;
-    if record.special_constfn_mask() != 0 {
+    if record.has_constfn_lane() {
         return None;
     }
     if record.keys != current.keys
@@ -632,7 +632,7 @@ pub(crate) unsafe fn rekey_stable_tombstone_shape_after_squeeze(
     }
     // SAFETY: live slab record, read immediately.
     let live = unsafe { *live_ptr };
-    if live.special_constfn_mask() != 0 || live.cache_carrier() {
+    if live.has_constfn_lane() || live.cache_carrier() {
         return None;
     }
     if live.keys != current.keys
@@ -1023,7 +1023,7 @@ fn rekey_predecessor_for_delete(
     // SAFETY: live slab record, single-threaded agent, read immediately.
     let live = unsafe { *live_ptr };
     if live.keys != keys
-        || live.special_constfn_mask() != 0
+        || live.has_constfn_lane()
         || live.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
     {
         return LayoutWord(0);
@@ -1143,7 +1143,7 @@ unsafe fn keys_array_is_shape_shared(keys: *const super::ArrayHeader) -> bool {
         // descriptor.
         return true;
     };
-    gc.obj_type != crate::gc::GC_TYPE_ARRAY || gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+    crate::gc_type_is_not_array!(gc.obj_type) || gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
 }
 
 /// Install a process-global id into this agent's local descriptor table.
@@ -1216,7 +1216,7 @@ pub(super) fn install_external_layout_with_constfn(
     let shape_keys: super::ShapeKeys = keys.into();
     let keys = shape_keys.arr();
     let id = identity.0;
-    let Some(mask) = super::shapes_store::constfn_mask(infos) else {
+    let Some(mask) = super::shapes_store::constfn_mask(infos, live_inline_slot_count) else {
         return false;
     };
     // An id of another identity kind fails closed too: its kind is a fact
@@ -1228,7 +1228,7 @@ pub(super) fn install_external_layout_with_constfn(
         || to_any & !mask != 0
         || infos
             .iter()
-            .any(|i| i.slot as u32 >= logical_key_count || i.slot as u32 >= live_inline_slot_count)
+            .any(|i| i.slot >= logical_key_count || i.slot >= live_inline_slot_count)
     {
         return false;
     }

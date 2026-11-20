@@ -294,16 +294,10 @@ fn test_runtime_root_visitor_rewrites_metadata_without_marking() {
 
 #[test]
 fn builtin_closure_constructability_moves_with_its_owner() {
-    check_objtables_builtin_flag(false);
+    check_objtables_builtin_flag();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_builtin_flag() {
-    check_objtables_builtin_flag(true);
-}
-
-fn check_objtables_builtin_flag(erase_invariant: bool) {
+fn check_objtables_builtin_flag() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -319,12 +313,6 @@ fn check_objtables_builtin_flag(erase_invariant: bool) {
     );
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
     assert_ne!(closure, moved, "the flagged owner must move");
-    if erase_invariant {
-        unsafe {
-            (*(header_from_user_ptr(moved as *const u8) as *mut GcHeader))._reserved &=
-                !GC_CLOSURE_NON_CONSTRUCTABLE;
-        }
-    }
     assert!(crate::object::builtin_closure_is_non_constructable(moved));
     // Negative control: removing the owner-local invariant changes the verdict.
     unsafe {

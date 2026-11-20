@@ -30,6 +30,7 @@ fn first_expanded_arg(call: &ast::CallExpr, args: Vec<Expr>) -> Expr {
         })
         .collect();
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::ArraySpread(elements)),
@@ -259,7 +260,8 @@ pub(super) fn try_global_builtins(
                 // `Expr::CallSpread`; `queueMicrotask` resolves to its callable
                 // globalThis thunk, and the spread is materialized and applied —
                 // the same path `setTimeout(...[fn], 0)` already uses.
-                if has_spread {
+                // A program that may rebind `queueMicrotask` calls the binding.
+                if has_spread || crate::patched_builtins::global_function_patched(func_name) {
                     return Ok(Err(args));
                 }
                 let callback = if !args.is_empty() {

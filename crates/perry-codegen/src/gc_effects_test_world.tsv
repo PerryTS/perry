@@ -48,10 +48,12 @@ js_process_pending_exit_code	Leaf	no
 js_register_class_constructor	Leaf	no
 js_register_class_string_member_order	Leaf	no
 js_register_function_metadata	Leaf	no
+js_slot_store_obligations	Leaf	no
 js_string_addref_if_heap_string	Leaf	no
 js_string_compare	Leaf	no
 js_string_register_property_atoms	Leaf	no
 js_throw	ThrowOnly	yes
+js_throw_local	Leaf	no
 js_timer_has_pending	Leaf	no
 js_trace_events_flush_output	Leaf	no
 js_typed_feedback_maybe_dump_trace	Leaf	no

@@ -337,6 +337,7 @@ fn process_stmts(
                 mut body,
                 mut catch,
                 mut finally,
+                forof_completion,
             } => {
                 // Inlined outer finallies still sit inside inner try EH
                 // regions. Guard their preserved copies and catches so a
@@ -438,6 +439,7 @@ fn process_stmts(
                     body,
                     catch,
                     finally: new_finally,
+                    forof_completion,
                 });
             }
             Stmt::If {
@@ -823,6 +825,7 @@ mod exit_tests {
                 body: vec![Stmt::Return(Some(Expr::Number(9.0)))],
             }),
             finally: Some(vec![Stmt::Expr(Expr::Number(5.0))]),
+            forof_completion: None,
         }];
         let mut fresh = 3;
         process_stmts(&mut body, &[], 0, 0, &mut HashMap::new(), &mut fresh);
@@ -830,6 +833,7 @@ mod exit_tests {
             body: inner,
             catch: Some(c),
             finally: Some(f),
+            ..
         } = &body[0]
         else {
             panic!("try");

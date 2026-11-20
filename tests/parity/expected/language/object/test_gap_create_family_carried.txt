@@ -1,0 +1,19 @@
+DEC 250: Cannot add member Object.prototype.value: built-in objects are read-only in a compiled program
+born0 own=["value"] value=0 tag=Some voU=0 str=some(0) eq=true iter=[0] pipe=pipe:0 insp=inspect:0 type={"_A":1}
+born1 own=["value"] value=1 tag=Some voU=1 str=some(1) eq=true iter=[1] pipe=pipe:1 insp=inspect:1 type={"_A":1}
+born2 own=["value"] value=2 tag=Some voU=2 str=some(2) eq=true iter=[2] pipe=pipe:2 insp=inspect:2 type={"_A":1}
+protoKeys=["_tag","_op","toString","valueOrUndefined","Symbol(cf/Equal)"]
+commonKeys=["~cf/Type","pipe","toJSON","Symbol(cf.inspect.custom)","Symbol(Symbol.iterator)"]
+mutatedKeys=["m","extra","kind"]
+pair own=["x","y"] extra=extra m=m
+common-set:10
+common-set:from-common
+setter own=[] value=from-common tag=Some voU=from-common str=some(from-common) eq=true iter=["from-common"] pipe=pipe:from-common insp=inspect:from-common type={"_A":1}
+deleted own=["value"] value=11 tag=Some voU=11 str=some(11) eq=true iter=[11] pipe=pipe:11 insp=inspect:11 type={"_A":1}
+frozen own=["value"] value=12 tag=Some voU=12 str=some(12) eq=true iter=[12] pipe=pipe:12 insp=inspect:12 type={"_A":1}
+root-readonly: no throw
+root-deleted own=["value"] value=14 tag=Some voU=14 str=some(14) eq=true iter=[14] pipe=pipe:14 insp=inspect:14 type={"_A":1}
+trap-set:15
+relinked own=[]
+pair2 own=["x","y"]
+readonly-x: true

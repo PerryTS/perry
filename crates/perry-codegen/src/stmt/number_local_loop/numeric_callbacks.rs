@@ -43,6 +43,10 @@ pub(super) fn candidate(ctx: &FnCtx<'_>, callee: &Expr, argc: usize) -> Option<P
     let [body] = ctx.wpfacts.local_bodies.get(id)?.as_slice() else {
         return None;
     };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::NumericBody,
+        || serde_json::json!({"local":id,"body":body.func_id}),
+    );
     crate::facts_consumed::used();
     if !body.closure
         || body.params as usize != argc

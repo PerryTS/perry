@@ -196,6 +196,7 @@ impl Analyzer<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.list(body);
                 if let Some(c) = catch {
@@ -247,7 +248,7 @@ impl Analyzer<'_> {
 }
 
 /// Ids named by a preallocation statement of this body (closures excluded).
-pub(super) fn collect_shallow_prealloc_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
+pub(crate) fn collect_shallow_prealloc_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
     for_each_stmt_shallow(stmts, &mut |s| {
         if let Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) = s {
             out.extend(ids.iter().copied());
@@ -285,6 +286,7 @@ pub(super) fn for_each_stmt_shallow(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for_each_stmt_shallow(body, f);
                 if let Some(c) = catch {
