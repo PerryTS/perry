@@ -2267,6 +2267,9 @@ mod function_value;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "object_create_tests.rs"]
+mod object_create;
+
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
 
