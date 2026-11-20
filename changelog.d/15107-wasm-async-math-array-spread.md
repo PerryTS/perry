@@ -1,0 +1,1 @@
+`--target web`: inside an `async` function, `Math.max` / `Math.min`, an array literal with a spread (`[...xs, 3]`) and an array's `keys()` / `values()` / `entries()` evaluate as in Node instead of to `undefined` (#15100).
