@@ -180,7 +180,7 @@ Two specific costs dominated:
   one prebuilt release compiler at ~1.5 s each; that is the `fast` gap mode every
   tier uses. Auto-optimize runs in the full tier's `parity` job, because it is
   the only arm that sees auto-optimize-only link bugs.
-- Every job saved a fresh ~0.5–1.3 GB sccache tarball on every PR push (~200 GB/day
+- Every job saved a fresh sccache tarball (then ~0.5–1.3 GB) on every PR push (~200 GB/day
   into a 10 GB repo cache budget), evicting every useful entry within the hour —
   and PR-scoped caches are not even readable by other PRs. No job saves an sccache
   tarball now, and only main-line runs save caches; see [Build caches](#build-caches).
@@ -219,11 +219,16 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
   needs the saver's `runs-on` and the same `CARGO*`/`RUST*`/`CC*` environment,
   which rust-cache hashes into the key; the action exports
   `CARGO_INCREMENTAL=0` first so that variable never splits a family.
-  `test_actions_plan.py` fails on a second saver, on a restorer that cannot
-  hit, and on a direct `Swatinem/rust-cache` use in the core workflows.
+  A saver must run on `main`: `e2e-scoped` runs only on PRs, so it keeps no
+  cache. `test_actions_plan.py` fails on a second saver, on a restorer that
+  cannot hit, on matrix legs that share a runner and a family but build
+  differently, and on a direct `Swatinem/rust-cache` use in the core workflows.
 - **Saves survive a red main.** `cache-on-failure` is on: a job that fails its
   tests has still compiled valid dependencies, and a red `main` would otherwise
-  never save anything.
+  never save anything. A job that fails before it builds saves a near-empty
+  entry that rust-cache never replaces, so the key also carries the ISO week
+  (`PERRY_CACHE_EPOCH`): such an entry lasts at most a week, and every family
+  starts cold once a week.
 - **The key follows the pinned toolchain only.** rust-cache hashes every
   installed `rustc`, and the runner image's preinstalled stable changes with each
   image rollout, so the action removes it before hashing.
@@ -233,8 +238,8 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
   vendored rust-cache keeps the build-std units it would otherwise drop for
   being absent from `cargo metadata` (the "Perry patch" in its `cleanup.ts`).
   Without both, std and every crate above it rebuild after a full cache hit.
-- **No sccache tarballs.** A per-run local-dir sccache tarball is ~4 GB; three
-  jobs saving one on every main run evicted the whole budget. The GitHub cache
+- **No sccache tarballs.** Those tarballs grew to ~4.7 GB each by the time
+  three jobs saved one on every main run, which evicted the whole budget. The GitHub cache
   backend of sccache (one entry per compilation unit) was measured at ~0 % Rust
   hits under throttling. rust-cache stores dependencies only; workspace crates
   rebuild in every job.
@@ -242,6 +247,10 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
 The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their own
 `release-*` keys. GitHub evicts least-recently-used entries first, and the PR
 families are restored by every PR run, so cold families are the ones that go.
+`gh api repos/PerryTS/perry/actions/cache/usage` and
+`gh api repos/PerryTS/perry/actions/caches` show the total and each family's
+size; if the families PRs restore stop fitting in 10 GB together, PR jobs go
+cold again.
 
 ## Budgets
 
