@@ -9,3 +9,5 @@ console.log("hash", h.length, h.slice(0, 7), matches, mismatch);
 const s = bcrypt.hashSync("pw", 4), salt = await bcrypt.genSalt(5), saltS = bcrypt.genSaltSync(6);
 console.log("sync", s.length, s.slice(0, 7), bcrypt.compareSync("pw", s), bcrypt.compareSync("no", s));
 console.log("salt", salt.length, salt.slice(0, 7), saltS.length, saltS.slice(0, 7));
+const salted = bcrypt.hashSync("pw", saltS);
+console.log("salted", salted.startsWith(saltS), bcrypt.compareSync("pw", salted), bcrypt.genSaltSync(0).slice(0, 7));
