@@ -607,6 +607,11 @@ pub(crate) fn install_builtin_constructor_statics(
                 crate::fn_info!(#[realm(Array.from, spec = {length = 1}, emit = metadata(realm_array_from_metadata))] export crate::object::global_this::bigint_promise::array_from_thunk, 3; with_declared(3)),
                 realm_array_from_metadata!(length),
             );
+            s.method(
+                "fromAsync",
+                crate::fn_info!(#[realm(Array.fromAsync, spec = {length = 1}, emit = metadata(realm_array_from_async_metadata))] export crate::object::global_this::bigint_promise::array_from_async_thunk, 3; with_declared(3)),
+                realm_array_from_async_metadata!(length),
+            );
             #[rustfmt::skip] s.method("of", crate::fn_info!(#[realm(Array.of)] export crate::object::global_this::bigint_promise::array_of_thunk, 1; with_rest(0)), 0);
         }
         "Promise" => {

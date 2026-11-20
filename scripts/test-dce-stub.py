@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PERRY_FACTS_DCE: an inactive body is a trap; on by default (`PERRY_FACTS_DCE=0` turns it off);
+"""PERRY_FACTS_DCE=1: an inactive body is a trap; off by default (unset or `PERRY_FACTS_DCE=0`);
 incomplete reach removes nothing; a false inactive claim traps, and check mode reports it first."""
 import argparse
 import os
@@ -46,15 +46,16 @@ def main():
 
     dead = fixtures / "dead.ts"
     want = oracle(dead)
-    # Default (no switch): the dead bodies are traps and the program's output is unchanged.
+    # Default (no switch): no trap is emitted, output is Node's.
     exe, env, traps = build(dead, "dead-default")
+    assert traps == 0, traps
+    assert run([str(exe)], env=env).stdout == want
+    # PERRY_FACTS_DCE=1: the dead bodies are traps and the program's output is unchanged.
+    exe, env, traps = build(dead, "dead-on", PERRY_FACTS_DCE="1")
     assert traps >= 3, traps
     seen = run([str(exe)], env=env)
     assert seen.returncode == 0 and seen.stdout == want, seen
-    # PERRY_FACTS_DCE=1 is the default spelled out.
-    exe, env, traps = build(dead, "dead-on", PERRY_FACTS_DCE="1")
-    assert traps >= 3, traps
-    # PERRY_FACTS_DCE=0: no trap is emitted, output is Node's.
+    # PERRY_FACTS_DCE=0 is the default spelled out.
     exe, env, traps = build(dead, "dead-off", PERRY_FACTS_DCE="0")
     assert traps == 0, traps
     assert run([str(exe)], env=env).stdout == want
@@ -62,19 +63,19 @@ def main():
     stopped = args.out / "stopped.ts"
     stopped.write_text(dead.read_text() + "function f(x: any) { return x.k; }\n" + "console.log(f({k: 1}));\n" * 256)
     want_stopped = oracle(stopped)
-    exe, env, traps = build(stopped, "stopped-complete")
+    exe, env, traps = build(stopped, "stopped-complete", PERRY_FACTS_DCE="1")
     assert traps >= 3, traps
-    exe, env, traps = build(stopped, "stopped-incomplete", PERRY_FACTS_MAX_WORK="1")
+    exe, env, traps = build(stopped, "stopped-incomplete", PERRY_FACTS_DCE="1", PERRY_FACTS_MAX_WORK="1")
     assert traps == 0, traps
     seen = run([str(exe)], env=env)
     assert seen.returncode == 0 and seen.stdout == want_stopped, seen
 
     # Once a false inactive claim (CXCHK0 findings, accepted witness
     # language/array/test_gap_10086): the iterator's `return` that
-    # destructuring runs is reached now, so the default build keeps it.
+    # destructuring runs is reached now, so removal keeps it.
     closing = fixtures / "false-inactive.ts"
     want = oracle(closing)
-    exe, env, traps = build(closing, "closing-default")
+    exe, env, traps = build(closing, "closing-on", PERRY_FACTS_DCE="1")
     seen = run([str(exe)], env=env)
     assert seen.returncode == 0 and seen.stdout == want, seen
 
@@ -84,8 +85,8 @@ def main():
     want = oracle(wrong)
     exe, env, traps = build(wrong, "wrong-correct")
     assert run([str(exe)], env=env).stdout == want
-    # Default: the wrong inactive claim is executed as a trap (SIGILL / SIGTRAP).
-    exe, env, traps = build(wrong, "wrong-default", PERRY_FACTS_SABOTAGE="noreachprotoaccessors")
+    # PERRY_FACTS_DCE=1: the wrong inactive claim is executed as a trap (SIGILL / SIGTRAP).
+    exe, env, traps = build(wrong, "wrong-on", PERRY_FACTS_SABOTAGE="noreachprotoaccessors", PERRY_FACTS_DCE="1")
     assert traps >= 1, traps
     seen = run([str(exe)], env=env)
     assert seen.returncode != 0 and seen.stdout != want, seen
@@ -94,7 +95,7 @@ def main():
     assert traps == 0, traps
     assert run([str(exe)], env=env).stdout == want
     # With the check mode the report takes precedence over the trap.
-    exe, env, traps = build(wrong, "wrong-verify", PERRY_FACTS_SABOTAGE="noreachprotoaccessors", PERRY_VERIFY_FACTS="1")
+    exe, env, traps = build(wrong, "wrong-verify", PERRY_FACTS_SABOTAGE="noreachprotoaccessors", PERRY_FACTS_DCE="1", PERRY_VERIFY_FACTS="1")
     seen = run([str(exe)], env=env)
     assert seen.returncode == 86 and b"PERRY_FALSE_PROOF" in seen.stderr, seen
     print("dce stub: ok")

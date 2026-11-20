@@ -800,13 +800,8 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
     pub(in crate::emit) fn class_ctor_slot(&self, class_name: &str) -> f64 {
-        self.emitter
-            .class_ctor_map
-            .get(class_name)
-            .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
-            .map_or(-1.0, |&slot| slot as f64)
+        self.emitter.class_ctor_slot(class_name)
     }
 
     /// The receiver a class-environment node resolves its evaluation from: `this`

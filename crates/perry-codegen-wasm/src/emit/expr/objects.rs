@@ -409,6 +409,12 @@ impl<'a> FuncEmitCtx<'a> {
                 );
             }
 
+            // `for (k in o)` walks the snapshot this returns (see `lower/stmt_loops.rs`).
+            Expr::ForInKeys(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "for_in_keys", 1);
+            }
             Expr::ObjectKeys(obj) => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, obj);
@@ -424,9 +430,15 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, obj);
                 self.emit_memcall(func, "object_entries", 1);
             }
-            Expr::ObjectRest { object, .. } => {
-                // For now, just return a copy of the object (approximate)
-                self.emit_expr(func, object);
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
+                let keys = exclude_keys.iter().cloned().map(Expr::String).collect();
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, object);
+                self.emit_store_arg(func, 1, &Expr::Array(keys, None));
+                self.emit_memcall(func, "object_rest", 2);
             }
             Expr::Delete(expr) => match expr.as_ref() {
                 Expr::PropertyGet {
