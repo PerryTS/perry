@@ -36,6 +36,9 @@ runs:
         src="$(rustc --print sysroot)/lib/rustlib/src"
         if [ -d "$src" ]; then
           find "$src" -exec touch -h -t 200001010000 {} +
+          # rust-cache keeps only `cargo metadata` packages when it saves; the
+          # vendored copy also keeps these (see its cleanup.ts "Perry patch").
+          echo "PERRY_RUST_CACHE_KEEP=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$src/rust/library/Cargo.lock" | sort -u | tr '\n' ' ')" >> "$GITHUB_ENV"
         fi
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
