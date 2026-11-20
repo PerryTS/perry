@@ -846,48 +846,27 @@ impl WasmModuleEmitter {
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
-            // `new` on a constructor value (`new Map<K, V>([...])` among others) calls the
-            // bridge the WASM arm calls.
+            // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
+            // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
+            // `emit/expr/map_set.rs`).
             Expr::NewDynamic { callee, args, .. } => {
-                let mut parts = vec![self.emit_js_expr(callee, locals)];
-                parts.extend(args.iter().map(|a| self.emit_js_expr(a, locals)));
-                format!(
-                    "fromJsValue(__memDispatch.new_dynamic({}))",
-                    host_args(&parts)
-                )
+                let operands: Vec<&Expr> = std::iter::once(&**callee).chain(args).collect();
+                self.emit_js_bridge_call("new_dynamic", &operands, locals)
             }
-            // Map and Set call the bridges their WASM arms in `emit/expr/map_set.rs` call.
-            Expr::MapNew => "fromJsValue(__memDispatch.map_new())".to_string(),
-            Expr::SetNew => "fromJsValue(__memDispatch.set_new())".to_string(),
-            Expr::SetNewFromArray(a)
-            | Expr::MapSize(a)
-            | Expr::SetSize(a)
-            | Expr::MapEntries(a)
-            | Expr::MapKeys(a)
-            | Expr::MapValues(a)
-            | Expr::SetValues(a) => {
-                let bridge = match expr {
-                    Expr::SetNewFromArray(_) => "set_new_from_array",
-                    Expr::MapSize(_) => "map_size",
-                    Expr::SetSize(_) => "set_size",
-                    Expr::MapEntries(_) => "map_entries",
-                    Expr::MapKeys(_) => "map_keys",
-                    Expr::MapValues(_) => "map_values",
-                    _ => "set_values",
-                };
-                format!(
-                    "fromJsValue(__memDispatch.{}(toJsValue({})))",
-                    bridge,
-                    self.emit_js_expr(a, locals)
-                )
-            }
-            Expr::MapGet { map: c, key: k } => format!(
-                "fromJsValue(__memDispatch.map_get(toJsValue({}), toJsValue({})))",
-                self.emit_js_expr(c, locals),
-                self.emit_js_expr(k, locals)
-            ),
-            // `has` and `delete` answer with a boolean, and `delete` says whether the
-            // entry was there.
+            Expr::MapNew => self.emit_js_bridge_call("map_new", &[], locals),
+            Expr::SetNew => self.emit_js_bridge_call("set_new", &[], locals),
+            Expr::SetNewFromArray(a) => self.emit_js_bridge_call("set_new_from_array", &[a], locals),
+            Expr::MapSize(a) => self.emit_js_bridge_call("map_size", &[a], locals),
+            Expr::SetSize(a) => self.emit_js_bridge_call("set_size", &[a], locals),
+            Expr::MapEntries(a) => self.emit_js_bridge_call("map_entries", &[a], locals),
+            Expr::MapKeys(a) => self.emit_js_bridge_call("map_keys", &[a], locals),
+            Expr::MapValues(a) => self.emit_js_bridge_call("map_values", &[a], locals),
+            Expr::SetValues(a) => self.emit_js_bridge_call("set_values", &[a], locals),
+            Expr::MapClear(a) => self.emit_js_bridge_call("map_clear", &[a], locals),
+            Expr::SetClear(a) => self.emit_js_bridge_call("set_clear", &[a], locals),
+            Expr::MapGet { map, key } => self.emit_js_bridge_call("map_get", &[map, key], locals),
+            // The `has` and `delete` bridges answer 1/0 and nothing, for their WASM callers;
+            // JS wants the boolean, and `delete` says whether the entry was there.
             Expr::MapHas { map: c, key: k } | Expr::SetHas { set: c, value: k } => format!(
                 "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.has(k))(toJsValue({}), toJsValue({})))",
                 self.emit_js_expr(c, locals),
@@ -910,11 +889,6 @@ impl WasmModuleEmitter {
                 "((s, v) => (__memDispatch.set_add(toJsValue(s), toJsValue(v)), s))({}, {})",
                 self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
                 self.emit_js_expr(value, locals)
-            ),
-            Expr::MapClear(c) | Expr::SetClear(c) => format!(
-                "(__memDispatch.{}(toJsValue({})), u64ToF64(TAG_UNDEFINED))",
-                if matches!(expr, Expr::MapClear(_)) { "map_clear" } else { "set_clear" },
-                self.emit_js_expr(c, locals)
             ),
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
@@ -1102,6 +1076,20 @@ impl WasmModuleEmitter {
                 ))
             ),
         }
+    }
+
+    /// JS that calls `__memDispatch.<bridge>` on `operands` and NaN-boxes its result.
+    fn emit_js_bridge_call(
+        &self,
+        bridge: &str,
+        operands: &[&Expr],
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        let args: Vec<String> = operands
+            .iter()
+            .map(|e| self.emit_js_expr(e, locals))
+            .collect();
+        format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args))
     }
 
     /// JS that stores `value` in local `id` and yields it. A local the body does not bind
