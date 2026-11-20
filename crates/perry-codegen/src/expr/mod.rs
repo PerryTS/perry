@@ -2939,11 +2939,11 @@ mod inline_cache_name_tests {
 impl<'a> FnCtx<'a> {
     /// Whether the existing i1 `proof` dominates the end of the current
     /// block, counting the body start's edge its activation adds later
-    /// (`LlFunction::proof_dominates_block_end_with`).
+    /// (`LlFunction::proof_dominates_block_end`).
     pub(crate) fn proof_dominates_here(&self, proof: &str) -> bool {
         let pending = self.agent_block.as_ref().map(|a| a.pending_edge());
         self.func
-            .proof_dominates_block_end_with(proof, self.current_block, pending)
+            .proof_dominates_block_end(proof, self.current_block, pending)
     }
 
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
