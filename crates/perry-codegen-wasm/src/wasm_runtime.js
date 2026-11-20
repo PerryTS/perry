@@ -1697,7 +1697,7 @@ function __classProto(className) {
   const parent = classParentTable[className];
   const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
     ? __classProto(parent)
-    : __classFunctionParentProtos.get(className) || Object.prototype;
+    : __classFunctionParentProto(className);
   t.proto = Object.create(base, { [__classTag]: { value: className } });
   for (const m of Reflect.ownKeys(classMethodTable[className] || {})) {
     if (typeof m === 'string' && (m.startsWith('__get_') || m.startsWith('__set_'))) continue;
@@ -1706,8 +1706,12 @@ function __classProto(className) {
   if (t.first === undefined && className in classCtorSlotTable) __classRef(className, classCtorSlotTable[className]);
   return t.proto;
 }
-// `class A extends F` with F a function value: F's `prototype` at definition time.
+// `class A extends F` with F a function value: F's `prototype` at definition time, which
+// may be null.
 const __classFunctionParentProtos = new Map();
+function __classFunctionParentProto(className) {
+  return __classFunctionParentProtos.has(className) ? __classFunctionParentProtos.get(className) : Object.prototype;
+}
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
   return Object.create(proto || __classProto(className));
@@ -2811,7 +2815,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   // `class A extends F` with a user function F: A's prototype inherits F's current one.
   class_extends_value: (className, value) => {
-    if (value instanceof __PerryClosure && __holdsProperties(value.prototype)) {
+    if (value instanceof __PerryClosure && (value.prototype === null || __holdsProperties(value.prototype))) {
       __classFunctionParentProtos.set(String(className), value.prototype);
     }
   },
@@ -5987,8 +5991,10 @@ function __superGet(home, key, receiver) {
     // named static methods and members of its class value.
     if (home.isStatic) return __classStaticGet(classParentTable[cls], name, receiver, Function.prototype);
     if (classParentTable[cls] === null) __throwNullReceiver(null, name);
-    let last = null;
+    // `below` is the class whose parent is `last`; a function parent's prototype is its.
+    let below = cls, last = null;
     for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
+      if (last !== null) below = last;
       last = c;
       const methods = classMethodTable[c];
       if (typeof name === 'string') {
@@ -6000,6 +6006,11 @@ function __superGet(home, key, receiver) {
         if (own(methods, name)) return __classMethodValue(c, name, __instanceEvaluationOf(receiver));
       }
       if (classParentTable[c] === null) return undefined;
+    }
+    if (__classFunctionParentProtos.has(below)) {
+      const base = __classFunctionParentProtos.get(below);
+      if (base === null) __throwNullReceiver(null, name);
+      return Reflect.get(base, name, receiver);
     }
     const host = last && !classMethodTable[last] ? globalThis[last] : undefined;
     const base = typeof host === 'function' ? host.prototype : Object.prototype;
