@@ -1710,15 +1710,16 @@ function __classRef(className, ctorIdx) {
 
 // A static field lives in `classStaticTable`. The class value has it as an own
 // enumerable property that reads and writes the table entry, so `Object.keys`, `in`
-// and `hasOwnProperty` see it. A static named `name` or `length`
-// replaces the function's own property, as a class definition does. A computed
+// and `hasOwnProperty` see it. A field replaces a configurable, non-enumerable own
+// property (`name`, `length`, a static method or accessor), as a class definition
+// does; an enumerable one is already the field's accessor. A computed
 // member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
 // shares the table and stays hidden.
 function __classExposeStatic(className, key) {
   const ctor = __classRefs.get(className);
   if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
   const own = Object.getOwnPropertyDescriptor(ctor, key);
-  if (own && (own.get || (key !== 'name' && key !== 'length'))) return;
+  if (own && (own.enumerable || !own.configurable)) return;
   Object.defineProperty(ctor, key, {
     get() { return classStaticTable[className][key]; },
     set(value) { classStaticTable[className][key] = value; },
