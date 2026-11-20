@@ -148,19 +148,13 @@ impl<'a> FuncEmitCtx<'a> {
             }
             // Array methods
             "push" if !args.is_empty() => {
-                // `push(a, b, ...)` sends its values as one array, pushed by a single `push`.
-                let many;
-                let (bridge, value) = match args {
-                    [one] => ("array_push", one),
-                    _ => {
-                        many = Expr::Array(args.to_vec(), None);
-                        ("array_push_spread", &many)
-                    }
-                };
-                self.emit_frame_begin(func, 2);
+                let argc = 1 + args.len() as u32;
+                self.emit_frame_begin(func, argc);
                 self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, value);
-                self.emit_memcall(func, bridge, 2);
+                for (slot, arg) in (1..).zip(args) {
+                    self.emit_store_arg(func, slot, arg);
+                }
+                self.emit_memcall(func, "array_push", argc);
                 // result is the handle; now get length
                 self.emit_frame_begin(func, 1);
                 func.instruction(&Instruction::LocalSet(self.temp_local));

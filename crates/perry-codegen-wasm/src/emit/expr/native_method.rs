@@ -528,17 +528,8 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                                 // Array instance methods called via NativeMethodCall
                                 "push" if !args.is_empty() => {
-                                    // `push(a, b, ...)` sends its values as one array,
-                                    // pushed by a single `push`.
-                                    let many;
-                                    let (bridge, value) = match args.as_slice() {
-                                        [one] => ("array_push", one),
-                                        _ => {
-                                            many = Expr::Array(args.to_vec(), None);
-                                            ("array_push_spread", &many)
-                                        }
-                                    };
-                                    self.emit_frame_begin(func, 2);
+                                    let argc = 1 + args.len() as u32;
+                                    self.emit_frame_begin(func, argc);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -549,8 +540,10 @@ impl<'a> FuncEmitCtx<'a> {
                                             memory_index: 0,
                                         },
                                     ));
-                                    self.emit_store_arg(func, 1, value);
-                                    self.emit_memcall(func, bridge, 2);
+                                    for (slot, arg) in (1..).zip(args) {
+                                        self.emit_store_arg(func, slot, arg);
+                                    }
+                                    self.emit_memcall(func, "array_push", argc);
                                     self.emit_frame_begin(func, 1);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
