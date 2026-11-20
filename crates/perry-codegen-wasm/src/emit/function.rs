@@ -55,6 +55,20 @@ pub(super) fn constructor_of(
         })
 }
 
+/// Whether neither `class` nor a user class above it declares a constructor, so
+/// `new` runs only implicit ones and its arguments reach the first non-user parent.
+pub(super) fn declares_no_constructor(
+    class: &perry_hir::ir::Class,
+    classes: &BTreeMap<&str, &perry_hir::ir::Class>,
+) -> bool {
+    class.constructor.is_none()
+        && class
+            .extends_name
+            .as_deref()
+            .and_then(|name| classes.get(name))
+            .is_none_or(|parent| declares_no_constructor(parent, classes))
+}
+
 impl WasmModuleEmitter {
     pub(super) fn compile_function(&self, hir_func: &perry_hir::ir::Function) -> Function {
         self.compile_function_with_signature(hir_func, /*force_returning=*/ false)

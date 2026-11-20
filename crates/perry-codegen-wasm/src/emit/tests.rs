@@ -2374,6 +2374,9 @@ mod object_prototype_method;
 #[path = "class_prototype_tests.rs"]
 mod class_prototype;
 
+#[path = "builtin_subclass_tests.rs"]
+mod builtin_subclass;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(

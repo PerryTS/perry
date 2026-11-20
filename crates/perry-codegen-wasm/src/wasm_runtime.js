@@ -1719,6 +1719,28 @@ const __classFunctionParentProtos = new Map();
 function __classFunctionParentProto(className) {
   return __classFunctionParentProtos.has(className) ? __classFunctionParentProtos.get(className) : Object.prototype;
 }
+// A collection constructor's adder (`set` or `add`), read as `obj.set` reads it, so
+// through a compiled getter too, as a function that calls it on `obj`. It must be
+// callable: a host function or a Perry closure.
+function __hostAdder(obj, name) {
+  const fn = __memDispatch.class_get_field(obj, name);
+  // A getter's throw is pending, not thrown: construction stops with it.
+  __memDispatch.propagate_exception(true);
+  if (__isPerryClosure(fn)) {
+    return (...args) => {
+      __callClosureMethod(fn, obj, args);
+      __memDispatch.propagate_exception(true);
+    };
+  }
+  if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
+  return (...args) => fn.apply(obj, args);
+}
+// The class name, after recording its constructor slot the first time `new` sees it.
+function __classNoteCtorSlot(className, ctorIdx) {
+  const cls = String(className);
+  if (ctorIdx !== undefined && !(cls in classCtorSlotTable)) classCtorSlotTable[cls] = ctorIdx | 0;
+  return cls;
+}
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
   return Object.create(proto || __classProto(className));
@@ -2632,10 +2654,54 @@ const __memDispatch = {
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
-  class_new: (className, ctorIdx) => {
-    const cls = String(className);
-    if (ctorIdx !== undefined && !(cls in classCtorSlotTable)) classCtorSlotTable[cls] = ctorIdx | 0;
-    return __classInstance(cls);
+  class_new: (className, ctorIdx) => __classInstance(__classNoteCtorSlot(className, ctorIdx)),
+  // `new C()` where C's chain of user classes ends at the built-in `base` (Map, Array,
+  // ...): the built-in object itself, on C's prototype. The first prototype up the chain
+  // that inherits from Object.prototype is re-parented onto base's.
+  class_new_host: (className, ctorIdx, base) => {
+    const cls = __classNoteCtorSlot(className, ctorIdx);
+    const Base = globalThis[String(base)];
+    for (let c = cls; c && c !== String(base); c = classParentTable[c]) {
+      const p = __classProto(c);
+      const up = Object.getPrototypeOf(p);
+      if (up === Base.prototype) break;
+      if (up === Object.prototype) {
+        Object.setPrototypeOf(p, Base.prototype);
+        break;
+      }
+    }
+    return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
+  },
+  // `super(...args)` into the built-in an instance from class_new_host was made from.
+  // A collection's entries go through the instance's `set`/`add`, read once before the
+  // iteration, so a subclass override sees them, and a Map entry is any object with keys 0 and 1, as the built-in
+  // constructors do. Array elements are own data properties and a Date's time value is
+  // set directly, past any accessor or override on the subclass.
+  host_super_init: (obj, args) => {
+    const a = Array.isArray(args) ? args : [];
+    if (obj instanceof Map || obj instanceof WeakMap) {
+      if (a[0] != null) {
+        const set = __hostAdder(obj, 'set');
+        for (const e of a[0]) {
+          if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
+          set(e[0], e[1]);
+        }
+      }
+    } else if (obj instanceof Set || obj instanceof WeakSet) {
+      if (a[0] != null) {
+        const add = __hostAdder(obj, 'add');
+        for (const v of a[0]) add(v);
+      }
+    } else if (Array.isArray(obj)) {
+      const made = Array(...a);
+      obj.length = made.length;
+      for (const i of Object.keys(made)) {
+        Object.defineProperty(obj, i, { value: made[i], writable: true, enumerable: true, configurable: true });
+      }
+    } else if (obj instanceof Date) {
+      Date.prototype.setTime.call(obj, new Date(...a).getTime());
+    }
+    return obj;
   },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
@@ -2848,11 +2914,13 @@ const __memDispatch = {
     if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
-    // Check for compiled getter method — WASM uses i64 (BigInt)
+    // Check for compiled getter method — WASM uses i64 (BigInt). A nearer class's
+    // method of that name hides a farther class's getter.
     if (__classOf(obj)) {
       let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
+        if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) break;
         if (methods && ('__get_' + fname) in methods) {
           const fn = wasmInstance?.exports.__indirect_function_table?.get(methods['__get_' + fname]);
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));
@@ -6151,10 +6219,11 @@ function __classDispatch(objVal, mname, rawArgs) {
   if (typeof objVal !== 'object' && typeof objVal !== 'function') {
     const fn = Reflect.get(Object.getPrototypeOf(objVal), mname, objVal);
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
-  } else if (Array.isArray(objVal)) {
+  } else if (Array.isArray(objVal) && !__classOf(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
     // handle) are routed through __memDispatch before reaching here — this fallback
-    // catches methods the codegen doesn't special-case (at, findLast, flat, etc.).
+    // catches methods the codegen doesn't special-case (at, findLast, flat, etc.). An
+    // Array subclass instance reads its class's methods first.
     const fn = Array.prototype[mname];
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   }
