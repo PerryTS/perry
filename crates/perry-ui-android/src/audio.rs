@@ -144,10 +144,8 @@ pub fn start() -> i64 {
             let _ = jni_bridge::push_local_frame(env, 32);
 
             // Constants for AudioRecord
-            // MediaRecorder.AudioSource.MIC = 1
             // AudioFormat.CHANNEL_IN_MONO = 16
             // AudioFormat.ENCODING_PCM_FLOAT = 4
-            let audio_source: i32 = 1;
             let sample_rate: i32 = 48000;
             let channel_config: i32 = 16; // CHANNEL_IN_MONO
             let audio_format: i32 = 4; // ENCODING_PCM_FLOAT
@@ -181,37 +179,57 @@ pub fn start() -> i64 {
                 }
             };
 
-            // Create AudioRecord
-            let record = env.new_object(
-                jni::jni_str!("android/media/AudioRecord"),
-                jni::jni_sig!("(IIIII)V"),
-                &[
-                    JValue::Int(audio_source),
-                    JValue::Int(sample_rate),
-                    JValue::Int(channel_config),
-                    JValue::Int(audio_format),
-                    JValue::Int(min_buffer_size),
-                ],
-            );
-            let record = match record {
-                Ok(r) => r,
-                Err(_) => {
+            // Create AudioRecord. Audio source matters for level metering:
+            // MIC (1) runs the vendor capture chain (AGC, noise suppression,
+            // speech EQ) on many phones, compressing loud sounds and
+            // suppressing steady noise. VOICE_RECOGNITION (6) is the source
+            // the CDD (5.4) pins down for measurement: AGC and noise
+            // reduction off, flat ±3 dB from 100 Hz to 4 kHz, and a defined
+            // gain (90 dB SPL @ 1 kHz → RMS 2500 for 16-bit, ≈ −22.4 dBFS),
+            // so apps can map dBFS to SPL. UNPROCESSED (9) is deliberately not
+            // used: its CDD gain differs by ~10 dB, so readings would shift
+            // depending on which source a device happened to accept.
+            // MIC stays as the fallback for devices that reject source 6.
+            let sources: [i32; 2] = [6, 1];
+
+            let mut record_opt = None;
+            for &audio_source in &sources {
+                let created = env.new_object(
+                    jni::jni_str!("android/media/AudioRecord"),
+                    jni::jni_sig!("(IIIII)V"),
+                    &[
+                        JValue::Int(audio_source),
+                        JValue::Int(sample_rate),
+                        JValue::Int(channel_config),
+                        JValue::Int(audio_format),
+                        JValue::Int(min_buffer_size),
+                    ],
+                );
+                let rec = match created {
+                    Ok(r) => r,
+                    Err(_) => {
+                        let _ = env.exception_clear();
+                        continue;
+                    }
+                };
+                // Check state (1 = STATE_INITIALIZED)
+                let state =
+                    env.call_method(&rec, jni::jni_str!("getState"), jni::jni_sig!("()I"), &[]);
+                if state.map(|v| v.i().unwrap_or(0)).unwrap_or(0) == 1 {
+                    record_opt = Some(rec);
+                    break;
+                }
+                let _ = env.exception_clear();
+                let _ = env.call_method(&rec, jni::jni_str!("release"), jni::jni_sig!("()V"), &[]);
+                let _ = env.exception_clear();
+            }
+            let record = match record_opt {
+                Some(r) => r,
+                None => {
                     RUNNING.store(false, Ordering::Relaxed);
                     return;
                 }
             };
-
-            // Check state (1 = STATE_INITIALIZED)
-            let state = env.call_method(
-                &record,
-                jni::jni_str!("getState"),
-                jni::jni_sig!("()I"),
-                &[],
-            );
-            if state.map(|v| v.i().unwrap_or(0)).unwrap_or(0) != 1 {
-                RUNNING.store(false, Ordering::Relaxed);
-                return;
-            }
 
             // Start recording
             let _ = env.call_method(
