@@ -240,11 +240,7 @@ fn run_continues(ctx: &mut FnCtx<'_>, receiver: RunReceiver) -> Option<RecvRun> 
     if run.receiver != receiver || run.epoch != ctx.block().call_epoch() {
         return None;
     }
-    if run.block != ctx.current_block
-        && !ctx
-            .func
-            .proof_dominates_block_end(&run.ok, ctx.current_block)
-    {
+    if run.block != ctx.current_block && !ctx.proof_dominates_here(&run.ok) {
         return None;
     }
     Some(run)
@@ -1267,8 +1263,7 @@ fn run_arm(
     // where ITS merge is, and the bind call can be one arm of a larger
     // lowering (a method-dispatch tower over a program's own `bind` methods),
     // whose other arms bypass it to reach this store.
-    let dominates =
-        |ctx: &FnCtx<'_>, proof: &str| ctx.func.proof_dominates_block_end(proof, ctx.current_block);
+    let dominates = |ctx: &FnCtx<'_>, proof: &str| ctx.proof_dominates_here(proof);
     let watched = ctx
         .inline_ctor_return
         .last_mut()
@@ -1449,8 +1444,7 @@ pub(crate) fn begin_family_init_store(
 ) -> Option<LayoutStore> {
     let arm = run?;
     debug_assert!(
-        ctx.func
-            .proof_dominates_block_end(&arm.ok, ctx.current_block),
+        ctx.proof_dominates_here(&arm.ok),
         "family-run proof {} must dominate its store gate",
         arm.ok,
     );
