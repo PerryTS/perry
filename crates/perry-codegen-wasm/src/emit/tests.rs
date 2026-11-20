@@ -2270,6 +2270,9 @@ mod get_prototype_of;
 #[path = "object_create_tests.rs"]
 mod object_create;
 
+#[path = "object_prototype_method_tests.rs"]
+mod object_prototype_method;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(

@@ -2106,7 +2106,10 @@ function __iterableToArray(v) {
 // A tagged template's strings array per call site, keyed by the HIR site id's halves.
 const __taggedTemplates = new Map();
 
+// The bridge tables have no prototype: mem_call indexes them by a call site's method name,
+// and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
 const __memDispatch = {
+  __proto__: null,
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
   // `value` must use the iterator protocol instead of its indices.
   rt_arrayRecordNeedsIterator: (...args) => args.length === 0
@@ -5706,6 +5709,7 @@ function perry_audio_on_loaded(soundHandle, callback) {
 
 // ---------- UI Dispatch table (maps bridge function names to implementations) ----------
 const __perryUiDispatch = {
+  __proto__: null,
   // Widget creation
   perry_ui_app_create, perry_ui_vstack_create, perry_ui_hstack_create, perry_ui_zstack_create,
   perry_ui_text_create, perry_ui_button_create, perry_ui_textfield_create, perry_ui_securefield_create,
@@ -6077,11 +6081,8 @@ function __classDispatch(objVal, mname, rawArgs) {
   // Only a null/undefined receiver throws: this function is also mem_call's fallback
   // for bridge names it does not know, where an absent method still yields undefined.
   if (objVal === null || objVal === undefined) __throwNullReceiver(objVal, mname);
-  if (typeof objVal === 'string') {
-    const fn = String.prototype[mname];
-    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
-  } else if (typeof objVal === 'number') {
-    const fn = Number.prototype[mname];
+  if (typeof objVal !== 'object' && typeof objVal !== 'function') {
+    const fn = Reflect.get(Object.getPrototypeOf(objVal), mname, objVal);
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (Array.isArray(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
