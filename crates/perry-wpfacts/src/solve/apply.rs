@@ -3081,15 +3081,46 @@ impl Model {
                 reason,
             } => {
                 let mut other = prim & prim::NULL != 0;
+                let mut class_parent = false;
                 for &t in toks {
-                    if t != expected {
-                        self.escape(t, reason);
-                        other = true;
+                    if t == expected {
+                        continue;
+                    }
+                    match self.toks[t as usize] {
+                        // A program class (`g[k] = P` lets the global name
+                        // `Error` read `P`) is modeled code, not unknown
+                        // code: `super()` follows the live edge and runs its
+                        // constructor, the class object's [[Prototype]]
+                        // receives it (`feed_parent`), and the instances'
+                        // chain continues at its prototype object
+                        // (ClassDefinitionEvaluation: protoParent is the
+                        // value's `prototype`, which a class keeps
+                        // non-writable). As for a name-linked program parent
+                        // whose evaluated value is not one class
+                        // (`settle_parent_values`), the instance is hard E11
+                        // and its parent unsettled; nothing escapes. A class
+                        // with `tm` on its own chain does not exist yet when
+                        // the `extends` of `tm` is evaluated: never its value.
+                        TokKind::ClassObj(p) => {
+                            class_parent = true;
+                            if !self.has_ancestor(p, tm) {
+                                let own = self.tok(TokKind::Proto(self.constructor_origin(tm)));
+                                let pn = self.proto_node(own);
+                                let pp = self.tok(TokKind::Proto(self.constructor_origin(p)));
+                                self.add_tok(pn, pp);
+                            }
+                        }
+                        _ => {
+                            self.escape(t, reason);
+                            other = true;
+                        }
                     }
                 }
-                if other {
+                if other || class_parent {
                     let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                    self.escape(inst, reason);
+                    if other {
+                        self.escape(inst, reason);
+                    }
                     self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                 }
             }

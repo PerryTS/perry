@@ -524,7 +524,9 @@ pub enum Cons {
     /// other than `expected`, the global object's declared constructor
     /// (⊤, a program-written global, `null`), runs as the parent
     /// constructor with `this` = the instance: it escapes, and the instance
-    /// escapes with hard E11.
+    /// escapes with hard E11. A program class among the values is modeled
+    /// code: the instance is hard E11 and its chain takes that class's
+    /// prototype object, and neither escapes.
     NativeParent {
         tm: TmplId,
         expected: Tok,
