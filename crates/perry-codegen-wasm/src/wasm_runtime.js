@@ -5946,12 +5946,9 @@ function __superGet(home, key, receiver) {
   const own = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
   if (home && home.__classHome__ !== undefined) {
     const cls = home.__classHome__;
-    if (home.isStatic) {
-      for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
-        if (own(classStaticTable[c], name)) return classStaticTable[c][name];
-      }
-      return Reflect.get(Function.prototype, name, receiver);
-    }
+    // The static side reads the parent's statics as a static member access does: fields,
+    // named static methods and members of its class value.
+    if (home.isStatic) return __classStaticGet(classParentTable[cls], name, receiver, Function.prototype);
     if (classParentTable[cls] === null) __throwNullReceiver(null, name);
     let last = null;
     for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
