@@ -28,8 +28,8 @@ mod undeclared;
 pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
-    builtin_function, global_object, global_self_key, global_store_escapes, native_may_be,
-    plain_namespace_own_store, realm_reads_store, undeclared,
+    builtin_function, declared_data_global, global_object, global_self_key, global_store_escapes,
+    native_may_be, plain_namespace_own_store, realm_reads_store, undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;

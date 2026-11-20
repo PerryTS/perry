@@ -3476,6 +3476,8 @@ fn builtin_store_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
 /// (`object_proto_unwritten`, `builtin_protos_unwritten`), so step 2.e
 /// CreateDataProperty creates it. Not `__proto__`, not a private name, no
 /// interpreted code, not unit mode (another unit's writes are unseen).
+/// A key the realm declares counts when it is a writable data global the
+/// runtime cannot call (`declared_data_global`, owner decision 2026-11-19).
 fn global_user_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
     let star = m.atom_index.get(crate::STAR_KEY).copied();
     crate::builtins::global_object(m, t)
@@ -3483,8 +3485,20 @@ fn global_user_sets(m: &Model, t: Tok, key: &str, a: Atom) -> bool {
         && !m.interp_runs
         && !m.is_private_atom(a)
         && key != "__proto__"
-        && crate::builtins::global_user_key(m, key)
-        && !crate::builtins::native_written(m, t, a)
+        && if crate::builtins::global_user_key(m, key) {
+            !crate::builtins::native_written(m, t, a)
+        } else {
+            // A declared key has no R1 field (`builtin_field`): the
+            // program's own [[Set]] is recorded as a plain data write onto
+            // the global object, the value `global_value_written` keeps in
+            // the global's field. Every other writer still counts there
+            // (unknown code through ⊤ once the global object reached it, a
+            // write under any key, an accessor, a given prototype, the
+            // realm replaced); a definition or an integrity operation
+            // makes the global object hard (below).
+            crate::builtins::declared_data_global(m, t, key)
+                && !crate::builtins::global_value_written(m, t, a)
+        }
         && !m.hard.contains_key(&t)
         && !m.super_relink.contains(&t)
         && !m.accessors.contains_key(&(t, a))

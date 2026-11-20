@@ -153,6 +153,44 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     declared_callable(identity)
 }
 
+/// Owner decision 2026-11-19: a key the realm declares on the global
+/// object as a writable data property holding an object the runtime cannot
+/// call (`performance`, `Math`, `JSON`: a `Reference` own of `%Global%` to
+/// a non-callable declaration) is the program's field once the program
+/// stores it, the same field `global_store_escapes` keeps the stored value
+/// in and `declared_global_value` reads back. [[Set]] (ECMA-262 10.1.9.2
+/// step 2.c-2.d) replaces the value of a writable own data property; the
+/// realm's non-writable global data properties are its primitive constants
+/// (`NaN`, `Infinity`, `undefined`, 19.1), which hold no `Reference`.
+/// Callable values (constructors, functions), `global_runtime_reads`
+/// (`WebAssembly`), `process`, the host objects (`console`) and accessors
+/// (`navigator`, `crypto`) stay out: the runtime reads those by name or
+/// through a getter.
+pub fn declared_data_global(m: &Model, t: Tok, name: &str) -> bool {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    if members::global_runtime_reads(name)
+        || ns_by_name(name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns))
+    {
+        return false;
+    }
+    let Some(p) = m.native_property(t, name) else {
+        return false;
+    };
+    if p.get.is_some() || p.set.is_some() {
+        return false;
+    }
+    let reference = members::realm_entry("%Global%").and_then(|e| {
+        e.own
+            .iter()
+            .find(|o| members::realm_key_is(o, name))
+            .and_then(|o| match o.value {
+                RealmOwnValue::Reference(r) => Some(r),
+                _ => None,
+            })
+    });
+    reference.is_some_and(|r| !declared_callable(p.native.unwrap_or(r)))
+}
+
 /// Is the realm's declared value `identity` callable (a constructor, a
 /// function)? The runtime reads a callable global by name; a declared
 /// object it cannot call (`performance`, `Math`, `JSON`, `Reflect`, `Intl`,
