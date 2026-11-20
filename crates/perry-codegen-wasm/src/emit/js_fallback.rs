@@ -125,15 +125,38 @@ impl WasmModuleEmitter {
                     .as_ref()
                     .map(|c| self.emit_js_expr(c, locals))
                     .unwrap_or_else(|| "1".to_string());
-                out.push_str(&format!("{pad}      while (toJsValue({cond})) {{\n"));
+                // A JS `for` header, so a `continue` still runs the update.
+                let upd = update
+                    .as_ref()
+                    .map(|u| self.emit_js_expr(u, locals))
+                    .unwrap_or_default();
+                let release = |threw| {
+                    condition
+                        .as_ref()
+                        .and_then(|c| super::stmt::collection_cursor_release(c, threw))
+                };
+                let release =
+                    release(true)
+                        .zip(release(false))
+                        .map(|((_, on_throw), (_, on_exit))| {
+                            (
+                                self.emit_js_expr(&on_throw, locals),
+                                self.emit_js_expr(&on_exit, locals),
+                            )
+                        });
+                if release.is_some() {
+                    out.push_str(&format!("{pad}      try {{\n"));
+                }
+                out.push_str(&format!("{pad}      for (; toJsValue({cond}); {upd}) {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 2);
                 }
-                if let Some(upd) = update {
-                    let u = self.emit_js_expr(upd, locals);
-                    out.push_str(&format!("{pad}        {u};\n"));
-                }
                 out.push_str(&format!("{pad}      }}\n"));
+                if let Some((on_throw, on_exit)) = release {
+                    out.push_str(&format!(
+                        "{pad}      }} catch (__e) {{ {on_throw}; throw __e; }} finally {{ {on_exit}; }}\n"
+                    ));
+                }
                 out.push_str(&format!("{pad}    }}\n"));
             }
             Stmt::Try {
@@ -386,6 +409,30 @@ impl WasmModuleEmitter {
                             .get(2)
                             .cloned()
                             .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string())
+                    }
+                    // The Set/Map `for...of` cursor calls the bridges the WASM arm calls.
+                    Expr::ExternFuncRef { name, .. }
+                        if matches!(
+                            name.as_str(),
+                            "js_set_cursor_next"
+                                | "js_map_cursor_next"
+                                | "js_set_compaction_epoch"
+                                | "js_map_compaction_epoch"
+                                | "js_collection_cursor_release"
+                        ) =>
+                    {
+                        let bridge = if name.ends_with("cursor_next") {
+                            "collection_cursor_next"
+                        } else if name.ends_with("cursor_release") {
+                            "collection_cursor_release"
+                        } else {
+                            "collection_cursor_epoch"
+                        };
+                        format!(
+                            "fromJsValue(__memDispatch.{}({}))",
+                            bridge,
+                            host_args(&args_js)
+                        )
                     }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
@@ -649,6 +696,21 @@ impl WasmModuleEmitter {
                     }
                 }
             }
+            Expr::SetValueAt { set: coll, idx }
+            | Expr::MapEntryKeyAt { map: coll, idx }
+            | Expr::MapEntryValueAt { map: coll, idx } => {
+                let bridge = match expr {
+                    Expr::SetValueAt { .. } => "set_value_at",
+                    Expr::MapEntryKeyAt { .. } => "map_entry_key_at",
+                    _ => "map_entry_value_at",
+                };
+                format!(
+                    "fromJsValue(__memDispatch.{}(toJsValue({}), toJsValue({})))",
+                    bridge,
+                    self.emit_js_expr(coll, locals),
+                    self.emit_js_expr(idx, locals)
+                )
+            }
             Expr::ArrayJoin { array, separator } => {
                 let a = self.emit_js_expr(array, locals);
                 let sep = separator
@@ -656,6 +718,20 @@ impl WasmModuleEmitter {
                     .map(|sep| format!("toJsValue({})", self.emit_js_expr(sep, locals)))
                     .unwrap_or_default();
                 format!("fromJsValue(toJsValue({}).join({}))", a, sep)
+            }
+            Expr::ObjectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.object_get_prototype_of(toJsValue({})))",
+                    o
+                )
+            }
+            Expr::ReflectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.reflect_get_prototype_of(toJsValue({})))",
+                    o
+                )
             }
             Expr::ObjectKeys(o) => {
                 let o = self.emit_js_expr(o, locals);
@@ -665,9 +741,28 @@ impl WasmModuleEmitter {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.values(toJsValue({})))", o)
             }
+            Expr::ObjectCreate(proto, props) => {
+                let proto = self.emit_js_expr(proto, locals);
+                let props = props.as_ref().map_or_else(
+                    || "undefined".to_string(),
+                    |p| format!("toJsValue({})", self.emit_js_expr(p, locals)),
+                );
+                format!("fromJsValue(__memDispatch.object_create(toJsValue({proto}), {props}))")
+            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
+            }
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
+                let keys: Vec<String> = exclude_keys.iter().map(|k| js_string_literal(k)).collect();
+                format!(
+                    "fromJsValue(__memDispatch.object_rest(toJsValue({}), [{}]))",
+                    self.emit_js_expr(object, locals),
+                    keys.join(", ")
+                )
             }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
@@ -846,6 +941,50 @@ impl WasmModuleEmitter {
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
+            // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
+            // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
+            // `emit/expr/map_set.rs`).
+            Expr::NewDynamic { callee, args, .. } => {
+                let operands: Vec<&Expr> = std::iter::once(&**callee).chain(args).collect();
+                self.emit_js_bridge_call("new_dynamic", &operands, locals)
+            }
+            Expr::MapNew => self.emit_js_bridge_call("map_new", &[], locals),
+            Expr::SetNew => self.emit_js_bridge_call("set_new", &[], locals),
+            Expr::SetNewFromArray(a) => self.emit_js_bridge_call("set_new_from_array", &[a], locals),
+            Expr::MapSize(a) => self.emit_js_bridge_call("map_size", &[a], locals),
+            Expr::SetSize(a) => self.emit_js_bridge_call("set_size", &[a], locals),
+            Expr::MapEntries(a) => self.emit_js_bridge_call("map_entries", &[a], locals),
+            Expr::MapKeys(a) => self.emit_js_bridge_call("map_keys", &[a], locals),
+            Expr::MapValues(a) => self.emit_js_bridge_call("map_values", &[a], locals),
+            Expr::SetValues(a) => self.emit_js_bridge_call("set_values", &[a], locals),
+            Expr::MapClear(a) => self.emit_js_bridge_call("map_clear", &[a], locals),
+            Expr::SetClear(a) => self.emit_js_bridge_call("set_clear", &[a], locals),
+            Expr::MapGet { map, key } => self.emit_js_bridge_call("map_get", &[map, key], locals),
+            // The `has` and `delete` bridges answer 1/0 and nothing, for their WASM callers;
+            // JS wants the boolean, and `delete` says whether the entry was there.
+            Expr::MapHas { map: c, key: k } | Expr::SetHas { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.has(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            Expr::MapDelete { map: c, key: k } | Expr::SetDelete { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.delete(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            // `set` and `add` yield the collection. The operands are the arrow's arguments,
+            // so each is evaluated once, in source order, and an `await` stays in the async body.
+            Expr::MapSet { map, key, value } => format!(
+                "((m, k, v) => (__memDispatch.map_set(toJsValue(m), toJsValue(k), toJsValue(v)), m))({}, {}, {})",
+                self.emit_js_expr(map, locals),
+                self.emit_js_expr(key, locals),
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::SetAdd { set_id, value } => format!(
+                "((s, v) => (__memDispatch.set_add(toJsValue(s), toJsValue(v)), s))({}, {})",
+                self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
+                self.emit_js_expr(value, locals)
+            ),
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
@@ -943,10 +1082,23 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(e, locals);
                 format!("({}, u64ToF64(TAG_UNDEFINED))", v)
             }
-            Expr::Delete(e) => {
-                let v = self.emit_js_expr(e, locals);
-                format!("(delete toJsValue({}), u64ToF64(TAG_TRUE))", v)
-            }
+            // `delete` reaches the property reference, not the value read through it, so a
+            // nullish receiver throws; any other operand is still evaluated.
+            Expr::Delete(e) => match e.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => format!(
+                    "fromJsValue(delete toJsValue({})[{}])",
+                    self.emit_js_expr(object, locals),
+                    js_string_literal(property)
+                ),
+                Expr::IndexGet { object, index, .. } => format!(
+                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    self.emit_js_expr(object, locals),
+                    self.emit_js_expr(index, locals)
+                ),
+                other => format!("({}, u64ToF64(TAG_TRUE))", self.emit_js_expr(other, locals)),
+            },
             // The iteration nodes beside the iterator-record intrinsics call the bridges
             // their WASM arms in `emit/expr/iterator_records.rs` call.
             Expr::GetIterator(value) => format!(
@@ -1032,6 +1184,20 @@ impl WasmModuleEmitter {
                 ))
             ),
         }
+    }
+
+    /// JS that calls `__memDispatch.<bridge>` on `operands` and NaN-boxes its result.
+    fn emit_js_bridge_call(
+        &self,
+        bridge: &str,
+        operands: &[&Expr],
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        let args: Vec<String> = operands
+            .iter()
+            .map(|e| self.emit_js_expr(e, locals))
+            .collect();
+        format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args))
     }
 
     /// JS that stores `value` in local `id` and yields it. A local the body does not bind
