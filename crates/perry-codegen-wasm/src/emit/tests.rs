@@ -848,6 +848,33 @@ inAsync().then((v) => console.log("async " + v));
     );
 }
 
+// An accessor descriptor's closure runs with the receiver as `this`, and a getter
+// that throws throws to the reader. Expected output is Node's.
+#[test]
+fn object_create_accessor_descriptors_run_closures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const arrow: any = Object.create(null, { x: { get: () => 7 } });
+const o: any = Object.create({}, {
+  g: { get: function (this: any) { return this.q; }, enumerable: true },
+  s: { set: function (this: any, v: number) { this.t = v * 2; } },
+  bad: { get: () => { throw new RangeError("no"); } },
+});
+o.q = 9;
+o.s = 3;
+let threw = "no";
+try { o.bad; } catch (e: any) { threw = e.message; }
+const later: any = { y: { get: () => 4 } };
+async function inAsync() { const a: any = Object.create(null, later); return a.y; }
+console.log([arrow.x, o.g, o.t, threw, Object.keys(o).join("+")].join(","));
+inAsync().then((v) => console.log("async " + v));
+"#
+        ),
+        "7,9,6,no,g+q+t\nasync 4"
+    );
+}
+
 #[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(

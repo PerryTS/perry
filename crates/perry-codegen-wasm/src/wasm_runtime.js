@@ -2203,7 +2203,10 @@ const __memDispatch = {
   object_keys: (obj) => __holdsProperties(obj) ? Object.keys(obj) : [],
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
   // Object.create keeps its own checks: a proto that is neither an object nor null throws.
-  object_create: (proto, props) => (props === undefined ? Object.create(proto) : Object.create(proto, props)),
+  object_create: (proto, props) => {
+    const obj = Object.create(proto);
+    return props === undefined ? obj : Object.defineProperties(obj, __hostDescriptors(props));
+  },
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   object_has_property: (obj, key) => {
     if (!__holdsProperties(obj)) return 0;
@@ -5703,6 +5706,34 @@ function __constructHostFunction(fn, args) {
 }
 
 const hostCallbacks = new WeakMap();
+
+// A descriptor map whose accessors the host can call. A Perry closure is not callable
+// by the host, so its accessor runs it with the receiver as `this`. The caller's map
+// and descriptors stay as they are: a rewritten descriptor inherits from the original.
+function __hostDescriptors(props) {
+  if (props === null || typeof props !== 'object') return props;
+  const descs = Object.create(null);
+  for (const key of Reflect.ownKeys(props)) {
+    if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
+    const desc = props[key];
+    descs[key] = desc;
+    if (desc === null || typeof desc !== 'object') continue;
+    for (const slot of ['get', 'set']) {
+      const fn = desc[slot];
+      if (!__isPerryClosure(fn)) continue;
+      if (descs[key] === desc) descs[key] = Object.create(desc);
+      Object.defineProperty(descs[key], slot, {
+        value: function (...args) {
+          const result = __callClosureMethod(fn, this, args);
+          __memDispatch.propagate_exception(true);
+          return result;
+        },
+        enumerable: true,
+      });
+    }
+  }
+  return descs;
+}
 
 // Host APIs require a stable function identity for Perry closure objects.
 function __hostCallback(value) {
