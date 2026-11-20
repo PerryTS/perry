@@ -42,7 +42,7 @@ runs:
         fi
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
-        prefix-key: v1-rust
+        prefix-key: v2-rust
         shared-key: ${{ inputs.key }}
         workspaces: ${{ inputs.workspaces }}
         # Main is often red; a failing job's compiled dependencies are still valid.
