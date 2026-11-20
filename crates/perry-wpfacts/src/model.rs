@@ -142,6 +142,10 @@ pub mod guard {
     /// `null` is not strictly equal to `null` (ECMA-262 7.2.16 step 1, the
     /// Null type has one value); `undefined` and every object pass.
     pub const NOT_NULL: u8 = 21;
+    /// Rule T7: the value of `Object` where `x !== Object.prototype` narrows
+    /// (`Cons::NotObjectProto`): any value but the intrinsic constructor (a
+    /// program store, ⊤, a primitive) lets every value of `x` through.
+    pub const NOT_OBJECT_CTOR: u8 = 22;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -172,6 +176,7 @@ pub mod guard {
             IS_NUM => p::NUM,
             IS_NULL => p::NULL,
             NOT_NULL => p::ALL & !p::NULL,
+            NOT_OBJECT_CTOR => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }

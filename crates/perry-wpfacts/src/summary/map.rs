@@ -145,6 +145,7 @@ pub fn map_cons(
             shared,
             dst: n(dst),
         },
+        NotObjectProto { dst } => NotObjectProto { dst: n(dst) },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -657,6 +658,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Fulfil { .. }
             | Falsy { .. }
             | NotBuffer { .. }
+            | NotObjectProto { .. }
             | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }

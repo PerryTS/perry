@@ -485,6 +485,7 @@ impl Model {
                     guard::NOT_SHARED_BUFFER_CTOR => {
                         Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
                     }
+                    guard::NOT_OBJECT_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Object))),
                     _ => None,
                 };
                 // A marker beside its values is no value (DECISIONS 74):
@@ -592,6 +593,20 @@ impl Model {
                         _ => false,
                     };
                     if !buffer {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
+            // Rule T7: every value but `%Object.prototype%`.
+            Cons::NotObjectProto { dst } => {
+                for &t in toks {
+                    if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
                         self.add_tok(dst, t);
                     }
                 }
