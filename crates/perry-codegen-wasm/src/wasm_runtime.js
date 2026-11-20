@@ -5893,7 +5893,7 @@ function __hostDescriptors(props) {
       descs[key] = desc;
       continue;
     }
-    const copy = {};
+    const copy = Object.create(null);
     for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
       if (!(field in desc)) continue;
       const v = desc[field];
