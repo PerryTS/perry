@@ -2448,11 +2448,20 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     // arm); every other operation on it is also the collapsed
     // builtin-prototype operation (`Model::native_proto_alias`), so a
     // write through the value stays a write of `ObjectProto`, as before.
+    // `ObjectProto` alone is the exact `Object.prototype`; a prototype the
+    // model does not describe is that and a native prototype of its own
+    // (`loads::family_proto_value`), so its reads stay apart from
+    // `Object.prototype`'s.
     match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => m.add_tok(dst, p),
         None => {
             let op = m.tok(TokKind::ObjectProto);
             m.add_tok(dst, op);
+            if let Some(ns) = ns.filter(|ns| *ns != BuiltinNs::Object) {
+                let name = format!("{ns:?}.prototype");
+                let p = native_proto(m, &name);
+                m.add_tok(dst, p);
+            }
         }
     }
 }

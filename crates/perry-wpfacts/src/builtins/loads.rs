@@ -202,12 +202,49 @@ pub(super) fn family_member(
                 family_ctor(m, fam, dst);
             }
         }
-        Some(Mem::Proto) => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
-        }
+        Some(Mem::Proto) => family_proto_value(m, fam, what, dst),
         None => {}
     }
+}
+
+/// `dst` ⊇ the intrinsic prototype of family `fam` (`what`: its kind) as a
+/// value (`x.__proto__` of a receiver of the family): `ObjectProto`, the
+/// collapsed builtin prototype every write through the value is a write
+/// of, and, for another builtin's prototype, that builtin's own token
+/// (`builtin_proto_tok`), so the exact `Object.prototype` is told apart
+/// from it (its `constructor` read, a `!== Object.prototype` test). A
+/// prototype the model does not describe is a native prototype of its
+/// own (`TokKind::NativeProto` under its kind's name).
+pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>, dst: NodeId) {
+    let op = m.tok(TokKind::ObjectProto);
+    m.add_tok(dst, op);
+    let ns = match fam {
+        Family::Object => return,
+        Family::Box => match what.map(members::box_chain) {
+            Some(members::BoxChain::Object | members::BoxChain::Null) => return,
+            Some(members::BoxChain::Array) => Some(BuiltinNs::Array),
+            _ => None,
+        },
+        Family::Function => Some(BuiltinNs::Function),
+        Family::Array => Some(BuiltinNs::Array),
+        Family::Str => Some(BuiltinNs::String),
+        Family::Num => Some(BuiltinNs::Number),
+        Family::BigInt => Some(BuiltinNs::BigInt),
+        Family::Bool => Some(BuiltinNs::Boolean),
+        Family::Sym => Some(BuiltinNs::Symbol),
+        Family::Promise => Some(BuiltinNs::Promise),
+        Family::Error => Some(what.and_then(ns_by_name).unwrap_or(BuiltinNs::Error)),
+        _ => match what {
+            Some("TypedArray" | "Buffer") => Some(BuiltinNs::TypedArray),
+            Some(w) => ns_by_name(w),
+            None => None,
+        },
+    };
+    let p = match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
+        Some(p) => p,
+        None => native_proto(m, what.unwrap_or("%UnknownPrototype%")),
+    };
+    m.add_tok(dst, p);
 }
 
 /// `dst` ⊇ member `name` of a primitive or a primitive wrapper whose
@@ -685,7 +722,10 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         // chain's (`Function` for a constructor, `Object` for a namespace).
         Some(Mem::Ctor) if name == "@@__perry_wk_species" => m.add_tok(dst, t),
         Some(Mem::Ctor) => family_ctor(m, members::ns_chain(ns), dst),
-        Some(Mem::Proto) => builtin_proto_value(m, (name == "prototype").then_some(ns), dst),
+        Some(Mem::Proto) if name == "prototype" => builtin_proto_value(m, Some(ns), dst),
+        // `F.__proto__`: the namespace's [[Prototype]], `Function.prototype`
+        // for a constructor, `Object.prototype` for a namespace object.
+        Some(Mem::Proto) => family_proto_value(m, members::ns_chain(ns), None, dst),
         None => m.add_prim(dst, prim::UNDEF),
     }
     // Absent on the namespace and on its chain: a key the program writes
@@ -766,8 +806,9 @@ pub fn prim_load(m: &mut Model, prim: u16, key: Key, dst: NodeId) {
             }
         }
         Some(Mem::Proto) => {
-            let op = m.tok(TokKind::ObjectProto);
-            m.add_tok(dst, op);
+            for fam in members::prim_families(prim) {
+                family_proto_value(m, fam, None, dst);
+            }
         }
         None => {}
     }
@@ -1557,15 +1598,17 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             _ => {}
         },
         TokKind::ObjectProto if name.as_deref() == Some("constructor") || name.is_none() => {
-            // Object.prototype stands for every builtin prototype here:
-            // its `constructor` may be Object or Function (E14). On a chain
-            // its object's kind says which one it is (`chain_load`). A
-            // computed key whose shape excludes `constructor` reads neither.
+            // `Object.prototype.constructor` is `Object` (ECMA-262
+            // 20.1.3.1). A value that is another builtin's prototype also
+            // holds that builtin's own token (`builtin_proto_value`,
+            // `family_proto_value`, `prim_load`'s `__proto__`), whose read
+            // gives its constructor (`Function.prototype`'s is `Function`,
+            // E14); on a chain the object's kind says which one it is
+            // (`chain_load`). A computed key whose shape excludes
+            // `constructor` reads neither.
             if m.key_may_name_str(key, "constructor") {
-                for ns in [BuiltinNs::Object, BuiltinNs::Function] {
-                    let b = m.tok(TokKind::Builtin(ns));
-                    m.add_tok(dst, b);
-                }
+                let b = m.tok(TokKind::Builtin(BuiltinNs::Object));
+                m.add_tok(dst, b);
             }
             m.add_prim(dst, prim::UNDEF);
             if name.is_none() {

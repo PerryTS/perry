@@ -23,6 +23,7 @@ mod array_holes;
 mod array_index_store;
 mod array_iteration;
 mod array_member_mixin;
+mod object_proto_constructor;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
