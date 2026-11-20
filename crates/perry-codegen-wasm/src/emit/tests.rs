@@ -1552,6 +1552,30 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
     );
 }
 
+// An async body is emitted as JS, which must build an array literal with a spread, call
+// `Math.max` / `Math.min` and an array's `keys` / `values` / `entries` itself rather than
+// yield undefined (#15100).
+#[test]
+fn async_body_spreads_into_array_literals_and_calls_math_max_min() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let log = "";
+function at(n: any) { log += n; return n; }
+async function f(): Promise<string> {
+  const xs = [1, 2];
+  const ys: any[] = [0, ...xs, 3, , ];
+  const ks = [...xs.keys(), ...xs.values(), ..."ab", [...xs.entries()][1][0]];
+  const m = Math.max(at(3), at(9), at(4)) + "," + Math.min(at(3), at(9)) + "," + Math.max("7" as any, 2) + "," + Math.min(1, NaN) + "," + Math.max() + "," + Math.min();
+  return ys.length + " " + ys.join("|") + " " + ks.join(",") + " " + m + " " + log;
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "5 0|1|2|3| 0,1,1,2,a,b,1 9,3,7,NaN,-Infinity,Infinity 39439"
+    );
+}
+
 // `new Set([...])`, `new Map([...])` and their methods inside an async body build and use
 // real collections (#14595).
 #[test]

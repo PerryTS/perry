@@ -554,6 +554,33 @@ impl WasmModuleEmitter {
                     .collect();
                 format!("fromJsValue([{}])", elems.join(", "))
             }
+            // An array literal with a spread is a JS array literal: a spread element expands
+            // any iterable, and a hole stays a hole. Each element ends in a comma, so a
+            // trailing hole still counts toward the length.
+            Expr::ArraySpread(elements) => {
+                let elems: String = elements
+                    .iter()
+                    .map(|el| match el {
+                        ArrayElement::Expr(e) => {
+                            format!("toJsValue({}),", self.emit_js_expr(e, locals))
+                        }
+                        ArrayElement::Spread(e) => {
+                            format!("...toJsValue({}),", self.emit_js_expr(e, locals))
+                        }
+                        ArrayElement::Hole => ",".to_string(),
+                    })
+                    .collect();
+                format!("fromJsValue([{}])", elems)
+            }
+            Expr::ArrayKeys(a) | Expr::ArrayValues(a) | Expr::ArrayEntries(a) => {
+                let method = match expr {
+                    Expr::ArrayKeys(_) => "keys",
+                    Expr::ArrayValues(_) => "values",
+                    _ => "entries",
+                };
+                let v = self.emit_js_expr(a, locals);
+                format!("fromJsValue(toJsValue({}).{}())", v, method)
+            }
             Expr::Conditional {
                 condition,
                 then_expr,
@@ -830,6 +857,20 @@ impl WasmModuleEmitter {
             Expr::ObjectCoerce(val) => {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(Object(toJsValue({})))", v)
+            }
+            // `Math.max` / `Math.min` convert every argument with ToNumber after evaluating
+            // them all, as the JS builtins do.
+            Expr::MathMax(args) | Expr::MathMin(args) => {
+                let name = if matches!(expr, Expr::MathMax(_)) {
+                    "max"
+                } else {
+                    "min"
+                };
+                let args_js: Vec<String> = args
+                    .iter()
+                    .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
+                    .collect();
+                format!("Math.{}({})", name, args_js.join(", "))
             }
             Expr::MathFloor(x) => {
                 let v = self.emit_js_expr(x, locals);
