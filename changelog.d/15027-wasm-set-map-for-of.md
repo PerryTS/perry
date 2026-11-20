@@ -1,1 +1,1 @@
-`--target web`: `for...of` over a value typed `Set` or `Map` visits its entries instead of running zero times, in synchronous and `async` code (#15020).
+`--target web`: `for...of` over a value typed `Set` or `Map` visits its entries instead of running zero times, in synchronous and `async` code (#15020). Each loop keeps its own cursor, so a nested loop over the same collection no longer skips entries, and a `continue` inside a `for` loop in an `async` body no longer hangs.

@@ -125,13 +125,14 @@ impl WasmModuleEmitter {
                     .as_ref()
                     .map(|c| self.emit_js_expr(c, locals))
                     .unwrap_or_else(|| "1".to_string());
-                out.push_str(&format!("{pad}      while (toJsValue({cond})) {{\n"));
+                // A JS `for` header, so a `continue` still runs the update.
+                let upd = update
+                    .as_ref()
+                    .map(|u| self.emit_js_expr(u, locals))
+                    .unwrap_or_default();
+                out.push_str(&format!("{pad}      for (; toJsValue({cond}); {upd}) {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 2);
-                }
-                if let Some(upd) = update {
-                    let u = self.emit_js_expr(upd, locals);
-                    out.push_str(&format!("{pad}        {u};\n"));
                 }
                 out.push_str(&format!("{pad}      }}\n"));
                 out.push_str(&format!("{pad}    }}\n"));

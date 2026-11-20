@@ -970,6 +970,34 @@ inAsync(new Set([4, 5]), ab()).then((v) => console.log(v));
     );
 }
 
+// Each Set/Map `for...of` owns its cursor: an inner loop over the same collection cannot
+// move the outer one, a frozen collection iterates, and a `continue` in the async body's
+// JS fallback still advances the loop.
+#[test]
+fn for_of_over_a_typed_set_or_map_keeps_a_cursor_per_loop() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+function nestedDelete(s: Set<number>) { let r = ""; for (const a of s) { r += a; for (const b of s) r += ""; s.delete(a); } return r; }
+function mapNested(m: Map<string, number>) { let r = ""; for (const [k] of m) { for (const [j] of m) r += k + j; m.delete(k); r += " "; } return r; }
+function values(s: Set<number>) { let r = ""; for (const v of s) r += v; return r; }
+function skipping(s: Set<number>) { let r = ""; for (const v of s) { if (v === 2) continue; r += v; } return r; }
+async function skippingAsync(s: Set<number>, m: Map<string, number>) { let r = ""; for (const v of s) { if (v === 2) continue; r += v; } for (const [k, v] of m) { if (v === 2) continue; r += k; } return r; }
+const ab = () => new Map<string, number>([["a", 1], ["b", 2], ["c", 3]]);
+console.log(nestedDelete(new Set([1, 2, 3])) + " " + mapNested(ab()) + "| " + values(new Set([1, 2])) + " " + skipping(new Set([1, 2, 3])));
+skippingAsync(new Set([1, 2, 3]), ab()).then((v) => console.log(v));
+"#,
+            // `Object.freeze` has no web lowering, so the frozen case drives the bridges.
+            r#"
+const frozen = Object.freeze(new Set([7]));
+const slot = __memDispatch.collection_cursor_next(frozen, 0, 0);
+console.log(__memDispatch.set_value_at(frozen, slot));
+"#
+        ),
+        "123 aaabac bbbc cc | 12 13\n13ac\n7"
+    );
+}
+
 // perry/ui declares `Picker(onChange)`, so the closure arrives as the first argument.
 #[test]
 fn picker_on_change_is_called_with_the_chosen_index() {
