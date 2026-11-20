@@ -669,6 +669,17 @@ impl WasmModuleEmitter {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
             }
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
+                let keys: Vec<String> = exclude_keys.iter().map(|k| js_string_literal(k)).collect();
+                format!(
+                    "fromJsValue(__memDispatch.object_rest(toJsValue({}), [{}]))",
+                    self.emit_js_expr(object, locals),
+                    keys.join(", ")
+                )
+            }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
                     let m_js = self.emit_js_expr(m, locals);
@@ -987,10 +998,23 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(e, locals);
                 format!("({}, u64ToF64(TAG_UNDEFINED))", v)
             }
-            Expr::Delete(e) => {
-                let v = self.emit_js_expr(e, locals);
-                format!("(delete toJsValue({}), u64ToF64(TAG_TRUE))", v)
-            }
+            // `delete` reaches the property reference, not the value read through it, so a
+            // nullish receiver throws; any other operand is still evaluated.
+            Expr::Delete(e) => match e.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => format!(
+                    "fromJsValue(delete toJsValue({})[{}])",
+                    self.emit_js_expr(object, locals),
+                    js_string_literal(property)
+                ),
+                Expr::IndexGet { object, index, .. } => format!(
+                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    self.emit_js_expr(object, locals),
+                    self.emit_js_expr(index, locals)
+                ),
+                other => format!("({}, u64ToF64(TAG_TRUE))", self.emit_js_expr(other, locals)),
+            },
             // The iteration nodes beside the iterator-record intrinsics call the bridges
             // their WASM arms in `emit/expr/iterator_records.rs` call.
             Expr::GetIterator(value) => format!(

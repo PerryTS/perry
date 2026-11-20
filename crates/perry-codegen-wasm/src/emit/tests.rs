@@ -1180,6 +1180,56 @@ console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
     );
 }
 
+// An object rest element is a new object holding the source's other own enumerable keys,
+// in a synchronous and in an async body.
+#[test]
+fn object_rest_copies_the_keys_not_named_before_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const keys = (o: any) => Object.keys(o).join(",");
+function decl() { const { x, ...o } = { x: 1, y: 2, z: 3 } as any; return x + " " + keys(o); }
+function param({ a, ...r }: any) { return a + " " + keys(r); }
+function assign() { let x: any, o: any; ({ x, ...o } = { x: 1, y: 2 } as any); return x + " " + keys(o); }
+function nested() { const { a: { b, ...inner }, ...outer } = { a: { b: 1, c: 2 }, d: 3 } as any; return b + " " + keys(inner) + " " + keys(outer); }
+function copy() { const src: any = { p: 1, q: 2 }; const { ...o } = src; o.p = 9; return (o !== src) + " " + src.p + " " + keys(o); }
+function computed() { const k = "a"; const { [k]: v, ...r } = { a: 1, b: 2 } as any; return v + " " + keys(r); }
+function hidden() { const src: any = { a: 1, b: 2 }; Object.defineProperty(src, "h", { value: 3, enumerable: false }); const { a, ...r } = src; return keys(r) + " " + ("h" in r); }
+function proto() { const { b, ...r } = JSON.parse('{"__proto__":{"f":1},"b":2}'); return Object.keys(r).join(",") + " " + r.f; }
+async function inAsync() { const k = "z"; const { x, [k]: z, ...o } = { x: 1, y: 2, z: 3 } as any; return x + " " + z + " " + JSON.stringify(o); }
+console.log(decl() + " | " + param({ a: 1, b: 2, c: 3 }) + " | " + assign() + " | " + nested());
+console.log(copy() + " | " + computed() + " | " + hidden() + " | " + proto());
+inAsync().then((v) => console.log(v));
+"#
+        ),
+        "1 y,z | 1 b,c | 1 y | 1 c d\ntrue 1 p,q | 1 b | b false | __proto__ undefined\n1 3 {\"y\":2}"
+    );
+}
+
+// In an async body `delete` removes the property, throws on a nullish receiver, and
+// still evaluates an operand that is not a property reference.
+#[test]
+fn async_delete_reaches_the_property_reference() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let n = 0;
+function bump() { n++; return n; }
+async function del() {
+  const o: any = { a: 1, b: 2 }; const k = "b";
+  const d = delete o.a; delete o[k];
+  let caught = "no";
+  try { const z: any = null; delete z.x; } catch (e) { caught = "yes"; }
+  delete (bump() as any);
+  return d + " " + JSON.stringify(o) + " " + caught + " " + n;
+}
+del().then((v) => console.log(v));
+"#
+        ),
+        "true {} yes 1"
+    );
+}
+
 // `.message` is an ordinary property read: only an Error's message comes from the
 // Error itself.
 #[test]

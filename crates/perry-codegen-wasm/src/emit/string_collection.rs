@@ -59,6 +59,7 @@ impl WasmModuleEmitter {
             "object_keys",
             "object_values",
             "object_entries",
+            "object_rest",
             "object_has_property",
             "object_assign",
             "array_new",
