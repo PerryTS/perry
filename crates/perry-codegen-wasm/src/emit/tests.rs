@@ -2240,6 +2240,9 @@ mod static_method;
 #[path = "class_value_tests.rs"]
 mod class_value;
 
+#[path = "function_value_tests.rs"]
+mod function_value;
+
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
