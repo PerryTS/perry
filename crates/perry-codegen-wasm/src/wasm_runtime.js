@@ -1674,7 +1674,7 @@ const classStaticTable = {};
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
-// A user parent class's constructor slot (`class_set_parent`), for its class value.
+// A user class's constructor slot (`class_set_parent`, `class_new`), for its class value.
 const classCtorSlotTable = Object.create(null);
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
@@ -1686,9 +1686,31 @@ const classCtorSlotTable = Object.create(null);
 // `{}`. `proto` is a class-expression evaluation's prototype (see __classCtor).
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
+// The class whose instance `obj` is, for `instanceof`: a class prototype holds its
+// class's tag as an own key and is an instance of the parent class only.
+function __instanceClassOf(obj) {
+  return Object.prototype.hasOwnProperty.call(obj, __classTag)
+    ? classParentTable[obj[__classTag]] || null
+    : __classOf(obj);
+}
+// That prototype is also the class value's `prototype`. It inherits from a user parent
+// class's prototype and holds the class's own methods, non-enumerable. A declared class
+// with a known constructor slot gets its class value here, so `constructor` holds
+// before any read of the class.
 function __classProto(className) {
   const t = __classTemplate(className);
-  return t.proto || (t.proto = Object.create(Object.prototype, { [__classTag]: { value: className } }));
+  if (t.proto) return t.proto;
+  const parent = classParentTable[className];
+  const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
+    ? __classProto(parent)
+    : Object.prototype;
+  t.proto = Object.create(base, { [__classTag]: { value: className } });
+  for (const m of Reflect.ownKeys(classMethodTable[className] || {})) {
+    if (typeof m === 'string' && (m.startsWith('__get_') || m.startsWith('__set_'))) continue;
+    __defineHidden(t.proto, m, __classMethodValue(className, m, undefined));
+  }
+  if (t.first === undefined && className in classCtorSlotTable) __classRef(className, classCtorSlotTable[className]);
+  return t.proto;
 }
 function __classInstance(className, proto) {
   if (className.startsWith('__AnonShape_') || className.startsWith('__PerryDeclaredKeys')) return {};
@@ -1803,10 +1825,10 @@ function __classCtor(className, ctorIdx, caps) {
   Object.defineProperty(ctor, Symbol.hasInstance, {
     value: (obj) => {
       if (!obj || typeof obj !== 'object') return false;
-      if (evaluated && __classOf(obj) === className) {
+      if (evaluated && __instanceClassOf(obj) === className) {
         return (__instanceEvaluationOf(obj) || __classTemplate(className).first) === ctor;
       }
-      for (let c = __classOf(obj); c; c = classParentTable[c] || null) {
+      for (let c = __instanceClassOf(obj); c; c = classParentTable[c] || null) {
         if (c === className) return true;
       }
       return false;
@@ -1814,14 +1836,20 @@ function __classCtor(className, ctorIdx, caps) {
   });
   __perryClassCtors.add(ctor);
   if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
-  const proto = { constructor: ctor };
-  for (let c = className; c; c = classParentTable[c] || null) {
-    for (const m of Object.keys(classMethodTable[c] || {})) {
-      if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
-      proto[m] = __classMethodValue(c, m, evaluated ? ctor : undefined);
+  // A declared class's value shares its instances' prototype (see __classProto). An
+  // evaluation has its own, holding the chain's methods bound to it.
+  const proto = evaluated ? { constructor: ctor } : __classProto(className);
+  if (evaluated) {
+    for (let c = className; c; c = classParentTable[c] || null) {
+      for (const m of Object.keys(classMethodTable[c] || {})) {
+        if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+        proto[m] = __classMethodValue(c, m, ctor);
+      }
     }
+    for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
+  } else {
+    __defineHidden(proto, 'constructor', ctor);
   }
-  for (const m of Object.keys(proto)) Object.defineProperty(proto, m, { enumerable: false });
   // Own named static methods only: an inherited one is found along the class chain
   // (`__classStaticGet`), where a nearer static field shadows it.
   for (const [m, idx] of Object.entries(classStaticMethodTable[className] || {})) {
@@ -2004,6 +2032,9 @@ function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b) {
   if (kind === 0) {
     methods[key] = a;
     if (evaluation) __defineHidden(evaluation.prototype, key, __classMethodValue(className, key, evaluation));
+    // A prototype made before this member was defined gets it too.
+    const proto = __classTemplate(className).proto;
+    if (!evaluation && proto) __defineHidden(proto, key, __classMethodValue(className, key, undefined));
     return;
   }
   if (typeof key === 'symbol') return;
@@ -2585,7 +2616,11 @@ const __memDispatch = {
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
-  class_new: (className, fieldCount) => __classInstance(String(className)),
+  class_new: (className, ctorIdx) => {
+    const cls = String(className);
+    if (ctorIdx !== undefined && !(cls in classCtorSlotTable)) classCtorSlotTable[cls] = ctorIdx | 0;
+    return __classInstance(cls);
+  },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
   class_eval_begin: (className, ctorIdx) => {
@@ -2692,7 +2727,7 @@ const __memDispatch = {
   // template answers for the evaluation that built it.
   class_instanceof_value: (classId, obj, ctor) => {
     const e = __evaluationOf(ctor);
-    if (e && obj && typeof obj === 'object' && __classOf(obj) === e.template) {
+    if (e && obj && typeof obj === 'object' && __instanceClassOf(obj) === e.template) {
       return (__instanceEvaluationOf(obj) || __classTemplate(e.template).first) === ctor;
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
@@ -2860,7 +2895,7 @@ const __memDispatch = {
     // A user-class instance (see __classInstance): its chain is the class table,
     // and as a plain object it is also an instance of Object.
     if (__classOf(obj)) {
-      let cls = __classOf(obj);
+      let cls = __instanceClassOf(obj);
       while (cls) { if (cls === target) return 1; cls = classParentTable[cls] || null; }
       return target === 'Object' ? 1 : 0;
     }
