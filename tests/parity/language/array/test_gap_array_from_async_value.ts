@@ -13,4 +13,20 @@ console.log(Object.getOwnPropertyNames(Array).includes("fromAsync"));
     yield 7;
   }
   console.log(JSON.stringify(await Array.fromAsync(gen())));
+
+  // A constructor receiver builds the result (proposal steps 3.j.ii, 3.k.iv).
+  class Bag {
+    args: unknown[];
+    constructor(...args: unknown[]) {
+      this.args = args;
+    }
+  }
+  const fromIterable: any = await fromAsync.call(Bag, gen());
+  console.log(fromIterable instanceof Bag, JSON.stringify(fromIterable.args), fromIterable.length, fromIterable[0], fromIterable[1]);
+  const fromArrayLike: any = await fromAsync.call(Bag, { length: 2, 0: "a", 1: "b" });
+  console.log(fromArrayLike instanceof Bag, JSON.stringify(fromArrayLike.args), fromArrayLike.length, fromArrayLike[1]);
+  class List extends Array {}
+  const list = await (List as any).fromAsync([8, 9]);
+  console.log(list instanceof List, Array.isArray(list), JSON.stringify(list));
+  console.log(Array.isArray(await fromAsync.call({}, [1])));
 })();

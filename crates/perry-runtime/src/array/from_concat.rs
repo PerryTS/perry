@@ -629,6 +629,26 @@ pub(super) fn finish_length(result: &RuntimeHandle<'_>, len: usize, array_result
 }
 
 #[cold]
+/// `CreateDataPropertyOrThrow(A, index, value)` on the `Array.fromAsync`
+/// result `Construct(C)` built; answers `A`, which growing an array result
+/// replaces.
+pub(crate) fn define_constructed_index(result: f64, index: usize, value: f64) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    if !define_index(&result, index, value, jsv_is_array(result.get_nanbox_f64())) {
+        throw_cannot_define_property(index);
+    }
+    result.get_nanbox_f64()
+}
+
+/// `Set(A, "length", len, true)` closing the `Array.fromAsync` result
+/// `Construct(C)` built.
+pub(crate) fn finish_constructed_length(result: f64, len: usize) -> f64 {
+    let scope = RuntimeHandleScope::new();
+    let result = scope.root_nanbox_f64(result);
+    finish_length(&result, len, jsv_is_array(result.get_nanbox_f64()))
+}
+
 fn throw_cannot_define_property(index: usize) -> ! {
     let msg = format!("Cannot define property {}, object is not extensible", index);
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
