@@ -2892,16 +2892,19 @@ const __memDispatch = {
       loops.set(id, cur);
     }
     // A step that throws ends the loop without closing the iterator, as a host loop does.
+    // User code in `next` may step another loop, so only a successful step publishes `id`.
     try {
       const step = Reflect.apply(cur.next, cur.iter, []);
       if (Object(step) !== step) throw new TypeError('Iterator result is not an object');
       if (step.done) {
         loops.delete(id);
+        __collectionCursorLast = 0;
         return -1;
       }
       cur.value = step.value;
     } catch (error) {
       loops.delete(id);
+      __collectionCursorLast = 0;
       throw error;
     }
     __collectionCursorLast = id;

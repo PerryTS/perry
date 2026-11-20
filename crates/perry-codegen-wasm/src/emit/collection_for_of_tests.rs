@@ -184,3 +184,44 @@ for (var v of s) if (v === 2) throw new Error("top");
         "uncaught top"
     );
 }
+
+// User code in an iterator's `next` can step another loop over the same collection; the
+// loop whose `next` it was keeps its own cursor and does not close the other one.
+#[test]
+fn a_set_for_of_ends_without_taking_a_nested_loops_cursor() {
+    let nesting = format!(
+        "{STUB_DOM}{}",
+        r#"
+globalThis.closeLog = "";
+let onDone = () => {};
+globalThis.onceDone = (f) => { onDone = () => { onDone = () => {}; f(); }; };
+globalThis.Nesting = class extends Set {
+  [Symbol.iterator]() {
+    const it = this.values();
+    return {
+      next() { const step = it.next(); if (step.done) onDone(); return step; },
+      return() { closeLog += "R"; return {}; },
+    };
+  }
+};
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+const g = globalThis as any;
+function* walk(s: Set<number>) { for (const v of s) yield v; }
+const s: Set<number> = new g.Nesting([1, 2, 3]);
+const w = walk(s);
+g.onceDone(() => w.next());
+let r = "";
+for (const v of s) r += v;
+r += " " + w.next().value + w.next().value;
+console.log(r + " " + g.closeLog);
+"#,
+            &nesting,
+            "",
+        ),
+        "123 23"
+    );
+}
