@@ -130,11 +130,21 @@ impl WasmModuleEmitter {
                     .as_ref()
                     .map(|u| self.emit_js_expr(u, locals))
                     .unwrap_or_default();
+                let release = condition
+                    .as_ref()
+                    .and_then(super::stmt::collection_cursor_release)
+                    .map(|r| self.emit_js_expr(&r, locals));
+                if release.is_some() {
+                    out.push_str(&format!("{pad}      try {{\n"));
+                }
                 out.push_str(&format!("{pad}      for (; toJsValue({cond}); {upd}) {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 2);
                 }
                 out.push_str(&format!("{pad}      }}\n"));
+                if let Some(release) = release {
+                    out.push_str(&format!("{pad}      }} finally {{ {release}; }}\n"));
+                }
                 out.push_str(&format!("{pad}    }}\n"));
             }
             Stmt::Try {
@@ -396,10 +406,13 @@ impl WasmModuleEmitter {
                                 | "js_map_cursor_next"
                                 | "js_set_compaction_epoch"
                                 | "js_map_compaction_epoch"
+                                | "js_collection_cursor_release"
                         ) =>
                     {
                         let bridge = if name.ends_with("cursor_next") {
                             "collection_cursor_next"
+                        } else if name.ends_with("cursor_release") {
+                            "collection_cursor_release"
                         } else {
                             "collection_cursor_epoch"
                         };

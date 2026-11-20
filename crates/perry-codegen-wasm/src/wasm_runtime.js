@@ -2786,8 +2786,7 @@ const __memDispatch = {
   // `ep` carries its id (0 before the first step) and the slot is that same id, so a
   // nested loop over the same collection cannot move it, and entries added or deleted
   // mid-loop behave as in a host loop.
-  // shortcut: a loop left by break/return/throw keeps its cursor until the collection is
-  // collected; release it on loop exit once the HIR emits an exit hook for this path.
+  // The emitters release a loop's cursor in a `finally` around it (`cursor_release`).
   collection_cursor_next: (coll, _slot, ep) => {
     __collectionCursorLast = 0;
     if (!(coll instanceof Set || coll instanceof Map)) return -1;
@@ -2811,6 +2810,10 @@ const __memDispatch = {
   },
   // Read right after `cursor_next`: the id of the loop it stepped.
   collection_cursor_epoch: () => __collectionCursorLast,
+  collection_cursor_release: (coll, ep) => {
+    const loops = __collectionCursors.get(coll);
+    if (loops) loops.delete(ep);
+  },
   set_value_at: (s, slot) => __collectionCursorValue(s, slot),
   map_entry_key_at: (m, slot) => (__collectionCursorValue(m, slot) || [])[0],
   map_entry_value_at: (m, slot) => (__collectionCursorValue(m, slot) || [])[1],

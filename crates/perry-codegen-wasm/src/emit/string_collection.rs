@@ -206,6 +206,7 @@ impl WasmModuleEmitter {
             "set_values",
             "collection_cursor_next",
             "collection_cursor_epoch",
+            "collection_cursor_release",
             "set_value_at",
             "map_entry_key_at",
             "map_entry_value_at",
