@@ -1311,6 +1311,7 @@ console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof 
 
 // A class value's static fields are its own enumerable keys, as in Node: declared ones,
 // one a subclass declares (not its parent's), and one assigned later through the value.
+// A computed member's hidden key slot is not one of them.
 #[test]
 fn a_class_values_static_fields_are_its_own_keys() {
     assert_eq!(
@@ -1327,9 +1328,11 @@ console.log(JSON.stringify(Object.entries(K)) + " " + JSON.stringify(Object.keys
 console.log(("x" in K) + " " + Object.prototype.hasOwnProperty.call(K, "y"));
 K.x = 10;
 console.log(A.x + " " + K.x + " " + JSON.stringify(Object.keys(new A())));
+class I { ["k" + 1] = 1; static t = 3; }
+console.log(JSON.stringify(Object.keys(I)) + " " + JSON.stringify(Object.keys(new I())));
 "#
         ),
-        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]"
+        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]\n[\"t\"] [\"k1\"]"
     );
 }
 
