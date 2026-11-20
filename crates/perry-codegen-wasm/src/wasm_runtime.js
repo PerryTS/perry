@@ -2327,7 +2327,8 @@ const __memDispatch = {
     const iterate = source?.[Symbol.iterator];
     if (Array.isArray(target) && typeof iterate === 'function') {
       const it = iterate.call(source);
-      for (let step = it.next(); !step.done; step = it.next()) target.push(step.value);
+      const next = it.next;
+      while (!__iteratorStep(it, next, true)) target.push(__iteratorStepValue);
     }
     return target;
   },
