@@ -136,3 +136,22 @@ console.log(b.who() + " " + A.n + " " + b.n + " " + b.__proto__.who());
         "B 1 2 A"
     );
 }
+
+// An evaluated subclass reads its parent's static fields, which live in the
+// parent's static table rather than on its class value. Expected output is Node's.
+#[test]
+fn an_evaluated_subclass_value_reads_its_parents_static_fields() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static x = 1; static m() { return "m"; } }
+function mk(): any { return class extends A {}; }
+const K: any = mk(), k = "x";
+console.log(K.x + " " + K[k] + " " + K.m() + " " + (A as any)[k]);
+K.x = 5;
+console.log(K.x + " " + A.x);
+"#
+        ),
+        "1 1 m 1\n5 1"
+    );
+}

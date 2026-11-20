@@ -1918,6 +1918,12 @@ function __classStaticRun(template, value, funcIdx) {
 // Static `name` of class `cls` along its parent chain: a declared static, else an own
 // member of the class value (a computed static); else `fallback`'s.
 function __classStaticGet(cls, name, receiver, fallback) {
+  // An evaluated subclass names no class: past its own members, its parent's
+  // class value carries the lookup on (see __linkClassParent).
+  if (cls === undefined && typeof fallback === 'function' && !Object.prototype.hasOwnProperty.call(fallback, name)) {
+    const parent = Object.getPrototypeOf(fallback);
+    if (__perryClassCtors.has(parent)) return __classStaticGet(__classNameOfValue(parent), name, receiver, parent);
+  }
   for (let c = cls; c; c = classParentTable[c] || null) {
     const statics = classStaticTable[c];
     if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
@@ -2212,6 +2218,7 @@ const __memDispatch = {
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!__holdsProperties(obj)) return undefined;
+    if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), key, obj, obj);
     return obj[key];
   },
   object_set_dynamic: (obj, key, value) => {
