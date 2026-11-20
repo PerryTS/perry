@@ -227,6 +227,28 @@ console.log(isFinite(n) + " " + isFinite(s) + " " + isFinite(Infinity) + " " + i
     );
 }
 
+// `push` with two or more arguments appends every one in order and returns the new length,
+// on a typed and on an `any` receiver. Expected output is Node's.
+#[test]
+fn push_with_several_arguments_appends_every_one() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a: number[] = [1, 2, 3];
+const n = a.push(4, 5);
+console.log(n + " " + a.join(","));
+const b: any = [1];
+let k = 0;
+console.log(b.push("x", ++k, "z", ++k) + " " + b.join(","));
+const c: number[] = [];
+c.push(7);
+console.log(c.length + " " + c.join(","));
+"#
+        ),
+        "5 1,2,3,4,5\n5 1,x,1,z,2\n1 7"
+    );
+}
+
 #[test]
 fn console_log_prints_every_argument_on_one_line() {
     assert_eq!(
