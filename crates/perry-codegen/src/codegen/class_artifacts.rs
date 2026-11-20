@@ -774,6 +774,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                     is_exported: false,
                     captures: ctor_body.2,
                     decorators: Vec::new(),
+                    construct_only: false,
                 };
                 compile_method(
                     llmod,

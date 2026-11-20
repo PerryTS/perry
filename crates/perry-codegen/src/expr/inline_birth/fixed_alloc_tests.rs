@@ -13,6 +13,7 @@ fn literal(captures: u32) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -48,6 +49,7 @@ fn compile(captures: u32, target: &str) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let options = crate::CompileOptions {
         emit_ir_only: true,

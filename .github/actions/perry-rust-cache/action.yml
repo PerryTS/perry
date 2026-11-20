@@ -1,0 +1,58 @@
+name: Perry Rust cache
+description: Swatinem/rust-cache with Perry's key and save policy (docs/src/testing/ci-tiers.md, "Build caches")
+inputs:
+  key:
+    description: Cache family. Jobs that run the same cargo build restore one family; exactly one of them saves it.
+    default: ${{ github.job }}
+  save:
+    description: Save the family from main-line runs. Set it on the one job that owns the family.
+    default: "false"
+  workspaces:
+    description: Passed to rust-cache unchanged.
+    default: ""
+runs:
+  using: composite
+  steps:
+    # rust-cache hashes every installed rustc into the key, and the runner
+    # image's preinstalled stable changes with each image rollout, which forks
+    # the key between runners. Only the pinned toolchains may remain.
+    - name: Pin the toolchain and the environment rust-cache hashes
+      shell: bash
+      run: |
+        set -euo pipefail
+        rustup toolchain list | awk '/^stable-/ {print $1}' | while read -r toolchain; do
+          rustup toolchain uninstall "$toolchain"
+        done
+        # Steps outside the checkout no longer have a default without this.
+        pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml | tr -d '\r')
+        rustup default "$pinned"
+        # rust-cache hashes CARGO_* into the key; jobs that set this and jobs that
+        # leave it to rust-cache build the same artifacts and must share a family.
+        echo "CARGO_INCREMENTAL=0" >> "$GITHUB_ENV"
+        # cache-on-failure can save a job that failed before it built anything, and
+        # rust-cache never replaces an exact key; the weekly epoch in the key ends
+        # such an entry within a week.
+        echo "PERRY_CACHE_EPOCH=$(date -u +%G-W%V)" >> "$GITHUB_ENV"
+    # .cargo/config.toml builds std from rust-src, a path source that Cargo
+    # fingerprints by mtime. A fresh toolchain install is newer than every
+    # restored artifact, so std and every crate above it would rebuild.
+    - name: Pin rust-src mtimes and list the build-std crates
+      shell: bash
+      run: |
+        set -euo pipefail
+        src="$(rustc --print sysroot)/lib/rustlib/src"
+        if [ -d "$src" ]; then
+          find "$src" -exec touch -h -t 200001010000 {} +
+          # rust-cache keeps only `cargo metadata` packages when it saves; the
+          # vendored copy also keeps these (see its cleanup.ts "Perry patch").
+          echo "PERRY_RUST_CACHE_KEEP=$(sed -n 's/^name = "\(.*\)"$/\1/p' "$src/rust/library/Cargo.lock" | sort -u | tr '\n' ' ')" >> "$GITHUB_ENV"
+        fi
+    - uses: ./.github/actions/perry/Swatinem/rust-cache
+      with:
+        prefix-key: v2-rust
+        shared-key: ${{ inputs.key }}
+        workspaces: ${{ inputs.workspaces }}
+        env-vars: PERRY_CACHE_EPOCH
+        # Main is often red; a failing job's compiled dependencies are still valid.
+        cache-on-failure: true
+        save-if: ${{ inputs.save == 'true' && github.ref == 'refs/heads/main' }}

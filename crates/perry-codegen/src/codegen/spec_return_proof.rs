@@ -944,6 +944,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -1095,6 +1096,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         };
         let mut module = Module::new("return_proof.ts");
         module.functions = vec![identity, forward, liar, escaping, one_pass_number];

@@ -679,6 +679,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             }),
             methods: vec![],
             getters: vec![],
@@ -739,6 +740,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         String::from_utf8(
             crate::compile_module(&module, crate::temp_root_coverage::entry_opts())

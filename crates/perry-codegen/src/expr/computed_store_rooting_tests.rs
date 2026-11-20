@@ -81,6 +81,7 @@ fn compile_body_with_params_and_strict(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,

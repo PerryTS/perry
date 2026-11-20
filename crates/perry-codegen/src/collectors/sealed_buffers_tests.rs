@@ -89,6 +89,7 @@ fn func(id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -350,6 +351,7 @@ fn an_exposure_in_a_closure_or_another_function_is_remote() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

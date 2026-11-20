@@ -409,12 +409,12 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
         if: ${{ !cancelled() }}
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
+          key: lint
+          save: "true"
           # PRs read from cache; only main writes new entries.
           # Avoids cache thrash from short-lived branches.
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       # #10986: native Windows builds run in sweep/full tiers, so PRs had no
       # required signal for cfg(windows) type errors. Bare cargo check on a
@@ -444,8 +444,8 @@ jobs:
       - name: Type-check Windows runtime and stdlib
         if: ${{ !cancelled() }}
         env:
-          # Keep cross-target objects out of lint's shared Linux Rust cache.
-          CARGO_TARGET_DIR: /tmp/perry-windows-typecheck
+          # Inside target/ so lint's cache family keeps the Windows dependencies.
+          CARGO_TARGET_DIR: target/windows-typecheck
         run: |
           rustup target add x86_64-pc-windows-msvc
           export PATH="$LLVM_SYS_221_PREFIX/bin:$PATH"
@@ -1311,10 +1311,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: check
+          save: "true"
 
       - name: Lean dependency boundaries and helper compatibility
         if: ${{ !cancelled() }}
@@ -1391,11 +1391,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component clippy
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          # Restores check's warm cache; check is the job that saves it.
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
+          # Restores the lint family; lint saves it.
+          key: lint
       - name: Clippy (product)
         if: ${{ !cancelled() }}
         run: cargo clippy -p perry --bins
@@ -1443,10 +1442,6 @@ jobs:
     timeout-minutes: 90
     env:
       RUSTFLAGS: -D warnings
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout repository (inline git)
@@ -1475,21 +1470,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: warnings
+          save: "true"
 
       - name: rustc warnings (product)
         if: ${{ !cancelled() }}
@@ -1505,22 +1489,6 @@ jobs:
             cargo_args+=(--exclude "$package")
           done
           cargo check "${cargo_args[@]}"
-
-      # Cache generations include rust-toolchain.toml so a toolchain change
-      # does not restore a multi-gigabyte sccache snapshot that rustc cannot
-      # reuse. sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # Rust unit tests (266+ tests across all crates)
@@ -1849,10 +1817,6 @@ jobs:
       matrix:
         shard: ${{ fromJSON(needs.plan.outputs.plan).cargo_test_perry.shards }}
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout repository (inline git)
@@ -1881,24 +1845,11 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      # Every shard starts from the same most-recent compiler-object cache.
-      # Shards deliberately do not save eight near-duplicate 12G archives:
-      # cargo-test remains the single main-line writer for this shared prefix.
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}-${{ matrix.shard }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
+          # Its `cargo build-perry --release` step is the gap-suite-build build;
+          # the test-profile shards compile on top of that.
+          key: gap-suite-build
 
       - name: Evict stale auto-opt archives (#5892)
         run: |
@@ -2021,10 +1972,6 @@ jobs:
     # seconds each, and the common case selects no suite and exits in ~20-30s.
     timeout-minutes: 360
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       # Nothing here pushes back to the repo, and the job compiles third-party
@@ -2111,32 +2058,6 @@ jobs:
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.scope.outputs.rust_work == 'true'
-
-      - name: Install sccache
-        if: steps.scope.outputs.rust_work == 'true'
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      - name: Restore sccache objects
-        if: steps.scope.outputs.rust_work == 'true'
-        uses: ./.github/actions/perry/actions/cache/restore # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        if: steps.scope.outputs.rust_work == 'true'
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-
-      # Same reasoning as cargo-test: a rust-cache-restored auto-opt archive dir
-      # keys only on perry-runtime's source hash and would link stale ext
-      # archives into the binaries these suites compile (#5892).
-      - name: Evict stale auto-opt archives (#5892)
-        if: steps.scope.outputs.rust_work == 'true'
-        run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Install the pinned integration-test Node oracle
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -2259,20 +2180,6 @@ jobs:
           done <<< "$EXCLUSIONS"
           exit "$status"
 
-      # sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-
   # ---------------------------------------------------------------------------
   # Windows build gate
   #
@@ -2355,10 +2262,10 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: windows-build
+          save: "true"
 
       # dev (see Cargo.toml [profile.dev]) trades peak optimization
       # for build speed. The package set covers the compiler binary (link
@@ -2507,10 +2414,10 @@ jobs:
           }
           "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-${{ runner.arch }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: windows-arm64-build
+          save: "true"
 
       - name: Build ARM64 compiler and static libraries (dev)
         shell: bash
@@ -2623,10 +2530,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
       - name: Install clang
         run: |
           # Third-party sources we never install from can fail `apt-get update`,
@@ -2745,10 +2648,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
+          key: gc-stress
+          save: "true"
       - name: Install clang
         run: |
           # Third-party sources we never install from can fail `apt-get update`,
@@ -2819,21 +2722,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RUSTC_WRAPPER: sccache
-      # sccache on a LOCAL DISK cache, persisted as a single tarball via
-      # actions/cache (see the "Cache sccache objects" step) — NOT the GitHub
-      # Actions cache backend (SCCACHE_GHA_ENABLED). The GHA backend stores one
-      # cache object per compilation unit; GitHub's cache service throttled /
-      # LRU-evicted the thousands of tiny entries, so a full build wrote ~3.3k
-      # objects (≈35 min of write time) yet the next run got ~0% Rust hits
-      # (measured: 3 hits / 3209 misses, 613 write errors) — i.e. every run
-      # recompiled the dependency graph cold. A single tarball'd disk cache
-      # restores in one step and gives real cross-run hit rates. Note
-      # SCCACHE_CACHE_SIZE is honoured by the disk backend (it was a silent
-      # no-op under the GHA backend, which is why the old "2G" never mattered).
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout repository (inline git)
@@ -2862,27 +2750,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      # Persist the sccache disk cache across runs. The github.job +
-      # github.run_id key makes every run (including PRs) save its own fresh
-      # entry — distinct per job so the three sccache jobs don't collide on
-      # save — while the shared prefix restore-keys pull the most recent prior
-      # cache from ANY of them. The object cache therefore warms continuously
-      # and cross-pollinates instead of starting cold each run.
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: compiler-output-regression
+          save: "true"
 
       - name: Install clang
         run: |
@@ -3045,20 +2916,6 @@ jobs:
           name: compiler-output-regression
           path: target/compiler-output-regression/
 
-      # sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-
   # ---------------------------------------------------------------------------
   # Representation-selection promotion census (#7106)
   #
@@ -3107,10 +2964,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
       # The census only needs codegen (`--no-link`), never a linked binary, so
       # it cannot be fooled by a stale libperry_runtime.a. Auto-optimize is off
@@ -3143,21 +2996,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: repsel-census
+          save: "true"
 
       # Verdict logic first, cheaply: if the census can't tell a regression
       # from a pass, the compile-based run below is not worth the minutes.
@@ -3271,20 +3113,6 @@ jobs:
           name: repsel-census
           path: target/repsel-census/
 
-      # sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-${{ github.job }}-${{ github.run_id }}
-
   # ---------------------------------------------------------------------------
   # Native ABI evidence packet
   #
@@ -3303,10 +3131,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
-      RUSTC_WRAPPER: sccache
-      SCCACHE_GHA_ENABLED: "false"
-      SCCACHE_DIR: ${{ github.workspace }}/.sccache
-      SCCACHE_CACHE_SIZE: "12G"
       CARGO_INCREMENTAL: "0"
     steps:
       - name: Checkout repository (inline git)
@@ -3335,21 +3159,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - name: Install sccache
-        uses: ./.github/actions/perry/mozilla-actions/sccache-action # v0.0.11
-
-      - name: Restore sccache objects
-        uses: ./.github/actions/perry/actions/cache/restore # v6
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-native-abi-evidence-${{ github.run_id }}
-          restore-keys: |
-            sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-
-
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: native-abi-evidence-packet
+          save: "true"
 
       - name: Install clang
         run: |
@@ -3384,20 +3197,6 @@ jobs:
         with:
           name: native-abi-evidence-packet
           path: target/native-abi-evidence-packet/
-
-      # sccache SAVE is main-line only (restore above is unconditional). PR
-      # runs used to write a fresh ~0.5-1.3 GB tarball per job per push --
-      # ~200 GB/day into a 10 GB repo cache budget -- which evicted every
-      # useful entry (including rust-cache's) within the hour. Now only sweep /
-      # nightly / release runs write, and PRs restore the newest main-line blob
-      # via the restore-keys prefix, i.e. a cache built from the tip they
-      # branched from.
-      - name: Save sccache objects (main-line runs only)
-        if: always() && github.event_name != 'pull_request'
-        uses: ./.github/actions/perry/actions/cache/save # v6
-        with:
-          path: ${{ github.workspace }}/.sccache
-          key: sccache-${{ runner.os }}-perry-${{ hashFiles('rust-toolchain.toml') }}-native-abi-evidence-${{ github.run_id }}
 
   # ---------------------------------------------------------------------------
   # gap-suite (was `conformance-smoke`): the gap suite, sharded, in fast mode
@@ -3439,10 +3238,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
+          save: "true"
 
       - name: Build compiler + runtime archives (fast mode, shared across shards)
         # Release profile, codegen-units=1: the parity harness's own build
@@ -3503,15 +3302,15 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry-instr"
+          key: gap-suite-build-instr
+          save: "true"
           # The instrumented graph builds in target-instr; sidecars.sh builds
           # the gc-effects analyzer in target/ when the cache lacks it.
           workspaces: |
             . -> target
             . -> target-instr
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build the instrumented runtime archives
         run: scripts/build_instr_runtime.sh
@@ -3579,10 +3378,6 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
-        with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -3708,11 +3503,10 @@ jobs:
       - name: Install Rust toolchain
         if: needs.lint.result == 'failure'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         if: needs.lint.result == 'failure'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
+          key: gap-suite-build
       - name: Build runtime archives
         if: needs.lint.result == 'failure'
         run: |
@@ -3785,10 +3579,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-gc-effects-${{ matrix.target }}"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gc-effects-${{ matrix.target }}
+          save: "true"
       - name: Install cargo-xwin
         if: matrix.target == 'windows-x86_64'
         run: |
@@ -3894,11 +3688,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.scope.outputs.selectors != ''
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.scope.outputs.selectors != ''
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: false
+          key: gap-suite-build
       - name: Setup Node.js
         if: steps.scope.outputs.selectors != ''
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -3981,10 +3774,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
         with:
@@ -4030,9 +3822,11 @@ jobs:
   # ---------------------------------------------------------------------------
   test262:
     # Every tier that runs test262 runs gap-suite-build (ci_plan.py
-    # self-test), whose build it links: the release's package graph.
+    # self-test), whose build it links: the release's package graph. Only
+    # the plan and that build gate it; a failed `check` orders it but
+    # cannot skip it.
     needs: [plan, check, gap-suite-build]
-    if: fromJSON(needs.plan.outputs.plan).jobs.test262
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.gap-suite-build.result == 'success' && fromJSON(needs.plan.outputs.plan).jobs.test262 }}
     strategy:
       fail-fast: false
       matrix:
@@ -4209,10 +4003,9 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
 
       - name: Build compiler
         # #8224: `--release` with no `-p` builds default-members only and
@@ -4600,10 +4393,9 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
 
       - name: Run perry-codegen-arkts unit tests
         run: cargo test -p perry-codegen-arkts --release --lib
@@ -4682,10 +4474,9 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
 
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -4785,10 +4576,9 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
 
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -4861,10 +4651,9 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
 
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -5154,10 +4943,10 @@ jobs:
         if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: doc-tests
+          save: "true"
 
       - name: Build compiler + UI backend + harness
         # The database/mail examples route through async wrapper staticlibs.
@@ -5278,10 +5067,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry/Swatinem/rust-cache # v2
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: binary-size
+          save: "true"
 
       - name: Install linker retention diagnostics (ELF)
         if: runner.os == 'Linux'
@@ -5426,10 +5215,10 @@ jobs:
     - name: Install Rust toolchain with the WASI targets
       run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
-    - uses: ./.github/actions/perry/Swatinem/rust-cache
+    - uses: ./.github/actions/perry-rust-cache
       with:
-        shared-key: Linux-wasi-native
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: wasi-native
+        save: "true"
     - name: WASI native EH toolchain and codegen regression
       run: cargo test --locked --profile perry-dev -p perry-codegen --lib --features target-wasi wasm_eh -- --test-threads=1
     - name: Link-argument and flavour unit tests (feature-enabled)
@@ -5481,10 +5270,10 @@ jobs:
     - name: Install Rust toolchain with the WASI targets
       run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
-    - uses: ./.github/actions/perry/Swatinem/rust-cache
+    - uses: ./.github/actions/perry-rust-cache
       with:
-        shared-key: Linux-wasi-component-units
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: wasi-component-units
+        save: "true"
     - name: Component-model unit tests
       run: ./scripts/component_unit_tests.sh
 
@@ -5526,10 +5315,10 @@ jobs:
     - name: Install Rust toolchain with the WASI targets
       run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
-    - uses: ./.github/actions/perry/Swatinem/rust-cache
+    - uses: ./.github/actions/perry-rust-cache
       with:
-        shared-key: Linux-wasi-codegen
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: wasi-execution
+        save: "true"
     - name: Install pinned Node oracle for WASI compatibility tests
       uses: ./.github/actions/perry/actions/setup-node
       with:
@@ -5610,10 +5399,10 @@ jobs:
     - name: Install Rust toolchain with the WASI targets
       run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
-    - uses: ./.github/actions/perry/Swatinem/rust-cache
+    - uses: ./.github/actions/perry-rust-cache
       with:
-        shared-key: Linux-wasi-p1
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: wasi-execution-p1
+        save: "true"
     - name: Install pinned Node oracle for WASI compatibility tests
       uses: ./.github/actions/perry/actions/setup-node
       with:
@@ -5706,10 +5495,10 @@ jobs:
     - name: Install Rust toolchain with the WASI targets
       run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2 --target wasm32-wasip1
     - uses: ./.github/actions/setup-llvm22
-    - uses: ./.github/actions/perry/Swatinem/rust-cache
+    - uses: ./.github/actions/perry-rust-cache
       with:
-        shared-key: Linux-wasi-components
-        save-if: ${{ github.ref == 'refs/heads/main' }}
+        key: wasi-components
+        save: "true"
     - name: Install pinned Node oracle for WASI compatibility tests
       uses: ./.github/actions/perry/actions/setup-node
       with:
@@ -5848,10 +5637,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component llvm-tools-preview
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: ${{ runner.os }}-perry-coverage
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: coverage
+          save: "true"
       - name: Install cargo-llvm-cov
         uses: ./.github/actions/perry/taiki-e/install-action
         with:
@@ -5977,9 +5766,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: security-audit
+          key: security-audit
+          save: "true"
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
@@ -6195,9 +5985,9 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: security-audit
+          key: security-audit
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
       - name: Run cargo audit
@@ -6726,10 +6516,10 @@ jobs:
       - uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: wasi-hosts-${{ matrix.target }}
-          cache-on-failure: true
+          key: wasi-hosts-${{ matrix.target }}
+          save: "true"
           workspaces: |
             . -> target
             . -> target-instr

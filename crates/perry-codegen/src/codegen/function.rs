@@ -1573,6 +1573,7 @@ pub(super) fn compile_function(
         scoped_temp_roots: Vec::new(),
         arena_state_slot,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -1933,6 +1934,7 @@ pub(super) fn compile_function(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
     super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
     super::facts_rep::bind_params(&mut ctx, &facts_number_params);
     if let Some(module) = finish_module {
@@ -1977,6 +1979,7 @@ pub(super) fn compile_function(
         }
     }
     let site_hash = spec_site_hash(ctx.strings.module_prefix());
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
     crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);

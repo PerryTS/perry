@@ -205,6 +205,7 @@ fn closed_effects(module: &Module) -> bool {
                 is_generator: false,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 ..
             } => true,

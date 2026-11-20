@@ -150,7 +150,7 @@ pub(crate) use self::alloc::{
     array_length_range_error, fill_capacity_with_holes_from, js_array_alloc_canonical_keys,
     js_array_alloc_key_list, js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
     js_array_alloc_tag_scanned, js_array_alloc_with_length_exact,
-    js_array_try_alloc_tag_scanned_unfilled,
+    js_array_try_alloc_tag_scanned_unfilled, publish_newborn_elements,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,
@@ -189,6 +189,7 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
+pub(crate) use self::from_concat::{define_constructed_index, finish_constructed_length};
 pub use self::generic::array_proto_mutator;
 pub(crate) use self::generic::{
     array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,

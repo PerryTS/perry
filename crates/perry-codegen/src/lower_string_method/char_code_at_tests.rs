@@ -63,6 +63,7 @@ fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         crate::compile_module(

@@ -110,7 +110,9 @@ await bootPerryWasm("{b64}");
 #[test]
 fn splice_inserts_and_evaluates_item_side_effects() {
     assert_eq!(
-        run_web_source("const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"),
+        run_web_source(
+            "const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"
+        ),
         "1,1,2\n1"
     );
 }
@@ -222,6 +224,28 @@ console.log(isFinite(n) + " " + isFinite(s) + " " + isFinite(Infinity) + " " + i
 "#
         ),
         "true false true true false\ntrue false false true"
+    );
+}
+
+// `push` with two or more arguments appends every one in order and returns the new length,
+// on a typed and on an `any` receiver. Expected output is Node's.
+#[test]
+fn push_with_several_arguments_appends_every_one() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a: number[] = [1, 2, 3];
+const n = a.push(4, 5);
+console.log(n + " " + a.join(","));
+const b: any = [1];
+let k = 0;
+console.log(b.push("x", ++k, "z", ++k) + " " + b.join(","));
+const c: number[] = [];
+c.push(7);
+console.log(c.length + " " + c.join(","));
+"#
+        ),
+        "5 1,2,3,4,5\n5 1,x,1,z,2\n1 7"
     );
 }
 
@@ -391,6 +415,23 @@ console.log(inner());
 "#
         ),
         "2 2 true\n3 true\n1"
+    );
+}
+
+// A spread takes any iterable, and `forEach`, which is dispatched by name, runs over a
+// Set or a Map as well as an array. Expected output is Node's.
+#[test]
+fn spread_and_for_each_visit_a_set_or_a_maps_entries() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function spreads() { const s = new Set<number>([1, 2, 3]); const a: any = new Set(["x"]); const m = new Map<string, number>([["a", 1], ["b", 2]]); return [...s].join(",") + " " + [0, ...a].join(",") + " " + [...m].map((e) => e[0] + e[1]).join(",") + " " + [...m.keys()].join(",") + [...m.values()].join(","); }
+function each() { const out: string[] = []; const s = new Set<string>(["x", "y"]); s.forEach((v, k, set) => out.push(v + k + set.size)); const m: any = new Map([["a", 1], ["b", 2]]); m.forEach((v: number, k: string) => out.push(k + "=" + v)); return out.join(","); }
+const big = new Set<number>(); for (let i = 0; i < 200000; i++) big.add(i);
+console.log(spreads() + " | " + each() + " | " + [..."ab"].join("-") + " | " + [...big].length);
+"#
+        ),
+        "1,2,3 0,x a1,b2 a,b1,2 | xx2,yy2,a=1,b=2 | a-b | 200000"
     );
 }
 
@@ -627,6 +668,39 @@ try {
     );
 }
 
+// An async body computes `**`, the bitwise and shift operators (compound assignments
+// included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
+// whose lowering uses `&` and `in`; `in` evaluates its property before its object in
+// both bodies. Expected output is Node's.
+#[test]
+fn async_body_operators_and_for_in_match_sync_code() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function ops(a: number, b: number, u: any, o: any): Promise<string> {
+  let k = "a";
+  let x = 12; x &= 10; let y = 1; y <<= 3; let z = 5; z |= 2; let w = 6; w ^= 3;
+  return [a & b, a | b, a ^ b, a << 2, a >> 1, -a >>> 28, ~a, 2 ** 10, +u, u & 7, x, y, z, w].join(",")
+    + " " + ["a" in o, "z" in o, 0 in [5], 1 in [5], k in (k = "b", { a: 1 })].join(",");
+}
+async function keys(): Promise<string> {
+  const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = [];
+  for (const k in o) ks.push(k + "=" + o[k]);
+  for (const k in [7, 8]) ks.push(k);
+  for (const k in "xy") ks.push(k);
+  for (const k in null as any) ks.push(k);
+  return ks.join(",");
+}
+ops(12, 10, "13", { a: 1 }).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+keys().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+function syncIn(): boolean { let k = "a"; return k in (k = "b", { a: 1 }); }
+console.log(syncIn());
+"#
+        ),
+        "true\n8,14,6,48,6,15,-13,1024,13,5,8,8,7,5 true,false,true,false,true\na=1,b=2,c=3,0,1,0,1"
+    );
+}
+
 // `r.run(shadow(r))` looks `run` up before it evaluates the argument: the argument gives
 // the instance an own, non-function `run`, which a lookup made afterwards would find.
 #[test]
@@ -852,6 +926,41 @@ console.log(bump(5) + " " + total);
     );
 }
 
+// A call through a closure or function value runs the callee with every argument, for any
+// argument count, evaluates each argument once, and a void callee yields `undefined`.
+// Expected output is Node's.
+#[test]
+fn a_dynamic_call_passes_every_argument_once() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f4: any = (a: number, b: number, c: number, d: number) => "" + a + b + c + d;
+const f5: any = (a: number, b: number, c: number, d: number, e: number) => "" + a + b + c + d + e;
+function g4(a: number, b: number, c: number, d: number) { return "" + a + b + c + d; }
+const gv: any = g4;
+function viaParam(fn: (a: number, b: number, c: number, d: number) => number) { return fn(1, 2, 3, 4); }
+console.log("label: " + f4(1, 2, 3, 4) + " " + f5(1, 2, 3, 4, 5) + " " + gv(5, 6, 7, 8) + " " + viaParam((a, b, c, d) => a + b + c + d));
+let n = 0;
+function tick(): number { n++; return n; }
+const a1: any = (x: number) => x;
+const a2: any = (x: number, y: number) => x + y;
+const t1: (x: number) => number = (x) => x;
+const counts: number[] = [];
+n = 0; a1(tick()); counts.push(n);
+n = 0; a2(tick(), tick()); counts.push(n);
+n = 0; f4(tick(), 0, 0, 0); counts.push(n);
+n = 0; t1(tick()); counts.push(n);
+console.log(counts.join(","));
+let sunk = 0;
+function sink(a: number, b?: number, c?: number, d?: number): void { sunk += a; }
+const sv: any = sink;
+console.log(sv(1) + " " + sv(1, 2, 3, 4) + " " + sunk);
+"#
+        ),
+        "label: 1234 12345 5678 10\n1,2,1,1\nundefined undefined 2"
+    );
+}
+
 // `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
 // is a symbol, as `ImageSymbol(name)` is.
 #[test]
@@ -1064,6 +1173,27 @@ console.log(new B().m());
     );
 }
 
+// `super.x` in a static method reads the parent's static methods, as `Parent.x`
+// does, and keeps the subclass as `this`. Expected output is Node's.
+#[test]
+fn super_in_a_static_method_reaches_the_parents_static_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static f() { return "f"; } static g() { return "g:" + this.name; } }
+class B extends A { static h() { return super.f() + "h"; } static i() { return super.g(); } }
+class C extends B {}
+console.log("B.f(): " + B.f());
+console.log("C.f(): " + C.f());
+console.log("B.h() (super.f()): " + B.h());
+console.log("B.i() (super.g() keeps this): " + B.i());
+console.log("C.h(): " + C.h());
+"#
+        ),
+        "B.f(): f\nC.f(): f\nB.h() (super.f()): fh\nB.i() (super.g() keeps this): g:B\nC.h(): fh"
+    );
+}
+
 // A getter that returns a non-callable makes `super.m()` throw a TypeError.
 #[test]
 fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
@@ -1180,6 +1310,56 @@ console.log(nullish(null), nullish(undefined), nullish({ y: 6 }));
     );
 }
 
+// An object rest element is a new object holding the source's other own enumerable keys,
+// in a synchronous and in an async body.
+#[test]
+fn object_rest_copies_the_keys_not_named_before_it() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const keys = (o: any) => Object.keys(o).join(",");
+function decl() { const { x, ...o } = { x: 1, y: 2, z: 3 } as any; return x + " " + keys(o); }
+function param({ a, ...r }: any) { return a + " " + keys(r); }
+function assign() { let x: any, o: any; ({ x, ...o } = { x: 1, y: 2 } as any); return x + " " + keys(o); }
+function nested() { const { a: { b, ...inner }, ...outer } = { a: { b: 1, c: 2 }, d: 3 } as any; return b + " " + keys(inner) + " " + keys(outer); }
+function copy() { const src: any = { p: 1, q: 2 }; const { ...o } = src; o.p = 9; return (o !== src) + " " + src.p + " " + keys(o); }
+function computed() { const k = "a"; const { [k]: v, ...r } = { a: 1, b: 2 } as any; return v + " " + keys(r); }
+function hidden() { const src: any = { a: 1, b: 2 }; Object.defineProperty(src, "h", { value: 3, enumerable: false }); const { a, ...r } = src; return keys(r) + " " + ("h" in r); }
+function proto() { const { b, ...r } = JSON.parse('{"__proto__":{"f":1},"b":2}'); return Object.keys(r).join(",") + " " + r.f; }
+async function inAsync() { const k = "z"; const { x, [k]: z, ...o } = { x: 1, y: 2, z: 3 } as any; return x + " " + z + " " + JSON.stringify(o); }
+console.log(decl() + " | " + param({ a: 1, b: 2, c: 3 }) + " | " + assign() + " | " + nested());
+console.log(copy() + " | " + computed() + " | " + hidden() + " | " + proto());
+inAsync().then((v) => console.log(v));
+"#
+        ),
+        "1 y,z | 1 b,c | 1 y | 1 c d\ntrue 1 p,q | 1 b | b false | __proto__ undefined\n1 3 {\"y\":2}"
+    );
+}
+
+// In an async body `delete` removes the property, throws on a nullish receiver, and
+// still evaluates an operand that is not a property reference.
+#[test]
+fn async_delete_reaches_the_property_reference() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let n = 0;
+function bump() { n++; return n; }
+async function del() {
+  const o: any = { a: 1, b: 2 }; const k = "b";
+  const d = delete o.a; delete o[k];
+  let caught = "no";
+  try { const z: any = null; delete z.x; } catch (e) { caught = "yes"; }
+  delete (bump() as any);
+  return d + " " + JSON.stringify(o) + " " + caught + " " + n;
+}
+del().then((v) => console.log(v));
+"#
+        ),
+        "true {} yes 1"
+    );
+}
+
 // `.message` is an ordinary property read: only an Error's message comes from the
 // Error itself.
 #[test]
@@ -1272,61 +1452,6 @@ console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " +
     );
 }
 
-// `new` on a class value hands its arguments to the compiled constructor as Perry
-// values: a closure argument stays a closure the array bridges can call.
-#[test]
-fn a_class_value_constructor_receives_a_closure_argument() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
-const MM: any = M;
-console.log(new MM((n: number) => n * 10).out.join(","));
-"#
-        ),
-        "10,20"
-    );
-}
-
-// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
-#[test]
-fn host_instanceof_on_a_class_value_walks_the_class_chain() {
-    assert_eq!(
-        run_web_source_then(
-            r#"
-class P { }
-class Q extends P { }
-const refs: any[] = [P, Q];
-console.log(refs.length);
-"#,
-            r#"
-const P = __classRef("P", -1), Q = __classRef("Q", -1);
-console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
-  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
-"#
-        ),
-        "2\ntrue true false false false"
-    );
-}
-
-// `new` on a class value yields what [[Construct]] yields: the instance, unless the
-// constructor returns an object. A bare `return;` keeps the initialized instance.
-#[test]
-fn a_class_value_constructor_returning_no_object_yields_the_instance() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
-class O { v = 1; constructor() { return { v: 5 } as any; } }
-const EE: any = E, OO: any = O;
-const e = new EE(1);
-console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
-"#
-        ),
-        "1 1 true 2 5 false"
-    );
-}
-
 // `fetchWithAuth` / `fetchPostWithAuth` build their headers object between
 // evaluating their arguments; the bridge must receive each argument in its own
 // slot, evaluated in source order, and the module must validate at all.
@@ -1375,6 +1500,30 @@ fn property_update_stores_and_returns_the_old_or_new_value() {
              o.x++; console.log(o.x);"
         ),
         "5 6\n5 6\n7 7\n6\n5 5\n6"
+    );
+}
+
+// `for...in` visits the enumerable string keys of an object and its prototype chain:
+// a literal, an array, a class instance, a boxed string, a key deleted before its
+// turn is skipped, a closure and a method value have none. Expected output is Node's.
+#[test]
+fn for_in_visits_enumerable_keys_of_the_object_and_its_prototypes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const keysIn = (o: any) => { const ks: string[] = []; for (const k in o) ks.push(k); return ks.join(","); };
+class P { x = 1; y = 2; m() { return 0; } }
+function typed() { const o = { a: 1, b: 2 }; const ks: string[] = []; for (const k in o) ks.push(k); return ks.join(","); }
+function inherited() { const o: any = { b: 2 }; Object.setPrototypeOf(o, { a: 1 }); Object.defineProperty(o, "h", { value: 3, enumerable: false }); return keysIn(o); }
+function deleted() { const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = []; for (const k in o) { ks.push(k); delete o.b; } return ks.join(","); }
+function letHead() { const o: any = { p: 1, q: 2 }; let k: string; let s = ""; for (k in o) s = s + k + o[k]; return s; }
+console.log(typed() + " | " + keysIn({ u: 1, v: 2 }) + " | " + keysIn([10, 20]) + " | " + keysIn(new P()) + " | " + keysIn("ab"));
+console.log(inherited() + " | " + deleted() + " | " + letHead() + " | [" + keysIn(null) + keysIn(undefined) + keysIn(5) + "]");
+const g: any = () => 0; g.w = 1;
+console.log("[" + keysIn(() => 1) + "] [" + keysIn(new P().m) + "] [" + keysIn(g) + "]");
+"#
+        ),
+        "a,b | u,v | 0,1 | x,y | 0,1\nb,a | a,c | p1q2 | []\n[] [] [w]"
     );
 }
 
@@ -1444,6 +1593,77 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
         "a|b 1|2 a,1|b,2"
+    );
+}
+
+// An async body is emitted as JS, which must build an array literal with a spread, call
+// `Math.max` / `Math.min` and an array's `keys` / `values` / `entries` itself rather than
+// yield undefined (#15100).
+#[test]
+fn async_body_spreads_into_array_literals_and_calls_math_max_min() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let log = "";
+function at(n: any) { log += n; return n; }
+async function f(): Promise<string> {
+  const xs = [1, 2];
+  const ys: any[] = [0, ...xs, 3, , ];
+  const ks = [...xs.keys(), ...xs.values(), ..."ab", [...xs.entries()][1][0]];
+  const m = Math.max(at(3), at(9), at(4)) + "," + Math.min(at(3), at(9)) + "," + Math.max("7" as any, 2) + "," + Math.min(1, NaN) + "," + Math.max() + "," + Math.min() + "," + Math.min(Infinity, 5) + "," + Math.max(-Infinity, -1);
+  return ys.length + " " + ys.join("|") + " " + ks.join(",") + " " + m + " " + log;
+}
+f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "5 0|1|2|3| 0,1,1,2,a,b,1 9,3,7,NaN,-Infinity,Infinity,5,-1 39439"
+    );
+}
+
+// `new Set([...])`, `new Map([...])` and their methods inside an async body build and use
+// real collections (#14595).
+#[test]
+fn async_body_builds_and_uses_maps_and_sets() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const outer = new Set([1, 2, 3]);
+async function sets(): Promise<string> {
+  const s = new Set([1, 2, 3]);
+  const e = new Set<string>();
+  e.add("a");
+  e.add("a");
+  const d1 = s.delete(1);
+  const d2 = s.delete(1);
+  e.add(await Promise.resolve("b"));
+  const copy = new Set(s);
+  return [s.size, s.has(2), s.has(1), e.size, d1, d2, outer.has(3), typeof s, copy.size, copy.has(3)].join(" ");
+}
+async function maps(): Promise<string> {
+  const m = new Map<string, number>([["a", 1]]);
+  const n = new Map<string, number>();
+  m.set("b", 2).set("c", 3);
+  n.set("x", 1).set("y", await Promise.resolve(4));
+  const d1 = m.delete("a");
+  const d2 = m.delete("zz");
+  const before = [m.size, m.get("b"), m.get("a"), m.has("c"), m.has("a"), d1, d2, n.get("x"), n.get("y")].join(" ");
+  m.clear();
+  return before + " " + m.size;
+}
+// A typed parameter's methods lower to the dedicated Map/Set nodes.
+async function typed(m: Map<string, number>, s: Set<number>): Promise<string> {
+  m.set("q", 5).set("r", 6);
+  const got = [m.get("q"), m.has("q"), m.delete("q"), m.delete("q"), m.size];
+  m.clear();
+  s.clear();
+  return got.join(" ") + " " + m.size + " " + s.size;
+}
+sets().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+maps().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+typed(new Map(), new Set([1])).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
+"#
+        ),
+        "5 true true false 1 0 0\n2 true false 2 true false true object 2 true\n2 2  true false true false 1 4 0"
     );
 }
 
@@ -1525,14 +1745,14 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 // An expression the JS emitter has no arm for must reject, not run on with `undefined`:
-// `new Set([...])` has no arm, so iterating it throws.
+// a typed array has no arm in an async body, so iterating it throws.
 #[test]
 fn async_body_rejects_iteration_it_cannot_emit() {
     let out = run_web_source(
         r#"
 async function each(): Promise<string> {
   let s = "";
-  for (const v of new Set(["x", "y"])) s = s + v;
+  for (const v of new Uint8Array([120, 121])) s = s + v;
   return s;
 }
 each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
@@ -1581,6 +1801,24 @@ console.log(lit.out.join(","), lit instanceof Object);
 "#
         ),
         "7 1,2,3\n1-2-3 true\n7 1,2,3\nx,y true"
+    );
+}
+
+// `join` converts each element as Array.prototype.join does: a nested array joins with
+// ",", null and undefined are empty strings, an undefined separator is ",". Expected
+// output is Node's.
+#[test]
+fn join_converts_nested_arrays_and_nullish_elements_as_js_does() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const nested = [[1, 2], [3]];
+const mixed: any = [[1, [2, 3]], "s", null, undefined, [true], { a: 1 }];
+function joinIn(xs: number[][]) { return xs.join(";"); }
+console.log(nested.join(";") + " | " + nested.join() + " | " + mixed.join("|") + " | " + joinIn([[4], [5, 6]]) + " | " + [1, 2].join(";") + " | " + [1, 2].join(undefined));
+"#
+        ),
+        "1,2;3 | 1,2,3 | 1,2,3|s|||true|[object Object] | 4;5,6 | 1;2 | 1,2"
     );
 }
 
@@ -1729,27 +1967,6 @@ try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name
 "#
         ),
         "a!\nb!\na\nnull: TypeError\n1: TypeError"
-    );
-}
-
-#[test]
-fn a_class_value_holds_static_side_properties_and_a_prototype() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class T {}
-(T as any).key = "class";
-console.log((T as any).key);
-const k = "dyn";
-(T as any)[k] = 2;
-console.log((T as any)[k]);
-const base = { tag: "base" };
-class U {}
-Object.setPrototypeOf(U, base);
-console.log((U as any).tag);
-"#
-        ),
-        "class\n2\nbase"
     );
 }
 
@@ -2050,6 +2267,71 @@ console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any)
     );
 }
 
+// A call with spread arguments passes the elements, in a sync and in an async body: to a
+// function (a void one too), a closure, a method (a computed key too), `push`, `Math.max` /
+// `Math.min`, a host static and `console.log`. Expected output is Node's.
+#[test]
+fn a_spread_call_passes_the_spread_elements() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function sum3(a: number, b: number, c: number): number { return a + b + c; }
+const add = (a: number, b: number) => a + b;
+class K { base = 100; plus(a: number, b: number) { return this.base + a + b; } }
+function note(a: number, b: number): void { console.log("note " + (a + b)); }
+const o: any = { base: 10, m(a: number, b: number) { return this.base + a + b; } };
+const xs: number[] = [1, 2, 3];
+const anyXs: any = [4, 5, 6];
+const arr: number[] = [0];
+const n = arr.push(...xs, 9);
+console.log(sum3(...(xs as [number, number, number])) + " " + sum3(0, ...(xs.slice(1) as [number, number])) + " " + add(...(xs as [number, number])) + " " + new K().plus(...(xs as [number, number])));
+console.log(n + " " + arr.join(",") + " " + Math.max(...xs) + " " + Math.min(...anyXs) + " " + Math.max(0, ...xs) + " " + String.fromCharCode(...[72, 105]));
+console.log(...["a", "b"], 1);
+note(...(xs as [number, number]));
+const key = "m";
+console.log(o[key](...(xs as [number, number])));
+async function inAsync(): Promise<string> { const ys = [1, 2, 3]; const a2: number[] = []; a2.push(...ys); note(...(ys as [number, number])); return Math.max(...ys) + ":" + a2.length + ":" + sum3(...(ys as [number, number, number])) + ":" + add(...(ys as [number, number])) + ":" + o[key](...(ys as [number, number])); }
+inAsync().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "6 5 3 103\n5 0,1,2,3,9 3 4 3 Hi\na b 1\nnote 3\n13\nnote 3\n3:3:6:3:13"
+    );
+}
+
+// A spread call on a UI handle reaches the UI method, as a call with fixed arguments does.
+#[test]
+fn a_spread_call_on_a_ui_handle_runs_the_ui_method() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text } from "perry/ui";
+const t: any = Text("hi");
+t.setWidth(...[10]);
+"#,
+            r#"
+const el = [...uiHandles.values()].find(e => e.textContent === "hi");
+console.log(el.style.width);
+"#
+        ),
+        "10px"
+    );
+}
+
+// A static method called with spread arguments receives the closure itself, not a host wrapper.
+#[test]
+fn a_spread_call_to_a_static_method_passes_closures_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const g = () => 1;
+class C { static same(f: any) { return f === g; } }
+console.log(C.same(g) + " " + C.same(...[g]));
+"#
+        ),
+        "true true"
+    );
+}
+
 // B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
 #[test]
 fn a_super_read_stops_at_a_setter_only_accessor() {
@@ -2148,6 +2430,39 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 
 #[path = "class_eval_tests.rs"]
 mod class_eval;
+
+#[path = "collection_for_of_tests.rs"]
+mod collection_for_of;
+
+#[path = "static_method_tests.rs"]
+mod static_method;
+
+#[path = "class_value_tests.rs"]
+mod class_value;
+
+#[path = "function_value_tests.rs"]
+mod function_value;
+
+#[path = "get_prototype_of_tests.rs"]
+mod get_prototype_of;
+
+#[path = "object_create_tests.rs"]
+mod object_create;
+
+#[path = "object_prototype_method_tests.rs"]
+mod object_prototype_method;
+
+#[path = "class_prototype_tests.rs"]
+mod class_prototype;
+
+#[path = "builtin_subclass_tests.rs"]
+mod builtin_subclass;
+
+#[path = "rest_param_tests.rs"]
+mod rest_param;
+
+#[path = "math_minmax_tests.rs"]
+mod math_minmax;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {

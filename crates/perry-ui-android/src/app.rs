@@ -233,6 +233,9 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         // thread mid-interaction.
         js_gc_step_us(2_000, std::ptr::null_mut());
     }
+    // Render each canvas that received draw calls during this tick once —
+    // all canvas calls between two pump ticks form one frame.
+    crate::widgets::canvas::flush_dirty();
     // perry/media (#351) — drive state polling on the UI thread so the
     // PLAYERS thread_local stays consistent with where create_player
     // stored entries. Internally throttled to ~10 Hz.

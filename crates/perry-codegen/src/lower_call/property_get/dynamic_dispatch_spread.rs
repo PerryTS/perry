@@ -201,6 +201,7 @@ fn produce<'f, 'a>(
         src: &src_h,
         len: &len,
         cap: cap.as_deref(),
+        prefix: None,
         post: &vals[k + 1..],
     };
     let mut phi = direct(ctx, &held_v, &parts, &vec_l, &merge_l)?;
@@ -367,14 +368,8 @@ pub(crate) fn emit_function(
                 Ok(vec![(v, after)])
             },
             |ctx, _, vector| {
-                let len = ctx.block().call(I32, "js_array_length", &[(I64, vector)]);
-                let parts = Parts {
-                    pre: &[],
-                    src: vector,
-                    len: &len,
-                    cap: None,
-                    post: &[],
-                };
+                let mut words = Default::default();
+                let parts = vector_parts(ctx, vector, &mut words);
                 let values = params(ctx, &parts, fixed, &undefined);
                 Ok(call(ctx, &values))
             },
@@ -415,14 +410,8 @@ pub(crate) fn emit_function(
                 .map(|i| roots.reread(ctx, i))
                 .collect::<Result<_>>()?;
             if fixed > cut {
-                let len = ctx.block().call(I32, "js_array_length", &[(I64, &vector)]);
-                let parts = Parts {
-                    pre: &[],
-                    src: &vector,
-                    len: &len,
-                    cap: None,
-                    post: &[],
-                };
+                let mut words = Default::default();
+                let parts = vector_parts(ctx, &vector, &mut words);
                 values.extend(params(ctx, &parts, fixed - cut, &undefined));
             }
             if rest {
@@ -451,7 +440,33 @@ struct Parts<'p> {
     /// slots are dense-prefix slots, loaded directly. `None`: the element
     /// read is the runtime's.
     cap: Option<&'p str>,
+    /// With `cap`, the source's dense prefix when the producer did not admit
+    /// the needed slots into it (a fresh argument vector): a slot below it is
+    /// loaded directly, any other is the runtime's element read.
+    prefix: Option<&'p str>,
     post: &'p [String],
+}
+
+/// [`Parts`] of a finished argument vector (`vector`, the raw address of
+/// the fresh array the drain built: a live, unforwarded Array with no
+/// element descriptors): its length, capacity and dense prefix, read inline.
+fn vector_parts<'p>(ctx: &mut FnCtx<'_>, vector: &'p str, words: &'p mut [String; 3]) -> Parts<'p> {
+    let blk = ctx.block();
+    let ptr = blk.inttoptr(I64, vector);
+    words[0] = blk.load(I32, &ptr);
+    let cap_ptr = blk.gep(crate::types::I8, &ptr, &[(I64, "4")]);
+    words[1] = blk.load(I32, &cap_ptr);
+    words[2] = blk.array_ek_prefix(vector);
+    let words: &'p [String; 3] = words;
+    let [len, cap, prefix] = words;
+    Parts {
+        pre: &[],
+        src: vector,
+        len,
+        cap: Some(cap),
+        prefix: Some(prefix),
+        post: &[],
+    }
 }
 
 /// Parameter `j < declared` of a fixed-arity body:
@@ -475,28 +490,47 @@ fn params(ctx: &mut FnCtx<'_>, p: &Parts<'_>, declared: usize, undefined: &str) 
         let inb = ctx.block().icmp_ult(I32, &k, p.len);
         ctx.block().cond_br(&inb, &read_l, &tail_l);
         ctx.current_block = read_idx;
-        let read = match p.cap {
-            Some(cap) => {
-                let blk = ctx.block();
-                let addr = blk.array_element_addr_with_capacity(p.src, cap, &k);
-                let ptr = blk.inttoptr(I64, &addr);
-                let bits = blk.load(I64, &ptr);
-                blk.bitcast_i64_to_double(&bits)
+        let load = |ctx: &mut FnCtx<'_>, cap: &str| {
+            let blk = ctx.block();
+            let addr = blk.array_element_addr_with_capacity(p.src, cap, &k);
+            let ptr = blk.inttoptr(I64, &addr);
+            let bits = blk.load(I64, &ptr);
+            blk.bitcast_i64_to_double(&bits)
+        };
+        let get = |ctx: &mut FnCtx<'_>| {
+            ctx.block()
+                .call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)])
+        };
+        let (read, read_l) = match (p.cap, p.prefix) {
+            (Some(cap), None) => (load(ctx, cap), read_l),
+            (Some(cap), Some(prefix)) => {
+                let dense_idx = ctx.new_block("sdispatch.arg_dense");
+                let cold_idx = ctx.new_block("sdispatch.arg_cold");
+                let dense_l = ctx.block_label(dense_idx);
+                let cold_l = ctx.block_label(cold_idx);
+                let below = ctx.block().icmp_ult(I32, &k, prefix);
+                ctx.block().cond_br(&below, &dense_l, &cold_l);
+                ctx.current_block = dense_idx;
+                let direct = load(ctx, cap);
+                ctx.block().br(&join_l);
+                ctx.current_block = cold_idx;
+                let cold = get(ctx);
+                ctx.block().br(&join_l);
+                ctx.current_block = tail_idx;
+                let tail = params_tail(ctx, p, &k, undefined);
+                ctx.block().br(&join_l);
+                ctx.current_block = join_idx;
+                out.push(ctx.block().phi(
+                    DOUBLE,
+                    &[(&direct, &dense_l), (&cold, &cold_l), (&tail, &tail_l)],
+                ));
+                continue;
             }
-            None => ctx
-                .block()
-                .call(DOUBLE, "js_array_get_f64", &[(I64, p.src), (I32, &k)]),
+            (None, _) => (get(ctx), read_l),
         };
         ctx.block().br(&join_l);
         ctx.current_block = tail_idx;
-        let mut tail = undefined.to_string();
-        if !p.post.is_empty() {
-            let t = ctx.block().sub(I32, &k, p.len);
-            for (m, v) in p.post.iter().enumerate().rev() {
-                let hit = ctx.block().icmp_eq(I32, &t, &m.to_string());
-                tail = ctx.block().select(I1, &hit, DOUBLE, v, &tail);
-            }
-        }
+        let tail = params_tail(ctx, p, &k, undefined);
         ctx.block().br(&join_l);
         ctx.current_block = join_idx;
         out.push(
@@ -505,6 +539,19 @@ fn params(ctx: &mut FnCtx<'_>, p: &Parts<'_>, declared: usize, undefined: &str) 
         );
     }
     out
+}
+
+/// Parameter source slot `k >= len`: `post[k - len]`, else `undefined`.
+fn params_tail(ctx: &mut FnCtx<'_>, p: &Parts<'_>, k: &str, undefined: &str) -> String {
+    let mut tail = undefined.to_string();
+    if !p.post.is_empty() {
+        let t = ctx.block().sub(I32, k, p.len);
+        for (m, v) in p.post.iter().enumerate().rev() {
+            let hit = ctx.block().icmp_eq(I32, &t, &m.to_string());
+            tail = ctx.block().select(I1, &hit, DOUBLE, v, &tail);
+        }
+    }
+    tail
 }
 
 struct Tower<'t, 'a> {
@@ -611,14 +658,8 @@ impl Tower<'_, '_> {
         let merge_idx = ctx.new_block("sdispatch.vmerge");
         let generic_l = ctx.block_label(generic_idx);
         let merge_l = ctx.block_label(merge_idx);
-        let len = ctx.block().call(I32, "js_array_length", &[(I64, vector)]);
-        let parts = Parts {
-            pre: &[],
-            src: vector,
-            len: &len,
-            cap: None,
-            post: &[],
-        };
+        let mut words = Default::default();
+        let parts = vector_parts(ctx, vector, &mut words);
         let mut phi = self.emit_direct_switch(ctx, recv_box, &parts, &generic_l, &merge_l)?;
         ctx.current_block = generic_idx;
         let by_id = |ctx: &mut FnCtx<'_>| {

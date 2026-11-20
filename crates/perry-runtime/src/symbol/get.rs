@@ -1039,6 +1039,78 @@ unsafe fn declared_prototype_chain_symbol(
     own_symbol_property_for_receiver(holder, sym, receiver)
 }
 
+/// `[[Get]](obj, sym)` of a compiled class instance when it is a data
+/// property holding a compiled generator function, read without running
+/// anything: the same answer [`js_object_get_symbol_property_with_receiver`]
+/// gives, by the same walk, for exactly these receivers. `obj` is a live,
+/// unforwarded `GC_TYPE_OBJECT` (no proxy, Date, handle, byte cell or class
+/// object) with a class identity and no recorded [[Prototype]] (its
+/// class-implied link, so the recorded walk answers nothing), and no own
+/// property under `sym` (its canonical keys are its own-key authority);
+/// [`declared_prototype_symbol_holder`]'s walk then finds the holder on the
+/// declared prototype chain, and its own slot is a data property whose value
+/// is a generator function. `None` (nothing run, nothing allocated) for
+/// every other receiver or answer: an accessor, a native function, a
+/// prototype not yet materialized, or a key found nowhere on that chain.
+pub(crate) unsafe fn class_instance_generator_symbol_method(
+    obj_f64: f64,
+    sym_f64: f64,
+) -> Option<f64> {
+    let bits = obj_f64.to_bits();
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let raw = (bits & POINTER_MASK) as usize;
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+        || crate::object::is_class_object_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    let obj = raw as *const crate::object::ObjectHeader;
+    let class_id = (*obj).class_id;
+    if class_id == 0
+        || !crate::object::shapes::receiver_has_class_identity(obj)
+        || crate::object::shapes::object_prototype_word(obj) != 0
+        || own_symbol_slot(obj_f64, sym_f64).is_some()
+    {
+        return None;
+    }
+    // [`declared_prototype_symbol_holder`]'s walk, reading each hop's own
+    // slot once: its presence test (`has_own_symbol_property`) and the
+    // slot read answer from the same own-key storage.
+    if crate::object::prototype_chain::object_prototype_is_foreign(raw) {
+        return None;
+    }
+    let mut declared = crate::object::class_decl_prototype_object(class_id);
+    let mut found = None;
+    for _ in 0..32 {
+        if declared.is_null() {
+            return None;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(declared as i64);
+        if let Some(slot) = own_symbol_slot(proto_value, sym_f64) {
+            found = Some(slot);
+            break;
+        }
+        let bits = crate::object::prototype_chain::object_static_prototype(declared as usize)?;
+        declared = object_header_ptr_from_value_bits(bits)? as *mut crate::object::ObjectHeader;
+    }
+    let OwnSymbolSlot::Data(method) = found? else {
+        return None;
+    };
+    let value = crate::value::JSValue::from_bits(method);
+    if !value.is_pointer() {
+        return None;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    (crate::closure::is_closure_ptr(closure as usize)
+        && crate::closure::props::closure_has_generator_body(closure))
+    .then_some(f64::from_bits(method))
+}
+
 /// Locate a declared prototype property without invoking its getter. An
 /// explicit prototype replaces the class default, including when it is null.
 unsafe fn declared_prototype_symbol_holder(receiver: f64, sym: f64, class_id: u32) -> Option<f64> {

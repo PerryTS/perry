@@ -65,6 +65,17 @@ Text("custom", { color: "#ff8800", backgroundColor: "#222" });
 
 Named colors: `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `white`, plus their `bright*` variants. Truecolor (`#rrggbb`) works on every modern terminal.
 
+Text layout and painting measure terminal columns, not UTF-8 bytes or Unicode
+scalar counts. Combining sequences remain one grapheme; CJK characters and
+wide emoji reserve their full display width. The renderer emits each complete
+grapheme once and clears leftover columns when wide text is replaced. A
+grapheme that does not fit at the right edge is omitted in full.
+
+Width follows `unicode-width`'s non-CJK policy (East Asian ambiguous characters
+are narrow). A terminal configured with a different width policy or Unicode
+version can disagree. Leading zero-width graphemes without a base are omitted;
+this does not add multiline layout, wrapping, or cross-widget grapheme joining.
+
 ## `Spacer()`
 
 A zero-content widget with `flexGrow: 1` baked in. Push siblings to the edges of a flex container without spelling out the grow factor:

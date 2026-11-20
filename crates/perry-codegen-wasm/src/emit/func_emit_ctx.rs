@@ -29,6 +29,8 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) label_stack: Vec<(String, u32, u32)>,
     /// Pending label to attach to the next loop encountered.
     pub(super) pending_label: Option<String>,
+    /// Set while a Set/Map cursor loop is emitted inside its releasing `finally`.
+    pub(super) cursor_loop_wrapped: bool,
     /// Current class name (set when compiling class methods/constructors)
     pub(super) current_class: Option<String>,
     /// The local holding `this`: local 0 in a class constructor, method or
@@ -36,6 +38,8 @@ pub(super) struct FuncEmitCtx<'a> {
     pub(super) this_local: Option<u32>,
     /// The class of a static method or static block, which is its `this`.
     pub(super) static_class: Option<String>,
+    /// The local a static method that reads `this` loads it into on entry.
+    pub(super) static_this_local: Option<u32>,
     /// Index of a temp i64 local
     pub(super) temp_local: u32,
     /// Completion kind while transferring to a shared finalizer.
@@ -72,9 +76,11 @@ impl<'a> FuncEmitCtx<'a> {
             block_depth: 0,
             label_stack: Vec::new(),
             pending_label: None,
+            cursor_loop_wrapped: false,
             current_class: None,
             this_local: None,
             static_class: None,
+            static_this_local: None,
             temp_local,
             temp_local_i32,
             temp_store_local: temp_local + 1,

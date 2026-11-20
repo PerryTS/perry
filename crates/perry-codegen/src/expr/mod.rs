@@ -1274,6 +1274,10 @@ pub(crate) struct FnCtx<'a> {
     /// `arena_state_slot` is a lazily-resolved null-initialized slot minted by
     /// `load_inline_arena_state` (as opposed to a seeded hidden parameter).
     pub arena_state_lazy: bool,
+    /// This activation's agent-pointer block address on Apple aarch64, read
+    /// once at the body's start (`agent_ptr::begin_activation`); `None`
+    /// where the body has no such start, and every site reads it itself.
+    pub agent_block: Option<agent_ptr::ActivationBlock>,
 
     /// Per-class cached `keys_array` global slots. The
     /// `@perry_class_keys_<class>` global is set once at module init,

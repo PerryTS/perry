@@ -975,7 +975,6 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
     if values.is_null() || n == 0 {
         return arr;
     }
-    let parent = arr as u64;
     let elems = unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64 };
     // The birth row of EK §3.1: P = the leading run of non-hole values.
     let mut run = n;
@@ -990,16 +989,41 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
         // stored element. No-op for SSO / non-string. (This outline path doesn't
         // funnel through `note_array_slot`.)
         crate::string::js_string_addref_if_heap_string(v);
-        // GC_STORE_AUDIT(BARRIERED): element store immediately followed by the
-        // slot layout note + write barrier below, identical to the inline
-        // array-literal element store via emit_jsvalue_slot_store_on_block.
+        // GC_STORE_AUDIT(BARRIERED): newborn element stores, published below
+        // by `publish_newborn_elements` (one layout decision and the newborn
+        // barrier) before anything can allocate.
         unsafe { core::ptr::write(slot, v) };
-        let vbits = v.to_bits();
-        crate::gc::js_gc_note_slot_layout(parent, i as u32, vbits);
-        crate::gc::js_write_barrier_slot(parent, slot as u64, vbits);
     }
-    unsafe { super::ek_set_prefix(arr, (*arr).ek_prefix, run) };
+    unsafe {
+        publish_newborn_elements(arr, n as usize);
+        super::ek_set_prefix(arr, (*arr).ek_prefix, run)
+    };
     arr
+}
+
+/// The layout and barrier of elements `0..n` of `arr`, a newborn from
+/// [`js_array_alloc_literal`] (`length == n`, pointer-free birth layout, no
+/// element-shape proof) whose slots were all written with nothing allocated
+/// since its birth: the state the per-slot `js_gc_note_slot_layout` +
+/// `js_write_barrier_slot` sequence reaches, decided once. A pointer-bearing
+/// element weakens the payload to the tag scan (and clears the numeric
+/// sub-flags, as its first slot note would); the newborn barrier then
+/// remembers or shades what the parent's generation and an incremental cycle
+/// require (the closure births' rule). An all-scalar payload stays
+/// pointer-free, which every slot note would have left it.
+///
+/// # Safety
+/// As stated: `arr` is that newborn and no collection ran since its birth.
+pub(crate) unsafe fn publish_newborn_elements(arr: *mut ArrayHeader, n: usize) {
+    let elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
+    if !(0..n).any(|i| crate::gc::layout_pointer_bearing_bits(*elems.add(i))) {
+        return;
+    }
+    crate::array::clear_array_numeric_layout_ptr(arr as usize);
+    crate::gc::layout_mark_unknown(arr as *mut u8);
+    if crate::gc::newborn_parent_needs_barrier(arr as usize) {
+        crate::gc::runtime_write_barrier_newborn_slots(arr as usize, elems, n);
+    }
 }
 
 /// Descriptor tag bytes for [`js_value_from_const_descriptor`]. MUST match the

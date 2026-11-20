@@ -1249,6 +1249,7 @@ fn chunk_statements(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         new_body.push(perry_hir::Stmt::Expr(perry_hir::Expr::Call {
             byte_end: 0,
@@ -1334,6 +1335,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,
@@ -1584,6 +1586,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         m.classes.push(perry_hir::Class {
             id: 1,
@@ -1611,6 +1614,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             }],
             getters: vec![],
             setters: vec![],
@@ -1726,6 +1730,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,

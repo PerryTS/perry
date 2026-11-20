@@ -182,6 +182,14 @@ class CategoryRoutingTests(unittest.TestCase):
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
 
+    def test_test262_runs_whenever_its_build_exists(self):
+        from pathlib import Path
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["jobs"]["test262"]["if"],
+                         "${{ !cancelled() && needs.plan.result == 'success' && needs.gap-suite-build.result == 'success'"
+                         " && fromJSON(needs.plan.outputs.plan).jobs.test262 }}")
+
     def test_required_wasi_job_executes_all_command_suites(self):
         from pathlib import Path
         import yaml
@@ -212,10 +220,87 @@ class CategoryRoutingTests(unittest.TestCase):
         self.assertTrue(any(step.get("env", {}).get("COMPONENT_CHECK_UNIT_TESTS") == "0"
                             for step in jobs["wasi-components"]["steps"]
                             if "component_check.sh" in step.get("run", "")))
-        keys = {name: next(step["with"]["shared-key"] for step in jobs[name]["steps"]
+        keys = {name: next(step["with"]["key"] for step in jobs[name]["steps"]
                            if "rust-cache" in step.get("uses", "")) for name in WASI_JOBS}
         self.assertEqual(len(set(keys.values())), len(WASI_JOBS), keys)
         self.assertTrue(any(step.get("with", {}).get("node-version-file") == ".node-version" for step in jobs["wasi-execution"]["steps"]))
+
+    def test_rust_cache_families_have_one_saver_and_reachable_restorers(self):
+        # rust-cache keeps the first save of a key, so two savers of one family
+        # leave whichever job finished first as the cache the other restores.
+        # A job restoring another job's family also needs the saver's runner and
+        # the env rust-cache hashes into the key, or it can never hit. Env a step
+        # exports through GITHUB_ENV before the cache step is not modelled.
+        import itertools
+        import yaml
+        hashed = ("CARGO", "CC", "CFLAGS", "CXX", "CMAKE", "RUST")
+        savers, restorers = {}, []
+        for name in ("test.yml", "gc.yml", "compiler-runtime.yml"):
+            workflow = yaml.load(Path(".github/workflows", name).read_text(), Loader=yaml.BaseLoader)
+            for job_id, job in workflow["jobs"].items():
+                matrix = (job.get("strategy") or {}).get("matrix") or {}
+                if not isinstance(matrix, dict):
+                    matrix = {}
+                axes = [v for k, v in matrix.items() if k not in ("include", "exclude") and isinstance(v, list)]
+                legs = [dict(zip([k for k, v in matrix.items() if k not in ("include", "exclude") and isinstance(v, list)], combo))
+                        for combo in itertools.product(*axes)] if axes else []
+                legs += [leg for leg in matrix.get("include") or [] if isinstance(leg, dict)]
+                for step in job.get("steps", []):
+                    uses = step.get("uses", "")
+                    self.assertNotIn("Swatinem/rust-cache", uses, f"{name}/{job_id} bypasses perry-rust-cache")
+                    if not uses.endswith("/perry-rust-cache"):
+                        continue
+                    env = {**(workflow.get("env") or {}), **(job.get("env") or {}), **(step.get("env") or {})}
+                    # The action exports CARGO_INCREMENTAL=0 before rust-cache hashes.
+                    signature = (job.get("runs-on"), sorted((k, v) for k, v in env.items()
+                                                            if k.startswith(hashed) and k != "CARGO_INCREMENTAL"))
+                    key = step.get("with", {}).get("key", job_id)
+                    if step.get("with", {}).get("save", "false") == "false":
+                        restorers.append((key, f"{name}/{job_id}", signature))
+                        continue
+                    savers.setdefault(key, []).append((f"{name}/{job_id}", signature))
+                    runners = [str(job.get("runs-on")).replace("${{ matrix.os }}", str(leg.get("os"))) for leg in legs]
+                    if "matrix." not in key and len(set(runners)) < len(runners):
+                        # rust-cache adds the OS and architecture, so only legs on one
+                        # runner share the key; they may only if they build the same.
+                        builds = [line for s in job.get("steps", []) for line in s.get("run", "").splitlines()
+                                  if "cargo " in line or "mbx " in line]
+                        build_env = [f"{k}={v}" for s in [job, *job.get("steps", [])] for k, v in (s.get("env") or {}).items()
+                                     if k.startswith(hashed)]
+                        self.assertFalse([x for x in builds + build_env if "matrix." in x],
+                                         f"{name}/{job_id}: matrix legs build differently but share family {key}")
+        self.assertEqual({k: [j for j, _ in v] for k, v in savers.items() if len(v) > 1}, {})
+        self.assertIn("gap-suite-build", savers)
+        for key, job, signature in restorers:
+            self.assertIn(key, savers, f"{job} restores {key}, which no job saves")
+            self.assertEqual(signature, savers[key][0][1], f"{job} cannot hit {key} saved by {savers[key][0][0]}")
+
+    def test_vendored_rust_cache_cleanup_keeps_listed_build_std_crates(self):
+        # The "Perry patch" in the vendored rust-cache: without it every restore
+        # rebuilds std, because build-std units are absent from cargo metadata.
+        import os
+        import shutil
+        import subprocess
+        import tempfile
+        node = shutil.which("node")
+        if node is None:
+            self.skipTest("node is not installed")
+        dist = next(Path(".github/actions/perry/Swatinem/rust-cache/dist").glob("cleanup-*.js")).resolve()
+        with tempfile.TemporaryDirectory() as tmp:
+            profile = Path(tmp, "target", "debug")
+            entries = ["deps/libcore-1a.rlib", "deps/librustc_std_workspace_core-2b.rlib", "deps/libfoo-3c.rlib",
+                       ".fingerprint/core-1a/x", ".fingerprint/rustc-std-workspace-core-2b/x", ".fingerprint/foo-3c/x",
+                       "build/std-4d/out", "build/foo-5e/out"]
+            for entry in entries:
+                Path(profile, entry).parent.mkdir(parents=True, exist_ok=True)
+                Path(profile, entry).write_text("")
+            script = Path(tmp, "clean.mjs")
+            script.write_text(f"import {{ c as cleanTargetDir }} from {json.dumps(str(dist))};\n"
+                              "await cleanTargetDir(process.argv[2], [], false);\n")
+            env = dict(os.environ, PERRY_RUST_CACHE_KEEP="core rustc-std-workspace-core std")
+            subprocess.run([node, str(script), str(Path(tmp, "target"))], check=True, env=env, capture_output=True)
+            kept = sorted(str(p.relative_to(profile)) for p in profile.rglob("*") if p.is_file())
+        self.assertEqual(kept, sorted(e for e in entries if "foo" not in e))
 
     def test_actual_pr_gate_rejects_one_skipped_planned_wasi_job(self):
         import os
