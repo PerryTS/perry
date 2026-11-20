@@ -693,6 +693,7 @@ impl WasmModuleEmitter {
                     // `(i64, i64, i64) -> i64`. Validator fails with
                     // "expected i64 but nothing on stack" (#1081 sibling instance).
                     self.func_param_counts.insert(async_import_idx, param_count);
+                    self.record_rest_param(async_import_idx, 0, &func.params);
                     self.async_func_imports.push((
                         func.name.clone(),
                         async_import_idx,
@@ -786,6 +787,7 @@ impl WasmModuleEmitter {
                     self.void_funcs.insert(user_func_idx);
                 }
                 self.func_param_counts.insert(user_func_idx, param_count);
+                self.record_rest_param(user_func_idx, 0, &func.params);
                 // Build func_name_map for ExternFuncRef resolution. Exported
                 // functions win the name; module-local helpers only fill a
                 // vacant slot (see exported_names above).
@@ -837,6 +839,7 @@ impl WasmModuleEmitter {
                         .or_default()
                         .insert(method.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &method.params);
                     user_func_idx += 1;
                 }
                 // Static methods: no this param
@@ -854,6 +857,7 @@ impl WasmModuleEmitter {
                     self.func_name_map
                         .insert(format!("{}_{}", class.name, method.name), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 0, &method.params);
                     user_func_idx += 1;
                 }
                 // Getters: like methods with 0 params + this
@@ -895,6 +899,7 @@ impl WasmModuleEmitter {
                         user_func_idx,
                     );
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &member.function.params);
                     user_func_idx += 1;
                 }
             }
@@ -904,10 +909,10 @@ impl WasmModuleEmitter {
         for (func_id, params, body, captures, mutable_captures, this, mod_idx) in &closure_funcs {
             if !self.module_func_maps[*mod_idx].contains_key(func_id) {
                 // Closure params: captures, then the captured `this`, then declared params
-                let total_params = captures.len()
+                let leading = captures.len()
                     + mutable_captures.len()
-                    + usize::from(*this == ClosureThis::Captured)
-                    + params.len();
+                    + usize::from(*this == ClosureThis::Captured);
+                let total_params = leading + params.len();
                 let wasm_params = vec![ValType::I64; total_params];
                 let results = if body.iter().any(has_return) {
                     vec![ValType::I64]
@@ -917,6 +922,7 @@ impl WasmModuleEmitter {
                 let type_idx = self.get_type_idx(wasm_params, results);
                 let _ = type_idx;
                 self.module_func_maps[*mod_idx].insert(*func_id, user_func_idx);
+                self.record_rest_param(user_func_idx, leading, params);
                 user_func_idx += 1;
             }
         }
@@ -1377,6 +1383,17 @@ impl WasmModuleEmitter {
                     );
                 }
             }
+            // One constant per rest parameter, exported below for the runtime.
+            for &slot in self.rest_params.values() {
+                global_section.global(
+                    GlobalType {
+                        val_type: ValType::I32,
+                        mutable: false,
+                        shared: false,
+                    },
+                    &wasm_encoder::ConstExpr::i32_const(slot as i32),
+                );
+            }
             wasm_module.section(&global_section);
         }
 
@@ -1408,6 +1425,15 @@ impl WasmModuleEmitter {
             for gidx in exported_globals {
                 export_section.export(&format!("__wasm_global_{}", gidx), ExportKind::Global, gidx);
             }
+        }
+        // `__wasm_rest_<idx>`: the rest parameter's slot of function `idx`, which the
+        // runtime reads to pack the arguments of a call through the function table.
+        for (k, &idx) in self.rest_params.keys().enumerate() {
+            export_section.export(
+                &format!("__wasm_rest_{}", idx),
+                ExportKind::Global,
+                self.num_globals + k as u32,
+            );
         }
         wasm_module.section(&export_section);
 
@@ -1741,6 +1767,33 @@ impl WasmModuleEmitter {
             async_js,
             ffi_imports: ffi_import_names,
         }
+    }
+
+    /// Records function `idx`'s rest parameter, if `params` has one, at its slot
+    /// after the `leading` receiver and capture parameters.
+    fn record_rest_param(&mut self, idx: u32, leading: usize, params: &[Param]) {
+        if let Some(i) = params.iter().position(|p| p.is_rest) {
+            self.rest_params.insert(idx, leading + i);
+        }
+    }
+
+    /// The arguments a direct call of WASM function `idx` passes: a rest parameter
+    /// receives the source arguments from its slot on as one array.
+    pub(super) fn with_rest_packed<'e>(
+        &self,
+        idx: Option<u32>,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = idx.and_then(|idx| self.rest_params.get(&idx)) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
     }
 }
 

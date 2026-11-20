@@ -2458,6 +2458,9 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "rest_param_tests.rs"]
+mod rest_param;
+
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
 

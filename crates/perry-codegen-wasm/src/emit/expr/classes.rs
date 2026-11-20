@@ -716,6 +716,8 @@ impl<'a> FuncEmitCtx<'a> {
                         // Direct call to compiled static method (no this param).
                         // Same arity reconciliation as FuncRef/ExternFuncRef arms
                         // (#183): pad-up for missing args, drop-excess for extras.
+                        let packed = self.emitter.with_rest_packed(Some(static_idx), args);
+                        let args: &[Expr] = &packed;
                         for arg in args {
                             self.emit_expr(func, arg);
                         }

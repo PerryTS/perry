@@ -27,7 +27,15 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 // Without this, V8/SpiderMonkey auto-coerce `undefined` via BigInt(undefined) and
 // throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
 // args already on the call (e.g. 1 for the receiver, or closure capture count).
+// A function with a rest parameter exports its slot as `__wasm_rest_<index>`; the
+// arguments from that slot on become one array, as a direct call packs them.
 function __padBigintArgs(fn, prefix, bigintArgs) {
+  const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
+  if (rest) {
+    const at = Math.max(0, rest.value - (prefix | 0));
+    while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
+    bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
+  }
   const need = Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1217,7 +1225,7 @@ function buildImports() {
         if (!cb || !wasmInstance) return 0;
         const id = setTimeout(() => {
           const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-          if (fn) fn(...cb.captures); // captures are already BigInt
+          if (fn) fn(...__padBigintArgs(fn, 0, [...cb.captures])); // captures are already BigInt
         }, delay);
         return id;
       },
@@ -1226,7 +1234,7 @@ function buildImports() {
         if (!cb || !wasmInstance) return 0;
         const id = setInterval(() => {
           const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-          if (fn) fn(...cb.captures); // captures are already BigInt
+          if (fn) fn(...__padBigintArgs(fn, 0, [...cb.captures])); // captures are already BigInt
         }, delay);
         return id;
       },
@@ -1383,7 +1391,7 @@ function buildImports() {
         const newP = p.then(val => {
           if (cb && wasmInstance) {
             const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-            if (fn) return u64ToF64(fn(...cb.captures, __jsValueToBits(val)));
+            if (fn) return u64ToF64(fn(...__padBigintArgs(fn, 0, [...cb.captures, __jsValueToBits(val)])));
           }
           return fromJsValue(val);
         });
@@ -1843,8 +1851,7 @@ function __classCtor(className, ctorIdx, caps) {
       while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
       args.push(...envCaps);
     }
-    const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...args.map(__jsValueToBits)));
     // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
@@ -1955,13 +1962,13 @@ function __defineHidden(target, key, value) {
 function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   const fn = function (...args) {
     const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
-    const padded = __padBigintArgs(impl, 0, args.map(__jsValueToBits));
+    const bits = args.map(__jsValueToBits);
     const outerThis = __classStaticThis;
     const outerCall = __classEnvCall;
     if (this !== undefined) __classStaticThis = { template, method: name, value: this, outer: outerThis };
     if (evaluation) __classEnvCall = { receiver: undefined, evaluation };
     try {
-      return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
+      return __bitsToJsValue(__invokeWasmCallback(impl, ...bits));
     } finally {
       __classStaticThis = outerThis;
       __classEnvCall = outerCall;
@@ -1995,11 +2002,11 @@ function __classStaticMethodValue(cls, name) {
 // A compiled member called on `self`, in `evaluation`'s capture environment.
 function __classMemberCall(funcIdx, evaluation, self, args) {
   const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
-  const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+  const bits = args.map(__jsValueToBits);
   const outer = __classEnvCall;
   if (evaluation) __classEnvCall = { receiver: self, evaluation };
   try {
-    return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...bits));
   } finally {
     __classEnvCall = outer;
   }
@@ -3260,11 +3267,11 @@ const __memDispatch = {
   // Captures are already BigInt from closure_set_capture.
   set_timeout: (closure, delay) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
-    return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...closure.captures); }, delay);
+    return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   set_interval: (closure, delay) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
-    return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...closure.captures); }, delay);
+    return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   clear_timeout: (id) => { clearTimeout(id); },
   clear_interval: (id) => { clearInterval(id); },
@@ -3319,7 +3326,7 @@ const __memDispatch = {
     const newP = p.then(val => {
       if (closure && typeof closure.funcIdx !== 'undefined' && wasmInstance) {
         const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
-        if (fn) return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(val)));
+        if (fn) return __bitsToJsValue(fn(...__padBigintArgs(fn, 0, [...closure.captures, __jsValueToBits(val)])));
       }
       return val;
     });

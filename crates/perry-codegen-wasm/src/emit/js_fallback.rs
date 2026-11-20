@@ -412,8 +412,16 @@ impl WasmModuleEmitter {
                 format!("fromJsValue(await toJsValue({}))", v)
             }
             Expr::Call { callee, args, .. } => {
-                let args_js: Vec<String> =
-                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let direct = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
+                    _ => None,
+                };
+                let args_js: Vec<String> = self
+                    .with_rest_packed(direct, args)
+                    .iter()
+                    .map(|a| self.emit_js_expr(a, locals))
+                    .collect();
                 match callee.as_ref() {
                     Expr::FuncRef(id) => {
                         if let Some(&func_idx) = self.func_map.get(id) {
