@@ -155,3 +155,54 @@ console.log(K.x + " " + A.x);
         "1 1 m 1\n5 1"
     );
 }
+
+// A class value's static fields are its own enumerable keys, as in Node: declared ones,
+// one a subclass declares (not its parent's), and one assigned later through the value.
+// A field replaces a static method of its name; a computed member's hidden key slot is
+// not a key.
+#[test]
+fn a_class_values_static_fields_are_its_own_keys() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static x = 1; static y = "s"; static m() { return 1; } z = 3; }
+class B extends A { static w = 2; }
+const C = class { static k = 5; };
+const K: any = A;
+const D: any = class {};
+D.dyn = 7;
+console.log(JSON.stringify(Object.keys(A)) + " " + JSON.stringify(Object.keys(B)) + " " + JSON.stringify(Object.keys(C)));
+console.log(JSON.stringify(Object.entries(K)) + " " + JSON.stringify(Object.keys(D)));
+console.log(("x" in K) + " " + Object.prototype.hasOwnProperty.call(K, "y"));
+K.x = 10;
+console.log(A.x + " " + K.x + " " + JSON.stringify(Object.keys(new A())));
+class I { ["k" + 1] = 1; static t = 3; }
+console.log(JSON.stringify(Object.keys(I)) + " " + JSON.stringify(Object.keys(new I())));
+const mk = "m";
+class M { static m() { return 0; } static [mk] = 1; }
+console.log(JSON.stringify(Object.keys(M)) + " " + (M as any).m);
+"#
+        ),
+        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]\n[\"t\"] [\"k1\"]\n[\"m\"] 1"
+    );
+}
+
+// Assigning an inherited static field through a subclass's class value gives the
+// subclass its own field and leaves the parent's alone. Expected output is Node's.
+#[test]
+fn a_subclass_value_assigns_its_own_static_field() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static x = 1; }
+class B extends A {}
+function mk(): any { return class extends A {}; }
+const b: any = B, e: any = mk();
+b.x = 5;
+e.x = 6;
+console.log(A.x + " " + b.x + " " + e.x + " " + Object.prototype.hasOwnProperty.call(b, "x"));
+"#
+        ),
+        "1 5 6 true"
+    );
+}

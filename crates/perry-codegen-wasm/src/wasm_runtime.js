@@ -1665,7 +1665,7 @@ const classStaticTable = {};
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
 // A user parent class's constructor slot (`class_set_parent`), for its class value.
-const classCtorSlotTable = {};
+const classCtorSlotTable = Object.create(null);
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
 // Args are decoded from NaN-boxed BigInt bits to plain JS values by __bitsToJsValue before dispatch.
@@ -1712,6 +1712,7 @@ function __classRef(className, ctorIdx) {
     __linkClassParent(className, ctor);
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
+    for (const key of Reflect.ownKeys(classStaticTable[className] || {})) __classExposeStatic(className, key);
   }
   return ctor;
 }
@@ -1723,6 +1724,31 @@ function __linkClassParent(className, ctor) {
   if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
     Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
   }
+}
+
+// A static field lives in `classStaticTable`. The class value has it as an own
+// enumerable property that reads and writes the table entry, so `Object.keys`, `in`
+// and `hasOwnProperty` see it. A field replaces a configurable, non-enumerable own
+// property (`name`, `length`, a static method or accessor), as a class definition
+// does; an enumerable one is already the field's accessor. A computed
+// member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
+// shares the table and stays hidden.
+function __classExposeStatic(className, key) {
+  const ctor = __classRefs.get(className);
+  if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
+  const own = Object.getOwnPropertyDescriptor(ctor, key);
+  if (own && (own.enumerable || !own.configurable)) return;
+  Object.defineProperty(ctor, key, {
+    get() { return classStaticTable[className][key]; },
+    // Reached through a subclass's [[Prototype]], an assignment gives the subclass
+    // its own field, as with an inherited data property.
+    set(value) {
+      if (this === ctor) classStaticTable[className][key] = value;
+      else Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true });
+    },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
@@ -1918,12 +1944,6 @@ function __classStaticRun(template, value, funcIdx) {
 // Static `name` of class `cls` along its parent chain: a declared static, else an own
 // member of the class value (a computed static); else `fallback`'s.
 function __classStaticGet(cls, name, receiver, fallback) {
-  // An evaluated subclass names no class: past its own members, its parent's
-  // class value carries the lookup on (see __linkClassParent).
-  if (cls === undefined && typeof fallback === 'function' && !Object.prototype.hasOwnProperty.call(fallback, name)) {
-    const parent = Object.getPrototypeOf(fallback);
-    if (__perryClassCtors.has(parent)) return __classStaticGet(__classNameOfValue(parent), name, receiver, parent);
-  }
   for (let c = cls; c; c = classParentTable[c] || null) {
     const statics = classStaticTable[c];
     if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
@@ -2218,7 +2238,6 @@ const __memDispatch = {
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
     if (!__holdsProperties(obj)) return undefined;
-    if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), key, obj, obj);
     return obj[key];
   },
   object_set_dynamic: (obj, key, value) => {
@@ -2312,10 +2331,11 @@ const __memDispatch = {
   },
   array_shift: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.shift(); },
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
+  // The host join owns element conversion (nested arrays, nullish elements) and the
+  // separator's: an undefined one is ",", not "undefined".
   array_join: (arr, separator) => {
     if (!Array.isArray(arr)) return '';
-    const sep = String(separator);
-    return arr.map(v => typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)).join(sep);
+    return arr.join(separator);
   },
   array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
   array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
@@ -2324,7 +2344,18 @@ const __memDispatch = {
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
-  array_push_spread: (target, source) => { if (Array.isArray(target) && Array.isArray(source)) target.push(...source); return target; },
+  // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
+  // One push per value: `push(...source)` passes each value as an argument and
+  // overflows the stack for a large source.
+  array_push_spread: (target, source) => {
+    const iterate = source?.[Symbol.iterator];
+    if (Array.isArray(target) && typeof iterate === 'function') {
+      const it = iterate.call(source);
+      const next = it.next;
+      while (!__iteratorStep(it, next, true)) target.push(__iteratorStepValue);
+    }
+    return target;
+  },
 
   // String methods — args are plain JS strings
   string_charAt: (str, idx) => String(str).charAt(idx),
@@ -2448,8 +2479,10 @@ const __memDispatch = {
       return !!rv;
     });
   },
+  // `forEach` is dispatched by name, so a Set or a Map receiver reaches it too.
   array_forEach: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    const isCollection = Array.isArray(arr) || arr instanceof Set || arr instanceof Map;
+    const call = isCollection ? __arrayCallback(cb) : undefined;
     if (!call) return;
     arr.forEach((v, i) => call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)));
   },
@@ -2531,7 +2564,9 @@ const __memDispatch = {
     if (evaluation) {
       Object.defineProperty(evaluation, key, { value, writable: true, configurable: true, enumerable: true });
     } else {
-      (classStaticTable[cls] ||= {})[typeof key === 'symbol' ? key : String(key)] = value;
+      const k = typeof key === 'symbol' ? key : String(key);
+      (classStaticTable[cls] ||= {})[k] = value;
+      __classExposeStatic(cls, k);
     }
   },
   class_static_this: (className, ctorIdx) => {
@@ -2731,8 +2766,10 @@ const __memDispatch = {
       const fname = String(name);
       const cls = __classNameOfValue(obj);
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
-      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) statics[fname] = value;
-      else obj[fname] = value;
+      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) {
+        statics[fname] = value;
+        __classExposeStatic(cls, fname);
+      } else obj[fname] = value;
       return;
     }
     if (!__holdsProperties(obj)) return;
@@ -2755,6 +2792,7 @@ const __memDispatch = {
     const cls = String(classId);
     if (!classStaticTable[cls]) classStaticTable[cls] = {};
     classStaticTable[cls][String(name)] = value;
+    __classExposeStatic(cls, String(name));
     return value;
   },
   class_get_static: (classId, name) => {
