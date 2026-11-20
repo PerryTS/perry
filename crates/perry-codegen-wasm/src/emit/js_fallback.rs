@@ -353,8 +353,10 @@ impl WasmModuleEmitter {
             Expr::In { property, object } => {
                 let p = self.emit_js_expr(property, locals);
                 let o = self.emit_js_expr(object, locals);
+                // The property is evaluated before the object; both stay outside the arrow
+                // so an `await` in either remains inside the async body.
                 format!(
-                    "(__memDispatch.object_has_property(toJsValue({o}), toJsValue({p})) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))"
+                    "((__p, __o) => __memDispatch.object_has_property(toJsValue(__o), toJsValue(__p)) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))({p}, {o})"
                 )
             }
             Expr::Compare { op, left, right } => {
