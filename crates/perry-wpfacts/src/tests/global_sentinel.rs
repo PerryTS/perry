@@ -103,3 +103,14 @@ fn a_replaced_console_log_stays_unknown_code() {
     );
     assert_site(&src, false);
 }
+
+/// `Array.fromAsync(x)` lowers to a call on the sentinel that codegen takes
+/// itself (lower_call console_promise.rs), whatever the global object holds:
+/// no read of an absent global, whose ReferenceError would leave the callback
+/// and the code after the call dead.
+#[test]
+fn array_from_async_on_the_sentinel_is_no_absent_global() {
+    let pf = facts("Array.fromAsync([1], (x: number) => x).then((v: any) => console.log(v));\n");
+    let d = pf.dump_text();
+    assert!(!d.contains("absent global"), "{d}");
+}
