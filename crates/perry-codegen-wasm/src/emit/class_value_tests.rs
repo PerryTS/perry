@@ -118,3 +118,21 @@ console.log((b.__proto__ === A) + " " + b.made() + " " + q.made() + " " + (new b
         "true A P true"
     );
 }
+
+// An evaluated subclass is not its parent: its own static method wins, and a
+// static it sets stays its own. Expected output is Node's.
+#[test]
+fn an_evaluated_subclass_value_keeps_its_own_static_side() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static who() { return "A"; } static n = 1; }
+function mk(): any { return class extends A { static who() { return "B"; } }; }
+const b: any = mk();
+b.n = 2;
+console.log(b.who() + " " + A.n + " " + b.n + " " + b.__proto__.who());
+"#
+        ),
+        "B 1 2 A"
+    );
+}

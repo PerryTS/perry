@@ -1700,6 +1700,11 @@ function __holdsProperties(v) {
 const __classRefs = new Map();
 const __classRefName = Symbol('perry.classRef');
 const __perryClassCtors = new WeakSet();
+// The class a class value names. Own only: a subclass evaluation reaches its
+// parent's name through [[Prototype]] (see __linkClassParent) and is not that class.
+function __classNameOfValue(fn) {
+  return Object.prototype.hasOwnProperty.call(fn, __classRefName) ? fn[__classRefName] : undefined;
+}
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
@@ -2615,7 +2620,7 @@ const __memDispatch = {
     const mname = stringTable[methodNameId | 0];
     // A static member of a class value.
     if (typeof obj === 'function') {
-      const member = __classStaticGet(obj[__classRefName], mname, obj, obj);
+      const member = __classStaticGet(__classNameOfValue(obj), mname, obj, obj);
       if (typeof member === 'function') return __callHostFunction(member, Array.isArray(argsArr) ? argsArr : [], obj);
     }
     if (obj && __classOf(obj)) {
@@ -2687,7 +2692,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
-    if (typeof obj === 'function') return __classStaticGet(obj[__classRefName], String(name), obj, obj);
+    if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
@@ -2717,7 +2722,7 @@ const __memDispatch = {
   class_set_field: (obj, name, value) => {
     if (typeof obj === 'function') {
       const fname = String(name);
-      const cls = obj[__classRefName];
+      const cls = __classNameOfValue(obj);
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
       if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) statics[fname] = value;
       else obj[fname] = value;
@@ -5924,7 +5929,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       // A class value's statics include its chain's (see __classStaticGet).
       const method = typeof objVal === 'function'
-        ? __classStaticGet(objVal[__classRefName], mname, objVal, objVal)
+        ? __classStaticGet(__classNameOfValue(objVal), mname, objVal, objVal)
         : objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
       if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
