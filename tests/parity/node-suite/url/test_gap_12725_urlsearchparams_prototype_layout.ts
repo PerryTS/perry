@@ -4,8 +4,8 @@
 // and `size` enumerable, `constructor` and the symbols not), and
 // `Symbol.iterator` the same function as `entries`. for-in over an instance
 // lists the enumerable members in that order.
-// `Symbol(nodejs.util.inspect.custom)` is left out of the comparison: perry's
-// util.inspect does not render a URLSearchParams through that member yet.
+// `Symbol(nodejs.util.inspect.custom)` is left out of the comparison: perry
+// has no such member on URLSearchParams.prototype.
 const P: any = URLSearchParams.prototype;
 const INSPECT_CUSTOM = Symbol.for("nodejs.util.inspect.custom");
 const ownKeys = Reflect.ownKeys(P).filter((k) => k !== INSPECT_CUSTOM);

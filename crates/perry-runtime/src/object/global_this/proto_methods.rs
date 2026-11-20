@@ -1461,10 +1461,7 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                 }
             }
             unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
-            // WHATWG: URLSearchParams.prototype[Symbol.iterator] is the
-            // same function as `entries` (iterable<USVString, USVString>).
-            // Libraries test `typeof params[Symbol.iterator] === "function"`
-            // before iterating (Effect's UrlParams.fromInput).
+            // WHATWG: `@@iterator` is the same function as `entries`.
             install_builtin_iterator_symbol(proto_obj, entries);
         }
         "URLPattern" => {
