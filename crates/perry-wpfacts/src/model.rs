@@ -993,6 +993,21 @@ pub enum NativeMiss {
     Store(NodeId, SiteId),
 }
 
+/// The lookups filed on one token (`Model::own_stopped`), in filing order,
+/// and the same entries as a set for the filing's duplicate check.
+#[derive(Default, Clone)]
+pub struct OwnStopped {
+    pub list: Vec<(Tok, Atom, ChainAct)>,
+    pub seen: crate::pts::FxHashSet<(Tok, Atom, ChainAct)>,
+}
+
+impl OwnStopped {
+    pub fn push(&mut self, e: (Tok, Atom, ChainAct)) {
+        self.seen.insert(e);
+        self.list.push(e);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     /// Return the installed accessor function, without invoking its body.
@@ -2384,7 +2399,7 @@ pub struct Model {
     /// receiver, answered by its own field alone. Filed with
     /// `note_shadowed`, so every event that revokes the key re-checks them
     /// (`flush_own_stopped`): the lookup then runs again, chain included.
-    pub own_stopped: FxHashMap<Tok, Vec<(Tok, Atom, ChainAct)>>,
+    pub own_stopped: FxHashMap<Tok, OwnStopped>,
     /// Rule C1: by typed array, the node its `length` loads read beside the
     /// %TypedArray%.prototype getter's Number while `Model::ta_length_getter`
     /// holds, and whether it has taken the own `length` field

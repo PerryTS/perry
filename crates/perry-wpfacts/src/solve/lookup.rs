@@ -254,7 +254,7 @@ impl Model {
     pub(super) fn note_own_stopped(&mut self, origin: Tok, t: Tok, a: Atom, act: ChainAct) {
         self.file_shadow_index(t, a);
         let v = self.own_stopped.entry(t).or_default();
-        if !v.contains(&(origin, a, act)) {
+        if !v.seen.contains(&(origin, a, act)) {
             v.push((origin, a, act));
         }
     }
@@ -266,7 +266,7 @@ impl Model {
             return;
         };
         let mut kept = Vec::new();
-        for (origin, a, act) in reads {
+        for (origin, a, act) in reads.list {
             if self.surely_own_data(t, a) {
                 kept.push((origin, a, act));
                 continue;
@@ -278,7 +278,10 @@ impl Model {
             }
         }
         if !kept.is_empty() {
-            self.own_stopped.entry(t).or_default().extend(kept);
+            let v = self.own_stopped.entry(t).or_default();
+            for e in kept {
+                v.push(e);
+            }
         }
     }
 
