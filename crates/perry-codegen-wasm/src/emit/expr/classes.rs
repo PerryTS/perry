@@ -319,7 +319,13 @@ impl<'a> FuncEmitCtx<'a> {
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
                 self.emit_frame_begin(func, 2);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
+                // The constructor slot, so the prototype's `constructor` is the class value.
+                let ctor_slot = if self.emitter.user_classes.contains(class_name.as_str()) {
+                    self.class_ctor_slot(class_name)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                self.emit_store_const(func, 1, ctor_slot);
                 self.emit_memcall(func, "class_new", 2);
                 let ctor = self
                     .emitter

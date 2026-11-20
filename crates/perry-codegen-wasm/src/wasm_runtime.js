@@ -1674,7 +1674,7 @@ const classStaticTable = {};
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
-// A user parent class's constructor slot (`class_set_parent`), for its class value.
+// A user class's constructor slot (`class_set_parent`, `class_new`), for its class value.
 const classCtorSlotTable = Object.create(null);
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
@@ -1687,7 +1687,9 @@ const classCtorSlotTable = Object.create(null);
 const __classTag = Symbol('perry.class');
 function __classOf(obj) { return obj[__classTag]; }
 // That prototype is also the class value's `prototype`. It inherits from a user parent
-// class's prototype and holds the class's own methods, non-enumerable.
+// class's prototype and holds the class's own methods, non-enumerable. A declared class
+// with a known constructor slot gets its class value here, so `constructor` holds
+// before any read of the class.
 function __classProto(className) {
   const t = __classTemplate(className);
   if (t.proto) return t.proto;
@@ -1696,10 +1698,11 @@ function __classProto(className) {
     ? __classProto(parent)
     : Object.prototype;
   t.proto = Object.create(base, { [__classTag]: { value: className } });
-  for (const m of Object.keys(classMethodTable[className] || {})) {
-    if (m.startsWith('__get_') || m.startsWith('__set_')) continue;
+  for (const m of Reflect.ownKeys(classMethodTable[className] || {})) {
+    if (typeof m === 'string' && (m.startsWith('__get_') || m.startsWith('__set_'))) continue;
     __defineHidden(t.proto, m, __classMethodValue(className, m, undefined));
   }
+  if (t.first === undefined && className in classCtorSlotTable) __classRef(className, classCtorSlotTable[className]);
   return t.proto;
 }
 function __classInstance(className, proto) {
@@ -2022,6 +2025,9 @@ function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b) {
   if (kind === 0) {
     methods[key] = a;
     if (evaluation) __defineHidden(evaluation.prototype, key, __classMethodValue(className, key, evaluation));
+    // A prototype made before this member was defined gets it too.
+    const proto = __classTemplate(className).proto;
+    if (!evaluation && proto) __defineHidden(proto, key, __classMethodValue(className, key, undefined));
     return;
   }
   if (typeof key === 'symbol') return;
@@ -2595,7 +2601,11 @@ const __memDispatch = {
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
   // class_set_method/class_call_method interact with WASM indirect call table.
-  class_new: (className, fieldCount) => __classInstance(String(className)),
+  class_new: (className, ctorIdx) => {
+    const cls = String(className);
+    if (ctorIdx !== undefined && !(cls in classCtorSlotTable)) classCtorSlotTable[cls] = ctorIdx | 0;
+    return __classInstance(cls);
+  },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
   class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
   class_eval_begin: (className, ctorIdx) => {
