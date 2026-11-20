@@ -1416,12 +1416,12 @@ function buildImports() {
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
-        const coreFn = __ownBridge(__memDispatch, name);
+        const coreFn = __memDispatch[name];
         try {
           if (coreFn) {
             result = coreFn(...args);
           } else {
-            const uiFn = __ownBridge(__perryUiDispatch, name);
+            const uiFn = __perryUiDispatch[name];
             if (uiFn) {
               result = uiFn(...args);
             } else if (argc > 0) {
@@ -1444,7 +1444,7 @@ function buildImports() {
         const u64View = new BigUint64Array(wasmMemory.buffer, base, Math.max(argc, 1));
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
-        const fn = __ownBridge(__memDispatch, name);
+        const fn = __memDispatch[name];
         if (!fn) return 0;
         try {
           return fn(...args) | 0;
@@ -2040,13 +2040,10 @@ function __iterableToArray(v) {
 // A tagged template's strings array per call site, keyed by the HIR site id's halves.
 const __taggedTemplates = new Map();
 
-// A bridge named by a call site. The tables are object literals, so a plain index would
-// also find Object.prototype's members: a method call `o.isPrototypeOf(x)` reaches
-// mem_call under that name and must fall through to __classDispatch instead.
-function __ownBridge(table, name) {
-  return Object.prototype.hasOwnProperty.call(table, name) ? table[name] : undefined;
-}
+// The bridge tables have no prototype: mem_call indexes them by a call site's method name,
+// and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
 const __memDispatch = {
+  __proto__: null,
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
   // `value` must use the iterator protocol instead of its indices.
   rt_arrayRecordNeedsIterator: (...args) => args.length === 0
@@ -5511,6 +5508,7 @@ function perry_audio_on_loaded(soundHandle, callback) {
 
 // ---------- UI Dispatch table (maps bridge function names to implementations) ----------
 const __perryUiDispatch = {
+  __proto__: null,
   // Widget creation
   perry_ui_app_create, perry_ui_vstack_create, perry_ui_hstack_create, perry_ui_zstack_create,
   perry_ui_text_create, perry_ui_button_create, perry_ui_textfield_create, perry_ui_securefield_create,
