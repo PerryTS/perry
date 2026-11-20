@@ -24,27 +24,48 @@ if [[ "${COMPONENT_CHECK_UNIT_TESTS:-1}" != 0 ]]; then
 fi
 logs="$out/build-logs"
 mkdir -p "$logs"
-# Independent builds run beside the main one; finish prints a log once its build ends.
+# Independent builds run beside the main one. finish prints a build's log and
+# fails the script with its status; on any other exit the EXIT trap stops the
+# builds still running and prints what they logged.
+bg_names=()
 background() {
   local name="$1"
   shift
   "$@" >"$logs/$name.log" 2>&1 &
   printf -v "pid_$name" '%s' "$!"
+  bg_names+=("$name")
 }
 finish() {
   local name="$1" pid_var="pid_$1" status=0
   wait "${!pid_var}" || status=$?
+  printf -v "done_$name" 1
   cat "$logs/$name.log"
   if [[ "$status" -ne 0 ]]; then
     echo "component_check.sh: $name failed ($status)" >&2
     exit "$status"
   fi
 }
-# The instrumented graph has its own target dir, so it never waits for
-# target/'s lock; build_instr_runtime.sh below then finds it fresh. Keep these
-# arguments equal to that script's PERRY_INSTR_PACKAGES=runtime perry-dev build.
-background instr env -u RUSTFLAGS CARGO_TARGET_DIR="$CARGO_TARGET_DIR-instr" PERRY_RUNTIME_INSTRUMENTS=1 \
-  cargo build -p perry-runtime-static -p perry-stdlib-static --profile perry-dev
+kill_tree() {
+  local child
+  for child in $(pgrep -P "$1" 2>/dev/null); do kill_tree "$child"; done
+  kill "$1" 2>/dev/null || true
+}
+stop_background() {
+  local name pid_var done_var
+  for name in ${bg_names[@]+"${bg_names[@]}"}; do
+    done_var="done_$name"
+    [[ -n "${!done_var:-}" ]] && continue
+    pid_var="pid_$name"
+    kill_tree "${!pid_var}"
+    echo "component_check.sh: stopped the unfinished $name build; its log so far:" >&2
+    cat "$logs/$name.log" >&2 || true
+  done
+}
+trap stop_background EXIT
+# The instrumented graph builds in its own target dir, so it never waits for
+# target/'s lock.
+background instr env PERRY_INSTR_BUILD_ONLY=1 PERRY_INSTR_PACKAGES=runtime \
+  scripts/build_instr_runtime.sh '' perry-dev
 cargo build --locked --profile perry-dev -p perry -p perry-runtime-static \
   -p perry-stdlib-static -p perry-component-host -p perry-wit -p perry-gc-effects \
   --features perry/target-wasi
@@ -54,9 +75,11 @@ export GC_EFFECTS_BIN="$CARGO_TARGET_DIR/perry-dev/perry-gc-effects"
 scripts/gc_call_effects/sidecars.sh "$CARGO_TARGET_DIR/perry-dev"
 finish instr
 PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev
-# The guest suite's wasm32 archive is the last build. The native suites below
-# compile Perry programs (PERRY_NO_AUTO_OPTIMIZE) beside it; their one cargo
-# build waits for target/'s lock.
+# The guest suite's wasm32 archive builds beside the native suites. Their
+# acceptance scripts set PERRY_NO_AUTO_OPTIMIZE=1, so perry links the prebuilt
+# archives without a Cargo build; only their Rust guests (four in
+# component_host_acceptance.py, one in component_command_acceptance.py) build
+# with Cargo, and those wait for target/'s lock while the wasm32 build holds it.
 background wasm python3 scripts/wasi_build_runtime.py --gc-instruments
 for suite in persistent async reader producer; do
   python3 "scripts/component_${suite}_acceptance.py" \
