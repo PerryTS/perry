@@ -657,8 +657,7 @@ mod tests {
         // `new Worker(...)` with no import lowers to node:worker_threads'
         // WorkerNew; minting that constructor mints its [[Prototype]],
         // EventEmitter, so R holds both constructor bags.
-        let global =
-            reach("const w = new Worker(new URL('./w.js', import.meta.url)); w.terminate();");
+        let global = reach("const w = new Worker(new URL('./w.js', import.meta.url)); w.terminate();");
         assert!(!global.is_full());
         assert!(global.names.contains("node:worker_threads.Worker"));
         let plan = RealmPlan::from_reach(&global).unwrap();

@@ -278,8 +278,8 @@ fn validate_read_sync_args(
     position_value: f64,
 ) -> Option<(f64, f64, f64)> {
     use crate::validators::{
-        format_range_received, throw_invalid_arg_type, throw_invalid_arg_value, throw_out_of_range,
-        validate_integer, MAX_SAFE_INTEGER,
+        throw_invalid_arg_type, throw_invalid_arg_value, throw_out_of_range, validate_integer,
+        format_range_received, MAX_SAFE_INTEGER,
     };
     use crate::value::JSValue;
     let offset_jv = JSValue::from_bits(offset_value.to_bits());
