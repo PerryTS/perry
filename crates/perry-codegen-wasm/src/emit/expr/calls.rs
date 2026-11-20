@@ -329,19 +329,29 @@ impl<'a> FuncEmitCtx<'a> {
                         })
                         .collect(),
                 );
-                if let Expr::PropertyGet {
-                    object, property, ..
-                } = callee.as_ref()
-                {
-                    let name = Expr::String(property.clone());
+                // A namespace import's function is called as the value `W.f` reads.
+                let ns_func = |object: &Expr, property: &str| {
+                    matches!(object, Expr::ExternFuncRef { name, .. }
+                        if self.emitter.imported_ns_funcs.contains_key(
+                            &(self.emitter.current_mod_idx, format!("{name}.{property}"))))
+                };
+                let member = match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if !ns_func(object, property) => Some((
+                        object,
+                        Expr::String(property.clone()),
+                        Some(property.as_str()),
+                    )),
+                    Expr::IndexGet { object, index, .. } => Some((object, (**index).clone(), None)),
+                    _ => None,
+                };
+                if let Some((object, name, property)) = member {
                     // HIR keeps `console.<m>` collapsed onto the unresolved global.
                     let unresolved_global = matches!(object.as_ref(), Expr::GlobalGet(id)
                         if !self.emitter.global_map.contains_key(id));
                     if unresolved_global
-                        && matches!(
-                            property.as_str(),
-                            "log" | "info" | "warn" | "error" | "debug"
-                        )
+                        && matches!(property, Some("log" | "info" | "warn" | "error" | "debug"))
                     {
                         self.emit_frame_begin(func, 2);
                         self.emit_store_arg(func, 0, &name);

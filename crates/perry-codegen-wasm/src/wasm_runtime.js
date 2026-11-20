@@ -2517,9 +2517,11 @@ const __memDispatch = {
     const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
     if (!fn) return undefined;
     const padded = __padBigintArgs(fn, closure.captures.length, argArr.map(v => __jsValueToBits(v)));
-    return __bitsToJsValue(fn(...closure.captures, ...padded));
+    // A void function's export returns `undefined`, not bits.
+    const result = fn(...closure.captures, ...padded);
+    return result === undefined ? undefined : __bitsToJsValue(result);
   },
-  // `obj.name(...xs)`: dispatched by name as a call with a fixed argument list is.
+  // `obj.name(...xs)` / `obj[key](...xs)`: dispatched by name as a call with a fixed argument list is.
   method_call_spread: (obj, name, args) => __classDispatch(obj, name, Array.isArray(args) ? args : []),
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
