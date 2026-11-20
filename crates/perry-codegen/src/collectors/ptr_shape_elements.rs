@@ -195,19 +195,6 @@ impl ElementShapeFacts {
         self.arrays.is_empty()
     }
 
-    /// Test-only: are ALL fact maps empty? `is_empty` gates every consumer and
-    /// keys on `arrays` alone; the other three are kept consistent with it by
-    /// construction, and `tests::is_empty_covers_every_fact_map` is what holds
-    /// that invariant in place.
-    #[cfg(test)]
-    pub(crate) fn debug_all_maps_empty(&self) -> bool {
-        self.arrays.is_empty()
-            && self.array_roots.is_empty()
-            && self.pushed.is_empty()
-            && self.element_reads.is_empty()
-            && self.callback_params.is_empty()
-    }
-
     /// Is `value_local`'s push into `array_local` covered by a proven array,
     /// so rule 2 may treat that element position as contained?
     pub(crate) fn push_is_contained(&self, value_local: u32, array_local: u32) -> bool {

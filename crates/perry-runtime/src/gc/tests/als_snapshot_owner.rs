@@ -4,14 +4,9 @@ use super::support::*;
 
 #[test]
 fn als_snapshot_store_moves_and_tokens_die_with_the_closure_edge() {
-    check_owned_snapshot(false);
+    check_owned_snapshot();
 }
-#[test]
-#[ignore = "negative control: clear the snapshot closure's holder capture"]
-fn negative_control_objtables_als_snapshot() {
-    check_owned_snapshot(true);
-}
-fn check_owned_snapshot(erase: bool) {
+fn check_owned_snapshot() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = crate::object::js_object_alloc(0, 0);
@@ -34,9 +29,6 @@ fn check_owned_snapshot(erase: bool) {
         crate::closure::js_closure_get_capture_bits(moved, 0),
         holder
     );
-    if erase {
-        crate::closure::js_closure_set_capture_bits(moved, 0, crate::value::TAG_UNDEFINED);
-    }
     let child_after = crate::async_context::test_snapshot_first_store(
         &crate::async_hooks::context_snapshots::snapshot_for_closure(moved),
     )

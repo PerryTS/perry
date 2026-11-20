@@ -55,8 +55,6 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 use perry_parser::swc_ecma_ast as ast;
 
-#[cfg(test)]
-mod bench;
 mod bridge;
 mod env;
 mod expr;

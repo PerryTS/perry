@@ -976,7 +976,7 @@ mod response_file_tests {
     #[test]
     fn ndk_clang_path_bypasses_the_per_target_wrapper() {
         let p = super::ndk_clang_path("/ndk");
-        assert!(!p.contains("aarch64-linux-android24-clang"), "{p}");
+        assert!(!p.contains("aarch64-linux-android29-clang"), "{p}");
         assert!(!p.ends_with(".cmd"), "{p}");
         assert!(p.starts_with("/ndk/toolchains/llvm/prebuilt/"), "{p}");
         #[cfg(target_os = "macos")]

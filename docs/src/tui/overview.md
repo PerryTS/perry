@@ -11,7 +11,7 @@
 | A native desktop / mobile app | [`perry/ui`](../ui/overview.md) |
 | A one-shot script that just prints to stdout | Plain `console.log` |
 
-`perry/tui` enters the terminal's [alternate screen buffer](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-The-Alternate-Screen-Buffer) (so your scrollback isn't polluted), captures raw-mode keypresses, and re-renders only the cells that changed between frames. The cell grid is a packed `Vec<Cell>` so an 80×24 terminal fits in ~15 KB — well within L2.
+`perry/tui` enters the terminal's [alternate screen buffer](https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-The-Alternate-Screen-Buffer) (so your scrollback isn't polluted), captures raw-mode keypresses, and re-renders only the cells that changed between frames. Its double-buffered grid stores complete graphemes at their terminal-column positions, reserving continuation cells for wide text.
 
 Cursor positions retain the full `u16` grid dimensions, including rows or columns beyond 255 and 999. Grid indices are zero-based; the renderer converts them to one-based ANSI coordinates without truncation.
 

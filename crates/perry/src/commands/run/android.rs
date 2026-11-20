@@ -355,7 +355,7 @@ fn apply_wear_overlay(build_dir: &Path, format: OutputFormat) -> Result<()> {
     if gradle_path.exists() {
         let mut gradle = std::fs::read_to_string(&gradle_path)?;
         // Wear OS 3 is the minSdk floor for watch APKs on Google Play.
-        gradle = gradle.replace("minSdk = 24", "minSdk = 30");
+        gradle = gradle.replace("minSdk = 29", "minSdk = 30");
         // Add the Wear support library (BoxInsetLayout, swipe-to-dismiss).
         gradle = inject_gradle_dependencies(&gradle, &["androidx.wear:wear:1.3.0".to_string()]);
         std::fs::write(&gradle_path, gradle)?;
@@ -1002,7 +1002,7 @@ mod tests {
             "androidx.wear dependency not injected"
         );
         assert!(
-            gradle.contains("minSdk = 30") && !gradle.contains("minSdk = 24"),
+            gradle.contains("minSdk = 30") && !gradle.contains("minSdk = 29"),
             "minSdk not raised to 30 for Wear OS"
         );
 

@@ -951,40 +951,6 @@ fn test_module_native_instance_index_last_wins() {
     );
 }
 
-/// #5271 perf gate (run with `--release --ignored`): time M lookups against a
-/// K-sized registry to show indexed lookups are ~flat in K (O(1)) rather than
-/// O(K) per call. Prints timings; not asserted (machine-dependent) but the
-/// flatness across K is the observable signal. Covers the registries whose
-/// linear scans this change indexed.
-#[test]
-#[ignore]
-fn perf_registry_lookup_is_flat_in_k() {
-    use std::time::Instant;
-    const M: usize = 20_000;
-    for k in [0usize, 2_000, 8_000, 16_000] {
-        let mut ctx = make_ctx();
-        for i in 0..k {
-            ctx.register_class_statics(
-                format!("K{i}"),
-                vec![format!("f{i}")],
-                vec![format!("s{i}")],
-            );
-            ctx.register_native_instance(format!("ni{i}"), "net".into(), "Socket".into());
-            ctx.register_native_module(format!("nm{i}"), "fs".into(), None);
-        }
-        // The hot case the bug targets: the receiver is NOT in the registry, so
-        // the old reverse/forward scan walked the whole Vec and returned None.
-        let t = Instant::now();
-        let mut acc = 0u64;
-        for _ in 0..M {
-            acc += ctx.has_static_method("Missing", "s") as u64;
-            acc += ctx.lookup_native_instance("missing").is_some() as u64;
-            acc += ctx.lookup_native_module("missing").is_some() as u64;
-        }
-        eprintln!("K={k:<6} {M} x3 lookups: {:?}  (acc={acc})", t.elapsed());
-    }
-}
-
 /// A chain comfortably under the ceiling still lowers cleanly — the guard
 /// must not reject ordinary (if large) expressions.
 #[test]

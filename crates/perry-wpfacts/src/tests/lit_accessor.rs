@@ -1,11 +1,7 @@
 //! A literal's own accessor keys are part of its per-unit contract: the
 //! reader's stand-in holds them as own accessors, so a call through a
 //! getter's result runs with `this` = the receiver (the reader escapes it)
-//! instead of being dropped. With only the call rule (a definite own key
-//! hides the chain for a call, `call_shadow`), the three fixtures below
-//! prove `createIdentifier` per unit while node (26) rewrites it
-//! (`console.log` prints 315000 4 for each); the accessor contract makes
-//! them unproven again.
+//! instead of being dropped.
 
 use super::call_shadow::whole;
 
@@ -61,15 +57,6 @@ fn whole_program_mode_is_unchanged_by_the_contract() {
     assert!(whole(&negmut0()).0);
     assert!(!whole(&super::unseen(&negmut0())).0);
 }
-
-#[test]
-fn a_getter_result_rewriting_the_method_through_a_known_function_stays_unproven() {}
-
-#[test]
-fn a_getter_result_rewriting_the_method_through_an_unknown_function_stays_unproven() {}
-
-#[test]
-fn a_getter_result_swapping_the_method_for_a_sibling_stays_unproven() {}
 
 #[test]
 fn a_getter_that_returns_a_fresh_arrow_is_proven_as_whole() {

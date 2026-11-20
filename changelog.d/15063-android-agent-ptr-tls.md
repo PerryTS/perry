@@ -1,0 +1,1 @@
+Android: read the agent-pointer block through the native thread-local slot instead of the emulated TLS call, which removes the per-read indirection on the hot property-access paths. Non-Android output is unchanged.

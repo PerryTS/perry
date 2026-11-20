@@ -106,13 +106,3 @@ pub(super) fn enqueue_all() {
         }
     });
 }
-#[cfg(test)]
-pub(crate) fn erase(owner: usize) {
-    let _no_move = crate::gc::GcSuppressScope::new();
-    unsafe {
-        let bag = bag(owner, false);
-        if !bag.is_null() {
-            crate::array::js_array_set(bag, SLOT, JSValue::undefined());
-        }
-    }
-}

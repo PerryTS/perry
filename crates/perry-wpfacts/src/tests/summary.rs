@@ -260,35 +260,6 @@ fn callback_instance_per_passing_call() {
     exact(&pf, "y", 1);
 }
 
-/// Diagnostics on a file: `CW_SRC=<file> cargo test -- --ignored debug_file --nocapture`.
-#[test]
-#[ignore]
-fn debug_file() {
-    let path = std::env::var("CW_SRC").expect("CW_SRC");
-    let src = std::fs::read_to_string(&path).expect("read");
-    let pf = facts_with(
-        &src,
-        FactsConfig {
-            explain: true,
-            unit: std::env::var_os("CW_UNIT").is_some(),
-            ..Default::default()
-        },
-    );
-    let proven = pf
-        .sites
-        .iter()
-        .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
-        .count();
-    eprintln!(
-        "proven {proven} of {} work {}",
-        pf.sites.len(),
-        pf.stats.work
-    );
-    if let Ok(out) = std::env::var("CW_DUMP") {
-        std::fs::write(out, pf.dump_text()).unwrap();
-    }
-}
-
 #[test]
 fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
     use crate::model::{Cons, Key, TokKind, NO_NODE};

@@ -1338,6 +1338,7 @@ pub(super) fn compile_closure(
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -1568,6 +1569,7 @@ pub(super) fn compile_closure(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
     crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
@@ -1603,6 +1605,7 @@ pub(super) fn compile_closure(
         && !is_generator)
         .then(|| returned_capture(&ctx, body))
         .flatten();
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
     crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);

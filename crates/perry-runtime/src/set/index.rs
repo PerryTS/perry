@@ -698,9 +698,3 @@ mod tests {
 pub(crate) unsafe fn test_key_identity(addr: usize) -> Option<u64> {
     key_identity(addr, false)
 }
-
-#[cfg(test)]
-pub(crate) unsafe fn test_erase_key_identity(addr: usize) {
-    let meta = *crate::object::cell_meta_slot(addr).unwrap();
-    (*meta).key_identity = 0;
-}
