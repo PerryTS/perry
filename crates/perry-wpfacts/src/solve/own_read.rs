@@ -140,8 +140,12 @@ impl Model {
         }
         if self.idx_done.insert((idx, t, dst, 0)) {
             if watched || kept {
-                let h = self.hole(t);
-                self.edge(h, dst);
+                // A typed array has no holes (rule TA-LEN): an index below
+                // its length always names an element (10.4.5.15).
+                if self.is_arr(t) {
+                    let h = self.hole(t);
+                    self.edge(h, dst);
+                }
                 let c = Cons::ElemUndef {
                     obj: t,
                     key: idx,

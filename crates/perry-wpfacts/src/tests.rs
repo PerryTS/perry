@@ -306,6 +306,7 @@ mod type_export;
 mod typed_array_element_store;
 mod typed_array_exact;
 mod typed_array_key_bigint;
+mod typed_array_in_bounds;
 mod typed_array_key_read;
 mod typed_array_length;
 mod typed_array_names;
