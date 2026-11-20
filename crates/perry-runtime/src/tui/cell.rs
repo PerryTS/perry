@@ -145,7 +145,11 @@ impl Grid {
                 fg,
                 bg,
                 style,
-                grapheme: chars.next().map(|_| Arc::from(grapheme)),
+                // Sharing the previous frame's text keeps an unchanged repaint allocation-free.
+                grapheme: chars.next().map(|_| match &self.front[start].grapheme {
+                    Some(shared) if **shared == *grapheme => Arc::clone(shared),
+                    _ => Arc::from(grapheme),
+                }),
                 width: width as u16,
             };
             for index in start + 1..start + width {
@@ -168,8 +172,14 @@ impl Grid {
             lead -= 1;
         }
         let end = lead + usize::from(self.back[lead].width);
+        // A blank keeps its colors and style: the span it replaces was painted with them.
         for cell in &mut self.back[lead..end] {
-            *cell = Cell::default();
+            *cell = Cell {
+                fg: cell.fg,
+                bg: cell.bg,
+                style: cell.style,
+                ..Cell::default()
+            };
         }
     }
 }
@@ -281,6 +291,61 @@ mod tests {
         let mut empty = Grid::new(0, 1);
         empty.paint_text(0, 0, "你", Color::Default, Color::Default, Style::default());
         assert!(empty.back.is_empty());
+    }
+
+    #[test]
+    fn overwriting_part_of_a_wide_grapheme_keeps_the_blanks_attributes() {
+        let mut grid = Grid::new(3, 1);
+        grid.paint_text(0, 0, "你", Color::Red, Color::Blue, Style(Style::BOLD));
+        grid.paint_text(0, 1, "x", Color::Default, Color::Default, Style::default());
+        assert_eq!(
+            grid.back[0],
+            Cell {
+                fg: Color::Red,
+                bg: Color::Blue,
+                style: Style(Style::BOLD),
+                ..Cell::default()
+            }
+        );
+        grid.paint_text(0, 0, "好", Color::Red, Color::Blue, Style::default());
+        grid.paint_text(0, 0, "y", Color::Default, Color::Default, Style::default());
+        assert_eq!(grid.back[1].bg, Color::Blue);
+        assert_eq!(grid.back[1].width, 1);
+    }
+
+    #[test]
+    fn repainting_an_unchanged_grapheme_shares_the_front_text() {
+        let mut grid = Grid::new(4, 1);
+        grid.paint_text(
+            0,
+            0,
+            "e\u{301}",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        grid.front.clone_from_slice(&grid.back);
+        grid.clear_back();
+        grid.paint_text(
+            0,
+            0,
+            "e\u{301}",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        let (front, back) = (&grid.front[0].grapheme, &grid.back[0].grapheme);
+        assert!(Arc::ptr_eq(front.as_ref().unwrap(), back.as_ref().unwrap()));
+        grid.clear_back();
+        grid.paint_text(
+            0,
+            0,
+            "e\u{300}",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        assert_eq!(grid.back[0].grapheme.as_deref(), Some("e\u{300}"));
     }
 
     #[test]

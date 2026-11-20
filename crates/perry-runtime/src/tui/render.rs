@@ -219,6 +219,12 @@ mod tests {
             Style::default(),
         );
         assert!(diff(&grid).is_empty());
+    }
+
+    #[test]
+    fn resizing_clears_unicode_cells_in_both_buffers() {
+        let mut grid = painted("你e\u{301}👩‍💻", 10);
+        grid.front.clone_from_slice(&grid.back);
         grid.resize(12, 1);
         assert!(grid
             .front
