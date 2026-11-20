@@ -61,6 +61,10 @@ Interfaces and type aliases are erased at compile time (like `tsc`). They exist 
 {{#include ../../examples/language/supported_features.ts:arrays}}
 ```
 
+Generic `Array.prototype` methods box Symbol receivers with `ToObject`.
+Without an inherited `length`, the wrapper has array-like length zero;
+mutators such as `reverse` and `sort` return that Symbol wrapper.
+
 ## Objects
 
 ```typescript
