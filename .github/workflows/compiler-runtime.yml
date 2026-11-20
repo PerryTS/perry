@@ -1058,7 +1058,8 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: gap-suite-build
+          key: node-compat-matrix
+          save: "true"
       - name: Setup Node.js (executes the runner; oracle is the pinned dist)
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1168,7 +1169,8 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: gap-suite-build
+          key: node-core-subset
+          save: "true"
       - name: Resolve Node version from the pinned test-corpus ref
         id: node_core_version
         run: |
@@ -3459,7 +3461,8 @@ jobs:
       - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          key: gap-suite-build
+          key: tls-budget
+          save: "true"
       - name: Build perry and the runtime archives
         if: steps.relevance.outputs.run == 'true'
         run: |
@@ -3522,5 +3525,3 @@ jobs:
               raise SystemExit(1)
           print(f'{len(ids)} suite jobs completed or were intentionally skipped')
           PY
-
-

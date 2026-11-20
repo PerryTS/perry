@@ -214,8 +214,12 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
   rust-cache keeps the first save of a key, so a family has exactly one saving
   job (`save: "true"`), chosen from the jobs a PR runs. Sweep and nightly jobs
   that run the same build restore that family without saving it; the
-  release-profile `build-perry` jobs restore `gap-suite-build`. `test_actions_plan.py` fails on a second
-  saver or on a direct `Swatinem/rust-cache` use in the core workflows.
+  release-profile `build-perry` jobs restore `gap-suite-build`. A restorer
+  needs the saver's `runs-on` and the same `CARGO*`/`RUST*`/`CC*` environment,
+  which rust-cache hashes into the key; the action exports
+  `CARGO_INCREMENTAL=0` first so that variable never splits a family.
+  `test_actions_plan.py` fails on a second saver, on a restorer that cannot
+  hit, and on a direct `Swatinem/rust-cache` use in the core workflows.
 - **Saves survive a red main.** `cache-on-failure` is on: a job that fails its
   tests has still compiled valid dependencies, and a red `main` would otherwise
   never save anything.
