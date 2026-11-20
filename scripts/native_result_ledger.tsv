@@ -2,6 +2,7 @@
 js_argon2_hash	NR_GCPTR	crates/perry-ext-argon2/src/lib.rs	*mut Promise
 js_argon2_verify	NR_GCPTR	crates/perry-ext-argon2/src/lib.rs	*mut Promise
 js_bcrypt_compare	NR_GCPTR	crates/perry-ext-bcrypt/src/lib.rs	*mut Promise
+js_bcrypt_gen_salt	NR_GCPTR	crates/perry-ext-bcrypt/src/lib.rs	*mut Promise
 js_bcrypt_hash	NR_GCPTR	crates/perry-ext-bcrypt/src/lib.rs	*mut Promise
 js_buffer_alloc_unsafe_slow	NR_GCPTR	crates/perry-runtime/src/buffer/from.rs	*mut BufferHeader
 js_buffer_copy_bytes_from	NR_GCPTR	crates/perry-runtime/src/buffer/copy_bytes.rs	*mut BufferHeader

@@ -21,26 +21,6 @@
       "crates/perry-ext-argon2/src/lib.rs",
       "crates/perry-stdlib/src/argon2.rs"
     ],
-    "js_bcrypt_compare": [
-      "crates/perry-ext-bcrypt/src/lib.rs",
-      "crates/perry-stdlib/src/bcrypt.rs"
-    ],
-    "js_bcrypt_compare_sync": [
-      "crates/perry-ext-bcrypt/src/lib.rs",
-      "crates/perry-stdlib/src/bcrypt.rs"
-    ],
-    "js_bcrypt_gen_salt": [
-      "crates/perry-ext-bcrypt/src/lib.rs",
-      "crates/perry-stdlib/src/bcrypt.rs"
-    ],
-    "js_bcrypt_hash": [
-      "crates/perry-ext-bcrypt/src/lib.rs",
-      "crates/perry-stdlib/src/bcrypt.rs"
-    ],
-    "js_bcrypt_hash_sync": [
-      "crates/perry-ext-bcrypt/src/lib.rs",
-      "crates/perry-stdlib/src/bcrypt.rs"
-    ],
     "js_blob_new": [
       "crates/perry-runtime/src/stdlib_stubs.rs",
       "crates/perry-stdlib/src/fetch_blob.rs"
