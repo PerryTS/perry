@@ -954,10 +954,23 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(e, locals);
                 format!("({}, u64ToF64(TAG_UNDEFINED))", v)
             }
-            Expr::Delete(e) => {
-                let v = self.emit_js_expr(e, locals);
-                format!("(delete toJsValue({}), u64ToF64(TAG_TRUE))", v)
-            }
+            // The same bridges as the WASM `Delete` arms: `delete` must reach the property
+            // reference, not the value read through it.
+            Expr::Delete(e) => match e.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => format!(
+                    "(__memDispatch.object_delete(toJsValue({}), {}), u64ToF64(TAG_TRUE))",
+                    self.emit_js_expr(object, locals),
+                    js_string_literal(property)
+                ),
+                Expr::IndexGet { object, index, .. } => format!(
+                    "(__memDispatch.object_delete_dynamic(toJsValue({}), toJsValue({})), u64ToF64(TAG_TRUE))",
+                    self.emit_js_expr(object, locals),
+                    self.emit_js_expr(index, locals)
+                ),
+                _ => "u64ToF64(TAG_TRUE)".to_string(),
+            },
             // The iteration nodes beside the iterator-record intrinsics call the bridges
             // their WASM arms in `emit/expr/iterator_records.rs` call.
             Expr::GetIterator(value) => format!(

@@ -1195,13 +1195,14 @@ function nested() { const { a: { b, ...inner }, ...outer } = { a: { b: 1, c: 2 }
 function copy() { const src: any = { p: 1, q: 2 }; const { ...o } = src; o.p = 9; return (o !== src) + " " + src.p + " " + keys(o); }
 function computed() { const k = "a"; const { [k]: v, ...r } = { a: 1, b: 2 } as any; return v + " " + keys(r); }
 function hidden() { const src: any = { a: 1, b: 2 }; Object.defineProperty(src, "h", { value: 3, enumerable: false }); const { a, ...r } = src; return keys(r) + " " + ("h" in r); }
-async function inAsync() { const { x, ...o } = { x: 1, y: 2 } as any; return x + " " + JSON.stringify(o); }
+function proto() { const { b, ...r } = JSON.parse('{"__proto__":{"f":1},"b":2}'); return Object.keys(r).join(",") + " " + r.f; }
+async function inAsync() { const k = "z"; const { x, [k]: z, ...o } = { x: 1, y: 2, z: 3 } as any; return x + " " + z + " " + JSON.stringify(o); }
 console.log(decl() + " | " + param({ a: 1, b: 2, c: 3 }) + " | " + assign() + " | " + nested());
-console.log(copy() + " | " + computed() + " | " + hidden());
+console.log(copy() + " | " + computed() + " | " + hidden() + " | " + proto());
 inAsync().then((v) => console.log(v));
 "#
         ),
-        "1 y,z | 1 b,c | 1 y | 1 c d\ntrue 1 p,q | 1 b | b false\n1 {\"y\":2}"
+        "1 y,z | 1 b,c | 1 y | 1 c d\ntrue 1 p,q | 1 b | b false | __proto__ undefined\n1 3 {\"y\":2}"
     );
 }
 

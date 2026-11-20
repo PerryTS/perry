@@ -2204,7 +2204,8 @@ const __memDispatch = {
   object_values: (obj) => __holdsProperties(obj) ? Object.keys(obj).map(k => obj[k]) : [],
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
-  // included, except the statically named ones (CopyDataProperties).
+  // included, except the statically named ones (CopyDataProperties). Defined, not
+  // assigned, so an own `__proto__` key stays a data property.
   object_rest: (obj, exclude) => {
     const rest = {};
     if (obj === null || obj === undefined) return rest;
@@ -2212,7 +2213,9 @@ const __memDispatch = {
     for (const key of Reflect.ownKeys(from)) {
       if (typeof key === 'string' && exclude.includes(key)) continue;
       const desc = Object.getOwnPropertyDescriptor(from, key);
-      if (desc && desc.enumerable) rest[key] = from[key];
+      if (desc && desc.enumerable) {
+        Object.defineProperty(rest, key, { value: from[key], writable: true, enumerable: true, configurable: true });
+      }
     }
     return rest;
   },
