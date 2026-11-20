@@ -224,8 +224,10 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
   image rollout, so the action removes it before hashing.
 - **Restored dependencies stay fresh.** `.cargo/config.toml` builds std from
   `rust-src`, which Cargo fingerprints by mtime, and every job installs the
-  toolchain anew. The action pins those mtimes to a fixed date; without it,
-  std and every crate above it rebuild after a full cache hit.
+  toolchain anew. The action pins those mtimes to a fixed date, and the
+  vendored rust-cache keeps the build-std units it would otherwise drop for
+  being absent from `cargo metadata` (the "Perry patch" in its `cleanup.ts`).
+  Without both, std and every crate above it rebuild after a full cache hit.
 - **No sccache tarballs.** A per-run local-dir sccache tarball is ~4 GB; three
   jobs saving one on every main run evicted the whole budget. The GitHub cache
   backend of sccache (one entry per compilation unit) was measured at ~0 % Rust
