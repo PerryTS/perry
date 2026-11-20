@@ -395,7 +395,11 @@ pub(super) fn may_test_object(rv: &Receiver) -> bool {
 /// when the word may ask for the R slots' value test, `rloop.guard.object*`
 /// when it can only ask for the presence test.
 fn object_test_label(rv: &Receiver, part: &str) -> String {
-    let kind = if may_value_test(rv) { "value" } else { "object" };
+    let kind = if may_value_test(rv) {
+        "value"
+    } else {
+        "object"
+    };
     format!("rloop.guard.{kind}{part}")
 }
 
@@ -429,9 +433,7 @@ fn object_tests_on(ctx: &mut FnCtx<'_>, rv: &Receiver, word: &str, handle: &str)
         let slot = slot_of(ctx, rv, word, i);
         let p = super::bare::slot_ptr(ctx, rv.form(), handle, &slot);
         let v = ctx.block().load(I64, &p);
-        let here = ctx
-            .block()
-            .icmp_ne(I64, &v, crate::nanbox::TAG_HOLE_I64);
+        let here = ctx.block().icmp_ne(I64, &v, crate::nanbox::TAG_HOLE_I64);
         present = ctx.block().and(I1, &present, &here);
     }
     let test_end = ctx.block().label.clone();

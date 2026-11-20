@@ -16,7 +16,7 @@
 use super::concat::{
     canonicalize_surrogate_pairs, concat_memo_admit, concat_memo_insert, concat_memo_lookup,
     concat_memo_note_hit, concat_memo_should_probe, concat_memo_slot_and_tag, copy_bytes_small,
-    decimal_len, fast_itoa_i64, fast_itoa_u32, format_number_into, js_string_concat, write_decimal,
+    decimal_len, fast_itoa_u32, format_number_into, js_string_concat, write_decimal,
     CONCAT_MEMO_MAX_BYTES,
 };
 use super::*;
@@ -461,24 +461,6 @@ fn concat_parts_general<const M: usize>(
         }
         if crate::value::JSValue::from_bits(bits).is_number() {
             let len = format_number_into(value, num_bufs[i].write([0u8; 32]));
-            piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
-            piece_lens[i] = len as u32;
-            total_blen = total_blen.saturating_add(len as u32);
-            total_u16 = total_u16.saturating_add(len as u32);
-            continue;
-        }
-        // An INT32 number takes the digit arm (a `C.prototype` ref word, bit 32
-        // set, is not one).
-        if (bits & !crate::value::INT32_MASK) == crate::value::INT32_TAG {
-            let v = (bits & 0xFFFF_FFFF) as u32 as i32;
-            let len = {
-                let buf = num_bufs[i].write([0u8; 32]);
-                if v >= 0 {
-                    fast_itoa_u32(v as u32, buf)
-                } else {
-                    fast_itoa_i64(v as i64, buf)
-                }
-            };
             piece_ptrs[i] = num_bufs[i].as_ptr() as *const u8;
             piece_lens[i] = len as u32;
             total_blen = total_blen.saturating_add(len as u32);

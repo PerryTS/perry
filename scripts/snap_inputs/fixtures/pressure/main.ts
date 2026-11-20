@@ -1,0 +1,10 @@
+import { value as value0 } from "./m0";
+import { value as value1 } from "./m1";
+import { value as value2 } from "./m2";
+import { value as value3 } from "./m3";
+import { value as value4 } from "./m4";
+import { value as value5 } from "./m5";
+import { value as value6 } from "./m6";
+import { value as value7 } from "./m7";
+console.log(value0,value1,value2,value3,value4,value5,value6,value7);
+(globalThis as any).gc();

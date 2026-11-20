@@ -79,6 +79,9 @@ SENTINELS=(
   js_typed_feedback_plain_array_index_get_guard
   js_typed_feedback_numeric_array_index_get_guard
   js_typed_feedback_packed_f64_array_loop_guard
+  js_typed_feedback_packed_f64_range_loop_guard
+  js_string_array_range_loop_guard
+  js_closure_exact_func_guard
   js_typed_feedback_packed_i32_array_loop_guard
   js_typed_feedback_packed_u32_array_loop_guard
   js_typed_feedback_array_index_get_fallback_boxed

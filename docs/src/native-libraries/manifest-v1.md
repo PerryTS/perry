@@ -238,7 +238,8 @@ Dynamic or pointerful descriptors such as `jsvalue`, `string`, `json`,
 | `"f64"` / `"number"` | `f64` | `number` |
 | `"ptr"` | `i64` raw boxed pointer payload | raw pointer escape hatch |
 | `"buffer_len"` | `u32` byte length | `number` |
-| `"buffer+len"` | `(*const u8, usize)` | one Buffer/Uint8Array-shaped argument |
+| `"buffer+len"` | `(*const u8, usize)` | one `ArrayBuffer` or `ArrayBufferView` (every typed array, `DataView`, `Buffer`, subarrays): pointer = the view's first byte (`byteOffset` applied), length = `byteLength`, no copy |
+| `{ "kind": "buffer+len", "nullable": true }` | `(*const u8, usize)` | the same, and `null`/`undefined`/an omitted argument pass `(NULL, 0)`; without `nullable` they throw a `TypeError` |
 | `"handle"` / `"handle<T>"` | `i64` unwrapped resource pointer | opaque native handle |
 | `"promise"` / `"promise<T>"` | `i64` promise handle | `Promise` handle metadata |
 | `{ "kind": "pod", ... }` | pointer to C-layout record storage | one object-shaped argument |

@@ -45,6 +45,6 @@ fn a_key_that_may_be_constructor_of_top_stays_the_function_constructor() {
     m.load_from(TOP, TOP, Key::Named(a), c);
     assert!(holds_function_ctor(&m, c));
     let any = m.node_l("any");
-    m.load_from(TOP, TOP, Key::Any, any);
+    m.load_from(TOP, TOP, Key::any(), any);
     assert!(holds_function_ctor(&m, any));
 }

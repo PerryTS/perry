@@ -1,6 +1,7 @@
 use super::*;
 
-const TRANSFORM: &str = include_str!("../../../test-wasi/components/transform/world.wit");
+const TRANSFORM: &str =
+    include_str!("../../../tests/integration/wasi/components/transform/world.wit");
 
 #[test]
 fn imported_resource_factories_keep_aliases_without_inventing_world_imports() {

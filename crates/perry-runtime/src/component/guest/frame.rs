@@ -49,14 +49,34 @@ impl Drop for Anchor {
 #[path = "frame_tests.rs"]
 mod tests;
 
+struct GuestErrorSlot(OwnerLink);
+impl GuestErrorSlot {
+    fn values(&self) -> f64 {
+        let owner =
+            unsafe { payload::link_event_owner(self.0) }.expect("canonical frame on owner thread");
+        payload::state_get(owner, &FRAME, b"values")
+    }
+}
+impl crate::exception::throw_leaf::CaughtSlot for GuestErrorSlot {
+    fn get(&self) -> f64 {
+        crate::array::js_array_get_f64(array(self.values()), 0)
+    }
+    fn put(&self, value: f64) {
+        crate::array::js_array_set_f64(array(self.values()), 0, value);
+    }
+}
+enum FrameOwner {
+    Ready(OwnerLink),
+    Failed(crate::exception::throw_leaf::StoredCaught<GuestErrorSlot>),
+}
+
 pub(super) struct Frame {
-    owner: OwnerLink,
+    owner: FrameOwner,
     alive: Arc<AtomicBool>,
     length: u32,
     // OwnerLink must only be resolved on its creating agent. The C ABI has the
     // same affinity requirement; Rust callers cannot move a frame to a worker.
     _thread: PhantomData<Rc<()>>,
-    failed: bool,
     pub(super) transfers: Vec<u32>,
     pub(super) borrows: Vec<u32>,
     // Each entry roots both its wrapper and its private owner state in slots.
@@ -72,6 +92,28 @@ pub(super) struct Frame {
 }
 
 impl Frame {
+    fn owner_link(&self) -> OwnerLink {
+        match &self.owner {
+            FrameOwner::Ready(owner) => *owner,
+            FrameOwner::Failed(error) => error.slot().0,
+        }
+    }
+    fn is_failed(&self) -> bool {
+        matches!(self.owner, FrameOwner::Failed(_))
+    }
+    pub(super) fn caught_error(&self) -> Option<crate::exception::Caught> {
+        match &self.owner {
+            FrameOwner::Ready(_) => None,
+            FrameOwner::Failed(error) => {
+                assert!(
+                    self.alive.load(Ordering::Acquire),
+                    "canonical frame used after heap teardown"
+                );
+                Some(error.caught())
+            }
+        }
+    }
+
     pub fn allocate_guest_frame() -> Self {
         let scope = RuntimeHandleScope::new();
         let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -96,11 +138,10 @@ impl Frame {
             payload::owner_link(owner.get_nanbox_f64(), &FRAME).expect("canonical frame owner");
         unsafe { payload::link_ref(owner) };
         Self {
-            owner,
+            owner: FrameOwner::Ready(owner),
             alive,
             length: 1,
             _thread: PhantomData,
-            failed: false,
             transfers: Vec::new(),
             borrows: Vec::new(),
             borrow_states: Vec::new(),
@@ -138,7 +179,7 @@ impl Frame {
             self.alive.load(Ordering::Acquire),
             "canonical frame used after heap teardown"
         );
-        let owner = unsafe { payload::link_event_owner(self.owner) }
+        let owner = unsafe { payload::link_event_owner(self.owner_link()) }
             .expect("canonical frame on owner thread");
         payload::state_get(owner, &FRAME, b"values")
     }
@@ -162,7 +203,7 @@ impl Frame {
         // the returned head, not an old forwarding stub, into the owner edge.
         let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
         let owner =
-            unsafe { payload::link_event_owner(self.owner) }.expect("canonical frame owner");
+            unsafe { payload::link_event_owner(self.owner_link()) }.expect("canonical frame owner");
         payload::state_set(owner, &FRAME, b"values", values.get_nanbox_f64());
         self.length = next;
         index
@@ -207,28 +248,25 @@ impl Frame {
         }
     }
 
+    #[cfg(test)]
     pub fn error(&self) -> Option<f64> {
-        self.failed.then(|| self.get(0))
+        self.caught_error().map(|error| error.value())
     }
 
     pub fn guard<T: Default>(&mut self, body: impl FnOnce(&mut Self) -> T) -> T {
-        if self.failed {
+        if self.is_failed() {
             return T::default();
         }
-        match crate::exception::catch_js_throw(|| body(self)) {
+        match crate::exception::catch_thrown(|| body(self)) {
             Ok(value) => value,
             Err(error) => {
                 // The owned slot array survives transient exception-root
                 // restoration. Keep the original error before later cleanup.
                 let scope = RuntimeHandleScope::new();
-                let error = scope.root_nanbox_f64(error);
-                let values = scope.root_nanbox_f64(self.values());
-                crate::array::js_array_set_f64(
-                    array(values.get_nanbox_f64()),
-                    0,
-                    error.get_nanbox_f64(),
-                );
-                self.failed = true;
+                let error = error.root(&scope);
+                let _values = scope.root_nanbox_f64(self.values());
+                self.owner =
+                    FrameOwner::Failed(error.caught().store(GuestErrorSlot(self.owner_link())));
                 T::default()
             }
         }
@@ -242,10 +280,10 @@ impl Drop for Frame {
         if self.alive.load(Ordering::Acquire) {
             super::resources::release_borrows(self);
             self.end_resource_scope();
-            let owner = unsafe { payload::link_event_owner(self.owner) }
+            let owner = unsafe { payload::link_event_owner(self.owner_link()) }
                 .expect("canonical frame on owner thread");
             payload::close(owner, &FRAME);
-            unsafe { payload::link_unref(self.owner) };
+            unsafe { payload::link_unref(self.owner_link()) };
         }
     }
 }
@@ -282,16 +320,15 @@ pub unsafe extern "C" fn perry_component_frame_bootstrap(
         return std::ptr::null_mut();
     }
     let initializer: unsafe extern "C" fn(*mut c_void) = std::mem::transmute(initializer);
-    let result = crate::exception::catch_js_throw(|| initializer(data));
+    let result = crate::exception::catch_thrown(|| initializer(data));
     // Trap setup and the initializer precede every managed frame allocation.
     // Root a thrown value before constructing the frame that will own it.
     let scope = RuntimeHandleScope::new();
-    let error = result.err().map(|error| scope.root_nanbox_f64(error));
+    let error = result.err().map(|error| error.root(&scope));
     let mut frame = Frame::allocate_guest_frame();
     if let Some(error) = error {
-        let values = scope.root_nanbox_f64(frame.values());
-        crate::array::js_array_set_f64(array(values.get_nanbox_f64()), 0, error.get_nanbox_f64());
-        frame.failed = true;
+        let _values = scope.root_nanbox_f64(frame.values());
+        frame.owner = FrameOwner::Failed(error.caught().store(GuestErrorSlot(frame.owner_link())));
     }
     Box::into_raw(Box::new(frame)).cast()
 }
@@ -309,7 +346,7 @@ pub unsafe extern "C" fn perry_component_frame_drop(pointer: *mut c_void) {
 pub unsafe extern "C" fn perry_component_frame_resource_scope_end(pointer: *mut c_void) -> i32 {
     let owner = frame(pointer);
     owner.end_resource_scope();
-    if owner.failed {
+    if owner.is_failed() {
         -1
     } else {
         0
@@ -317,7 +354,7 @@ pub unsafe extern "C" fn perry_component_frame_resource_scope_end(pointer: *mut 
 }
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_failed(pointer: *mut c_void) -> i32 {
-    i32::from(frame(pointer).failed)
+    i32::from(frame(pointer).is_failed())
 }
 #[no_mangle]
 pub unsafe extern "C" fn perry_component_frame_initialize(

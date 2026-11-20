@@ -1,0 +1,1 @@
+CI: the required WASI checks run as three parallel jobs (`wasi-native`, `wasi-execution`, `wasi-components`), so a core PR waits for the longest of them instead of their sum; `pr-gate` requires each planned one.

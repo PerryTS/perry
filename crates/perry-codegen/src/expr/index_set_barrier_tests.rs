@@ -131,6 +131,7 @@ fn setter() -> Function {
                 }),
                 index: Box::new(Expr::LocalGet(IDX_ID)),
                 value: Box::new(Expr::LocalGet(VAL_ID)),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })],
@@ -170,6 +171,7 @@ fn bag_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

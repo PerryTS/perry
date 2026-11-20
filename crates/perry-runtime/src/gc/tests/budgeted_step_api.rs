@@ -234,3 +234,51 @@ fn check_trigger_drives_old_reclaim_to_completion_without_host_stepping() {
         "live root must survive the reclaim"
     );
 }
+
+#[test]
+fn a_budgeted_full_leaves_freed_pages_to_the_allocator_and_gc_forces_the_purge() {
+    use crate::gc::cycle_malloc_trim::{
+        mimalloc_purge_available, reset_test_mimalloc_purge_count,
+        test_mimalloc_forced_purge_count, test_mimalloc_purge_count,
+    };
+    let _guard = CopyingNurseryTestGuard::new(2);
+    let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    reset_old_reclaim_pressure();
+    let available = usize::from(mimalloc_purge_available());
+
+    // An ordinary full the old generation's growth started: it reaches the
+    // allocator, but nobody is owed the memory now, so it does not decommit.
+    let _dead_old = crate::arena::arena_alloc_gc_old(32, 8, GC_TYPE_STRING);
+    reset_test_mimalloc_purge_count();
+    GC_OLD_RECLAIM_PENDING.with(|pending| pending.set(true));
+    let mut result = JsGcStepResult::default();
+    assert_eq!(
+        js_gc_step_work_units(1, &mut result),
+        JS_GC_STEP_STATUS_ACTIVE
+    );
+    assert_eq!(result.collection_kind, GcCollectionKind::Full.ffi_code());
+    assert_eq!(
+        complete_budgeted_gc_cycle().status,
+        JS_GC_STEP_STATUS_COMPLETED
+    );
+    assert_eq!(
+        test_mimalloc_purge_count(),
+        available,
+        "the budgeted full's reclaim tail must still reach the allocator"
+    );
+    assert_eq!(
+        test_mimalloc_forced_purge_count(),
+        0,
+        "a budgeted full must leave freed pages to mimalloc's delayed purge"
+    );
+
+    // `gc()` asks for the memory back: the same tail forces the purge.
+    reset_test_mimalloc_purge_count();
+    js_gc_collect();
+    assert_eq!(test_mimalloc_purge_count(), available);
+    assert_eq!(
+        test_mimalloc_forced_purge_count(),
+        available,
+        "an explicit full must force the purge"
+    );
+}

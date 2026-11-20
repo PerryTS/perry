@@ -103,22 +103,6 @@ fn ensure_com_sta() {
     });
 }
 
-#[cfg(target_os = "windows")]
-fn host_of_url_string(s: &str) -> String {
-    let after_scheme = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => return String::new(),
-    };
-    let host_end = after_scheme
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_scheme.len());
-    let host_with_port = &after_scheme[..host_end];
-    match host_with_port.find(':') {
-        Some(i) => host_with_port[..i].to_string(),
-        None => host_with_port.to_string(),
-    }
-}
-
 fn catch_panic<F: FnOnce() + std::panic::UnwindSafe>(label: &str, f: F) {
     if let Err(e) = std::panic::catch_unwind(f) {
         let msg = if let Some(s) = e.downcast_ref::<&str>() {
@@ -130,15 +114,6 @@ fn catch_panic<F: FnOnce() + std::panic::UnwindSafe>(label: &str, f: F) {
         };
         eprintln!("[perry] panic in {} (caught): {}", label, msg);
     }
-}
-
-fn host_in_allowlist(host: &str, allowlist: &[String]) -> bool {
-    if allowlist.is_empty() {
-        return true;
-    }
-    allowlist
-        .iter()
-        .any(|d| host == d || host.ends_with(&format!(".{}", d)))
 }
 
 #[cfg(target_os = "windows")]
@@ -471,14 +446,11 @@ fn install_navigation_handlers(handle: i64, webview: &ICoreWebView2) {
         });
 
         // Allowlist gate first.
-        if !allowed.is_empty() {
-            let host = host_of_url_string(&url);
-            if !host_in_allowlist(&host, &allowed) {
-                unsafe {
-                    let _ = args.SetCancel(true);
-                }
-                return Ok(());
+        if !perry_ui::webview_navigation::navigation_allowed(&url, &allowed) {
+            unsafe {
+                let _ = args.SetCancel(true);
             }
+            return Ok(());
         }
 
         if on_should != 0.0 {

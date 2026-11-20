@@ -1,0 +1,1 @@
+Use native ELF thread-locals on Android (global-dynamic TLS model for the runtime and generated code, local-dynamic for mimalloc) instead of emulated TLS, which removes thousands of emutls variables and their per-access calls. OpenHarmony keeps emulated TLS.

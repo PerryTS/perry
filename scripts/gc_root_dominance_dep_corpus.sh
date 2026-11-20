@@ -6,7 +6,7 @@
 #   ./scripts/gc_root_dominance_dep_corpus.sh [OUTDIR]
 #
 # The sibling script, gc_root_dominance_corpus.sh, compiles ~99 hand-written
-# `test-files/` sources. That corpus reads ZERO in both modes the CI gate runs
+# `tests/fixtures/programs/` sources. That corpus reads ZERO in both modes the CI gate runs
 # — and it read zero while twenty lines of stock `zod` faulted deterministically
 # under the from-space protector (#7280). Twenty-five curated files passing
 # while a real dependency fails is not noise, it is the corpus measuring the
@@ -41,7 +41,7 @@ set -euo pipefail
 
 OUTDIR="${1:-ir-corpus-dep}"
 PERRY_BIN="${PERRY_BIN:-target/release/perry}"
-ENTRY="${ENTRY:-test-files/gc-dep-corpus/main.ts}"
+ENTRY="${ENTRY:-tests/fixtures/programs/gc-dep-corpus/main.ts}"
 
 # The floor, not a target. `zod@4` compiles to ~90 native modules here; the
 # floor sits below that with room for the dependency's own churn and well above
@@ -118,7 +118,7 @@ fi
 # character replaced by `_`. Release worktrees can add their directory name as
 # a prefix, so require exactly one emitted module with the source-path suffix.
 dark=()
-for src in test-files/gc-dep-corpus/*.ts; do
+for src in tests/fixtures/programs/gc-dep-corpus/*.ts; do
   sanitized="$(printf '%s' "$src" | tr -c 'A-Za-z0-9' '_')"
   matches=("$OUTDIR"/dep__*"${sanitized}.ll")
   if [ "${#matches[@]}" -ne 1 ] || [ ! -f "${matches[0]}" ]; then
@@ -128,7 +128,7 @@ done
 if [ "${#dark[@]}" -gt 0 ]; then
   echo "::error::these corpus sources produced no IR — nothing imports them:" >&2
   printf '  %s\n' "${dark[@]}" >&2
-  echo "Import them from test-files/gc-dep-corpus/main.ts, or delete them." >&2
+  echo "Import them from tests/fixtures/programs/gc-dep-corpus/main.ts, or delete them." >&2
   echo "An unimported corpus source is not a weak test, it is no test at all." >&2
   exit 1
 fi

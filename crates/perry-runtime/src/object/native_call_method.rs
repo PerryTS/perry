@@ -44,6 +44,8 @@ mod typed_array;
 /// #10724: the class receiver guard's own-key scan never uses the element accessor.
 mod vtable_guard_scan_tests;
 
+use crate::object::native_module::is_namespace_inherited_method;
+pub(super) use crate::typedarray_hook_slots::dispatch_typed_array_method;
 use bare_receiver::{
     canonicalize_bare_gc_receiver, dispatch_unvouched_bare_as_number, is_unvouched_bare_word,
 };
@@ -51,7 +53,7 @@ use disposal::{
     js_using_check_disposable, try_disposable_stack_method_dispatch, try_symbol_dispose_dispatch,
 };
 pub(crate) use handle_methods::try_dispatch_handle_method_value;
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) use namespace_override::namespace_override_depth;
 #[cfg(test)]
 pub(crate) use namespace_override::test_push_catch_namespace_override;
@@ -66,7 +68,7 @@ pub(crate) use proto_dispatch::{
     is_self_redispatching_proto_method, try_dispatch_instance_method_value,
     try_dispatch_value_called_proto_method,
 };
-pub(super) use typed_array::dispatch_typed_array_method;
+pub(crate) use typed_array::typed_array_method_tower;
 
 /// The receiver predicate of a class instance's fast method call
 /// ([`class_holder::try_class_holder_fast_dispatch`]) and of the compiled
@@ -488,6 +490,44 @@ pub unsafe extern "C-unwind" fn js_native_call_method_by_id(
     js_native_call_method_str_key(object, method_id, args_ptr, args_len)
 }
 
+/// ONCHG1: the own-value arm of a guarded named call `o.k( ... )`. The
+/// compiled caller compared `o`'s exact class family word and read `value`
+/// from the family's late slot of `k` (not the hole). Under that word the
+/// layout names every own key and the late key is a data property, so
+/// OrdinaryGet (10.1.8.1) gives `value`; EvaluateCall (13.3.6.2) then calls
+/// it with `o` as `this` (7.3.14). A compiled user closure enters its body
+/// directly; any other value (a builtin, a bound function, a non-callable
+/// that throws) takes the complete by-id call, which performs the same
+/// Get-then-Call. The tests here are a subset of the by-id path's own-slot
+/// arm (`call_by_id`): no name decode, descriptor probe or key compare.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_call_late_own_value(
+    object: f64,
+    value: i64,
+    method_id: i64,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    let v = value as u64;
+    if v & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((v & crate::value::POINTER_MASK) as usize)
+    {
+        let closure = (v & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+        if let Some(info) = (*closure).info.as_ref() {
+            if info.flags & crate::codegen_abi::FN_COMPILED_BODY != 0 {
+                return compiled_target::enter_compiled_body(
+                    closure,
+                    info,
+                    crate::closure::JsThis::from_f64(object),
+                    args_ptr,
+                    args_len,
+                );
+            }
+        }
+    }
+    js_native_call_method_by_id(object, method_id, args_ptr, args_len)
+}
+
 /// Apply/spread sibling of `js_native_call_method_by_id`.
 #[no_mangle]
 pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
@@ -508,76 +548,6 @@ pub unsafe extern "C-unwind" fn js_native_call_method_apply_by_id(
     )
 }
 
-/// Materialize `fixed..., ...spread` for the generic branch of a short packed
-/// spread callsite. The fast branch has already evaluated all operands; doing
-/// the fallback assembly here preserves that source order without re-running
-/// an expression, and [`crate::array::array_from_spread_value`] preserves the
-/// full iterator protocol for every proof miss.
-///
-/// The returned array is consumed immediately by
-/// [`js_native_call_method_apply_by_id`]. Every input and both arrays are held
-/// in mutable runtime handles because iterator materialization and array pushes
-/// can evacuate the nursery.
-#[no_mangle]
-pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
-    fixed_ptr: *const f64,
-    fixed_len: usize,
-    spread: f64,
-) -> i64 {
-    let fixed = if fixed_ptr.is_null() || fixed_len == 0 {
-        &[][..]
-    } else {
-        std::slice::from_raw_parts(fixed_ptr, fixed_len)
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let fixed_handles = scope.root_nanbox_f64_slice(fixed);
-    let spread_handle = scope.root_nanbox_f64(spread);
-
-    let rooted_spread = spread_handle.get_nanbox_f64();
-    // Drive the real iterator protocol on a guard miss. The older
-    // `js_array_like_to_array` shortcut reinterprets an Array Proxy handle or
-    // object-backed Array-subclass instance as an `ArrayHeader`, making both
-    // appear empty. Nullish tails retain Perry's established optional-tail
-    // extension and contribute zero arguments, matching the admitted arm.
-    let spread_array = if matches!(
-        rooted_spread.to_bits(),
-        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
-    ) {
-        crate::array::js_array_alloc(0)
-    } else {
-        crate::array::array_from_spread_value(rooted_spread)
-    };
-    let spread_array_handle = scope.root_raw_mut_ptr(spread_array);
-    let spread_len = spread_array_handle.with_const_ptr(|arr: *const crate::array::ArrayHeader| {
-        if arr.is_null() {
-            0
-        } else {
-            crate::array::js_array_length(arr) as usize
-        }
-    });
-    let capacity = fixed_len.saturating_add(spread_len).min(u32::MAX as usize) as u32;
-    let result_handle = scope.root_raw_mut_ptr(crate::array::js_array_alloc(capacity));
-
-    for value in &fixed_handles {
-        let rooted_value = value.get_nanbox_f64();
-        let next = result_handle
-            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
-        result_handle.set_raw_mut_ptr(next);
-    }
-    for index in 0..spread_len {
-        let value = spread_array_handle
-            .with_const_ptr(|arr| crate::array::js_array_get_f64(arr, index as u32));
-        // The push can collect while `value` is otherwise only a Rust local.
-        let value_scope = crate::gc::RuntimeHandleScope::new();
-        let value_handle = value_scope.root_nanbox_f64(value);
-        let rooted_value = value_handle.get_nanbox_f64();
-        let next = result_handle
-            .with_mut_ptr(|result| crate::array::js_array_push_f64(result, rooted_value));
-        result_handle.set_raw_mut_ptr(next);
-    }
-    result_handle.with_mut_ptr(|result: *mut crate::array::ArrayHeader| result as i64)
-}
-
 /// The numeric property key of an `obj[key](...)` call, as the raw `f64` index
 /// `js_object_get_index_polymorphic` consumes, or `None` when `key` is not a
 /// number. Both representations a numeric key can arrive in are accepted: a
@@ -585,9 +555,6 @@ pub unsafe extern "C-unwind" fn js_spread_tail_fallback_args(
 /// async-loop shape) and a NaN-boxed INT32 (the i32 loop-counter lowering).
 #[inline]
 fn numeric_index_key(key: JSValue) -> Option<f64> {
-    if key.is_int32() {
-        return Some(key.as_int32() as f64);
-    }
     // `is_number` accepts every non-Perry-tagged bit pattern, NaN included; a
     // NaN key is not an index and would only make the polymorphic read return
     // `undefined`, so screen it out here rather than paying for the probe.
@@ -626,7 +593,7 @@ fn receiver_is_plain_array(object: f64) -> bool {
     v.is_pointer()
         // SAFETY: `try_read_gc_header` validates the address before reading.
         && unsafe { crate::value::addr_class::try_read_gc_header(v.as_pointer::<u8>() as usize) }
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 /// The body of [`js_native_call_method_value`].
@@ -641,130 +608,6 @@ unsafe fn native_call_method_value_inner(
 ) -> f64 {
     let key_jsval = JSValue::from_bits(key.to_bits());
     let is_symbol_key = crate::symbol::js_is_symbol(key) != 0;
-
-    // Well-known symbol calls must use the current property value below;
-    // direct registry dispatch bypasses own/prototype replacements (#9788).
-    if is_symbol_key && !crate::symbol::is_well_known_symbol(crate::symbol::sym_key_from_f64(key)) {
-        let sym_key = crate::symbol::sym_key_from_f64(key);
-        if sym_key != 0 {
-            let bits = object.to_bits();
-            let top16 = bits >> 48;
-            let _ = top16;
-            if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
-                let is_prototype_ref = crate::object::class_prototype_ref_id(object).is_some();
-                if is_prototype_ref {
-                    if let Some((func_ptr, param_count, has_rest, entry)) =
-                        lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-                    {
-                        if entry != 0
-                            && crate::closure::info_has(
-                                &*(entry as *const crate::closure::JsFunctionInfo),
-                                crate::closure::FN_GENERATOR,
-                            )
-                        {
-                            return crate::object::call_generator_symbol_method(
-                                object, key, args_ptr, args_len,
-                            );
-                        }
-                        return call_vtable_method(
-                            func_ptr,
-                            object.to_bits() as i64,
-                            args_ptr,
-                            args_len,
-                            param_count,
-                            // Computed symbol methods never synthesize an
-                            // `arguments` object, but DO carry a `has_rest`
-                            // flag for a trailing user rest param.
-                            false,
-                            has_rest,
-                        );
-                    }
-                } else {
-                    if let Some((func_ptr, param_count, has_rest, entry)) =
-                        lookup_class_symbol_method_in_chain(class_id, sym_key, true)
-                    {
-                        if entry != 0
-                            && crate::closure::info_has(
-                                &*(entry as *const crate::closure::JsFunctionInfo),
-                                crate::closure::FN_GENERATOR,
-                            )
-                        {
-                            return crate::object::call_generator_symbol_method(
-                                object, key, args_ptr, args_len,
-                            );
-                        }
-                        return call_registered_static_method(
-                            func_ptr,
-                            args_ptr,
-                            args_len,
-                            param_count,
-                            has_rest,
-                        );
-                    }
-                }
-            } else if is_class_object_value(object) {
-                let obj = JSValue::from_bits(bits).as_pointer::<ObjectHeader>();
-                let class_id = js_object_get_class_id(obj);
-                if let Some((func_ptr, param_count, has_rest, entry)) =
-                    lookup_class_symbol_method_in_chain(class_id, sym_key, true)
-                {
-                    if entry != 0
-                        && crate::closure::info_has(
-                            &*(entry as *const crate::closure::JsFunctionInfo),
-                            crate::closure::FN_GENERATOR,
-                        )
-                    {
-                        return crate::object::call_generator_symbol_method(
-                            object, key, args_ptr, args_len,
-                        );
-                    }
-                    return call_registered_static_method(
-                        func_ptr,
-                        args_ptr,
-                        args_len,
-                        param_count,
-                        has_rest,
-                    );
-                }
-            } else if key_jsval.is_pointer() || JSValue::from_bits(bits).is_pointer() {
-                let obj_val = JSValue::from_bits(bits);
-                if obj_val.is_pointer() {
-                    let obj = obj_val.as_pointer::<ObjectHeader>();
-                    if !obj.is_null() && is_valid_obj_ptr(obj as *const u8) {
-                        let class_id = js_object_get_class_id(obj);
-                        if class_id != 0 {
-                            if let Some((func_ptr, param_count, has_rest, entry)) =
-                                lookup_class_symbol_method_in_chain(class_id, sym_key, false)
-                            {
-                                if entry != 0
-                                    && crate::closure::info_has(
-                                        &*(entry as *const crate::closure::JsFunctionInfo),
-                                        crate::closure::FN_GENERATOR,
-                                    )
-                                {
-                                    return crate::object::call_generator_symbol_method(
-                                        object, key, args_ptr, args_len,
-                                    );
-                                }
-                                let this_i64 = obj as i64;
-                                return call_vtable_method(
-                                    func_ptr,
-                                    this_i64,
-                                    args_ptr,
-                                    args_len,
-                                    param_count,
-                                    // Computed symbol methods never synthesize an
-                                    // `arguments` object, but DO carry `has_rest`.
-                                    false,
-                                    has_rest,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 
     // #6328: NUMERIC key — `fns[i](x)`, `resolvers[i](i)`. `js_to_property_key`
     // canonicalizes the index to the string `"i"`, and the string branch below
@@ -787,8 +630,12 @@ unsafe fn native_call_method_value_inner(
     // a numerically-named vtable method (`class C { 3() {} }`) keeps working.
     if !is_symbol_key {
         if let Some(index) = numeric_index_key(key_jsval) {
+            // The index entry takes a receiver HANDLE (clear top 16 bits =
+            // a raw pointer); a Number receiver with that shape is handed
+            // over as a Number the entry cannot read as an address.
+            let receiver = crate::value::addr_class::number_receiver_for_dispatch(object);
             let field =
-                crate::object::js_object_get_index_polymorphic(object.to_bits() as i64, index);
+                crate::object::js_object_get_index_polymorphic(receiver.to_bits() as i64, index);
             let fv = JSValue::from_bits(field.to_bits());
             // An undefined answer may still name a numerically-named vtable
             // method below; an array has none, so its element read is the
@@ -893,6 +740,9 @@ unsafe fn native_call_method_value_inner(
     };
     let fv = JSValue::from_bits(field.to_bits());
     if fv.is_undefined() || fv.is_null() {
+        if is_symbol_key {
+            crate::closure::throw_not_callable();
+        }
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
 
@@ -994,8 +844,7 @@ pub unsafe extern "C-unwind" fn js_native_call_method_value_apply(
 
 fn throw_type_error_message(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(crate) fn throw_object_value_of_nullish_receiver() -> ! {
@@ -1024,12 +873,9 @@ unsafe fn gc_pointer_and_type_from_value(value: f64) -> Option<(*const u8, u8)> 
     let ptr = if jsval.is_pointer() {
         jsval.as_pointer::<u8>()
     } else {
-        let bits = value.to_bits();
-        if (bits >> 48) == 0 && bits >= (crate::gc::GC_HEADER_SIZE as u64) + 0x1000 {
-            bits as *const u8
-        } else {
-            return None;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return None;
     };
     if ptr.is_null() || (ptr as usize) < crate::gc::GC_HEADER_SIZE + 0x1000 {
         return None;
@@ -1404,6 +1250,22 @@ pub(crate) unsafe fn native_call_method_tower(
     let object = || object_handle.get_nanbox_f64();
     let jsval = || JSValue::from_bits(object().to_bits());
 
+    // Calls with no observable arguments can skip the split lookup. They
+    // still perform the deferred namespace's [[Get]], never slot-only native
+    // dispatch. Reuse this tower's receiver/argv roots across module evaluation.
+    if super::deferred_namespace::is_deferred(object()) {
+        let name = method_name.as_bytes().to_vec();
+        let function = super::method_call::spec_get_value(object(), &name);
+        let function = root_scope.root_nanbox_f64(function);
+        let args = refreshed_args();
+        return super::method_call::js_method_call_value(
+            function.get_nanbox_f64(),
+            object(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
+
     // An explicit `Object.setPrototypeOf(instance, proto)` replaces the
     // instance's class prototype. Resolve a method value through ordinary
     // property lookup before any class/native dispatch: that lookup preserves
@@ -1499,16 +1361,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // directly — returning unconditionally avoids double-invoking a void method.
     if jsval().is_pointer()
         && !method_name.starts_with("__perry_")
-        && !matches!(
-            method_name,
-            "toString"
-                | "toLocaleString"
-                | "valueOf"
-                | "hasOwnProperty"
-                | "isPrototypeOf"
-                | "propertyIsEnumerable"
-                | "constructor"
-        )
+        && !is_namespace_inherited_method(method_name)
     {
         let ns_ptr = jsval().as_pointer::<ObjectHeader>();
         // The POINTER_TAG payload reaching here can be a small registry handle
@@ -1722,8 +1575,6 @@ pub(crate) unsafe fn native_call_method_tower(
     {
         let raw_addr = if jsval().is_pointer() {
             crate::value::js_nanbox_get_pointer(object()) as usize
-        } else if (object().to_bits() >> 48) == 0 {
-            object().to_bits() as usize
         } else {
             0
         };
@@ -1931,12 +1782,12 @@ pub(crate) unsafe fn native_call_method_tower(
         // First Get the method through the trap. Only the actual Array
         // builtin may enter the generic engine; a trap's replacement must
         // be called with the original Proxy receiver.
-        if crate::object::builtin_closure_is_non_constructable_value(method_handle.get_nanbox_f64())
-            && crate::object::is_array_prototype_method_value(
-                method_handle.get_nanbox_f64(),
-                method_name,
-            )
-        {
+        if crate::object::native_module::builtin_closure_is_native_non_constructor_value(
+            method_handle.get_nanbox_f64(),
+        ) && crate::object::is_array_prototype_method_value(
+            method_handle.get_nanbox_f64(),
+            method_name,
+        ) {
             let args = refreshed_args();
             if let Some(result) = crate::array::dispatch_arraylike_read_method(
                 object(),
@@ -1950,8 +1801,8 @@ pub(crate) unsafe fn native_call_method_tower(
         let args = refreshed_args();
         // The proxy is the call's receiver, matching the receiver semantics
         // of a normal `obj.method(args)` invocation. A canonical class-method
-        // value takes it via `canonical_bound_method_receiver` (#6699 routes a
-        // proxy receiver through there).
+        // value takes it as its call-time `this` in `dispatch_bound_method`
+        // (#6699 routes a proxy receiver through there).
         let proxy_class_id =
             crate::proxy_hooks::proxy_target_class_id(object_handle.get_nanbox_f64());
         let is_static_class_method = proxy_class_id.is_some_and(|class_id| {
@@ -2243,50 +2094,19 @@ pub(crate) unsafe fn native_call_method_tower(
                     args.len(),
                 );
             }
-            // A live Error whose chain has no such callable: the member call
-            // has no callee, a TypeError as in node.
-            if gc_type == crate::gc::GC_TYPE_ERROR {
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-            // Closes #645: when a method falls through every dispatcher
-            // and returns NULL_OBJECT_BYTES (e.g. drizzle's
-            // `this.client.prepare(...)` where `this.client` resolved to
-            // a heap-object that doesn't dispatch any method named
-            // "prepare"), the result gets stored as `this.stmt` and the
-            // chained `this.stmt.raw().all(...)` re-enters this function
-            // with `obj` pointing at NULL_OBJECT_BYTES — a static stub in
-            // the binary's data segment, NOT the macOS userspace heap
-            // range that `is_valid_obj_ptr` requires (HEAP_MIN ==
-            // 0x200_0000_0000). Pre-fix this returned a literal `0.0`,
-            // which the codegen interprets as the IEEE-754 number zero,
-            // so the next chained method saw a number receiver and
-            // threw `(number).<method> is not a function`. Returning the
-            // null-object stub matches every other catch-all in this
-            // function and keeps `typeof === "object"` so chained
-            // operations propagate consistently instead of mid-chain
-            // numeric arithmetic on bit patterns. Truly garbage pointers
-            // benefit too — chained calls hit a stable null stub instead
-            // of mysterious numeric values.
-            //
-            // #340/#341 row 4 collapsed an `is_valid_obj_ptr(obj)` branch that
-            // used to sit here: BOTH of its arms already returned the stub, so
-            // it could not change the answer -- a test that cannot fail. Its
-            // premise is gone too. It was written when the stub was a `.data`
-            // static, deliberately OUTSIDE the macOS heap window
-            // (`HEAP_MIN == 0x200_0000_0000`) that `is_valid_obj_ptr` requires,
-            // so a re-entrant `stub.raw().all(...)` reached this arm with
-            // `gc_type` read out of whatever bytes preceded the static. The
-            // stub is a real `GC_TYPE_OBJECT` now, so that re-entry takes the
-            // ordinary-object path below, finds a zero-key shape, matches no
-            // method and reaches the same catch-all at the end of this
-            // function. Same answer, decided by the object model rather than by
-            // the linker's layout.
-            return crate::object::null_stub_value();
+            // A live exotic receiver whose chain has no such callable (an
+            // Error; an Array, a Date or a typed array behind a class
+            // annotation, `p.m()` with `p: P` given `[7, 8]`): the member call
+            // has no callee, node's TypeError `p.m is not a function`. The
+            // null-object stub this arm returned before (#645: a chained call
+            // on a heap object that dispatches no such method) is an ordinary
+            // object (`GC_TYPE_OBJECT`) and never reaches this arm.
+            crate::error::js_throw_type_error_not_a_function(
+                std::ptr::null(),
+                0,
+                method_name.as_ptr(),
+                method_name.len(),
+            );
         }
 
         // Overflow owns the current key list after a delete or descriptor
@@ -2454,47 +2274,6 @@ pub(crate) unsafe fn native_call_method_tower(
             method_name.len(),
         );
     }
-    // Issue #687: INT32-NaN-boxed value whose payload is a registered
-    // class id — i.e. a `ClassRef` produced by `Expr::ClassRef` codegen.
-    // Effect's `Schema.NonNegative.pipe(int()).annotations({...})` chains
-    // produce a ClassRef out of the first `.pipe()` (via the codegen-side
-    // defensive no-op in `lower_call.rs::Expr::ClassRef`) and the chained
-    // `.annotations(...)` reaches us with that ClassRef as the receiver.
-    // Treat it as a chainable no-op: return the receiver so further
-    // `.method(...)` calls stay typed-class-shaped during module init.
-    // The result isn't semantically equivalent to Effect's transformed
-    // schema, but it advances Schema.ts__init past sites that previously
-    // threw `(number).<method> is not a function`. Paired with the
-    // codegen-side fix in `lower_call.rs` for the simpler
-    // `ClassRef.method()` shape.
-    if jsval().is_int32() {
-        let payload = jsval().as_int32() as u32;
-        if payload != 0 {
-            let registered = REGISTERED_CLASS_IDS
-                .read()
-                .unwrap()
-                .as_ref()
-                .is_some_and(|set| set.contains(&payload));
-            if registered {
-                // The class's prototype method, called with an undefined
-                // `this`: the property `C.prototype` holds for the name.
-                if let Some(result) =
-                    class_holder::call_class_ref_method(payload, method_name, &arg_handles)
-                {
-                    return result;
-                }
-                if matches!(method_name, "pipe" | "annotations") {
-                    return object();
-                }
-                crate::error::js_throw_type_error_not_a_function(
-                    std::ptr::null(),
-                    0,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
-    }
     // #9675: the BARE-heap-pointer recovery that used to sit here is gone. It
     // reboxed any word whose magnitude looked like a heap address, which is what
     // let a genuine subnormal double be dispatched as an object. Both halves of
@@ -2505,7 +2284,7 @@ pub(crate) unsafe fn native_call_method_tower(
     // any more. See `bare_receiver`.
     let primitive_kind: Option<&'static str> = if jsval().is_any_string() {
         Some("string")
-    } else if jsval().is_int32() || jsval().is_number() {
+    } else if jsval().is_number() {
         Some("number")
     } else if jsval().is_bool() {
         Some("boolean")

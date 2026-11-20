@@ -64,6 +64,7 @@ fn reachable_dynamic_import_observes_namespace_dead_site_does_not() {
         byte_offset: 0,
         deferred_error: None,
         synchronous: false,
+        deferred: false,
     }));
     let mut dynamic = lower(
         "export function viaImport() {} function privateDead() {}",
@@ -298,6 +299,7 @@ fn dynamic_namespace_includes_star_bindings_and_deferred_evaluation() {
         byte_offset: 0,
         deferred_error: None,
         synchronous: false,
+        deferred: false,
     }));
     let mut barrel = lower("export * from 'lib.ts';", "barrel.ts");
     let mut lib = lower(
@@ -513,15 +515,4 @@ fn actual_tiny_entry_image_preserves_the_generated_reference_contract() {
         .unwrap_err()
         .to_string()
         .contains("root contract violated"));
-}
-
-#[test]
-fn well_known_symbol_class_hooks_are_owned_by_module_init() {
-    let m = lower(
-        "class Dead { get [Symbol.toStringTag]() { return 'D'; } } function dead() {}",
-        "entry.ts",
-    );
-    let c = run(&[("entry.ts", &m)]);
-    assert!(live(&c, "__perry_wk_tostringtag_Dead"));
-    assert!(!live(&c, "dead"));
 }

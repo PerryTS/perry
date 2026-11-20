@@ -19,7 +19,7 @@ pub enum Kind {
 impl Kind {
     pub const fn header_type(self) -> u8 {
         match self {
-            Self::Arr => crate::gc::GC_TYPE_ARRAY,
+            Self::Arr => crate::gc_array_type_pat!(),
             Self::Str => crate::gc::GC_TYPE_STRING,
             Self::Map => crate::gc::GC_TYPE_MAP,
             Self::Set => crate::gc::GC_TYPE_SET,

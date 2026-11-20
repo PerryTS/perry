@@ -56,7 +56,7 @@ extern "C" fn ns_readable_iterator_chunk_fulfilled(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let outer = js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let outer = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     if !outer.is_null() {
         crate::promise::js_promise_resolve(outer, iterator_result(value, false));
     }
@@ -127,8 +127,8 @@ fn readable_iterator_chunk_result(value: f64) -> f64 {
         crate::fn_info!(ns_readable_iterator_chunk_rejected, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(fulfill, 0, outer as i64);
-    js_closure_set_capture_ptr(reject, 0, outer as i64);
+    crate::closure::closure_set_capture_ref(fulfill, 0, outer as i64);
+    crate::closure::closure_set_capture_ref(reject, 0, outer as i64);
     crate::promise::js_promise_attach_handlers(inner, fulfill, reject);
     box_pointer(outer as *const u8)
 }
@@ -1147,16 +1147,23 @@ extern "C" fn single_value_iterator_return(
 /// source forwards its events into node:stream's registry (see
 /// `node_stream::emit_to_stream_listeners`) and can be resumed via `resume()`.
 pub(crate) fn install_foreign_readable_async_iterator_symbol(stream: f64) {
+    mark_foreign_readable(stream);
+    install_readable_async_iterator_symbol(stream);
+}
+
+/// Mark a Readable whose bytes arrive through events, not node:stream's chunk
+/// buffer, so `Readable.toWeb()` and iteration wait for them.
+pub(crate) fn mark_foreign_readable(stream: f64) {
     set_hidden_value(
         stream,
         crate::runtime_state_key!(FOREIGN_READABLE_KEY),
         f64::from_bits(TAG_TRUE),
     );
-    install_readable_async_iterator_symbol(stream);
 }
 
 /// Record a foreign source's real EOF before invoking its end listeners. An
 /// iterator first pulled after that event cannot rely on seeing it again.
+#[cfg(not(unix))]
 pub(crate) fn mark_foreign_readable_ended(stream: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
@@ -1206,7 +1213,8 @@ pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64
     install_foreign_readable_async_iterator_symbol(stream);
 }
 
-#[cfg(test)]
+// The foreign readable under test is child_process's pre-socket stdout.
+#[cfg(all(test, not(unix)))]
 mod foreign_eof_tests;
 
 #[cfg(test)]

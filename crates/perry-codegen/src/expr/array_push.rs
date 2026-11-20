@@ -54,7 +54,7 @@
 use anyhow::{anyhow, Result};
 use perry_hir::Expr;
 
-use super::array_push_own::{OwnPushJoin, PUSH_SPEC_OR_OWN};
+use super::array_push_own::{method_tiers_enabled, push_entry, OwnPushJoin};
 use crate::block::LlBlock;
 use crate::nanbox::double_literal;
 use crate::native_value::{
@@ -75,6 +75,30 @@ use super::{
     nanbox_pointer_inline, raw_f64_layout_fact, unbox_to_i64, FnCtx, TypedFeedbackContract,
     TypedFeedbackKind,
 };
+
+/// Runtime entry the inline push tier calls when only room failed: grows the
+/// admitted array without collecting, or declines with null.
+pub(crate) const GROW_FOR_PUSH: &str = "js_array_grow_for_push";
+
+/// `PERRY_PUSH_GROW_INLINE=0` keeps every full-capacity push on the complete
+/// runtime push and the guarded length loads (A/B control: the previous IR).
+fn grow_for_push_enabled() -> bool {
+    std::env::var("PERRY_PUSH_GROW_INLINE").as_deref() != Ok("0")
+}
+
+/// `length` of a receiver the `apush.nofwd` admission has already read the
+/// header of (`payload - 6`). That read proved a live array user pointer, so
+/// `safe_load_i32_from_ptr`'s small-address guard (a compare, a select and a
+/// register for the guard global, once per push) has nothing left to catch.
+/// `PERRY_PUSH_GROW_INLINE=0` keeps the guarded load, i.e. the previous IR.
+fn admitted_length_load(blk: &mut LlBlock, handle: &str) -> String {
+    if grow_for_push_enabled() {
+        let ptr = blk.inttoptr(I64, handle);
+        blk.load(I32, &ptr)
+    } else {
+        blk.safe_load_i32_from_ptr(handle)
+    }
+}
 
 /// Metadata may admit the #7839 append tier because that tier tests the live
 /// result bits before doing GC bookkeeping. A lying numeric operand makes JS
@@ -184,7 +208,7 @@ fn emit_dynamic_pointer_push_store(
 ) -> (String, String, String) {
     let (length, element_addr, value_bits) = {
         let blk = ctx.block();
-        let length = blk.safe_load_i32_from_ptr(arr_handle);
+        let length = admitted_length_load(blk, arr_handle);
         let length_i64 = blk.zext(I32, &length, I64);
         let byte_offset = blk.shl(I64, &length_i64, "3");
         let elements_addr = blk.array_elements_addr(arr_handle);
@@ -261,7 +285,7 @@ fn emit_dynamic_pointer_push_store(
             let refcount_addr = blk.add(I64, &payload, "12");
             let refcount_ptr = blk.inttoptr(I64, &refcount_addr);
             let refcount = blk.load(I32, &refcount_ptr);
-            let unique = blk.icmp_ne(I32, &refcount, "0");
+            let unique = blk.icmp_eq(I32, &refcount, "1");
             blk.cond_br(&unique, &string_demote_label, &done_label);
         }
         ctx.current_block = string_demote_idx;
@@ -340,7 +364,7 @@ fn emit_numeric_push_store_pointer_tested(
 ) -> (String, String, Option<String>) {
     let (length, element_addr, value_bits) = {
         let blk = ctx.block();
-        let length = blk.safe_load_i32_from_ptr(arr_handle);
+        let length = admitted_length_load(blk, arr_handle);
         let length_i64 = blk.zext(I32, &length, I64);
         let byte_offset = blk.shl(I64, &length_i64, "3");
         let elements_addr = blk.array_elements_addr(arr_handle);
@@ -646,7 +670,8 @@ fn lower_array_push_spec_order(
             let still_bound = blk.icmp_eq(I64, &cur_bits, &recv_bits);
             let recv_handle = unbox_to_i64(blk, &recv_box);
             // #11021: an own `push` exits here with the method's return.
-            let mut own = OwnPushJoin::new(ctx);
+            let test = push_receiver_needs_pointer_test(ctx, array_id);
+            let mut own = OwnPushJoin::with_receiver_test(ctx, &recv_box, test);
             let new_handle = own.emit_push(ctx, &recv_handle, &v);
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
 
@@ -717,6 +742,17 @@ const FIELD_WRITEBACK_BLOCKING_FLAGS_I16: &str = "2055";
 const POINTER_TAG_HI16: &str = "32765"; // 0x7FFD
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
 const HANDLE_MASK_48: &str = "281474976710655"; // 0x0000_FFFF_FFFF_FFFF
+
+/// `method_site::inline_tier_needs_pointer_test` for the push receiver
+/// `array_id`: an owned local slot (born from a literal here, never rebound)
+/// needs no test.
+fn push_receiver_needs_pointer_test(ctx: &FnCtx<'_>, array_id: u32) -> bool {
+    let owned = matches!(
+        PushReceiverHome::resolve(ctx, array_id),
+        Some(PushReceiverHome::Slot(_))
+    ) && ctx.loop_pushed_arrays.owned.contains(&array_id);
+    crate::method_site::inline_tier_needs_pointer_test(ctx, array_id, owned, "push")
+}
 
 /// `Expr::ArrayPush`. When `field_writeback` names a class field (the
 /// `perry-transform::field_push_local_bind` expansion of `this.f.push(v)`),
@@ -927,6 +963,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             let (v, v_bits) =
                 lower_array_push_value(ctx, value, layout_note_needed, write_barrier_needed)?;
             let arr_box = lower_expr(ctx, &array_expr)?;
+            // The tier was folded from the receiver's ANNOTATION: unless the
+            // facts prove the site, every read of a header behind `arr_box`
+            // and every runtime entry handed its address first tests that it
+            // is a heap pointer at all.
+            let receiver_test = push_receiver_needs_pointer_test(ctx, *array_id);
 
             // Repsel 4a.1 (#6904 recon): the guarded numeric push was an
             // INVERSION — 3 out-of-line calls (guard + unboxed push + length)
@@ -962,7 +1003,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     );
                     // #11021: the fallback is where an own `push` lands (the
                     // guard rejects a named layout), and exits here.
-                    let mut own = OwnPushJoin::new(ctx);
+                    let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
                     let fast_idx = ctx.new_block("apush.numeric_fast");
                     let fallback_idx = ctx.new_block("apush.numeric_fallback");
                     let merge_idx = ctx.new_block("apush.numeric_merge");
@@ -982,6 +1023,35 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.block().cond_br(&guard_ok, &fast_label, &fallback_label);
 
                     ctx.current_block = fast_idx;
+                    // The guard proved a live, unforwarded Array with room and
+                    // a numeric layout. It does NOT prove that `push` is the
+                    // builtin on it: it reads the named layout only for element
+                    // descriptors and never the array's own `[[Prototype]]`
+                    // bit, so an own `push` (data or accessor) or a prototype
+                    // installed on this one array passed it. The same word
+                    // test the inline tier's admission makes; a miss takes the
+                    // fallback, whose entry resolves the method.
+                    if method_tiers_enabled() {
+                        let plain_idx = ctx.new_block("apush.numeric_plain");
+                        let plain_label = ctx.block_label(plain_idx);
+                        let blk = ctx.block();
+                        let arr_handle = unbox_to_i64(blk, &arr_box);
+                        let flags_addr = blk.sub(I64, &arr_handle, "6");
+                        let flags_ptr = blk.inttoptr(I64, &flags_addr);
+                        let obj_flags = blk.load(I16, &flags_ptr);
+                        let default_proto =
+                            crate::expr::array_proto_guard::emit_array_method_admission(
+                                blk, &obj_flags,
+                            );
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk,
+                            &arr_handle,
+                        );
+                        let no_named = blk.xor(I1, &has_named, "true");
+                        let plain = blk.and(I1, &default_proto, &no_named);
+                        blk.cond_br(&plain, &plain_label, &fallback_label);
+                        ctx.current_block = plain_idx;
+                    }
                     {
                         let blk = ctx.block();
                         let arr_handle = unbox_to_i64(blk, &arr_box);
@@ -1051,7 +1121,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.record_lowered_value_with_access_mode_and_facts(
                         "NumericArrayPush",
                         Some(*array_id),
-                        PUSH_SPEC_OR_OWN,
+                        push_entry(),
                         &fallback,
                         Some(BoundsState::Unknown),
                         None,
@@ -1119,13 +1189,41 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             // branches both update the slot via the existing
             // boxed/captured/local fall-through below.
             if let Some(home) = PushReceiverHome::resolve(ctx, *array_id) {
+                // An owned local (`collectors::loop_pushed_arrays`) is the
+                // live head of an ordinary array born from a literal in this
+                // function, and nothing else holds it: it cannot be a
+                // forwarded stub (every growth stores the new head back into
+                // its slot, and a collection reloads the slot), an Array
+                // subclass, or carry a named layout (an own property, a
+                // descriptor, an own `push`). Those probes are constants for
+                // it, and LLVM drops their loads. The integrity/layout mask,
+                // the prototype admission and the room test still run.
+                let owned = matches!(home, PushReceiverHome::Slot(_))
+                    && ctx.loop_pushed_arrays.owned.contains(array_id);
                 let apush_meta_offset = crate::target_layout::object_meta_slot_offset_bytes(
                     ctx.target_triple,
                     crate::target_layout::HeaderForm::Meta,
                 )
                 .to_string();
+                let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
+                // A receiver that is no heap pointer has no header to read: it
+                // takes the forwarded arm, whose push entry sends it to the
+                // ordinary `Get` + `Call` (`OwnPushJoin::with_receiver_test`).
+                let pointer_miss_idx = receiver_test.then(|| {
+                    let hdr_idx = ctx.new_block("apush.recv.hdr");
+                    let miss_idx = ctx.new_block("apush.recv.miss");
+                    let hdr_label = ctx.block_label(hdr_idx);
+                    let miss_label = ctx.block_label(miss_idx);
+                    super::array_push_own::emit_heap_pointer_branch(
+                        ctx,
+                        &arr_box,
+                        &hdr_label,
+                        &miss_label,
+                    );
+                    ctx.current_block = hdr_idx;
+                    miss_idx
+                });
                 let blk = ctx.block();
-                let arr_handle = unbox_to_i64(blk, &arr_box);
 
                 // Issue #233: forwarded arrays must follow the
                 // forwarding chain. Route through the runtime which
@@ -1159,7 +1257,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 let gc_type_addr = blk.sub(I64, &arr_handle, "8");
                 let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
                 let gc_type = blk.load(I8, &gc_type_ptr);
-                let not_array = blk.icmp_ne(I8, &gc_type, "1"); // != GC_TYPE_ARRAY
+                let not_array = crate::target_layout::emit_gc_type_is_not_array(blk, I8, &gc_type);
                 let gc_flags_addr = blk.sub(I64, &arr_handle, "7");
                 let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                 let gc_flags = blk.load(I8, &gc_flags_ptr);
@@ -1171,7 +1269,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // `push` lands — the admission mask below tests
                 // the array's named layout, where every own named property
                 // lives — and both exit here with the method's return.
-                let mut own = OwnPushJoin::new(ctx);
+                let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
                 let fwd_idx = ctx.new_block("apush.fwd");
                 // An elements-backed Array subclass (`ObjectMeta.elements`)
                 // appends to its store: the payload is resolved here and the
@@ -1201,9 +1299,18 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let blk = ctx.block();
                     // A forwarded receiver keeps the runtime arm; a live
                     // non-Array receiver gets the elements probe.
+                    let fwd_set = if owned {
+                        "false".to_string()
+                    } else {
+                        fwd_set.clone()
+                    };
                     blk.cond_br(&fwd_set, &fwd_label, &elem_label);
                 }
                 let _ = &is_fwd;
+                if let Some(miss_idx) = pointer_miss_idx {
+                    ctx.current_block = miss_idx;
+                    ctx.block().br(&fwd_label);
+                }
 
                 // Every load below sits behind a branch that proved its address
                 // is inside a live allocation: an Array receiver goes straight
@@ -1216,7 +1323,11 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 ctx.current_block = elem_idx;
                 {
                     let blk = ctx.block();
-                    let array_receiver = blk.icmp_eq(I8, &gc_type, "1");
+                    let array_receiver = if owned {
+                        "true".to_string()
+                    } else {
+                        crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type)
+                    };
                     blk.cond_br(&array_receiver, &nofwd_label, &elem_meta_label);
                 }
                 let elem_probe_end = ctx.block_label(elem_idx);
@@ -1260,7 +1371,8 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let gc_type_addr = blk.sub(I64, &elem_store, "8");
                     let gc_type_ptr = blk.inttoptr(I64, &gc_type_addr);
                     let store_type = blk.load(I8, &gc_type_ptr);
-                    let store_is_array = blk.icmp_eq(I8, &store_type, "1");
+                    let store_is_array =
+                        crate::target_layout::emit_gc_type_is_array(blk, I8, &store_type);
                     let gc_flags_addr = blk.sub(I64, &elem_store, "7");
                     let gc_flags_ptr = blk.inttoptr(I64, &gc_flags_addr);
                     let store_flags = blk.load(I8, &gc_flags_ptr);
@@ -1300,6 +1412,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                 // gc_flags u8 at -7, `_reserved` u16 at -6): mask
                 // FROZEN|SEALED|NO_EXTEND = 0x7, plus a null named layout.
                 let live_object_flags: String;
+                let admitted: String;
                 ctx.current_block = nofwd_idx;
                 let payload = ctx.block().phi(
                     I64,
@@ -1384,11 +1497,17 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let clean = blk.and(I1, &clean, &prototype_clean);
                     // A non-writable `length`, an element descriptor or an own
                     // `push` lives in the array's named layout (§6a).
-                    let has_named =
-                        crate::expr::array_proto_guard::emit_array_has_named_layout(blk, &payload);
-                    let no_named = blk.xor(I1, &has_named, "true");
-                    let clean = blk.and(I1, &clean, &no_named);
-                    let length = blk.safe_load_i32_from_ptr(&payload);
+                    let clean = if owned {
+                        clean
+                    } else {
+                        let has_named = crate::expr::array_proto_guard::emit_array_has_named_layout(
+                            blk, &payload,
+                        );
+                        let no_named = blk.xor(I1, &has_named, "true");
+                        blk.and(I1, &clean, &no_named)
+                    };
+                    admitted = clean.clone();
+                    let length = admitted_length_load(blk, &payload);
                     let cap_addr = blk.add(I64, &payload, "4");
                     let cap_ptr = blk.inttoptr(I64, &cap_addr);
                     let capacity = blk.load(I32, &cap_ptr);
@@ -1400,6 +1519,60 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     let inline_ok = blk.and(I1, &has_room, &clean);
                     blk.cond_br(&inline_ok, &inbounds_label, &realloc_label);
                 }
+
+                // Realloc: no room, or the admission failed. When only room
+                // failed and the receiver is the array itself (not an Array
+                // subclass's elements store, whose replacement would have to
+                // be published into its meta), `js_array_grow_for_push` makes
+                // room without collecting — in place when the array is the
+                // last nursery birth — and the push continues into the same
+                // inline store below with the grown head. A null (declined)
+                // and every other arrival take the complete runtime push.
+                ctx.current_block = realloc_idx;
+                let full_idx = if grow_for_push_enabled() {
+                    let grow_idx = ctx.new_block("apush.grow");
+                    let grown_idx = ctx.new_block("apush.grown");
+                    let full_idx = ctx.new_block("apush.full");
+                    let grow_label = ctx.block_label(grow_idx);
+                    let grown_label = ctx.block_label(grown_idx);
+                    let full_label = ctx.block_label(full_idx);
+                    {
+                        let blk = ctx.block();
+                        let own_store = blk.icmp_eq(I64, &payload, &arr_handle);
+                        let growable = blk.and(I1, &admitted, &own_store);
+                        blk.cond_br(&growable, &grow_label, &full_label);
+                    }
+                    ctx.current_block = grow_idx;
+                    let grown = {
+                        let blk = ctx.block();
+                        let grown = blk.call(I64, GROW_FOR_PUSH, &[(I64, &arr_handle)]);
+                        let declined = blk.icmp_eq(I64, &grown, "0");
+                        blk.cond_br(&declined, &full_label, &grown_label);
+                        grown
+                    };
+                    // The grown head re-enters the admission (`apush.nofwd`)
+                    // as a third incoming payload: it carries the copied
+                    // `_reserved` facts and now has room, so it lands in the
+                    // unchanged inline store below. Looping back keeps the
+                    // in-capacity path's IR exactly what it was.
+                    ctx.current_block = grown_idx;
+                    {
+                        let blk = ctx.block();
+                        let grown_box = nanbox_pointer_inline(blk, &grown);
+                        home.store_head(blk, &grown_box);
+                        blk.br(&nofwd_label);
+                    }
+                    let grown_end = ctx.block_label(ctx.current_block);
+                    let patched = ctx
+                        .func
+                        .block_mut(nofwd_idx)
+                        .expect("apush.nofwd exists")
+                        .add_phi_incoming(&payload, &grown, &grown_end);
+                    assert!(patched, "apush.nofwd opens with the payload phi");
+                    full_idx
+                } else {
+                    realloc_idx
+                };
 
                 // Inline store: arr+8+length*8 = value, length++.
                 ctx.current_block = inbounds_idx;
@@ -1444,7 +1617,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     )
                 } else {
                     let blk = ctx.block();
-                    let length = blk.safe_load_i32_from_ptr(&payload);
+                    let length = admitted_length_load(blk, &payload);
                     let length_i64 = blk.zext(I32, &length, I64);
                     let byte_offset = blk.shl(I64, &length_i64, "3");
                     let elements_addr = blk.array_elements_addr(&payload);
@@ -1534,10 +1707,13 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
                     ctx.block().br(&merge_label);
                 }
 
-                // Realloc: capacity exhausted. Runtime allocates a
-                // bigger backing block and installs the forwarding
-                // pointer; writeback the new head to the local slot.
-                ctx.current_block = realloc_idx;
+                // Complete push: capacity exhausted and not grown above, or
+                // the admission failed. Runtime allocates a bigger backing
+                // block and installs the forwarding pointer; writeback the
+                // new head to the local slot.
+                ctx.current_block = full_idx;
+                // Reached only through the header admission: a heap pointer.
+                own.receiver_is_heap_pointer();
                 let new_handle = own.emit_push(ctx, &arr_handle, &v);
                 {
                     let blk = ctx.block();
@@ -1560,7 +1736,7 @@ fn lower_inner(ctx: &mut FnCtx<'_>, expr: &Expr, value_discarded: bool) -> Resul
             let arr_handle = unbox_to_i64(ctx.block(), &arr_box);
             // #11021: a boxed or captured receiver's every push is this call,
             // and an own `push` exits here with the method's return.
-            let mut own = OwnPushJoin::new(ctx);
+            let mut own = OwnPushJoin::with_receiver_test(ctx, &arr_box, receiver_test);
             let new_handle = own.emit_push(ctx, &arr_handle, &v);
             let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
             emit_push_writeback(ctx, *array_id, &new_box, "ArrayPush")?;

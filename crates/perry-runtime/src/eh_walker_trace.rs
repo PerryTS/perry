@@ -902,6 +902,18 @@ fn hdr_function(tables: &CfiTables, site: u64) -> Option<Option<(u64, u64)>> {
     )))
 }
 
+/// Exact containing function, or `None` when only gimli can read the encoding.
+/// The header's predecessor alone is insufficient: gaps between FDEs must
+/// not acquire the previous function's name.
+pub(super) fn direct_function_start(image: &EhFrameImage, pc: u64) -> Option<Option<u64>> {
+    let tables = image.cfi_tables();
+    let Some((start, fde)) = hdr_function(&tables, pc)? else {
+        return Some(None);
+    };
+    let (_, _, range, _) = fde_header(&tables, fde, &mut CieMemo::default())?;
+    Some((pc < start.checked_add(range)?).then_some(start))
+}
+
 /// The FDE at `fde_addr`, read up to its program: a cursor at the first
 /// instruction, the FDE's end, its `pc_range` and its CIE.
 #[inline(always)]
@@ -1267,3 +1279,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "eh_walker_start_tests.rs"]
+mod start_tests;

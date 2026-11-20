@@ -1160,6 +1160,7 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),
@@ -1322,6 +1323,7 @@ fn generic_class(id: u32, name: &str) -> Class {
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

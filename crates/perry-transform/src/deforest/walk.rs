@@ -140,6 +140,7 @@ pub fn max_in_stmt(stmt: &Stmt, max_id: &mut LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             max_in_stmts(body, max_id);
             if let Some(c) = catch {
@@ -271,6 +272,7 @@ impl<'a> StmtRefWalker<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     self.visit_stmt(s);

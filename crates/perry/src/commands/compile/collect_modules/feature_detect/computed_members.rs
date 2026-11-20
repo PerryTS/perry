@@ -278,6 +278,7 @@ fn date_receiver(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 returns_value(body)
                     || catch
@@ -1108,7 +1109,15 @@ mod tests {
         ] {
             let path = std::path::PathBuf::from("/p").join(name);
             let (wrapped, _) = crate::commands::compile::cjs_wrap::wrap_commonjs_with_addon_paths(
-                source, &path, None, false, None, None, None, &mut Vec::new(), None,
+                source,
+                &path,
+                None,
+                false,
+                None,
+                None,
+                None,
+                &mut Vec::new(),
+                None,
             );
             let ast = perry_parser::parse_typescript(&wrapped, name).unwrap();
             let mut module = perry_hir::lower_module(&ast, name, path.to_str().unwrap()).unwrap();
@@ -1134,7 +1143,10 @@ mod tests {
         // enum IIFE and the other two modules do not select Temporal themselves.
         for (path, module) in &ctx.native_modules {
             let caps = super::scan(module, &ctx.native_modules);
-            assert_eq!(caps.date_members, path == std::path::Path::new("/p/main.js"));
+            assert_eq!(
+                caps.date_members,
+                path == std::path::Path::new("/p/main.js")
+            );
         }
         super::super::detect_program_optional_feature_usage(&mut ctx);
         assert!(ctx.uses_date);

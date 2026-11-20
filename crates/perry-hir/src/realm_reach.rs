@@ -156,8 +156,47 @@ fn scan_resolved(module: &ast::Module, entries: &[RealmEntry], out: &mut RealmRe
             *context = SyntaxContext::empty();
         }
     }
+    // An ambient declaration that HIR lowering erases binds nothing: references
+    // to its names resolve exactly as if the line were absent (`declare
+    // function require` keeps `require` the loader; `declare var x` reads the
+    // global). The resolver must not see it as a binding.
+    struct Ambient;
+    fn erased(decl: &ast::Decl) -> bool {
+        match decl {
+            ast::Decl::Fn(f) => crate::lower::ambient::fn_decl_types_the_loader(f),
+            ast::Decl::Var(var) => var.declare && var.decls.is_empty(),
+            _ => false,
+        }
+    }
+    impl VisitMut for Ambient {
+        fn visit_mut_var_decl(&mut self, var: &mut ast::VarDecl) {
+            let erased: Vec<bool> = var
+                .decls
+                .iter()
+                .map(|d| crate::lower::ambient::declarator_binds_nothing(var, d))
+                .collect();
+            let mut erased = erased.into_iter();
+            var.decls.retain(|_| !erased.next().unwrap_or(false));
+            var.visit_mut_children_with(self);
+        }
+        fn visit_mut_module_items(&mut self, items: &mut Vec<ast::ModuleItem>) {
+            items.visit_mut_children_with(self);
+            items.retain(|item| match item {
+                ast::ModuleItem::Stmt(ast::Stmt::Decl(decl)) => !erased(decl),
+                ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(export)) => {
+                    !erased(&export.decl)
+                }
+                _ => true,
+            });
+        }
+        fn visit_mut_stmts(&mut self, stmts: &mut Vec<ast::Stmt>) {
+            stmts.visit_mut_children_with(self);
+            stmts.retain(|stmt| !matches!(stmt, ast::Stmt::Decl(decl) if erased(decl)));
+        }
+    }
     let mut resolved = module.clone();
     resolved.visit_mut_with(&mut Clear);
+    resolved.visit_mut_with(&mut Ambient);
     GLOBALS.set(&Globals::new(), || {
         let unresolved = Mark::new();
         resolved.visit_mut_with(&mut swc_ecma_transforms_base::resolver(
@@ -282,7 +321,37 @@ pub fn scan_lowered(module: &crate::Module, entries: &[RealmEntry], out: &mut Re
             out.top.insert(RealmTop::GlobalObjectValue);
         }
     });
+    if entries.iter().any(|e| e.name == ARGUMENTS_BIRTH) && synthesizes_arguments(module) {
+        out.names.insert(ARGUMENTS_BIRTH.into());
+    }
     out.close(entries);
+}
+
+/// The per-call birth site of an arguments object (object/arguments.rs).
+const ARGUMENTS_BIRTH: &str = "%ArgumentsBirth%";
+
+/// Whether any function of the module synthesizes an `arguments` object: the
+/// hidden raw-arguments parameter HIR adds for it (`Param::arguments_object`).
+fn synthesizes_arguments(module: &crate::Module) -> bool {
+    let synthesizes = |params: &[crate::Param]| params.iter().any(|p| p.arguments_object.is_some());
+    let mut found = module.functions.iter().any(|f| synthesizes(&f.params))
+        || module.classes.iter().any(|c| {
+            c.constructor
+                .iter()
+                .chain(&c.methods)
+                .chain(&c.static_methods)
+                .chain(c.getters.iter().chain(&c.setters).map(|(_, f)| f))
+                .chain(c.computed_members.iter().map(|m| &m.function))
+                .any(|f| synthesizes(&f.params))
+        });
+    if !found {
+        crate::for_each_module_expr(module, &mut |expr| {
+            if let crate::Expr::Closure { params, .. } = expr {
+                found |= synthesizes(params);
+            }
+        });
+    }
+    found
 }
 
 /// The module loaders a program can name. A loader is a function that loads
@@ -527,15 +596,23 @@ impl Scan<'_> {
     }
 
     /// A call, optional call or `import()` (callee `None`).
-    fn call(&mut self, span: swc_common::Span, callee: Option<&ast::Expr>, args: &[ast::ExprOrSpread]) {
+    fn call(
+        &mut self,
+        span: swc_common::Span,
+        callee: Option<&ast::Expr>,
+        args: &[ast::ExprOrSpread],
+    ) {
         let module_call = match callee {
             None => true,
             Some(callee) => {
                 self.loaders.loader(callee)
-                    || self.loaders.create_require_call(callee).is_some_and(|maker| {
-                        self.called_makers.insert(maker);
-                        true
-                    })
+                    || self
+                        .loaders
+                        .create_require_call(callee)
+                        .is_some_and(|maker| {
+                            self.called_makers.insert(maker);
+                            true
+                        })
             }
         };
         // A loader made by `createRequire` that is neither a const alias nor
@@ -895,6 +972,15 @@ impl Visit for Scan<'_> {
 
     fn visit_new_expr(&mut self, expression: &ast::NewExpr) {
         self.primitive_prototypes();
+        // A free `new Worker(...)` (the Bun/browser global) lowers to the same
+        // WorkerNew node as node:worker_threads.Worker (lower/expr_new.rs), so
+        // it constructs that cell, and R reaches its prototype chain
+        // (EventEmitter) and births through it. No global `Worker` cell exists.
+        if let ast::Expr::Ident(callee) = crate::patched_builtins::peel(&expression.callee) {
+            if self.free(callee) && &*callee.sym == "Worker" {
+                self.add("node:worker_threads.Worker");
+            }
+        }
         expression.visit_children_with(self);
     }
 

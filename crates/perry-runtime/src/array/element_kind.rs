@@ -139,7 +139,7 @@ pub(crate) unsafe fn ek_note_descriptor_edits(
     let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(owner) else {
         return;
     };
-    if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type) {
         return;
     }
     let arr = super::clean_arr_ptr(owner as *const ArrayHeader) as *mut ArrayHeader;

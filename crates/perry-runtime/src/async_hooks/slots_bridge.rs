@@ -6,7 +6,7 @@ pub(crate) unsafe fn owned_provider_scope(
     resource: f64,
     context: *mut (),
     callback: Callback,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     super::owned_provider_scope(resource, || callback(context))
 }
 pub(crate) unsafe fn owned_provider_scope_rooted(
@@ -14,7 +14,7 @@ pub(crate) unsafe fn owned_provider_scope_rooted(
     owner: &crate::gc::RuntimeHandle<'_>,
     context: *mut (),
     callback: Callback,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::exception::Caught> {
     super::owned_provider_scope_rooted(scope, owner, || callback(context))
 }
 pub(crate) unsafe fn run_provider_completion(

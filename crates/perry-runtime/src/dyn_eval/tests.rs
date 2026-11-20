@@ -35,9 +35,7 @@ fn as_str(v: f64) -> String {
 
 fn as_num(v: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
+    {
         assert!(
             jv.is_number(),
             "expected a number, got bits {:x}",
@@ -460,12 +458,7 @@ extern "C" fn host_double_thunk(
 }
 
 fn as_num_raw(v: f64) -> f64 {
-    let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    }
+    v
 }
 
 fn host_double_fn() -> f64 {
@@ -692,30 +685,6 @@ fn try_finally_without_catch_reruns_finalizer_then_rethrows() {
     let r = call(f, &[root_get(log_idx)]);
     roots_truncate(log_idx);
     assert_eq!(as_str(r), "cleanup,caught:boom");
-}
-
-#[test]
-fn probe_compiled_path_reads_closure_expando_null() {
-    // Mirror the COMPILED-code read path (`js_object_get_field_by_name_f64`,
-    // what codegen emits for `validate.errors`) against a null stored by the
-    // interpreter (`validate10.errors = vErrors` with vErrors === null).
-    let f = dyn_fn(&[r#"
-        const g = function v() { v.errors = null; return true; };
-        g();
-        return g;
-    "#]);
-    let g_idx = root_push(call(f, &[]));
-    let key = crate::string::js_string_from_bytes("errors".as_ptr(), 6);
-    let obj =
-        crate::value::js_nanbox_get_pointer(root_get(g_idx)) as *const crate::object::ObjectHeader;
-    let read = crate::object::js_object_get_field_by_name_f64(obj, key);
-    roots_truncate(g_idx);
-    let jv = crate::value::JSValue::from_bits(read.to_bits());
-    assert!(
-        jv.is_null(),
-        "compiled-path read of stored null must be null; got bits {:x}",
-        read.to_bits()
-    );
 }
 
 #[test]

@@ -19,7 +19,7 @@
 //!
 //! A keys array that carries any non-default entry owns an *attributes
 //! array*: a pointer-free `GC_TYPE_ARRAY` with one element per key position,
-//! `INT32_TAG | cumulative << 8 | entry`. `cumulative` is the OR of
+//! `INTERNAL_WORD_TAG | cumulative << 8 | entry`. `cumulative` is the OR of
 //! [`entry_summary`] over positions `0..=i`, so the summary of any PREFIX of
 //! the list — which is what a shape names, since one canonical backing serves
 //! a whole growth chain (`canonical_keys.rs`) — is one load:
@@ -57,7 +57,7 @@
 //! position, so they stay exact.
 
 use crate::array::ArrayHeader;
-use crate::value::{INT32_TAG, POINTER_MASK, POINTER_TAG, TAG_MASK};
+use crate::value::{INTERNAL_WORD_TAG, POINTER_MASK, POINTER_TAG, TAG_MASK};
 
 /// `[[Writable]]` is false. On an accessor this is the internal writable bit
 /// (`install_fresh_accessor_property` keeps it true for a fresh accessor).
@@ -222,7 +222,7 @@ impl Word {
 
     #[inline]
     const fn encode(self) -> u64 {
-        INT32_TAG
+        INTERNAL_WORD_TAG
             | self.entry as u64
             | (self.summary as u64) << 8
             | (self.entry_bloom as u64) << 16
@@ -387,7 +387,7 @@ unsafe fn keys_attrs_resolved(keys: *const ArrayHeader) -> *mut ArrayHeader {
 #[inline]
 pub(crate) unsafe fn keys_attrs_checked(keys: *const ArrayHeader) -> *mut ArrayHeader {
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => keys_attrs(keys),
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => keys_attrs(keys),
         _ => std::ptr::null_mut(),
     }
 }
@@ -423,7 +423,17 @@ pub(crate) unsafe fn keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
     if crate::object::overflow::is_table(keys) {
         return crate::object::overflow::entry_attrs(keys, pos);
     }
+    layout_keys_entry(keys, pos)
+}
 
+/// [`keys_entry`] of a layout keys array (never a Table): the attributes
+/// array beside the keys, with no Table branch.
+///
+/// # Safety
+/// As [`keys_attrs`]; `keys` is not a Table.
+#[inline(always)]
+pub(crate) unsafe fn layout_keys_entry(keys: *const ArrayHeader, pos: u32) -> u8 {
+    debug_assert!(!crate::object::overflow::is_table(keys));
     let attrs = keys_attrs(keys);
     if attrs.is_null() {
         return 0;
@@ -571,7 +581,7 @@ pub(crate) unsafe fn keys_have_slots(keys: *const ArrayHeader, count: u32) -> bo
         return true;
     }
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+        && (crate::gc_type_is_not_array!(header.obj_type)
             || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
     {
         return false;
@@ -848,12 +858,36 @@ pub(crate) unsafe fn list_storage_slot(keys: *const ArrayHeader, pos: u32) -> Op
         return None;
     }
     if header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
-        && (header.obj_type != crate::gc::GC_TYPE_ARRAY
+        && (crate::gc_type_is_not_array!(header.obj_type)
             || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
     {
         return Some(pos);
     }
     Some(attributed_storage_slot(keys, pos))
+}
+
+/// [`list_storage_slot`] over many positions of one list: its attribute
+/// words and their written length, or `(null, 0)` when every position is its
+/// own slot (a handle, an overflow table, a list without attributes).
+#[inline]
+pub(crate) unsafe fn storage_slot_words(keys: *const ArrayHeader) -> (*const u64, usize) {
+    if (keys as usize) < perry_abi::RECEIVER_HANDLE_FLOOR || (keys as u64) >> 48 != 0 {
+        return (std::ptr::null(), 0);
+    }
+    let header = &*crate::gc::header_from_trusted_user_ptr(keys.cast());
+    if header.obj_type == crate::gc::GC_TYPE_OVERFLOW
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && (crate::gc_type_is_not_array!(header.obj_type)
+                || header._reserved & crate::gc::GC_ARRAY_KEY_ATTRS == 0)
+    {
+        return (std::ptr::null(), 0);
+    }
+    let attrs = keys_attrs(keys);
+    if attrs.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    let (w, len) = words(attrs);
+    (w as *const u64, len)
 }
 
 /// [`list_storage_slot`] for a list with attributes: one shared helper, so
@@ -1114,6 +1148,16 @@ pub(crate) unsafe fn attrs_live_in_keys_for_install(addr: usize) -> bool {
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> u8 {
+    crate::object::overflow::home::ObjHome::key_summary(obj as usize)
+}
+
+/// [`KeyOwner::key_summary`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: its overflow's summary, else its layout's.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_summary(obj: *const crate::object::ObjectHeader) -> u8 {
     let t = crate::object::overflow::table(obj);
     if !t.is_null() {
         return (*t).summary as u8;
@@ -1129,14 +1173,35 @@ pub(crate) unsafe fn object_summary(obj: *const crate::object::ObjectHeader) -> 
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: inlining it into its callers moved two
+// matrix rows (dyn__spread +20, solo__lit_delete +4 on the per-op matrix).
+#[inline(never)]
 pub(crate) unsafe fn object_key_is_private(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
-        return false;
-    }
+    key_is_private(obj as usize, key)
+}
+
+/// [`object_key_is_private`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_is_private(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE != 0
+        && crate::object::overflow::home::ObjHome::private_only(owner, key)
+}
+
+/// `KeyOwner::private_only` of an ordinary object: its key list.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_private_only(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
     let keys = crate::object::object_keys(obj);
     !keys.is_null()
         && crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key).is_some()
@@ -1144,13 +1209,36 @@ pub(crate) unsafe fn object_key_is_private(
 }
 
 /// Private-field presence, independent of an equally spelled public property.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_has_private_entry(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 {
-        return false;
-    }
+    has_private_entry(obj as usize, key)
+}
+
+/// [`object_key_has_private_entry`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn has_private_entry(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE != 0
+        && crate::object::overflow::home::ObjHome::private_present(owner, key)
+}
+
+/// `KeyOwner::private_present` of an ordinary object: its key list, then
+/// the element's slot when the list holds it as optional.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_private_present(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> bool {
     let keys = crate::object::object_keys(obj);
     if keys.is_null() {
         return false;
@@ -1170,11 +1258,39 @@ pub(crate) unsafe fn object_key_has_private_entry(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_optional_private_slot(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> Option<u32> {
-    if object_summary(obj) & SUMMARY_PRIVATE == 0 || crate::object::overflow::has_overflow(obj) {
+    optional_private_slot(obj as usize, key)
+}
+
+/// [`object_optional_private_slot`] through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn optional_private_slot(owner: usize, key: &[u8]) -> Option<u32> {
+    if crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_PRIVATE == 0 {
+        return None;
+    }
+    crate::object::overflow::home::ObjHome::optional_private_slot(owner, key)
+}
+
+/// `KeyOwner::optional_private_slot` of an ordinary object: none with an
+/// overflow (its table lists present keys only), else its key list.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_optional_private_slot(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+) -> Option<u32> {
+    if crate::object::overflow::has_overflow(obj) {
         return None;
     }
     let keys = crate::object::object_keys(obj);
@@ -1235,18 +1351,58 @@ pub(crate) unsafe fn private_element_word(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, key: &[u8]) -> u8 {
+    key_entry(obj as usize, key)
+}
+
+/// The entry `owner`'s own key `key` carries, through the owner's hook.
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_entry(owner: usize, key: &[u8]) -> u8 {
+    crate::object::overflow::home::ObjHome::entry_of(owner, key, false)
+}
+
+/// Is `owner`'s own key `key` an accessor, through the owner's hook?
+///
+/// # Safety
+/// `owner` is a live owner of kind `H`.
+#[inline(always)]
+pub(crate) unsafe fn key_is_accessor(owner: usize, key: &[u8]) -> bool {
+    crate::object::overflow::home::ObjHome::entry_of(owner, key, true) & ENTRY_ACCESSOR != 0
+}
+
+/// [`KeyOwner::entry_of`](crate::object::key_owner::KeyOwner) of an ordinary
+/// object: the layout summary filter (the accessor bit alone for `accessor`),
+/// then the key list's entry.
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+#[inline(always)]
+pub(crate) unsafe fn object_home_entry(
+    obj: *const crate::object::ObjectHeader,
+    key: &[u8],
+    accessor: bool,
+) -> u8 {
     let Some(record) = crate::object::shapes::object_shape_record(obj) else {
         return 0;
     };
-    if record.summary() & SUMMARY_KEY_BITS == 0 && !crate::object::overflow::has_overflow(obj) {
+    let filter = if accessor {
+        SUMMARY_ACCESSOR
+    } else {
+        SUMMARY_KEY_BITS
+    };
+    if record.summary() & filter == 0 && !crate::object::overflow::has_overflow(obj) {
         return 0;
     }
     object_key_entry_filtered(
         crate::object::object_keys_from_shape_record(obj, record),
         key,
-        false,
+        accessor,
     )
 }
 
@@ -1255,23 +1411,14 @@ pub(crate) unsafe fn object_key_entry(obj: *const crate::object::ObjectHeader, k
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline]
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_key_is_accessor(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    let Some(record) = crate::object::shapes::object_shape_record(obj) else {
-        return false;
-    };
-    if record.summary() & SUMMARY_ACCESSOR == 0 && !crate::object::overflow::has_overflow(obj) {
-        return false;
-    }
-    object_key_entry_filtered(
-        crate::object::object_keys_from_shape_record(obj, record),
-        key,
-        true,
-    ) & ENTRY_ACCESSOR
-        != 0
+    key_is_accessor(obj as usize, key)
 }
 
 #[inline(never)]
@@ -1296,12 +1443,36 @@ unsafe fn object_key_entry_filtered(
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn object_accessor_key_names(
     obj: *const crate::object::ObjectHeader,
 ) -> Vec<String> {
-    if object_summary(obj) & SUMMARY_ACCESSOR == 0 {
+    accessor_key_names(obj as usize)
+}
+
+/// The owner's own accessor keys, sorted: empty unless its summary has an
+/// accessor, else the owner's `accessor_names`.
+///
+/// # Safety
+/// `owner` is a live owner of home `H`.
+#[inline(always)]
+pub(crate) unsafe fn accessor_key_names(owner: usize) -> Vec<String> {
+    if crate::object::overflow::home::ObjHome::key_summary(owner) & SUMMARY_ACCESSOR == 0 {
         return Vec::new();
     }
+    let mut out = crate::object::overflow::home::ObjHome::accessor_names(owner);
+    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
+    out
+}
+
+/// [`KeyOwner::accessor_names`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: the accessor keys of its key list, in list order.
+#[inline(always)]
+pub(crate) unsafe fn object_home_accessor_names(
+    obj: *const crate::object::ObjectHeader,
+) -> Vec<String> {
     let keys = crate::object::object_keys(obj);
     let (slots, available) = crate::object::keys_array_dense_slots(keys.arr());
     let mut out = Vec::new();
@@ -1315,7 +1486,6 @@ pub(crate) unsafe fn object_accessor_key_names(
             out.push(String::from_utf8_lossy(bytes).into_owned());
         }
     }
-    crate::cold_sort::sort_by(&mut out, |a, b| a.cmp(b));
     out
 }
 
@@ -1400,6 +1570,19 @@ pub(crate) enum AttrsEdit<'a> {
 }
 
 impl AttrsEdit<'_> {
+    /// Does the edit leave its key with default attributes (or keep the
+    /// attributes it had)? `Data` with all of W, E and C, and the clears.
+    #[inline]
+    pub(crate) fn leaves_default(&self) -> bool {
+        match *self {
+            AttrsEdit::Data(_, bits) => bits == 0x07,
+            AttrsEdit::ClearData(_) | AttrsEdit::ClearAccessor(_) => true,
+            #[cfg(test)]
+            AttrsEdit::ClearAll => true,
+            AttrsEdit::Accessor(..) | AttrsEdit::Integrity { .. } | AttrsEdit::Private(_) => false,
+        }
+    }
+
     /// The single key this edit is about, or `None` for a whole-list edit.
     #[inline]
     pub(crate) fn key(&self) -> Option<&[u8]> {
@@ -1539,12 +1722,26 @@ unsafe fn fold_edits(
 ///
 /// # Safety
 /// `obj` is a live `GC_TYPE_OBJECT` that is not a typed array.
+// Out of line as on 0eb596fa4b: its body is one call of an inline(always)
+// generic, which callers' inliners see as cheap and copy whole.
+#[inline(never)]
 pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &[AttrsEdit<'_>]) {
-    if edits.is_empty() || !crate::object::object_is_shaped(obj) {
+    edit_keys(obj as usize, edits)
+}
+
+/// [`apply_edits`] over any key owner: absent keys are claimed with their
+/// folded entry through the owner's `claim_absent`, the edits reach the
+/// present keys through its `edit_present`.
+///
+/// # Safety
+/// `owner` is a live owner of home `H` whose keys may be edited.
+#[inline(always)]
+pub(crate) unsafe fn edit_keys(owner: usize, edits: &[AttrsEdit<'_>]) {
+    if edits.is_empty() || !crate::object::overflow::home::ObjHome::keys_editable(owner) {
         return;
     }
     #[cfg(feature = "attr-census")]
-    crate::object::attr_census::note_kind("edit.apply", obj as usize);
+    crate::object::attr_census::note_kind("edit.apply", owner);
     let _no_move = crate::gc::GcSuppressScope::new();
     // 1. Claim absent keys, each with its folded entry.
     for (i, edit) in edits.iter().enumerate() {
@@ -1554,15 +1751,11 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
         if (0..i).any(|j| same_key(edits, j, i)) {
             continue; // folded with its first occurrence
         }
-        let keys = crate::object::object_keys(obj);
-        if !keys.is_null()
-            && (if matches!(edit, AttrsEdit::Private(_)) {
-                crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
-            } else {
-                crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
-            })
-            .is_some()
-        {
+        if crate::object::overflow::home::ObjHome::key_present(
+            owner,
+            key,
+            matches!(edit, AttrsEdit::Private(_)),
+        ) {
             continue;
         }
         let entry = edits
@@ -1576,10 +1769,58 @@ pub(crate) unsafe fn apply_edits(obj: *mut crate::object::ObjectHeader, edits: &
             continue;
         }
         #[cfg(feature = "attr-census")]
-        crate::object::attr_census::note_kind("edit.claim_absent_key", obj as usize);
-        let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, name, entry);
+        crate::object::attr_census::note_kind("edit.claim_absent_key", owner);
+        crate::object::overflow::home::ObjHome::claim_absent(owner, key, entry);
     }
+    crate::object::overflow::home::ObjHome::edit_present(owner, edits);
+}
+
+/// [`KeyOwner::keys_editable`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: it is shaped.
+#[inline(always)]
+pub(crate) unsafe fn object_home_keys_editable(obj: *mut crate::object::ObjectHeader) -> bool {
+    crate::object::object_is_shaped(obj)
+}
+
+/// [`KeyOwner::key_present`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: `key` (a private name with `private`) is in its key list.
+#[inline(always)]
+pub(crate) unsafe fn object_home_key_present(
+    obj: *mut crate::object::ObjectHeader,
+    key: &[u8],
+    private: bool,
+) -> bool {
+    let keys = crate::object::object_keys(obj);
+    !keys.is_null()
+        && (if private {
+            crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), key)
+        } else {
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), key)
+        })
+        .is_some()
+}
+
+/// [`KeyOwner::claim_absent`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: the key enters its list with `entry`, in insertion order.
+#[inline(always)]
+pub(crate) unsafe fn object_home_claim_absent(
+    obj: *mut crate::object::ObjectHeader,
+    key: &[u8],
+    entry: u8,
+) {
+    let name = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, name, entry);
+}
+
+/// [`KeyOwner::edit_present`](crate::object::key_owner::KeyOwner) of an
+/// ordinary object: its present keys take `edits` (a shared layout is
+/// rebuilt from the first changed position, a dictionary edits its private
+/// list in place).
+#[inline(always)]
+pub(crate) unsafe fn object_home_edit_present(
+    obj: *mut crate::object::ObjectHeader,
+    edits: &[AttrsEdit<'_>],
+) {
     // 2. Existing keys: which positions change, and to what.
     let keys = crate::object::object_keys(obj);
     if keys.is_null() {
@@ -1832,6 +2073,132 @@ pub(crate) unsafe fn owned_note_compaction(keys: *mut ArrayHeader, mapping: &[u3
     }
     (*attrs).length = mapping.len() as u32;
     recompute_cumulative(keys, attrs, 0);
+}
+
+/// E2 enumeration bits: what an object's own keys may be. A layout record
+/// carries all three as birth facts of its immutable key prefix
+/// (`ShapeRecordRef::enum_bits`). A table is born with [`ENUM_ANY`] in
+/// `Table::summary` (above the attribute summary byte), the conservative
+/// "may", so no table writer stores an enumeration bit; a table entry's NAME
+/// facts (index, internal) are read by [`key_name_bits`] while the entries
+/// are copied. A set bit is "may" (a slower answer), never a wrong one.
+/// Some own string key may be a canonical array index (ECMA key order).
+pub(crate) const ENUM_INDEX_KEY: u32 = 1 << 8;
+/// Some own string key may be enumerable.
+pub(crate) const ENUM_ANY: u32 = 1 << 9;
+/// Some own key may carry a runtime-internal name ([`is_internal_key_name`]).
+pub(crate) const ENUM_INTERNAL_KEY: u32 = 1 << 10;
+
+/// Table summary bit (`Table::summary`): an entry key may be a non-string or
+/// a name [`key_name_bits`] decodes as index or runtime-internal, so a copy
+/// of the table's keys decodes each name. ORed with no decode by the general
+/// insert (`overflow::insert_key_bits`: any key may arrive there; a per-key
+/// decode on the insert cost tssrc +0.17%) and by a table born from a
+/// non-empty layout (`overflow::ensure_adding`).
+/// A spread's table birth (`spread::table_born`) ORs it once. The plain
+/// append (`overflow::append_plain`) writes none: its admission
+/// (`layout_probe::table_add_admitted`) refuses non-strings and every hidden
+/// name. User names such as `_x` or `#y` are ordinary enumerable keys.
+pub(crate) const TABLE_KEY_HIDDEN: u32 = 1 << 11;
+
+/// Table summary bit: an entry may be an enumerable key. ORed by every entry
+/// attribute write whose attributes lack `ENTRY_NON_ENUMERABLE`
+/// ([`table_entry_summary`]) and by the plain append; never cleared (a
+/// deleted entry leaves it), so its absence proves no enumerable key.
+pub(crate) const TABLE_ENUM_ANY: u32 = (ENTRY_NON_ENUMERABLE as u32) << TABLE_ATTRS_SHIFT;
+
+/// Where [`table_entry_summary_with`] places an entry's attribute byte, so
+/// that its `ENTRY_NON_ENUMERABLE` bit, inverted, is [`TABLE_ENUM_ANY`].
+const TABLE_ATTRS_SHIFT: u32 = 12;
+const _: () = assert!(TABLE_KEY_HIDDEN & (0xff << TABLE_ATTRS_SHIFT) == 0);
+
+/// The table summary contribution of an entry written with `attrs`.
+#[inline(always)]
+pub(crate) fn table_entry_summary(attrs: u8) -> u32 {
+    table_entry_summary_with(attrs, 0)
+}
+
+/// [`table_entry_summary`] ORed with `extra`, a constant of table bits
+/// outside the shifted attribute byte (such as [`TABLE_KEY_HIDDEN`]): the
+/// inverted shifted byte has those bits set, so the mask carries `extra`
+/// with no further instruction.
+#[inline(always)]
+pub(crate) fn table_entry_summary_with(attrs: u8, extra: u32) -> u32 {
+    u32::from(entry_summary(attrs))
+        | (!(u32::from(attrs) << TABLE_ATTRS_SHIFT) & (TABLE_ENUM_ANY | extra))
+}
+/// Every enumeration bit: the answer for a key list nothing is proven of.
+pub(crate) const ENUM_BITS: u32 = ENUM_INDEX_KEY | ENUM_ANY | ENUM_INTERNAL_KEY;
+
+/// A name that enumeration hides by name: a runtime-internal key of a class
+/// instance (`is_internal_runtime_key_bytes`) or WASI state (`__wasi*`).
+#[inline]
+pub(crate) fn is_internal_key_name(b: &[u8]) -> bool {
+    crate::object::field_get_set::enumeration::is_internal_runtime_key_bytes(b)
+        || b.starts_with(b"__wasi")
+}
+
+/// The enumeration bits key `key` with entry attributes `entry` brings to the
+/// object that gains it. One first-byte test decides almost every key; only a
+/// digit-, `_`- or `#`-leading name is decoded. A non-string key (a symbol,
+/// the hole) brings none: string enumeration never lists it.
+///
+/// # Safety
+/// `key` is a live key value.
+#[inline(always)]
+pub(crate) unsafe fn key_enum_bits(key: u64, entry: u8) -> u32 {
+    let v = crate::JSValue::from_bits(key);
+    let first = if v.is_short_string() {
+        (key & crate::value::SHORT_STRING_DATA_MASK) as u8
+    } else if v.is_string() {
+        let p = v.as_string_ptr();
+        if p.is_null() {
+            return 0;
+        }
+        if (*p).byte_len == 0 {
+            0
+        } else {
+            *(p as *const u8).add(std::mem::size_of::<crate::StringHeader>())
+        }
+    } else {
+        return 0;
+    };
+    let mut bits = if entry & (ENTRY_NON_ENUMERABLE | ENTRY_PRIVATE) == 0 {
+        ENUM_ANY
+    } else {
+        0
+    };
+    if first.wrapping_sub(b'0') <= 9 || first == b'_' || first == b'#' {
+        bits |= key_name_bits_decoded(v);
+    }
+    bits
+}
+
+/// The name facts ([`ENUM_INDEX_KEY`], [`ENUM_INTERNAL_KEY`]) of string key
+/// `key`: one first-byte test, the name decoded only when it leads with a
+/// digit, `_` or `#`.
+///
+/// # Safety
+/// `key` is a live key value.
+#[inline(always)]
+pub(crate) unsafe fn key_name_bits(key: u64) -> u32 {
+    key_enum_bits(key, ENTRY_NON_ENUMERABLE)
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn key_name_bits_decoded(v: crate::JSValue) -> u32 {
+    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    let Some(b) = crate::string::js_string_key_bytes(v, &mut buf) else {
+        return 0;
+    };
+    if crate::object::field_get_set::enumeration::canonical_array_index_bytes(b).is_some() {
+        ENUM_INDEX_KEY
+    } else if is_internal_key_name(b) {
+        ENUM_INTERNAL_KEY
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]

@@ -203,6 +203,7 @@ fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSe
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_prealloc_box_ids_in_stmts(body, out);
                 if let Some(c) = catch {
@@ -336,6 +337,7 @@ fn writes_all_precede_captures(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     find_home(body, id, out);
                     if let Some(c) = catch {
@@ -483,6 +485,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
             body,
             catch,
             finally,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_stmts(body, out);
             if let Some(c) = catch {
@@ -763,6 +766,7 @@ fn collect_self_recursive_closure_ids(stmts: &[perry_hir::Stmt], out: &mut HashS
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_self_recursive_closure_ids(body, out);
                 if let Some(c) = catch {
@@ -812,6 +816,7 @@ fn collect_for_init_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_for_init_ids(body, out);
                 if let Some(c) = catch {
@@ -904,6 +909,7 @@ fn collect_closure_refs_and_writes_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_closure_refs_and_writes_in_stmts(body, refs, writes);
             if let Some(c) = catch {
@@ -1144,6 +1150,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
             body,
             catch,
             finally,
+            ..
         } => {
             collect_outer_writes_in_stmts(body, out);
             if let Some(c) = catch {
@@ -1358,6 +1365,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             collect_write_ids_in_stmts(body, out);
             if let Some(c) = catch {
@@ -1557,6 +1565,7 @@ pub(crate) fn collect_let_types_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_let_types_in_stmts(body, out);
                 if let Some(c) = catch {
@@ -1672,6 +1681,7 @@ fn collect_compiler_private_async_control_locals_in_stmts_inner(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_compiler_private_async_control_locals_in_stmts_inner(
                     body,

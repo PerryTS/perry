@@ -154,12 +154,11 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 // ============================================================================
 // Truthiness check (mirrors js_is_truthy in value.rs)
@@ -175,9 +174,9 @@ fn is_truthy_bits(bits: u64) -> bool {
     if bits == TAG_TRUE {
         return true;
     }
-    // INT32_TAG: check if value is 0
-    if (bits & TAG_MASK) == INT32_TAG {
-        return (bits & INT32_MASK) != 0;
+    // An internal word is no JS value; a slot scan that meets one keeps it.
+    if (bits & TAG_MASK) == INTERNAL_WORD_TAG {
+        return true;
     }
     // String: empty string is falsy (check length == 0)
     if (bits & TAG_MASK) == STRING_TAG {
@@ -226,6 +225,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Message-owned layout and value storage. No source shape or heap address crosses.
 #[derive(Debug, Default)]
 pub struct CloneMessage {
+    pub ports: Vec<std::sync::Arc<crate::messaging::port_transport::Ticket>>,
     pub shapes: Vec<CloneShape>,
     pub strings: Vec<Vec<u8>>,
     pub slots: Vec<CloneSlot>,
@@ -277,6 +277,7 @@ impl CloneSlot {
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
+    MessagePort(u32),
     RawArray(Vec<u64>),
     Message {
         root: Box<SerializedValue>,
@@ -293,7 +294,7 @@ pub enum SerializedValue {
     },
     StringRef(u32),
     /// A raw 64-bit value that needs no pointer fixup.
-    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
+    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INTERNAL_WORD_TAG.
     Inline(u64),
 
     /// A UTF-8 string (copied from StringHeader + trailing bytes).
@@ -456,9 +457,12 @@ mod clone_read;
 mod clone_timing;
 mod clone_write;
 mod transfer_list;
-pub use clone_read::deserialize_nanbox_on_current_thread;
+pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
-pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use clone_write::{
+    serialize_message, serialize_message_with_ports, serialize_nanbox_for_thread,
+    validate_message_buffer,
+};
 pub use transfer_list::js_worker_transfer_sequence;
 
 pub(crate) use crate::thread_hook_slots::fs_thread_codec;
@@ -485,6 +489,10 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
         | gc::GC_TYPE_NATIVE_HANDLE
         | gc::GC_TYPE_NATIVE_POD_VIEW => "native handle",
         gc::GC_TYPE_TEMPORAL => "Temporal value",
+        // Value records (design §6.3 part 3): a clone that walks an owner's
+        // fields can meet a record array only if the compiler's facts were
+        // wrong. Reported as a false proof, in every build mode.
+        gc::GC_TYPE_RECORD_ARRAY => crate::record_array::false_proof(),
         _ => "value of an unsupported type",
     }
 }
@@ -537,11 +545,15 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
 /// Must run on the thread whose arena should own the error object (the main
 /// thread, at the drain boundary).
 unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
+    unsupported_transfer_error(type_name).value()
+}
+
+unsafe fn unsupported_transfer_error(type_name: &str) -> crate::error::CoreError {
     let msg =
         format!("Cannot transfer a {type_name} across a perry/thread boundary (unsupported type)");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::value::js_nanbox_pointer(err as i64)
+    let err = crate::error::CoreError::type_error(s);
+    err
 }
 
 /// Throw a catchable `TypeError` naming an unsupported cross-thread transfer.
@@ -553,7 +565,7 @@ unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
 /// there would be undefined behavior — worker-side failures are surfaced by
 /// rejecting the returned promise on the main thread instead.
 unsafe fn throw_unsupported_transfer(type_name: &str) -> ! {
-    crate::exception::js_throw(make_unsupported_transfer_error(type_name));
+    crate::exception::throw_core(unsupported_transfer_error(type_name));
 }
 
 /// Main-thread guard: if any value in `values` is non-transferable, throw a
@@ -1453,3 +1465,11 @@ mod literal_launch_tests;
 #[cfg(test)]
 #[path = "thread/shape_clone_tests.rs"]
 mod shape_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_stack_clone_tests.rs"]
+mod error_stack_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_cause_clone_tests.rs"]
+mod error_cause_clone_tests;

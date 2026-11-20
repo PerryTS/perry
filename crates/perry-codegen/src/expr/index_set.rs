@@ -303,9 +303,25 @@ fn lower_array_index_set_via_runtime_key(
     // #9394: the assignment's own `Throw` flag, carried to the runtime helper
     // so a rejected element write is a TypeError only in strict code.
     assignment_strict: bool,
+    // Key signs: what the facts prove of this store's key (`index_key::
+    // store_key_fact`).
+    key: Option<super::index_key::KeyFact>,
+    // The receiver's rep when the rep-keyed store takes the site
+    // (`index_set_rep::fact`).
+    rep: Option<super::index_get::proven_array::RepRead>,
 ) -> Result<String> {
     let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
-    let value_is_numeric = is_numeric_expr(ctx, value);
+    // A value the facts prove a Number (`a[j] ?? 0` over an Array of
+    // Numbers whose static type says nothing) selects the guarded store's
+    // number-over-number arm as a statically numeric one does: the arm
+    // tests the value itself, so this is a choice of code, not a proof.
+    let value_is_numeric = is_numeric_expr(ctx, value)
+        || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number);
+    // The rep-keyed store's value proof (`index_set_rep::emit`): native fp
+    // arithmetic, or a value the facts prove a Number, is a plain double.
+    let value_plain = rep.is_some()
+        && (crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
+            || super::facts_canonical::of(ctx, value) == Some(super::facts_canonical::Num::Number));
     // #7341, same hazard as the packed path: the receiver is live across both
     // `index` and `value` lowering, and an allocating RHS is a collection
     // point. Without this the store writes through a pre-evacuation address.
@@ -320,7 +336,13 @@ fn lower_array_index_set_via_runtime_key(
         &[object],
         &[index, value],
         |ctx| {
-            let idx_double = lower_expr(ctx, index)?;
+            // A key the range proofs bound to int32 is lowered as that i32
+            // (`int32_key`): the guarded store takes it as a native key.
+            let idx_double = if super::int32_key::proven(ctx, index) {
+                super::int32_key::lower(ctx, index)?
+            } else {
+                lower_expr(ctx, index)?
+            };
             let value_needs_barrier = array_store_needs_write_barrier(ctx, value);
             let (val_double, val_bits) = lower_value_for_dynamic_index_set(
                 ctx,
@@ -339,30 +361,50 @@ fn lower_array_index_set_via_runtime_key(
             // side has done this since #7286 (`aidx.canonical`). A rejected key
             // becomes index -1, which the guarded in-bounds store declines
             // onto the same helper arm, so the helper is emitted once.
-            let guard_idx_i32 = super::index_key::normalize(ctx, &idx_double, Some(index));
-            super::index_set_guarded::emit_guarded_inbounds_array_store(
-                ctx,
-                &arr_box,
-                &guard_idx_i32,
-                &val_double,
-                "idxset.runtime_key",
-                layout_note_needed,
-                value_needs_barrier,
-                value_is_numeric,
-                |ctx| {
-                    emit_array_runtime_key_store(
-                        ctx,
-                        object,
-                        &arr_box,
-                        &idx_double,
-                        &val_double,
-                        &val_bits,
-                        value_needs_barrier,
-                        source_label,
-                        assignment_strict,
-                    )
-                },
-            )?;
+            // N10: every arm of that store is behind `idx <u capacity`, and
+            // every decline takes this one helper with the original key, so
+            // a widened native index needs no sign test in front of it.
+            // Key signs: a key the facts prove an int32 is that `i32` with
+            // no normalizer; a negative one declines as above.
+            let guard_idx_i32 = match key {
+                Some(fact) => super::index_key::exact_i32(ctx, &idx_double, fact),
+                None => super::index_key::normalize_unsigned(ctx, &idx_double, Some(index)),
+            };
+            let exact = |ctx: &mut FnCtx<'_>| {
+                emit_array_runtime_key_store(
+                    ctx,
+                    object,
+                    &arr_box,
+                    &idx_double,
+                    &val_double,
+                    &val_bits,
+                    value_needs_barrier,
+                    source_label,
+                    assignment_strict,
+                )
+            };
+            match rep {
+                Some(read) => super::index_set_rep::emit(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    value_plain,
+                    read,
+                    exact,
+                )?,
+                None => super::index_set_guarded::emit_guarded_inbounds_array_store(
+                    ctx,
+                    &arr_box,
+                    &guard_idx_i32,
+                    &val_double,
+                    "idxset.runtime_key",
+                    layout_note_needed,
+                    value_needs_barrier,
+                    value_is_numeric,
+                    exact,
+                )?,
+            }
             Ok(val_double)
         },
     )
@@ -526,7 +568,7 @@ pub(crate) fn lower(
     assignment_strict: bool,
 ) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
-    let _consumed = crate::facts_consumed::enter(expr);
+    let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     match expr {
         Expr::IndexSet {
             object,
@@ -534,6 +576,9 @@ pub(crate) fn lower(
             value,
             ..
         } => {
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, object, index, value, floor);
+            }
             if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                 ctx,
                 object,
@@ -805,7 +850,11 @@ pub(crate) fn lower(
                         MaterializationReason::FunctionAbi,
                     ));
                 }
-                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref()) {
+                // A value that needs ToNumber takes the runtime element store
+                // too: it converts before its bounds test (`Uint8ArraySet`).
+                if typed_array_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+                    || super::byte_store_value_needs_tonumber(ctx, value)
+                {
                     return rooting::with_operands_rooted(
                         ctx,
                         &[object, index, value],
@@ -840,10 +889,13 @@ pub(crate) fn lower(
             // every statically-typed array / typed-array / object fast path below
             // is preserved.
             let recv_ty = crate::type_analysis::static_type_of(ctx, object);
+            // A receiver the facts give an Arr rep with Number elements takes
+            // the rep-keyed store (`index_set_rep`) below, whatever its key.
+            let rep_store = super::index_set_rep::fact(ctx, object.as_ref(), expr);
             let recv_unknown = matches!(
                 recv_ty,
                 None | Some(perry_hir::types::Type::Any) | Some(perry_hir::types::Type::Unknown)
-            );
+            ) && rep_store.is_none();
             // The index may be numeric, a runtime string, or (rarely) a runtime
             // symbol — `js_dyn_index_set` triages all three. We only keep the
             // statically-known string-literal / symbol keys on their dedicated
@@ -1037,8 +1089,9 @@ pub(crate) fn lower(
                     )
                 });
             }
-            if is_array_expr(ctx, object)
-                && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
+            if rep_store.is_some() && !is_string_expr(ctx, index)
+                || is_array_expr(ctx, object)
+                    && numeric_index_needs_runtime_key(ctx, object.as_ref(), index.as_ref())
             {
                 return lower_array_index_set_via_runtime_key(
                     ctx,
@@ -1047,6 +1100,8 @@ pub(crate) fn lower(
                     value.as_ref(),
                     "array[dynamic_numeric_index]",
                     assignment_strict,
+                    super::index_key::store_key_fact(ctx, expr),
+                    super::index_set_rep::fact(ctx, object.as_ref(), expr),
                 );
             }
             // Same dispatch tree as IndexGet: known array → fast inline,
@@ -1169,6 +1224,8 @@ pub(crate) fn lower(
                                 value.as_ref(),
                                 "array[dynamic_numeric_index]",
                                 assignment_strict,
+                                super::index_key::store_key_fact(ctx, expr),
+                                super::index_set_rep::fact(ctx, object.as_ref(), expr),
                             );
                         };
                         let layout_note_needed = array_store_needs_layout_note(ctx, object, value);
@@ -1445,6 +1502,10 @@ pub(crate) fn lower(
                 // (#7201): the receiver is live across both. The operand group
                 // derives that from the list order; the index is numeric on
                 // this path, so it takes no slot and the IR is unchanged.
+                // The facts' Arr rep proves the receiver an Array: its slow
+                // store call needs no pointer test.
+                let receiver_test = crate::method_site::annotation_receiver_tests_enabled()
+                    && !super::index_get::proven_array::receiver_is_proven_array(ctx, object);
                 return rooting::with_operands_rooted(ctx, &[object, index, value], |ctx, vals| {
                     let (arr_box, idx_double, val_double) =
                         (vals[0].clone(), vals[1].clone(), vals[2].clone());
@@ -1518,20 +1579,15 @@ pub(crate) fn lower(
                             let idx_i32_c = idx_i32.clone();
                             let feedback_site_id_c = feedback_site_id.clone();
                             let slow_store = move |ctx: &mut FnCtx<'_>| -> Result<()> {
-                                let blk = ctx.block();
-                                let arr_bits = blk.bitcast_double_to_i64(&arr_box_c);
-                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                let new_handle = blk.call(
-                                    I64,
-                                    "js_typed_feedback_array_set_f64_extend",
-                                    &[
-                                        (I64, &feedback_site_id_c),
-                                        (I64, &arr_handle),
-                                        (I32, &idx_i32_c),
-                                        (DOUBLE, &val_double_c),
-                                    ],
+                                let new_box = emit_annotated_set_extend(
+                                    ctx,
+                                    &arr_box_c,
+                                    &feedback_site_id_c,
+                                    &idx_i32_c,
+                                    &val_double_c,
+                                    receiver_test,
+                                    assignment_strict,
                                 );
-                                let new_box = nanbox_pointer_inline(blk, &new_handle);
                                 let g_ref = format!("@{}", global_name);
                                 // GC_STORE_AUDIT(ROOT): module global array slot is a registered mutable GC root.
                                 emit_root_nanbox_store_on_block(ctx.block(), &new_box, &g_ref);
@@ -1590,21 +1646,16 @@ pub(crate) fn lower(
                             // head's forwarding pointer.
                             let write_back_boxed = ctx.boxed_vars.contains(&id);
                             let slow_store = move |ctx: &mut FnCtx<'_>| -> Result<()> {
-                                let blk = ctx.block();
-                                let arr_bits = blk.bitcast_double_to_i64(&arr_box_c);
-                                let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                let new_handle = blk.call(
-                                    I64,
-                                    "js_typed_feedback_array_set_f64_extend",
-                                    &[
-                                        (I64, &feedback_site_id_c),
-                                        (I64, &arr_handle),
-                                        (I32, &idx_i32_c),
-                                        (DOUBLE, &val_double_c),
-                                    ],
+                                let new_box = emit_annotated_set_extend(
+                                    ctx,
+                                    &arr_box_c,
+                                    &feedback_site_id_c,
+                                    &idx_i32_c,
+                                    &val_double_c,
+                                    receiver_test,
+                                    assignment_strict,
                                 );
                                 if write_back_boxed {
-                                    let new_box = nanbox_pointer_inline(ctx.block(), &new_handle);
                                     super::array_push::emit_push_writeback(
                                         ctx, id, &new_box, "IndexSet",
                                     )?;
@@ -1657,18 +1708,14 @@ pub(crate) fn lower(
                                 write_barrier_needed,
                                 value_is_numeric,
                                 |ctx| {
-                                    let blk = ctx.block();
-                                    let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                                    let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
-                                    blk.call(
-                                        I64,
-                                        "js_typed_feedback_array_set_f64_extend",
-                                        &[
-                                            (I64, &feedback_site_id),
-                                            (I64, &arr_handle),
-                                            (I32, &idx_i32c),
-                                            (DOUBLE, &val_double),
-                                        ],
+                                    emit_annotated_set_extend(
+                                        ctx,
+                                        &arr_box,
+                                        &feedback_site_id,
+                                        &idx_i32c,
+                                        &val_double,
+                                        receiver_test,
+                                        assignment_strict,
                                     );
                                     // The helper owns the precise slot barrier.
                                     Ok(())
@@ -1676,9 +1723,6 @@ pub(crate) fn lower(
                             )?;
                             return Ok(val_double);
                         }
-                        let blk = ctx.block();
-                        let arr_bits = blk.bitcast_double_to_i64(&arr_box);
-                        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
                         // Issue #637 followup / hono r2: use the extend variant
                         // so `arr[i] = X` for i >= length grows the array per
                         // JS spec, instead of silently no-op'ing (which the
@@ -1690,15 +1734,14 @@ pub(crate) fn lower(
                         // length 0 inside the closure, so `for (const i in
                         // indexReplacementMap)` outside the closure iterated
                         // zero times and `handlerMap` ended up empty.
-                        blk.call(
-                            I64,
-                            "js_typed_feedback_array_set_f64_extend",
-                            &[
-                                (I64, &feedback_site_id),
-                                (I64, &arr_handle),
-                                (I32, &idx_i32),
-                                (DOUBLE, &val_double),
-                            ],
+                        emit_annotated_set_extend(
+                            ctx,
+                            &arr_box,
+                            &feedback_site_id,
+                            &idx_i32,
+                            &val_double,
+                            receiver_test,
+                            assignment_strict,
                         );
                         // The extending runtime setter owns the precise slot
                         // barrier; a second opaque parent/child barrier here
@@ -1919,4 +1962,98 @@ pub(crate) fn lower(
         // `obj.field = v` — generic object field write.
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// `js_typed_feedback_array_set_f64_extend` for an element store whose
+/// receiver was chosen as an Array from its ANNOTATION, returning the new head
+/// box. The entry takes the receiver's ADDRESS; a String, `null` or a Number
+/// behind the annotation has none (a short string's payload is its bytes), so
+/// unless the facts prove the receiver an Array (`receiver_test` false: its
+/// Arr rep, or the switch off) a receiver that is no heap pointer
+/// takes the complete `[[Set]]` (`js_put_value_set_dynamic`, the assignment's
+/// own `Throw` flag) and the head stays the receiver.
+fn emit_annotated_set_extend(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    feedback_site_id: &str,
+    idx_i32: &str,
+    val_double: &str,
+    receiver_test: bool,
+    strict: bool,
+) -> String {
+    let call = |ctx: &mut FnCtx<'_>| {
+        let blk = ctx.block();
+        let arr_bits = blk.bitcast_double_to_i64(arr_box);
+        let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
+        let new_handle = blk.call(
+            I64,
+            "js_typed_feedback_array_set_f64_extend",
+            &[
+                (I64, feedback_site_id),
+                (I64, &arr_handle),
+                (I32, idx_i32),
+                (DOUBLE, val_double),
+            ],
+        );
+        nanbox_pointer_inline(blk, &new_handle)
+    };
+    if !receiver_test {
+        return call(ctx);
+    }
+    let heap_idx = ctx.new_block("idxset.recv.heap");
+    let other_idx = ctx.new_block("idxset.recv.other");
+    let join_idx = ctx.new_block("idxset.recv.join");
+    let (heap_label, other_label, join_label) = (
+        ctx.block_label(heap_idx),
+        ctx.block_label(other_idx),
+        ctx.block_label(join_idx),
+    );
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            super::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+        );
+        let heap = blk.icmp_ult(
+            I64,
+            &biased,
+            super::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+        );
+        blk.cond_br(&heap, &heap_label, &other_label);
+    }
+    ctx.current_block = heap_idx;
+    let new_box = call(ctx);
+    let heap_end = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+    ctx.current_block = other_idx;
+    {
+        // The shape directory first (`perry_probe_get_keyed`'s argument):
+        // the store's hit path names no thread-local.
+        let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+            ctx,
+            crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+            "@PERRY_EMPTY_SHAPE_DIR",
+        );
+        let blk = ctx.block();
+        let idx_double = blk.sitofp(I32, idx_i32, DOUBLE);
+        let _ = blk.call(
+            DOUBLE,
+            "js_put_value_set_dynamic",
+            &[
+                (crate::types::PTR, &dir),
+                (DOUBLE, arr_box),
+                (DOUBLE, &idx_double),
+                (DOUBLE, val_double),
+                (I32, if strict { "1" } else { "0" }),
+            ],
+        );
+        blk.br(&join_label);
+    }
+    // The directory read may end in its own join block (Apple TSD).
+    let other_end = ctx.block_label(ctx.current_block);
+    ctx.current_block = join_idx;
+    ctx.block()
+        .phi(DOUBLE, &[(&new_box, &heap_end), (arr_box, &other_end)])
 }

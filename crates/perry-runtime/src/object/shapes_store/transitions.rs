@@ -131,4 +131,24 @@ impl ShapeRecord {
             self.integrity_target(2),
         ]
     }
+
+    /// Image replay (R1, pass 2): set the handles `owned_handles` lists, in its order (0: none).
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(in super::super) fn snap_image_set_handles(&mut self, h: [LayoutWord; 6]) {
+        let [rollback, birth, define, i0, i1, i2] = h;
+        if rollback.0 != 0 {
+            self.note_rollback_parent(rollback);
+        }
+        if birth.0 != 0 {
+            self.note_created_birth_shape(birth);
+        }
+        if define.0 != 0 {
+            self.note_field_define_target(define);
+        }
+        for (level, t) in [i0, i1, i2].into_iter().enumerate() {
+            if t.0 != 0 {
+                self.note_integrity_target(level, t);
+            }
+        }
+    }
 }

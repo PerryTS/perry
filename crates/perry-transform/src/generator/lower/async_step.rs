@@ -288,6 +288,7 @@ pub fn build_async_step_driver_direct(
                 ],
             }),
             finally: None,
+            forof_completion: None,
         },
         Stmt::If {
             condition: Expr::IterResultGetDone,

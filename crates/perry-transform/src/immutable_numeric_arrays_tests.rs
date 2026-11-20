@@ -24,6 +24,7 @@ fn read(index: Expr) -> Expr {
     Expr::IndexGet {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(index),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }

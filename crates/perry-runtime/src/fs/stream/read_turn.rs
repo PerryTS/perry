@@ -1,12 +1,9 @@
-//! Deferred `ReadStream` start and error-close turns.
+//! Coalesced native turns for file-backed Readable reads.
 
 use super::*;
 
-/// Start a readable on a later event-loop turn. Node opens file streams
-/// asynchronously, so a caller must be able to finish a chained sequence such
-/// as `.on("data", ...).on("error", ...)` before an open failure is emitted.
-/// The pending bit coalesces starts from construction, `on("data")`, `pipe`,
-/// and `resume` into one callback.
+/// A read runs after the caller has attached its chained listeners. Coalesce
+/// repeated requests until the queued native FS callback takes its turn.
 pub(super) fn schedule_read_stream_turn(id: usize) {
     let should_schedule = STREAM_REGISTRY.with(|registry| {
         let mut registry = registry.borrow_mut();
@@ -34,18 +31,11 @@ pub(super) extern "C" fn read_stream_turn_impl(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let id = stream_id_of(closure);
-    let should_close = STREAM_REGISTRY.with(|registry| {
+    STREAM_REGISTRY.with(|registry| {
         if let Some(state) = registry.borrow_mut().get_mut(&id) {
             state.turn_pending = false;
-            state.kind == StreamKind::Read && state.errored && !state.closed
-        } else {
-            false
         }
     });
-    if should_close {
-        maybe_close_stream(id, false);
-    } else {
-        read_stream_pump(id);
-    }
+    read_stream_deliver_impl(closure, _this);
     undefined_value()
 }

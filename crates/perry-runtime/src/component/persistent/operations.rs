@@ -4,10 +4,10 @@ use super::*;
 
 pub(in crate::component) fn cancel(component: f64, writer: &Value) {
     let request = serde_json::json!({"kind":"writer-control","request":{"op":"cancel-write","writer":writer}});
-    let outcome = crate::exception::catch_js_throw(|| submit::collection(component, &request));
+    let outcome = crate::exception::catch_thrown(|| submit::collection(component, &request));
     drop(request);
     if let Err(error) = outcome {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
 }
 
@@ -16,7 +16,7 @@ pub(in crate::component) fn create(component: f64, index: u64, schema: &Value) -
     let reply = ReplyKind::Create {
         schema: schema.clone(),
     };
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         admit_producer(component, undefined(), undefined(), &request, &reply, None)
     });
     drop((request, reply));
@@ -38,7 +38,7 @@ pub(in crate::component) fn write(
         stream,
     };
     let collection = serde_json::json!({"kind":"async-writer","writer":writer});
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         admit_producer(
             component,
             target,
@@ -67,7 +67,7 @@ fn admit_producer(
     let promise = scope.root_nanbox_f64(undefined());
     let weak = collection.is_some();
     let mut bytes = Vec::new();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         submit::available(component.get_nanbox_f64(), false);
         bytes = serde_json::to_vec(request).unwrap();
         let captured = scope.root_raw_mut_ptr(crate::async_context::alloc_snapshot_holder(

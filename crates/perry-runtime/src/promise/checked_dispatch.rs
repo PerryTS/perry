@@ -32,6 +32,13 @@ pub extern "C" fn js_promise_then_checked(
 ) -> f64 {
     let promise_addr = (promise_val.to_bits() & crate::value::POINTER_MASK) as usize;
     if promise_has_own_property(promise_addr, "then") {
+        // An own `then` accessor runs user code that can collect and move the
+        // receiver and the handlers: the call below reads them back from these
+        // handles, never from the by-value arguments.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let promise_h = scope.root_nanbox_f64(promise_val);
+        let fulfilled_h = scope.root_nanbox_f64(on_fulfilled);
+        let rejected_h = scope.root_nanbox_f64(on_rejected);
         let own_then = unsafe {
             crate::object::exotic_expando::exotic_get_own_property(
                 promise_addr,
@@ -44,16 +51,13 @@ pub extern "C" fn js_promise_then_checked(
         if !spec_combinators::is_callable_value(own_then) {
             let msg = b"'then' property on Promise is not callable";
             let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_typeerror_new(msg_str);
-            crate::exception::js_throw(f64::from_bits(
-                crate::value::JSValue::pointer(err as *const u8).bits(),
-            ));
+            crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
         }
-        let args = [on_fulfilled, on_rejected];
+        let args = [fulfilled_h.get_nanbox_f64(), rejected_h.get_nanbox_f64()];
         return unsafe {
             crate::closure::native_call_value_this(
                 own_then,
-                crate::closure::JsThis::from_f64(promise_val),
+                crate::closure::JsThis::from_f64(promise_h.get_nanbox_f64()),
                 args.as_ptr(),
                 args.len(),
             )

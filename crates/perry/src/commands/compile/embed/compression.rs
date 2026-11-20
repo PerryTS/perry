@@ -127,4 +127,19 @@ mod tests {
         assert_eq!(result[1].path, raw);
         assert_eq!(fs::read(raw).unwrap(), random);
     }
+
+    #[test]
+    fn sea_profile_bypasses_optional_bun_compression() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("large.bin");
+        fs::write(&source, vec![0u8; 524288]).unwrap();
+        let assets = vec![("large.bin".into(), source.clone())];
+
+        // `generate_embedded_asset_object` passes false for its compression
+        // switch when `sea_profile` is set, even for a Bun-targeted build.
+        let sea = prepare(&assets, dir.path(), false).unwrap();
+        assert_eq!(sea[0].original_len, None);
+        assert_eq!(sea[0].path, source);
+        assert_eq!(fs::read(&sea[0].path).unwrap(), vec![0u8; 524288]);
+    }
 }

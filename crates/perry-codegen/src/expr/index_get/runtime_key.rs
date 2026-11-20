@@ -18,7 +18,7 @@ use anyhow::Result;
 
 use crate::types::{DOUBLE, I32};
 
-use super::{lower_guarded_array_index_get, FnCtx};
+use super::FnCtx;
 
 pub(super) fn lower_array_index_get_via_runtime_key(
     ctx: &mut FnCtx<'_>,
@@ -61,7 +61,36 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     coerce_numeric_fallback: bool,
     preserve_claimed_receiver_fallback: bool,
     receiver_slot: Option<&str>,
+    proven: Option<super::proven_array::Proven>,
+    key: Option<crate::expr::index_key::KeyFact>,
 ) -> Result<String> {
+    // Key signs: a key the facts prove a non-negative int32 is an array
+    // index at every evaluation. It takes the element tier with no
+    // normalizer and no sign test, the tier's own cold read serves every
+    // miss, and the property-key arm does not exist.
+    if let Some(fact) = key.filter(|k| k.nonneg) {
+        let idx_i32 = crate::expr::index_key::exact_i32(ctx, idx_double, fact);
+        return match proven {
+            Some(proven) => Ok(super::proven_array::lower_bounded(
+                ctx,
+                arr_box,
+                &idx_i32,
+                proven,
+                coerce_numeric_fallback,
+                None,
+            )),
+            None => super::guarded_array::lower_guarded_array_index_get_bounded(
+                ctx,
+                arr_box,
+                &idx_i32,
+                "aidx.dynamic",
+                require_numeric_layout,
+                coerce_numeric_fallback,
+                receiver_slot,
+                None,
+            ),
+        };
+    }
     let element_idx = ctx.new_block("aidx.canonical");
     let runtime_idx = ctx.new_block("aidx.runtime_key");
     let merge_idx = ctx.new_block("aidx.dynamic_merge");
@@ -69,21 +98,51 @@ pub(super) fn lower_array_index_get_via_canonical_i32_split(
     let runtime_label = ctx.block_label(runtime_idx);
     let merge_label = ctx.block_label(merge_idx);
 
-    let idx_i32 = crate::expr::index_key::normalize(ctx, idx_double, Some(index));
-    let is_canonical_i32 = ctx.block().icmp_sge(I32, &idx_i32, "0");
-    ctx.block()
-        .cond_br(&is_canonical_i32, &element_label, &runtime_label);
+    // N10: when every element arm of the tier is behind `idx <u n`, the
+    // sign test moves off the hit: the bound declines a negative key (it is
+    // at least 2^31 unsigned), and the tier's miss arm sends a negative key
+    // to the runtime arm below before its own cold read. A non-negative miss
+    // keeps the tier's cold read, so every key takes the arm it takes today.
+    let fold = super::guarded_array::unsigned_bound_covers(proven);
+    // Key signs: an int32 key that may be negative is its `i32` with no
+    // normalizer; its sign is tested as any other key's.
+    let idx_i32 = match key {
+        Some(fact) => crate::expr::index_key::exact_i32(ctx, idx_double, fact),
+        None if fold => crate::expr::index_key::normalize_unsigned(ctx, idx_double, Some(index)),
+        None => crate::expr::index_key::normalize(ctx, idx_double, Some(index)),
+    };
+    let negative_exit = fold.then(|| runtime_label.clone());
+    if fold {
+        ctx.block().br(&element_label);
+    } else {
+        let is_canonical_i32 = ctx.block().icmp_sge(I32, &idx_i32, "0");
+        ctx.block()
+            .cond_br(&is_canonical_i32, &element_label, &runtime_label);
+    }
 
     ctx.current_block = element_idx;
-    let element_value = lower_guarded_array_index_get(
-        ctx,
-        arr_box,
-        &idx_i32,
-        "aidx.dynamic",
-        require_numeric_layout,
-        coerce_numeric_fallback,
-        receiver_slot,
-    )?;
+    // A canonical key under a wpfacts proof takes the proven tier
+    // (`proven_array`); every other key keeps its exact runtime arm.
+    let element_value = match proven {
+        Some(fact) => super::proven_array::lower_bounded(
+            ctx,
+            arr_box,
+            &idx_i32,
+            fact,
+            coerce_numeric_fallback,
+            negative_exit.as_deref(),
+        ),
+        None => super::guarded_array::lower_guarded_array_index_get_bounded(
+            ctx,
+            arr_box,
+            &idx_i32,
+            "aidx.dynamic",
+            require_numeric_layout,
+            coerce_numeric_fallback,
+            receiver_slot,
+            negative_exit.as_deref(),
+        )?,
+    };
     let element_end = ctx.block().label.clone();
     ctx.block().br(&merge_label);
 

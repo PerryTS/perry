@@ -43,7 +43,9 @@ mod json_reflect_namespaces;
 mod math_namespace;
 
 mod object_intrinsic;
+pub(super) mod phase_rows;
 mod populate;
+pub(crate) use populate::learn_prototype_lanes;
 mod proto_methods;
 pub(crate) mod proto_room;
 mod typed_array;
@@ -64,7 +66,7 @@ pub(crate) fn is_object_prototype_value_of_code(func: *const u8) -> bool {
 pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'static str> {
     if func == array_error::function_prototype_bind_thunk as *const u8 {
         Some("bind")
-    } else if func == array_error::function_prototype_call_thunk as *const u8 {
+    } else if func == array_error::js_function_prototype_call_body as *const u8 {
         Some("call")
     } else if func == array_error::function_prototype_apply_thunk as *const u8 {
         Some("apply")
@@ -75,7 +77,7 @@ pub(crate) fn function_prototype_intrinsic_of(func: *const u8) -> Option<&'stati
 
 #[cfg(test)]
 pub(crate) fn function_prototype_call_thunk_for_test() -> *const crate::closure::JsFunctionInfo {
-    crate::fn_info!(native_args array_error::function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
+    crate::fn_info!(native_args array_error::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN))
 }
 
 #[cfg(test)]
@@ -83,11 +85,12 @@ pub(crate) fn function_prototype_bind_thunk_for_test() -> *const crate::closure:
     crate::fn_info!(native_args array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN))
 }
 
+pub(in crate::object) use array_error::has_own_property_call;
 pub(crate) use array_error::{
-    function_apply_proxy, function_prototype_apply_thunk, function_prototype_call_thunk,
-    generic_array_like_to_vec, global_this_rest_array_values, is_native_error_subclass_constructor,
-    object_prototype_has_own_property_thunk, object_prototype_is_prototype_of_thunk,
-    object_prototype_property_is_enumerable_thunk, object_prototype_to_string_thunk,
+    function_apply_proxy, function_prototype_apply_thunk, generic_array_like_to_vec,
+    global_this_rest_array_values, is_native_error_subclass_constructor,
+    js_function_prototype_call_body, object_prototype_to_string_thunk,
+    object_prototype_value_of_thunk,
 };
 pub(crate) use async_generator_state::is_async_generator_instance_value;
 pub use async_generator_state::js_async_generator_create;
@@ -110,35 +113,41 @@ pub(crate) use ctor_thunks::{
 };
 #[cfg(test)]
 pub(crate) use fetch_globals::collect_before_global_this_alloc_for_test;
-pub(crate) use fetch_globals::init_fetch_backed_receiver;
 #[cfg(feature = "temporal")]
 pub(crate) use fetch_globals::temporal_subclass_super;
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use fetch_globals::thread_realm_global_addr;
+pub(crate) use fetch_globals::{attach_fetch_handle_to_this, init_fetch_backed_receiver};
 pub(crate) use fetch_globals::{
     global_this_blob_thunk, global_this_builtin_noop_thunk, global_this_file_thunk,
     global_this_headers_thunk, global_this_is_materialized, global_this_request_thunk,
-    global_this_response_thunk, is_thread_realm_global,
+    global_this_response_thunk, is_thread_realm_global, realm_core, realm_family_phase,
+    realm_is_complete,
 };
 pub use fetch_globals::{
-    js_fetch_or_value_super, js_get_global_this, js_global_or_console_property_by_name,
-    js_module_top_this, js_request_subclass_init, js_response_subclass_init,
+    js_fetch_or_value_super, js_get_global_core, js_get_global_this,
+    js_global_or_console_property_by_name, js_module_top_this, js_realm_complete,
+    js_realm_family_phase, js_request_subclass_init, js_response_subclass_init,
+    perry_realm_complete, perry_realm_core_entry, perry_realm_family_phase,
 };
 #[cfg(test)]
 pub(crate) use generator::append_async_function_root_snapshot;
+#[cfg(test)]
+pub(crate) use generator::ensure_generator_intrinsics;
 pub(crate) use generator::function_kind_prototype_unwritten;
 pub(crate) use generator::{
-    ensure_generator_intrinsics, generator_function_constructor_of, generator_function_proto_of,
+    generator_function_constructor_of, generator_function_proto_of,
     generator_function_prototype_of, generator_original_prototype, set_intrinsic_data_prop,
     set_intrinsic_to_string_tag, wire_function_intrinsic_parents,
 };
 pub(crate) use generator::{intrinsic_sync_step_kind, resume_intrinsic_sync_step};
 pub use generator::{js_generator_attach_closure_prototype, js_generator_attach_prototype};
 pub(crate) use generator_state::{
-    call_generator_symbol_method, fixed_generator_state, install_class_symbol_method,
-    install_evaluation_generator_symbols, STEP_DONE, STEP_INNER_RESULT,
+    fixed_generator_state, install_class_symbol_method, STEP_DONE, STEP_INNER_RESULT,
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,
-    generator_record_prototype_word,
+    generator_record_prototype_word, sync_generator_next_owner,
 };
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;
@@ -163,11 +172,14 @@ pub(crate) use object_intrinsic::{
     object_prototype_intrinsic_bits,
 };
 pub(crate) use populate::{
-    default_prepare_stack_trace_func_ptr, populate_global_this_builtins,
-    scan_error_constructor_root_mut, ERROR_CONSTRUCTOR_PTR,
+    birth_lazy_family, birth_unborn_family_of, default_prepare_stack_trace_func_ptr,
+    populate_global_this_builtins, populate_realm_core, populate_realm_rest,
+    scan_error_constructor_root_mut, unborn_declared_statics_of, RealmPhases,
+    ERROR_CONSTRUCTOR_PTR,
 };
 pub(crate) use proto_methods::{
-    install_error_prototype_data_properties, populate_builtin_prototype_methods,
+    install_builtin_well_known_symbol_method, install_error_prototype_data_properties,
+    populate_builtin_prototype_methods,
 };
 pub(crate) use typed_array::{
     ensure_typed_array_intrinsic, install_function_has_instance_symbol,
@@ -185,9 +197,7 @@ pub(crate) use global_this_webassembly::owned_wrappers as test_wasm_wrapper_stat
 // Existing unit fixtures invoke these bodies directly; production installers
 // now name their owning module in the exported info declaration.
 #[cfg(test)]
-pub(crate) use array_error::{
-    object_prototype_to_locale_string_thunk, object_prototype_value_of_thunk,
-};
+pub(crate) use array_error::object_prototype_to_locale_string_thunk;
 #[cfg(test)]
 pub(crate) use typed_array::array_buffer_is_view_thunk;
 

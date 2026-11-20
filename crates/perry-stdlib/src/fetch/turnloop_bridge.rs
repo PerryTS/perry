@@ -207,7 +207,7 @@ fn settle_text(ctx: usize, outcome: Outcome) {
             });
         }
         Outcome::Err(error) if error.aborted => {
-            queue_deferred_resolution(ctx, false, super::abort_bridge::abort_error_bits);
+            super::abort_bridge::reject_aborted(ctx, error.abort_reason);
         }
         Outcome::Err(error) => {
             let message = format!("Fetch error: {}", error.message);
@@ -248,7 +248,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         let rejection = Rejection::for_declined(declined, &url, &method);
         queue_deferred_resolution(promise_ptr, false, move || rejection.into_js_bits());
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
+            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
                 stream,
             ));
         }
@@ -299,11 +299,9 @@ fn response_chunk(stream: usize, bytes: &[u8]) {
 fn response_done(stream: usize, outcome: Outcome) {
     if let Some(promise) = crate::streams::take_native_promise(stream) {
         match outcome {
-            Outcome::Err(error) if error.aborted => queue_deferred_resolution(
-                promise as usize,
-                false,
-                super::abort_bridge::abort_error_bits,
-            ),
+            Outcome::Err(error) if error.aborted => {
+                super::abort_bridge::reject_aborted(promise as usize, error.abort_reason)
+            }
             Outcome::Err(error) => {
                 let failure = failure_for(error);
                 queue_deferred_resolution(promise as usize, false, move || failure.into_js_bits());
@@ -311,7 +309,7 @@ fn response_done(stream: usize, outcome: Outcome) {
             Outcome::Ok(_) => unreachable!("success requires a final head"),
         }
         unsafe {
-            crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
+            crate::streams::js_readable_stream_controller_close(crate::streams::controller_value(
                 stream,
             ));
         }
@@ -320,18 +318,18 @@ fn response_done(stream: usize, outcome: Outcome) {
     unsafe {
         match outcome {
             Outcome::Ok(_) => {
-                crate::streams::js_readable_stream_controller_close(crate::streams::stream_value(
-                    stream,
-                ));
+                crate::streams::js_readable_stream_controller_close(
+                    crate::streams::controller_value(stream),
+                );
             }
             Outcome::Err(error) => {
                 let bits = if error.aborted {
-                    super::abort_bridge::abort_error_bits()
+                    super::abort_bridge::aborted_bits(error.abort_reason)
                 } else {
                     failure_for(error).into_body_error_bits()
                 };
                 crate::streams::js_readable_stream_controller_error(
-                    crate::streams::stream_value(stream),
+                    crate::streams::controller_value(stream),
                     f64::from_bits(bits),
                 );
             }

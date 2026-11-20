@@ -283,6 +283,7 @@ fn visit_stmt_for_dyn_imports<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt_for_dyn_imports(s, f);
@@ -387,6 +388,7 @@ fn visit_stmt_for_dyn_imports_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt_for_dyn_imports_ref(s, f);
@@ -568,6 +570,7 @@ fn visit_stmt_for_worker_new<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt_for_worker_new(s, f);
@@ -672,6 +675,7 @@ fn visit_stmt_for_worker_new_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt_for_worker_new_ref(s, f);

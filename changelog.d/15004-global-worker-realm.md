@@ -1,0 +1,1 @@
+Fix: a program that constructs the global `Worker` (`new Worker(url)`, the Bun and browser spelling, with no `node:worker_threads` import) no longer aborts at startup with "runtime layout NATIVE_CTOR_EVENT_EMITTER is born, but the program's realm does not reach it". The realm now includes node:worker_threads' Worker, which that construction mints, with its EventEmitter parent.

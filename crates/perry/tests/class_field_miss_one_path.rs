@@ -133,7 +133,10 @@ class P {
 }
 console.log(px, new P().sum(N));
 "#;
-    for (name, source) in [("declared-field twin", TS), ("field-initializer class", FIELD_INIT)] {
+    for (name, source) in [
+        ("declared-field twin", TS),
+        ("field-initializer class", FIELD_INIT),
+    ] {
         let (stdout, count) = run_census(source, "ts");
         assert_eq!(stdout, "5 3000", "{name}");
         assert!(

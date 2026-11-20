@@ -1,18 +1,10 @@
 //! `perry target add | list | remove`: target and ext packages without npm.
 //!
-//! A triple's libraries ship as `@perryts/perry-target-<triple>` (a cross
-//! target's runtime, stdlib and UI) and `@perryts/perry-ext-<triple>` (the
-//! native-extension archives); see `compile/target_packages.rs`. npm users
-//! may install either next to perry. Everyone else runs `perry target add
-//! <target>` (or `perry target add --ext`), which downloads the byte-identical
-//! tarball from the GitHub release this perry came from, verifies it against
-//! a manifest signed with the CLI-update key (its own signing domain, so a
-//! CLI update manifest never passes), and installs it into
-//! `~/.perry/<targets|ext>/<version>/<triple>`. A compile that needs an ext
-//! archive nobody installed runs the same install first
-//! ([`ensure_ext_package`]). perry never runs npm, and never edits a
-//! `node_modules` tree: for an npm-installed package, `remove` prints the npm
-//! command instead.
+//! A cross target's runtime, stdlib and UI travel together. Host UI,
+//! WebAssembly host and native extensions each have their own signed package.
+//! All kinds use the same installer and signature/hash checks, whether fetched
+//! on first use, installed beside perry with npm, or added ahead of time by
+//! `perry target add` with `--ui`, `--wasm-host` or `--ext`.
 
 use std::fs;
 use std::io::IsTerminal as _;
@@ -37,9 +29,9 @@ const RELEASE_DOWNLOAD_BASE: &str = "https://github.com/PerryTS/perry/releases/d
 /// the same either way.
 pub(crate) const RELEASE_MIRROR_ENV: &str = "PERRY_RELEASE_MIRROR";
 
-/// Set to `1` to stop a compile from downloading a missing ext package
-/// (offline machines, hermetic CI); the compile then fails with the install
-/// commands instead.
+/// Set to `1` to stop a compile from downloading a missing ext or target
+/// package (offline machines, hermetic CI); the compile then fails with the
+/// install commands instead.
 pub(crate) const NO_AUTO_FETCH_ENV: &str = "PERRY_NO_AUTO_FETCH";
 
 #[derive(Args, Debug)]
@@ -50,30 +42,34 @@ pub struct TargetArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum TargetCommand {
-    /// Install a cross target's libraries (or, with --ext, the native-extension
-    /// archives) into ~/.perry.
+    /// Install a cross target's libraries, or one host kind selected with
+    /// --ui, --wasm-host or --ext, into ~/.perry. A compile fetches missing
+    /// packages automatically unless PERRY_NO_AUTO_FETCH=1.
     ///
-    /// Downloads `perry-target-<triple>-<version>.tgz` (`perry-ext-...` with
-    /// --ext) from the GitHub release of this perry and verifies its signed
-    /// manifest. Nothing is installed unless every check passes.
+    /// Downloads this perry version's package from its GitHub release and
+    /// verifies the signed manifest and every archive before installation.
     Add(AddArgs),
-    /// List the installed target and ext packages (npm and ~/.perry) and their status.
+    /// List the installed library packages (npm and ~/.perry) and their status.
     List(ListArgs),
-    /// Remove a target or ext package from ~/.perry (never from node_modules).
+    /// Remove a library package from ~/.perry (never from node_modules).
     Remove(RemoveArgs),
 }
 
 #[derive(Args, Debug)]
 pub struct AddArgs {
     /// A perry `--target` name (android, ios-simulator, wasi, ...) or a Rust
-    /// triple. With --ext it defaults to this perry's own platform.
-    #[arg(required_unless_present = "ext")]
+    /// triple. With --ui, --wasm-host or --ext it defaults to this perry's own platform.
+    #[arg(required_unless_present_any = ["ext", "ui", "wasm_host"])]
     pub target: Option<String>,
-    /// Install the native-extension archives (node:http, ws, zlib, ...)
-    /// instead of the target libraries. A compile that needs them fetches
-    /// them by itself unless PERRY_NO_AUTO_FETCH=1.
+    /// Install native extensions (node:http, ws, zlib, ...) instead of target libraries.
     #[arg(long)]
     pub ext: bool,
+    /// Select this host's UI libraries.
+    #[arg(long, conflicts_with_all = ["ext", "wasm_host"])]
+    pub ui: bool,
+    /// Select this host's WebAssembly host library.
+    #[arg(long, conflicts_with_all = ["ext", "ui"])]
+    pub wasm_host: bool,
     /// Install this tarball instead of downloading it (offline).
     #[arg(long, requires = "manifest", value_name = "TGZ")]
     pub from: Option<PathBuf>,
@@ -91,13 +87,19 @@ pub struct ListArgs {
 
 #[derive(Args, Debug)]
 pub struct RemoveArgs {
-    /// A perry `--target` name or a Rust triple. With --ext it defaults to
+    /// A perry `--target` name or a Rust triple. With --ui, --wasm-host or --ext it defaults to
     /// this perry's own platform.
-    #[arg(required_unless_present = "ext")]
+    #[arg(required_unless_present_any = ["ext", "ui", "wasm_host"])]
     pub target: Option<String>,
-    /// Remove the native-extension archives instead of the target libraries.
+    /// Remove native extensions instead of target libraries.
     #[arg(long)]
     pub ext: bool,
+    /// Select this host's UI libraries.
+    #[arg(long, conflicts_with_all = ["ext", "wasm_host"])]
+    pub ui: bool,
+    /// Select this host's WebAssembly host library.
+    #[arg(long, conflicts_with_all = ["ext", "ui"])]
+    pub wasm_host: bool,
     /// Remove the package for every perry version, not only this one.
     #[arg(long)]
     pub all_versions: bool,
@@ -146,6 +148,14 @@ fn add_command(kind: PackageKind, target: &str) -> String {
         PackageKind::Target => format!("perry target add {target}"),
         PackageKind::Ext if target == HOST_TRIPLE => "perry target add --ext".to_string(),
         PackageKind::Ext => format!("perry target add --ext {target}"),
+        PackageKind::Ui | PackageKind::WasmHost => {
+            let flag = kind.home_dir();
+            if target == HOST_TRIPLE {
+                format!("perry target add --{flag}")
+            } else {
+                format!("perry target add --{flag} {target}")
+            }
+        }
     }
 }
 
@@ -164,7 +174,22 @@ fn release_tag(version: &str) -> String {
 }
 
 fn run_add(args: AddArgs, exe: Option<&Path>, home: &Path, me: PerryIdentity<'_>) -> Result<()> {
-    let (kind, triple) = resolve_package(args.target.as_deref(), args.ext)?;
+    let (kind, triple) = if args.ui || args.wasm_host {
+        (
+            if args.ui {
+                PackageKind::Ui
+            } else {
+                PackageKind::WasmHost
+            },
+            args.target
+                .as_deref()
+                .map(resolve_triple)
+                .transpose()?
+                .unwrap_or_else(|| HOST_TRIPLE.to_string()),
+        )
+    } else {
+        resolve_package(args.target.as_deref(), args.ext)?
+    };
     if kind == PackageKind::Target && triple == HOST_TRIPLE {
         bail!("{triple} is this perry's own platform; its libraries ship with perry");
     }
@@ -262,23 +287,25 @@ pub(crate) fn install_package(
     )
 }
 
-/// What [`ensure_ext_package`] did.
-pub(crate) enum ExtFetch {
-    /// Downloaded, verified and installed under ~/.perry/ext.
+/// What [`ensure_package`] did.
+pub(crate) enum PackageFetch {
+    /// Downloaded, verified and installed under ~/.perry/<ext|targets>.
     Installed,
-    /// Not attempted; the message says why and what to install.
+    /// Not attempted or failed; the message says why and what to install.
     Refused(String),
 }
 
-/// A compile needs `archive` (an ext archive) for `triple` and no install
-/// layout has it. When perry publishes an ext package for the triple and
+/// A compile needs a library of the `kind` package for `triple` (the ext,
+/// UI or wasm_host archives of a host, or a cross target's libraries) and no
+/// install layout has it. When perry publishes that package and
 /// `PERRY_NO_AUTO_FETCH` is unset, install it now, exactly as `perry target
-/// add --ext` would, saying so in one line. Only this path touches the
-/// network during a compile, and only when an ext archive is missing.
-pub(crate) fn ensure_ext_package(triple: &str) -> Option<ExtFetch> {
+/// add` would, saying so in one line. Only this path touches the network
+/// during a compile, and only when such a library is missing.
+pub(crate) fn ensure_package(kind: PackageKind, triple: &str) -> Option<PackageFetch> {
     let exe = std::env::current_exe().ok();
     let home = dirs::home_dir();
-    fetch_ext_package(
+    fetch_package(
+        kind,
         triple,
         PerryIdentity::current(),
         exe.as_deref(),
@@ -287,31 +314,23 @@ pub(crate) fn ensure_ext_package(triple: &str) -> Option<ExtFetch> {
     )
 }
 
-/// [`ensure_ext_package`] with this perry's identity, paths and keyring
+/// [`ensure_package`] with this perry's identity, paths and keyring
 /// injected (the tests sign with their own key).
-fn fetch_ext_package(
+fn fetch_package(
+    kind: PackageKind,
     triple: &str,
     me: PerryIdentity<'_>,
     exe: Option<&Path>,
     home: Option<&Path>,
     keys: impl FnOnce() -> Result<Vec<(String, String)>>,
-) -> Option<ExtFetch> {
-    if !is_packaged(PackageKind::Ext, triple) {
+) -> Option<PackageFetch> {
+    if !is_packaged(kind, triple) {
         return None;
     }
-    let package = format!("{}@{}", package_name(PackageKind::Ext, triple), me.version);
-    let hint = || {
-        install_hint(
-            PackageKind::Ext,
-            triple,
-            &add_command(PackageKind::Ext, triple),
-            exe,
-            home,
-            me,
-        )
-    };
+    let package = format!("{}@{}", package_name(kind, triple), me.version);
+    let hint = || install_hint(kind, triple, &add_command(kind, triple), exe, home, me);
     let refused = |why: String| {
-        Some(ExtFetch::Refused(format!(
+        Some(PackageFetch::Refused(format!(
             "it ships in {package}, {why}\n{}",
             hint()
         )))
@@ -334,22 +353,21 @@ fn fetch_ext_package(
             ))
         }
     };
+    let what = match kind {
+        PackageKind::Ext => "native extensions".to_string(),
+        PackageKind::Ui => "UI libraries".to_string(),
+        PackageKind::WasmHost => "WebAssembly host".to_string(),
+        PackageKind::Target => format!("libraries for the {triple} target"),
+    };
     eprintln!(
-        "perry: fetching {package} (native extensions, once per perry version) into {}; {NO_AUTO_FETCH_ENV}=1 turns this off",
-        perry_home_root(home, PackageKind::Ext, me.version, triple).display()
+        "perry: fetching {package} ({what}, once per perry version) into {}; {NO_AUTO_FETCH_ENV}=1 turns this off",
+        perry_home_root(home, kind, me.version, triple).display()
     );
-    match install_package(
-        PackageKind::Ext,
-        triple,
-        me,
-        home,
-        Source::Release,
-        &key_refs(&keys),
-    ) {
-        Ok(_) => Some(ExtFetch::Installed),
+    match install_package(kind, triple, me, home, Source::Release, &key_refs(&keys)) {
+        Ok(_) => Some(PackageFetch::Installed),
         Err(e) if e.downcast_ref::<Unreachable>().is_some() => {
-            let (lead, tail) = unreachable_advice(PackageKind::Ext, triple, me, exe);
-            Some(ExtFetch::Refused(format!(
+            let (lead, tail) = unreachable_advice(kind, triple, me, exe);
+            Some(PackageFetch::Refused(format!(
                 "it ships in {package}, and fetching it failed: {e:#}\n{lead}{}{tail}",
                 hint()
             )))
@@ -791,7 +809,22 @@ fn run_remove(
     home: &Path,
     me: PerryIdentity<'_>,
 ) -> Result<()> {
-    let (kind, triple) = resolve_package(args.target.as_deref(), args.ext)?;
+    let (kind, triple) = if args.ui || args.wasm_host {
+        (
+            if args.ui {
+                PackageKind::Ui
+            } else {
+                PackageKind::WasmHost
+            },
+            args.target
+                .as_deref()
+                .map(resolve_triple)
+                .transpose()?
+                .unwrap_or_else(|| HOST_TRIPLE.to_string()),
+        )
+    } else {
+        resolve_package(args.target.as_deref(), args.ext)?
+    };
     let name = package_name(kind, &triple);
     let mut removed = 0;
     let doomed: Vec<PathBuf> = if args.all_versions {

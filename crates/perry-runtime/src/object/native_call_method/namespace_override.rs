@@ -4,16 +4,15 @@
 //! Every READ of `console.error` already returns the replacement; the call
 //! used to go straight to the native implementation and ignore it.
 
-use crate::exception::CatchStack;
-
-crate::perry_thread_local! {
-    /// `(module, method)` pairs whose user override is executing on this
-    /// thread. A JS throw crossing the override skips the pop below; the
-    /// catching landing pad pops the entry by its frame mark
-    /// (`crate::exception::marks`).
-    static RUNNING: std::cell::RefCell<CatchStack<(String, String)>> =
-        const { std::cell::RefCell::new(CatchStack::new()) };
-}
+/// `(module, method)` pairs whose user override is executing on this
+/// thread. A JS throw crossing the override skips the pop below; the
+/// catching landing pad pops the entry by its frame mark
+/// (`crate::exception::marks`).
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static RUNNING: crate::exception::marks::CatchStackKey<(String, String)> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.namespace_override);
 
 pub(crate) fn namespace_override_unwind_to(sp: usize) {
     RUNNING.with(|r| {
@@ -34,7 +33,7 @@ pub(crate) fn namespace_override_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn namespace_override_depth() -> usize {
     RUNNING.with(|r| r.borrow().len())
 }
@@ -77,6 +76,10 @@ pub(super) unsafe fn call_native_namespace_override(
     let args_handles = root_scope.root_nanbox_f64_slice(args);
     // Allocates (the probe key string): everything live is rooted above.
     let own = crate::object::native_module::native_namespace_user_value(&module, method_name)?;
+    // A primitive (a deleted member reads `undefined`) is not callable.
+    if !crate::value::JSValue::from_bits(own.to_bits()).is_pointer() {
+        crate::closure::throw_not_callable();
+    }
     if !crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(own) as usize) {
         return None;
     }

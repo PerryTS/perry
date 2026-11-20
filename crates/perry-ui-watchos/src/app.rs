@@ -91,10 +91,10 @@ fn register_cross_platform_text_handlers() {
 /// Uses a plain thread::sleep rather than NSTimer because the main runloop on
 /// watchOS is Swift's, and scheduling onto it from Rust early-init is fragile.
 fn install_test_mode_exit_timer() {
-    if !perry_ui_testkit::is_test_mode() {
+    if !perry_ui::test_mode::is_test_mode() {
         return;
     }
-    let delay_ms = perry_ui_testkit::exit_delay_ms();
+    let delay_ms = perry_ui::test_mode::exit_delay_ms();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(delay_ms as u64));
         use std::io::Write;

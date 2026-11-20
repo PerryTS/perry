@@ -28,7 +28,7 @@ For every arm in a matrix JSON report whose `requires` is not `none`:
 
   * **inert + unregistered → FAIL.** The arm satisfied its own liveness
     requirement on ZERO cells and nothing in the tree says that is expected.
-  * **live + registered → FAIL.** `test-parity/gc_matrix_inert_arms.txt` lists
+  * **live + registered → FAIL.** `tests/parity/gc_matrix_inert_arms.txt` lists
     an arm as known-inert, and it just bit. The blocker named in the entry has
     lifted; delete the entry (and, usually, promote the arm back into
     `PR_ARMS`). A registry that can only be added to rots exactly the way the
@@ -55,7 +55,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-REGISTRY = REPO_ROOT / "test-parity" / "gc_matrix_inert_arms.txt"
+REGISTRY = REPO_ROOT / "tests/parity" / "gc_matrix_inert_arms.txt"
 MATRIX = REPO_ROOT / "scripts" / "gc_repsel_matrix.sh"
 
 # requires= value -> (human name, cell counter key(s) summed to decide "it bit")

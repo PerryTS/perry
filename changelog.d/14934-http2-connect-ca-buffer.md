@@ -1,0 +1,1 @@
+`http2`: `http2.connect(url, { ca })` reads a Buffer `ca` (what `fs.readFileSync` returns) as its PEM bytes instead of the Buffer's JSON, so a server certificate trusted that way verifies and the session connects (#14680).

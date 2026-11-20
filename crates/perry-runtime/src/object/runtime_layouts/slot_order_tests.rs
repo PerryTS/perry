@@ -203,6 +203,7 @@ fn static_layout_slot_order_registration_reflection_values_and_transitions() {
             crate::object::spread::js_object_spread_fresh_leading(
                 f64::from_bits(crate::value::TAG_UNDEFINED),
                 crate::js_nanbox_pointer(obj as i64),
+                0,
             )
         });
         let spread = scope.root_nanbox_f64(spread);
@@ -371,7 +372,7 @@ fn static_layout_slot_order_rejects_slots_that_are_not_a_permutation() {
         kind: 0,
         integrity: 0,
         slot_count: 5,
-        layout_id: 0x80000089,
+        layout_id: 0x8000008a,
         rep: 0,
         proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
         keys: std::ptr::null(),
@@ -484,6 +485,7 @@ fn static_layout_slot_order_holes_use_the_main_presence_readers() {
             crate::object::spread::js_object_spread_fresh_leading(
                 f64::from_bits(crate::value::TAG_UNDEFINED),
                 crate::js_nanbox_pointer(obj as i64),
+                0,
             )
         }));
         let copied = (spread.get_nanbox_u64() & crate::value::POINTER_MASK) as *mut ObjectHeader;

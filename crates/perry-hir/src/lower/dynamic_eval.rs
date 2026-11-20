@@ -280,6 +280,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
     let source = if let Some(id) = spread_temp {
         args.clear();
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),

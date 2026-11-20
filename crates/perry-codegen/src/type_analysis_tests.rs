@@ -131,6 +131,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -301,6 +302,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -375,6 +377,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

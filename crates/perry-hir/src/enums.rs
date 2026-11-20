@@ -118,6 +118,7 @@ pub(crate) fn fix_imported_enums_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 fix_imported_enums_in_stmts(body, enums);
                 if let Some(catch_clause) = catch {
@@ -279,12 +280,14 @@ mod tests {
     #[test]
     fn descends_through_string_coerce_into_array() {
         let got = fixed(Expr::StringCoerce(Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::Array(vec![ident_member()], None)),
             index: Box::new(Expr::Integer(0)),
         })));
         let want = Expr::StringCoerce(Box::new(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::Array(vec![Expr::String("IDENT".to_string())], None)),

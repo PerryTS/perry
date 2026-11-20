@@ -162,13 +162,7 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_async(
     options_bits: f64,
     callback_bits: f64,
 ) -> f64 {
-    let alg = string_from_header(alg_ptr as *const StringHeader).unwrap_or_default();
-    let pair = match alg.as_slice() {
-        b"ec" => js_crypto_generate_key_pair_sync_ec_p256(options_bits),
-        b"ed25519" => js_crypto_generate_key_pair_sync_ed25519(options_bits),
-        b"x25519" => js_crypto_generate_key_pair_sync_x25519(options_bits),
-        _ => js_crypto_generate_key_pair_sync_rsa(options_bits),
-    };
+    let pair = js_crypto_generate_key_pair_sync_named(alg_ptr, options_bits);
     let null = f64::from_bits(JSValue::null().bits());
     let undefined = f64::from_bits(JSValue::undefined().bits());
     if pair.is_null() {

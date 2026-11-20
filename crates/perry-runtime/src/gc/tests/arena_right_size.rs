@@ -21,6 +21,7 @@ fn low_usage(capacity_bytes: usize) -> ArenaUsage {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn low_utilization_must_persist_and_the_capacity_floor_is_strict() {
     let _guard = ArenaRightSizeTestGuard::new();
     let capacity = 100 * MIB;
@@ -82,6 +83,7 @@ fn fulls_already_in_the_low_streak_count_toward_block_release() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn an_episode_is_bounded_and_utilization_hysteresis_rearms_it() {
     let _guard = ArenaRightSizeTestGuard::new();
     let capacity = 100 * MIB;
@@ -141,6 +143,7 @@ fn material_capacity_regrowth_rearms_without_requiring_a_large_live_set() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn reaching_the_target_stops_early_and_records_capacity_released() {
     let _guard = ArenaRightSizeTestGuard::new();
     let start_capacity = 100 * MIB;

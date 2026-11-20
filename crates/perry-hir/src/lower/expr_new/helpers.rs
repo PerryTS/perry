@@ -178,36 +178,15 @@ pub(crate) fn lower_new_spread_args(
         .collect()
 }
 
-/// Whether a `new` callee is a generic constructable shape that the
-/// `NewDynamicSpread` path can handle: a function/class expression, an IIFE
-/// (`new (function(){…})()`), or an arrow (constructing one is a `TypeError` —
-/// the runtime reports it). Bare-identifier callees (user classes, native
-/// module constructors, built-ins) are intentionally excluded — they keep their
-/// dedicated per-constructor lowering, whose argument marshalling (rest
-/// parameters, default values, …) the generic construct helper does not
-/// replicate. `callee` must already be peeled (see `peel_new_callee`).
+/// Constructor values without native argument marshalling use the spread-aware
+/// dynamic path. Native module constructors and built-ins keep their dedicated
+/// lowering. `callee` must already be peeled (see `peel_new_callee`).
 pub(crate) fn callee_is_generic_construct_shape(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
-    // A bare-identifier callee that resolves to a *local* binding (a parameter
-    // or `let`/`const` holding a runtime constructor value, e.g. test262's
-    // `checkSubclassingIgnored`'s `new construct(...constructArgs)`) has no
-    // dedicated per-constructor lowering — it falls through to the generic
-    // construct path, which otherwise collapses a spread into one array arg.
-    // Route it through `NewDynamicSpread`. Top-level class/function names keep
-    // their dedicated lowering (they aren't local bindings).
     if let ast::Expr::Ident(ident) = callee {
-        if ctx.lookup_local(ident.sym.as_ref()).is_some() {
-            return true;
-        }
-        // A bare-identifier callee naming a known USER CLASS (`class S {…}`;
-        // `new S(...args)`). The dedicated static-class `new` lowering maps over
-        // `a.expr` and DROPS the `a.spread` marker, collapsing `new S(...arr)`
-        // into a single array argument (`this.field = arr` instead of `arr[0]`),
-        // which SIGBUSes on the first method call (NestJS DI:
-        // `new Provider(...resolvedDeps)`). Route it through `NewDynamicSpread`
-        // so the spread positions survive; the generic apply path allocates the
-        // instance with the class's registered inline-keys shape and replays the
-        // constructor, so the result is identical to the fixed-arity `new S(arg)`.
-        if ctx.lookup_class(ident.sym.as_ref()).is_some() {
+        if ctx.lookup_local(ident.sym.as_ref()).is_some()
+            || ctx.lookup_class(ident.sym.as_ref()).is_some()
+            || ctx.lookup_imported_func(ident.sym.as_ref()).is_some()
+        {
             return true;
         }
     }
@@ -301,6 +280,28 @@ pub(crate) fn lower_worker_messaging_new(
     class_name: &str,
     args: Option<&[ast::ExprOrSpread]>,
 ) -> Result<Expr> {
+    if class_name == "BroadcastChannel" {
+        let callee = Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: 0,
+            object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
+            property: class_name.to_string(),
+        });
+        if let Some(args) = args.filter(|args| args.iter().any(|arg| arg.spread.is_some())) {
+            return Ok(Expr::NewDynamicSpread {
+                byte_end: 0,
+                callee,
+                args: lower_new_spread_args(ctx, args)?,
+                byte_offset: 0,
+            });
+        }
+        return Ok(Expr::NewDynamic {
+            byte_end: 0,
+            callee,
+            args: lower_optional_args(ctx, args)?,
+            byte_offset: 0,
+        });
+    }
     Ok(Expr::NativeMethodCall {
         module: "worker_threads".to_string(),
         class_name: None,

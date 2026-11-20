@@ -181,9 +181,16 @@ impl Walk {
             Expr::Call { callee, args, .. } => {
                 // `require("net")` / `process.getBuiltinModule("net")` by name
                 // (`lower_call/mod.rs`).
-                if matches!(callee.as_ref(), Expr::ExternFuncRef { .. }) {
+                if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     if let Some(Expr::String(module)) = args.first() {
                         self.materialized.insert(module.clone());
+                        // A global read by name (`unresolved_global_get_expr`)
+                        // is the global's value: a constructor reached as a
+                        // value reaches what `new` of it reaches (its statics,
+                        // `new C()` through the value).
+                        if name == "js_global_get_or_throw_unresolved" {
+                            hand_lowered(set, Surface::Global(module));
+                        }
                     }
                 }
                 if let Expr::PropertyGet {

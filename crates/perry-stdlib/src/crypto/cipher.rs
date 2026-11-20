@@ -14,6 +14,7 @@ pub(super) enum CipherKind {
     Aes128Gcm,
     Aes192Gcm,
     Aes256Gcm,
+    ChaCha20Poly1305,
 }
 
 impl CipherKind {
@@ -31,6 +32,7 @@ impl CipherKind {
             "aes-128-gcm" => Some(Self::Aes128Gcm),
             "aes-192-gcm" => Some(Self::Aes192Gcm),
             "aes-256-gcm" => Some(Self::Aes256Gcm),
+            "chacha20-poly1305" => Some(Self::ChaCha20Poly1305),
             _ => None,
         }
     }
@@ -40,11 +42,18 @@ impl CipherKind {
             Self::Aes128Cbc | Self::Aes128Ecb | Self::Aes128Wrap | Self::Aes128Gcm => 16,
             Self::Aes192Cbc | Self::Aes192Ecb | Self::Aes192Wrap | Self::Aes192Gcm => 24,
             Self::Aes256Cbc | Self::Aes256Ecb | Self::Aes256Wrap | Self::Aes256Gcm => 32,
+            Self::ChaCha20Poly1305 => 32,
         }
     }
 
     fn is_gcm(self) -> bool {
         matches!(self, Self::Aes128Gcm | Self::Aes192Gcm | Self::Aes256Gcm)
+    }
+
+    /// The AEAD ciphers: the GCM family and ChaCha20-Poly1305. They share
+    /// the auth-tag / AAD state machine of `Cipheriv` / `Decipheriv`.
+    fn is_aead(self) -> bool {
+        self.is_gcm() || self == Self::ChaCha20Poly1305
     }
 
     fn is_ecb(self) -> bool {
@@ -448,6 +457,49 @@ pub(super) fn decrypt_gcm256_with_tag_len(
     }
 }
 
+/// ChaCha20-Poly1305 (RFC 8439) with a detached tag. Returns
+/// `(ciphertext, full_16_byte_tag)`.
+fn encrypt_chacha20_poly1305(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    plaintext: &[u8],
+) -> Option<(Vec<u8>, [u8; 16])> {
+    use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+    use chacha20poly1305::{ChaCha20Poly1305, Nonce};
+    if iv.len() != 12 {
+        return None;
+    }
+    let cipher = ChaCha20Poly1305::new_from_slice(key).ok()?;
+    let mut ciphertext = plaintext.to_vec();
+    let tag = cipher
+        .encrypt_in_place_detached(Nonce::from_slice(iv), aad, &mut ciphertext)
+        .ok()?;
+    let mut full_tag = [0u8; 16];
+    full_tag.copy_from_slice(&tag);
+    Some((ciphertext, full_tag))
+}
+
+/// ChaCha20-Poly1305 decrypt against a tag of the length the `Decipheriv`
+/// was created with (node accepts a truncated tag when `authTagLength` says
+/// so). The keystream is its own inverse, so the plaintext comes from one
+/// keystream pass and the tag is recomputed over the given ciphertext by
+/// sealing that plaintext again; the tag prefix is compared in constant time.
+fn decrypt_chacha20_poly1305(
+    key: &[u8],
+    iv: &[u8],
+    aad: &[u8],
+    ciphertext: &[u8],
+    tag: &[u8],
+) -> Option<Vec<u8>> {
+    if tag.is_empty() || tag.len() > 16 {
+        return None;
+    }
+    let (plaintext, _) = encrypt_chacha20_poly1305(key, iv, &[], ciphertext)?;
+    let (_, expected_tag) = encrypt_chacha20_poly1305(key, iv, aad, &plaintext)?;
+    tag_prefix_eq(tag, &expected_tag).then_some(plaintext)
+}
+
 fn encrypt_gcm_for_kind(
     kind: CipherKind,
     key: &[u8],
@@ -460,6 +512,7 @@ fn encrypt_gcm_for_kind(
         CipherKind::Aes256Gcm => encrypt_gcm::<Aes256, Aes256Ctr32Be>(key, iv, aad, plaintext)?,
         CipherKind::Aes192Gcm => encrypt_gcm::<Aes192, Aes192Ctr32Be>(key, iv, aad, plaintext)?,
         CipherKind::Aes128Gcm => encrypt_gcm::<Aes128, Aes128Ctr32Be>(key, iv, aad, plaintext)?,
+        CipherKind::ChaCha20Poly1305 => encrypt_chacha20_poly1305(key, iv, aad, plaintext)?,
         _ => return None,
     };
     Some((ciphertext, tag[..auth_tag_len.min(tag.len())].to_vec()))
@@ -477,6 +530,7 @@ fn decrypt_gcm_for_kind(
         CipherKind::Aes256Gcm => decrypt_gcm256_with_tag_len(key, iv, aad, ciphertext, tag),
         CipherKind::Aes192Gcm => decrypt_gcm192_with_tag_len(key, iv, aad, ciphertext, tag),
         CipherKind::Aes128Gcm => decrypt_gcm128_with_tag_len(key, iv, aad, ciphertext, tag),
+        CipherKind::ChaCha20Poly1305 => decrypt_chacha20_poly1305(key, iv, aad, ciphertext, tag),
         _ => None,
     }
 }
@@ -531,8 +585,7 @@ fn throw_invalid_state_for(op: &str) -> ! {
 /// shape for `cipher.update()` after `final()` (#2962).
 unsafe fn throw_plain_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_error_new_with_message(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::error(msg))
 }
 
 const GCM_AUTH_FAILURE_MESSAGE: &str = "Unsupported state or unable to authenticate data";
@@ -562,6 +615,11 @@ pub(super) unsafe fn create_cipher_handle(
         if iv.is_empty() {
             return nanbox_undefined();
         }
+    } else if kind == CipherKind::ChaCha20Poly1305 {
+        // RFC 8439: the nonce is exactly 96 bits.
+        if iv.len() != 12 {
+            return nanbox_undefined();
+        }
     } else if kind.is_ecb() {
         if !iv.is_empty() {
             return nanbox_undefined();
@@ -579,7 +637,7 @@ pub(super) unsafe fn create_cipher_handle(
     // down to `auth_tag_len` before `getAuthTag()` returns, so a request
     // for 4 / 8 still produces a tag with the expected length. Filter to
     // 1..=16 (Node-superset; out-of-range falls through to the default).
-    let auth_tag_len = if kind.is_gcm() {
+    let auth_tag_len = if kind.is_aead() {
         object_field_bits(options_bits.to_bits(), b"authTagLength")
             .and_then(|bits| nanboxed_to_usize(f64::from_bits(bits)))
             .filter(|len| (1..=16).contains(len))
@@ -809,16 +867,20 @@ unsafe fn cipher_step(
         let g = &mut *state_ptr;
         match method {
             "final" if g.finished => invalid_state = true,
+            // ChaCha20-Poly1305 without a tag is not an error in node: `final()`
+            // then returns the unauthenticated plaintext.
             "final" if g.kind.is_gcm() && !g.encrypt && g.auth_tag.is_none() => {
                 g.finished = true;
                 plain_error = Some(GCM_AUTH_FAILURE_MESSAGE);
             }
             "update" if g.finished => plain_error = Some("Trying to add data in unsupported state"),
             "setAutoPadding" if g.finished => invalid_state_for = Some("setAutoPadding"),
-            "setAuthTag" if g.finished || g.encrypt || !g.kind.is_gcm() || g.auth_tag.is_some() => {
+            "setAuthTag"
+                if g.finished || g.encrypt || !g.kind.is_aead() || g.auth_tag.is_some() =>
+            {
                 invalid_state_for = Some("setAuthTag")
             }
-            "getAuthTag" if !g.finished || !g.encrypt || !g.kind.is_gcm() => {
+            "getAuthTag" if !g.finished || !g.encrypt || !g.kind.is_aead() => {
                 invalid_state_for = Some("getAuthTag")
             }
             "setAAD" if g.updated || g.finished => invalid_state_for = Some("setAAD"),
@@ -881,7 +943,7 @@ unsafe fn cipher_step(
             };
             let previous_len = state.buffer.len();
             state.buffer.extend_from_slice(&bytes);
-            let output = if state.kind.is_gcm() && state.encrypt {
+            let output = if state.kind.is_aead() && state.encrypt {
                 let (ciphertext, tag) = match encrypt_gcm_for_kind(
                     state.kind,
                     &state.key,
@@ -1228,7 +1290,7 @@ unsafe fn cipher_step(
                 // only finalizes and stores the auth tag for getAuthTag().
                 // The manual CTR32+GHASH path derives J0 from any non-empty
                 // IV, so non-96-bit IVs do not panic in fixed-nonce types.
-                (kind, true) if kind.is_gcm() => {
+                (kind, true) if kind.is_aead() => {
                     let (_, tag) = match encrypt_gcm_for_kind(
                         kind,
                         &state.key,
@@ -1243,7 +1305,13 @@ unsafe fn cipher_step(
                     state.auth_tag = Some(tag);
                     Vec::new()
                 }
-                (kind, false) if kind.is_gcm() => {
+                (CipherKind::ChaCha20Poly1305, false) if state.auth_tag.is_none() => {
+                    match encrypt_chacha20_poly1305(&state.key, &state.iv, &[], &plaintext_or_ct) {
+                        Some((plaintext, _)) => plaintext,
+                        None => return nanbox_undefined(),
+                    }
+                }
+                (kind, false) if kind.is_aead() => {
                     let tag = match state.auth_tag.as_ref() {
                         Some(t) if t.len() == state.auth_tag_len => t.clone(),
                         _ => {
@@ -1306,7 +1374,7 @@ unsafe fn cipher_step(
             if args.is_empty() {
                 return nanbox_undefined();
             }
-            if state.encrypt || !state.kind.is_gcm() {
+            if state.encrypt || !state.kind.is_aead() {
                 return nanbox_undefined();
             }
             let ptr = arg_ptr(args[0]);

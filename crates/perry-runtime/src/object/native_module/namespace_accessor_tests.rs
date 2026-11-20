@@ -96,7 +96,7 @@ extern "C-unwind" fn throwing_receiver_getter(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    crate::exception::js_throw(this.as_f64())
+    crate::exception::test_throw(this.as_f64())
 }
 
 fn define_real_accessor(target: f64, getter: f64) {

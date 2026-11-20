@@ -26,16 +26,16 @@ pub use boxed_primitives::{
     js_boxed_bigint_new, js_boxed_boolean_new, js_boxed_number_new, js_boxed_string_new,
     js_boxed_symbol_new,
 };
+mod array_layout;
 mod collections;
 mod identity_equality;
 mod prototype_equality;
 mod strip_vt;
 mod typed_array_equality;
 mod util_format;
-mod array_layout;
 pub(crate) use util_format::install_json_format;
 mod value_repr;
-pub(crate) use value_repr::{int32_or_class_repr, is_array_hole};
+pub(crate) use value_repr::is_array_hole;
 
 pub use strip_vt::js_util_strip_vt_control_characters;
 pub use util_format::{js_util_format, js_util_format_with_options, js_util_inspect};
@@ -112,22 +112,18 @@ fn inspect_finish_circular(ptr_addr: usize, body: String) -> String {
 }
 
 /// Format a finite, non-zero, non-integer-like f64 per ECMAScript
-/// NumberToString. Caller has already filtered NaN / ±Infinity / ±0 /
-/// integer-shaped values; this only decides decimal vs scientific
-/// notation per the |n| < 10^-6 / |n| >= 10^21 thresholds.
+/// Number::toString: the same formatter as `String(n)` (`js_format_f64`).
+/// Caller has already filtered NaN / ±Infinity / ±0 / integer-shaped values.
 ///
-/// Without the threshold split, Rust's Display impl produces 300-digit
-/// decimals for `Number.MAX_VALUE` (`1.7976931348623157e+308` → 309
-/// zeros) and 16-digit `0.000…0002…` decimals for `Number.EPSILON`,
-/// neither of which matches Node.
+/// Rust's `{}` / `{:e}` also emit a shortest round-tripping decimal, but when
+/// the two shortest candidates are equidistant they can pick the odd final
+/// digit (`2 ** -25` printed `2.9802322387695313e-8`); ECMA-262 requires the
+/// even one (`…312e-8`). `ryu-js` implements that tie-break together with the
+/// |n| < 10^-6 / |n| >= 10^21 notation thresholds.
 #[inline]
 pub(crate) fn format_finite_number_js(value: f64) -> String {
-    let abs = value.abs();
-    if !(1e-6..1e21).contains(&abs) {
-        crate::string::fix_exponent_format(&format!("{:e}", value))
-    } else {
-        format!("{}", value)
-    }
+    let mut buffer = ryu_js::Buffer::new();
+    buffer.format_finite(value).to_owned()
 }
 
 /// 2^53 — the largest magnitude below which every integer is exactly
@@ -724,7 +720,7 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                 if gc_type == crate::gc::GC_TYPE_ERROR {
                     let error_ptr = ptr as *const crate::error::ErrorHeader;
                     errors::format_error_value(error_ptr, depth)
-                } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                } else if crate::gc_type_is_array!(gc_type) {
                     // A grown array's old head is a forwarding stub; inspect the
                     // live header (and key the cycle check on it) instead.
                     let ptr = crate::array::clean_arr_ptr(ptr);
@@ -759,29 +755,27 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                         };
                         return inspect_finish_circular(ptr as usize, empty);
                     }
-                    let data_ptr = crate::array::array_elements_ptr(
-                        maybe_arr as *const crate::array::ArrayHeader,
-                    ) as *const f64;
                     // #9415: a hole slot is `TAG_HOLE`, whose bits read back as
                     // a NaN, so element-by-element recursion printed
                     // `new Array(3)` as `[ NaN, NaN, NaN ]`. Runs of holes are
                     // ONE entry (`<N empty items>`), which is also why the
-                    // layout below counts entries rather than slots.
-                    let mut parts =
-                        value_repr::array_entries_with_holes(data_ptr, length, |elem| {
-                            let elem_jsval = JSValue::from_bits(elem.to_bits());
-                            // Quote string elements like Node's util.inspect: 'hello'
-                            if elem_jsval.is_any_string() {
-                                let s = jsvalue_string_content(elem).unwrap_or_default();
-                                return value_repr::ArrayEntry::new(
-                                    array_layout::inspect_string_value(&s, depth + 1),
-                                    false,
-                                );
-                            }
-                            let rendered = format_jsvalue(elem, depth + 1);
-                            let numeric = value_repr::entry_is_numeric(elem, &rendered);
-                            value_repr::ArrayEntry::new(rendered, numeric)
-                        });
+                    // layout below counts entries rather than slots. A sparse
+                    // Array's far elements are read from its named layout,
+                    // never as slots past the store.
+                    let mut parts = value_repr::array_entries(maybe_arr, |elem| {
+                        let elem_jsval = JSValue::from_bits(elem.to_bits());
+                        // Quote string elements like Node's util.inspect: 'hello'
+                        if elem_jsval.is_any_string() {
+                            let s = jsvalue_string_content(elem).unwrap_or_default();
+                            return value_repr::ArrayEntry::new(
+                                array_layout::inspect_string_value(&s, depth + 1),
+                                false,
+                            );
+                        }
+                        let rendered = format_jsvalue(elem, depth + 1);
+                        let numeric = value_repr::entry_is_numeric(elem);
+                        value_repr::ArrayEntry::new(rendered, numeric)
+                    });
                     if inspect_show_hidden() {
                         // #9463: `%o` is `util.inspect(v, { showHidden: true,
                         // depth: 4 })`; the array's own `length` is part of that
@@ -835,10 +829,6 @@ pub(crate) fn format_jsvalue(value: f64, depth: usize) -> String {
                     "[object Object]".to_string()
                 }
             }
-        } else if jsval.is_int32() {
-            // Shares its tag with a class reference; `int32_or_class_repr` is
-            // the only place that decides which one these bits are (#9415).
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             // A hole that escaped its array. `js_array_get_f64` normalizes one
             // to `undefined`, so that is what it must display as — not the
@@ -942,9 +932,25 @@ unsafe fn format_buffer_value(buf_ptr: *const crate::buffer::BufferHeader) -> St
     })
 }
 
+/// Node lib/internal/util/inspect.js `formatValue`: a Proxy is unwrapped
+/// (`getProxyDetails`) before anything else, so no trap runs. A revoked one
+/// prints `<Revoked Proxy>`. Without `showProxy` the `[util.inspect.custom]`
+/// hook is read off the TARGET and called with `this` = the Proxy; what it
+/// returns is the output. Else the target is formatted, as `Proxy(..)`.
 fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
+    if crate::proxy_hooks::proxy_is_revoked(value) != 0 {
+        return "<Revoked Proxy>".to_string();
+    }
     let target = crate::proxy_hooks::proxy_target(value);
     if !inspect_show_proxy() {
+        if inspect_custom_inspect_enabled() {
+            if let Some(obj) = plain_object_ptr(target) {
+                // SAFETY: `obj` is a live GC object of type OBJECT.
+                if let Some(hook) = unsafe { inspect_custom_hook(obj) } {
+                    return unsafe { run_inspect_custom_hook(hook, Some(value), obj, depth) };
+                }
+            }
+        }
         let target_str = if json {
             format_jsvalue_for_json(target, depth)
         } else {
@@ -965,6 +971,151 @@ fn format_proxy_value(value: f64, depth: usize, json: bool) -> String {
         format_jsvalue(handler, depth + 1)
     };
     format!("Proxy [ {}, {} ]", target_str, handler_str)
+}
+
+/// The object a NaN-boxed pointer `v` holds, when it is an ordinary object
+/// (GC type OBJECT, not a Proxy).
+fn plain_object_ptr(v: f64) -> Option<*const crate::object::ObjectHeader> {
+    let bits = v.to_bits();
+    if bits & 0xFFFF_0000_0000_0000 != 0x7FFD_0000_0000_0000
+        || crate::proxy_hooks::proxy_is_proxy(v) != 0
+    {
+        return None;
+    }
+    let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+    if (ptr as usize) < 0x10000 {
+        return None;
+    }
+    // SAFETY: a tagged heap pointer is preceded by its GC header.
+    let ty =
+        unsafe { (*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).obj_type };
+    (ty == crate::gc::GC_TYPE_OBJECT).then_some(ptr as *const crate::object::ObjectHeader)
+}
+
+/// The `[util.inspect.custom]` hook an object carries: its own entry for
+/// `Symbol.for("nodejs.util.inspect.custom")` when that is a closure, else a
+/// class method `[util.inspect.custom]() {}`, which HIR renames to
+/// `__perry_inspect_custom__` on the class vtable (#1248).
+#[derive(Clone, Copy)]
+enum InspectCustomHook {
+    Own(*const crate::closure::ClosureHeader),
+    Method {
+        func_ptr: usize,
+        param_count: u32,
+        has_synthetic_arguments: bool,
+        has_rest: bool,
+    },
+}
+
+unsafe fn inspect_custom_hook(
+    obj_ptr: *const crate::object::ObjectHeader,
+) -> Option<InspectCustomHook> {
+    let custom_sym = crate::symbol::inspect_custom_symbol_ptr();
+    if custom_sym != 0 {
+        let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_ptr as usize);
+        for (sym_ptr, val_bits) in &entries {
+            if *sym_ptr != custom_sym {
+                continue;
+            }
+            let val_tag = val_bits & 0xFFFF_0000_0000_0000;
+            if val_tag != 0x7FFD_0000_0000_0000 {
+                break;
+            }
+            let val_ptr = (val_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
+            if val_ptr.is_null() || (val_ptr as usize) < 0x10000 {
+                break;
+            }
+            let gc_header = val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
+                break;
+            }
+            return Some(InspectCustomHook::Own(
+                val_ptr as *const crate::closure::ClosureHeader,
+            ));
+        }
+    }
+    let class_id = (*obj_ptr).class_id;
+    if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
+        if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
+            crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
+        {
+            return Some(InspectCustomHook::Method {
+                func_ptr,
+                param_count,
+                has_synthetic_arguments,
+                has_rest,
+            });
+        }
+    }
+    None
+}
+
+/// Run `hook` of `obj_ptr` and format what it returns. Node invokes it as
+/// `hook.call(context, depth, options, inspect)` (#1247): `this_value` is
+/// that context when the value shown is a Proxy over `obj_ptr`; `None` keeps
+/// the receiver an ordinary object's hook has always had. `depth` is the
+/// REMAINING recursion budget (counts down from `util.inspect`'s `depth`
+/// option, default 2); perry's internal `depth` counts UP from 0. `options`
+/// is a placeholder object; `inspect` is undefined. The hook runs with
+/// `customInspect` off, so a hook returning `this` does not recurse.
+unsafe fn run_inspect_custom_hook(
+    hook: InspectCustomHook,
+    this_value: Option<f64>,
+    obj_ptr: *const crate::object::ObjectHeader,
+    depth: usize,
+) -> String {
+    let _guard = InspectCustomInspectGuard::new(false);
+    let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
+    let options_obj = crate::object::js_object_alloc(0, 0);
+    let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
+    let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let ret = match hook {
+        InspectCustomHook::Own(closure_ptr) => crate::closure::js_closure_call3(
+            closure_ptr,
+            this_value.map_or(
+                crate::closure::plain_call_receiver(),
+                crate::codegen_abi::JsThis::from_f64,
+            ),
+            remaining,
+            options_arg,
+            undef_arg,
+        ),
+        InspectCustomHook::Method {
+            func_ptr,
+            param_count,
+            has_synthetic_arguments,
+            has_rest,
+        } => {
+            let args = [remaining, options_arg, undef_arg];
+            match this_value {
+                None => crate::object::call_vtable_method(
+                    func_ptr,
+                    obj_ptr as i64,
+                    args.as_ptr(),
+                    args.len(),
+                    param_count,
+                    has_synthetic_arguments,
+                    has_rest,
+                ),
+                Some(this) => crate::object::call_vtable_method_value(
+                    func_ptr,
+                    this,
+                    args.as_ptr(),
+                    args.len(),
+                    param_count,
+                    has_synthetic_arguments,
+                    has_rest,
+                    None,
+                ),
+            }
+        }
+    };
+    let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
+    if ret_jv.is_any_string() {
+        return jsvalue_string_content(ret).unwrap_or_default();
+    }
+    // #1251: a non-string result is formatted at the hook's own `depth`.
+    format_jsvalue(ret, depth)
 }
 
 fn format_weak_wrapper(
@@ -1030,91 +1181,8 @@ unsafe fn format_object_as_json(
     // hook itself runs with `customInspect` temporarily disabled to prevent
     // unbounded recursion if the hook returns `this`. Refs #1201.
     if inspect_custom_inspect_enabled() {
-        let custom_sym = crate::symbol::inspect_custom_symbol_ptr();
-        if custom_sym != 0 {
-            let entries = crate::symbol::clone_symbol_entries_for_obj_ptr(obj_addr);
-            for (sym_ptr, val_bits) in &entries {
-                if *sym_ptr != custom_sym {
-                    continue;
-                }
-                let val_tag = val_bits & 0xFFFF_0000_0000_0000;
-                if val_tag != 0x7FFD_0000_0000_0000 {
-                    break;
-                }
-                let val_ptr = (val_bits & 0x0000_FFFF_FFFF_FFFF) as *const u8;
-                if val_ptr.is_null() || (val_ptr as usize) < 0x10000 {
-                    break;
-                }
-                let gc_header =
-                    val_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_header).obj_type != crate::gc::GC_TYPE_CLOSURE {
-                    break;
-                }
-                let closure_ptr = val_ptr as *const crate::closure::ClosureHeader;
-                let _guard = InspectCustomInspectGuard::new(false);
-                // Node invokes the hook as `hook.call(this, depth, options, inspect)`
-                // — see #1247. `depth` is the REMAINING recursion budget (counts
-                // down from `util.inspect`'s `depth` option, default 2). Perry's
-                // internal `depth` counts UP from 0 so we invert it. `options`
-                // is a placeholder object — populating its fields properly is
-                // its own follow-up. `inspect` is undefined since we don't yet
-                // expose a JS-callable equivalent.
-                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
-                let options_obj = crate::object::js_object_alloc(0, 0);
-                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
-                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
-                let ret = crate::closure::js_closure_call3(
-                    closure_ptr,
-                    crate::closure::plain_call_receiver(),
-                    remaining,
-                    options_arg,
-                    undef_arg,
-                );
-                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
-                if ret_jv.is_any_string() {
-                    return jsvalue_string_content(ret).unwrap_or_default();
-                }
-                // #1251: non-string return values count as one nesting
-                // level — but the hook itself was reached from the
-                // formatter at `depth`, so the return value's nested
-                // structure starts at `depth` (NOT `depth + 1`). Node
-                // ends up truncating `[Object]` at the same boundary
-                // because both formatters increment by 1 per descent.
-                return format_jsvalue(ret, depth);
-            }
-        }
-
-        // #1248: class-method `[util.inspect.custom]() {}` is not stored in
-        // the per-instance symbol side table — HIR renames it to
-        // `__perry_inspect_custom__` and registers it on the class vtable
-        // (see crates/perry-hir/src/lower_decl/class_decl.rs). Walk the
-        // object's class chain when the instance lookup misses.
-        let class_id = (*obj_ptr).class_id;
-        if class_id != 0 && crate::object::shapes::receiver_has_class_identity(obj_ptr) {
-            if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-                crate::object::class_method_slot_target(class_id, "__perry_inspect_custom__")
-            {
-                let _guard = InspectCustomInspectGuard::new(false);
-                let remaining = inspect_depth_limit().saturating_sub(depth) as f64;
-                let options_obj = crate::object::js_object_alloc(0, 0);
-                let options_arg = crate::value::js_nanbox_pointer(options_obj as i64);
-                let undef_arg = f64::from_bits(crate::value::TAG_UNDEFINED);
-                let args = [remaining, options_arg, undef_arg];
-                let ret = crate::object::call_vtable_method(
-                    func_ptr,
-                    obj_ptr as i64,
-                    args.as_ptr(),
-                    args.len(),
-                    param_count,
-                    has_synthetic_arguments,
-                    has_rest,
-                );
-                let ret_jv = crate::value::JSValue::from_bits(ret.to_bits());
-                if ret_jv.is_any_string() {
-                    return jsvalue_string_content(ret).unwrap_or_default();
-                }
-                return format_jsvalue(ret, depth);
-            }
+        if let Some(hook) = inspect_custom_hook(obj_ptr) {
+            return run_inspect_custom_hook(hook, None, obj_ptr, depth);
         }
     }
 
@@ -1202,6 +1270,26 @@ unsafe fn format_object_as_json(
     let descriptors_in_use = crate::object::owner_has_property_descriptors(obj_ptr as usize);
 
     let mut string_parts: Vec<(String, String)> = Vec::with_capacity(key_count);
+
+    // A plain object's index store holds its index keys (ascending), which
+    // its layout does not name: they print first, as `Object.keys` lists them.
+    if let Some(view) = crate::array::subclass_elements::own_elements(obj_addr) {
+        if view.plain {
+            for index in crate::array::subclass_elements::own_index_keys(view) {
+                // Re-read per element: formatting a value can run user code.
+                let Some(bits) = crate::array::subclass_elements::own_elements(obj_addr)
+                    .filter(|view| view.plain)
+                    .and_then(|view| crate::array::subclass_elements::view_get(view, index))
+                else {
+                    continue;
+                };
+                let key_str = index.to_string();
+                let value_str = format_jsvalue_for_json(f64::from_bits(bits), depth + 1);
+                let rendered = format!("{}: {}", format_inspect_property_key(&key_str), value_str);
+                string_parts.push((key_str, rendered));
+            }
+        }
+    }
 
     for i in 0..key_count {
         // Get the key (NaN-boxed string pointer)
@@ -1519,7 +1607,7 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     if gc_type == crate::gc::GC_TYPE_ERROR {
                         let error_ptr = ptr as *const crate::error::ErrorHeader;
                         errors::format_error_value(error_ptr, depth)
-                    } else if gc_type == crate::gc::GC_TYPE_ARRAY {
+                    } else if crate::gc_type_is_array!(gc_type) {
                         // A grown array's old head is a forwarding stub; inspect the
                         // live header (and key the cycle check on it) instead.
                         let ptr = crate::array::clean_arr_ptr(ptr);
@@ -1541,20 +1629,16 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                         if length > 1_000_000 {
                             return inspect_finish_circular(ptr as usize, "[Array]".to_string());
                         }
-                        let data_ptr = crate::array::array_elements_ptr(
-                            maybe_arr as *const crate::array::ArrayHeader,
-                        ) as *const f64;
                         // #9415: the same hole grouping the `format_jsvalue`
                         // array arm does. This is the twin that renders an
                         // array reached as an object FIELD, so without it
                         // `{ h: new Array(3) }` still said
                         // `{ h: [ NaN, NaN, NaN ] }`.
-                        let mut parts =
-                            value_repr::array_entries_with_holes(data_ptr, length, |elem| {
-                                let rendered = format_jsvalue_for_json(elem, depth + 1);
-                                let numeric = value_repr::entry_is_numeric(elem, &rendered);
-                                value_repr::ArrayEntry::new(rendered, numeric)
-                            });
+                        let mut parts = value_repr::array_entries(maybe_arr, |elem| {
+                            let rendered = format_jsvalue_for_json(elem, depth + 1);
+                            let numeric = value_repr::entry_is_numeric(elem);
+                            value_repr::ArrayEntry::new(rendered, numeric)
+                        });
                         // #9463: the `showHidden` tail belongs on nested arrays
                         // too — node's `%o` on `{ a: [1, 2] }` is
                         // `{ a: [ 1, 2, [length]: 2 ] }`.
@@ -1611,8 +1695,6 @@ fn format_jsvalue_for_json(value: f64, depth: usize) -> String {
                     }
                 }
             }
-        } else if jsval.is_int32() {
-            value_repr::int32_or_class_repr(value)
         } else if value_repr::is_array_hole(value) {
             "undefined".to_string()
         } else {
@@ -1698,19 +1780,6 @@ mod inspect_property_key_tests;
 #[cfg(test)]
 mod internal_key_hiding_tests;
 
-#[inline]
-fn looks_like_raw_heap_pointer(value: f64) -> bool {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        return false;
-    }
-    let addr = bits as usize;
-    // Compare in u64 so the 2^47 upper bound stays in range on 32-bit targets
-    // (arm64_32 watchOS, wasm32), where it's a no-op — no addresses that high.
-    (0x1000..0x8000_0000_0000u64).contains(&(addr as u64))
-        && addr >= crate::gc::GC_HEADER_SIZE + 0x1000
-}
-
 mod deep_equal;
 pub use deep_equal::*;
 
@@ -1723,15 +1792,21 @@ pub extern "C" fn js_array_print(arr_ptr: *const crate::array::ArrayHeader) {
     }
 
     unsafe {
-        let length = (*arr_ptr).length as usize;
-        let data_ptr = crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader)
-            as *const f64;
-
-        let mut parts: Vec<String> = Vec::with_capacity(length);
-        for i in 0..length {
-            let value = *data_ptr.add(i);
-            parts.push(format_jsvalue_for_json(value, 0));
+        let arr = crate::array::clean_arr_ptr(arr_ptr);
+        if arr.is_null() {
+            println!("[]");
+            return;
         }
+        // Holes and a sparse Array's absent indices print as `undefined`; no
+        // slot past the store is read.
+        let length = (*arr).length as usize;
+        let mut parts: Vec<String> = Vec::new();
+        crate::array::array_for_each_own_element(arr, |index, value| {
+            parts.resize(index as usize, "undefined".to_string());
+            parts.push(format_jsvalue_for_json(value, 0));
+            true
+        });
+        parts.resize(length, "undefined".to_string());
         println!("[{}]", parts.join(", "));
     }
 }

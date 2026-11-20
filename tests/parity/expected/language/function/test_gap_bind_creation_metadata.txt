@@ -1,0 +1,13 @@
+snapshot bound add 2 7
+override snapshot bound changed 8 7
+nonstring bound  0
+twice bound bound add 1 7
+bound override bound own 12
+source function () { [native code] }
+getters at bind length,name
+getters result bound visible 7 7 length,name
+throws at bind name getter
+construct 11 true true bound Pair 1
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+patched after warmup 4 4

@@ -52,7 +52,7 @@ fn fresh_destruct_local(ctx: &mut LoweringContext, ty: Type) -> (LocalId, String
 /// function after `x` (`x.name === "x"`). The closure-lowering paths read
 /// `ctx.assignment_inferred_name`; a named function expression ignores it, so
 /// `[ xFn = function x(){} ]` correctly keeps `"x"`.
-fn lower_default_named(
+pub(super) fn lower_default_named(
     ctx: &mut LoweringContext,
     default_expr: &ast::Expr,
     binding_name: Option<&str>,
@@ -92,7 +92,7 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
 /// `value === undefined` — the spec check that gates a destructuring default
 /// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
 /// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
-fn is_strictly_undefined(value: Expr) -> Expr {
+pub(super) fn is_strictly_undefined(value: Expr) -> Expr {
     Expr::Compare {
         op: CompareOp::Eq,
         left: Box::new(value),
@@ -390,6 +390,7 @@ pub(crate) fn lower_array_pattern_binding(
             ],
         }),
         finally: None,
+        forof_completion: None,
     });
     result.push(close_stmt);
     result.extend(source.release(&[iter_id, next_id]));
@@ -750,6 +751,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 });
                                 computed_key_temps.push(key_id);
                                 Expr::IndexGet {
+                                    element_offset: 0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
@@ -914,6 +916,7 @@ pub(crate) fn lower_pattern_binding_into(
                             });
                             for key_id in &computed_key_temps {
                                 result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
+                                    element_offset: 0,
                                     byte_offset: 0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(rest_id)),

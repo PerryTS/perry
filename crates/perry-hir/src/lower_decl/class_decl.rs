@@ -61,7 +61,7 @@ use class_heritage::*;
 pub(crate) use from_ast::lower_class_from_ast;
 pub(crate) use member_helpers::capture_class_source;
 use member_helpers::{
-    generic_computed_member_key, lower_generic_computed_class_member,
+    define_named_method, generic_computed_member_key, lower_generic_computed_class_member,
     noncomputed_member_registration_name, record_class_accessor, runtime_instance_accessor_names,
 };
 use member_registration::*;
@@ -103,6 +103,181 @@ pub(super) fn collect_this_field_assigns(expr: &ast::Expr, out: &mut Vec<String>
             }
         }
         ast::Expr::Paren(p) => collect_this_field_assigns(&p.expr, out),
+        _ => {}
+    }
+}
+
+/// The `this.x = v` keys a constructor body stores, in the order of their
+/// first store in the source text along the paths that reach the end of the
+/// constructor: top-level statements and the bodies of blocks, branches,
+/// loops, `switch` cases and `try`/`catch`/`finally` alike, not closures or
+/// nested classes (their stores run whenever they are called). Keys stored
+/// in an `if` arm that leaves the constructor (it ends in `return` or
+/// `throw`) follow them, in their own text order: that run never reaches the
+/// keys after the arm, so its stores fix no position among them. This is
+/// the order the class's reservations take, the one order the codegen
+/// layout (`own_keys`), the class key index and the facts' birth keys read:
+/// an execution that takes a branch adds its key where the text stores it,
+/// so a key stored in a branch before a top-level store comes before that
+/// store's key. A run that skips the branch leaves the key's slot a hole;
+/// the runtime's in-order rule still decides enumeration, so a wrong
+/// prediction costs a table, never an order.
+///
+/// With a `class`, R9BIRTH3 rule M:
+/// an expression statement `this.m(..)` with `m` one of the class's own
+/// instance methods runs `m`'s body there (ECMA-262 13.3.6.1 with `this`):
+/// its `this.x = v` keys take the call's place in the order, the method's
+/// calls of further own methods too (each once on a path: no recursion).
+pub(crate) fn constructor_store_keys_of(
+    class: Option<&ast::Class>,
+    stmts: &[ast::Stmt],
+    out: &mut Vec<String>,
+) {
+    let mut cx = StoreKeysCx {
+        methods: class.map(own_method_bodies).unwrap_or_default(),
+        visiting: Vec::new(),
+    };
+    let mut exits = Vec::new();
+    store_keys_in(stmts, out, Some(&mut exits), &mut cx);
+    out.append(&mut exits);
+}
+
+struct StoreKeysCx<'a> {
+    methods: std::collections::HashMap<String, &'a [ast::Stmt]>,
+    visiting: Vec<String>,
+}
+
+/// The bodies of `class`'s own plain instance methods by name (a name
+/// declared twice, or also as an accessor, is left out).
+fn own_method_bodies(class: &ast::Class) -> std::collections::HashMap<String, &[ast::Stmt]> {
+    let mut out: std::collections::HashMap<String, &[ast::Stmt]> = Default::default();
+    let mut dup = std::collections::HashSet::new();
+    for member in &class.body {
+        let ast::ClassMember::Method(m) = member else {
+            continue;
+        };
+        let name = match &m.key {
+            ast::PropName::Ident(i) => i.sym.to_string(),
+            ast::PropName::Str(s) => s.value.to_string_lossy().into_owned(),
+            _ => continue,
+        };
+        if m.is_static {
+            continue;
+        }
+        let plain =
+            m.kind == ast::MethodKind::Method && !m.function.is_async && !m.function.is_generator;
+        match (&m.function.body, plain) {
+            (Some(b), true) if !dup.contains(&name) => {
+                if out.insert(name.clone(), b.stmts.as_slice()).is_some() {
+                    dup.insert(name.clone());
+                }
+            }
+            _ => {
+                dup.insert(name.clone());
+            }
+        }
+    }
+    out.retain(|k, _| !dup.contains(k));
+    out
+}
+
+/// `e` is `this.m(..)` with `m` a method `cx` follows: its body.
+fn followed_call<'a>(e: &ast::Expr, cx: &StoreKeysCx<'a>) -> Option<(String, &'a [ast::Stmt])> {
+    let ast::Expr::Call(call) = e else {
+        return None;
+    };
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return None;
+    };
+    let ast::Expr::Member(mem) = &**callee else {
+        return None;
+    };
+    if !matches!(&*mem.obj, ast::Expr::This(_)) {
+        return None;
+    }
+    let ast::MemberProp::Ident(id) = &mem.prop else {
+        return None;
+    };
+    let name = id.sym.to_string();
+    if cx.visiting.contains(&name) {
+        return None;
+    }
+    cx.methods.get(&name).map(|b| (name, *b))
+}
+
+/// The keys of `stmts` into `out`; an `if` arm that leaves the constructor
+/// puts its keys into `exits` (`None`: already on such a path, into `out`).
+fn store_keys_in(
+    stmts: &[ast::Stmt],
+    out: &mut Vec<String>,
+    mut exits: Option<&mut Vec<String>>,
+    cx: &mut StoreKeysCx<'_>,
+) {
+    for stmt in stmts {
+        statement_store_keys(stmt, out, exits.as_deref_mut(), cx);
+    }
+}
+
+/// `stmt` cannot complete normally: it returns or throws on every path.
+fn leaves_constructor(stmt: &ast::Stmt) -> bool {
+    match stmt {
+        ast::Stmt::Return(_) | ast::Stmt::Throw(_) => true,
+        ast::Stmt::Block(b) => b.stmts.iter().any(leaves_constructor),
+        ast::Stmt::If(s) => {
+            leaves_constructor(&s.cons) && s.alt.as_deref().is_some_and(leaves_constructor)
+        }
+        _ => false,
+    }
+}
+
+fn statement_store_keys(
+    stmt: &ast::Stmt,
+    out: &mut Vec<String>,
+    mut exits: Option<&mut Vec<String>>,
+    cx: &mut StoreKeysCx<'_>,
+) {
+    match stmt {
+        ast::Stmt::Expr(e) => {
+            collect_this_field_assigns(&e.expr, out);
+            if let Some((name, body)) = followed_call(&e.expr, cx) {
+                cx.visiting.push(name);
+                store_keys_in(body, out, None, cx);
+                cx.visiting.pop();
+            }
+        }
+        ast::Stmt::Block(b) => store_keys_in(&b.stmts, out, exits, cx),
+        ast::Stmt::If(s) => {
+            let mut arm = |arm: &ast::Stmt,
+                           exits: Option<&mut Vec<String>>,
+                           cx: &mut StoreKeysCx<'_>| match exits {
+                Some(e) if leaves_constructor(arm) => statement_store_keys(arm, e, None, cx),
+                exits => statement_store_keys(arm, out, exits, cx),
+            };
+            arm(&s.cons, exits.as_deref_mut(), cx);
+            if let Some(alt) = &s.alt {
+                arm(alt, exits, cx);
+            }
+        }
+        ast::Stmt::For(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::ForIn(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::ForOf(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::While(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::DoWhile(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::Labeled(s) => statement_store_keys(&s.body, out, exits, cx),
+        ast::Stmt::Try(s) => {
+            store_keys_in(&s.block.stmts, out, exits.as_deref_mut(), cx);
+            if let Some(h) = &s.handler {
+                store_keys_in(&h.body.stmts, out, exits.as_deref_mut(), cx);
+            }
+            if let Some(f) = &s.finalizer {
+                store_keys_in(&f.stmts, out, exits, cx);
+            }
+        }
+        ast::Stmt::Switch(s) => {
+            for case in &s.cases {
+                store_keys_in(&case.cons, out, exits.as_deref_mut(), cx);
+            }
+        }
         _ => {}
     }
 }
@@ -775,14 +950,15 @@ pub fn lower_class_decl(
                 if method.function.body.is_none() {
                     continue;
                 }
-                if let Some(computed) = generic_computed_member_key(ctx, method) {
-                    computed_members.push(lower_generic_computed_class_member(
-                        ctx,
-                        method,
-                        computed,
-                        member_index,
-                    )?);
-                    seen_generic_computed_member = true;
+                if let Some(computed) =
+                    generic_computed_member_key(ctx, method, &class_decl.class.body[..member_index])
+                {
+                    let member =
+                        lower_generic_computed_class_member(ctx, method, computed, member_index)?;
+                    // Only an evaluated key moves later members to source-order
+                    // registration; a known symbol key is an ordinary member.
+                    seen_generic_computed_member |= member.is_evaluated();
+                    computed_members.push(member);
                     continue;
                 }
                 // Get the property name for getters/setters. Computed
@@ -803,19 +979,17 @@ pub fn lower_class_decl(
                     // method/accessor was silently dropped, so `C.prototype[0]`
                     // read `undefined` (Test262 accessor-name-inst/literal-numeric-*).
                     ast::PropName::Num(n) => (crate::lower::number_to_js_key(n.value), true),
+                    ast::PropName::Computed(computed)
+                        if literal_computed_key(&computed.expr).is_some() =>
+                    {
+                        (
+                            literal_computed_key(&computed.expr).unwrap_or_default(),
+                            true,
+                        )
+                    }
                     ast::PropName::Computed(computed) => {
                         if is_symbol_iterator_key(&computed.expr) {
                             ("@@iterator".to_string(), false)
-                        } else if is_inspect_custom_key(ctx, &computed.expr)
-                            && !method.is_static
-                            && matches!(method.kind, ast::MethodKind::Method)
-                        {
-                            // `[util.inspect.custom]() {}` on a class — rename
-                            // to a stable string key so the class declaration
-                            // picks it up. `format_object_as_json` looks up
-                            // this name on the object's vtable when there is no
-                            // per-instance entry. Refs #1248.
-                            ("__perry_inspect_custom__".to_string(), false)
                         } else if let Some(outcome) =
                             lower_well_known_computed_method(ctx, method, &name)?
                         {
@@ -825,9 +999,7 @@ pub fn lower_class_decl(
                             // path (`lower_class_from_ast`); see the helper in
                             // helpers.rs for the per-symbol details.
                             match outcome {
-                                WellKnownComputedMethod::Rename(renamed) => (renamed, false),
-                                WellKnownComputedMethod::Lifted
-                                | WellKnownComputedMethod::Unsupported => continue,
+                                WellKnownComputedMethod::Unsupported => continue,
                             }
                         } else {
                             continue;
@@ -923,28 +1095,6 @@ pub fn lower_class_decl(
                             });
                             continue;
                         }
-                        // `[Symbol.asyncIterator]()` (plain or `async *`) — the
-                        // same computed-symbol registration: the prototype holds
-                        // the method under its symbol, so `obj[Symbol.asyncIterator]`
-                        // reads it (React Flight's async-iterable test on Next.js's
-                        // VaryParamsAccumulator), and the registration installs the
-                        // `@@asyncIterator` dispatch alias `for await` uses.
-                        // Registered under the string name it was an own
-                        // "@@asyncIterator" key the source never declared, and the
-                        // symbol read found nothing.
-                        if prop_name == "@@asyncIterator" && !method.is_static {
-                            let ast::PropName::Computed(computed) = &method.key else {
-                                unreachable!("@@asyncIterator key must be computed");
-                            };
-                            computed_members.push(ClassComputedMember {
-                                key_expr: lower_expr(ctx, &computed.expr)?,
-                                function: func,
-                                is_static: false,
-                                kind: ClassComputedMemberKind::Method,
-                                source_order: member_index,
-                            });
-                            continue;
-                        }
                         if seen_generic_computed_member && can_source_order_register {
                             computed_members.push(lower_noncomputed_class_member_registration(
                                 ctx,
@@ -954,9 +1104,9 @@ pub fn lower_class_decl(
                             )?);
                         }
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                 }
@@ -1003,9 +1153,9 @@ pub fn lower_class_decl(
                     ast::MethodKind::Method => {
                         let func = lower_private_method(ctx, method)?;
                         if method.is_static {
-                            static_methods.push(func);
+                            define_named_method(&mut static_methods, func);
                         } else {
-                            methods.push(func);
+                            define_named_method(&mut methods, func);
                         }
                     }
                     ast::MethodKind::Getter => {
@@ -1229,34 +1379,32 @@ pub fn lower_class_decl(
 
         let declared_field_names: std::collections::HashSet<String> =
             fields.iter().map(|f| f.name.clone()).collect();
+        // The constructor's stores in first-store order, branches included
+        // (`constructor_store_keys`): the class's reservation order.
+        let mut names: Vec<String> = Vec::new();
         for member in &class_decl.class.body {
             if let ast::ClassMember::Constructor(ctor) = member {
                 if let Some(ref body) = ctor.body {
-                    for stmt in &body.stmts {
-                        if let ast::Stmt::Expr(expr_stmt) = stmt {
-                            let mut names: Vec<String> = Vec::new();
-                            collect_this_field_assigns(&expr_stmt.expr, &mut names);
-                            for fname in names {
-                                if !declared_field_names.contains(&fname)
-                                    && !inherited_field_names.contains(&fname)
-                                    && !accessor_names.contains_any(&fname)
-                                    && !method_names.contains(&fname)
-                                {
-                                    fields.push(ClassField {
-                                        origin: crate::ClassFieldOrigin::ConstructorStore,
-                                        name: fname,
-                                        key_expr: None,
-                                        ty: Type::Any,
-                                        init: None,
-                                        is_private: false,
-                                        is_readonly: false,
-                                        decorators: Vec::new(),
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    constructor_store_keys_of(Some(&class_decl.class), &body.stmts, &mut names);
                 }
+            }
+        }
+        for fname in names {
+            if !declared_field_names.contains(&fname)
+                && !inherited_field_names.contains(&fname)
+                && !accessor_names.contains_any(&fname)
+                && !method_names.contains(&fname)
+            {
+                fields.push(ClassField {
+                    origin: crate::ClassFieldOrigin::ConstructorStore,
+                    name: fname,
+                    key_expr: None,
+                    ty: Type::Any,
+                    init: None,
+                    is_private: false,
+                    is_readonly: false,
+                    decorators: Vec::new(),
+                });
             }
         }
         // Dedup fields: keep first occurrence of each name
@@ -1392,6 +1540,17 @@ pub fn lower_class_decl(
         }
     }
 
+    // Loop-invariant `this.F` array reads in instance methods
+    // (`property_array_hoist::hoist_this_array_fields`).
+    crate::lower::property_array_hoist::hoist_this_array_fields(
+        ctx,
+        &name,
+        &fields,
+        &getters,
+        &setters,
+        !computed_members.is_empty(),
+        &mut methods,
+    );
     Ok(Class {
         id: class_id,
         name,
@@ -1417,6 +1576,7 @@ pub fn lower_class_decl(
         // Declared inside a function body / non-module block → its static-field
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     })

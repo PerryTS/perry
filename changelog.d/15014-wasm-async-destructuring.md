@@ -1,0 +1,1 @@
+`--target web`: array and object destructuring inside an `async` function (`const [x, y] = …`, `for (const [k, v] of …)`, `for (const { n } of …)`, destructuring an iterator) runs instead of throwing `arrayRecordIndex is not supported in an async function body on the web target` (#15011).

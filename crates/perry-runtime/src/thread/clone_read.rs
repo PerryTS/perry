@@ -24,17 +24,37 @@ use crate::value::{JSValue, POINTER_TAG};
 /// `sv` must come from the writer in `clone_write.rs` (or keep its rules).
 #[optimize(size)]
 pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 {
+    deserialize_message(sv, false).0
+}
+
+pub unsafe fn deserialize_message(sv: &SerializedValue, include_ports: bool) -> (u64, u64) {
     #[cfg(perry_gc_instruments)]
     let _timer = super::clone_timing::CloneTimer::new("deserialize");
     let scope = RuntimeHandleScope::new();
     let mut reader = Reader {
         scope: &scope,
         made: Vec::new(),
+        ports: Vec::new(),
         message: None,
         shapes: Vec::new(),
         strings: Vec::new(),
     };
-    reader.value(sv)
+    let data = scope.root_nanbox_u64(reader.value(sv));
+    let ports = include_ports.then(|| scope.root_raw_mut_ptr(crate::array::js_array_alloc(0)));
+    if let SerializedValue::Message { data, .. } = sv {
+        for index in 0..data.ports.len() {
+            let value = reader.port(index);
+            if let Some(ports) = &ports {
+                crate::array::js_array_push_f64(ports.get_raw_mut_ptr(), f64::from_bits(value));
+            }
+        }
+    }
+    (
+        data.get_nanbox_u64(),
+        ports.map_or(TAG_UNDEFINED, |ports| {
+            JSValue::pointer(ports.get_raw_mut_ptr::<u8>()).bits()
+        }),
+    )
 }
 
 /// Whether the writer gave this value an index (`Writer::begin`). The reader
@@ -43,7 +63,8 @@ pub unsafe fn deserialize_nanbox_on_current_thread(sv: &SerializedValue) -> u64 
 fn remembers(sv: &SerializedValue) -> bool {
     matches!(
         sv,
-        SerializedValue::RawArray(_)
+        SerializedValue::MessagePort(_)
+            | SerializedValue::RawArray(_)
             | SerializedValue::SlotArray { .. }
             | SerializedValue::ShapeObject { .. }
             | SerializedValue::Array(_)
@@ -94,6 +115,7 @@ impl ArrayElements<'_> {
 
 struct Reader<'s, 'm> {
     message: Option<&'m CloneMessage>,
+    ports: Vec<Option<RuntimeHandle<'s>>>,
     shapes: Vec<(RuntimeHandle<'s>, u32)>,
     strings: Vec<Option<RuntimeHandle<'s>>>,
     scope: &'s RuntimeHandleScope,
@@ -101,6 +123,19 @@ struct Reader<'s, 'm> {
 }
 
 impl<'s, 'm> Reader<'s, 'm> {
+    fn port(&mut self, index: usize) -> u64 {
+        if let Some(root) = &self.ports[index] {
+            return root.get_nanbox_u64();
+        }
+        let value = crate::messaging::port_transport::adopt(&self.message.unwrap().ports[index])
+            .map(crate::messaging::port_transfer::adopt)
+            .unwrap_or_else(|| f64::from_bits(TAG_UNDEFINED));
+        let root = self.scope.root_nanbox_f64(value);
+        let bits = root.get_nanbox_u64();
+        self.ports[index] = Some(root);
+        bits
+    }
+
     #[inline(never)]
     #[optimize(size)]
     fn reserve(&mut self) -> usize {
@@ -157,6 +192,7 @@ impl<'s, 'm> Reader<'s, 'm> {
             None
         };
         let bits = match sv {
+            SerializedValue::MessagePort(index) => self.port(*index as usize),
             SerializedValue::RawArray(bits) => JSValue::pointer(
                 crate::array::js_array_from_f64(bits.as_ptr().cast(), bits.len() as u32).cast(),
             )
@@ -268,6 +304,7 @@ impl<'s, 'm> Reader<'s, 'm> {
     #[optimize(size)]
     unsafe fn prepare_message(&mut self, data: &'m CloneMessage) {
         self.message = Some(data);
+        self.ports.resize_with(data.ports.len(), || None);
         self.strings.resize_with(data.strings.len(), || None);
         for shape in &data.shapes {
             let names = &shape.keys;
@@ -617,6 +654,24 @@ impl<'s, 'm> Reader<'s, 'm> {
         if let Some(stack) = stack {
             let text = heap_string(stack);
             crate::error::error_set_stack(self.ptr(slot), text);
+        } else {
+            // A missing serialized stack must shadow the receiver's freshly
+            // captured native stack, not expose a new diagnostic.
+            let descriptor = self
+                .scope
+                .root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let value_key = heap_string(b"value");
+            crate::object::js_object_set_field_by_name(
+                descriptor.get_raw_mut_ptr(),
+                value_key,
+                undefined,
+            );
+            let stack_key = string_bits(b"stack");
+            crate::object::js_object_define_property(
+                f64::from_bits(self.get(slot)),
+                f64::from_bits(stack_key),
+                f64::from_bits(JSValue::pointer(descriptor.get_raw_mut_ptr::<u8>()).bits()),
+            );
         }
         if let Some(cause) = cause {
             let cause = self.value(cause);

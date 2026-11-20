@@ -27,6 +27,19 @@ use precise_roots::{lower_precise_roots_to_native_stack, retype_landing_pads_for
 /// global in address space 0.
 pub const TLS_ADDRESS_INTRINSIC: &str = "llvm.threadlocal.address.p0";
 
+/// A size-based decision made after worker-local operands acquire their
+/// serial spellings. Symbol digit counts are part of the existing IR budget.
+pub(crate) enum PreinlineAfterNaming {
+    SelfBody {
+        statements: usize,
+        name_bytes: usize,
+    },
+    OtherBody {
+        statements: usize,
+        symbol: String,
+    },
+}
+
 pub struct LlFunction {
     pub name: String,
     pub return_type: LlvmType,
@@ -45,6 +58,7 @@ pub struct LlFunction {
     /// general small-function policy gives the early pass an explicit code-size
     /// budget instead of activating every historical hint at once.
     pub pre_statepoint_inline: bool,
+    preinline_after_naming: Option<PreinlineAfterNaming>,
     /// This admission belongs to the receiver/closed-target/ConstFn cost
     /// policy. Numeric/index ABI adapters have their own admission contracts;
     /// the final guarded-growth gate may revoke only this policy's decisions.
@@ -53,6 +67,10 @@ pub struct LlFunction {
     /// It joins the early inliner only when the facts prove a call site closed
     /// over it (`codegen/closed_targets.rs`).
     pub closed_target_preinline: bool,
+    /// The bodies the facts close this function's call sites over
+    /// (`codegen/closed_targets.rs`). It travels with the function, so a body
+    /// lowered on a callable worker reports its sites like any other.
+    pub(crate) closed_callees: Vec<String>,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -319,8 +337,10 @@ impl LlFunction {
             linkage: String::new(),
             force_inline: false,
             pre_statepoint_inline: false,
+            preinline_after_naming: None,
             guarded_preinline: false,
             closed_target_preinline: false,
+            closed_callees: Vec::new(),
             no_inline: false,
             disable_tail_calls: false,
             nanbox_operands: false,
@@ -1266,6 +1286,21 @@ impl LlFunction {
     /// Every decision that reads compile state (the root backend, which is
     /// per-thread) is made here, on the thread that owns the function; the
     /// returned plan applies on any thread.
+    /// Whether this body's roots lower to native stack maps at text finish
+    /// (`lower_precise_roots_to_native_stack`), which removes its shadow-slot
+    /// bookkeeping calls.
+    pub(crate) fn precise_roots_lowered(&self) -> bool {
+        self.stack_map_requested
+    }
+
+    /// Whether this body's `js_shadow_slot_bind` / `js_shadow_slot_set` calls
+    /// are dropped when its text is finished (`lower_roots_for_rs4gc` removes
+    /// every one), so no analysis of the body may count them as calls.
+    /// `PERRY_UNBOXED_CLASS_FIELDS=0` keeps counting them.
+    pub(crate) fn shadow_slot_calls_vanish(&self) -> bool {
+        self.precise_roots_lowered() && !crate::stmt::this_field_fast_off()
+    }
+
     pub(crate) fn text_finish(&self, gc_leaf_callees: &HashSet<String>) -> TextFinish {
         TextFinish {
             name: self.name.clone(),
@@ -1896,6 +1931,15 @@ impl TextFinish {
         } else {
             ir
         };
+        // A root re-read with no safepoint since the previous one reuses its
+        // launder output (`precise_roots/reload_reuse.rs`). After the leaf
+        // stamping above, so a direct call the whole-module analysis proved
+        // cannot collect does not end the stretch.
+        let ir = if self.precise_roots.is_some() {
+            precise_roots::reload_reuse::reuse_root_reloads(&ir)
+        } else {
+            ir
+        };
 
         // RS4GC uses the unwind destination's landing pad **as the token** for
         // the relocates it inserts on the exceptional edge, so
@@ -1927,5 +1971,45 @@ impl TextFinish {
         }
 
         ir
+    }
+}
+
+mod owned;
+pub(crate) use owned::OwnedFunction;
+
+impl LlFunction {
+    pub(crate) fn defer_self_preinline(&mut self, statements: usize) {
+        self.preinline_after_naming = Some(PreinlineAfterNaming::SelfBody {
+            statements,
+            name_bytes: self.name.len(),
+        });
+    }
+    pub(crate) fn defer_body_preinline(&mut self, statements: usize, symbol: String) {
+        self.preinline_after_naming = Some(PreinlineAfterNaming::OtherBody { statements, symbol });
+    }
+    pub(crate) fn cancel_deferred_preinline(&mut self) {
+        self.preinline_after_naming = None;
+    }
+    pub(crate) fn resolve_callable_preinline(&mut self, body_size: impl Fn(&str) -> Option<usize>) {
+        use PreinlineAfterNaming::*;
+        let Some(decision) = self.preinline_after_naming.take() else {
+            return;
+        };
+        let (size, statements) = match decision {
+            SelfBody {
+                statements,
+                name_bytes,
+            } => (
+                Some(self.estimated_ir_bytes() - self.name.len() + name_bytes),
+                statements,
+            ),
+            OtherBody { statements, symbol } => (body_size(&symbol), statements),
+        };
+        if size.is_some_and(|size| {
+            crate::codegen::helpers::guarded_specialization_admits_preinline(size, statements)
+        }) {
+            self.pre_statepoint_inline = true;
+            self.guarded_preinline = true;
+        }
     }
 }

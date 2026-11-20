@@ -77,30 +77,6 @@ unsafe fn url_from_action(action: *mut AnyObject) -> String {
     ns.to_string()
 }
 
-fn host_of_url_string(s: &str) -> String {
-    let after_scheme = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => return String::new(),
-    };
-    let host_end = after_scheme
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_scheme.len());
-    let host_with_port = &after_scheme[..host_end];
-    match host_with_port.find(':') {
-        Some(i) => host_with_port[..i].to_string(),
-        None => host_with_port.to_string(),
-    }
-}
-
-fn host_in_allowlist(host: &str, allowlist: &[String]) -> bool {
-    if allowlist.is_empty() {
-        return true;
-    }
-    allowlist
-        .iter()
-        .any(|d| host == d || host.ends_with(&format!(".{}", d)))
-}
-
 pub struct PerryWebViewDelegateIvars {
     callback_key: Cell<usize>,
 }
@@ -134,14 +110,11 @@ define_class!(
                 }
             });
 
-            if !allowed.is_empty() {
-                let host = host_of_url_string(&url_str);
-                if !host_in_allowlist(&host, &allowed) {
-                    if !decision_handler.is_null() {
-                        unsafe { (*decision_handler).call((POLICY_CANCEL,)); }
-                    }
-                    return;
+            if !perry_ui::webview_navigation::navigation_allowed(&url_str, &allowed) {
+                if !decision_handler.is_null() {
+                    unsafe { (*decision_handler).call((POLICY_CANCEL,)); }
                 }
+                return;
             }
 
             if on_should_navigate != 0.0 {

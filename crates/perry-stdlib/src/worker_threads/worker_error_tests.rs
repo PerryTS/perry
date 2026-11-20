@@ -215,3 +215,272 @@ fn native_worker_diagnostic_code_survives_error_delivery() {
         }
     }
 }
+
+thread_local! {
+    static DIAGNOSTIC_CAUSE_GETS: Cell<usize> = const { Cell::new(0) };
+}
+
+extern "C-unwind" fn diagnostic_cause_getter(
+    closure: *const ClosureHeader,
+    this: perry_runtime::closure::JsThis,
+) -> f64 {
+    DIAGNOSTIC_CAUSE_GETS.with(|count| count.set(count.get() + 1));
+    assert_eq!(
+        this.as_f64().to_bits(),
+        perry_runtime::closure::js_closure_get_capture_f64(closure, 1).to_bits()
+    );
+    let value = perry_runtime::closure::js_closure_get_capture_f64(closure, 0);
+    if perry_runtime::closure::js_closure_get_capture_f64(closure, 2) == 1.0 {
+        perry_runtime::exception::throw_program_value(value);
+    }
+    value
+}
+
+fn define_diagnostic_cause(owner: f64, receiver: f64, value: f64, throws: bool) {
+    let scope = RuntimeHandleScope::new();
+    let owner = scope.root_nanbox_f64(owner);
+    let captures = [
+        value.to_bits(),
+        receiver.to_bits(),
+        (if throws { 1.0_f64 } else { 0.0_f64 }).to_bits(),
+    ];
+    let getter = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc_init(
+        perry_runtime::fn_info!(unwind diagnostic_cause_getter, 0; with_declared(0)),
+        3,
+        captures.as_ptr(),
+    ));
+    let descriptor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_field_from_value_for_test(
+        object_value(descriptor.get_raw_mut_ptr()),
+        "get",
+        perry_runtime::value::js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
+    );
+    set_object_field_from_value_for_test(
+        object_value(descriptor.get_raw_mut_ptr()),
+        "enumerable",
+        f64::from_bits(JSValue::bool(true).bits()),
+    );
+    perry_runtime::object::js_object_define_property(
+        owner.get_nanbox_f64(),
+        string_value("cause"),
+        object_value(descriptor.get_raw_mut_ptr()),
+    );
+}
+
+#[test]
+fn worker_diagnostic_cause_retains_getter_value_presence_and_flags() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    for value in [23.0, js_undefined()] {
+        let scope = RuntimeHandleScope::new();
+        let error = perry_runtime::error::js_error_new_kind_from_value(
+            perry_runtime::error::ERROR_KIND_TYPE_ERROR,
+            string_value("original"),
+        );
+        let error = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(error as i64));
+        define_diagnostic_cause(error.get_nanbox_f64(), error.get_nanbox_f64(), value, false);
+        DIAGNOSTIC_CAUSE_GETS.with(|count| count.set(0));
+        let message = worker_error_message(error.get_nanbox_f64());
+        let restored = scope.root_nanbox_f64(message.deserialize());
+        assert_eq!(DIAGNOSTIC_CAUSE_GETS.with(Cell::get), 1);
+        let descriptor = scope.root_nanbox_f64(
+            perry_runtime::object::js_object_get_own_property_descriptor(
+                restored.get_nanbox_f64(),
+                string_value("cause"),
+            ),
+        );
+        assert!(!is_undefined(descriptor.get_nanbox_f64()));
+        assert_eq!(
+            get_object_field_from_value(descriptor.get_nanbox_f64(), "value").to_bits(),
+            value.to_bits()
+        );
+        for (key, expected) in [
+            ("enumerable", true),
+            ("configurable", false),
+            ("writable", false),
+        ] {
+            assert_eq!(
+                get_object_field_from_value(descriptor.get_nanbox_f64(), key).to_bits(),
+                JSValue::bool(expected).bits()
+            );
+        }
+    }
+}
+
+#[test]
+fn worker_diagnostic_cause_throw_falls_back_without_custom_code() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    let scope = RuntimeHandleScope::new();
+    let error = perry_runtime::error::js_error_new_from_value(string_value("original"));
+    let error = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(error as i64));
+    set_object_field_from_value_for_test(error.get_nanbox_f64(), "code", string_value("E_DIAG"));
+    define_diagnostic_cause(error.get_nanbox_f64(), error.get_nanbox_f64(), 47.0, true);
+    DIAGNOSTIC_CAUSE_GETS.with(|count| count.set(0));
+    let message = worker_error_message(error.get_nanbox_f64());
+    let restored = scope.root_nanbox_f64(message.deserialize());
+    assert_eq!(DIAGNOSTIC_CAUSE_GETS.with(Cell::get), 1);
+    assert_eq!(
+        string_value_to_string(get_object_field_from_value(
+            restored.get_nanbox_f64(),
+            "message"
+        ))
+        .as_deref(),
+        Some("original")
+    );
+    assert!(is_undefined(get_object_field_from_value(
+        restored.get_nanbox_f64(),
+        "code"
+    )));
+    assert!(is_undefined(
+        perry_runtime::object::js_object_get_own_property_descriptor(
+            restored.get_nanbox_f64(),
+            string_value("cause")
+        )
+    ));
+}
+
+#[test]
+fn worker_diagnostic_shadowed_inherited_cause_getter_is_observed() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    let scope = RuntimeHandleScope::new();
+    let error = perry_runtime::error::js_error_new_from_value(string_value("original"));
+    let error = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(error as i64));
+    let inherited = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    let prototype = scope.root_nanbox_f64(perry_runtime::object::js_object_get_prototype_of(
+        error.get_nanbox_f64(),
+    ));
+    perry_runtime::object::js_object_set_prototype_of(
+        object_value(inherited.get_raw_mut_ptr()),
+        prototype.get_nanbox_f64(),
+    );
+    define_diagnostic_cause(
+        object_value(inherited.get_raw_mut_ptr()),
+        error.get_nanbox_f64(),
+        23.0,
+        false,
+    );
+    perry_runtime::object::js_object_set_prototype_of(
+        error.get_nanbox_f64(),
+        object_value(inherited.get_raw_mut_ptr()),
+    );
+    let own = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_field_from_value_for_test(
+        object_value(own.get_raw_mut_ptr()),
+        "value",
+        js_undefined(),
+    );
+    perry_runtime::object::js_object_define_property(
+        error.get_nanbox_f64(),
+        string_value("cause"),
+        object_value(own.get_raw_mut_ptr()),
+    );
+    DIAGNOSTIC_CAUSE_GETS.with(|count| count.set(0));
+    let message = worker_error_message(error.get_nanbox_f64());
+    let restored = scope.root_nanbox_f64(message.deserialize());
+    assert_eq!(DIAGNOSTIC_CAUSE_GETS.with(Cell::get), 1);
+    let descriptor = scope.root_nanbox_f64(
+        perry_runtime::object::js_object_get_own_property_descriptor(
+            restored.get_nanbox_f64(),
+            string_value("cause"),
+        ),
+    );
+    assert!(!is_undefined(descriptor.get_nanbox_f64()));
+    assert!(is_undefined(get_object_field_from_value(
+        descriptor.get_nanbox_f64(),
+        "value"
+    )));
+}
+
+#[test]
+fn worker_diagnostic_forged_error_prototype_remains_an_ordinary_object() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    let scope = RuntimeHandleScope::new();
+    let real = perry_runtime::error::js_error_new_kind_from_value(
+        perry_runtime::error::ERROR_KIND_TYPE_ERROR,
+        string_value("original"),
+    );
+    let real = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(real as i64));
+    let prototype = scope.root_nanbox_f64(perry_runtime::object::js_object_get_prototype_of(
+        real.get_nanbox_f64(),
+    ));
+    let forged = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    perry_runtime::object::js_object_set_prototype_of(
+        object_value(forged.get_raw_mut_ptr()),
+        prototype.get_nanbox_f64(),
+    );
+    set_object_field_from_value_for_test(
+        object_value(forged.get_raw_mut_ptr()),
+        "message",
+        string_value("payload"),
+    );
+    set_object_field_from_value_for_test(object_value(forged.get_raw_mut_ptr()), "cause", 23.0);
+    let message = worker_error_message(object_value(forged.get_raw_mut_ptr()));
+    let restored = scope.root_nanbox_f64(message.deserialize());
+    assert!(is_undefined(get_object_field_from_value(
+        restored.get_nanbox_f64(),
+        "name"
+    )));
+    assert_eq!(
+        get_object_field_from_value(restored.get_nanbox_f64(), "cause"),
+        23.0
+    );
+}
+
+#[test]
+fn worker_diagnostic_throwing_tag_getter_uses_ordinary_clone_fallback() {
+    unsafe {
+        js_shape_run_static_seed();
+    }
+    let scope = RuntimeHandleScope::new();
+    let error = perry_runtime::error::js_error_new_kind_from_value(
+        perry_runtime::error::ERROR_KIND_TYPE_ERROR,
+        string_value("original"),
+    );
+    let error = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(error as i64));
+    set_object_field_from_value_for_test(error.get_nanbox_f64(), "code", string_value("E_DIAG"));
+    let captures = [
+        47.0_f64.to_bits(),
+        error.get_nanbox_u64(),
+        1.0_f64.to_bits(),
+    ];
+    let getter = scope.root_raw_mut_ptr(perry_runtime::closure::js_closure_alloc_init(
+        perry_runtime::fn_info!(unwind diagnostic_cause_getter, 0; with_declared(0)),
+        3,
+        captures.as_ptr(),
+    ));
+    let descriptor = scope.root_raw_mut_ptr(perry_runtime::object::js_object_alloc(0, 0));
+    set_object_field_from_value_for_test(
+        object_value(descriptor.get_raw_mut_ptr()),
+        "get",
+        perry_runtime::value::js_nanbox_pointer(getter.get_raw_mut_ptr::<u8>() as i64),
+    );
+    let symbol = perry_runtime::symbol::well_known_symbol("toStringTag");
+    perry_runtime::object::js_object_define_property(
+        error.get_nanbox_f64(),
+        perry_runtime::value::js_nanbox_pointer(symbol as i64),
+        object_value(descriptor.get_raw_mut_ptr()),
+    );
+    DIAGNOSTIC_CAUSE_GETS.with(|count| count.set(0));
+    let message = worker_error_message(error.get_nanbox_f64());
+    let restored = scope.root_nanbox_f64(message.deserialize());
+    assert_eq!(DIAGNOSTIC_CAUSE_GETS.with(Cell::get), 1);
+    assert_eq!(
+        string_value_to_string(get_object_field_from_value(
+            restored.get_nanbox_f64(),
+            "message"
+        ))
+        .as_deref(),
+        Some("original")
+    );
+    assert!(is_undefined(get_object_field_from_value(
+        restored.get_nanbox_f64(),
+        "code"
+    )));
+}

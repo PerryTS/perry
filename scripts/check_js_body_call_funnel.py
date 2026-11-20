@@ -45,6 +45,9 @@ function, and three rules keep native code outside the runtime on that ABI:
   `*const u8`: a body's info is built from its `JsBody` pointer type, so a
   wrong signature does not compile.
 
+Runtime, stdlib and extension Rust code throw through the four typed leaves;
+`js_throw` is private to the compiled-code entry and its test-only probe.
+
 Every fact about a body lives in its static `JsFunctionInfo`, which the
 function object points to. Nothing is registered by code address: no crate
 may name a closure-body registrar (`js_register_closure_*`) or one of the
@@ -59,6 +62,8 @@ import argparse
 import re
 import sys
 from pathlib import Path
+
+from shape_descriptor_census import blank_rust_comments_and_literals
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -359,11 +364,61 @@ def registry_violations(root: Path):
     return out
 
 
+def raw_throw_violations(root: Path):
+    """Only the compiled-code ABI definition and its cfg(test) probe name js_throw.
+
+    Tests use the probe or a typed leaf too, so removing a test cfg cannot
+    silently introduce an untyped shipping throw. Imports are checked as well
+    as calls, preventing a renamed import from bypassing the funnel.
+    """
+    out = []
+    bases = ["crates/perry-runtime", "crates/perry-stdlib"] + sorted(
+        p.relative_to(root).as_posix() for p in root.glob("crates/perry-ext-*")
+    )
+    for base in bases:
+        for path in sorted((root / base).rglob("*.rs")):
+            rel = path.relative_to(root).as_posix()
+            text = path.read_text(encoding="utf-8")
+            code = blank_rust_comments_and_literals(text)
+            allowed = set()
+            if rel == "crates/perry-runtime/src/exception.rs":
+                definition = re.search(r'(?m)^extern\s+"C-unwind"\s+fn\s+(js_throw)\s*\(', text)
+                if definition:
+                    allowed.add(definition.start(1))
+                probe = re.search(
+                    r'#\[cfg\(test\)\]\s+pub\(crate\) fn test_throw\(value: f64\) -> ! \{\s*(js_throw)\(value\)\s*\}',
+                    text,
+                )
+                if probe:
+                    allowed.add(probe.start(1))
+            for m in re.finditer(r"\bjs_throw\b", code):
+                if m.start() not in allowed:
+                    line = text.count("\n", 0, m.start()) + 1
+                    out.append(f"{rel}:{line}: raw js_throw outside compiled-code entry; use a typed throw leaf")
+            # An extern declaration can hide the raw entry behind link_name.
+            for m in re.finditer(r'#\[link_name\s*=\s*"js_throw"\s*\]', text):
+                if code[m.start():m.start() + 2] == "#[":
+                    line = text.count("\n", 0, m.start()) + 1
+                    out.append(f"{rel}:{line}: raw js_throw ABI alias; use a typed throw leaf")
+    return out
+
+
 def self_test() -> int:
     import tempfile
 
     cases = {
         # (file, text, expect_red)
+        "raw_runtime": ("crates/perry-runtime/src/x.rs", 'fn f() { crate::exception::js_throw(1.0) }', True),
+        "raw_example": ("crates/perry-runtime/examples/x.rs", 'fn f() { js_throw(1.0) }', True),
+        "raw_stdlib": ("crates/perry-stdlib/src/x.rs", 'fn f() { js_throw(1.0) }', True),
+        "raw_ext_decl": ("crates/perry-ext-zz/src/x.rs", 'extern "C" { fn js_throw(v: f64) -> !; }', True),
+        "raw_alias": ("crates/perry-ext-zz/src/x.rs", 'extern "C" { #[link_name = "js_throw"] fn hidden(v: f64) -> !; }', True),
+        "raw_import": ("crates/perry-runtime/src/x.rs", 'use crate::exception::js_throw as hidden;', True),
+        "raw_comment": ("crates/perry-runtime/src/x.rs", '// js_throw(1.0)\nfn f() { let _ = "js_throw(1.0)"; }', False),
+        "raw_definition": ("crates/perry-runtime/src/exception.rs", '#[no_mangle]\nextern "C-unwind" fn js_throw(value: f64) -> ! { loop {} }', False),
+        "raw_probe": ("crates/perry-runtime/src/exception.rs", '#[cfg(test)]\npub(crate) fn test_throw(value: f64) -> ! { js_throw(value) }', False),
+        "raw_probe_shipping": ("crates/perry-runtime/src/exception.rs", 'pub(crate) fn test_throw(value: f64) -> ! { js_throw(value) }', True),
+        "raw_other_in_entry_file": ("crates/perry-runtime/src/exception.rs", 'fn other() { js_throw(1.0) }', True),
         "rt_let": ("crates/perry-runtime/src/x.rs",
                    'fn f(p: *const u8) { let g: extern "C" fn(*const ClosureHeader, f64) -> f64 = unsafe { std::mem::transmute(p) }; }', True),
         "rt_turbofish": ("crates/perry-runtime/src/x.rs",
@@ -447,6 +502,7 @@ def self_test() -> int:
                 or definition_violations(root)
                 or entry_abi_violations(root)
                 or registry_violations(root)
+                or raw_throw_violations(root)
             )
             if red != expect_red:
                 print(f"self-test {name}: expected {'red' if expect_red else 'green'}, got {'red' if red else 'green'}")
@@ -469,6 +525,7 @@ def main() -> int:
         + definition_violations(REPO)
         + entry_abi_violations(REPO)
         + registry_violations(REPO)
+        + raw_throw_violations(REPO)
     )
     if violations:
         print("\n".join(violations))

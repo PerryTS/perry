@@ -266,6 +266,10 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // string lowering. The value may be SSO, not only a heap string; the
         // string lowerings tag-dispatch a proven local for exactly that.
         Expr::StringCoerce(_) | Expr::TemplateStringCoerce(_) => Some(HirType::String),
+        // `atob(x)` / `btoa(x)` return a string or throw (`js_atob` /
+        // `js_btoa`); without this, `const s = atob(b64)` keeps no proof and
+        // `s.charCodeAt(i)` takes the generic method site.
+        Expr::Atob(_) | Expr::Btoa(_) => Some(HirType::String),
         // `+` with a string literal on either side concatenates: a string or a
         // throw, whatever the other operand is (`"" + n`, `"k" + i`). Only a
         // literal counts; a declared `string` operand is not a proof (#7837).
@@ -1080,7 +1084,7 @@ pub(crate) fn compute_auto_captures_with_globals(
     let mut referenced: std::collections::HashSet<u32> = std::collections::HashSet::new();
     crate::collectors::collect_free_ref_ids_in_stmts(body, &mut referenced);
     let mut inner_lets: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    crate::collectors::collect_let_ids(body, &mut inner_lets);
+    crate::collectors::collect_own_binding_ids(body, &mut inner_lets);
     let param_ids: std::collections::HashSet<u32> = params.iter().map(|p| p.id).collect();
     let already: std::collections::HashSet<u32> = out.iter().copied().collect();
     // Sort for determinism (HashSet iteration order is unspecified).

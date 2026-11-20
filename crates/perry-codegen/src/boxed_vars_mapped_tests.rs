@@ -45,6 +45,7 @@ fn write() -> Stmt {
         object: Box::new(Expr::LocalGet(3)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(2)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -125,6 +126,7 @@ fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
             byte_offset: 0,
         },
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),

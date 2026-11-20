@@ -1,6 +1,6 @@
 use super::*;
 // The fs-module helpers (`decode_path_value`, `build_dirent_object`,
-// `DirentKind`, `build_dir_object`, `alloc_dir_state`, `build_fs_error_value*`,
+// `DirentKind`, `build_dir_object`, `alloc_dir_state`, `fs_error*`,
 // `fs_encoding_option`, `encoded_string_ptr`, `options_*`, `validate`,
 // `metadata_*`, `build_stats_object`, `extract_closure_ptr`,
 // `js_string_from_bytes`, ...) live in the parent `fs` module; the trunk
@@ -22,19 +22,24 @@ use std::fs;
 pub extern "C" fn js_fs_opendir_sync(path_value: f64) -> f64 {
     match js_fs_opendir_value(path_value) {
         Ok(dir) => dir,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
-pub(crate) fn js_fs_opendir_value(path_value: f64) -> Result<f64, f64> {
+pub(crate) fn js_fs_opendir_value(path_value: f64) -> Result<f64, crate::error::CoreError> {
     js_fs_opendir_value_inner(path_value, false)
 }
 
-pub(crate) fn js_fs_opendir_value_with_path(path_value: f64) -> Result<f64, f64> {
+pub(crate) fn js_fs_opendir_value_with_path(
+    path_value: f64,
+) -> Result<f64, crate::error::CoreError> {
     js_fs_opendir_value_inner(path_value, true)
 }
 
-fn js_fs_opendir_value_inner(path_value: f64, include_path: bool) -> Result<f64, f64> {
+fn js_fs_opendir_value_inner(
+    path_value: f64,
+    include_path: bool,
+) -> Result<f64, crate::error::CoreError> {
     validate::validate_path("path", path_value);
     unsafe {
         let path = match decode_path_value(path_value) {
@@ -45,9 +50,9 @@ fn js_fs_opendir_value_inner(path_value: f64, include_path: bool) -> Result<f64,
             Ok(read_dir) => read_dir,
             Err(err) => {
                 return Err(if include_path {
-                    build_fs_error_value(&err, "opendir", &path)
+                    fs_error(&err, "opendir", &path)
                 } else {
-                    build_fs_error_value_no_path(&err, "opendir")
+                    fs_error_no_path(&err, "opendir")
                 });
             }
         };

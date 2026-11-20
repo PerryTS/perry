@@ -1,0 +1,21 @@
+DEC 250: Cannot add member Object.prototype.zz1: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.zz2: built-in objects are read-only in a compiled program
+getter calls 0
+own add/delete over absent: 0=undefined 10=own 20=undefined
+setPrototypeOf literal: 0=undefined 10=newproto 20=undefined
+deep chain miss/add/shadow: 0=undefined 10=far 20=mid 30=far 40=undefined
+deep chain inherited hit: 0=1 10=99
+DEC 250: Cannot add member Object.prototype.zz6: built-in objects are read-only in a compiled program
+computed keys 30 20 undefined
+constructor Object,K,Object,L,undef
+DEC 250: Cannot replace built-in member Object.prototype.toString: built-in objects are read-only in a compiled program
+toString through literal: 0=orig
+DEC 250: Cannot replace built-in member Object.prototype.toString: built-in objects are read-only in a compiled program
+hasOwnProperty true false function
+DEC 250: Cannot add member Function.prototype.isBuffer: built-in objects are read-only in a compiled program
+axios isBuffer 0
+null proto 10 true true
+class getter undefined 30 30
+DEC 250: Cannot add member Object.prototype.ttl: built-in objects are read-only in a compiled program
+lru opts 1242
+DEC 250: Cannot add member Object.prototype.missing: built-in objects are read-only in a compiled program

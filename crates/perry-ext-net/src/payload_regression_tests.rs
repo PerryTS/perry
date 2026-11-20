@@ -26,6 +26,25 @@ unsafe extern "C" fn observe(closure: *const RawClosureHeader, _: JsThis, error:
         "close".into()
     } else if label == 4.0 {
         "drain".into()
+    } else if label == 5.0 || label == 6.0 || label == 9.0 {
+        let name = if label == 5.0 {
+            "end-one"
+        } else if label == 6.0 {
+            "end-two"
+        } else {
+            "write"
+        };
+        let value = perry_ffi::JsValue::from_bits(error.get().to_bits());
+        if value.is_null() || value.is_undefined() {
+            name.into()
+        } else {
+            let code = crate::jsvalue_to_owned_string(p::own_get(error.get(), "code"));
+            format!("{name}:error:{code:?}")
+        }
+    } else if label == 7.0 {
+        "prefinish".into()
+    } else if label == 8.0 {
+        "finish".into()
     } else {
         let code = crate::jsvalue_to_owned_string(p::own_get(error.get(), "code")).unwrap();
         let message = crate::jsvalue_to_owned_string(p::own_get(error.get(), "message")).unwrap();
@@ -43,6 +62,223 @@ fn observer(scope: &TransientRootScope, label: f64) -> f64 {
         perry_ffi::set_closure_capture_f64(callback.get() as *mut RawClosureHeader, 0, label);
     }
     p::boxed_addr(callback.get())
+}
+
+#[cfg(unix)]
+#[test]
+fn destroy_error_publishes_after_pending_callback_before_native_close() {
+    use std::os::fd::IntoRawFd;
+    let _serial = crate::test_serial();
+    for drain_before_ack in [true, false] {
+        std::thread::spawn(move || {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let scope = TransientRootScope::enter();
+            let owner = scope.root_nanbox(socket::adopt_pipe(
+                p::undefined(),
+                stream.into_raw_fd() as f64,
+            ));
+            extern "C" {
+                fn js_node_stream_method_on(owner: i64, event: f64, callback: f64) -> f64;
+            }
+            for (event, label) in [("error", 2.0), ("close", 3.0)] {
+                let event = scope.root_nanbox(events::string(event));
+                let callback = scope.root_nanbox(observer(&scope, label));
+                unsafe {
+                    js_node_stream_method_on(
+                        p::raw_owner(owner.get()),
+                        event.get(),
+                        callback.get(),
+                    );
+                }
+            }
+            let chunk = scope.root_nanbox(events::string("pending"));
+            socket::write(
+                owner.get(),
+                chunk.get(),
+                p::undefined(),
+                observer(&scope, 9.0),
+            );
+            let error = scope.root_nanbox(socket::error("EINVAL", "actual write failure"));
+            socket::destroy(owner.get(), error.get());
+            socket::destroy(owner.get(), error.get());
+            // Drain logical jobs without polling the native close acknowledgement.
+            if drain_before_ack {
+                perry_runtime::promise::microtasks::js_promise_run_microtasks_checkpoint();
+                SEEN.with(|seen| {
+                    assert_eq!(
+                        *seen.borrow(),
+                        [
+                            "write:error:Some(\"EINVAL\")",
+                            "2:EINVAL:actual write failure",
+                        ]
+                    )
+                });
+            }
+            until(|| SEEN.with(|seen| seen.borrow().last().is_some_and(|s| s == "close")));
+            perry_runtime::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            SEEN.with(|seen| {
+                assert_eq!(
+                    *seen.borrow(),
+                    [
+                        "write:error:Some(\"EINVAL\")",
+                        "2:EINVAL:actual write failure",
+                        "close",
+                    ]
+                )
+            });
+            drop(peer);
+            perry_runtime::agent::retire_agent(agent);
+        })
+        .join()
+        .unwrap();
+    }
+}
+
+#[cfg(unix)]
+fn adopted_stream_end_callbacks(peer_closed: bool) {
+    use std::os::fd::IntoRawFd;
+    let _serial = crate::test_serial();
+    std::thread::spawn(move || {
+        let agent = perry_runtime::agent::enter_worker_agent();
+        SEEN.with(|seen| seen.borrow_mut().clear());
+        let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(socket::adopt_pipe(
+            p::undefined(),
+            stream.into_raw_fd() as f64,
+        ));
+        let peer = if peer_closed {
+            drop(peer);
+            None
+        } else {
+            Some(peer)
+        };
+        socket::once(owner.get(), "error", observer(&scope, 2.0));
+        socket::once(owner.get(), "prefinish", observer(&scope, 7.0));
+        socket::once(owner.get(), "finish", observer(&scope, 8.0));
+        if !peer_closed {
+            let chunk = scope.root_nanbox(events::string("payload"));
+            socket::write(
+                owner.get(),
+                chunk.get(),
+                p::undefined(),
+                observer(&scope, 9.0),
+            );
+        }
+        for label in [5.0, 6.0] {
+            socket::end(
+                owner.get(),
+                p::undefined(),
+                p::undefined(),
+                observer(&scope, label),
+            );
+        }
+        assert!(SEEN.with(|seen| seen.borrow().is_empty()));
+        until(|| {
+            SEEN.with(|seen| {
+                let seen = seen.borrow();
+                seen.iter().any(|s| s == "finish" || s.starts_with("2:"))
+            })
+        });
+        perry_runtime::event_pump::js_loop_turn_bounded(2);
+        SEEN.with(|seen| {
+            let expected = if peer_closed {
+                vec!["prefinish", "end-one", "end-two", "finish"]
+            } else {
+                vec!["write", "prefinish", "end-one", "end-two", "finish"]
+            };
+            assert_eq!(*seen.borrow(), expected);
+        });
+        if let Some(peer) = peer.as_ref() {
+            let mut peer = peer;
+            peer.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut bytes = Vec::new();
+            peer.read_to_end(&mut bytes).unwrap();
+            assert_eq!(bytes, b"payload");
+        }
+        socket::destroy(owner.get(), p::undefined());
+        drop(peer);
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_stream_closed_peer_finishes_repeated_end_callbacks_without_error() {
+    adopted_stream_end_callbacks(true);
+}
+
+#[cfg(unix)]
+#[test]
+fn adopted_stream_connected_peer_preserves_end_callback_order() {
+    adopted_stream_end_callbacks(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn shutdown_completion_preserves_other_errors_and_stale_events() {
+    use perry_ffi::turnloop_net as tl;
+    use std::os::fd::IntoRawFd;
+    let _serial = crate::test_serial();
+    for (code, syscall, flags, pending, queued, terminal) in [
+        ("ENOTCONN", "write", 0, false, 0, 1),
+        ("EINVAL", "shutdown", 0, true, 0, 1),
+        ("ENOTCONN", "shutdown", tl::NET_FLAG_STALE, true, 0, 1),
+        ("ENOTCONN", "shutdown", 0, true, 1, 1),
+        ("ENOTCONN", "shutdown", 0, true, 0, 0),
+    ] {
+        std::thread::spawn(move || {
+            let agent = perry_runtime::agent::enter_worker_agent();
+            SEEN.with(|seen| seen.borrow_mut().clear());
+            let (stream, peer) = std::os::unix::net::UnixStream::pair().unwrap();
+            let scope = TransientRootScope::enter();
+            let owner = scope.root_nanbox(socket::adopt_pipe(
+                p::undefined(),
+                stream.into_raw_fd() as f64,
+            ));
+            socket::once(owner.get(), "error", observer(&scope, 2.0));
+            socket::once(owner.get(), "finish", observer(&scope, 8.0));
+            if pending {
+                socket::end(
+                    owner.get(),
+                    p::undefined(),
+                    p::undefined(),
+                    observer(&scope, 5.0),
+                );
+            }
+            let completion = tl::NetCompletion {
+                kind: tl::NET_ERROR,
+                errno: 0,
+                terminal,
+                flags: tl::NET_FLAG_LINK | flags,
+                id: socket::link(owner.get()).raw() as i64,
+                conn: 0,
+                user: 0,
+                len: 0,
+                queued,
+                data: std::ptr::null(),
+                code: code.as_ptr(),
+                code_len: code.len(),
+                syscall: syscall.as_ptr(),
+                syscall_len: syscall.len(),
+            };
+            io::deliver_for_test(&completion);
+            until(|| SEEN.with(|seen| seen.borrow().iter().any(|s| s.starts_with("2:"))));
+            SEEN.with(|seen| {
+                let seen = seen.borrow();
+                assert!(seen.iter().any(|s| s.starts_with(&format!("2:{code}:"))));
+                assert!(!seen.iter().any(|s| s == "finish" || s == "end-one"));
+            });
+            drop(peer);
+            perry_runtime::agent::retire_agent(agent);
+        })
+        .join()
+        .unwrap();
+    }
 }
 #[test]
 fn unopened_socket_refuses_native_bytes_and_queued_callbacks_error_once_before_close() {
@@ -284,9 +520,9 @@ fn tls_roundtrip_through_a_rooted_wrapper_and_its_native_parent() {
         let agent = perry_runtime::agent::enter_worker_agent();
         SEEN.with(|seen| seen.borrow_mut().clear());
         const CERT: &[u8] =
-            include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+            include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
         const KEY: &[u8] =
-            include_bytes!("../../../test-parity/node-suite/tls/fixtures/localhost-key.pem");
+            include_bytes!("../../../tests/parity/node-suite/tls/fixtures/localhost-key.pem");
         let certs = rustls_pemfile::certs(&mut std::io::Cursor::new(CERT))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();

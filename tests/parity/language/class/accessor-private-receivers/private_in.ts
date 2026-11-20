@@ -1,0 +1,1 @@
+class Base{constructor(o){return o;}} class C extends Base{get #a(){return 42;} static has(o){return #a in o;}} function fn(){} function no(){} new C(fn); console.log(C.has(fn)); console.log(C.has(no));console.log(C.has({}));console.log(C.has(new C({})));

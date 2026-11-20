@@ -236,8 +236,21 @@ mod tests {
             .lines()
             .find(|line| line.starts_with(&format!("@perry_layout_class_{id} = global")))
             .expect("literal family descriptor must be defined");
+        // The section name is the target's (the module's own triple: the
+        // host's by default).
+        let triple = ir
+            .lines()
+            .find_map(|line| line.strip_prefix("target triple = \""))
+            .and_then(|rest| rest.strip_suffix('"'))
+            .expect("module must name its target triple");
+        let literal_section = crate::layout_desc::section(
+            triple,
+            "perry_literal_layouts",
+            "__DATA,__perry_litlay",
+            ".perrylit$m",
+        );
         assert!(
-            descriptor.contains(r#"section "perry_literal_layouts""#),
+            descriptor.contains(&format!(r#"section "{literal_section}""#)),
             "unused literal family must be outside startup's descriptor section"
         );
         let fields: Vec<_> = descriptor
@@ -251,7 +264,10 @@ mod tests {
             .unwrap()
             .parse::<i32>()
             .unwrap() as u32;
-        let row = word.wrapping_sub(crate::runtime_abi::LAYOUT_TAG);
+        let row = word
+            .wrapping_sub(crate::runtime_abi::LAYOUT_TAG)
+            .wrapping_add(crate::runtime_abi::LAYOUT_ROW_BIAS)
+            & crate::runtime_abi::LAYOUT_ROW_MASK;
         assert!(
             row >= crate::runtime_abi::NATIVE_LAYOUT_ROWS
                 && row < crate::runtime_abi::LAYOUT_ROW_LIMIT,

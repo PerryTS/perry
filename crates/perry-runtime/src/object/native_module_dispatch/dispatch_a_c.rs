@@ -167,9 +167,10 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
                 message.as_ptr(),
                 message.len() as u32,
             ));
-            let err = msg
-                .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+            let err = msg.with_mut_ptr::<crate::StringHeader, _>(|msg| {
+                crate::error::CoreError::type_error(msg)
+            });
+            crate::exception::throw_core(err)
         }
         ("async_hooks", "createHook") => {
             crate::async_hook_slots::js_async_hooks_create_hook(arg(0))
@@ -471,6 +472,9 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
         }
         ("buffer", "isAscii") => crate::buffer::js_buffer_is_ascii(arg(0)),
         ("buffer", "isUtf8") => crate::buffer::js_buffer_is_utf8(arg(0)),
+        ("buffer", "resolveObjectURL") => {
+            crate::object::global_fetch::call_buffer_resolve_object_url(arg(0))
+        }
 
         // ── process EventEmitter API ──
         _ => f64::from_bits(JSValue::undefined().bits()),

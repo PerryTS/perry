@@ -1,0 +1,30 @@
+typed-holes 1,u,3
+unrelated-members 1,2,3
+push 1,2,3,4,5
+pop 1,2,3
+zero 1
+splice 1,9,8,3,4
+completed 9 8 undefined
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+elision-get 2 0
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+prototype-hole 1,u,3 1 ,3
+rest-dense true 2 undefined 3
+nested 10 20 undefined 12 30 40 undefined 32
+empty-throws
+typed-array 2,4,6
+array-like 5,6
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+leave 7
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+closes 0 10
+DEC 250: Cannot add member Iterator.prototype.return: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.return: built-in objects are read-only in a compiled program
+ancestor-closes 0
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+captured 1,2,3

@@ -21,7 +21,7 @@ def main():
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=True)
     for name in ["host.ts", "world.wit"]:
-        shutil.copyfile(root / "test-wasi/components/async" / name, out / name)
+        shutil.copyfile(root / "tests/integration/wasi/components/async" / name, out / name)
     fixture = (root / "crates/perry-wasi/src/p3/clock.component.wat").read_text()
     fixture = fixture.replace("wasi:clocks/monotonic-clock@0.3.0", "test:async-clock/clock@1.0.0")
     fixture = fixture.replace('(instance $clock', '(instance $clock\n    (export "item" (type $item (sub resource)))')

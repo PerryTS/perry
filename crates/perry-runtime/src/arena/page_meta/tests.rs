@@ -6,6 +6,7 @@ mod page_generation_hasher_tests {
     use std::collections::HashSet;
     use std::hash::BuildHasher;
 
+    #[cfg(target_pointer_width = "64")]
     /// #7187 regression guard for `PageGenerationMap`'s hasher.
     ///
     /// `HashMap` is hashbrown: the bucket index comes from the hash's low bits,
@@ -44,6 +45,7 @@ mod page_generation_hasher_tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The bucket index (low bits) must stay well spread too — mixing that put
     /// all the entropy in the high bits and left the low bits constant would
     /// trade a control-byte collision for a far worse bucket collision. This is
@@ -69,6 +71,7 @@ mod page_generation_hasher_tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The map must still answer correctly after the hasher change — a
     /// point-query round trip over many buckets, which is the only way this map
     /// is ever used.

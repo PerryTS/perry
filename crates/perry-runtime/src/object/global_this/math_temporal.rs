@@ -592,6 +592,43 @@ extern "C" fn temporal_zdt_proto_getter_thunk(
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
 
+/// The static record of the `Temporal.ZonedDateTime.prototype` getter `name`
+/// (the shared body, the getter's own `get <name>` as static data).
+#[cfg(feature = "temporal")]
+fn zdt_getter_info(name: &str) -> *const crate::closure::JsFunctionInfo {
+    match name {
+        "year" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get year"), with_declared(0)),
+        "month" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get month"), with_declared(0)),
+        "monthCode" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get monthCode"), with_declared(0)),
+        "day" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get day"), with_declared(0)),
+        "hour" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get hour"), with_declared(0)),
+        "minute" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get minute"), with_declared(0)),
+        "second" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get second"), with_declared(0)),
+        "millisecond" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get millisecond"), with_declared(0)),
+        "microsecond" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get microsecond"), with_declared(0)),
+        "nanosecond" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get nanosecond"), with_declared(0)),
+        "era" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get era"), with_declared(0)),
+        "eraYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get eraYear"), with_declared(0)),
+        "epochMilliseconds" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get epochMilliseconds"), with_declared(0)),
+        "epochNanoseconds" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get epochNanoseconds"), with_declared(0)),
+        "dayOfWeek" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get dayOfWeek"), with_declared(0)),
+        "dayOfYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get dayOfYear"), with_declared(0)),
+        "weekOfYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get weekOfYear"), with_declared(0)),
+        "yearOfWeek" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get yearOfWeek"), with_declared(0)),
+        "daysInWeek" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get daysInWeek"), with_declared(0)),
+        "daysInMonth" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get daysInMonth"), with_declared(0)),
+        "daysInYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get daysInYear"), with_declared(0)),
+        "monthsInYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get monthsInYear"), with_declared(0)),
+        "inLeapYear" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get inLeapYear"), with_declared(0)),
+        "hoursInDay" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get hoursInDay"), with_declared(0)),
+        "offset" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get offset"), with_declared(0)),
+        "offsetNanoseconds" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get offsetNanoseconds"), with_declared(0)),
+        "timeZoneId" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get timeZoneId"), with_declared(0)),
+        "calendarId" => crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_name("get calendarId"), with_declared(0)),
+        _ => unreachable!("every ZonedDateTime getter has a declared record"),
+    }
+}
+
 /// Shared body for a `Temporal.ZonedDateTime.prototype` method invoked
 /// reflectively (`.prototype.equals.call(zdt, …)`). Brand-checks `this` then
 /// dispatches to the per-type method router.
@@ -686,11 +723,7 @@ fn build_zoned_date_time_prototype() -> *mut ObjectHeader {
         "calendarId",
     ];
     for g in GETTERS {
-        install_temporal_getter(
-            proto,
-            g,
-            crate::fn_info!(temporal_zdt_proto_getter_thunk, 0; with_declared(0)),
-        );
+        install_temporal_getter(proto, g, zdt_getter_info(g));
     }
     // (name, spec_length)
     const METHODS: &[(&str, u32)] = &[

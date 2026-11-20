@@ -24,7 +24,7 @@
 //!    CI job and the whole parity suite were correct while the artifact
 //!    users install aborted on the first cross-helper throw.
 //! 3. A **separate workspace** in the tree —
-//!    `tests/release/packages/next-app-route/provider/Cargo.toml` — set
+//!    `tests/integration/release/packages/next-app-route/provider/Cargo.toml` — set
 //!    `codegen-units`/`lto`/`strip` in its `[profile.release]` and simply
 //!    never mentioned `panic`, silently taking cargo's `unwind` default.
 //!    The first two instances were caught by a check that read only the

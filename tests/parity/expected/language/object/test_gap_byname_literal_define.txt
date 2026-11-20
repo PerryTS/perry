@@ -1,0 +1,30 @@
+DEC 250: Cannot add member Object.prototype.trap: built-in objects are read-only in a compiled program
+{"value":5,"writable":true,"enumerable":true,"configurable":true} 5 0 a,trap,b
+DEC 250: Cannot add member Object.prototype.ro: built-in objects are read-only in a compiled program
+7 a,ro
+{"x":2,"y":4}
+{"value":9,"writable":true,"enumerable":true,"configurable":true}
+10,a,k0,long_key_name_here 1 0 ten 0
+10,a,k0,long_key_name_here 1 1 ten 2
+10,a,k0,long_key_name_here 1 2 ten 4
+4002000
+DEC 250: Cannot add member Object.prototype.sp: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.ro2: built-in objects are read-only in a compiled program
+{"value":1,"writable":true,"enumerable":true,"configurable":true} 2 4 0 pre,sp,ro2,plain
+{"value":0,"writable":true,"enumerable":true,"configurable":true} {"value":1,"writable":true,"enumerable":true,"configurable":true} 0
+2 2 v,w
+plain {"x":1,"y":"two","z":null} x,y,z,u
+deleted {"p":1,"r":3,"after":1} p,r,after
+big {"key_number_0":0,"key_number_1":1,"key_number_2":2,"key_number_3":3,"key_number_4":4,"key_number_5":5,"key_number_6":6,"key_number_7":7,"key_number_8":8,"key_number_9":9,"key_number_10":10,"key_number_11":11,"key_number_12":12,"key_number_13":13,"key_number_14":14,"key_number_15":15,"key_number_16":16,"key_number_17":17,"key_number_18":18,"key_number_19":19} key_number_0,key_number_1,key_number_2,key_number_3,key_number_4,key_number_5,key_number_6,key_number_7,key_number_8,key_number_9,key_number_10,key_number_11,key_number_12,key_number_13,key_number_14,key_number_15,key_number_16,key_number_17,key_number_18,key_number_19
+nonenum {"vis":1} vis
+accessor {"g":1,"h":2} g,h
+n=1
+class {"f":1,"g":2} f,g
+fnproto {"shared":5} shared
+assign {"x":1,"k":1,"y":"two","z":null} x,k,y,z,u
+frozen threw TypeError
+numeric {"1":"one","2":"two","b":1,"a":0} 1,2,b,a
+array {"0":10,"1":20} 0,1
+string {"0":"h","1":"i"} 0,1
+sym 7
+total 800068890

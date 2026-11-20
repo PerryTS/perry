@@ -112,3 +112,63 @@ fn generator_prototype_inherits_from_iterator_prototype() {
         .join()
         .unwrap();
 }
+
+/// No bootstrap builds an async / generator / async-generator tower; an unborn
+/// tower is unwritten by construction; a tower born after the bootstrap wires
+/// and seals itself; a write to it is seen, and a second wiring pass does not
+/// re-seal (clear) it.
+#[test]
+fn function_kind_towers_are_born_on_first_observation() {
+    std::thread::Builder::new()
+        .stack_size(16 << 20)
+        .spawn(|| unsafe {
+            use crate::closure::shape::FunctionProtoKind as K;
+            crate::gc::ensure_gc_initialized();
+            crate::object::layout_desc::seed_static_atoms();
+            let _ = crate::object::js_get_global_this();
+            for slot in [
+                &crate::object::ASYNC_FUNCTION_INTRINSIC_PTR,
+                &crate::object::GENERATOR_FUNCTION_INTRINSIC_PTR,
+                &crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR,
+            ] {
+                assert_eq!(
+                    slot.load(Ordering::Acquire),
+                    0,
+                    "the bootstrap built a tower"
+                );
+            }
+            for kind in [K::AsyncFunction, K::Generator, K::AsyncGenerator] {
+                assert!(
+                    function_kind_prototype_unwritten(kind),
+                    "an unborn tower is unwritten"
+                );
+            }
+            ensure_function_kind_tower(K::Generator);
+            assert_eq!(
+                crate::object::ASYNC_GENERATOR_FUNCTION_INTRINSIC_PTR.load(Ordering::Acquire),
+                0,
+                "one kind's birth builds only its own tower"
+            );
+            let proto = crate::object::GENERATOR_INTRINSIC_PROTO_PTR.load(Ordering::Acquire)
+                as *mut ObjectHeader;
+            assert!(!proto.is_null());
+            assert!(
+                function_kind_prototype_unwritten(K::Generator),
+                "a tower born after the bootstrap is wired and sealed by its birth"
+            );
+            let key = crate::string::js_string_from_bytes(b"call".as_ptr(), 4);
+            crate::object::js_object_set_field_by_name(proto, key, 1.0);
+            assert!(
+                !function_kind_prototype_unwritten(K::Generator),
+                "the write is seen"
+            );
+            wire_function_intrinsic_parents();
+            assert!(
+                !function_kind_prototype_unwritten(K::Generator),
+                "a second wiring pass re-sealed a written tower"
+            );
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

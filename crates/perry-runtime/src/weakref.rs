@@ -166,9 +166,7 @@ pub(crate) fn weak_collection_entries(obj: *const ObjectHeader) -> Vec<(f64, f64
 
 fn weakref_type_error(message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    let err_val = JSValue::pointer(err as *const u8);
-    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[inline]
@@ -184,18 +182,15 @@ pub(crate) fn is_valid_weak_target(value: f64) -> bool {
         return true;
     }
 
-    // A class reference (e.g. an imported `class Foo {}` passed as a value, or a
-    // class prototype) is NaN-boxed as an INT32-tagged (`0x7FFE`) class-ref ID,
-    // not a heap pointer. In JS such a value is a function/object and therefore
-    // "CanBeHeldWeakly" (ES2023) — a valid WeakMap/WeakSet/WeakRef key. NestJS
-    // relies on this: `InitializeOnPreviewAllowlist.add(InternalCoreModule)` does
+    // A class constructor (e.g. an imported `class Foo {}` passed as a value) is
+    // a function and therefore "CanBeHeldWeakly" (ES2023) — a valid
+    // WeakMap/WeakSet/WeakRef key. NestJS relies on this:
+    // `InitializeOnPreviewAllowlist.add(InternalCoreModule)` does
     // `weakmap.set(InternalCoreModule, true)`, and module-token factories key a
-    // WeakMap by the module class. Cross-module class imports arrive as class-ref
-    // values (not closure pointers), so without this branch they were rejected
-    // with "Invalid value used as weak map key" only inside a full module graph.
-    if crate::object::class_ref_id(value).is_some()
-        || crate::object::class_prototype_ref_id(value).is_some()
-    {
+    // WeakMap by the module class. Without this branch cross-module class
+    // imports were rejected with "Invalid value used as weak map key" only
+    // inside a full module graph.
+    if crate::object::class_ref_id(value).is_some() {
         return true;
     }
 
@@ -294,7 +289,7 @@ unsafe fn object_value_to_array(
     bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
 ) -> Option<*mut ArrayHeader> {
-    value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_ARRAY)
+    value_points_to_gc_type(bits, valid_ptrs, crate::gc_array_type_pat!())
         .map(|ptr| ptr as *mut ArrayHeader)
 }
 
@@ -836,7 +831,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         weak_target_should_clear_copied(target_bits, self.ptrs)
     }
     unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
-        classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
+        classify_gc_type_child(bits, self.ptrs, crate::gc_array_type_pat!())
             .map(|ptr| ptr as *mut ArrayHeader)
     }
     unsafe fn as_live_object_with_class(
@@ -1472,13 +1467,13 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
             let adder = adder_handle.get_nanbox_f64();
             let map = map_handle.get_nanbox_f64();
             crate::collection_iter::call_with_this_capturing_throw(adder, map, &[key, val])
-                .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+                .unwrap_or_else(|exc| crate::exception::rethrow_caught(exc))
         });
         if let Err(exc) = result {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     }
 
@@ -1501,9 +1496,13 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let Some(entry) = crate::collection_iter::iterator_next_value(iter) else {
+                let Some(entry) =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64())
+                else {
                     break;
                 };
                 add_entry(map_handle, adder_handle, entry, Some(iter));
@@ -1519,8 +1518,7 @@ pub extern "C" fn js_weakmap_init_iterable(map: f64, iterable: f64) -> f64 {
 fn throw_invalid_weakmap_key() -> ! {
     let msg = "Invalid value used as weak map key";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// Throw `TypeError: Invalid value used in weak set` (WeakSet value must be an
@@ -1528,8 +1526,7 @@ fn throw_invalid_weakmap_key() -> ! {
 fn throw_invalid_weakset_value() -> ! {
     let msg = "Invalid value used in weak set";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(msg_str);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 #[no_mangle]
@@ -1570,7 +1567,7 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     };
 
@@ -1593,9 +1590,13 @@ pub extern "C" fn js_weakset_init_iterable(set: f64, iterable: f64) -> f64 {
         }
         ConstructorIter::Iterator(iter) => {
             let iter_handle = scope.root_nanbox_f64(iter);
+            let next_handle =
+                scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let Some(element) = crate::collection_iter::iterator_next_value(iter) else {
+                let Some(element) =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64())
+                else {
                     break;
                 };
                 add_value(element, Some(iter));
@@ -1636,9 +1637,7 @@ pub extern "C" fn js_weakset_delete(set: f64, value: f64) -> f64 {
 pub extern "C" fn js_weak_throw_primitive() -> f64 {
     let msg = "Invalid value used as weak collection key";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg_str);
-    let err_val = JSValue::pointer(err as *const u8);
-    crate::exception::js_throw(f64::from_bits(err_val.bits()))
+    crate::exception::throw_core(crate::error::CoreError::error(msg_str))
 }
 
 #[cfg(test)]
@@ -1678,7 +1677,7 @@ mod tests {
         // exact value bits it was given.
         let wm = js_weakmap_new();
         let wm_val = f64::from_bits(JSValue::pointer(wm as *const u8).bits());
-        let v = f64::from_bits(JSValue::int32(42).bits());
+        let v = f64::from(42);
         js_weakmap_set(wm_val, fresh_sym, v);
         let got = js_weakmap_get(wm_val, fresh_sym);
         assert_eq!(

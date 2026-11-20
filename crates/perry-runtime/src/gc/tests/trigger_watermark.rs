@@ -264,8 +264,13 @@ fn the_leaf_arm_does_not_count_the_survivor_space_twice() {
         );
         assert_eq!(due, small >= limit, "the bound and the answer agree");
     }
-    // Leaves that do fill Eden's window still make it due.
+    // The old policy serviced any leaves that filled the residual Eden
+    // window. The new policy also requires a quarter-window of leaves: small
+    // pressure alone must not repeatedly buy a census for tiny leaf recovery.
+    // The small-copying cap remains independent and bounds that deferral.
     let window = crate::gc::tenuring::eden_allocation_window_bytes(cap, survivor);
     let eden = small - survivor;
-    assert!(leaf_window_due(cap, small, survivor, window - eden).0);
+    assert!(!leaf_window_due(cap, small, survivor, window - eden).0);
+    let leaves = (window - eden).max(window.div_ceil(4));
+    assert!(leaf_window_due(cap, small, survivor, leaves).0);
 }

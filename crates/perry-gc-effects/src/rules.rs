@@ -109,6 +109,7 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "collector",
             "poll",
             "js",
+            "program",
             "throw",
             "panic",
             "teardown",
@@ -122,6 +123,13 @@ pub fn load_rules(text: &str) -> Result<Vec<Rule>> {
             "idiom",
             "closures",
             "target",
+            "barrier",
+            // The byte-cell births check (`births.rs`, its own rules file).
+            "birth",
+            "in-hand",
+            "origin",
+            "before-claim",
+            "fills",
         ]
         .contains(&kind)
         {

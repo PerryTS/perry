@@ -54,19 +54,12 @@ pub(crate) fn ascii_char_string(byte: u8) -> *mut StringHeader {
 /// int32-tagged values pass through unchanged.
 pub(crate) fn number_method_receiver(value: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
-    }
     if jv.is_number() {
         return value;
     }
     if let Some((class_id, payload)) = crate::builtins::boxed_primitive_payload(value) {
         // 0xFFFF_00D0 == CLASS_ID_BOXED_NUMBER (see formatting::boxed_primitives).
         if class_id == 0xFFFF_00D0 {
-            let pj = crate::value::JSValue::from_bits(payload.to_bits());
-            if pj.is_int32() {
-                return pj.as_int32() as f64;
-            }
             return payload;
         }
     }
@@ -391,8 +384,7 @@ fn to_integer_or_infinity(value: f64) -> f64 {
 
 fn throw_number_format_range_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]

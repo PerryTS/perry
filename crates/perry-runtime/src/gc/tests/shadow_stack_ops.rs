@@ -530,12 +530,46 @@ fn out_of_range_frame_pop_is_ignored() {
     // A NaN-boxed `undefined` threaded in where the handle belongs, plus the
     // two handles that would wrap a `base + HEADER_SLOTS` bounds check and slip
     // past it into an unchecked read.
-    for bogus in [0x7FFC_0000_0000_0001u64, u64::MAX, u64::MAX - 1] {
+    // `(1 << 32) | h` is the real handle plus a high word: a decode that keeps
+    // only the low 32 bits (wasm32) pops the live frame with it.
+    for bogus in [
+        0x7FFC_0000_0000_0001u64,
+        u64::MAX,
+        u64::MAX - 1,
+        (1 << 32) | h,
+    ] {
         js_shadow_frame_pop(bogus);
         assert_eq!(shadow_stack_depth(), 1, "frame must still be installed");
     }
     assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0001);
     js_shadow_frame_pop(h);
+    assert_eq!(shadow_stack_depth(), 0);
+}
+
+/// The landing-pad restore skips a malformed handle like the pop does: the
+/// top frame and its slots stay exactly as they were. A decode that drops the
+/// handle's high word (wasm32) re-topped the stack at index 1 for a NaN-boxed
+/// `undefined`, and at the outer frame for `(1 << 32) | outer`.
+#[test]
+fn out_of_range_frame_restore_is_ignored() {
+    let _guard = GcTestIsolationGuard::new();
+    reset_shadow_stack();
+    let outer = js_shadow_frame_push(2);
+    js_shadow_slot_set(0, 0x7FFD_0000_0000_0021);
+    let inner = js_shadow_frame_push(1);
+    js_shadow_slot_set(0, 0x7FFD_0000_0000_0022);
+    for bogus in [0x7FFC_0000_0000_0001u64, u64::MAX, (1 << 32) | outer] {
+        js_shadow_frame_restore_to(bogus);
+        assert_eq!(shadow_stack_depth(), 2, "both frames must stay installed");
+        assert_eq!(
+            js_shadow_slot_get(0),
+            0x7FFD_0000_0000_0022,
+            "inner stays the top frame"
+        );
+    }
+    js_shadow_frame_pop(inner);
+    assert_eq!(js_shadow_slot_get(0), 0x7FFD_0000_0000_0021);
+    js_shadow_frame_pop(outer);
     assert_eq!(shadow_stack_depth(), 0);
 }
 

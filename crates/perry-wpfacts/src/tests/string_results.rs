@@ -7,19 +7,6 @@
 //! runs that value's method: both stay unknown.
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// The verdict of the one site of `key` that follows `marker` in `src`.
 fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;
@@ -42,6 +29,13 @@ fn proves(body: &str, marker: &str, key: &str) {
     let src = format!("{body}\nconsole.log(f(\" a,b \"), f(\"c\"));\n");
     for per_unit in [false, true] {
         let v = verdict_at(&facts_of(&src, per_unit), &src, marker, key);
+        assert!(proven(&v), "per_unit={per_unit} {marker} .{key}: {v:?}");
+    }
+}
+
+fn proven_src(src: &str, marker: &str, key: &str) {
+    for per_unit in [false, true] {
+        let v = verdict_at(&facts_of(src, per_unit), src, marker, key);
         assert!(proven(&v), "per_unit={per_unit} {marker} .{key}: {v:?}");
     }
 }
@@ -127,11 +121,11 @@ fn array_slice_result_length() {
     assert!(proven(&v), "{v:?}");
 }
 
-/// A written `String.prototype.trim` runs what was stored: its result is
-/// unknown.
+/// DEC 250: replacing `String.prototype.trim` is a TypeError, so the call
+/// runs the builtin and its result is a string.
 #[test]
-fn written_prototype_method_result_is_unknown() {
-    unproven(
+fn a_replaced_locked_prototype_method_keeps_its_result() {
+    proven_src(
         "(String.prototype as any).trim = function () { return { length: 9 }; };\n\
          function f(s: string) { return s.trim().length; }\n\
          console.log(f(\" a \"));\n",
@@ -144,7 +138,7 @@ fn written_prototype_method_result_is_unknown() {
 #[test]
 fn receiver_that_may_be_a_host_value_is_unknown() {
     unproven(
-        "function f(v: any) { return v.trim().length; }\n\
+        "import \"unseen-host\"; function f(v: any) { return v.trim().length; }\n\
          console.log(f(\" a \"), f((globalThis as any).hostValue));\n",
         "v.trim()",
         "length",
@@ -161,5 +155,18 @@ fn number_or_string_receiver_result_is_a_string() {
     for per_unit in [false, true] {
         let v = verdict_at(&facts_of(src, per_unit), src, "(typeof", "length");
         assert!(proven(&v), "per_unit={per_unit}: {v:?}");
+    }
+}
+
+fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
     }
 }

@@ -96,3 +96,13 @@ pub(super) fn holds(addr: usize) -> bool {
 pub(super) fn base() -> usize {
     BASE.load(Ordering::Acquire)
 }
+
+/// The address range of the space; empty until it is mapped.
+pub(super) fn image_range() -> (usize, usize) {
+    let base = BASE.load(Ordering::Acquire);
+    if base == 0 {
+        (0, 0)
+    } else {
+        (base, base + SPACE_BYTES)
+    }
+}

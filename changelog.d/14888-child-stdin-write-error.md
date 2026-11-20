@@ -1,0 +1,1 @@
+Fix pending child-process stdin writes losing their native error during timeout cleanup. Write callbacks and the original socket error now run before child exit/close; socket close acknowledgements preserve that ordering, including TLS wrappers, without replacing errors or emitting them twice.

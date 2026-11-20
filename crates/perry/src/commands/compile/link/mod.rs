@@ -35,18 +35,23 @@ use super::{
     dedup_stdlib_for_tier3, dedup_ui_lib_against_linked_libs, find_lld_link, find_llvm_tool,
     find_msvc_lib_paths, find_msvc_link_exe, find_perry_windows_sdk, find_stdlib_library,
     find_ui_library, find_visionos_swift_runtime, find_watchos_swift_runtime, is_android_target,
-    is_native_windows_target, is_windows_target, localize_stdlib_stub_symbols, rust_target_triple,
-    strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
-    strip_duplicate_objects_from_lib_with_evidence, strip_duplicate_objects_from_well_known_lib,
-    windows_pe_subsystem_flag, windows_subsystem_needs_ui, windows_target_arch, CompilationContext,
-    StdlibEvidence, WindowsTargetArch,
+    is_native_windows_target, is_windows_target, localize_bundled_jni_in_stdlib,
+    localize_stdlib_stub_symbols, rust_target_triple, strip_bundled_runtime_from_well_known_lib,
+    strip_bundled_shared_deps_from_well_known_lib, strip_duplicate_objects_from_lib_with_evidence,
+    strip_duplicate_objects_from_well_known_lib, windows_pe_subsystem_flag,
+    windows_subsystem_needs_ui, windows_target_arch, CompilationContext, StdlibEvidence,
+    WindowsTargetArch,
 };
 
 mod archive_cache;
 mod build_and_run;
+mod elf_linker;
 mod function_layout;
 mod glibc_version;
 mod harmonyos_objects;
+mod hot_data_order;
+mod hot_text_order;
+mod hot_text_order_macho;
 mod link_cache;
 mod linux_dylib_libs;
 mod linux_ui_libs;
@@ -59,6 +64,7 @@ pub(super) mod wasi;
 mod watchos_frameworks;
 mod windows_link;
 mod winui_assets;
+mod wrapper_hooks;
 
 use archive_cache::{prepare_well_known_archives, PreparedArchiveInputs};
 pub(super) use build_and_run::build_and_run_link;
@@ -100,6 +106,8 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     // Runtime allocation / value primitives
     "js_array_alloc",
     "js_array_from_f64",
+    // The inline push tier's no-collect growth (`expr/array_push.rs`).
+    "js_array_grow_for_push",
     "js_array_push_f64",
     "js_bigint_is_zero",
     "js_closure_alloc",
@@ -153,12 +161,6 @@ pub(super) const PLUGIN_HOST_SYMBOLS: &[&str] = &[
     "perry_plugin_init",
 ];
 
-/// Checked-in Node v26.5.1 / N-API v8 export inventory. The runtime build
-/// consumes the same file to generate retention anchors.
-pub(super) fn node_api_host_symbols() -> impl Iterator<Item = &'static str> {
-    perry_runtime_manifest::node_api_host_symbols()
-}
-
 fn add_node_api_host_link_args(
     cmd: &mut Command,
     ctx: &CompilationContext,
@@ -168,16 +170,20 @@ fn add_node_api_host_link_args(
     is_harmonyos: bool,
     is_cross_macos: bool,
 ) -> Result<()> {
-    if ctx.native_addons.is_empty() {
+    // Export the addons' Node-API imports and Perry's supplemental C surface.
+    // An open addon can still reach the full Node-API host.
+    let mut exports = ctx.node_api_host_exports();
+    exports.extend(ctx.perry_c_host_exports());
+    if exports.is_empty() {
         return Ok(());
     }
     if is_windows {
-        for symbol in node_api_host_symbols() {
+        for symbol in &exports {
             cmd.arg(format!("/INCLUDE:{symbol}"));
             cmd.arg(format!("/EXPORT:{symbol}"));
         }
     } else if is_linux || is_android || is_harmonyos {
-        for symbol in node_api_host_symbols() {
+        for symbol in &exports {
             cmd.arg(format!("-Wl,-u,{symbol}"));
             cmd.arg(format!("-Wl,--export-dynamic-symbol={symbol}"));
         }
@@ -186,13 +192,14 @@ fn add_node_api_host_link_args(
         if let Some(parent) = exports_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        let exports = node_api_host_symbols()
+        let list = exports
+            .iter()
             .map(|symbol| format!("_{symbol}\n"))
             .collect::<String>();
-        fs::write(&exports_path, exports)?;
+        fs::write(&exports_path, list)?;
         if is_cross_macos {
             cmd.arg("-exported_symbols_list").arg(&exports_path);
-            for symbol in node_api_host_symbols() {
+            for symbol in &exports {
                 cmd.arg("-u").arg(format!("_{symbol}"));
             }
         } else {
@@ -200,7 +207,7 @@ fn add_node_api_host_link_args(
                 "-Wl,-exported_symbols_list,{}",
                 exports_path.display()
             ));
-            for symbol in node_api_host_symbols() {
+            for symbol in &exports {
                 cmd.arg(format!("-Wl,-u,_{symbol}"));
             }
         }
@@ -210,7 +217,7 @@ fn add_node_api_host_link_args(
 
 #[cfg(test)]
 mod node_api_symbol_inventory_tests {
-    use super::node_api_host_symbols;
+    use perry_runtime_manifest::{node_api_host_symbols, perry_c_host_symbols};
     use std::collections::BTreeSet;
 
     #[test]
@@ -241,6 +248,23 @@ mod node_api_symbol_inventory_tests {
             .map(|capture| capture[1].to_string())
             .collect::<BTreeSet<_>>();
         let inventory = node_api_host_symbols()
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        assert_eq!(inventory, source_exports);
+    }
+
+    #[test]
+    fn perry_c_inventory_matches_exported_runtime_functions() {
+        let source = include_str!("../../../../../perry-runtime/src/embedded.rs");
+        let export_re = perry_perex::tooling::Regex::new(
+            r#"(?s)#\[no_mangle\]\s*pub\s+(?:unsafe\s+)?extern\s+"C"\s+fn\s+(perry_[A-Za-z0-9_]+)"#,
+        )
+        .unwrap();
+        let source_exports = export_re
+            .captures_iter(source)
+            .map(|capture| capture[1].to_string())
+            .collect::<BTreeSet<_>>();
+        let inventory = perry_c_host_symbols()
             .map(str::to_string)
             .collect::<BTreeSet<_>>();
         assert_eq!(inventory, source_exports);
@@ -952,7 +976,7 @@ mod response_file_tests {
     #[test]
     fn ndk_clang_path_bypasses_the_per_target_wrapper() {
         let p = super::ndk_clang_path("/ndk");
-        assert!(!p.contains("aarch64-linux-android24-clang"), "{p}");
+        assert!(!p.contains("aarch64-linux-android29-clang"), "{p}");
         assert!(!p.ends_with(".cmd"), "{p}");
         assert!(p.starts_with("/ndk/toolchains/llvm/prebuilt/"), "{p}");
         #[cfg(target_os = "macos")]

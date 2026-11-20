@@ -23,6 +23,7 @@ pub(crate) enum Owner {
     ProcessSignal { signum: i32 },
     /// A child's readable pipe: stdout (`fd == 1`), stderr (`fd == 2`), or an
     /// extra `stdio` descriptor.
+    #[cfg(not(unix))]
     ChildStream { child: u64, fd: usize },
     /// The acceptance tests' own owner. It exists so the tests exercise the
     /// real registry, the real token space and the real dispatch path rather
@@ -39,8 +40,9 @@ pub(crate) enum Owner {
 /// collection.
 #[derive(Debug)]
 pub(crate) enum StreamEvent {
-    /// Bytes arrived on a stream.
-    Data(Vec<u8>),
+    /// Bytes arrived on a stream (read only by Windows child stdio pipes, see
+    /// `read_start`).
+    Data(#[cfg_attr(unix, allow(dead_code))] Vec<u8>),
     /// One datagram arrived, with its source endpoint.
     Datagram { bytes: Vec<u8>, from: SocketAddr },
     /// The peer closed its write side.
@@ -60,6 +62,7 @@ pub(crate) enum StreamEvent {
     Error {
         user: u64,
         error: NodeError,
+        #[cfg_attr(unix, allow(dead_code))]
         terminal: bool,
     },
 }
@@ -80,6 +83,7 @@ pub(crate) fn deliver(owner: Owner, id: u64, event: StreamEvent) {
         Owner::ProcessSignal { .. } => {
             let _ = event;
         }
+        #[cfg(not(unix))]
         Owner::ChildStream { child, fd } => {
             crate::child_process::reactor::on_stream_completion(child, fd, event)
         }

@@ -145,7 +145,7 @@ def check_native_calls(binary, data):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('perry', type=Path)
-    parser.add_argument('--fixture', type=Path, default=Path(__file__).parent.parent/'test-files/test_gap_fallback_diagnostics.ts')
+    parser.add_argument('--fixture', type=Path, default=Path(__file__).parent.parent/'tests/parity/language/object/test_gap_fallback_diagnostics.ts')
     parser.add_argument('--out', type=Path)
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='DG-fallback-') as temp:

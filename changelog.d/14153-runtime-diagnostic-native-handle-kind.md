@@ -1,0 +1,1 @@
+The field-kind diagnostic recognizes native handles as objects and excludes them from raw doubles using the runtime value predicates, so valid stores such as a Headers value no longer stop the program.

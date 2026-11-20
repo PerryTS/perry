@@ -50,10 +50,7 @@ pub fn emit(out: &Path) {
                 format!("with_arguments(args, len, |args| {{ {constructor} }})")
             };
             let invoke = if bucket == "worker_threads" {
-                format!(
-                    "crate::collection_iter::throw_type_error({:?})",
-                    format!("{module}.{property} is not supported")
-                )
+                format!("super::worker_environment::dispatch(&_ctx, {module:?}, {property:?})")
             } else {
                 format!("super::super::native_module_dispatch::nm_dispatch_{bucket}(&_ctx, {module:?}, {property:?})")
             };
@@ -159,6 +156,41 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             "0.0, false"
         };
         let mut children = String::new();
+        let constants_install = match module {
+            "assert" | "assert/strict" => Some("assert"),
+            "async_hooks" => Some("async_hooks"),
+            "buffer" => Some("buffer"),
+            "bun:ffi" | "ffi" => Some("bun_ffi"),
+            "crypto" => Some("crypto"),
+            "dns" | "dns/promises" => Some("dns"),
+            "domain" => Some("domain"),
+            "events" => Some("events"),
+            "fs" => Some("fs"),
+            "module" => Some("module"),
+            "net" => Some("net"),
+            "os" => Some("os"),
+            "path" => Some("path"),
+            "perf_hooks" | "perf_histogram" => Some("perf"),
+            "punycode" => Some("punycode"),
+            "querystring" => Some("querystring"),
+            "readline" => Some("readline"),
+            "repl" => Some("repl"),
+            "sqlite" => Some("sqlite"),
+            "stream" => Some("stream"),
+            "timers" => Some("timers"),
+            "url" => Some("url"),
+            "util" => Some("util"),
+            "v8" => Some("v8"),
+            "vm" => Some("vm"),
+            "wasi" => Some("wasi"),
+            "worker_threads" => Some("worker_threads"),
+            "constants" => Some("constants"),
+            _ => None,
+        };
+        let install = constants_install
+            .map(|name| format!("super::constant_getters::{name}();"))
+            .unwrap_or_default();
+
         let mut child_modules = vec![
             format!("{module}.{property}"),
             format!("{module}/{property}"),
@@ -185,6 +217,7 @@ pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
             r#"
 #[no_mangle]
 pub extern "C" fn {symbol}(observe_writes: i32) -> f64 {{
+    {install}
     selected_value({module:?}, {property:?}, observe_writes != 0, || unsafe {{
         let scope = crate::gc::RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(super::{owner}({module:?}, {property:?}, {args})

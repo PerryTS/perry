@@ -9,7 +9,7 @@ For building and installing Perry as a user, see [README.md](README.md#installat
 All of these are welcome and none are ranked:
 
 - **Fix a bug.** Check the [issue tracker](https://github.com/PerryTS/perry/issues), especially [`good first issue`](https://github.com/PerryTS/perry/labels/good%20first%20issue) and [`help wanted`](https://github.com/PerryTS/perry/labels/help%20wanted).
-- **Close a TypeScript parity gap.** Every program case that does not match `node --experimental-strip-types` is listed in [`test-parity/snapshots/`](test-parity/snapshots/); make one pass, then drop its entry as [`test-parity/README.md`](test-parity/README.md) describes (snapshots are regenerated on Linux, not by hand).
+- **Close a TypeScript parity gap.** Every program case that does not match `node --experimental-strip-types` is listed in [`tests/parity/snapshots/`](tests/parity/snapshots/); make one pass, then drop its entry as [`tests/parity/README.md`](tests/parity/README.md) describes (snapshots are regenerated on Linux, not by hand).
 - **Add a platform backend or widget.** See "Adding a native UI widget" in [docs/src/contributing/architecture.md](docs/src/contributing/architecture.md).
 - **Improve docs or examples.** Everything under [`docs/src/`](docs/src/) and [`docs/examples/`](docs/examples/) is fair game.
 - **Report an issue.** File one even if you don't have a fix — reproducers are themselves a contribution.
@@ -77,8 +77,8 @@ extension sources changed; a stale binary passes against the old code.
 ### What goes in a PR
 
 - One logical change. Small PRs land faster. If you find yourself writing "also, I fixed …", split.
-- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, add a `.ts` program case under its subject in [`test-parity/`](test-parity/README.md). For runtime/stdlib, `#[test]` in the relevant crate.
-- **A new test file must be registered in its suite's registry, or it will not run.** Most suites glob their inputs, but four read an explicit list — a `test_gap_gc_*` witness needs a line in [`test-parity/gc_repsel_corpus.txt`](test-parity/gc_repsel_corpus.txt), a feature probe needs an entry in `test-features/feature_matrix.toml`, a compiler-output fixture needs an entry in `benchmarks/compiler_output/workloads.toml`, and a Rust test file below a suite root needs a `mod` declaration. An unregistered file is not a failing test, it is *no test at all*: your PR goes green having run nothing. `python3 scripts/check_test_registration.py` catches this in `lint` in under a second; `--list` names every registry. Full page: [`docs/src/testing/test-registration.md`](docs/src/testing/test-registration.md).
+- Tests. New behavior needs a test; a bug fix needs a regression test. For compiler changes, add a `.ts` program case under its subject in [`tests/parity/`](tests/parity/README.md). For runtime/stdlib, `#[test]` in the relevant crate.
+- **A new test file must be registered in its suite's registry, or it will not run.** Most suites glob their inputs, but four read an explicit list — a `test_gap_gc_*` witness needs a line in [`tests/parity/gc_repsel_corpus.txt`](tests/parity/gc_repsel_corpus.txt), a feature probe needs an entry in `tests/features/feature_matrix.toml`, a compiler-output fixture needs an entry in `benchmarks/compiler_output/workloads.toml`, and a Rust test file below a suite root needs a `mod` declaration. An unregistered file is not a failing test, it is *no test at all*: your PR goes green having run nothing. `python3 scripts/check_test_registration.py` catches this in `lint` in under a second; `--list` names every registry. Full page: [`docs/src/testing/test-registration.md`](docs/src/testing/test-registration.md).
 - Docs where user-visible. New CLI flags, new perry.toml fields, new stdlib APIs → update [`docs/src/`](docs/src/).
 
 ### What does NOT go in a PR (maintainer handles these at merge)

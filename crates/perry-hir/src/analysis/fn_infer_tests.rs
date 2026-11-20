@@ -86,15 +86,6 @@ fn closures_in_a_cjs_wrapper_get_signatures() {
 }
 
 #[test]
-#[ignore]
-fn debug_print_hir() {
-    let src = std::env::var("FNINFER_SRC").unwrap_or_default();
-    let m = lower_src(&src);
-    eprintln!("{:#?}", m.init);
-    eprintln!("{:#?}", m.functions);
-}
-
-#[test]
 fn constructor_functions_are_templates() {
     let s = sigs(
         "(function () { function Reply(res, log) { this.raw = res; this.log = log; }\n\

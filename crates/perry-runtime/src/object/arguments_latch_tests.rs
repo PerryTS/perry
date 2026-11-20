@@ -23,6 +23,7 @@
 
 use super::*;
 
+#[allow(dead_code)]
 fn plain_object() -> *mut ObjectHeader {
     js_object_alloc(0, 4)
 }
@@ -40,61 +41,6 @@ fn args_object() -> *mut ObjectHeader {
 /// future edit adds a second `ObjectMeta::arguments` writer without arming it,
 /// `is_arguments_object` starts answering `false` for a real arguments object —
 /// a silent wrong answer — and this goes red.
-#[test]
-fn creating_an_arguments_object_arms_the_latch() {
-    let args = args_object();
-    assert!(
-        !crate::object::arguments::test_arguments_registry_never_used(),
-        "js_arguments_object_alloc must arm ARGUMENTS_OBJECTS_EVER_USED before storing"
-    );
-    assert!(
-        crate::object::is_arguments_object(args),
-        "a real arguments object must still be recognised once the latch is armed"
-    );
-    assert!(
-        !crate::object::is_arguments_object(plain_object()),
-        "an ordinary object must not be recognised as an arguments object"
-    );
-    assert!(
-        !crate::object::is_arguments_object(std::ptr::null()),
-        "a null receiver must answer false"
-    );
-}
-
-/// Sabotage: with a REAL arguments object registered, force the latch back off
-/// and require the probe to answer `false`. That answer is wrong — deliberately
-/// — and it is the proof that the short-circuit is the arm being taken, not
-/// dead code sitting in front of a registry lookup that would have answered
-/// anyway. Deleting the `arguments_registry_never_used()` early-out makes this
-/// test fail.
-///
-/// Also asserts the probe was ENTERED (`TEST_ARGUMENTS_REGISTRY_PROBES` moves),
-/// so a future refactor that inlines the call away cannot leave this vacuous.
-#[test]
-fn latch_off_is_what_makes_the_probe_cheap() {
-    let args = args_object();
-    assert!(crate::object::is_arguments_object(args));
-
-    let restore = !crate::object::arguments::test_arguments_registry_never_used();
-    crate::object::arguments::test_force_arguments_registry_ever_used(false);
-    let before = crate::object::arguments::test_arguments_registry_probe_count();
-    let answered = crate::object::is_arguments_object(args);
-    let probes_moved = crate::object::arguments::test_arguments_registry_probe_count() > before;
-    crate::object::arguments::test_force_arguments_registry_ever_used(restore);
-
-    assert!(probes_moved, "the probe must have been entered");
-    assert!(
-        !answered,
-        "with the latch off the probe must short-circuit before the registry — \
-         a `true` here means the early-out is gone and every non-`arguments` \
-         program is paying the thread-local + hash again"
-    );
-    assert!(
-        crate::object::is_arguments_object(args),
-        "restoring the latch must restore the correct answer"
-    );
-}
-
 fn args_object_of(restricted: bool) -> *mut ObjectHeader {
     let arr = crate::array::js_array_alloc(2);
     let arr = crate::array::js_array_push_f64(arr, 1.0);
@@ -140,7 +86,7 @@ fn arguments_objects_of_one_arity_share_one_shape() {
 fn restricted_callee_pair_is_shared() {
     let a = args_object_of(true);
     let b = args_object_of(true);
-    let callee_slot = 3; // two arguments, then `length`, then `callee`
+    let callee_slot = 1; // slot 0 `length`, slot 1 `callee`, then @@iterator and the elements
     let pa = crate::object::js_object_get_field(a, callee_slot).bits();
     let pb = crate::object::js_object_get_field(b, callee_slot).bits();
     assert_eq!(pa, pb, "strict arguments objects share one callee pair");

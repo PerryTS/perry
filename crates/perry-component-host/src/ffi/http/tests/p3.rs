@@ -7,7 +7,8 @@ use perry_abi::component_host::ASYNC_PENDING;
 
 const P3: &str = "wasi:http/handler@0.3.0";
 const WAT: &str = include_str!("../../../http/p3/bridge.component.wat");
-const WORLD: &str = include_str!("../../../../../../test-wasi/components/http-p3/world.wit");
+const WORLD: &str =
+    include_str!("../../../../../../tests/integration/wasi/components/http-p3/world.wit");
 static REQUEST: Mutex<Option<(u64, u64)>> = Mutex::new(None);
 unsafe extern "C" fn before(
     context: u64,

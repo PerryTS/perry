@@ -14,7 +14,7 @@
 #
 # WHY A RUNTIME WITNESS, WHEN TWO STATIC GATES ALREADY COMPILE THIS CORPUS
 #
-# `gc-root-dominance` compiles `test-files/gc-dep-corpus/` and checks the
+# `gc-root-dominance` compiles `tests/fixtures/programs/gc-dep-corpus/` and checks the
 # emitted LLVM IR. That cannot see a runtime-side cache holding a raw heap
 # pointer — `scripts/gc_root_dominance_check.py` reads IR, and a `static` or
 # `thread_local!` in perry-runtime is structurally invisible to it. The #7154
@@ -76,7 +76,7 @@ cd "$ROOT"
 
 PERRY_BIN="${PERRY_BIN:-$ROOT/target/release/perry}"
 RUNTIME_DIR="${PERRY_RUNTIME_DIR:-$ROOT/target/release}"
-ENTRY="${ENTRY:-test-files/gc-dep-corpus/main.ts}"
+ENTRY="${ENTRY:-tests/fixtures/programs/gc-dep-corpus/main.ts}"
 OUT_DIR="$(mktemp -d)"
 trap 'rm -rf "$OUT_DIR"' EXIT
 

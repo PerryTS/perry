@@ -40,7 +40,7 @@ unsafe fn nth_arg(args_ptr: *const f64, args_len: usize, index: usize) -> f64 {
     }
 }
 
-fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(super) fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let public_bytes = ml_kem_public_bytes_from_der(algo, public_der)?;
     let mut random = [0u8; 32];
     rand_core_06::OsRng.fill_bytes(&mut random);
@@ -74,7 +74,11 @@ fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<
     }
 }
 
-fn ml_kem_decapsulate(algo: KeyAlgo, private_der: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn ml_kem_decapsulate(
+    algo: KeyAlgo,
+    private_der: &[u8],
+    ciphertext: &[u8],
+) -> Option<Vec<u8>> {
     let (seed_bytes, _) = ml_kem_private_seed_and_public_from_der(algo, private_der)?;
     let seed = ml_kem::Seed::try_from(seed_bytes.as_slice()).ok()?;
     match algo {

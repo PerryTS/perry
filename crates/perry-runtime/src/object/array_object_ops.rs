@@ -10,7 +10,7 @@ pub(crate) unsafe fn is_array_object(obj: *const ObjectHeader) -> bool {
         return false;
     }
     let gc_header = (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!((*gc_header).obj_type)
 }
 
 /// Reinterpret an array's `ObjectHeader` pointer as an `ArrayHeader`, following

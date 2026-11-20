@@ -1,0 +1,34 @@
+10 90 90
+90 90 90
+73 90 90
+71 90 90
+72 90 90
+74 90 90
+75 90 90
+90 90 90
+100
+20 20 20
+101
+40 40 40
+102
+90 100 100
+103
+90 102 undefined
+100 100 100
+101 101 101
+11 11 101
+11
+11 101
+11 101
+101
+11
+101
+90
+undefined 100
+undefined 101
+undefined 100
+undefined
+101
+11
+DEC 250: Cannot replace built-in member String.prototype.charCodeAt: built-in objects are read-only in a compiled program (adding a new member is allowed)
+undefined

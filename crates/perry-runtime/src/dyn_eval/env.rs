@@ -20,6 +20,10 @@ const PARENT_KEY: &str = "perry dyn parent";
 /// Optional ObjectEnvironmentRecord bindings for this scope. The space keeps
 /// the slot unreachable through interpreted identifiers, like `PARENT_KEY`.
 const OBJECT_BINDINGS_KEY: &str = "perry dyn object bindings";
+/// Present on the object environment of a `with` statement: its bindings
+/// honor `Symbol.unscopables`, a call they resolve gets the binding object as
+/// `this`, and it is never a variable environment.
+const WITH_MARKER_KEY: &str = "perry dyn with";
 
 thread_local! {
     /// identifier name → its cached `StringHeader`. Every scope-chain read /
@@ -123,6 +127,34 @@ pub(crate) fn env_new_object(parent: Option<f64>, bindings: f64) -> f64 {
     env
 }
 
+/// Allocate the object environment of `with (object)`; `object` has already
+/// gone through ToObject.
+pub(crate) fn env_new_with(parent: f64, object: f64) -> f64 {
+    let env_idx = root_push(env_new_object(Some(parent), object));
+    define(
+        root_get(env_idx),
+        WITH_MARKER_KEY,
+        super::bridge::boolean(true),
+    );
+    let env = root_get(env_idx);
+    roots_truncate(env_idx);
+    env
+}
+
+fn is_with_env(env: f64) -> bool {
+    own_slot(env, WITH_MARKER_KEY).is_some()
+}
+
+/// HasBinding of the object environment `env` whose binding object is
+/// `bindings`; a `with` environment also consults `@@unscopables`.
+fn object_env_has_binding(env: f64, bindings: f64, name: &str) -> bool {
+    if is_with_env(env) {
+        crate::object::js_with_has_binding(bindings, key_string(name)) != 0
+    } else {
+        object_has_binding(bindings, name)
+    }
+}
+
 fn env_object_bindings(env: f64) -> Option<f64> {
     let value = env_read(env, OBJECT_BINDINGS_KEY);
     (!crate::value::JSValue::from_bits(value.to_bits()).is_undefined()).then_some(value)
@@ -172,7 +204,7 @@ fn env_has_own(env: f64, name: &str) -> bool {
 pub(crate) fn variable_environment(env: f64) -> f64 {
     let cur_idx = root_push(env);
     loop {
-        if env_object_bindings(root_get(cur_idx)).is_some() {
+        if env_object_bindings(root_get(cur_idx)).is_some() && !is_with_env(root_get(cur_idx)) {
             let result = root_get(cur_idx);
             roots_truncate(cur_idx);
             return result;
@@ -243,18 +275,30 @@ pub(crate) fn define(env: f64, name: &str, value: f64) {
 /// Keep the cursor rooted while object-environment hooks can run user code.
 /// Private lexical scopes resolve reads and writes directly through slots.
 pub(crate) fn lookup(env: f64, name: &str) -> Option<f64> {
+    lookup_with_this(env, name).map(|(value, _)| value)
+}
+
+/// [`lookup`] plus the `this` a call of the result receives: the binding
+/// object when a `with` environment resolved `name` (WithBaseObject),
+/// otherwise undefined.
+pub(crate) fn lookup_with_this(env: f64, name: &str) -> Option<(f64, f64)> {
     let cur_idx = root_push(env);
     loop {
         if let Some(value) = own_value(root_get(cur_idx), name) {
             roots_truncate(cur_idx);
-            return Some(value);
+            return Some((value, super::bridge::undefined()));
         }
         let has_object_binding = env_object_bindings(root_get(cur_idx))
-            .is_some_and(|bindings| object_has_binding(bindings, name));
+            .is_some_and(|bindings| object_env_has_binding(root_get(cur_idx), bindings, name));
         if has_object_binding {
             let value = object_read_binding(env_object_bindings(root_get(cur_idx)).unwrap(), name);
+            let this = if is_with_env(root_get(cur_idx)) {
+                env_object_bindings(root_get(cur_idx)).unwrap()
+            } else {
+                super::bridge::undefined()
+            };
             roots_truncate(cur_idx);
-            return Some(value);
+            return Some((value, this));
         }
         match env_parent(root_get(cur_idx)) {
             Some(p) => root_set(cur_idx, p),
@@ -276,7 +320,7 @@ pub(crate) fn is_bound(env: f64, name: &str) -> bool {
             return true;
         }
         if let Some(bindings) = env_object_bindings(root_get(cur_idx)) {
-            if object_has_binding(bindings, name) {
+            if object_env_has_binding(root_get(cur_idx), bindings, name) {
                 roots_truncate(cur_idx);
                 return true;
             }
@@ -307,7 +351,7 @@ pub(crate) fn assign(env: f64, name: &str, value: f64, strict: bool) {
             return;
         }
         let has_object_binding = env_object_bindings(root_get(cur_idx))
-            .is_some_and(|bindings| object_has_binding(bindings, name));
+            .is_some_and(|bindings| object_env_has_binding(root_get(cur_idx), bindings, name));
         if has_object_binding {
             object_write_binding(
                 env_object_bindings(root_get(cur_idx)).unwrap(),

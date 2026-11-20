@@ -123,6 +123,11 @@ impl<'s> RootedArrayElems<'s> {
     }
 }
 
+/// The proof [`crate::buffer::store::store_alloc_scratch`] asks for. Only this
+/// module can build one, so the two workspaces below stay the only cells born
+/// without the family claim.
+pub(crate) struct ScratchWorkspace(());
+
 /// Sort indices into the rooted source instead of moving GC values during
 /// comparisons. The source is private to this sort, so callbacks can move its
 /// objects but cannot mutate its slots. No copied heap value survives a call.
@@ -147,14 +152,20 @@ unsafe fn with_sorted_indices<R>(
     // slices remain valid across arbitrary callbacks and copying collections.
     // Keep both allocations rooted, including across allocation of the second.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let order_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+    #[cfg(perry_gc_instruments)]
+    let scratch_cells = crate::wpfacts_check::family::Scratch::enter();
+    let order_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
-    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray_hook_slots::typed_array_alloc(
+    let scratch_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
         crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
+    #[cfg(perry_gc_instruments)]
+    drop(scratch_cells);
     let order = std::slice::from_raw_parts_mut(
         order_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,
@@ -753,8 +764,7 @@ fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
         value_str
     );
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// sort - sort array in-place using a comparator closure

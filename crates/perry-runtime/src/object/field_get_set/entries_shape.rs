@@ -57,46 +57,9 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
         unsafe {
             let gc_header = (stripped as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let arr = crate::array::clean_arr_ptr(stripped as *const crate::array::ArrayHeader);
-                let length = (*arr).length;
-                if length > 100_000 {
-                    return crate::array::js_array_alloc(0);
-                }
-                let elements =
-                    crate::array::array_elements_ptr(arr as *const crate::array::ArrayHeader)
-                        as *const u64;
-                let result = crate::array::js_array_alloc(length);
-                for i in 0..length {
-                    if std::ptr::read(elements.add(i as usize)) == crate::value::TAG_HOLE {
-                        continue;
-                    }
-                    let pair = crate::array::js_array_alloc(2);
-                    let s = i.to_string();
-                    let key_box = crate::string::js_string_new_sso(s.as_ptr(), s.len() as u32);
-                    crate::array::js_array_push_f64(pair, key_box);
-                    let v = crate::array::js_array_get(arr, i);
-                    crate::array::js_array_push_f64(pair, f64::from_bits(v.bits()));
-                    crate::array::js_array_push_f64(
-                        result,
-                        crate::value::js_nanbox_pointer(pair as i64),
-                    );
-                }
-                for name in crate::array::array_named_property_enumeration_names(arr, true, length)
-                {
-                    if let Some(v) = crate::array::array_named_property_get_by_name(arr, &name) {
-                        let pair = crate::array::js_array_alloc(2);
-                        let key =
-                            crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-                        crate::array::js_array_push(pair, JSValue::string_ptr(key));
-                        crate::array::js_array_push_f64(pair, v);
-                        crate::array::js_array_push_f64(
-                            result,
-                            crate::value::js_nanbox_pointer(pair as i64),
-                        );
-                    }
-                }
-                return result;
+                return array_own_enumerable(arr, ArrayEnum::Entries);
             }
         }
     }
@@ -227,4 +190,90 @@ pub(super) fn js_object_entries_shape(obj: *const ObjectHeader) -> *mut ArrayHea
 
         result
     }
+}
+
+/// What [`array_own_enumerable`] collects of each own enumerable property.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ArrayEnum {
+    Keys,
+    Values,
+    Entries,
+}
+
+/// `Object.keys` / `Object.values` / `Object.entries` of a plain Array:
+/// EnumerableOwnProperties in OrdinaryOwnPropertyKeys order. The present index
+/// elements ascending (the store's, then the far ones a sparse Array keeps in
+/// its named layout), then the enumerable named keys in insertion order; each
+/// value by `Get`. No slot past the store is read, and the length of the Array
+/// does not limit the answer. The receiver, the result and each pair under
+/// construction are rooted: a getter and every allocation here can collect.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved plain Array.
+pub(super) unsafe fn array_own_enumerable(
+    arr: *const crate::array::ArrayHeader,
+    mode: ArrayEnum,
+) -> *mut crate::array::ArrayHeader {
+    use crate::array::{clean_arr_ptr, ArrayHeader};
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_raw_const_ptr(arr);
+    let result = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
+    let dense = (*arr).length.min((*arr).capacity);
+    let (mut far, named): (Vec<String>, Vec<String>) =
+        crate::array::array_named_property_enumeration_names(arr, true, dense)
+            .into_iter()
+            .partition(|name| crate::object::canonical_array_index(name).is_some());
+    far.sort_by_key(|name| crate::object::canonical_array_index(name));
+    let push = |value: f64| {
+        let grown = result.with_mut_ptr(|out| crate::array::js_array_push_f64(out, value));
+        result.set_raw_mut_ptr(grown);
+    };
+    let emit = |key: &str, value: f64| {
+        if mode == ArrayEnum::Values {
+            push(value);
+            return;
+        }
+        if mode == ArrayEnum::Keys {
+            let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+            push(f64::from_bits(JSValue::string_ptr(key).bits()));
+            return;
+        }
+        // One scope per pair: the handles of a pair die with it.
+        let pair_scope = crate::gc::RuntimeHandleScope::new();
+        let value_h = pair_scope.root_nanbox_f64(value);
+        let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+        let key_h = pair_scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key).bits()));
+        let pair = crate::array::js_array_alloc(2);
+        let pair = crate::array::js_array_push_f64(pair, key_h.get_nanbox_f64());
+        let pair = crate::array::js_array_push_f64(pair, value_h.get_nanbox_f64());
+        push(crate::value::js_nanbox_pointer(pair as i64));
+    };
+    let mut index = 0u32;
+    loop {
+        let live = clean_arr_ptr(source.get_raw_const_ptr::<ArrayHeader>());
+        if index >= dense.min((*live).length).min((*live).capacity) {
+            break;
+        }
+        let slot = *(crate::array::array_elements_ptr(live) as *const u64).add(index as usize);
+        if slot != crate::value::TAG_HOLE {
+            // `Get` only when the value is wanted: a getter runs for
+            // values / entries, never for keys.
+            let value = if mode == ArrayEnum::Keys {
+                0.0
+            } else {
+                f64::from_bits(crate::array::js_array_get(live, index).bits())
+            };
+            emit(&index.to_string(), value);
+        }
+        index += 1;
+    }
+    for name in far.iter().chain(named.iter()) {
+        let live = clean_arr_ptr(source.get_raw_const_ptr::<ArrayHeader>());
+        if let Some(value) = crate::array::array_named_property_get_by_name(live, name) {
+            emit(name, value);
+        } else if mode == ArrayEnum::Keys && crate::object::canonical_array_index(name).is_none() {
+            emit(name, 0.0);
+        }
+    }
+    result.get_raw_mut_ptr::<ArrayHeader>()
 }

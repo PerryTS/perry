@@ -947,6 +947,7 @@ pub(crate) fn guarded_undefined_method_candidate(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body_has_loop_guard(body, id, in_loop)
                     || catch
@@ -1117,6 +1118,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_only_direct_conditions(body, id, guards)
                     && catch
@@ -1262,6 +1264,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body_contains_await(body)
                 || catch
@@ -1675,6 +1678,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),

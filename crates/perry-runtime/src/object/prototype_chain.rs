@@ -14,7 +14,6 @@
 //!
 //! A stored TAG_NULL distinguishes an explicit null from the unset word 0.
 
-use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Set when `Object.setPrototypeOf` has retargeted a REAL ARRAY's
@@ -30,16 +29,17 @@ pub(crate) fn array_static_proto_recorded() -> bool {
 
 const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 
-crate::perry_thread_local! {
-    /// Owners currently walking a recorded prototype chain. Although
-    /// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
-    /// and custom-construction links can still expose a malformed chain. Keep
-    /// recursive property lookup bounded and stop on a repeated owner. These
-    /// are NaN-boxed root slots, not raw addresses: an accessor or Proxy trap
-    /// can collect and move an owner before re-entering property resolution.
-    static PROTOTYPE_RESOLUTION_STACK: RefCell<crate::exception::CatchStack<u64>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Owners currently walking a recorded prototype chain. Although
+/// `Object.setPrototypeOf` normally rejects cycles, residual/native owners
+/// and custom-construction links can still expose a malformed chain. Keep
+/// recursive property lookup bounded and stop on a repeated owner. These
+/// are NaN-boxed root slots, not raw addresses: an accessor or Proxy trap
+/// can collect and move an owner before re-entering property resolution.
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static PROTOTYPE_RESOLUTION_STACK: crate::exception::marks::CatchStackKey<u64> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.prototype_resolution);
 const MAX_PROTOTYPE_RESOLUTION_DEPTH: usize = 64;
 /// From this resolution depth on, an inherited read first skips every
 /// prototype whose shape proves it lacks the key
@@ -265,7 +265,7 @@ pub(crate) fn owned_prototype_receiver_type(kind: u8) -> bool {
     crate::gc::is_byte_family_type(kind)
         || matches!(
             kind,
-            crate::gc::GC_TYPE_ARRAY
+            crate::gc_array_type_pat!()
                 | crate::gc_object_type_pat!()
                 | crate::gc::GC_TYPE_CLOSURE
                 | crate::gc::GC_TYPE_PROMISE
@@ -378,7 +378,11 @@ fn object_set_static_prototype_impl_with(
     // when the first array takes a named property) are the runtime's own
     // definitions and do not count.
     if matches!(link_kind, PrototypeLinkKind::UserOverride) {
-        super::builtin_proto::note_write_addr(obj_ptr, "[[Prototype]] link");
+        super::builtin_proto::note_write_addr(
+            obj_ptr,
+            super::builtin_proto::Mutation::Relink,
+            "[[Prototype]] link",
+        );
         // Object model step 3 (§3.6): every chain a binding site proved
         // through this object changed.
         super::shadow::note_relink(obj_ptr);
@@ -421,7 +425,7 @@ fn object_set_static_prototype_impl_with(
                 (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             (*hdr).obj_type
         };
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             // #10593: a retargeted ordinary array is a PER-ARRAY fact. The
             // owner sets `GC_ARRAY_CUSTOM_PROTO` on its own header, and
             // every inline element guard tests that
@@ -449,7 +453,11 @@ fn object_set_static_prototype_impl_with(
                 crate::array::invalidate_array_index_fast_path();
                 // Every array's chain runs through `%Array.prototype%`'s
                 // holder: its shadow bit now says the chain left its layout.
-                crate::object::builtin_proto::note_array_prototype_write(obj_ptr, "relink");
+                crate::object::builtin_proto::note_array_prototype_write(
+                    obj_ptr,
+                    crate::object::builtin_proto::Mutation::Relink,
+                    "relink",
+                );
             }
         } else if obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // A lazy JSON array becomes the ordinary array in place, keeping
@@ -576,13 +584,9 @@ fn object_set_static_prototype_impl_with(
     let _no_move = crate::gc::GcSuppressScope::new();
     let _edit = crate::object::descriptor_state::HolderEdit::new(obj_ptr);
     unsafe {
-        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
-        if !holder.is_null() {
-            // A1_UNPROVEN: descriptor_holder(obj_ptr) may return the user object itself (kind-A/B question for S0b-S0e).
-            let meta = crate::object::object_meta_ensure(
-                crate::meta_obj_runtime_born!(holder),
-                crate::object::MetaReason::PrototypeHolder,
-            );
+        let meta = crate::object::descriptor_state::owner_key_target(obj_ptr)
+            .meta(crate::object::MetaReason::PrototypeHolder, true);
+        if !meta.is_null() {
             // GC_STORE_AUDIT(BARRIERED): the bag owns this NaN-boxed prototype
             // edge; the exact metadata-slot barrier follows the store.
             (*meta).prototype = proto_bits;
@@ -591,6 +595,18 @@ fn object_set_static_prototype_impl_with(
                 std::ptr::addr_of!((*meta).prototype) as usize,
                 proto_bits,
             );
+            // A Map, Set or Date cell that takes its own `[[Prototype]]` no
+            // longer reads its family's builtins: arm the emitted own-override
+            // guard, so a folded site asks `receiver_pristine`, which reads the
+            // cell's meta record. Only holder-owning receivers reach here.
+            if matches!(
+                receiver_header_type(obj_ptr),
+                Some(
+                    crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET | crate::gc::GC_TYPE_DATE_CELL
+                )
+            ) {
+                crate::object::own_override::note_builtin_proto_modified();
+            }
         }
     }
 }
@@ -650,12 +666,7 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
                 }
                 // A legacy holder record on its bag (`object_set_static_prototype`
                 // of a function): read the bag's record directly.
-                let bag = (*(obj_ptr as *const crate::closure::ClosureHeader)).props;
-                if bag.is_null() {
-                    return None;
-                }
-                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _));
-                return (!meta.is_null() && (*meta).prototype != 0).then(|| (*meta).prototype);
+                return crate::closure::props::store_meta_prototype(obj_ptr);
             }
             Some(kind)
                 if !owned_prototype_receiver_type(kind)
@@ -667,15 +678,12 @@ pub fn object_static_prototype(obj_ptr: usize) -> Option<u64> {
         }
     }
     unsafe {
-        let holder = crate::object::descriptor_state::descriptor_holder(obj_ptr);
-        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        if holder.is_null()
-            || crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _)).is_null()
-        {
+        let meta = crate::object::descriptor_state::owner_key_target(obj_ptr)
+            .meta(crate::object::MetaReason::PrototypeHolder, false);
+        if meta.is_null() {
             return None;
         }
-        // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-        let bits = (*crate::meta_read!(crate::meta_obj_runtime_born!(holder as *mut _))).prototype;
+        let bits = (*meta).prototype;
         (bits != 0).then_some(bits)
     }
 }

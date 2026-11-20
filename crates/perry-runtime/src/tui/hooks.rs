@@ -1065,26 +1065,18 @@ pub extern "C" fn js_perry_tui_wait_until_exit() -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex as StdMutex;
-
-    /// Cargo runs tests in parallel by default. The hook slot pool +
-    /// hook index counter are process-wide globals, so two tests racing
-    /// see each other's writes. This mutex serialises tests within
-    /// this module — `parking_lot` would be nicer for poisoning
-    /// resistance but std::sync::Mutex is enough for tests.
-    static TEST_LOCK: StdMutex<()> = StdMutex::new(());
 
     /// Acquire the test lock and reset all shared state. Returns the
     /// guard — drop at end of test.
     fn reset() -> std::sync::MutexGuard<'static, ()> {
-        let g = TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let guard = crate::event_pump::tests::serial();
         crate::gc::lock_gc_root_registry(&SLOTS).clear();
         NEXT_HOOK_IDX.store(0, Ordering::Release);
         STATE_DIRTY.store(false, Ordering::Release);
         FOCUS_ID_COUNTER.store(0, Ordering::Release);
         FOCUS_CURRENT.store(0, Ordering::Release);
         super::super::input::EXIT_FLAG.store(false, Ordering::Release);
-        g
+        guard
     }
 
     #[test]

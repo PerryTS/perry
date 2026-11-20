@@ -9,7 +9,7 @@ perry=${1:?usage: check_unlimited_stack.sh <perry-binary>}
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
-"$perry" compile "$root/test-files/test_gap_10812_stack_overflow_range_error.ts" -o "$work/rec" >/dev/null 2>&1 || { echo "FAIL: compile"; exit 1; }
+"$perry" compile "$root/tests/parity/language/error/test_gap_10812_stack_overflow_range_error.ts" -o "$work/rec" >/dev/null 2>&1 || { echo "FAIL: compile"; exit 1; }
 status=0
 for limit in 8192 unlimited; do
   (ulimit -v 8000000; ulimit -s "$limit"; timeout 120 "$work/rec" >"$work/out-$limit" 2>&1)

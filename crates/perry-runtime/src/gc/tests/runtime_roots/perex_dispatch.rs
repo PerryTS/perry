@@ -42,11 +42,13 @@ fn function<'s>(
 }
 fn put(owner: &RuntimeHandle<'_>, name: &[u8], value: &RuntimeHandle<'_>) {
     let key = crate::string::canonical_key(name);
-    crate::object::js_object_set_field_by_name(
-        crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader,
-        key,
-        value.get_nanbox_f64(),
-    );
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_set_field_by_name(
+            crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader,
+            key,
+            value.get_nanbox_f64(),
+        )
+    });
 }
 fn getter(owner: &RuntimeHandle<'_>, method: &RuntimeHandle<'_>) {
     getter_named(owner, b"exec", method);
@@ -147,14 +149,14 @@ extern "C" fn throw_exec(
     _: f64,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(843.0)
+    crate::exception::test_throw(843.0)
 }
 extern "C" fn throw_getter(
     _: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
     gc_collect_minor();
-    crate::exception::js_throw(844.0)
+    crate::exception::test_throw(844.0)
 }
 extern "C" fn ordered_string(
     _: *const crate::closure::ClosureHeader,
@@ -547,10 +549,12 @@ fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
     let parent = object(&scope);
     put(&parent, b"exec", &yes);
     assert_eq!(
-        crate::proxy::js_reflect_set_prototype_of(
-            reparented.get_nanbox_f64(),
-            parent.get_nanbox_f64()
-        )
+        crate::object::own_override::as_builtin_definition(|| {
+            crate::proxy::js_reflect_set_prototype_of(
+                reparented.get_nanbox_f64(),
+                parent.get_nanbox_f64(),
+            )
+        })
         .to_bits(),
         crate::value::TAG_TRUE
     );
@@ -560,20 +564,6 @@ fn perex_dispatch_skips_the_exec_lookup_only_when_nothing_can_observe_it() {
         "the new prototype's exec must run"
     );
     assert!(lookups() > before);
-
-    // Replacing RegExp.prototype.exec reaches every RegExp, including a fresh
-    // one; restoring it restores the skipped lookup.
-    let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value("RegExp"));
-    let original = scope.root_nanbox_f64(api::finish(dispatch::get(&proto, b"exec")));
-    put(&proto, b"exec", &yes);
-    let fresh = regex(&scope);
-    let before = lookups();
-    assert!(test(&fresh, &miss), "a replaced prototype exec must run");
-    assert!(lookups() > before);
-    put(&proto, b"exec", &original);
-    let before = lookups();
-    assert!(!test(&fresh, &miss));
-    assert_eq!(lookups(), before);
 }
 
 #[test]

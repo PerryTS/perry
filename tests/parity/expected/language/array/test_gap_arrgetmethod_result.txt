@@ -1,0 +1,44 @@
+own for true
+own binding true
+own for true
+own binding true
+own for true
+own binding true
+own for true
+own binding true
+prototype for true
+prototype binding true
+prototype for true
+prototype binding true
+prototype for true
+prototype binding true
+prototype for true
+prototype binding true
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+unexpected 1
+unexpected 2
+unexpected 3
+unexpected 4
+unexpected 1
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+unexpected 1
+unexpected 2
+unexpected 3
+unexpected 4
+unexpected 1
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+unexpected 1
+unexpected 2
+unexpected 3
+unexpected 4
+unexpected 1
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+unexpected 1
+unexpected 2
+unexpected 3
+unexpected 4
+unexpected 1
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program

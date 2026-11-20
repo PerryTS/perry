@@ -38,20 +38,6 @@
       "why": "Keyed by a hash of the TLS option identity (verifier/CA/client cert): one rustls config per distinct option set, not per request"
     },
     {
-      "file": "crates/perry-ext-http/src/server/turnloop_h2/mod.rs",
-      "name": "PENDING",
-      "fn": "pending",
-      "verdict": "open_leak",
-      "why": "Keyed by runtime server handle; take_pending only pop_fronts the VecDeque, so an empty queue entry stays for every server ever created"
-    },
-    {
-      "file": "crates/perry-ext-http/src/server/turnloop_serve/conn.rs",
-      "name": "PENDING",
-      "fn": "pending",
-      "verdict": "open_leak",
-      "why": "Keyed by runtime server handle; take_pending pops the deque but never removes the key, leaving one entry per created server after close"
-    },
-    {
       "file": "crates/perry-runtime/src/buffer/store/layout.rs",
       "name": "ASYMMETRIC_KEY_REGISTRY",
       "verdict": "open_leak",
@@ -256,12 +242,6 @@
       "name": "CLASS_STATIC_METHOD_BIND_LENGTHS",
       "verdict": "bounded_by_program",
       "why": "(class_id, static method name) -> .length, written only at codegen static-method registration"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
-      "verdict": "open_leak",
-      "why": "Key includes the runtime SymbolHeader.id: a re-evaluated class expression with computed [Symbol()] members adds entries each time"
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_guard_fast.rs",

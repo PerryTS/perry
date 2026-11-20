@@ -2,6 +2,10 @@
     if module == "__perry_runtime" && class_name.is_none() && object.is_none() {
         if let Some(result) = crate::array_record_stack::lower(ctx, method, args)? { return Ok(result); }
         if let Some(result) = crate::expr::private_resume_frame::lower(ctx, method, args)? { return Ok(result); }
+        // DESIGN-p4l4 VR-4b: the record-array intrinsics.
+        if let Some(result) = crate::codegen::record_array::try_lower_value(ctx, method, args)? {
+            return Ok(result);
+        }
         match method {
             "importMetaResolve" | "importMetaResolveValue" => {
                 // #11789 sweep: `import.meta.resolve(specifier, parent)` holds
@@ -145,6 +149,8 @@
                 // array arm's IteratorClose is unobservable: only the
                 // protocol arm reaches the runtime.
                 let result = if ctx.wpfacts.array_iterator_close_unwritten {
+                    crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                        || serde_json::json!({}));
                     let skipped = if throwing { values[5].1.to_owned() } else {
                         double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                     };
@@ -169,10 +175,14 @@
                 return Ok(result);
             }
             "arrayRecordCloseAbsent" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_TRUE)));
             }
             // The array arm of IteratorClose: nothing to observe (#13645).
             "arrayRecordClose" if ctx.wpfacts.array_iterator_close_unwritten => {
+                crate::verify_facts::consumed(crate::verify_facts::Fact::IteratorClose,
+                    || serde_json::json!({}));
                 if matches!(args.get(4), Some(Expr::Bool(true))) {
                     return lower_expr(ctx, &args[3]);
                 }
@@ -209,6 +219,39 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 let iter = lower_expr(ctx, &args[0])?;
                 return Ok(ctx.block().call(DOUBLE, "js_iterator_next_method", &[(DOUBLE, &iter)]));
             }
+            // A step of a for-of whose payload local holds only proven
+            // sync generators (`ElisionFacts::generator_sources`; a for-of
+            // inside a transformed generator body, its record words being
+            // captures): `next` is `%GeneratorPrototype%.next`, so the step
+            // resumes the body directly. The payload stays in its local, as
+            // the runtime step leaves it; the generator is rooted in its own
+            // home word across the body call.
+            "iteratorStep"
+                if matches!(args.first(), Some(Expr::LocalGet(p))
+                    if crate::array_record_stack::direct_generator(ctx, *p)) =>
+            {
+                let Expr::LocalGet(payload) = &args[0] else {
+                    unreachable!("matched above");
+                };
+                let Expr::LocalSet(value_id, output_expr) = &args[2] else {
+                    return Err(anyhow::anyhow!("iteratorStep requires a compiler-owned output binding"));
+                };
+                let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                let g = lower_expr(ctx, &args[0])?;
+                let (_, homes) = ctx.func.alloca_entry_root_record(1);
+                let home = homes[0].clone();
+                ctx.block().store_volatile(DOUBLE, &g, &home);
+                let out = ctx.func.alloca_entry(DOUBLE);
+                let (done, value) =
+                    crate::array_record_stack::generator_resume(ctx, *payload, &home, &out);
+                ctx.block().store_volatile(DOUBLE, &undefined, &home);
+                // A step whose value is not read binds `undefined`, as the
+                // runtime step with a null output does.
+                let value = if matches!(args.get(3), Some(Expr::Bool(false))) { undefined } else { value };
+                crate::expr::invalidate_local_write_facts(ctx, *value_id);
+                crate::expr::bind_lowered_value_to_local(ctx, *value_id, &value, output_expr)?;
+                return Ok(done);
+            }
             "iteratorStep" => {
                 let (values, roots) = super::lower_call_args_rooted(ctx, &args[..2])?;
                 let iter = &values[0];
@@ -237,6 +280,36 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 return Ok(ctx
                     .block()
                     .call(DOUBLE, "js_iterator_next_result", &[(DOUBLE, &iter)]));
+            }
+            // The counted entry of a for-of source walk (`for_of_guard`):
+            // `arrayRecordNeedsIterator(t, true)` over the walk's own source
+            // temp. One call answers the IteratorRecord's array-mode proof
+            // (bit 0) and the packed-f64 loop admission of the live head it
+            // resolved (bit 1); the walk's counted loop over `t` consumes bit
+            // 1 (`record_packed_admissions`) in place of its own guard call.
+            // `t` is rebound to the resolved head, as the record entry does.
+            "arrayRecordNeedsIterator"
+                if matches!(args, [Expr::LocalGet(_), Expr::Bool(true)]) =>
+            {
+                let Expr::LocalGet(source_id) = &args[0] else {
+                    unreachable!("matched above");
+                };
+                let (values, roots) = super::lower_call_args_rooted(ctx, &args[..1])?;
+                let (verdict, source) = walk_entry::lower(ctx, &values[0]);
+                let admission = ctx
+                    .record_packed_admissions
+                    .get(source_id)
+                    .cloned()
+                    .unwrap_or_else(|| ctx.func.alloca_entry(crate::types::I1));
+                let bit = ctx.block().and(I32, &verdict, "2");
+                let admitted = ctx.block().icmp_ne(I32, &bit, "0");
+                ctx.block().store(crate::types::I1, &admitted, &admission);
+                ctx.record_packed_admissions.insert(*source_id, admission);
+                let needs = ctx.block().and(I32, &verdict, "1");
+                roots.release(ctx);
+                crate::expr::invalidate_local_write_facts(ctx, *source_id);
+                crate::expr::bind_lowered_value_to_local(ctx, *source_id, &source, &args[0])?;
+                return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
             }
             // #10524: the runtime guard of array destructuring over a source
             // with no static array proof — a NaN-boxed boolean, the same shape
@@ -374,8 +447,28 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
                 let init_fn = format!("{prefix}__init");
                 ctx.pending_declares
                     .push((init_fn.clone(), crate::types::VOID, vec![]));
+                // SNAP census: the evaluation this guard starts was reached
+                // by `require`, not by `import()` (instrumented compiles only).
+                let census = crate::expr::snap_env_site::census_compile();
+                if census {
+                    ctx.block().call_void("js_snap_require_edge", &[(crate::types::I32, "1")]);
+                }
                 ctx.block().call_void(&init_fn, &[]);
+                if census {
+                    ctx.block().call_void("js_snap_require_edge", &[(crate::types::I32, "0")]);
+                }
                 return lower_expr(ctx, &args[0]);
+            }
+            // The admission of a for-of over a source annotated as a numeric
+            // typed array (`for_of_guard::source_for_of`).
+            "typedArrayForOfAdmits" => {
+                let value = args.first().map_or_else(
+                    || Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))),
+                    |arg| lower_expr(ctx, arg),
+                )?;
+                return Ok(ctx
+                    .block()
+                    .call(DOUBLE, "js_typed_array_for_of_admits", &[(DOUBLE, &value)]));
             }
             "isBuiltin" => {
                 let specifier = args.first().map_or_else(
@@ -740,3 +833,4 @@ return crate::lower_array_record_length::lower(ctx, &args[0]);
         return Ok(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &input)]));
     }
 }
+

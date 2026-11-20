@@ -134,6 +134,7 @@ extern "C" fn scan_fetch_roots_ffi(
     let mut visitor = FfiFetchRootVisitor { visit, ctx };
     // Owned by no handle yet, so a root on every mark kind.
     visit_pending_fetch_body_iterable(&mut visitor);
+    abort_bridge::visit_abort_reasons(&mut visitor);
     if unsafe { perry_ffi_gc_root_visitor_is_full_mark(ctx) } {
         // Full marking reaches registry edges only through live handles
         // (`lifecycle::observe`), except for young ids, which are roots.
@@ -147,6 +148,7 @@ extern "C" fn scan_fetch_roots_ffi(
 pub(super) fn scan_fetch_roots(mark: &mut dyn FnMut(f64)) {
     let mut visitor = perry_runtime::gc::RuntimeRootVisitor::for_copy(mark);
     visit_pending_fetch_body_iterable(&mut visitor);
+    abort_bridge::visit_abort_reasons(&mut visitor);
     scan_fetch_roots_with(&mut visitor);
 }
 

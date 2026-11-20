@@ -28,7 +28,7 @@ extern "C-unwind" fn canonical_loan_promise_init(
     }
     crate::gc::gc_collect_minor();
     if mode == 0.0 {
-        crate::exception::js_throw(value.get_nanbox_f64());
+        crate::exception::test_throw(value.get_nanbox_f64());
     }
     undefined()
 }

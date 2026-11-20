@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run a Perry-authored WASI HTTP component with real peers and GC witnesses.
 
-The component must be built from test-wasi/components/http-guest using matching
+The component must be built from tests/integration/wasi/components/http-guest using matching
 Perry compiler and WASI runtime archives. Native archives must also match the
 compiler. Results distinguish guest moving GC from native moving GC.
 """
@@ -128,7 +128,7 @@ def main():
     root = Path(__file__).resolve().parent.parent
     out = args.output.resolve()
     out.mkdir(parents=True, exist_ok=False)
-    fixture = root / "test-wasi/components/http-guest"
+    fixture = root / "tests/integration/wasi/components/http-guest"
     shutil.copytree(fixture, out / "fixture")
     env = os.environ.copy()
     env.update(PERRY_RUNTIME_DIR=str(args.runtime_dir.resolve()), PERRY_NO_AUTO_OPTIMIZE="1",

@@ -30,10 +30,8 @@
 //!
 //! Runs under `GcSuppressScope`, as every bag writer does (`closure::props`):
 //! nothing moves, so raw addresses stay valid across the spill growth.
-use super::ObjectHeader;
 use crate::closure::ClosureHeader;
 use crate::codegen_abi::LayoutWord;
-use crate::object::layout_probe::FunctionPut;
 
 /// Is `key` (a live string) an intrinsic key of a function object, which has
 /// its own materialization and attribute rules?
@@ -105,53 +103,7 @@ pub(crate) unsafe fn function_own_put(
         }
     };
     let _no_move = crate::gc::GcSuppressScope::new();
-    let bag = (*c).props;
-    if bag.is_null() {
-        // The first own key: the bag is born holding the intrinsic slots and
-        // this key in one shape (`props::bag_born_with_attrs`).
-        if !define && !super::layout_probe::function_link_admits_add(link, key) {
-            return None;
-        }
-        let name = crate::string::header_str_checked(key)?;
-        let prev = (*c).shape_id;
-        if !crate::closure::props::bag_born_with_room(ptr, &[(name, value)], &[]) {
-            return None;
-        }
-        // The born bag lists the intrinsic slots and `key`: the closure's
-        // next shape is `prev`'s key-add edge for `key`, as for any add.
-        closure_shape_key_added(c, prev, key);
-        return Some(value);
-    }
-    match super::layout_probe::function_put_plan(bag, link, key, define) {
-        FunctionPut::Decline => None,
-        FunctionPut::Overwrite => {
-            let bytes = std::slice::from_raw_parts(
-                crate::string::string_data(key),
-                (*key).byte_len as usize,
-            );
-            super::try_existing_own_data_overwrite_by_content(bag, key_value, bytes, value)
-                .then_some(value)
-        }
-        FunctionPut::Add => {
-            let prev = (*c).shape_id;
-            if !super::leaf_key_add(bag, key, value.to_bits()) {
-                if super::shapes::object_shape_record(bag)?.object_kind()
-                    == super::shapes::ShapeObjectKind::OrdinaryUnmarked
-                {
-                    super::alloc_plain::mark_object_plain_ordinary(bag);
-                }
-                let mut refresh = None;
-                super::object_set_field_by_name_transition_chain_proven_value(
-                    bag,
-                    key,
-                    value,
-                    &mut refresh,
-                )?;
-            }
-            closure_shape_key_added(c, prev, key);
-            Some(value)
-        }
-    }
+    crate::closure::props::put_own(ptr, key, key_value, value, link, define)
 }
 
 /// Move the closure `c`, whose bag just took `key` while `c` carried the
@@ -162,13 +114,12 @@ pub(crate) unsafe fn function_own_put(
 ///
 /// # Safety
 /// `c` is a live described closure whose bag is non-null.
-unsafe fn closure_shape_key_added(
+pub(crate) unsafe fn closure_shape_key_added(
     c: *mut ClosureHeader,
     prev: LayoutWord,
     key: *const crate::StringHeader,
 ) {
-    let bag = (*c).props as *const ObjectHeader;
-    let Some(now) = super::shapes::object_shape_record(bag) else {
+    let Some(now) = crate::closure::props::shape_record(c as usize) else {
         crate::closure::shape::refresh_closure_shape(c as usize);
         return;
     };

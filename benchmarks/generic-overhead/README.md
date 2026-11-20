@@ -63,7 +63,7 @@ cross-module GC effect propagation.
 
 ## Semantic coverage
 
-`test-files/test_gap_generic_function_overhead.ts` compares with the pinned Node
+`tests/parity/language/function/test_gap_generic_function_overhead.ts` compares with the pinned Node
 oracle. It covers primitive and heap aliases, source writes, retained captures,
 mapped arguments, TDZ, effectful assignments, declared-only number stores,
 ordinary/arrow/bound/rest/proxy callbacks, exception propagation, and an object

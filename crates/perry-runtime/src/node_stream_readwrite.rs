@@ -974,7 +974,7 @@ pub(super) fn is_array_like_value(value: f64) -> bool {
     unsafe {
         matches!(
             gc_type_for_ptr(raw),
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY)
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY)
         )
     }
 }
@@ -1580,7 +1580,7 @@ pub(super) fn is_single_chunk_value(value: f64) -> bool {
 
 pub(super) fn is_non_iterable_primitive_for_readable_from(value: f64) -> bool {
     let jsval = JSValue::from_bits(value.to_bits());
-    (jsval.is_number() || jsval.is_int32() || jsval.is_bool()) && !jsval.is_any_string()
+    (jsval.is_number() || jsval.is_bool()) && !jsval.is_any_string()
 }
 
 pub(super) fn is_invalid_readable_from_input(value: f64) -> bool {
@@ -1803,10 +1803,6 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
         append_string_bytes(value, out);
         return;
     }
-    if jsval.is_int32() {
-        out.extend_from_slice(jsval.as_int32().to_string().as_bytes());
-        return;
-    }
     if jsval.is_number() && value.is_finite() {
         let text = if value.fract() == 0.0 {
             (value as i64).to_string()
@@ -1828,7 +1824,7 @@ pub(super) fn append_chunk_bytes(value: f64, out: &mut Vec<u8>, depth: u8) {
 
     unsafe {
         match gc_type_for_ptr(raw) {
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunks(raw, out, depth);
             }
             Some(crate::gc_object_type_pat!()) => {

@@ -3,7 +3,7 @@
 use super::*;
 use crate::codegen_abi::LayoutWord;
 
-#[inline(never)]
+#[inline(always)]
 pub(super) unsafe fn get<const ABSENT: bool, const SITE: bool, const LAZY_HASH: bool>(
     dir: *const u8,
     obj: *const ObjectHeader,

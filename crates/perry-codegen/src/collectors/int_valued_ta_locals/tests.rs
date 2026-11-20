@@ -30,6 +30,7 @@ fn xor(l: Expr, r: Expr) -> Expr {
 /// `S[idx]` — an element read on local `arr_id`.
 fn idx_get(arr_id: u32, idx: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(arr_id)),
@@ -120,6 +121,7 @@ fn bcrypt_feistel_accumulator_is_eligible() {
             value: Box::new(Expr::LocalGet(9)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -299,6 +301,7 @@ fn guarded_number_array_seed_is_native_after_bitwise_normalization() {
             object: Box::new(Expr::LocalGet(0)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::LocalGet(5)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -389,6 +392,7 @@ fn plain_array_store_value_excludes_local() {
             object: Box::new(Expr::LocalGet(7)),
             index: Box::new(Expr::LocalGet(1)),
             value: Box::new(Expr::LocalGet(5)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -652,6 +656,7 @@ fn bigint_capable_bitwise_write_is_not_an_i32_write() {
             object: Box::new(Expr::LocalGet(0)),
             index: Box::new(Expr::Integer(1)),
             value: Box::new(Expr::LocalGet(id)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
