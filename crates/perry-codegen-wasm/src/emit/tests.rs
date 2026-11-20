@@ -1083,6 +1083,27 @@ console.log(new B().m());
     );
 }
 
+// `super.x` in a static method reads the parent's static methods, as `Parent.x`
+// does, and keeps the subclass as `this`. Expected output is Node's.
+#[test]
+fn super_in_a_static_method_reaches_the_parents_static_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static f() { return "f"; } static g() { return "g:" + this.name; } }
+class B extends A { static h() { return super.f() + "h"; } static i() { return super.g(); } }
+class C extends B {}
+console.log("B.f(): " + B.f());
+console.log("C.f(): " + C.f());
+console.log("B.h() (super.f()): " + B.h());
+console.log("B.i() (super.g() keeps this): " + B.i());
+console.log("C.h(): " + C.h());
+"#
+        ),
+        "B.f(): f\nC.f(): f\nB.h() (super.f()): fh\nB.i() (super.g() keeps this): g:B\nC.h(): fh"
+    );
+}
+
 // A getter that returns a non-callable makes `super.m()` throw a TypeError.
 #[test]
 fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
@@ -2239,6 +2260,9 @@ mod static_method;
 
 #[path = "class_value_tests.rs"]
 mod class_value;
+
+#[path = "function_value_tests.rs"]
+mod function_value;
 
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;

@@ -206,3 +206,25 @@ console.log(A.x + " " + b.x + " " + e.x + " " + Object.prototype.hasOwnProperty.
         "1 5 6 true"
     );
 }
+
+// A class value's `prototype` is read-only, a fresh class expression's (`class_fresh`)
+// included: the store is ignored, or throws in strict code.
+#[test]
+fn a_class_value_keeps_its_prototype_when_assigned() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function make(n: number) { return class K { v = n; }; }
+class D {}
+const K: any = make(1);
+const D2: any = D;
+const kp = K.prototype;
+const dp = D2.prototype;
+try { K.prototype = {}; } catch (e) {}
+try { D2.prototype = {}; } catch (e) {}
+console.log([K.prototype === kp, D2.prototype === dp].join(","));
+"#
+        ),
+        "true,true"
+    );
+}

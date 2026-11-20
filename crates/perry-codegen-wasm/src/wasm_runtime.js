@@ -1640,6 +1640,8 @@ class __PerryClosure {
 // receiver of a method call through `closure_this` on entry.
 class __PerryReceiverClosure extends __PerryClosure {}
 let __closureReceiver;
+// One value per function declaration, keyed by its table index (`function_value`).
+const __functionValues = new Map();
 function __isPerryClosure(v) {
   return v instanceof __PerryClosure;
 }
@@ -2419,6 +2421,28 @@ const __memDispatch = {
   // __bitsToJsValue converts BigInt return values back to JS.
   closure_new: (funcIdx, captureCount, receivesThis) =>
     receivesThis ? new __PerryReceiverClosure(funcIdx, captureCount) : new __PerryClosure(funcIdx, captureCount),
+  // A function declaration used as a value: one closure per function, so it keeps its
+  // identity and properties across reads, with the `prototype` object an ordinary
+  // function has (`prototype.constructor` is the function).
+  function_value: (funcIdx) => {
+    let fn = __functionValues.get(funcIdx);
+    if (!fn) {
+      fn = new __PerryClosure(funcIdx, 0);
+      const prototype = {};
+      Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
+      Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
+      __functionValues.set(funcIdx, fn);
+    }
+    return fn;
+  },
+  // `F.prototype = proto`. A class's `prototype` is read-only: the store is ignored,
+  // or a TypeError in strict code.
+  function_set_prototype: (fn, proto, strict) => {
+    if ((__perryClassCtors.has(fn) || !__holdsProperties(fn) || !Reflect.set(fn, 'prototype', proto)) && strict) {
+      throw new TypeError(`Cannot assign to read only property 'prototype' of ${typeof fn}`);
+    }
+    return proto;
+  },
   closure_this: () => {
     const receiver = __closureReceiver;
     __closureReceiver = undefined;
@@ -5958,12 +5982,9 @@ function __superGet(home, key, receiver) {
   const own = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
   if (home && home.__classHome__ !== undefined) {
     const cls = home.__classHome__;
-    if (home.isStatic) {
-      for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
-        if (own(classStaticTable[c], name)) return classStaticTable[c][name];
-      }
-      return Reflect.get(Function.prototype, name, receiver);
-    }
+    // The static side reads the parent's statics as a static member access does: fields,
+    // named static methods and members of its class value.
+    if (home.isStatic) return __classStaticGet(classParentTable[cls], name, receiver, Function.prototype);
     if (classParentTable[cls] === null) __throwNullReceiver(null, name);
     let last = null;
     for (let c = classParentTable[cls]; c; c = classParentTable[c]) {
