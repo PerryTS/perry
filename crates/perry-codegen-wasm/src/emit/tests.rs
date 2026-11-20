@@ -2243,6 +2243,9 @@ mod class_value;
 #[path = "function_value_tests.rs"]
 mod function_value;
 
+#[path = "get_prototype_of_tests.rs"]
+mod get_prototype_of;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(
