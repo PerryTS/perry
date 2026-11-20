@@ -43,6 +43,7 @@ fn ir(expr: Expr, extra: Vec<Stmt>) -> String {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
         byte_end: 0,

@@ -604,6 +604,7 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     let mut opts = ir_opts();
@@ -712,6 +713,7 @@ fn idxset_recv_global_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -786,6 +788,7 @@ fn idxset_recv_captured_ir() -> String {
                     mutable_captures: Vec::new(),
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -810,6 +813,7 @@ fn idxset_recv_captured_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -849,6 +853,7 @@ fn apush_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -896,6 +901,7 @@ fn idxset_runtime_key_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -939,6 +945,7 @@ fn dynarr_set_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -1038,6 +1045,7 @@ fn idxset_bounded_ir_with(quiet: bool) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     let mut opts = ir_opts();
@@ -1094,6 +1102,7 @@ fn private_field_set_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     m.classes = vec![Class {
         id: CLASS_ID,
@@ -1207,6 +1216,7 @@ fn generator_state_ir() -> String {
                     mutable_captures: vec![1],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -1227,6 +1237,7 @@ fn generator_state_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     String::from_utf8(compile_module(&m, ir_opts()).expect("generator state compiles"))
         .expect("LLVM IR should be UTF-8")

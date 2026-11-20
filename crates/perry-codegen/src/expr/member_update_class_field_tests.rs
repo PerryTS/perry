@@ -84,6 +84,7 @@ fn probe_ir(op: BinaryOp, prefix: bool) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.classes = vec![class];
     m.init_kind = ModuleInitKind::Eager;

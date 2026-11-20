@@ -20,6 +20,7 @@ fn function(name: &str, body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -216,6 +217,7 @@ fn a_captured_owner_keeps_everything() {
         is_arrow: true,
         is_async: false,
         is_generator: false,
+        construct_only: false,
     };
     unchanged(vec![owner(), value(), store(), read(), Stmt::Expr(closure)]);
 }

@@ -30,6 +30,7 @@ fn function_decl(id: FuncId, name: &str, return_type: Type) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -56,6 +57,7 @@ fn closure_returning(return_type: Type) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -630,6 +632,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         computed_members: vec![crate::ClassComputedMember {
             key_expr: Expr::String("values".into()),

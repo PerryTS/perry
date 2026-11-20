@@ -73,6 +73,7 @@ fn birth(ctx: &mut FnCtx<'_>, link: &Expr) -> Result<String> {
         captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         mutable_captures,
         ..
     } = obj.as_ref()
@@ -397,6 +398,7 @@ fn async_birth(ctx: &mut FnCtx<'_>, closure: &Expr) -> Result<String> {
         mutable_captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         ..
     } = closure

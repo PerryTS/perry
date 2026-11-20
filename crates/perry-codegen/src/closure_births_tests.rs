@@ -27,6 +27,7 @@ fn hoisted_run(ids: &[u32]) -> Vec<Stmt> {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: false,
                 is_async: false,
@@ -56,6 +57,7 @@ pub(crate) fn function_ir(ids: &[u32]) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     crate::scope_env::group_scope_boxes(&mut module);
     let options = crate::CompileOptions {

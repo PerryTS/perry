@@ -376,6 +376,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 is_strict: true,
+                construct_only: false,
             }),
         );
         m

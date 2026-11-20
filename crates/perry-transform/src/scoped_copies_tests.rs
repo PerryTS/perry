@@ -17,6 +17,7 @@ fn function(body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -137,6 +138,7 @@ fn a_captured_copy_stays() {
         is_async: false,
         is_generator: false,
         is_strict: true,
+        construct_only: false,
     };
     unchanged(vec![looped(vec![
         value(2),
@@ -162,6 +164,7 @@ fn a_copy_inside_a_closure_folds_only_against_the_closure_body() {
             is_async: false,
             is_generator: false,
             is_strict: true,
+            construct_only: false,
         })
     };
     // v2 lives outside: the closure may run before v2 is initialized.
