@@ -277,3 +277,29 @@ fn set_and_both_symbol_storage_classes_still_dispatch() {
         "a GC-allocated Symbol must still enter the authoritative symbol registry"
     );
 }
+
+fn string_text(value: f64) -> String {
+    let s = crate::value::js_get_string_pointer_unified(value) as *const crate::StringHeader;
+    assert!(!s.is_null(), "expected a string value");
+    let bytes = unsafe {
+        std::slice::from_raw_parts(crate::string::string_data(s), (*s).byte_len as usize)
+    };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// #15039: the generic value read, the entry a compiled `sym.description`
+/// calls, answers the description of both storage classes of symbol.
+#[test]
+fn value_read_answers_symbol_description() {
+    let _frame = TestShadowFrame::new(2);
+    root_pointer(0, leaked_symbol("perry-15039-for"));
+    root_pointer(1, fresh_symbol("perry-15039-new"));
+    for (slot, expected) in [(0, "perry-15039-for"), (1, "perry-15039-new")] {
+        let value = super::get_slow::js_object_get_field_value(
+            crate::gc::js_shadow_slot_get(slot) as i64,
+            key(b"description"),
+            0,
+        );
+        assert_eq!(string_text(value), expected);
+    }
+}
