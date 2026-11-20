@@ -1489,6 +1489,7 @@ mod date_methods;
 mod declared_constructor;
 mod declared_global_write;
 mod ek;
+mod ek_rest;
 mod field_read_calls;
 mod gen_next;
 mod gen_proto_lock;

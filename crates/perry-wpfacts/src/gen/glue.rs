@@ -436,14 +436,25 @@ impl<'a> Gen<'a> {
                 let (Some(rest), Some(value)) = (arg(0), arg(1)) else {
                     return self.m.top_val("iteratorRestAppend without arguments");
                 };
-                self.store(
-                    fx,
+                // The append defines index `rest.length` (CreateDataProperty,
+                // ECMA-262 8.6.2 IteratorBindingInitialization step 4.d,
+                // 23.1.3.23 push): its key is a Number, a canonical numeric
+                // String, never `@@iterator` or `__proto__`. The site says so
+                // before its constraint exists (the solve is online), so the
+                // append is no write that may change which `@@iterator` an
+                // Array finds (`Model::array_iteration_writes`) and holds no
+                // guarded record's protocol arm open (`Cons::RecordEntry`).
+                let num = self.prim_node(prim::NUM);
+                let site =
+                    self.store_site(fx.module, fx.f, "rest element append".into(), None, false);
+                self.m.stores[site as usize].key_value = Some(num);
+                self.m.cons(
                     rest,
-                    Key::any(),
-                    value,
-                    "rest element append".into(),
-                    None,
-                    false,
+                    Cons::Store {
+                        key: Key::any(),
+                        src: value,
+                        site,
+                    },
                 );
                 let out = self.tmp("rest-append");
                 self.m.edge(rest, out);
