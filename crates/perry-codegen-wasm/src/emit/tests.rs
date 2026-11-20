@@ -1897,6 +1897,24 @@ console.log((k in b) + " " + (k in c) + " " + c[k]() + " " + Object.prototype.ha
     );
 }
 
+// A class expression evaluated in a function body links its class value to its
+// user parent's, as a declared subclass does. Expected output is Node's.
+#[test]
+fn an_evaluated_subclass_value_inherits_from_its_parent_class_value() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static made() { return "A"; } }
+function mk(): any { return class extends A {}; }
+function pair(): any { class P { static made() { return "P"; } } return class extends P {}; }
+const b: any = mk(), q: any = pair();
+console.log((b.__proto__ === A) + " " + b.made() + " " + q.made() + " " + (new b() instanceof A));
+"#
+        ),
+        "true A P true"
+    );
+}
+
 #[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(

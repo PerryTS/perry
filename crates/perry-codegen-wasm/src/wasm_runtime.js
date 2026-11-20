@@ -1704,15 +1704,20 @@ function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
     ctor = __classCtor(className, ctorIdx, undefined);
-    // `class B extends A`: B's [[Prototype]] is A, so B inherits A's statics.
-    const parent = classParentTable[className];
-    if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
-      Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
-    }
+    __linkClassParent(className, ctor);
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
   }
   return ctor;
+}
+
+// `class B extends A` with a user class A: B's class value has A's as its
+// [[Prototype]], so it inherits A's static side.
+function __linkClassParent(className, ctor) {
+  const parent = classParentTable[className];
+  if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
+    Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
+  }
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
@@ -1799,6 +1804,7 @@ function __classTemplate(className) {
 }
 function __classEvaluate(className, ctorIdx, caps) {
   const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+  __linkClassParent(className, ctor);
   const t = __classTemplate(className);
   if (t.first === undefined) t.first = ctor;
   return ctor;
