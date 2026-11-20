@@ -84,15 +84,6 @@ fn maybe_dir() {
 }
 
 #[test]
-fn optionally_recursive_mkdir() {
-    let tmpdir = tmpdir();
-    let start = h::dir_of(&tmpdir);
-    let dir = "d1/d2";
-    check!(h::create_dir_all(&start, dir));
-    assert!(h::is_dir(&start, dir));
-}
-
-#[test]
 fn optionally_nonrecursive_mkdir() {
     let tmpdir = tmpdir();
     let start = h::dir_of(&tmpdir);

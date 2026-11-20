@@ -1972,8 +1972,17 @@ impl Model {
                 // the named read, which decides presence (`load_from`). A
                 // non-Array object read under such a key got no `undefined`
                 // up front (`idx_load_tok`); once the key holds anything
-                // else, it does.
-                if !self.is_arr(obj) && !self.const_str_key(n) {
+                // else, it does. Rule TA-LEN: a Number key of a typed array
+                // whose length rule watches the read names an element or
+                // no property at all (10.4.5.4); its `Cons::ElemUndef`
+                // decides `undefined`. A key that grows past a Number runs
+                // this again.
+                let ta_floor = toks.is_empty()
+                    && prim == prim::NUM
+                    && self.typed_array_number_key(obj, prim, named)
+                    && self.idx_done.contains(&(n, obj, dst, 0))
+                    && self.elem_undef_watched(obj);
+                if !self.is_arr(obj) && !self.const_str_key(n) && !ta_floor {
                     self.add_prim(dst, prim::UNDEF);
                 }
                 match named.then(|| self.key_entry_shapes(n)).flatten() {
@@ -2044,9 +2053,15 @@ impl Model {
                     self.builtin_field_use(obj, key, ChainAct::Load(dst));
                     if self.typed_array_number_key(obj, prim, named) {
                         // Rule TYPED-ELEM (`typed_array_number_key`): the
-                        // element, a Number (BigInt) or `undefined`.
+                        // element, a Number (BigInt) or `undefined`. Under
+                        // rule TA-LEN (`elem_undef_watched`) the read's
+                        // `Cons::ElemUndef` decides `undefined` (`idx_load_tok`
+                        // registered it, or added `undefined` itself).
                         let p = self.typed_array_elem_prim(obj);
-                        self.add_prim(dst, p | prim::UNDEF);
+                        let floor = self.idx_done.contains(&(n, obj, dst, 0))
+                            && self.elem_undef_watched(obj);
+                        let undef = if floor { 0 } else { prim::UNDEF };
+                        self.add_prim(dst, p | undef);
                     } else {
                         let f = self.num_fields(obj);
                         self.edge(f, dst);

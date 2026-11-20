@@ -4,7 +4,9 @@
 //! `FuncEmitCtx` frame-slot helpers (`emit_frame_begin`, `emit_slot_addr`,
 //! `emit_store_arg`, `emit_store_const`, `emit_local_or_global_get`).
 
+use super::closures::reads_this;
 use super::*;
+use perry_hir::walker::stmt_any_expr;
 
 /// The parameters and body `new C(...)` runs for a class.
 pub(super) struct Constructor {
@@ -111,6 +113,14 @@ impl WasmModuleEmitter {
             &mut extra_locals,
             param_count,
         );
+        // A static method that reads `this` takes it once, on entry, into its own local.
+        let static_this = static_class.filter(|_| {
+            hir_func
+                .body
+                .iter()
+                .any(|s| stmt_any_expr(s, &mut reads_this))
+        });
+        extra_locals += u32::from(static_this.is_some());
 
         let temp_local_idx = param_count + extra_locals;
         let temp_i32_idx = temp_local_idx + 3;
@@ -127,6 +137,21 @@ impl WasmModuleEmitter {
         ctx.returns_value = wasm_returns_i64;
         ctx.static_class = static_class.map(str::to_string);
         ctx.emit_box_params(&mut func, &hir_func.params);
+        if let Some(class_name) = static_this {
+            let local = temp_local_idx - 1;
+            let ctor_slot = ctx.class_ctor_slot(class_name);
+            ctx.emit_class_bridge(
+                &mut func,
+                "class_static_method_this",
+                class_name,
+                &[
+                    &Expr::Number(ctor_slot),
+                    &Expr::String(hir_func.name.clone()),
+                ],
+            );
+            func.instruction(&Instruction::LocalSet(local));
+            ctx.static_this_local = Some(local);
+        }
 
         for stmt in &hir_func.body {
             ctx.emit_stmt(&mut func, stmt, wasm_returns_i64);

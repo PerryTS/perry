@@ -85,19 +85,6 @@ proptest! {
     }
 }
 
-// ============ Property 10: Image verification cache idempotence ============
-// Feature: perry-container, Property 10: Image verification cache idempotence
-// Validates: Requirements 15.7
-
-// Note: Testing actual async verify_image with global state in proptest is complex.
-// We test the logic of the cache hit behavior here.
-#[test]
-fn test_verification_cache_manual_idempotence() {
-    perry_stdlib::container::verification::clear_verification_cache();
-    // This is more of a unit test than property test due to global state,
-    // but satisfies the requirement for validating idempotence.
-}
-
 // ============ Property 11: Error propagation preserves code and message ============
 // Feature: perry-container, Property 11: Error propagation preserves code and message
 // Validates: Requirements 2.6, 12.2

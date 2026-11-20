@@ -261,16 +261,10 @@ fn young_keys_follow_their_owner_local_metadata() {
 
 #[test]
 fn set_key_identity_moves_with_the_key_metadata() {
-    check_owned_key_identity(false);
+    check_owned_key_identity();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Set key identity"]
-fn negative_control_objtables_set_key_identity() {
-    check_owned_key_identity(true);
-}
-
-fn check_owned_key_identity(erase: bool) {
+fn check_owned_key_identity() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let set = crate::set::js_set_alloc(16);
@@ -286,11 +280,6 @@ fn check_owned_key_identity(erase: bool) {
     let key = crate::set::js_set_value_at(set, 9);
     let moved = (key.to_bits() & POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        unsafe {
-            crate::set::test_erase_key_identity(moved);
-        }
-    }
     assert_eq!(
         unsafe { crate::set::test_key_identity(moved) },
         Some(identity)

@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn native_handle_property_bag_moves_and_releases_its_values() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: remove the native owner's bag slot"]
-fn negative_control_objtables_native_handle_props() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -32,9 +27,6 @@ fn check(erase: bool) {
         before,
         crate::object::handle_expando::handle_property_bag(native.handle())
     );
-    if erase {
-        native.clear();
-    }
     js_gc_collect();
     let retained = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(0)));
     assert_ne!(

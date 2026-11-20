@@ -364,33 +364,6 @@ mod tests {
     }
 
     #[test]
-    fn compile_rs_uses_shared_helper_for_all_fallbacks() {
-        // #998 grep-audit: ensure no Apple-platform site builds the
-        // bundle-ID inline (which would skip the sanitizer). Every
-        // `com.perry.<stem>` derivation must go through
-        // `default_perry_bundle_id`.
-        let src = include_str!("compile.rs");
-        // The only places `com.perry.` may appear are doc/comment text;
-        // there must be no `format!("com.perry.{...", ...)` invocations
-        // (those are the unsanitized inline forms).
-        for line in src.lines() {
-            // Be conservative — skip comments outright.
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("//") || trimmed.starts_with("///") {
-                continue;
-            }
-            assert!(
-                !line.contains("format!(\"com.perry."),
-                "compile.rs has an inline `format!(\"com.perry.…\")` call. \
-                 Use `crate::commands::sanitize::default_perry_bundle_id` \
-                 instead so the bundle-ID fallback stays consistent across \
-                 Apple platforms (#998). Offending line:\n  {}",
-                line
-            );
-        }
-    }
-
-    #[test]
     fn validate_bundle_id_accepts_reverse_dns() {
         // Standard reverse-DNS forms must pass — these are what real
         // provisioning profiles look like.

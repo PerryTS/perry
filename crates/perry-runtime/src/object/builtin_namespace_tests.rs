@@ -78,6 +78,36 @@ fn rebinding_a_namespace_on_the_global_withdraws_it_and_nothing_else() {
     assert!(pristine(ns("Math")) && pristine(ns("Reflect")));
 }
 
+/// A value store into a global slot names that slot's key alone: overwriting
+/// a symbol-keyed or another string-keyed global (a fiber runtime's
+/// `globalThis[currentFiber] = fiber` on every run) rebinds no namespace.
+#[test]
+fn overwriting_a_global_that_names_no_namespace_withdraws_nothing() {
+    let gv = crate::value::js_nanbox_pointer(global() as i64);
+    // SAFETY: the realm global and a fresh symbol of this thread.
+    unsafe {
+        let description = crate::value::js_nanbox_string(key("currentFiber") as i64);
+        let sym = crate::symbol::js_symbol_new(description);
+        let name = crate::value::js_nanbox_string(key("someProgramGlobal") as i64);
+        for value in [1.0, 2.0, 3.0] {
+            crate::proxy::js_put_value_set(gv, sym, value, gv, 0);
+            crate::proxy::js_put_value_set(gv, name, value, gv, 0);
+        }
+    }
+    for name in crate::codegen_abi::BUILTIN_NAMESPACES {
+        assert!(pristine(ns(name)), "{name} stays pristine");
+    }
+    // SAFETY: the realm global.
+    unsafe {
+        crate::object::js_object_set_field_by_name(global(), key("Math"), 4.0);
+    }
+    assert!(
+        !pristine(ns("Math")),
+        "the Math slot's store still withdraws it"
+    );
+    assert!(pristine(ns("JSON")));
+}
+
 #[test]
 fn deleting_a_namespace_binding_withdraws_it() {
     let g = global();

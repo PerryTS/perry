@@ -63,7 +63,7 @@ pub use properties::{
 pub(crate) use get::has_declared_prototype_symbol_property;
 pub use get::js_object_get_symbol_property;
 pub(crate) use get::{
-    has_own_symbol_property, inherited_symbol_property,
+    class_instance_generator_symbol_method, has_own_symbol_property, inherited_symbol_property,
     js_object_get_symbol_property_with_receiver, own_symbol_property, own_symbol_slot,
     OwnSymbolSlot,
 };
@@ -218,13 +218,6 @@ pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: 
         let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
         debug_assert!((*cell).symbol.registered & perry_abi::SYMBOL_NATIVE_TEXT != 0);
         (*cell).description_text = Some(std::sync::Arc::from(description));
-    }
-}
-#[cfg(test)]
-pub(crate) fn test_clear_persistent_description(sym_ptr: usize) {
-    unsafe {
-        let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
-        (*cell).description_text = None;
     }
 }
 

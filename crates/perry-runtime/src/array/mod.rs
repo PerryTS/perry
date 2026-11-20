@@ -83,6 +83,7 @@ mod shift_queue_tests;
 #[cfg(test)]
 mod small_capacity_tests;
 mod sort;
+pub(crate) use sort::ScratchWorkspace;
 mod sort_numeric;
 pub use sort_numeric::{js_array_sort_key_order, js_array_sort_numeric_order};
 #[cfg(test)]
@@ -149,7 +150,7 @@ pub(crate) use self::alloc::{
     array_length_range_error, fill_capacity_with_holes_from, js_array_alloc_canonical_keys,
     js_array_alloc_key_list, js_array_alloc_key_list_reserved, js_array_alloc_pointer_elements,
     js_array_alloc_tag_scanned, js_array_alloc_with_length_exact,
-    js_array_try_alloc_tag_scanned_unfilled,
+    js_array_try_alloc_tag_scanned_unfilled, publish_newborn_elements,
 };
 pub use self::alloc::{
     js_array_alloc, js_array_alloc_literal, js_array_alloc_with_length,

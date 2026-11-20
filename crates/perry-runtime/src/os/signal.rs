@@ -1479,14 +1479,9 @@ fn release_signal_resources_in_freed_ranges(freed: &crate::arena::thread_exit::F
 mod resource_teardown_tests {
     #[test]
     fn native_signal_tokens_clear_with_their_retiring_allocation_range() {
-        check(false);
+        check();
     }
-    #[test]
-    #[ignore = "negative control: omit the native signal allocation-range invalidation"]
-    fn negative_control_objtables_signal_resource_teardown() {
-        check(true);
-    }
-    fn check(omit: bool) {
+    fn check() {
         let _guard = crate::gc::global_side_table_test_lock();
         let token = unsafe {
             crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
@@ -1499,9 +1494,8 @@ mod resource_teardown_tests {
             .insert(NAME.into(), token);
         let ranges =
             crate::arena::thread_exit::FreedRanges::new(&[(token as usize, token as usize + 1)]);
-        if !omit {
-            super::release_signal_resources_in_freed_ranges(&ranges);
-        }
+        super::release_signal_resources_in_freed_ranges(&ranges);
+
         assert!(
             !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
             "retired signal state must not remain in native routing"

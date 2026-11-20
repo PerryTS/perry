@@ -19,44 +19,6 @@ fn names(pf: &ProgramFacts, key: &str, call: bool) -> Vec<String> {
     s.iter().map(|s| format!("{:?}", s.verdict)).collect()
 }
 
-/// Probe: every `*.ts` under $AUDIT_DIR, sites printed (and the dump when
-/// $AUDIT_DUMP is set).
-#[test]
-fn audit1_probe() {
-    let Ok(dir) = std::env::var("AUDIT_DIR") else {
-        return;
-    };
-    let mut files: Vec<_> = std::fs::read_dir(&dir)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    files.sort();
-    for f in files {
-        if f.extension().and_then(|e| e.to_str()) != Some("ts") {
-            continue;
-        }
-        let src = std::fs::read_to_string(&f).unwrap();
-        let name = f.file_name().unwrap().to_string_lossy().to_string();
-        let r = std::panic::catch_unwind(|| {
-            let pf = one(&src);
-            let mut s: Vec<_> = pf.sites.iter().collect();
-            s.sort_by_key(|s| s.byte_offset);
-            for x in s {
-                eprintln!(
-                    "AUD {name} @{} key={} call={} {:?}",
-                    x.byte_offset, x.key, x.is_call, x.verdict
-                );
-            }
-            if std::env::var("AUDIT_DUMP").is_ok() {
-                eprintln!("{}", pf.dump_text());
-            }
-        });
-        if r.is_err() {
-            eprintln!("AUD {name} PANIC");
-        }
-    }
-}
-
 #[test]
 fn audit1_trivial() {
     let pf = one("const o = { m() { return 1; } };\nconst r = o.m();\n");

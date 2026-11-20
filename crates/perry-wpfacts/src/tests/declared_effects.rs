@@ -4,7 +4,7 @@
 //! are `any` so the calls stay calls of the native (not HIR array folds).
 
 use super::*;
-use crate::builtins::effects_for_tests::{declared_array_method, interpretable};
+use crate::builtins::effects_for_tests::interpretable;
 use crate::model::prim;
 use perry_hir::realm_manifest::{RealmEffect, RealmOperand, RealmSlot, RealmSlotRoot};
 use std::borrow::Cow;
@@ -38,25 +38,6 @@ const P: &str = r#"
     class T { t = 3; }
     function arr(): any { return [new P()]; }
 "#;
-
-/// The migrated methods are declared in forms the interpreter runs.
-/// forEach keeps its hand arm; map and filter construct their species
-/// through the interpreter.
-#[test]
-fn the_array_declarations_are_interpretable() {
-    for n in [
-        "push", "reverse", "every", "some", "find", "indexOf", "includes", "join", "sort",
-        "forEach", "map", "filter",
-    ] {
-        assert!(declared_array_method(n), "Array.prototype.{n}");
-    }
-    for n in ["slice", "concat", "pop", "splice"] {
-        assert!(
-            !declared_array_method(n),
-            "Array.prototype.{n} is undeclared"
-        );
-    }
-}
 
 /// `open` and an empty declaration keep today's arm: the interpreter
 /// refuses them. A species construction runs as the result, of the

@@ -574,28 +574,7 @@ impl WasmModuleEmitter {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
                     "__perry_borrowed_proof" => "u64ToF64(TAG_FALSE)".to_string(),
-                    // `for...of` asks whether its source can be walked by index before
-                    // choosing the array loop; the answer comes from the bridge the WASM
-                    // arm calls.
-                    "__perry_runtime" if method == "arrayRecordNeedsIterator" => {
-                        let args_js: Vec<String> = args
-                            .iter()
-                            .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
-                            .collect();
-                        format!(
-                            "fromJsValue(__memDispatch.rt_arrayRecordNeedsIterator({}))",
-                            args_js.join(", ")
-                        )
-                    }
-                    // The iterator protocol and array destructuring are not emitted as JS:
-                    // throwing names the gap where an undefined result would run on with
-                    // wrong values.
-                    "__perry_runtime" => format!(
-                        "(() => {{ throw new TypeError({}); }})()",
-                        js_string_literal(&format!(
-                            "{method} is not supported in an async function body on the web target"
-                        ))
-                    ),
+                    "__perry_runtime" => self.emit_js_runtime_intrinsic(method, args, locals),
                     "console" => {
                         let args_js: Vec<String> = args
                             .iter()
@@ -1043,10 +1022,90 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(e, locals);
                 format!("(delete toJsValue({}), u64ToF64(TAG_TRUE))", v)
             }
+            // The iteration nodes beside the iterator-record intrinsics call the bridges
+            // their WASM arms in `emit/expr/iterator_records.rs` call.
+            Expr::GetIterator(value) => format!(
+                "fromJsValue(__memDispatch.rt_getIterator(toJsValue({})))",
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::IteratorToArray(value) | Expr::ForOfToArray(value) => format!(
+                "fromJsValue(__memDispatch.rt_iterableToArray(toJsValue({})))",
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::ArrayIterationPatched => {
+                "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
+            }
             _ => {
                 // Fallback: return undefined for unhandled expressions
                 "u64ToF64(TAG_UNDEFINED)".to_string()
             }
+        }
+    }
+
+    /// JS for a `__perry_runtime` intrinsic: the same contract as the WASM arms in
+    /// `emit/expr/iterator_records.rs`. The mode-selected forms evaluate only the arm their
+    /// mode picks, and every other intrinsic is one call to the bridge the WASM arm calls.
+    /// An intrinsic without an arm throws, because an undefined result would run on with
+    /// wrong values.
+    fn emit_js_runtime_intrinsic(
+        &self,
+        method: &str,
+        args: &[Expr],
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        let js = |e: &Expr| self.emit_js_expr(e, locals);
+        let select = |mode: &Expr, then_js: String, else_js: String| {
+            format!("(toJsValue({}) ? {} : {})", js(mode), then_js, else_js)
+        };
+        let bridge = |name: &str, args: &[&Expr]| {
+            let args_js: Vec<String> = args.iter().map(|a| js(a)).collect();
+            format!(
+                "fromJsValue(__memDispatch.rt_{}({}))",
+                name,
+                host_args(&args_js)
+            )
+        };
+        match (method, args) {
+            ("arrayRecordForValue", [mode, proto_value, elem]) => {
+                select(mode, js(proto_value), js(elem))
+            }
+            ("arrayRecordForUpdate", [mode, update]) => select(mode, "0".to_string(), js(update)),
+            ("arrayRecordForBound", [mode, len, idx, step_call, state_set]) => format!(
+                "({}, {})",
+                js(state_set),
+                select(
+                    mode,
+                    select(step_call, js(idx), "Infinity".to_string()),
+                    js(len)
+                )
+            ),
+            ("arrayRecordIndex", [value]) => js(value),
+            // `(source, payload := ..., source := undefined)`: the payload write is the
+            // value, and the clear runs after it.
+            ("arrayRecordPayload", [_source, payload, clear]) => {
+                format!("[{}, {}][0]", js(payload), js(clear))
+            }
+            // The step runs before its output operand, which reads what it produced.
+            ("iteratorStep", [iter, next, output, read @ ..]) => {
+                let read_true = Expr::Bool(true);
+                let read = read.first().unwrap_or(&read_true);
+                format!(
+                    "[{}, {}][0]",
+                    bridge("iteratorStep", &[iter, next, read]),
+                    js(output)
+                )
+            }
+            // The second operand is a source offset for native `--debug-symbols` only.
+            ("requireObjectCoercible", [value, ..]) => bridge("requireObjectCoercible", &[value]),
+            (name, args) if expr::ITERATOR_RECORD_EAGER.contains(&name) => {
+                bridge(name, &args.iter().collect::<Vec<_>>())
+            }
+            _ => format!(
+                "(() => {{ throw new TypeError({}); }})()",
+                js_string_literal(&format!(
+                    "{method} is not supported in an async function body on the web target"
+                ))
+            ),
         }
     }
 
