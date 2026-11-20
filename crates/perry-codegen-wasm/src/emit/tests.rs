@@ -403,10 +403,11 @@ fn spread_and_for_each_visit_a_set_or_a_maps_entries() {
             r#"
 function spreads() { const s = new Set<number>([1, 2, 3]); const a: any = new Set(["x"]); const m = new Map<string, number>([["a", 1], ["b", 2]]); return [...s].join(",") + " " + [0, ...a].join(",") + " " + [...m].map((e) => e[0] + e[1]).join(",") + " " + [...m.keys()].join(",") + [...m.values()].join(","); }
 function each() { const out: string[] = []; const s = new Set<string>(["x", "y"]); s.forEach((v, k, set) => out.push(v + k + set.size)); const m: any = new Map([["a", 1], ["b", 2]]); m.forEach((v: number, k: string) => out.push(k + "=" + v)); return out.join(","); }
-console.log(spreads() + " | " + each() + " | " + [..."ab"].join("-"));
+const big = new Set<number>(); for (let i = 0; i < 200000; i++) big.add(i);
+console.log(spreads() + " | " + each() + " | " + [..."ab"].join("-") + " | " + [...big].length);
 "#
         ),
-        "1,2,3 0,x a1,b2 a,b1,2 | xx2,yy2,a=1,b=2 | a-b"
+        "1,2,3 0,x a1,b2 a,b1,2 | xx2,yy2,a=1,b=2 | a-b | 200000"
     );
 }
 

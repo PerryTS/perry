@@ -2276,9 +2276,13 @@ const __memDispatch = {
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
+  // One push per value: `push(...source)` passes each value as an argument and
+  // overflows the stack for a large source.
   array_push_spread: (target, source) => {
-    if (Array.isArray(target) && (Array.isArray(source) || typeof source?.[Symbol.iterator] === 'function')) {
-      target.push(...source);
+    const iterate = source?.[Symbol.iterator];
+    if (Array.isArray(target) && typeof iterate === 'function') {
+      const it = iterate.call(source);
+      for (let step = it.next(); !step.done; step = it.next()) target.push(step.value);
     }
     return target;
   },
