@@ -2737,6 +2737,13 @@ pub struct Model {
     /// can hold a string, a symbol or an object once the solve is done
     /// ([`Model::array_iteration_writes`]); a number key is an element.
     pub array_keyed_stores: Vec<(SiteId, u32)>,
+    /// #13645: writes (token, computed-store site, reason)
+    /// [`Model::note_array_member_write`] holds back because the token's
+    /// class had an `extends` value with no Array parent in it then
+    /// (`tmpl_may_be_array_now`). Each counts once that value may be one
+    /// (and, with a site, once its key may name a member), when
+    /// [`Model::array_iteration_writes`] asks.
+    pub array_member_unsure: Vec<(Tok, Option<SiteId>, u32)>,
     /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
     /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
     /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),

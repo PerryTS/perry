@@ -22,6 +22,7 @@ mod array_helper_nodes;
 mod array_holes;
 mod array_index_store;
 mod array_iteration;
+mod array_member_mixin;
 mod array_length;
 mod array_named_keys;
 mod array_numeric;
