@@ -30,68 +30,24 @@ static OUTPUT_FILENAME: Mutex<String> = Mutex::new(String::new());
 static RECORDING_SAMPLE_RATE: AtomicU64 = AtomicU64::new(0);
 
 // =============================================================================
-// A-weighting IIR filter
+// Sound level metering — shared A-weighting + Fast time weighting
+// (see perry_ui::sound_level). One meter per capture session; reset on
+// start/stop so a restart re-primes instead of decaying from stale energy.
 // =============================================================================
 
-struct AWeightState {
-    sections: [[f64; 4]; 3],
+static METER: Mutex<Option<perry_ui::sound_level::SoundLevelMeter>> = Mutex::new(None);
+
+fn reset_meter() {
+    *METER.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-impl AWeightState {
-    fn new() -> Self {
-        AWeightState {
-            sections: [[0.0; 4]; 3],
-        }
-    }
-}
-
-// A-weighting coefficients for 48kHz (default on modern Apple devices).
-const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.9746716508129498,
-        0.97504628855498883,
-    ],
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.1440825051498020,
-        0.20482985688498268,
-    ],
-    [
-        0.24649652853975498,
-        -0.49299305707950996,
-        0.24649652853975498,
-        1.0,
-        -0.48689808685150487,
-        0.0,
-    ],
-];
-
-const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
-
-fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
-    let mut x = sample * A_WEIGHT_GAIN;
-    for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0];
-        let b1 = sos[1];
-        let b2 = sos[2];
-        let a1 = sos[4];
-        let a2 = sos[5];
-        let s = &mut state.sections[i];
-        let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0];
-        s[0] = x;
-        s[3] = s[2];
-        s[2] = y;
-        x = y;
-    }
-    x
+/// Feed one buffer through the shared meter. Returns `(level_db, peak)`.
+fn meter_process(samples: &[f32], sample_rate: f64) -> (f64, f32) {
+    let mut guard = METER.lock().unwrap_or_else(|e| e.into_inner());
+    let meter =
+        guard.get_or_insert_with(|| perry_ui::sound_level::SoundLevelMeter::new(sample_rate));
+    meter.ensure_sample_rate(sample_rate);
+    meter.process(samples)
 }
 
 // =============================================================================
@@ -100,8 +56,6 @@ fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
 
 thread_local! {
     static ENGINE: RefCell<Option<Retained<AnyObject>>> = RefCell::new(None);
-    static FILTER_STATE: RefCell<AWeightState> = RefCell::new(AWeightState::new());
-    static EMA_DB: RefCell<f64> = RefCell::new(0.0);
 }
 
 extern "C" {
@@ -119,6 +73,7 @@ pub fn start() -> i64 {
     if already_running {
         return 1;
     }
+    reset_meter();
 
     unsafe {
         // Configure audio session for recording
@@ -258,6 +213,7 @@ pub fn start() -> i64 {
 }
 
 pub fn stop() {
+    reset_meter();
     ENGINE.with(|e| {
         if let Some(engine) = e.borrow_mut().take() {
             unsafe {
@@ -419,41 +375,8 @@ unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
         RECORDED_SAMPLES.lock().unwrap().extend_from_slice(slice);
     }
 
-    let mut sum_sq = 0.0f64;
-    let mut peak = 0.0f32;
-
-    FILTER_STATE.with(|fs| {
-        let mut state = fs.borrow_mut();
-        for i in 0..n {
-            let sample = *samples.add(i);
-            let abs_sample = sample.abs();
-            if abs_sample > peak {
-                peak = abs_sample;
-            }
-            let weighted = a_weight_filter(sample as f64, &mut state);
-            sum_sq += weighted * weighted;
-        }
-    });
-
-    let rms = (sum_sq / n as f64).sqrt();
-    // Map digital RMS to dB SPL. 0 dBFS ≈ 110 dB SPL (conservative;
-    // per-device calibration in calibration.ts refines this).
-    let db_raw = if rms > 1.0e-10 {
-        20.0 * rms.log10() + 110.0
-    } else {
-        0.0
-    };
-    let db_clamped = db_raw.max(0.0).min(140.0);
-
-    let dt = n as f64 / sample_rate;
-    let tau = 0.125;
-    let alpha = 1.0 - (-dt / tau).exp();
-
-    let smoothed = EMA_DB.with(|ema| {
-        let mut current = ema.borrow_mut();
-        *current += alpha * (db_clamped - *current);
-        *current
-    });
+    // A-weighted, Fast (125 ms) energy-domain level — see perry_ui::sound_level.
+    let (smoothed, peak) = meter_process(std::slice::from_raw_parts(samples, n), sample_rate);
 
     CURRENT_DB.store(smoothed.to_bits(), Ordering::Relaxed);
     CURRENT_PEAK.store((peak as f64).to_bits(), Ordering::Relaxed);
