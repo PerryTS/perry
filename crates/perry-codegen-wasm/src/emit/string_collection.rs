@@ -128,6 +128,8 @@ impl WasmModuleEmitter {
             "math_clz32",
             "math_imul",
             "closure_new",
+            "function_value",
+            "function_set_prototype",
             "closure_this",
             "closure_set_capture",
             "closure_call_0",
