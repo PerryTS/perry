@@ -2184,6 +2184,40 @@ inAsync().then((v) => console.log(v), (e) => console.log("threw " + e.message));
     );
 }
 
+// A spread call on a UI handle reaches the UI method, as a call with fixed arguments does.
+#[test]
+fn a_spread_call_on_a_ui_handle_runs_the_ui_method() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text } from "perry/ui";
+const t: any = Text("hi");
+t.setWidth(...[10]);
+"#,
+            r#"
+const el = [...uiHandles.values()].find(e => e.textContent === "hi");
+console.log(el.style.width);
+"#
+        ),
+        "10px"
+    );
+}
+
+// A static method called with spread arguments receives the closure itself, not a host wrapper.
+#[test]
+fn a_spread_call_to_a_static_method_passes_closures_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const g = () => 1;
+class C { static same(f: any) { return f === g; } }
+console.log(C.same(g) + " " + C.same(...[g]));
+"#
+        ),
+        "true true"
+    );
+}
+
 // B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
 #[test]
 fn a_super_read_stops_at_a_setter_only_accessor() {

@@ -6046,7 +6046,8 @@ function __jsNativeMember(obj, name) {
 // chain defines wins over what the object inherits from Object.prototype (`toString`),
 // and loses only to an own property. Otherwise the property is read exactly once (an
 // inherited getter runs once), and a non-callable result throws in `__jsMethodInvoke`;
-// only names in `__uiMethodMap` keep the bridge route, which `__classDispatch` ends with.
+// only names in `__uiMethodMap`, on an instance or a primitive UI handle, keep the bridge
+// route, which `__classDispatch` ends with.
 function __jsMethodGet(obj, mname) {
   const tagged = obj && typeof obj === 'object' && __classOf(obj)
     && !Object.prototype.hasOwnProperty.call(obj, mname);
@@ -6054,7 +6055,8 @@ function __jsMethodGet(obj, mname) {
     return { r: obj, m: mname, user: true };
   }
   const f = obj[mname];
-  if (tagged && typeof f !== 'function' && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
+  if ((tagged || typeof obj !== 'object') && typeof f !== 'function'
+    && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
     return { r: obj, m: mname, user: true };
   }
   return { r: obj, m: mname, f };
@@ -6074,6 +6076,8 @@ function __jsMethodInvoke(ref, args) {
     return result;
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
+  // A compiled class method takes Perry values, as `reflect_apply` passes them.
+  if (__classMethodFns.has(ref.f)) return ref.f.apply(ref.r, args);
   return ref.f.apply(ref.r, args.map(__hostCallback));
 }
 
