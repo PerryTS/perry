@@ -2861,15 +2861,23 @@ const __memDispatch = {
     let cur = loops.get(id);
     if (!cur) {
       id = ++__collectionCursorSeq;
-      cur = { iter: coll[Symbol.iterator](), value: undefined };
+      const iter = coll[Symbol.iterator]();
+      cur = { iter, next: iter.next, value: undefined };
       loops.set(id, cur);
     }
-    const step = cur.iter.next();
-    if (step.done) {
+    // A step that throws ends the loop without closing the iterator, as a host loop does.
+    try {
+      const step = Reflect.apply(cur.next, cur.iter, []);
+      if (Object(step) !== step) throw new TypeError('Iterator result is not an object');
+      if (step.done) {
+        loops.delete(id);
+        return -1;
+      }
+      cur.value = step.value;
+    } catch (error) {
       loops.delete(id);
-      return -1;
+      throw error;
     }
-    cur.value = step.value;
     __collectionCursorLast = id;
     return id;
   },

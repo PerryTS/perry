@@ -468,7 +468,13 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_frame_begin(func, 0);
                     self.emit_memcall(func, "get_exception", 0);
                     if let Some((param_id, _)) = &catch_clause.param {
-                        if let Some(&idx) = self.local_map.get(param_id) {
+                        let key = (self.emitter.current_mod_idx, *param_id);
+                        // A Set/Map cursor loop's step local holds its error; at module
+                        // level that local is a WASM global (`collection_cursor_release`).
+                        if self.emitter.module_let_globals.contains_key(&key) {
+                            self.emit_local_tee(func, param_id);
+                            func.instruction(&Instruction::Drop);
+                        } else if let Some(&idx) = self.local_map.get(param_id) {
                             if self.is_boxed(param_id) {
                                 self.emit_box_call(func, "box_new");
                             }

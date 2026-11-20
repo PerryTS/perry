@@ -111,3 +111,76 @@ abrk(s).then(() => athr(s)).catch((e) => console.log(g.closeLog + (e as Error).m
         "R R  RbodyR bodyR close\nRRasync"
     );
 }
+
+// A Set/Map `for...of` steps its iterator as a host loop does: it reads `next` once, a
+// step that throws or returns a non-object ends the loop without calling `return`.
+#[test]
+fn for_of_over_a_typed_set_or_map_steps_its_iterator_as_node_does() {
+    let stepping = format!(
+        "{STUB_DOM}{}",
+        r#"
+globalThis.closeLog = "";
+globalThis.mode = "";
+globalThis.Stepping = class extends Set {
+  [Symbol.iterator]() {
+    const it = this.values();
+    const iter = {
+      next() {
+        const step = it.next();
+        if (mode === "throw" && step.value === 2) throw new Error("next");
+        if (mode === "primitive" && step.value === 2) return 1;
+        if (mode === "swap") iter.next = () => ({ done: true });
+        return step;
+      },
+      return() { closeLog += "R"; return {}; },
+    };
+    return iter;
+  }
+};
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+const g = globalThis as any;
+function all(s: Set<number>) { let r = ""; for (const v of s) r += v; return r; }
+const s: Set<number> = new g.Stepping([1, 2, 3]);
+let out = "";
+g.mode = "throw";
+try { all(s); } catch (e) { out += (e as Error).message; }
+g.mode = "primitive";
+try { all(s); } catch (e) { out += " " + (e as Error).name; }
+g.mode = "swap";
+out += " " + all(s);
+console.log(out + " " + g.closeLog);
+"#,
+            &stepping,
+            "",
+        ),
+        "next TypeError 123"
+    );
+}
+
+// A module-level loop's step local is a WASM global; the body's error leaves the loop
+// through it unchanged. The boot's rejection is the program's uncaught error.
+#[test]
+fn a_module_level_set_for_of_rethrows_its_body_error() {
+    let report = format!(
+        "{STUB_DOM}{}",
+        r#"
+console.error = (e) => console.log("uncaught " + (e instanceof Error ? e.message : e));
+process.on("exit", () => { process.exitCode = 0; });
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+const s = new Set<number>([1, 2, 3]);
+for (var v of s) if (v === 2) throw new Error("top");
+"#,
+            &report,
+            "",
+        ),
+        "uncaught top"
+    );
+}
