@@ -478,25 +478,6 @@ console.log(f.call(s, 1) + " " + f.call(plain, 1) + " " + s.read(1));
     );
 }
 
-// A method call whose name is also an Object.prototype member (`isPrototypeOf`,
-// `hasOwnProperty`) reaches the receiver's method, not that member with no receiver.
-// Expected output is Node's.
-#[test]
-fn an_object_prototype_method_call_keeps_its_receiver() {
-    assert_eq!(
-        run_web_source(
-            r#"
-const base: any = { k: 1 };
-const child: any = { own: 2 };
-Object.setPrototypeOf(child, base);
-const typed: { k: number } = { k: 1 };
-console.log([base.isPrototypeOf(child), child.isPrototypeOf(base), Object.prototype.isPrototypeOf({}), Array.prototype.isPrototypeOf([]), child.hasOwnProperty("own"), child.hasOwnProperty("k"), typed.hasOwnProperty("k"), child.propertyIsEnumerable("own"), base.toString()].join(","));
-"#
-        ),
-        "true,false,true,true,true,false,true,true,[object Object]"
-    );
-}
-
 // A method call or a property read on null / undefined throws TypeError.
 #[test]
 fn null_and_undefined_receivers_throw_type_error() {
@@ -2261,6 +2242,9 @@ mod class_value;
 
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
+
+#[path = "object_prototype_method_tests.rs"]
+mod object_prototype_method;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
