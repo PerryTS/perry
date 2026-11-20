@@ -141,6 +141,21 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, set);
                 self.emit_memcall(func, "set_values", 1);
             }
+            // The Set/Map `for...of` fast path reads the slot its cursor names (see the
+            // `js_*_cursor_next` arm in `calls.rs`).
+            Expr::SetValueAt { set: coll, idx }
+            | Expr::MapEntryKeyAt { map: coll, idx }
+            | Expr::MapEntryValueAt { map: coll, idx } => {
+                let bridge = match expr {
+                    Expr::SetValueAt { .. } => "set_value_at",
+                    Expr::MapEntryKeyAt { .. } => "map_entry_key_at",
+                    _ => "map_entry_value_at",
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, coll);
+                self.emit_store_arg(func, 1, idx);
+                self.emit_memcall(func, bridge, 2);
+            }
 
             // --- Date ---
             // WASM target only handles the 0/1-arg forms. The multi-arg

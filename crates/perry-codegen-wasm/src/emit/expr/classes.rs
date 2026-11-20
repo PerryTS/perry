@@ -116,27 +116,37 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "generator_new", 2);
             }
             Expr::LinkGeneratorPrototype { obj, .. } => self.emit_expr(func, obj),
+            Expr::SetFunctionPrototype {
+                func: f,
+                proto,
+                strict,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, f);
+                self.emit_store_arg(func, 1, proto);
+                self.emit_store_const(func, 2, f64::from(u8::from(*strict)));
+                self.emit_memcall(func, "function_set_prototype", 3);
+            }
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
-                    // Create a closure wrapper with 0 captures for function reference
+                    // The function's one value (see `function_value`)
                     let table_idx = self
                         .emitter
                         .func_to_table_idx
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: an `ExternFuncRef` used as a value can resolve
-                // either to (a) a cross-module function — wrap as closure with
-                // 0 captures, or (b) a cross-module exported variable — read
+                // either to (a) a cross-module function — its one value
+                // (`function_value`), or (b) a cross-module exported variable — read
                 // the source module's promoted-let global directly. Variables
                 // win when both apply (a let with the same name is closer to
                 // the user's intent than a like-named function); in practice
@@ -151,7 +161,7 @@ impl<'a> FuncEmitCtx<'a> {
                     .get(&mod_key)
                     .or_else(|| self.emitter.func_name_map.get(name))
                 {
-                    // Create a closure wrapper with 0 captures (like FuncRef).
+                    // The function's one value, as for FuncRef.
                     // Consumer import table first — bare names collide.
                     let table_idx = self
                         .emitter
@@ -159,10 +169,9 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -310,7 +319,13 @@ impl<'a> FuncEmitCtx<'a> {
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
                 self.emit_frame_begin(func, 2);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
+                // The constructor slot, so the prototype's `constructor` is the class value.
+                let ctor_slot = if self.emitter.user_classes.contains(class_name.as_str()) {
+                    self.class_ctor_slot(class_name)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                self.emit_store_const(func, 1, ctor_slot);
                 self.emit_memcall(func, "class_new", 2);
                 let ctor = self
                     .emitter
@@ -791,13 +806,8 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
     pub(in crate::emit) fn class_ctor_slot(&self, class_name: &str) -> f64 {
-        self.emitter
-            .class_ctor_map
-            .get(class_name)
-            .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
-            .map_or(-1.0, |&slot| slot as f64)
+        self.emitter.class_ctor_slot(class_name)
     }
 
     /// The receiver a class-environment node resolves its evaluation from: `this`
