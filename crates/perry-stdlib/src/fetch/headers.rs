@@ -330,7 +330,7 @@ unsafe fn materialize_header_pair(
     let raw = perry_runtime::js_nanbox_get_pointer(pair_value);
     let pair_array_value = if matches!(
         gc_type_for_raw_ptr(raw),
-        Some(perry_runtime::gc::GC_TYPE_ARRAY | perry_runtime::gc::GC_TYPE_LAZY_ARRAY)
+        Some(perry_runtime::gc_array_type_pat!() | perry_runtime::gc::GC_TYPE_LAZY_ARRAY)
     ) {
         pair_value
     } else {

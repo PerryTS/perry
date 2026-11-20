@@ -104,8 +104,7 @@ fn throw_too_wide_for_wasi(width: usize) -> ! {
          supported on WASI yet (#11378): wasm needs an exact-arity call"
     );
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cold]
@@ -117,8 +116,7 @@ fn throw_too_wide(width: usize) -> ! {
          (at most {MAX_DYNAMIC_CALL_WIDTH} can be passed dynamically)"
     );
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]

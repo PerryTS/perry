@@ -5,6 +5,7 @@
 //! or with none, it is the call of an unknown function value it was before.
 
 use crate::builtins;
+use crate::builtins::Family;
 use crate::model::*;
 use crate::solve::Tokens;
 
@@ -23,9 +24,56 @@ impl Model {
     /// call's own `this`). `false`: not a named native, or a receiver its
     /// model does not cover: the caller runs the unknown callee's arm.
     pub(super) fn native_call(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
-        let TokKind::BuiltinFn(Native::Member { fam, what, key }) = self.toks[t as usize] else {
+        let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
+        // A module member whose effects the runtime declares at the body
+        // its dispatch arm calls: the declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_member(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_member(m, e, t, call));
+            }
+            return true;
+        }
+        if builtins::native_namespace_call(self, t, call, this_tok) {
+            return true;
+        }
+        // A static of a realm constructor whose effects the runtime
+        // declares without naming `this` (`AbortSignal.any`): the
+        // declaration runs, whatever `this`.
+        if let Some(e) = builtins::declared_static(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+
+        // The realm's own accessors run per receiver token
+        // (`builtins::realm_accessor_call`).
+        if builtins::is_realm_accessor(identity) {
+            let r = match (this_tok, &self.calls[call as usize].this) {
+                (Some(r), _) | (None, &ThisArg::Tok(r)) => Some(r),
+                (None, &ThisArg::Node(n)) => {
+                    if self.bind_done.insert((call, t, u32::MAX - 5)) {
+                        self.cons(n, Cons::NativeThis { call, f: t });
+                    }
+                    return true;
+                }
+                (None, ThisArg::Undef) => None,
+            };
+            if self.bind_done.insert((call, t, r.unwrap_or(u32::MAX - 8))) {
+                self.diagnostic_callee(call, t);
+                self.with_b(|m| builtins::realm_accessor_call(m, r, call));
+            }
+            return true;
+        }
+
+        let Some((fam, what, name)) = builtins::native_model(self, t) else {
+            return false;
+        };
+        let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {
             (Some(r), _) | (None, &ThisArg::Tok(r)) => r,
             (None, &ThisArg::Node(n)) => {
@@ -35,37 +83,326 @@ impl Model {
                 }
                 return true;
             }
-            (None, ThisArg::Undef) => return false,
+            (None, ThisArg::Undef)
+                if what.is_none()
+                    && matches!(
+                        fam,
+                        Family::Object
+                            | Family::Array
+                            | Family::Str
+                            | Family::Num
+                            | Family::Bool
+                            | Family::Sym
+                            | Family::BigInt
+                    ) =>
+            {
+                return self.method_undefined_this(call, t, fam, name);
+            }
+            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
         };
         if !builtins::native_receiver(self, fam, what, r) {
-            return false;
+            if fam == Family::Str {
+                return self.string_this(call, t, r, key);
+            }
+            if fam == Family::Function && builtins::never_callable(self, r) {
+                return self.function_this_not_callable(call, t, r, key);
+            }
+            if builtins::no_this_value(self, fam, what, r) {
+                return self.this_value_throws(call, t, r);
+            }
+            return self.declared_proto_call(call, t, identity);
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
-            self.with_b(|m| builtins::own_method(m, r, Key::Named(key), call));
+            self.with_native(call, |m, call| {
+                builtins::native_prototype_call(m, fam, r, key, call)
+            });
         }
         true
+    }
+
+    /// A method of `Object.prototype`, `Array.prototype` or a primitive's
+    /// prototype called with `this` undefined (a value read off an object
+    /// and called bare): `Object.prototype.toString` returns
+    /// `"[object Undefined]"` (ECMA-262 20.1.3.6 step 1); every other one
+    /// starts with `ToObject(this)` (`valueOf` 20.1.3.7, the Annex B methods
+    /// B.2.2, each `Array.prototype` method 23.1.3), `Invoke(this,
+    /// "toString")` (`toLocaleString` 20.1.3.5, `GetV`'s ToObject),
+    /// `RequireObjectCoercible(this)` or `thisStringValue` (22.1.3) or
+    /// `thisNumberValue` / `thisBooleanValue` / `thisSymbolValue` /
+    /// `thisBigIntValue` (21.1.3, 20.3.3, 20.4.3, 21.2.3): a TypeError before
+    /// any argument is used. No argument reaches other code. (The three
+    /// receiver-independent `Object.prototype` methods are `ObjectProtoOwn`;
+    /// a method whose effects the runtime declares ran as `declared_member`.)
+    fn method_undefined_this(&mut self, call: CallId, t: Tok, fam: Family, name: &str) -> bool {
+        if self.bind_done.insert((call, t, u32::MAX - 8)) {
+            self.diagnostic_callee(call, t);
+            if fam == Family::Object && name == "toString" {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::STR);
+            }
+        }
+        true
+    }
+
+    /// A prototype method called on a receiver its family model does not
+    /// cover (`Performance.prototype.now` on `performance`, a host object
+    /// with no family), when the runtime declares what a call does without
+    /// naming `this`: the declaration runs, whatever the receiver (one of
+    /// another brand throws before any of it: the declaration is a
+    /// superset). `false`: no such declaration, the unknown callee's arm.
+    fn declared_proto_call(&mut self, call: CallId, t: Tok, identity: &str) -> bool {
+        let Some(e) = builtins::declared_proto_method(identity) else {
+            return false;
+        };
+        if self.bind_done.insert((call, t, u32::MAX - 7)) {
+            self.diagnostic_callee(call, t);
+            self.with_native(call, |m, call| builtins::run_function(m, e, call));
+        }
+        true
+    }
+
+    /// A `Number`, `Boolean`, `Symbol` or `BigInt` prototype method called
+    /// with a receiver `r` that is no wrapper of any kind
+    /// (`builtins::no_this_value`): each starts with `thisNumberValue(this)`
+    /// / `thisBooleanValue` / `thisSymbolValue` / `thisBigIntValue` (ECMA-262
+    /// 21.1.3, 20.3.3, 20.4.3, 21.2.3), which reads an internal slot `r`
+    /// lacks and throws a TypeError before any argument is used: `r` reaches
+    /// no code. So does a `%TypedArray%.prototype` method called with a
+    /// receiver that is no typed array (ValidateTypedArray, 23.2.4.4).
+    fn this_value_throws(&mut self, call: CallId, t: Tok, r: Tok) -> bool {
+        if self.bind_done.insert((call, t, r)) {
+            self.diagnostic_callee(call, t);
+        }
+        true
+    }
+
+    /// A `Function.prototype` method called with a receiver `r` that is no
+    /// function (`builtins::never_callable`), the method a value: an object
+    /// field holding `Function.prototype.call` called as the object's
+    /// method, `Function.prototype.call.call(o)`. `call`, `apply`, `bind`
+    /// and `toString` throw a TypeError before they read `this` or an
+    /// argument (ECMA-262 20.2.3.3 step 2, 20.2.3.1 step 2, 20.2.3.2 step 2,
+    /// 20.2.3.5 step 3); `@@hasInstance` is OrdinaryHasInstance, false for a
+    /// non-callable `this` (20.2.3.6, 7.3.21 step 1): the member's model.
+    /// Nothing reaches unknown code.
+    fn function_this_not_callable(&mut self, call: CallId, t: Tok, r: Tok, key: Atom) -> bool {
+        if self.bind_done.insert((call, t, r)) {
+            self.diagnostic_callee(call, t);
+            if self.atoms[key as usize].starts_with(builtins::WK_PREFIX) {
+                self.with_b(|m| builtins::native_prototype_call(m, Family::Function, r, key, call));
+            }
+        }
+        true
+    }
+
+    /// A `String.prototype` method called with a receiver `r` of another
+    /// kind (`String.prototype.replace.call(o, ...)`): the method starts with
+    /// `ToString(RequireObjectCoercible(this))` (ES 22.1.3), which runs `r`'s
+    /// own ToPrimitive and nothing else on it; the rest is the method on that
+    /// string. `r` is not handed to unknown code. (`toString` and `valueOf`
+    /// throw on such an `r` instead: the model is a superset of that.)
+    /// An unknown `r` (⊤) is no exception: its ToPrimitive is its own code,
+    /// which receives nothing but `r` and may throw anything (an operation
+    /// on ⊤); the arguments still go only where the method sends them, and
+    /// the result is the string method's.
+    fn string_this(&mut self, call: CallId, t: Tok, r: Tok, key: Atom) -> bool {
+        if self.bind_done.insert((call, t, r)) {
+            self.diagnostic_callee(call, t);
+            if r == TOP {
+                let c = &self.calls[call as usize];
+                let (region, ret) = (c.region, c.ret);
+                self.raise_top(
+                    region,
+                    ret,
+                    "unknown code may throw in the region (an operation on ⊤)",
+                );
+            }
+            let why = self.reason("ToString(this) of a String.prototype method");
+            self.implicit(r, why, Protocol::ToPrimitive);
+            self.with_native(call, |m, call| {
+                builtins::prim_method(m, prim::STR, Key::Named(key), call)
+            });
+        }
+        true
+    }
+
+    /// `Cons::ProtoKey` for receiver `t` (`E.prototype.key`): builtin
+    /// namespace `F` reads its intrinsic prototype, whose own method `key`
+    /// is final (DEC 250: a store there is refused), so the read is that
+    /// native (`builtins::proto_own_native`); any other value, or a key
+    /// the prototype does not hold as a final method, is the two reads.
+    pub(super) fn proto_key(&mut self, t: Tok, key: Atom, dst: NodeId) {
+        if let TokKind::Builtin(ns) = self.toks[t as usize] {
+            if let Some(n) = builtins::proto_own_native(self, ns, key, dst) {
+                let f = self.tok(TokKind::BuiltinFn(n));
+                self.add_tok(dst, f);
+                return;
+            }
+        }
+        let r = self.proto_key_relay(key, dst);
+        let pa = self.atom("prototype");
+        self.load_from(t, t, Key::Named(pa), r);
+    }
+
+    /// The prototypes node of `Cons::ProtoKey` into `dst`: it loads `key`
+    /// into `dst` (one per `dst`, in `dst`'s frame).
+    pub(super) fn proto_key_relay(&mut self, key: Atom, dst: NodeId) -> NodeId {
+        if let Some(&r) = self.proto_key_relays.get(&dst) {
+            return r;
+        }
+        let r = self.node_l("protokey-protos");
+        self.nodes[r as usize].frame = self.nodes[dst as usize].frame;
+        self.nodes[r as usize].obs = self.nodes[dst as usize].obs;
+        self.proto_key_relays.insert(dst, r);
+        self.cons(
+            r,
+            Cons::Load {
+                key: Key::Named(key),
+                dst,
+            },
+        );
+        r
     }
 
     /// `Cons::NativeThis`: the receiver values of `call` into named native
     /// `f`. A primitive of the member's family runs the primitive's method;
     /// `undefined` / `null` throw (no intrinsic prototype method accepts
-    /// them as `this`); any other primitive is an unknown callee's call.
+    /// them as `this`).
+    ///
+    /// Another primitive on a primitive family's method runs no program
+    /// code: a `String.prototype` method starts with `ToString(this)` (ES
+    /// 22.1.3), which for a number, boolean or bigint is the realm's own
+    /// conversion, so the method runs on a string (`string_this` minus the
+    /// ToPrimitive; `toString` / `valueOf` throw instead: a superset); on a
+    /// symbol it throws. A `Number`, `Boolean`, `Symbol` or `BigInt` method
+    /// starts with `thisNumberValue(this)` (and the like), which throws on a
+    /// foreign primitive: no callee, nothing escapes. On any other family's
+    /// method (generic `ToObject(this)`) the primitive is an unknown
+    /// callee's call.
     pub(super) fn native_this(&mut self, call: CallId, f: Tok, toks: Tokens<'_>, prim: u16) {
         for &r in toks {
             self.call_tok(call, f, Some(r));
         }
-        let TokKind::BuiltinFn(Native::Member { fam, key, .. }) = self.toks[f as usize] else {
+        if let TokKind::Builtin(BuiltinNs::ObjectProtoMethod) = self.toks[f as usize] {
+            if prim != 0 {
+                self.with_b(|m| builtins::object_proto_method_prims(m, prim, call));
+            }
+            return;
+        }
+        let TokKind::BuiltinFn(Native::Member { .. }) = self.toks[f as usize] else {
             return;
         };
+        let Some((fam, _, name)) = builtins::native_model(self, f) else {
+            return;
+        };
+        let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let own = prim & builtins::native_prims(fam);
         if own != 0 {
-            self.with_b(|m| builtins::prim_method(m, own, Key::Named(key), call));
+            self.with_native(call, |m, call| {
+                builtins::prim_method(m, own, Key::Named(key), call)
+            });
         }
-        if prim & !own & !(prim::UNDEF | prim::NULL) != 0
-            && self.bind_done.insert((call, f, u32::MAX - 2))
+        let foreign = prim & !own & !(prim::UNDEF | prim::NULL);
+        if foreign == 0 {
+            return;
+        }
+        if fam == Family::Object {
+            // `Object.prototype`'s Annex B accessor methods (B.2.2.2-5) with
+            // a primitive `this`, the method a value (`o.m =
+            // Object.prototype.__lookupGetter__`, then `o.m.call(1, k)`): the
+            // native that runs is the one the name finds on the primitive's
+            // chain (no primitive prototype has an own member of these
+            // names), so the call is the primitive's call by name.
+            // `__defineGetter__` / `__defineSetter__` call no argument and
+            // keep none: the runtime (`object_ops/accessors.rs`
+            // `define_accessor_annexb`) throws a TypeError for a non-callable
+            // function, then `js_object_define_property` throws on a
+            // non-object `this` (`define_property.rs:161`); ECMA-262 defines
+            // on the discarded wrapper (7.1.18). `__lookupGetter__` /
+            // `__lookupSetter__` walk the primitive's chain
+            // (`accessors.rs` `lookup_accessor_annexb`, B.2.2.4/5):
+            // `annexb_lookup_prim`.
+            let n: &str = &*name;
+            if matches!(
+                n,
+                "__defineGetter__" | "__defineSetter__" | "__lookupGetter__" | "__lookupSetter__"
+            ) {
+                let setter = n == "__lookupSetter__";
+                let lookup = n.starts_with("__lookup");
+                let mut b = foreign;
+                while b != 0 {
+                    let k = b & b.wrapping_neg();
+                    b &= !k;
+                    if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
+                        self.diagnostic_callee(call, f);
+                        if lookup {
+                            self.with_native(call, |m, call| {
+                                builtins::annexb_lookup_prim(m, k, call, setter)
+                            });
+                        }
+                    }
+                }
+                return;
+            }
+        }
+        if builtins::native_prims(fam) == 0 {
+            // A generic `Array.prototype` method ToObject's its `this`
+            // (ECMA-262 23.1.3, 7.1.18): a string, number, boolean, symbol
+            // or bigint share runs the method on that share's own wrapper
+            // object (`array_method_on_prim`). So does each `Object.prototype`
+            // method but `toLocaleString`: `valueOf` (20.1.3.7) and the Annex B
+            // accessor methods (B.2.2.2-5) begin with ToObject(this),
+            // `toString` (20.1.3.6) with it after `undefined` / `null`,
+            // `hasOwnProperty` / `propertyIsEnumerable` (20.1.3.2, 20.1.3.4)
+            // with it after ToPropertyKey of the key, `isPrototypeOf`
+            // (20.1.3.3) with it after a non-object argument answered false;
+            // the wrapper is new, so the order is not observable.
+            // `toLocaleString` (20.1.3.5) is Invoke(this, "toString"): the
+            // primitive itself is the callee's `this`, no wrapper. Every other
+            // family's stays an unknown callee's call.
+            let boxed = if fam == Family::Array
+                || (fam == Family::Object && builtins::object_proto_method_to_object(name))
+            {
+                foreign & builtins::ARRAY_BOXED_PRIMS
+            } else {
+                0
+            };
+            let mut b = boxed;
+            while b != 0 {
+                let k = b & b.wrapping_neg();
+                b &= !k;
+                if self.bind_done.insert((call, f, u32::MAX - 16 - k as u32)) {
+                    self.with_native(call, |m, call| {
+                        builtins::method_on_prim(m, fam, k, key, call)
+                    });
+                }
+            }
+            // `Object.prototype.toLocaleString` is Invoke(this, "toString")
+            // (20.1.3.5): GetV reads `toString` off the primitive's own
+            // prototype chain and calls it with the primitive as `this`
+            // (`prim_method`, as a read of `toString` on that value).
+            let mut local = 0;
+            if fam == Family::Object && name == "toLocaleString" {
+                local = foreign & !boxed & builtins::ARRAY_BOXED_PRIMS;
+                if local != 0 && self.bind_done.insert((call, f, u32::MAX - 6)) {
+                    let ts = self.atom("toString");
+                    self.with_native(call, |m, call| {
+                        builtins::prim_method(m, local, Key::Named(ts), call)
+                    });
+                }
+            }
+            if foreign & !boxed & !local != 0 && self.bind_done.insert((call, f, u32::MAX - 2)) {
+                self.unknown_callee_args(call, f, false);
+            }
+        } else if fam == Family::Str
+            && foreign & (prim::NUM | prim::BOOL | prim::BIGINT) != 0
+            && self.bind_done.insert((call, f, u32::MAX - 6))
         {
-            self.unknown_callee_args(call, f, false);
+            self.diagnostic_callee(call, f);
+            self.with_native(call, |m, call| {
+                builtins::prim_method(m, prim::STR, Key::Named(key), call)
+            });
         }
     }
 }

@@ -36,7 +36,9 @@ fn y_reads(pf: &ProgramFacts) -> Vec<Verdict> {
 
 fn y_proven(pf: &ProgramFacts) -> bool {
     let v = y_reads(pf);
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 /// What the driver passes for a program with an interpreted source site
@@ -79,7 +81,7 @@ fn with_an_interpreter_linked_it_is_dynamic_code() {
 fn an_unknown_callee_still_receives_its_arguments() {
     let src = program("", "d").replace(
         "const holder: any = { m: g.constructor };",
-        "declare const unknown: any; const holder: any = { m: unknown.f };",
+        "import \"unseen-host\"; declare const unknown: any; const holder: any = { m: unknown.f };",
     );
     let pf = facts(&src);
     assert!(!y_proven(&pf), "{:?}", y_reads(&pf));
@@ -90,7 +92,7 @@ fn an_unknown_callee_still_receives_its_arguments() {
 #[test]
 fn the_arguments_tostring_still_runs() {
     let pf = facts(&program(
-        "declare const unknown: any; const a = { toString() { unknown.take(d); return ''; } };",
+        "import \"unseen-host\"; declare const unknown: any; const a = { toString() { unknown.take(d); return ''; } };",
         "a",
     ));
     assert!(!y_proven(&pf), "{:?}", y_reads(&pf));

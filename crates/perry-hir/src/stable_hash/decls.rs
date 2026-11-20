@@ -33,6 +33,7 @@ impl SH for Class {
             is_exported,
             aliases,
             is_nested,
+            decl_stmt,
             alloc_width_hint,
             specialized_from,
         } = self;
@@ -58,6 +59,7 @@ impl SH for Class {
         is_exported.hash(h);
         aliases.hash(h);
         is_nested.hash(h);
+        decl_stmt.hash(h);
         alloc_width_hint.hash(h);
         // #7575: drives an extra module-init registration, so it is part of
         // what the object cache keys on.
@@ -259,6 +261,7 @@ impl SH for Function {
             is_async,
             is_generator,
             is_strict,
+            construct_only,
             is_exported,
             captures,
             decorators,
@@ -274,6 +277,7 @@ impl SH for Function {
         is_async.hash(h);
         is_generator.hash(h);
         is_strict.hash(h);
+        construct_only.hash(h);
         is_exported.hash(h);
         captures.hash(h);
         decorators.hash(h);

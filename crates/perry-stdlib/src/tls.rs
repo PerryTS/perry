@@ -271,7 +271,7 @@ fn type_name(value: f64) -> &'static str {
         "boolean"
     } else if jsv.is_any_string() {
         "string"
-    } else if jsv.is_number() || jsv.is_int32() {
+    } else if jsv.is_number() {
         "number"
     } else if jsv.is_pointer() {
         "object"
@@ -286,8 +286,7 @@ fn throw_type_error(message: &str, code: &'static str) -> ! {
 
 fn throw_plain_type_error(message: &str) -> ! {
     let msg = perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 fn is_closure_value(value: f64) -> bool {
@@ -299,8 +298,7 @@ fn throw_error(message: &str, code: &'static str) -> ! {
     {
         let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
         perry_runtime::node_submodules::register_error_code_pub(msg, code);
-        let err = perry_runtime::error::js_error_new_with_message(msg);
-        perry_runtime::exception::js_throw(js_nanbox_pointer(err as i64))
+        perry_runtime::exception::throw_core(perry_runtime::error::CoreError::error(msg))
     }
 }
 
@@ -908,7 +906,7 @@ unsafe fn validate_server_options(options: f64) -> (f64, bool, bool, Option<Vec<
     for field in ["handshakeTimeout", "sessionTimeout"] {
         let value = object_field(options, field);
         let js = JSValue::from_bits(value.to_bits());
-        if !js.is_undefined() && !js.is_number() && !js.is_int32() {
+        if !js.is_undefined() && !js.is_number() {
             throw_type_error(
                 &format!("The \"options.{field}\" property must be of type number"),
                 "ERR_INVALID_ARG_TYPE",

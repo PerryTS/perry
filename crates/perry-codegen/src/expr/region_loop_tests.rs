@@ -61,6 +61,7 @@ fn put(key: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::LocalGet(O)),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -117,6 +118,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, opts()).expect("module compiles")).expect("UTF-8 IR")

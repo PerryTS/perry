@@ -169,7 +169,7 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                     // SAFETY: The runtime keeps the completion and its spans valid until this sink
                     // returns; these reads do not retain the borrowed metadata.
                     unsafe { event.code() }.unwrap_or("EIO"),
-                    &error_message(event),
+                    &error_message(event, None),
                 );
                 events::emit(owner.get(), "error", &[error]);
                 // SAFETY: The retained link belongs to this agent; projection checks family/open
@@ -238,20 +238,48 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 // A listener may reopen either object during the first emit.
                 let wrapper_record = scope.root_nanbox(prepare_socket_closed(owner.get(), &closed));
                 let parent_record = scope.root_nanbox(prepare_socket_closed(original.get(), event));
-                emit_socket_closed(owner.get(), wrapper_record.get());
-                emit_socket_closed(original.get(), parent_record.get());
+                queue_socket_closed(owner.get(), wrapper_record.get());
+                queue_socket_closed(original.get(), parent_record.get());
             } else {
                 socket_closed(owner.get(), event);
             }
         }
         tl::NET_ERROR => {
-            let error = socket::error(
-                // SAFETY: The runtime keeps the completion and its spans valid until this sink
-                // returns; these reads do not retain the borrowed metadata.
-                unsafe { event.code() }.unwrap_or("EIO"),
-                &error_message(event),
-            );
-            socket::destroy(owner.get(), error);
+            // A shutdown completion follows all accepted writes. Node completes
+            // its finalizer when the peer is already gone, without turning a
+            // successful child exit into an unhandled socket error.
+            // SAFETY: Completion strings live through this sink; projection only reads
+            // native state, without retaining a borrow across callbacks or allocation.
+            let ended_peer = event.flags & tl::NET_FLAG_STALE == 0
+                && event.terminal != 0
+                && event.queued == 0
+                && unsafe {
+                    event.code() == Some("ENOTCONN")
+                        && event.syscall() == Some("shutdown")
+                        && p::socket_ptr(link).is_ok_and(|payload| {
+                            let fields = &(*payload).ext;
+                            fields.opened
+                                && !fields.connecting
+                                && fields.write_ended
+                                && !fields.shutdown_done
+                        })
+                };
+            if ended_peer {
+                shutdown(owner.get(), event.user);
+            } else {
+                let target = connect_target(link, event);
+                let error = scope.root_nanbox(socket::error(
+                    // SAFETY: The runtime keeps the completion and its spans valid until this sink
+                    // returns; these reads do not retain the borrowed metadata.
+                    unsafe { event.code() }.unwrap_or("EIO"),
+                    &error_message(event, target.as_ref()),
+                ));
+                if let Some(target) = target {
+                    p::own_set(error.get(), "address", events::string(&target.address));
+                    p::own_set(error.get(), "port", f64::from(target.port));
+                }
+                socket::destroy(owner.get(), error.get());
+            }
         }
         tl::NET_TIMER => {
             events::emit(owner.get(), "timeout", &[]);
@@ -260,8 +288,28 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
     }
 }
 
-fn error_message(event: &tl::NetCompletion) -> String {
-    format!(
+#[cfg(test)]
+pub(super) fn deliver_for_test(completion: &tl::NetCompletion) {
+    sink(completion);
+}
+
+/// The peer a failed `connect` was attempting, which Node puts in the message
+/// and on the error. A hostname whose every address failed has no handle left.
+fn connect_target(link: OwnerLink, event: &tl::NetCompletion) -> Option<tl::Endpoint> {
+    // SAFETY: The runtime keeps the completion and its spans valid until this sink returns.
+    if unsafe { event.syscall() } != Some("connect") {
+        return None;
+    }
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+    // and the address read is callback-free.
+    unsafe {
+        let core = p::socket_core(link).ok()?;
+        tl::link_peer_address(&mut *core, link).filter(|peer| !peer.address.is_empty())
+    }
+}
+
+fn error_message(event: &tl::NetCompletion, target: Option<&tl::Endpoint>) -> String {
+    let message = format!(
         "{} {}",
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
@@ -269,7 +317,11 @@ fn error_message(event: &tl::NetCompletion) -> String {
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
         unsafe { event.code() }.unwrap_or("EIO")
-    )
+    );
+    match target {
+        Some(target) => format!("{message} {}:{}", target.address, target.port),
+        None => message,
+    }
 }
 
 pub(crate) fn connected(owner: f64) {
@@ -618,7 +670,9 @@ pub(crate) fn socket_closed(owner: f64, event: &tl::NetCompletion) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
     let record = scope.root_nanbox(prepare_socket_closed(owner.get(), event));
-    emit_socket_closed(owner.get(), record.get());
+    // Native acknowledgement may arrive before the logical destroy jobs run.
+    // Share their FIFO so cancellation and error precede close/provider retirement.
+    queue_socket_closed(owner.get(), record.get());
 }
 
 fn prepare_socket_closed(owner: f64, event: &tl::NetCompletion) -> f64 {
@@ -726,9 +780,6 @@ fn emit_socket_closed(owner: f64, record: f64) {
         p::undefined()
     });
     server::child_closed(owner.get(), group.get());
-    if had_error {
-        events::emit_in(resource.get(), owner.get(), "error", &[error.get()]);
-    }
     let had_handle = !record_exists
         || p::record_get(record.get(), "hadHandle").to_bits() != JsValue::FALSE.bits();
     let args = if had_handle {

@@ -342,7 +342,7 @@ unsafe fn heap_payload_slot_selection_impl(
     match (*header)._reserved & GC_LAYOUT_STATE_MASK {
         GC_LAYOUT_POINTER_FREE => HeapPayloadSlotSelection::PointerFree {
             emitted: false,
-            raw_numeric_array: (*header).obj_type == GC_TYPE_ARRAY
+            raw_numeric_array: crate::gc_type_is_array!((*header).obj_type)
                 && (*header)._reserved & GC_ARRAY_RAW_F64_LAYOUT != 0,
             raw_numeric_object_slots,
         },
@@ -400,7 +400,6 @@ pub(in crate::gc) unsafe fn gc_child_slots(header: *mut GcHeader) -> HeapChildSl
             // keeps payload slot indices aligned with the layout masks.
             HeapChildSlotIterator::new_object(header, None, range, shape)
                 .with_meta_slot(crate::object::gc_object_meta_slot(user_ptr as usize))
-                .with_meta_slot2(crate::object::arguments_mapping_slot(obj))
         }
         GcLayoutSlotKind::RegExpFields => {
             let (source, count) =
@@ -502,7 +501,7 @@ impl GcMutableSlot {
             return false;
         }
         let header = header_from_user_ptr(bits as usize as *const u8);
-        debug_assert_eq!((*header).obj_type, GC_TYPE_ARRAY);
+        debug_assert!(crate::gc_type_is_array!((*header).obj_type));
         (*header).gc_flags & (GC_FLAG_MARKED | GC_FLAG_FORWARDED) == GC_FLAG_MARKED
     }
 

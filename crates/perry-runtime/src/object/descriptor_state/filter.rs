@@ -2,7 +2,7 @@
 use super::*;
 #[derive(Clone, Copy)]
 pub(super) struct DescriptorRoute {
-    pub(super) bag: *const ObjectHeader,
+    pub(super) target: super::holder_edit::KeyTarget,
     /// Present only for integrity-restricted arrays. The routing boundary
     /// already resolved this header; descriptor queries never resolve it again.
     pub(super) integrity_array: *const ArrayHeader,
@@ -11,7 +11,15 @@ impl DescriptorRoute {
     #[inline]
     fn keys(bag: *const ObjectHeader) -> Self {
         Self {
-            bag,
+            target: super::holder_edit::KeyTarget::Object(bag as *mut ObjectHeader),
+            integrity_array: std::ptr::null(),
+        }
+    }
+    /// A function's own keys: its store is addressed by the function.
+    #[inline]
+    fn function(owner: usize) -> Self {
+        Self {
+            target: super::holder_edit::KeyTarget::Function(owner),
             integrity_array: std::ptr::null(),
         }
     }
@@ -29,7 +37,7 @@ unsafe fn array_route(mut arr: *const ArrayHeader) -> DescriptorRoute {
         header = crate::gc::header_from_trusted_user_ptr(arr.cast());
     }
     DescriptorRoute {
-        bag: crate::array::array_property_bag(arr),
+        target: super::holder_edit::KeyTarget::Object(crate::array::array_property_bag(arr)),
         integrity_array: if (*header)._reserved
             & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED)
             != 0
@@ -64,11 +72,11 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
     let bag = if crate::value::addr_class::is_proxy_cell(owner) {
         crate::proxy_hooks::property_bag(owner)
     } else if crate::closure::is_closure_ptr(owner) {
-        crate::closure::props::bag_of(owner)
+        return DescriptorRoute::function(owner);
     } else if crate::buffer::header::is_owned_byte_cell(owner) {
         crate::buffer::store::bag(owner)
     } else if crate::value::addr_class::try_read_gc_header(owner)
-        .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
     {
         // Array queries already arrive at a GC array holder. Preserve their
         // header-only route; allocator admission belongs to the otherwise
@@ -79,7 +87,7 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
             .map(|h| (*h.as_ptr()).obj_type)
         {
             Some(crate::gc::GC_TYPE_OBJECT) => resolve_object_holder(owner) as *mut ObjectHeader,
-            Some(crate::gc::GC_TYPE_ARRAY) => return array_route(owner as *const ArrayHeader),
+            Some(crate::gc_array_type_pat!()) => return array_route(owner as *const ArrayHeader),
             // Still lazy: no own properties (a write materializes it into
             // the ordinary array first).
             Some(crate::gc::GC_TYPE_LAZY_ARRAY) => std::ptr::null_mut(),
@@ -105,13 +113,12 @@ pub(super) unsafe fn descriptor_route(owner: usize) -> DescriptorRoute {
 #[inline]
 pub(crate) fn may_have_descriptor_entry(owner: usize, key: &str, accessor: bool) -> bool {
     unsafe {
-        let bag = descriptor_route(owner).bag;
-        !bag.is_null()
-            && if accessor {
-                super::key_attrs::object_key_is_accessor(bag, key.as_bytes())
-            } else {
-                super::key_attrs::object_key_entry(bag, key.as_bytes()) != 0
-            }
+        let target = descriptor_route(owner).target;
+        if accessor {
+            target.key_is_accessor(key.as_bytes())
+        } else {
+            target.key_entry(key.as_bytes()) != 0
+        }
     }
 }
 #[cfg(test)]

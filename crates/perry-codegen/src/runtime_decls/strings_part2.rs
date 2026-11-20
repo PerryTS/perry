@@ -121,6 +121,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // context): numeric element in-bounds, TAG_UNDEFINED double for OOB / view /
     // wrong-kind — bit-exact with js_typed_array_get.
     module.declare_function("js_typed_array_read_f64", DOUBLE, &[I64, I32]);
+    module.declare_function("js_typed_array_get_number_key", DOUBLE, &[I64, DOUBLE]);
     // #9342: priming slow arm of the inline Uint8Array byte read
     // (expr/u8_buffer_read.rs); delegates to js_uint8array_index_get_value.
     module.declare_function("js_u8_buffer_read_f64", DOUBLE, &[I64, I32]);
@@ -159,6 +160,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_typed_array_find_last_index", DOUBLE, &[I64, I64]);
     // #3148: TypedArray.prototype.set(source, offset?) / subarray(begin?, end?).
     module.declare_function("js_typed_array_set_from", DOUBLE, &[I64, DOUBLE, DOUBLE]);
+    module.declare_function(
+        "js_typed_array_set_call",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE, I32],
+    );
     module.declare_function(
         "js_typed_array_subarray",
         I64,
@@ -205,6 +211,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_builtin_namespace_member", DOUBLE, &[DOUBLE, PTR, I64]);
     crate::builtin_proto::declare_entries(module);
     module.declare_function("js_builtin_proto_generic_call0", DOUBLE, &[DOUBLE, I64]);
+    module.declare_function("js_collection_size_get", DOUBLE, &[DOUBLE]);
     module.declare_function(
         "js_builtin_proto_generic_call1",
         DOUBLE,
@@ -228,6 +235,8 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #10943: the own-override guard condition; 0 takes the builtin, 1 the
     // universal dispatcher.
     module.declare_function("js_receiver_may_own_named_method", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_array_method_needs_get", I32, &[DOUBLE, DOUBLE]);
+    module.declare_function("js_array_member_witness", I32, &[DOUBLE, DOUBLE]);
     // #2891: Object.prototype.propertyIsEnumerable.call(obj, key).
     module.declare_function(
         "js_object_property_is_enumerable",
@@ -302,6 +311,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // The codegen IndexGet/IndexSet paths on `Expr::GlobalGet` route
     // through this helper.
     module.declare_function("js_get_global_this", DOUBLE, &[]);
+    // Two-phase realm (off with `PERRY_REALM_TWO_PHASE=0`): the core entry of a static
+    // read of a phase-A name, the entry's mode call, check mode's read check.
+    module.declare_function("js_get_global_core", DOUBLE, &[]);
+    module.declare_function("js_realm_two_phase", VOID, &[I32]);
+    module.declare_function("js_realm_check_global_read", VOID, &[DOUBLE]);
+    module.declare_function("js_realm_complete", DOUBLE, &[]);
+    module.declare_function("js_realm_family_phase", VOID, &[I32]);
     module.declare_function("js_module_top_this", DOUBLE, &[]);
     module.declare_function("js_global_or_console_property_by_name", DOUBLE, &[I64]);
     // Refs #420: register a static computed-key Symbol field on a class.
@@ -423,8 +439,15 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_object_assign_validate_target", DOUBLE, &[DOUBLE]);
     module.declare_function("js_object_assign_one", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_object_literal_spread", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_object_spread_fresh", DOUBLE, &[DOUBLE, DOUBLE]);
-    module.declare_function("js_object_spread_fresh_leading", DOUBLE, &[DOUBLE, DOUBLE]);
+    // `Object.assign({}, source)`: the fresh target born for the source.
+    module.declare_function("js_object_assign_fresh", DOUBLE, &[DOUBLE]);
+    // Spread parts: (accumulator, source, literal keys after this part).
+    module.declare_function("js_object_spread_fresh", DOUBLE, &[DOUBLE, DOUBLE, I32]);
+    module.declare_function(
+        "js_object_spread_fresh_leading",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I32],
+    );
     // String extras (already in string.rs; expr.rs was stubbing or missing dispatch).
     module.declare_function("js_string_at", DOUBLE, &[I64, I32]);
     module.declare_function("js_string_code_point_at", DOUBLE, &[I64, I32]);
@@ -616,6 +639,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_crypto_generate_key_pair_sync_ed25519", I64, &[DOUBLE]);
     module.declare_function("js_crypto_generate_key_pair_sync_x25519", I64, &[DOUBLE]);
     module.declare_function(
+        "js_crypto_generate_key_pair_sync_named",
+        I64,
+        &[I64, DOUBLE],
+    );
+    module.declare_function(
         "js_crypto_generate_key_pair_async",
         DOUBLE,
         &[I64, DOUBLE, DOUBLE],
@@ -773,6 +801,11 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     // #10873: `new ArrayBuffer(length, { maxByteLength })`.
     module.declare_function("js_array_buffer_new_with_options", I64, &[DOUBLE, DOUBLE]);
     module.declare_function("js_shared_array_buffer_new_value", I64, &[DOUBLE]);
+    module.declare_function(
+        "js_shared_array_buffer_new_with_options",
+        I64,
+        &[DOUBLE, DOUBLE],
+    );
     // JSON full-featured stringify/parse (replacer + indent + reviver).
     module.declare_function("js_json_stringify_full", I64, &[DOUBLE, DOUBLE, DOUBLE]);
     module.declare_function("js_json_parse_with_reviver", I64, &[I64, I64]);
@@ -835,6 +868,9 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_event_loop_host_driven", I32, &[]);
     module.declare_function("js_unsettled_top_level_await_exit", VOID, &[]);
     module.declare_function("js_throw", VOID, &[DOUBLE]);
+    // A throw handled by a scope of the throwing function: makes the value
+    // pending and returns (`stmt/try_stmt.rs::emit_throw`).
+    module.declare_function("js_throw_local", VOID, &[DOUBLE]);
 
     // Exception handling: invoke/landingpad-based try/catch (#7302).
     // Entering a `try` costs nothing (ehfree slice 1): every landing pad
@@ -983,6 +1019,13 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
         "js_native_call_method_by_id",
         DOUBLE,
         &[DOUBLE, I64, PTR, I64],
+    );
+    // ONCHG1: a guarded call's own late-slot value (receiver, slot word,
+    // dispatch id, args).
+    module.declare_function(
+        "js_call_late_own_value",
+        DOUBLE,
+        &[DOUBLE, I64, I64, PTR, I64],
     );
     // Apply form: takes the args as a JS array handle (i64). The runtime
     // materialises the array elements into a temp f64 buffer and forwards to

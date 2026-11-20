@@ -192,7 +192,7 @@ unsafe fn read_heap_string(bits: u64, max_chars: usize) -> Option<String> {
 /// Snapshot node type + display name for one GC object.
 unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
     match rec.obj_type {
-        GC_TYPE_ARRAY | GC_TYPE_LAZY_ARRAY => (NODE_TYPE_ARRAY, "Array".to_string()),
+        crate::gc_array_type_pat!() | GC_TYPE_LAZY_ARRAY => (NODE_TYPE_ARRAY, "Array".to_string()),
         GC_TYPE_STRING => {
             let name = read_heap_string(
                 crate::value::JSValue::string_ptr(rec.user as *mut crate::StringHeader).bits(),
@@ -239,6 +239,55 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
     }
 }
 
+/// LIFE I3d (`gc::life_why`): the label of one object for a holder chain.
+#[cfg(perry_gc_instruments)]
+pub(super) unsafe fn life_label(header: *mut GcHeader) -> String {
+    let rec = NodeRec {
+        header,
+        user: (header as usize) + GC_HEADER_SIZE,
+        obj_type: (*header).obj_type,
+        self_size: (*header).size,
+    };
+    let (kind, name) = node_label(&rec);
+    let mut name: String = name.chars().take(48).collect();
+    if kind == NODE_TYPE_ARRAY && rec.obj_type != GC_TYPE_LAZY_ARRAY {
+        let arr = rec.user as *const crate::array::ArrayHeader;
+        let len = (*arr).length.min(8);
+        let els = crate::array::array_elements_ptr(arr);
+        name.push_str(&format!(" len={} [", (*arr).length));
+        for i in 0..len as usize {
+            let bits = *els.add(i);
+            let v = crate::value::JSValue::from_bits(bits);
+            // An element of key/attribute storage is not always a value (attribute words): read a
+            // string only behind a tracked string header.
+            let target = decode_slot_target(bits);
+            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                target,
+                GC_TYPE_STRING,
+            )
+            .is_some();
+            let text = tracked
+                .then(|| read_heap_string(bits, 24))
+                .flatten()
+                .or_else(|| {
+                    v.is_short_string()
+                        .then(|| crate::value::boxed_text::short_string_content(v))
+                })
+                .unwrap_or_else(|| format!("{bits:#x}"));
+            name.push_str(&text);
+            name.push(',');
+        }
+        name.push(']');
+    }
+    format!(
+        "type={} size={} flags={:#x} {:?}",
+        rec.obj_type,
+        rec.self_size,
+        (*header).gc_flags,
+        name
+    )
+}
+
 /// Best-effort property name for inline object field `field_index`,
 /// resolved through the object's keys array. `None` for class
 /// instances (keys array is NULL) and non-string keys.
@@ -255,7 +304,7 @@ unsafe fn object_field_name(
         return None;
     }
     let keys_header = (keys_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-    if (*keys_header).obj_type != GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*keys_header).obj_type) {
         return None;
     }
     let keys = keys_addr as *const crate::array::ArrayHeader;
@@ -387,7 +436,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
         // Element-index naming only for regular arrays — GC_TYPE_LAZY_ARRAY
         // has a different header layout, so its slots fall through to the
         // `internal` label below.
-        let (elems_base, elems_len) = if rec.obj_type == GC_TYPE_ARRAY {
+        let (elems_base, elems_len) = if crate::gc_type_is_array!(rec.obj_type) {
             let arr = rec.user as *const crate::array::ArrayHeader;
             (
                 unsafe { crate::array::array_elements_ptr(arr) as usize },

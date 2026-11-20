@@ -68,7 +68,7 @@ pub extern "C" fn js_component_host_resource_create(
     let row = scope.root_nanbox_f64(undefined());
     let mut key = String::new();
     let mut id = 0;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         key = string(ty.get_nanbox_f64());
         let context = unsafe { &*context::get(owner.get_nanbox_f64()) };
         if !context.alive {
@@ -315,7 +315,7 @@ pub(in crate::component) fn dispose_owner(owner: f64) {
     let keys = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(crate::map::js_map_keys(
         map_pointer(map.get_nanbox_f64()),
     ) as i64));
-    let error = scope.root_nanbox_f64(undefined());
+    let mut error = None;
     let mut failed = false;
     for index in 0..crate::array::js_array_length(array(keys.get_nanbox_f64())) {
         let id = get(keys.get_nanbox_f64(), index);
@@ -323,16 +323,15 @@ pub(in crate::component) fn dispose_owner(owner: f64) {
         if array_pointer(row).is_none() {
             continue;
         } // an earlier destructor disposed it
-        if let Err(thrown) =
-            crate::exception::catch_js_throw(|| destroy(owner.get_nanbox_f64(), id))
+        if let Err(thrown) = crate::exception::catch_thrown(|| destroy(owner.get_nanbox_f64(), id))
         {
             if !failed {
-                error.set_nanbox_f64(thrown);
+                error = Some(thrown.root(&scope));
                 failed = true;
             }
         }
     }
     if failed {
-        crate::exception::js_throw(error.get_nanbox_f64());
+        crate::exception::rethrow_caught(error.as_ref().unwrap().caught());
     }
 }

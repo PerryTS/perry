@@ -12,7 +12,7 @@
 //!
 //! Nothing faults at the move: the probe fails its `obj_type == GC_TYPE_OBJECT`
 //! check on the recycled cell and answers TAG_UNDEFINED, so the wrong answer
-//! surfaces several steps downstream. `test-files/test_gap_9417_dispatch_
+//! surfaces several steps downstream. `tests/fixtures/programs/test_gap_9417_dispatch_
 //! receiver_roots.ts` is the end-to-end half of this, and it fails
 //! deterministically without GC environment knobs.
 //!
@@ -62,6 +62,7 @@ fn empty_fn(id: u32, name: &str, return_type: Type) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -99,6 +100,7 @@ fn tagged_class() -> perry_hir::Class {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

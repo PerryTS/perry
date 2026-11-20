@@ -246,6 +246,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeInvokeCallback1(
     key: jni::sys::jlong,
     arg: jni::sys::jdouble,
 ) {
+    crate::widgets::bottom_nav::select_from_tap(key as i64, arg);
     invoke1(key as i64, arg);
     pump_microtasks();
 }

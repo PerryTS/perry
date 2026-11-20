@@ -210,6 +210,7 @@ fn census_stmts(stmts: &[perry_hir::Stmt], acc: &mut (u64, u64)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 census_stmts(body, acc);
                 if let Some(c) = catch {

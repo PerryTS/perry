@@ -38,7 +38,8 @@ impl<'a> Gen<'a> {
             for e in self.exports_of(mi) {
                 match e {
                     // An erased type export binds nothing and shadows nothing.
-                    Export::Named { local, .. } if modules[mi].1.is_type_only_export_binding(local) => {}
+                    Export::Named { local, .. }
+                        if modules[mi].1.is_type_only_export_binding(local) => {}
                     Export::Named { exported, .. } | Export::ReExport { exported, .. } => {
                         names.push(exported)
                     }
@@ -445,6 +446,10 @@ impl<'a> Gen<'a> {
         // through the cell's contract, what the others throw is seeded into
         // what its `catch` reads (beside the runtime's errors, ⊤).
         let thrown = self.thrown;
+        // Another unit is unknown compiled code: it may throw anything.
+        self.m
+            .add_top(thrown, |_| "thrown value (runtime errors)".into());
+        self.m.add_prim(thrown, prim::ALL);
         if cells {
             self.seed_cell("thrown", thrown);
             self.cells.push(("thrown".to_string(), thrown));
@@ -461,7 +466,7 @@ impl<'a> Gen<'a> {
             // `builtins::global_field`). The global object itself is no value
             // of another unit: every unit reads it, none publishes it.
             let mut keys: Vec<(String, Atom)> = (0..self.m.atoms.len() as Atom)
-                .filter(|&a| crate::builtins::global_user_key(&self.m.atoms[a as usize]))
+                .filter(|&a| crate::builtins::global_user_key(&self.m, &self.m.atoms[a as usize]))
                 .map(|a| (self.m.atoms[a as usize].clone(), a))
                 .collect();
             keys.sort_unstable();
@@ -1295,30 +1300,6 @@ impl<'a> Gen<'a> {
         let n = self.at_module_scope(|g| g.stand_in_value(0, "stored by another unit", c));
         self.effect_srcs.insert((tm, a), n);
         n
-    }
-
-    /// The store effects this unit publishes (decision 17), by template
-    /// display and key, with the nodes of what it stores: their value
-    /// contracts are published (design §17.16 (c), DECISIONS 73 their kinds).
-    pub(crate) fn store_effects(&self) -> Vec<(String, String, Vec<NodeId>)> {
-        let mut by: FxHashMap<(TmplId, Atom), Vec<NodeId>> = FxHashMap::default();
-        for &(tm, a, n) in &self.m.foreign_stores {
-            by.entry((tm, a)).or_default().push(n);
-        }
-        let mut out: Vec<(String, String, Vec<NodeId>)> = by
-            .into_iter()
-            .map(|((tm, a), mut ns)| {
-                ns.sort_unstable();
-                ns.dedup();
-                (
-                    self.m.tmpls[tm as usize].display.clone(),
-                    self.m.atoms[a as usize].clone(),
-                    ns,
-                )
-            })
-            .collect();
-        out.sort();
-        out
     }
 
     /// A literal-shape object, a plain object literal (DECISIONS 94) or an

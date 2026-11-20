@@ -6,18 +6,18 @@ from perf_missread_lane import environment, run, NODE
 
 CASES = [
     "benchmarks/read_miss_shape.ts",
-    "test-files/test_gap_missread_shape_authority.ts",
-    "test-files/test_gap_missread_constructor_transitions.ts",
-    "test-files/test_gap_missread_native_alias_holders.ts",
-    "test-files/test_gap_missread_constructor_chain_lengths.ts",
-    "test-files/test_gap_prototype_in_shape.ts",
-    "test-files/test_gap_10497_dispatch_function_prototype_mutation.ts",
-    "test-files/test_gap_class_static_attrs_delete.ts",
-    "test-files/test_gap_function_deleted_method.ts",
-    "test-parity/language/array/test_gap_array_named_descriptor_forwarding.ts",
-    "test-files/test_gap_iterator_prototype_next_patch.ts",
-    "test-files/test_gap_typed_array_proto_methods.ts",
-    "test-files/test_gap_dynamic_key_read_paths.ts",
+    "tests/parity/language/object/test_gap_missread_shape_authority.ts",
+    "tests/parity/language/object/test_gap_missread_constructor_transitions.ts",
+    "tests/parity/node-suite/http/test_gap_missread_native_alias_holders.ts",
+    "tests/parity/language/object/test_gap_missread_constructor_chain_lengths.ts",
+    "tests/parity/language/object/test_gap_prototype_in_shape.ts",
+    "tests/parity/language/function/test_gap_10497_dispatch_function_prototype_mutation.ts",
+    "tests/parity/language/class/test_gap_class_static_attrs_delete.ts",
+    "tests/parity/language/function/test_gap_function_deleted_method.ts",
+    "tests/parity/language/array/test_gap_array_named_descriptor_forwarding.ts",
+    "tests/parity/language/iterator/test_gap_iterator_prototype_next_patch.ts",
+    "tests/parity/language/typed-array/test_gap_typed_array_proto_methods.ts",
+    "tests/parity/language/object/test_gap_dynamic_key_read_paths.ts",
 ]
 
 p = argparse.ArgumentParser()

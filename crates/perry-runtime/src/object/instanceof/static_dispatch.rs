@@ -57,7 +57,7 @@ pub(super) fn instanceof_with_constructor(
     class_id: u32,
     constructor: Option<f64>,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, constructor, None, false)
+    instanceof_dispatch(value, class_id, constructor, None, false, false)
 }
 
 /// Generic entry preparation has already classified the left operand.
@@ -68,7 +68,24 @@ pub(super) fn instanceof_classified(
     primitive: bool,
     lhs_non_proxy: bool,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy)
+    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, false)
+}
+
+/// [`instanceof_classified`] for a class constructor RHS whose `@@hasInstance`
+/// the dynamic entry has already resolved by `GetMethod` on the actual
+/// constructor and its actual chain (the complete `[[Get]]`, or a hop-by-hop
+/// proof that no hop owns the key): the class's own symbol store and its
+/// parents' are not read again, so a getter there runs once and a getter that
+/// returns `undefined` falls through to the ordinary walk. The lifted
+/// `static [Symbol.hasInstance]` hooks (Form 1) are still consulted.
+#[inline(always)]
+pub(super) fn instanceof_class_resolved(
+    value: f64,
+    class_id: u32,
+    primitive: bool,
+    lhs_non_proxy: bool,
+) -> f64 {
+    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, true)
 }
 
 #[inline(always)]
@@ -78,6 +95,7 @@ fn instanceof_dispatch(
     constructor: Option<f64>,
     primitive: Option<bool>,
     lhs_non_proxy: bool,
+    symbol_hook_resolved: bool,
 ) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -140,7 +158,7 @@ fn instanceof_dispatch(
     // The latch check is what keeps `well_known_symbol("hasInstance")` — a
     // string-keyed interning probe — off the path entirely in the (dominant)
     // case where no class in the program declares any static Symbol member.
-    if crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
+    if !symbol_hook_resolved && crate::symbol::CLASS_STATIC_SYMBOLS_LATCH.is_armed() {
         // Both lookups are Leaf: symbol interning uses native allocations,
         // and the static-symbol read cannot collect. The call owns its args;
         // a completed hook returns immediately, so no value crosses it here.
@@ -318,7 +336,7 @@ fn native_instanceof(
             let function = constructor
                 .as_ref()
                 .map(|rhs| rhs.get_nanbox_f64())
-                .unwrap_or_else(|| js_get_global_this_builtin_value(b"Function".as_ptr(), 8));
+                .unwrap_or_else(|| crate::object::builtin_value_core("Function"));
             if ordinary_has_instance_prototype_walk(rooted_value.get_nanbox_f64(), function) {
                 return true_val;
             }
@@ -734,8 +752,7 @@ fn native_instanceof(
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, constructor)
                 } else {
                     let scope = crate::gc::RuntimeHandleScope::new();
-                    let object = scope
-                        .root_nanbox_f64(js_get_global_this_builtin_value(b"Object".as_ptr(), 6));
+                    let object = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, &object)
                 };
                 return if matches { true_val } else { false_val };
@@ -767,18 +784,8 @@ fn native_instanceof(
             // `DateCell` pointer — #2089) and an Invalid Date.
             return true_val;
         }
-        let top16 = (bits >> 48) as u16;
-        if top16 == 0 && bits >= 0x1000 {
-            let addr = bits as usize;
-            // #10694: a raw word must be allocator-owned before the brand read.
-            if crate::buffer::buffer_family_type_owned(addr).is_some()
-                || crate::set::is_registered_set(addr)
-                || crate::map::is_registered_map(addr)
-                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
-            {
-                return true_val;
-            }
-        }
+        // A word whose top 16 bits are clear is a Number (a denormal, or
+        // +0), not a raw object pointer.
         return false_val;
     }
 
@@ -794,7 +801,7 @@ fn native_instanceof(
         // byte below it.
         let is_array = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| {
-                header.obj_type == crate::gc::GC_TYPE_ARRAY
+                crate::gc_type_is_array!(header.obj_type)
                     || header.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             });
         return if is_array { true_val } else { false_val };

@@ -96,7 +96,7 @@ runtime_layout!(
 #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
 #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows")),
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
     link_section = "perry_layouts"
 )]
 static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
@@ -108,7 +108,7 @@ static mut CLASS_HOLEY: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: HOLEY::SLOT_COUNT as u32,
-    layout_id: 0x80000089,
+    layout_id: crate::object::runtime_layouts::test_layout_word(12),
     rep: 0,
     proto: crate::object::layout_desc::LAYOUT_PROTO_OBJECT,
     keys: HOLEY::KEYS.as_ptr(),
@@ -365,6 +365,7 @@ fn layout_holes_are_absent_for_every_reader() {
                 crate::object::spread::js_object_spread_fresh_leading(
                     f64::from_bits(crate::value::TAG_UNDEFINED),
                     crate::js_nanbox_pointer(obj as i64),
+                    0,
                 )
             });
             let spread = scope.root_nanbox_f64(spread);
@@ -1199,8 +1200,15 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
             crate::object::property_ops::set::own_set_descriptor(a, key).is_none(),
             "[[Set]]'s own-descriptor read walks on to the prototype"
         );
-        assert_eq!(crate::object::shape_store::try_store(a, key, 1.0), Some(1.0));
-        assert_eq!(late_slot(a), 1.0_f64.to_bits(), "the add fills the listed slot");
+        assert_eq!(
+            crate::object::shape_store::try_store(a, key, 1.0),
+            Some(1.0)
+        );
+        assert_eq!(
+            late_slot(a),
+            1.0_f64.to_bits(),
+            "the add fills the listed slot"
+        );
         assert!(obj_value_has_own_key(bag_value(a), key));
         assert_eq!(object_keys(bag_of(a)).count(), 2, "the add appended no key");
         assert!(
@@ -1231,7 +1239,11 @@ fn an_array_layout_late_key_is_absent_and_its_store_asks_the_chain() {
             js_object_delete_dynamic_value(crate::value::js_nanbox_pointer(proto as i64), key)
         });
         assert_eq!(result, None, "an inherited read-only key decides the add");
-        assert_eq!(slot_after, crate::value::TAG_HOLE, "the declined add stored nothing");
+        assert_eq!(
+            slot_after,
+            crate::value::TAG_HOLE,
+            "the declined add stored nothing"
+        );
         assert!(!present);
     }
 }

@@ -96,8 +96,8 @@
 //! by construction, may have happened in a module this one never looked at.
 //!
 //! Confirmed empirically, not just by proof-reading:
-//! `test-files/test_issue_7143_delete_barrier_cross_module.ts` (+
-//! `test-files/fixtures/issue_7143_pkg/shared.ts`) is exactly this shape — a
+//! `tests/parity/language/object/test_issue_7143_delete_barrier_cross_module.ts` (+
+//! `tests/fixtures/programs/fixtures/issue_7143_pkg/shared.ts`) is exactly this shape — a
 //! `delete` in the importing module, then a call back into the declaring
 //! module on the mutated instance — and the emitted `--trace llvm` IR shows
 //! the `$pshape` call dominated by `js_typed_feedback_method_direct_call_guard`
@@ -358,6 +358,7 @@ fn stmts_contain_loop(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_contain_loop(body)
                 || catch
@@ -430,6 +431,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_array_field_reads_in_stmts(body, aliases);
                 if let Some(catch) = catch {

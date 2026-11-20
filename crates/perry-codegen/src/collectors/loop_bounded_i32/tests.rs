@@ -664,6 +664,7 @@ fn a_write_from_a_closure_disqualifies() {
             mutable_captures: vec![2],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -810,6 +811,7 @@ fn step_in_a_switch_case_and_a_finally_are_both_counted() {
                 body: vec![],
             }),
             finally: Some(vec![Stmt::Expr(inc(2))]),
+            forof_completion: None,
         },
     ];
     // Three steps run per iteration (update + switch case + finally), so the

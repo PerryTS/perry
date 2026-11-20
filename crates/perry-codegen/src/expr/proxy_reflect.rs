@@ -488,10 +488,22 @@ pub(crate) fn lower_put_value_dyn_ic_inline(
     strict_i32: &str,
 ) -> Result<String> {
     let _decision = crate::fallback_diag::decision("computed-key store has no fixed key/slot; runtime layout and ordinary Set dispatch required", "runtime key coercion/layout/presence/store admission");
+    // The shape directory first, as `perry_probe_get_keyed` takes it.
+    let dir = crate::expr::agent_ptr::emit_agent_ptr_or(
+        ctx,
+        crate::runtime_abi::AGENT_PTR_SHAPE_DIR,
+        "@PERRY_EMPTY_SHAPE_DIR",
+    );
     Ok(ctx.block().call(
         DOUBLE,
         "js_put_value_set_dynamic",
-        &[(DOUBLE, t), (DOUBLE, k), (DOUBLE, v), (I32, strict_i32)],
+        &[
+            (crate::types::PTR, &dir),
+            (DOUBLE, t),
+            (DOUBLE, k),
+            (DOUBLE, v),
+            (I32, strict_i32),
+        ],
     ))
 }
 
@@ -818,7 +830,7 @@ fn try_lower_process_env_put_value_set(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
-    let _consumed = crate::facts_consumed::enter(expr);
+    let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     match expr {
         Expr::ProxyNew { target, handler } => {
             downgrade_unknown_call_expr(ctx, target);
@@ -937,8 +949,23 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             value,
             receiver,
             strict,
+            element_offset,
             ..
         } => {
+            // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+            super::record_witness::store_into_copy(ctx, target)?;
+            // Check mode: a store the facts took to be in bounds.
+            super::index_get::array_rep::witness_in_bounds_store(
+                ctx,
+                target,
+                key,
+                *element_offset,
+            )?;
+            // I32 at rest: the store of an at-rest element (`rest_elems`);
+            // `receiver` is `target` cloned (one evaluation of the base).
+            if let Some(floor) = super::rest_elems::write_floor(ctx, expr) {
+                return super::rest_elems::lower_write(ctx, target, key, value, floor);
+            }
             if matches!(receiver.as_ref(), Expr::This) {
                 if let Some(result) = crate::layout_desc::function_families::lower_symbol_store(
                     ctx, target, key, value, *strict,
@@ -954,6 +981,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // Step 4b: a planned-bare store inside a region's F-body.
             if same_put_value_receiver_expr(target, receiver) {
                 if let Expr::String(k) = key.as_ref() {
+                    // ACCBUILD2 P3: a store proven to call one setter.
+                    if let Some(v) = super::property_set::try_lower_proven_setter(
+                        ctx,
+                        target,
+                        k,
+                        value,
+                        *element_offset,
+                    )? {
+                        return Ok(v);
+                    }
                     // Object model step 1: adding an `Object.create(P)` family's key.
                     if let Some(add) = crate::layout_desc::create_families::add_site(ctx, target, k)
                     {
@@ -1020,6 +1057,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         object: target.clone(),
                         index: key.clone(),
                         value: value.clone(),
+                        // The store's own site: its key facts apply
+                        // (`index_key::store_key_fact`). An at-rest store
+                        // was taken above (`rest_elems::write_floor`).
+                        element_offset: *element_offset,
                         byte_offset: 0,
                         byte_end: 0,
                     },

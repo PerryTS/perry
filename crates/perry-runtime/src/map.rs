@@ -6,19 +6,19 @@
 
 use crate::string::StringHeader;
 use std::alloc::Layout;
-use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
 use std::ptr;
 
 /// Must match value.rs TAG_UNDEFINED
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
 
-crate::perry_thread_local! {
-    /// Backing Maps whose `forEach` raw-entry walk is currently active. A
-    /// compaction would move entries behind those cursors (#9082).
-    static MAP_FOREACH_STACK: RefCell<crate::exception::CatchStack<usize>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// Backing Maps whose `forEach` raw-entry walk is currently active. A
+/// compaction would move entries behind those cursors (#9082).
+///
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static MAP_FOREACH_STACK: crate::exception::marks::CatchStackKey<usize> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.map_foreach);
 
 #[inline]
 fn map_foreach_is_active(map: *const MapHeader) -> bool {
@@ -70,7 +70,7 @@ pub(crate) fn map_foreach_check_marks(sp: usize) {
     });
 }
 
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn map_foreach_depth() -> usize {
     MAP_FOREACH_STACK.with(|stack| stack.borrow().len())
 }
@@ -139,14 +139,12 @@ unsafe fn note_map_compaction(map: *mut MapHeader, removed: RemovedSlots) {
     (*map).compaction_epoch = epoch;
     let budget = std::cmp::max(MAP_COMPACTION_LOG_MIN_BUDGET, (*map).capacity as usize);
     {
-        let entry = (*(*map).store)
-            .compaction
-            .get_or_insert_with(|| {
-                Box::new(MapCompactionLog {
-                    records: std::collections::VecDeque::new(),
-                    retained: 0,
-                })
-            });
+        let entry = (*(*map).store).compaction.get_or_insert_with(|| {
+            Box::new(MapCompactionLog {
+                records: std::collections::VecDeque::new(),
+                retained: 0,
+            })
+        });
         if matches!(removed, RemovedSlots::Prefix(_)) {
             // The extent was discarded: every cursor rebases to 0 through
             // this record whatever came before, so older history is dead.
@@ -356,24 +354,16 @@ pub fn is_registered_map(addr: usize) -> bool {
     store::is_live_map(addr)
 }
 
-/// Resolve a NaN-boxed (or raw-i64) `this` receiver to a registered `Map`
-/// pointer, or `None` if the receiver is not a `Map`. Backs the reflective
+/// Resolve a NaN-boxed `this` receiver to a registered `Map` pointer, or
+/// `None` if the receiver is not a `Map`. Backs the reflective
 /// `Map.prototype.*` thunks so they can perform the spec brand check
-/// (`TypeError` on a non-`Map` receiver) before dispatching. See
-/// `set::set_ptr_from_receiver_bits` for the receiver-extraction rationale.
+/// (`TypeError` on a non-`Map` receiver) before dispatching. Decodes by the
+/// tag alone, like `set::set_ptr_from_receiver_bits`.
 pub fn map_ptr_from_receiver_bits(bits: u64) -> Option<*mut MapHeader> {
-    let jsv = crate::value::JSValue::from_bits(bits);
-    let addr = if jsv.is_pointer() {
-        (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if bits >> 48 == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class: the bare-address branch must reject the handle bands, not
-        // just small integers. A hand-rolled `> 0x10000` floor sits an order of
-        // magnitude BELOW `HANDLE_BAND_MAX` (0x200000), so every fetch / zlib /
-        // proxy handle passed it and was treated as a candidate heap address.
-        bits as usize
-    } else {
+    if !crate::value::JSValue::from_bits(bits).is_pointer() {
         return None;
-    };
+    }
+    let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
     if is_registered_map(addr) {
         Some(addr as *mut MapHeader)
     } else {
@@ -672,7 +662,7 @@ pub(crate) fn is_plain_nonzero_number_bits(bits: u64) -> bool {
 #[inline]
 fn is_safe_numeric_key(bits: u64) -> bool {
     let upper = bits >> 48;
-    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INT32_TAG (0x7FFE) carry
+    // STRING_TAG (0x7FFF), POINTER_TAG (0x7FFD), INTERNAL_WORD_TAG (0x7FFE) carry
     // heap pointers or need numeric normalization before reaching here.
     if upper == 0x7FFF || upper == 0x7FFD || upper == 0x7FFE {
         return false;
@@ -694,13 +684,8 @@ fn is_safe_numeric_key(bits: u64) -> bool {
     if upper == (crate::value::SHORT_STRING_TAG >> 48) {
         return false;
     }
-    // Raw pointer (0x0000) with a plausible heap address is also a pointer.
-    if upper == 0x0000 {
-        let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-        if lower > 0x10000 {
-            return false;
-        }
-    }
+    // A word whose top 16 bits are clear is a Number (a denormal, or +0):
+    // it keys by its bits like every other Number.
     true
 }
 
@@ -755,10 +740,6 @@ fn bigint_ptr_from_bits(bits: u64) -> *const crate::bigint::BigIntHeader {
     let upper = bits >> 48;
     let addr = if upper == (crate::value::BIGINT_TAG >> 48) || upper == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if upper == 0 && crate::value::addr_class::is_above_handle_band(bits as usize) {
-        // #6271 class — see `map_ptr_from_receiver_bits`: `> 0x10000` lets the
-        // whole handle band through; `is_above_handle_band` is the real floor.
-        bits as usize
     } else {
         return std::ptr::null();
     };
@@ -929,7 +910,12 @@ fn clean_map_ptr(map: *const MapHeader) -> *const MapHeader {
                 crate::object::map_set_subclass::CollectionKind::Map,
             ) as *const MapHeader
         }
-        _ => map,
+        // Any other cell (an Array, a Date, a closure, a Set, ...) or a word
+        // with no readable header (a primitive's payload behind the
+        // annotation): no `MapHeader` lives there, and the operation would read
+        // or WRITE that cell as one. Null is the "not a Map" answer every
+        // entry already gives a plain object.
+        _ => std::ptr::null(),
     }
 }
 
@@ -1068,9 +1054,7 @@ fn normalize_zero(key: f64) -> f64 {
 #[inline(always)]
 fn normalize_number_key_from_boxed(key: f64) -> Option<f64> {
     let js_value = crate::value::JSValue::from_bits(key.to_bits());
-    if js_value.is_int32() {
-        Some(normalize_zero(js_value.as_int32() as f64))
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(normalize_zero(key))
     } else {
         None
@@ -1086,15 +1070,6 @@ fn extract_string_ptr_from_value(bits: u64) -> *const StringHeader {
     match upper {
         0x7FFF => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // STRING_TAG
         0x7FFD => (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader, // POINTER_TAG (string stored as generic pointer)
-        0x0000 => {
-            // Raw pointer (no NaN-boxing tag)
-            let lower = bits & 0x0000_FFFF_FFFF_FFFF;
-            if lower > 0x10000 {
-                lower as *const StringHeader
-            } else {
-                std::ptr::null()
-            }
-        }
         _ => std::ptr::null(),
     }
 }
@@ -1681,11 +1656,7 @@ unsafe fn small_map_array_key_miss(map: *const MapHeader, key_bits: u64) -> i32 
 
 /// [`small_map_array_key_miss`] for a large map whose store the caller holds.
 #[inline(always)]
-unsafe fn large_map_array_key_miss(
-    store: &MapStore,
-    map: *const MapHeader,
-    key_bits: u64,
-) -> i32 {
+unsafe fn large_map_array_key_miss(store: &MapStore, map: *const MapHeader, key_bits: u64) -> i32 {
     match probe_array_state(key_bits) {
         ProbeArray::NotArray => -1,
         ProbeArray::Forwarded => find_array_alias(map, key_bits, true),
@@ -1721,7 +1692,7 @@ enum ProbeArray {
 #[inline(always)]
 fn probe_array_state(key_bits: u64) -> ProbeArray {
     match crate::value::addr_class::pointer_value_header(key_bits) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => {
             if h.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
                 ProbeArray::Forwarded
             } else {
@@ -1792,7 +1763,8 @@ unsafe fn find_array_alias(map: *const MapHeader, key_bits: u64, probe_forwarded
         let Some(h) = crate::value::addr_class::try_read_gc_header(stored) else {
             continue;
         };
-        if h.obj_type != crate::gc::GC_TYPE_ARRAY || h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        if crate::gc_type_is_not_array!(h.obj_type)
+            || h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
         {
             continue;
         }
@@ -1820,7 +1792,9 @@ unsafe fn index_large_map_array_key(map: *mut MapHeader, key_bits: u64, index: u
     }
     if let Some(token) = crate::array::array_identity_token(key_bits, true) {
         let store = &mut *(*map).store;
-        let arrays = store.arrays.get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
+        let arrays = store
+            .arrays
+            .get_or_insert_with(|| Box::new(crate::fast_hash::new_ptr_hash_map()));
         let before = hash_index_bytes(arrays);
         arrays.insert(token, index);
         note_index_bytes_changed(before, hash_index_bytes(arrays));
@@ -2147,8 +2121,8 @@ pub extern "C" fn js_map_set_string_i32(
     key: *const StringHeader,
     value: i32,
 ) -> *mut MapHeader {
-    let value_bits = crate::value::INT32_TAG | ((value as u32) as u64);
-    map_set_string_returning_receiver(map, key, f64::from_bits(value_bits))
+    // A Number has one encoding: the raw double (exact for every i32).
+    map_set_string_returning_receiver(map, key, value as f64)
 }
 
 #[no_mangle]
@@ -2290,7 +2264,7 @@ unsafe fn heal_forwarded_array_value(
     // check, exactly as codegen's inline array guards read it. Only the
     // forwarding bit is decided here; the full resolver validates the target.
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
     {
         return value;
@@ -3200,14 +3174,14 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
             } else {
                 let map_value = crate::value::js_nanbox_pointer(map as i64);
                 crate::collection_iter::call_with_this_capturing_throw(adder, map_value, &args)
-                    .unwrap_or_else(|exc| crate::exception::js_throw(exc))
+                    .unwrap_or_else(|exc| crate::exception::rethrow_caught(exc))
             }
         });
         if let Err(exc) = pair {
             if let Some(iter) = iter_to_close {
                 crate::collection_iter::iterator_close(iter);
             }
-            crate::exception::js_throw(exc);
+            crate::exception::rethrow_caught(exc);
         }
     }
 
@@ -3242,7 +3216,8 @@ pub(crate) fn map_init_iterable(map: *mut MapHeader, value: f64) -> *mut MapHead
                 scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
             loop {
                 let iter = iter_handle.get_nanbox_f64();
-                let next = crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
+                let next =
+                    crate::collection_iter::iterator_next_value(iter, next_handle.get_nanbox_f64());
                 let Some(entry) = next else {
                     break;
                 };
@@ -3549,7 +3524,7 @@ mod tests {
         assert_eq!(js_map_size(map), 1);
         assert_eq!(
             js_map_get_string_key(map, key_b).to_bits(),
-            crate::value::JSValue::int32(42).bits()
+            42.0f64.to_bits()
         );
 
         js_map_set_string_i32(map, key_b, -7);
@@ -3560,7 +3535,7 @@ mod tests {
         );
         assert_eq!(
             js_map_get_string_key(map, key_a).to_bits(),
-            crate::value::JSValue::int32(-7).bits()
+            (-7.0f64).to_bits()
         );
 
         js_map_set_string_u32(map, key_a, u32::MAX);
@@ -3789,11 +3764,11 @@ mod tests {
         js_map_set_string_i32(strings, key_a, 11);
         assert_eq!(
             js_map_get_string_key(strings, key_a).to_bits(),
-            crate::value::JSValue::int32(11).bits()
+            11.0f64.to_bits()
         );
         assert_eq!(
             js_map_get_string_key(strings, key_b).to_bits(),
-            crate::value::JSValue::int32(22).bits()
+            22.0f64.to_bits()
         );
         assert_eq!(js_map_has(strings, 9.0), 0);
 
@@ -3810,7 +3785,7 @@ mod tests {
         js_map_set_string_i32(big, key_a, 6);
         assert_eq!(
             js_map_get_string_key(big, key_a).to_bits(),
-            crate::value::JSValue::int32(6).bits()
+            6.0f64.to_bits()
         );
     }
 
@@ -4060,6 +4035,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// A Map value that names an Array growth stub is healed to the live head
     /// on `get`, and the entry itself is rewritten so later reads are direct.
     #[test]
@@ -4103,3 +4079,8 @@ mod map_tombstone_tests;
 pub(crate) fn test_enter_catch_foreach(mark: usize) {
     map_foreach_enter_at(mark, js_map_alloc(4));
 }
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use store::snap_native_index_range;
+
+pub(crate) use store::{image_form, image_keys_derivable, MapStore};

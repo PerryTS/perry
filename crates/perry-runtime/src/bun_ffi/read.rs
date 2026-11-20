@@ -38,8 +38,6 @@ unsafe fn address(pointer: f64, offset: f64) -> usize {
     let offset_value = JSValue::from_bits(offset.to_bits());
     let displacement = if offset_value.is_undefined() {
         0i64
-    } else if offset_value.is_int32() {
-        offset_value.as_int32() as i64
     } else if offset_value.is_number() {
         let value = offset_value.as_number();
         if !value.is_finite()
@@ -95,9 +93,9 @@ unsafe fn read_value(kind: u8, pointer: f64, offset: f64) -> f64 {
             std::ptr::read_unaligned(pointer.cast::<u64>()),
         ),
         super::types::T_F32 => {
-            super::number_value(std::ptr::read_unaligned(pointer.cast::<f32>()) as f64)
+            super::float_value(std::ptr::read_unaligned(pointer.cast::<f32>()) as f64)
         }
-        super::types::T_F64 => super::number_value(std::ptr::read_unaligned(pointer.cast::<f64>())),
+        super::types::T_F64 => super::float_value(std::ptr::read_unaligned(pointer.cast::<f64>())),
         _ => super::undefined(),
     }
 }

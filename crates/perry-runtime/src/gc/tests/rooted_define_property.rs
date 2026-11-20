@@ -523,7 +523,6 @@ fn descriptor_snapshot_current_record_fields_survive_alloc_point_copying() {
     gc_register_mutable_root_scanner(crate::object::scan_shape_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
     gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
-    gc_register_mutable_root_scanner(crate::object::scan_arguments_object_roots_mut);
     unsafe {
         for arguments in [false, true] {
             for accessor in [false, true] {
@@ -668,6 +667,10 @@ extern "C" fn descriptor_key_with_copying(
     string_value("normalized_key")
 }
 
+/// An object operand of `Object.defineProperty` / `defineProperties`. The
+/// raw spelling (the bare address, top 16 bits clear) is no longer an object
+/// operand: in value context that word is a Number, so the callers below pass
+/// `raw = false` only.
 fn admitted_object_operand(handle: &crate::gc::RuntimeHandle<'_>, raw: bool) -> f64 {
     if raw {
         f64::from_bits(addr_of(handle.get_nanbox_f64()) as u64)
@@ -684,8 +687,8 @@ fn descriptor_snapshot_public_raw_and_tagged_operands_move_during_key_conversion
     register_descriptor_cache_scanners();
     unsafe {
         for reflect in [false, true] {
-            for raw_receiver in [false, true] {
-                for raw_bag in [false, true] {
+            for raw_receiver in [false] {
+                for raw_bag in [false] {
                     let scope = RuntimeHandleScope::new();
                     let receiver =
                         scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
@@ -766,8 +769,8 @@ fn descriptor_snapshot_collection_raw_and_tagged_operands_move_during_decode() {
     register_handle_scanner();
     register_descriptor_cache_scanners();
     unsafe {
-        for raw_target in [false, true] {
-            for raw_properties in [false, true] {
+        for raw_target in [false] {
+            for raw_properties in [false] {
                 let scope = RuntimeHandleScope::new();
                 let target =
                     scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));

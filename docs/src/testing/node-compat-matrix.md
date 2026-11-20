@@ -41,7 +41,7 @@ node scripts/node_compat_matrix.mjs --update-baseline   # rewrite the committed 
 ```
 
 The harness needs the release binary (`cargo build --release -p perry`). The
-baseline lives at `test-parity/node-compat-matrix.baseline.json`; the CI job
+baseline lives at `tests/parity/node-compat-matrix.baseline.json`; the CI job
 `.github/workflows/node-compat-matrix.yml` runs `--check` nightly in its own
 job (so the pinned-Node download never slows the main test job).
 
@@ -103,7 +103,7 @@ Each `(module, form)` cell gets a status:
 | `perry-unresolved` | Node resolved, Perry did not compile/run |
 | `perry-extra` | Perry resolved a form the oracle did not |
 | `both-unresolved` | neither resolved (neutral) |
-| `skip` | curated skip — see `test-parity/node-compat-matrix.skip.json` |
+| `skip` | curated skip — see `tests/parity/node-compat-matrix.skip.json` |
 
 Modules that cannot be meaningfully fingerprinted by a bare `import * as m`
 (side-effectful on import, or shape depends on constructor args) go in the skip

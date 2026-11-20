@@ -371,6 +371,7 @@ fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -738,6 +739,7 @@ fn each_child_stmt_list_mut<F: FnMut(&mut Vec<Stmt>)>(stmt: &mut Stmt, f: &mut F
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -1181,6 +1183,7 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &Ho
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -1218,6 +1221,7 @@ fn rewrite_cells_in_stmt(stmt: &mut Stmt, cells: &HashSet<LocalId>, hoisted: &Ho
 /// `cell[slot]` for the cell bound to `id`.
 fn cell_slot(id: LocalId, slot: i64) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
@@ -1231,6 +1235,7 @@ fn cell_flag_set(id: LocalId) -> Expr {
         object: Box::new(Expr::LocalGet(id)),
         index: Box::new(Expr::Integer(1)),
         value: Box::new(Expr::Bool(true)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }
@@ -1347,6 +1352,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                 object: Box::new(Expr::LocalGet(id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(value),
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -1362,6 +1368,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                         object: Box::new(Expr::LocalGet(id)),
                         index: Box::new(Expr::Integer(0)),
                         value: Box::new(Expr::Undefined),
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                     };
@@ -1387,6 +1394,7 @@ fn rewrite_cells_in_expr(e: &mut Expr, cells: &HashSet<LocalId>, hoisted: &Hoist
                 op,
                 prefix,
                 strict: false,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             };
@@ -1523,6 +1531,7 @@ mod tests {
             mutable_captures: vec![x],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_strict: false,
@@ -1555,6 +1564,7 @@ mod tests {
                 body: rest,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::Undefined)]),
+                forof_completion: None,
             });
         } else {
             loop_body.extend(rest);

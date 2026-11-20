@@ -22,11 +22,13 @@ fn shared_parent_keeps_the_native_step_until_a_protocol_method_appears() {
             "the @@toStringTag accessor is not a protocol method"
         );
 
-        crate::object::own_override::as_builtin_definition(|| super::super::js_object_set_field_by_name(
-            shared,
-            crate::string::intern_ascii_literal(b"map"),
-            1.0,
-        ));
+        crate::object::own_override::as_builtin_definition(|| {
+            super::super::js_object_set_field_by_name(
+                shared,
+                crate::string::intern_ascii_literal(b"map"),
+                1.0,
+            )
+        });
         assert!(
             iterator_step_is_builtin(obj),
             "a helper method is not a protocol method"

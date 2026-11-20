@@ -186,6 +186,56 @@ const INTRINSIC_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_CONSTRUC
 /// read, rewritten by [`scan_prototype_addr_cache_roots_mut`].
 pub(crate) struct RealmIntrinsics {
     entries: [IntrinsicEntry; INTRINSIC_ENTRY_COUNT],
+    /// The restricted `callee` accessor pair of every strict arguments object
+    /// (CreateUnmappedArgumentsObject: %ThrowTypeError% as getter and setter),
+    /// born with the first one. Same cell algebra as the entries.
+    restricted_callee_pair: Cell<usize>,
+    /// %Array.prototype.values% (slot 2 of every arguments object), noted
+    /// when Array.prototype installs it.
+    array_values: Cell<usize>,
+}
+
+/// This realm's %Array.prototype.values%, 0 before Array.prototype is built.
+pub(crate) fn realm_array_values_addr() -> usize {
+    let cell = &crate::state::state().realm_intrinsics.array_values;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// Record this realm's %Array.prototype.values%.
+pub(crate) fn note_realm_array_values(addr: usize) {
+    crate::state::state()
+        .realm_intrinsics
+        .array_values
+        .set(addr);
+    if addr != 0 {
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
+}
+
+/// This realm's restricted-`callee` accessor pair, 0 before the first strict
+/// arguments object is born.
+pub(crate) fn realm_restricted_callee_pair_addr() -> usize {
+    let cell = &crate::state::state()
+        .realm_intrinsics
+        .restricted_callee_pair;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// Record this realm's restricted-`callee` accessor pair (0 resets it).
+pub(crate) fn note_realm_restricted_callee_pair(addr: usize) {
+    crate::state::state()
+        .realm_intrinsics
+        .restricted_callee_pair
+        .set(addr);
+    if addr != 0 {
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
 }
 
 /// One builtin's realm intrinsics: its constructor and its prototype.
@@ -220,10 +270,30 @@ pub(crate) fn note_realm_intrinsic(
 /// none (a builtin not yet bound while the realm is being populated). Builds
 /// the realm when this thread has none yet, exactly as the `globalThis`
 /// read it replaces did.
+// Its own function with the materialize point inlined into it, as it was
+// before the realm had phases: its callers (`builtin_prototype_value` and the
+// prototype resolvers, which a large program calls 10^5 times at start-up)
+// stay small enough to be inlined where their name is a constant, and pay one
+// call with one argument.
+#[inline(never)]
 pub(crate) fn intrinsic_prototype_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).prototype)
+    realm_intrinsic_addr_inline(&intrinsic_entry(identity).prototype, identity, true)
+}
+
+/// This realm's intrinsic prototype of `identity` if the realm has bound it,
+/// else 0. Never builds the realm: a prototype that was never born cannot
+/// have been written either (the per-call `dv.get*` guard asks exactly that).
+#[inline(always)]
+pub(crate) fn intrinsic_prototype_addr_if_bound(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry(identity).prototype;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
 }
 
 /// This realm's original constructor of `identity` (`%Promise%`, …), or 0
@@ -232,19 +302,92 @@ pub(crate) fn intrinsic_prototype_addr(
 pub(crate) fn intrinsic_constructor_addr(
     identity: crate::object::BuiltinConstructorIdentity,
 ) -> usize {
-    realm_intrinsic_addr(&intrinsic_entry(identity).constructor)
+    realm_intrinsic_addr(&intrinsic_entry(identity).constructor, identity, false)
 }
 
-fn realm_intrinsic_addr(cell: &Cell<usize>) -> usize {
+/// This realm's original constructor of `identity` if the realm has bound
+/// it, else 0. Never builds the realm.
+#[inline]
+pub(crate) fn intrinsic_constructor_addr_if_bound(
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let cell = &intrinsic_entry(identity).constructor;
+    match cell.get() {
+        0 => 0,
+        addr => heal_prototype_addr(cell, addr),
+    }
+}
+
+/// The one materialize point of the realm's intrinsics: builds the realm when
+/// this thread has none yet, then births a `lazy` family
+/// (`BuiltinConstructorDeclaration::lazy`) whose prototype is asked for
+/// (`prototype`) the first time. Every reader that may build goes through
+/// here; the `_if_bound` readers never build (an unborn family was never
+/// written either).
+///
+/// Two-phase realm (`perry_abi::realm_phase`): an unbound entry while the
+/// realm is not complete is a family whose phase has not run. A phase-A
+/// family needs the core; a phase-B family (`realm_rest_global`) the complete
+/// realm, so this is the point that runs phase B for every internal birth of
+/// one (a `WeakMap`'s inherited read, a `WeakRef`'s `constructor`). The name
+/// is looked at only in that state: with the realm complete, as from its
+/// allocation in a realm populated in one pass, the test is the one load it
+/// was.
+#[inline(never)]
+fn realm_intrinsic_addr(
+    cell: &Cell<usize>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
+) -> usize {
+    realm_intrinsic_addr_inline(cell, identity, prototype)
+}
+
+/// [`realm_intrinsic_addr`], inlined into [`intrinsic_prototype_addr`]. The
+/// bound entry and the entry of a complete realm cost what they cost before
+/// the realm had phases; everything a two-phase realm adds is behind
+/// [`realm_intrinsic_incomplete`].
+#[inline(always)]
+fn realm_intrinsic_addr_inline(
+    cell: &Cell<usize>,
+    identity: crate::object::BuiltinConstructorIdentity,
+    prototype: bool,
+) -> usize {
     let mut addr = cell.get();
-    if addr == 0 && !crate::object::global_this_is_materialized() {
-        crate::object::js_get_global_this();
-        addr = cell.get();
+    if addr == 0 && !crate::object::realm_is_complete() {
+        addr = realm_intrinsic_incomplete(cell, identity);
     }
     if addr == 0 {
-        return 0;
+        if prototype && identity.declaration().lazy {
+            crate::object::birth_lazy_family(identity);
+            addr = cell.get();
+        }
+        if addr == 0 {
+            return 0;
+        }
     }
     heal_prototype_addr(cell, addr)
+}
+
+/// An unbound entry of a realm that is not complete: this thread's first
+/// touch of the realm (through the entry the link chose: the full entry
+/// unless the program is two-phase), then, for a two-phase realm's core only,
+/// phase B if it binds the family. Out of line (once per thread in a
+/// one-pass program); listed in the default hot-text order.
+#[inline(never)]
+fn realm_intrinsic_incomplete(
+    cell: &Cell<usize>,
+    identity: crate::object::BuiltinConstructorIdentity,
+) -> usize {
+    let mut addr = 0;
+    if !crate::object::global_this_is_materialized() {
+        crate::object::realm_core();
+        addr = cell.get();
+    }
+    if addr == 0 && !crate::object::realm_is_complete() {
+        crate::object::realm_family_phase(identity);
+        addr = cell.get();
+    }
+    addr
 }
 
 /// GC root scanner for this thread's memoized prototype addresses (#6981).
@@ -270,6 +413,16 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
         rewrite_prototype_addr_slot(&entry.prototype, visitor);
         rewrite_prototype_addr_slot(&entry.constructor, visitor);
     }
+    rewrite_prototype_addr_slot(
+        &crate::state::state()
+            .realm_intrinsics
+            .restricted_callee_pair,
+        visitor,
+    );
+    rewrite_prototype_addr_slot(
+        &crate::state::state().realm_intrinsics.array_values,
+        visitor,
+    );
 }
 
 /// The per-cell half of [`scan_prototype_addr_cache_roots_mut`].

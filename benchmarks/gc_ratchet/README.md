@@ -364,7 +364,7 @@ Deliberate properties, each of them a refusal:
 
 The bit-identity rule itself now lives in `validate_artifact`, so an artifact
 carrying a non-deterministic gating cell cannot be *pinned*. Before #7554 the
-rule existed only in `tests/test_gc_ratchet.py`, which is why a bad pin could
+rule existed only in `tests/tooling/infrastructure/test_gc_ratchet.py`, which is why a bad pin could
 be committed and only wedge CI afterwards.
 
 The former `12_large_live_set.heap_used_bytes` entry was deleted by #7558,
@@ -526,7 +526,7 @@ per cell, fail-closed on the verdict.
 The CI preflight runs `validate --scope structural`, which fails only on the
 fatal kind. That is not a hole: `check` re-derives the same defect list and fails
 on every entry, and
-`tests/test_gc_ratchet.py::FailOpenPerCellTests::test_structural_preflight_defers_every_defect_it_waves_through`
+`tests/tooling/infrastructure/test_gc_ratchet.py::FailOpenPerCellTests::test_structural_preflight_defers_every_defect_it_waves_through`
 asserts that coupling one planted defect shape at a time. Without it the flag
 would be indistinguishable from suppression.
 
@@ -725,7 +725,7 @@ failure this suite has paid for most often.
 | `tolerances.json` | every band, with the variance it was derived from |
 | `baseline/gc-ratchet-v1.json` | the pinned artifact |
 | `run_gc_ratchet_baseline.sh` | quiet-host driver (`--check` / `--pin`) |
-| `../../tests/test_gc_ratchet.py` | proves the gate fails on each failure mode |
+| `../../tests/tooling/infrastructure/test_gc_ratchet.py` | proves the gate fails on each failure mode |
 | `../../.github/workflows/gc-ratchet.yml` | CI wiring |
 
 

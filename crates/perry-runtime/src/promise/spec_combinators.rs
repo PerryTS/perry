@@ -21,10 +21,7 @@
 use super::combinators::{combinator_catch_js, combinator_iterable_to_array_caught};
 use super::*;
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_set_f64};
-use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr,
-};
+use crate::closure::{js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64};
 use crate::value::{js_nanbox_pointer, JSValue};
 
 const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
@@ -95,9 +92,7 @@ pub(super) struct Capability {
 
 fn throw_type_error(msg: &str) -> ! {
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    let v = f64::from_bits(JSValue::pointer(err as *const u8).bits());
-    crate::exception::js_throw(v);
+    crate::exception::throw_core(crate::error::CoreError::type_error(s));
 }
 
 fn type_error_value(msg: &str) -> f64 {
@@ -157,7 +152,7 @@ extern "C" fn capability_executor_fn(
     resolve: f64,
     reject: f64,
 ) -> f64 {
-    let storage = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
+    let storage = crate::closure::closure_capture_ref(closure, 0) as *mut crate::array::ArrayHeader;
     if storage.is_null() {
         return undef();
     }
@@ -217,7 +212,7 @@ pub(super) fn new_promise_capability(c: f64) -> Capability {
 
     let executor_h =
         scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(&CAPABILITY_EXECUTOR_FN_INFO, 1)));
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         unboxed_ptr(executor_h.get_nanbox_f64()),
         0,
         unboxed_ptr::<u8>(storage_h.get_nanbox_f64()) as i64,
@@ -274,14 +269,16 @@ fn get_promise_resolve(c: f64) -> Result<f64, f64> {
 }
 
 /// `Call(func, thisArg, args)` catching exceptions into `Err`.
-fn call_with_this(func: f64, this_arg: f64, args: &[f64]) -> Result<f64, f64> {
+fn call_with_this(func: f64, this_arg: f64, args: &[f64]) -> Result<f64, crate::exception::Caught> {
     let (ptr, len) = if args.is_empty() {
         (std::ptr::null(), 0)
     } else {
         (args.as_ptr(), args.len())
     };
     let this = crate::closure::JsThis::from_f64(this_arg);
-    combinator_catch_js(|| unsafe { crate::closure::native_call_value_this(func, this, ptr, len) })
+    crate::exception::catch_thrown(|| unsafe {
+        crate::closure::native_call_value_this(func, this, ptr, len)
+    })
 }
 
 /// `Invoke(obj, "then", args)` catching exceptions into `Err`.
@@ -345,10 +342,22 @@ fn build_element_closure(
 
     let closure_h = scope.root_nanbox_f64(boxed_ptr(js_closure_alloc(info, 6)));
     let c: *mut crate::closure::ClosureHeader = unboxed_ptr(closure_h.get_nanbox_f64());
-    js_closure_set_capture_ptr(c, 0, unboxed_ptr::<u8>(guard_h.get_nanbox_f64()) as i64);
+    crate::closure::closure_set_capture_ref(
+        c,
+        0,
+        unboxed_ptr::<u8>(guard_h.get_nanbox_f64()) as i64,
+    );
     js_closure_set_capture_f64(c, 1, index as f64);
-    js_closure_set_capture_ptr(c, 2, unboxed_ptr::<u8>(values_h.get_nanbox_f64()) as i64);
-    js_closure_set_capture_ptr(c, 3, unboxed_ptr::<u8>(state_h.get_nanbox_f64()) as i64);
+    crate::closure::closure_set_capture_ref(
+        c,
+        2,
+        unboxed_ptr::<u8>(values_h.get_nanbox_f64()) as i64,
+    );
+    crate::closure::closure_set_capture_ref(
+        c,
+        3,
+        unboxed_ptr::<u8>(state_h.get_nanbox_f64()) as i64,
+    );
     js_closure_set_capture_f64(c, 4, cap_resolve_h.get_nanbox_f64());
     js_closure_set_capture_f64(c, 5, cap_reject_h.get_nanbox_f64());
     // Spec: the resolve/reject element functions are anonymous built-in
@@ -381,13 +390,13 @@ extern "C" fn all_resolve_element_fn(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let guard = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
+    let guard = crate::closure::closure_capture_ref(closure, 0) as *mut crate::array::ArrayHeader;
     if !take_already_called(guard) {
         return undef();
     }
     let index = js_closure_get_capture_f64(closure, 1) as u32;
-    let values = js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader;
-    let state = js_closure_get_capture_ptr(closure, 3) as *mut crate::array::ArrayHeader;
+    let values = crate::closure::closure_capture_ref(closure, 2) as *mut crate::array::ArrayHeader;
+    let state = crate::closure::closure_capture_ref(closure, 3) as *mut crate::array::ArrayHeader;
     let cap_resolve = js_closure_get_capture_f64(closure, 4);
 
     js_array_set_f64(values, index, value);
@@ -445,7 +454,7 @@ fn settled_element(
     value: f64,
     fulfilled: bool,
 ) -> f64 {
-    let guard = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
+    let guard = crate::closure::closure_capture_ref(closure, 0) as *mut crate::array::ArrayHeader;
     if !take_already_called(guard) {
         return undef();
     }
@@ -463,8 +472,8 @@ fn settled_element(
 
     let closure: *const crate::closure::ClosureHeader =
         unboxed_ptr(closure_h.get_nanbox_f64()) as *const _;
-    let values = js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader;
-    let state = js_closure_get_capture_ptr(closure, 3) as *mut crate::array::ArrayHeader;
+    let values = crate::closure::closure_capture_ref(closure, 2) as *mut crate::array::ArrayHeader;
+    let state = crate::closure::closure_capture_ref(closure, 3) as *mut crate::array::ArrayHeader;
     let cap_resolve = js_closure_get_capture_f64(closure, 4);
 
     js_array_set_f64(values, index, record_h.get_nanbox_f64());
@@ -490,13 +499,13 @@ extern "C" fn any_reject_element_fn(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let guard = js_closure_get_capture_ptr(closure, 0) as *mut crate::array::ArrayHeader;
+    let guard = crate::closure::closure_capture_ref(closure, 0) as *mut crate::array::ArrayHeader;
     if !take_already_called(guard) {
         return undef();
     }
     let index = js_closure_get_capture_f64(closure, 1) as u32;
-    let errors = js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader;
-    let state = js_closure_get_capture_ptr(closure, 3) as *mut crate::array::ArrayHeader;
+    let errors = crate::closure::closure_capture_ref(closure, 2) as *mut crate::array::ArrayHeader;
+    let state = crate::closure::closure_capture_ref(closure, 3) as *mut crate::array::ArrayHeader;
 
     js_array_set_f64(errors, index, reason);
     if dec_remaining(state) {
@@ -509,7 +518,8 @@ extern "C" fn any_reject_element_fn(
         let msg = crate::string::js_string_from_bytes(b"All promises were rejected".as_ptr(), 26);
         let closure: *const crate::closure::ClosureHeader =
             unboxed_ptr(closure_h.get_nanbox_f64()) as *const _;
-        let errors = js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader;
+        let errors =
+            crate::closure::closure_capture_ref(closure, 2) as *mut crate::array::ArrayHeader;
         let cap_reject = js_closure_get_capture_f64(closure, 5);
         let agg_v = boxed_ptr(crate::error::js_aggregateerror_new(errors, msg));
         let _ = call_with_this(cap_reject, undef(), &[agg_v]);
@@ -775,7 +785,8 @@ fn perform(
                 resolve_fn_h.get_nanbox_f64(),
                 ctor_h.get_nanbox_f64(),
                 &[next],
-            )?
+            )
+            .map_err(|error| error.value())?
         };
         let next_promise_h = iter.root_nanbox_f64(next_promise);
 
@@ -901,7 +912,8 @@ fn perform(
                         cap_resolve_h.get_nanbox_f64(),
                         undef(),
                         &[values_h.get_nanbox_f64()],
-                    )?;
+                    )
+                    .map_err(|error| error.value())?;
                 }
                 CombinatorKind::Any => {
                     // The message allocates; `values` (the errors array) is the
@@ -913,7 +925,8 @@ fn perform(
                     let agg_v = boxed_ptr(crate::error::js_aggregateerror_new(values_ptr(), msg));
                     // Nothing allocates between the line above and the call, so
                     // `agg_v` needs no handle of its own.
-                    call_with_this(cap_reject_h.get_nanbox_f64(), undef(), &[agg_v])?;
+                    call_with_this(cap_reject_h.get_nanbox_f64(), undef(), &[agg_v])
+                        .map_err(|error| error.value())?;
                 }
                 CombinatorKind::Race => unreachable!(),
             }
@@ -1055,7 +1068,7 @@ pub extern "C" fn js_promise_reject_spec(this_ctor: f64, reason: f64) -> f64 {
     let cap = new_promise_capability(ctor_h.get_nanbox_f64());
     let cap_promise_h = scope.root_nanbox_f64(cap.promise);
     if let Err(thrown) = call_with_this(cap.reject, undef(), &[reason_h.get_nanbox_f64()]) {
-        crate::exception::js_throw(thrown);
+        crate::exception::rethrow_caught(thrown);
     }
     cap_promise_h.get_nanbox_f64()
 }
@@ -1102,7 +1115,7 @@ pub extern "C" fn js_promise_resolve_spec(this_ctor: f64, value: f64) -> f64 {
     let cap = new_promise_capability(ctor_h.get_nanbox_f64());
     let cap_promise_h = scope.root_nanbox_f64(cap.promise);
     if let Err(thrown) = call_with_this(cap.resolve, undef(), &[value_h.get_nanbox_f64()]) {
-        crate::exception::js_throw(thrown);
+        crate::exception::rethrow_caught(thrown);
     }
     cap_promise_h.get_nanbox_f64()
 }
@@ -1177,7 +1190,7 @@ pub extern "C" fn js_promise_try_spec(this_ctor: f64, callback: f64, rest: f64) 
             let _ = call_with_this(cap_resolve_h.get_nanbox_f64(), undef(), &[value]);
         }
         Err(reason) => {
-            let _ = call_with_this(cap_reject_h.get_nanbox_f64(), undef(), &[reason]);
+            let _ = call_with_this(cap_reject_h.get_nanbox_f64(), undef(), &[reason.value()]);
         }
     }
     cap_promise_h.get_nanbox_f64()

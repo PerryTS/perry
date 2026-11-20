@@ -52,6 +52,10 @@ pub struct ProgramLayoutOrdinals {
     pub family_first: u32,
     pub family_count: u32,
     pub prototype_serial_end: u64,
+    /// Program identities whose content is the declared empty ordinary
+    /// layout's facts: they name the native row and get no static row, so no
+    /// image record with those facts is published in front of the seed.
+    pub empty_ordinary: Vec<u32>,
 }
 
 impl ProgramLayoutOrdinals {
@@ -73,10 +77,26 @@ impl ProgramLayoutOrdinals {
             Self::append(&mut entries, input)?;
         }
         let lazy_first = entries.len() as u32;
+        let native_empty = seen.contains_key(&LayoutKey::Native(EMPTY_ORDINARY_NATIVE.into()));
+        let mut empty_ordinary = Vec::new();
         let mut sorted = BTreeMap::new();
         for input in program {
             if input.role == LayoutRole::Native || matches!(input.key, LayoutKey::Native(_)) {
                 return Err("program entry cannot extend the native catalog".into());
+            }
+            if let LayoutKey::Identity(identity, shape) = &input.key {
+                if native_empty
+                    && input.role == LayoutRole::OtherStatic
+                    && shape.is_empty_ordinary()
+                {
+                    if *identity == 0 || *identity != input.requested_shape_id {
+                        return Err("identity key disagrees with requested identity".into());
+                    }
+                    if !empty_ordinary.contains(identity) {
+                        empty_ordinary.push(*identity);
+                    }
+                    continue;
+                }
             }
             if let LayoutKey::Identity(identity, _) = &input.key {
                 if *identity == 0 || *identity != input.requested_shape_id {
@@ -125,6 +145,7 @@ impl ProgramLayoutOrdinals {
             family_first,
             family_count,
             prototype_serial_end: perry_abi::intrinsic_serials::FIRST_DYNAMIC_PROTOTYPE_SERIAL,
+            empty_ordinary,
         })
     }
 
@@ -152,6 +173,11 @@ impl ProgramLayoutOrdinals {
     }
 
     pub fn identity_word(&self, identity: u32) -> Option<u32> {
+        if identity != 0 && self.empty_ordinary.contains(&identity) {
+            return self
+                .entry(&LayoutKey::Native(EMPTY_ORDINARY_NATIVE.into()))
+                .map(OrdinalEntry::word);
+        }
         self.entries
             .iter()
             .find(|entry| identity != 0 && entry.requested_shape_id == identity)
@@ -256,22 +282,25 @@ mod tests {
     #[test]
     fn exact_raw_word_fixtures_and_checked_limits() {
         for (row, band, kind, expected) in [
-            (0, 0, 0, 0x80000000),
-            (1, 0, 2, 0x88000001),
-            (1, 0, 3, 0x8c000001),
-            (1, 1, 1, 0x94000001),
-            (0, 2, 1, 0xa4000000),
+            (10, 0, 0, 0x80000000),
+            (11, 0, 2, 0x88000001),
+            (11, 0, 3, 0x8c000001),
+            (11, 1, 1, 0x94000001),
+            (0, 1, 3, 0x9ffffff6),
         ] {
             assert_eq!(encode_layout_word(row, band, kind).unwrap(), expected);
         }
         assert_eq!(
-            encode_layout_word(0, 0, 0).unwrap() | 0x40000000,
+            encode_layout_word(10, 0, 0).unwrap() | 0x40000000,
             0xc0000000
         );
         for band in 0..3 {
             for kind in 0..4 {
                 let word = encode_layout_word((1 << 26) - 1, band, kind).unwrap();
-                assert_eq!(word & 0x03ffffff, (1 << 26) - 1);
+                assert_eq!(
+                    word & 0x03ffffff,
+                    (1 << 26) - 1 - perry_abi::LAYOUT_ROW_BIAS
+                );
                 assert_eq!((word >> 28) & 3, u32::from(band));
                 assert_eq!((word >> 26) & 3, u32::from(kind));
             }
@@ -351,10 +380,13 @@ mod tests {
 }
 
 /// One authoritative ABI catalog, including absent target variants.
+/// The native catalog key of `perry_abi::EMPTY_ORDINARY_LAYOUT_ROW`.
+pub const EMPTY_ORDINARY_NATIVE: &str = "EmptyOrdinary";
+
 pub fn native_inputs() -> Vec<OrdinalInput> {
     use perry_abi::*;
     let mut inputs = Vec::new();
-    for index in 0..9 {
+    for index in 0..FUNCTION_FAMILY_ROWS {
         let word = intrinsic_function_layout_word(index);
         inputs.push(OrdinalInput {
             key: LayoutKey::Native(format!("intrinsic_function_{index}")),
@@ -371,6 +403,8 @@ pub fn native_inputs() -> Vec<OrdinalInput> {
     for name in ["WeakMap", "WeakSet"]
         .into_iter()
         .chain(NATIVE_LAYOUT_DESCRIPTORS.iter().copied())
+        // The declared empty ordinary layout (`EMPTY_ORDINARY_LAYOUT_ROW`).
+        .chain([EMPTY_ORDINARY_NATIVE])
     {
         inputs.push(OrdinalInput {
             key: LayoutKey::Native(name.into()),
@@ -539,6 +573,16 @@ pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) 
     content.rep = 0;
     content.typed = None;
     let plan = current_plan();
+    if content.is_empty_ordinary() {
+        if let (Some(&id), Some(word)) = (
+            plan.empty_ordinary.first(),
+            plan.empty_ordinary
+                .first()
+                .and_then(|id| plan.identity_word(*id)),
+        ) {
+            return (id, word);
+        }
+    }
     let entry = plan
         .entries
         .iter()
@@ -548,6 +592,64 @@ pub(crate) fn deferred_word(birth: &crate::BirthShape, live: u32) -> (u32, u32) 
         })
         .expect("deferred width has a static ordinal");
     (entry.requested_shape_id, entry.word())
+}
+
+#[cfg(test)]
+mod empty_ordinary_tests {
+    use super::*;
+
+    fn empty(live: u32) -> crate::BirthShape {
+        crate::BirthShape {
+            keys: Vec::new(),
+            key_count: 0,
+            live,
+            proto: crate::BirthProto::Literal,
+            typed: None,
+            rep: 0,
+            constfn: Vec::new(),
+            private: Vec::new(),
+            brands: Vec::new(),
+            attrs: Vec::new(),
+        }
+    }
+
+    /// A program `{}` content names the seeded native row and takes no
+    /// static row: an image record with the same facts would be published
+    /// in front of the seed and shadow it.
+    #[test]
+    fn empty_literal_names_the_native_row() {
+        let plan = ProgramLayoutOrdinals::assign(
+            native_inputs(),
+            [
+                identity_input(&empty(0), 0x8000_0360),
+                identity_input(&empty(1), 0x8000_0361),
+            ],
+        )
+        .unwrap();
+        let native = perry_abi::NATIVE_LAYOUT_ROWS;
+        assert_eq!(
+            plan.static_rows(),
+            native + 1,
+            "only the live-1 content gets a row"
+        );
+        assert_eq!(
+            plan.identity_word(0x8000_0360),
+            Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD)
+        );
+        assert_ne!(
+            plan.identity_word(0x8000_0361),
+            Some(perry_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD)
+        );
+        assert!(plan
+            .entries
+            .iter()
+            .all(|e| !matches!(&e.key, LayoutKey::Identity(_, s) if s.is_empty_ordinary())));
+        // Without the native catalog (a standalone plan) nothing aliases.
+        let bare =
+            ProgramLayoutOrdinals::assign([], [identity_input(&empty(0), 0x8000_0360)]).unwrap();
+        assert_eq!(bare.static_rows(), 1);
+        assert!(bare.empty_ordinary.is_empty());
+    }
 }
 
 #[cfg(test)]

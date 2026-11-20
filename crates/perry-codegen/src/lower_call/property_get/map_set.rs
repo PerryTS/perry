@@ -36,16 +36,99 @@ use crate::type_analysis::{
 };
 use crate::types::{DOUBLE, I64};
 
+pub(crate) fn try_lower_certified_map(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+) -> Result<Option<String>> {
+    use perry_hir::folded_call::{direct_map_call, Site, SITE_DIRECT_MAP, SITE_MAP};
+    let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    else {
+        return Ok(None);
+    };
+    if ctx.wpfacts_off || !direct_map_call(callee, args.len()) {
+        return Ok(None);
+    }
+    let flags = ctx
+        .wpfacts
+        .method_sites
+        .get(&(Site::Callee(*byte_offset), property.clone()))
+        .copied()
+        .unwrap_or(0);
+    if flags & SITE_DIRECT_MAP == 0 {
+        return Ok(None);
+    }
+    debug_assert!(flags & SITE_MAP != 0 && ctx.wpfacts.native_member_calls.contains(byte_offset));
+    let operands: Vec<_> = std::iter::once(object.as_ref()).chain(args).collect();
+    rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
+        let blk = ctx.block();
+        let map = unbox_to_i64(blk, &vals[0]);
+        Ok(Some(match property.as_str() {
+            "clear" => {
+                blk.call_void("js_map_clear", &[(I64, &map)]);
+                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            }
+            "get" => blk.call(DOUBLE, "js_map_get", &[(I64, &map), (DOUBLE, &vals[1])]),
+            "set" => {
+                let receiver = blk.call(
+                    I64,
+                    "js_map_set",
+                    &[(I64, &map), (DOUBLE, &vals[1]), (DOUBLE, &vals[2])],
+                );
+                nanbox_pointer_inline(blk, &receiver)
+            }
+            _ => unreachable!("direct_map_call admits only clear/get/set"),
+        }))
+    })
+}
+
 /// Map/Set methods on PropertyGet receivers. The HIR only folds
 /// `m.set(...)`/`m.get(...)` to MapSet/MapGet when `m` is an Ident receiver.
 /// When the receiver is `this.field` (class method accessing a Map-typed
 /// field), the generic Call reaches here and needs an explicit dispatch.
+/// Every method name [`try_lower_map_set_methods`] lowers to a direct Map or
+/// Set builtin. The own-override guard covers exactly these names
+/// (`own_override_guard::shadowable_builtin_name`), so a receiver that owns or
+/// inherits another function under the name reads it; the lowering declines
+/// every other name. One list for both: a direct arm the guard does not know
+/// is a call that ignores the receiver's own `[[Prototype]]` (the ES2025 Set
+/// methods were such arms).
+pub(crate) fn is_direct_collection_builtin_name(property: &str) -> bool {
+    matches!(
+        property,
+        "get"
+            | "set"
+            | "has"
+            | "delete"
+            | "add"
+            | "clear"
+            | "entries"
+            | "keys"
+            | "values"
+            | "union"
+            | "intersection"
+            | "difference"
+            | "symmetricDifference"
+            | "isSubsetOf"
+            | "isSupersetOf"
+            | "isDisjointFrom"
+    )
+}
+
 pub(crate) fn try_lower_map_set_methods(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     args: &[Expr],
 ) -> Result<Option<String>> {
+    if !is_direct_collection_builtin_name(property) {
+        return Ok(None);
+    }
     // `ReadonlySet<T>` is a structural interface, not a native-layout proof.
     // The runtime helper brand-checks the overwhelmingly common genuine Set
     // and otherwise preserves JavaScript dispatch (custom interface objects,

@@ -1,0 +1,1 @@
+The `target-wasi` codegen test for nested WebAssembly exception-handling regions builds `Stmt::Try` with its `forof_completion` field again, so `wasi-execution` compiles past its first step instead of failing every core PR.

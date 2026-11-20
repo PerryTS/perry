@@ -100,6 +100,10 @@ That is deliberate. The signature is what makes a self-update safe to run, and
 `source` is a URL you can point anywhere — so if it could redirect the
 download, this setting would be a way to install arbitrary code.
 
+ZIP bundles are extracted into a staging directory. Encrypted entries,
+symbolic links, paths outside that directory, and duplicate file destinations are
+rejected before installation.
+
 ## The cooldown
 
 `auto` will not install a release that is younger than `min_age_hours`, which

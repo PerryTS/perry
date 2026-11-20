@@ -77,11 +77,23 @@ js exact js_to_primitive -- runs valueOf / toString / Symbol.toPrimitive
 js exact js_number_coerce -- ToNumber: runs valueOf / Symbol.toPrimitive (#11522)
 js exact js_promise_run_microtasks -- drains the microtask queue, running reactions
 
+# ------------------------------------------------------------------ barrier
+# The GC write barrier: a function reaching one may keep a heap value. Used
+# only by the effect-declaration check (`perry-gc-effects effects`), never by
+# the classes. Layered like the other seeds: the exported entries AND the
+# out-of-line parts of the inlined runtime barrier, so inlining cannot erase
+# every name on a store path. Collections are cut in that solve.
+barrier regex ^js_write_barrier(_slot|_slot_validated_parent|_birth_slots)?$ -- exported heap-slot barrier entries (root-word barriers write handles, not heap slots: not seeds)
+barrier regex ^perry_runtime::gc::barrier_store::runtime_write_barrier_ -- the runtime's slot-store barrier wrappers
+barrier regex ^perry_runtime::gc::barrier::(incremental_mark_barrier_value|gc_note_black_birth|(REMEMBERED_SET|DIRTY_OLD_PAGES|EVER_DIRTY_OLD_PAGES|EXTERNAL_DIRTY_SLOT_PAGES)::resolve) -- out-of-line parts of the inlined barrier (marking, remembered set, dirty pages)
+barrier regex (replay_array_growth_write_barriers|rebuild_closure_layout_and_barriers)$ -- barrier replays after array growth and closure relayout
+
 # ------------------------------------------------------------------- throw
 # The throw funnel. ThrowOnly cuts it: a call that reaches JS only by throwing
 # leaves no suspended frame to resume without unwinding (RFC section 4.6). The
 # fatal path runs exit listeners on an intact stack that never resumes.
-throw exact js_throw -- the single throw funnel every js_throw_* helper ends in
+throw exact js_throw -- the entry of compiled code (a program `throw` statement); it calls raise_thrown
+throw regex ^perry_runtime::exception::raise_thrown$ -- the single raise behind js_throw and the four typed leaves (throw_core, rethrow_caught, throw_program_value, throw_open)
 throw contains perry_runtime::exception::print_uncaught -- fatal uncaught-exception report: runs exit listeners, then the process exits
 
 # ------------------------------------------------------------------- panic
@@ -159,6 +171,9 @@ extern regex ^(Get\w+|Set\w+|Create\w+|Close\w+|Read\w+|Write\w+|Query\w+|Wait\w
 # every function matching the right-hand side becomes a callee of the exempted
 # function, so if any possible target can collect or run JS, the exempted
 # function -- and everything that calls it -- is still tainted by the graph.
+# Audit even unused delegations against each release archive before changing
+# these rules (the analyzer normalizes LLVM symbol suffixes):
+# cargo run --release -p perry-gc-effects --example audit_delegations -- ARCHIVE...
 #
 # Formatting: core::fmt dispatches only through fmt::Arguments' formatter
 # pointers and `&mut dyn fmt::Write`, i.e. to implementations of the core::fmt
@@ -225,7 +240,7 @@ indirect regex ^perry_runtime::gc::full_trace:: -- the full-trace fetch hook (au
 # slot. Most such calls sit in helpers that run JS or collect anyway; these are
 # the ones on Leaf helpers, each delegated to the only functions its slot can
 # hold, so the graph (not this reason) decides the class.
-indirect regex ^perry_runtime::feature_hooks::run_feature_installer$ => regex ^js_runtime_install_ -- js_gc_init runs the installer registered by js_runtime_register_feature_installer. The only registration is the static constructor perry_codegen::stubs::generate_feature_installer_object emits, and the installer it registers is a generated function that only calls js_runtime_install_* entry points (made callees here; the forbid rule below keeps archive code from registering anything else)
+indirect regex ^perry_runtime::feature_hooks::run_feature_installer$ => regex ^js_runtime_(install_|families_never$) -- js_gc_init runs the installer registered by js_runtime_register_feature_installer. The only registration is the static constructor perry_codegen::stubs::generate_feature_installer_object emits, and the installer it registers is a generated function that only calls js_runtime_install_* entry points and, first, js_runtime_families_never with the image's family claim (made callees here; the forbid rule below keeps archive code from registering anything else)
 indirect regex ^js_segments_view_next$ => regex ^perry_runtime::intl::segmenter::next_grapheme_boundary_impl$ -- the segments-view cursor (ink's per-grapheme loop) finds the next boundary through the `intl-segmenter` slot; the only function that slot can hold is next_grapheme_boundary_impl (set by `intl::segmenter::install`, which is the slot's only writer), a pure unicode-segmentation cursor step. Without this delegation the slot's indirect call would turn a Leaf hot path into Reenters
 indirect regex ^js_node_submod_install_all$ => regex ^perry_runtime::node_submodules::install_test_buckets$ -- install-all adds the node:test buckets through the `mod-node-test` slot; the only function that slot can hold is install_test_buckets (set by `node_submodules::install_node_test`, the slot's only writer), which stores two static spec pointers
 # HWS2 BigInt slots: each target is a real graph edge, never a Leaf cut.
@@ -407,7 +422,7 @@ indirect exact perry_runtime::gc::gc_init => exact perry_runtime::async_hooks::r
 indirect regex ^(js_nm_install_all|js_nm_install_child_process|js_nm_install_cluster|js_nm_install_crypto|js_nm_install_dgram|js_nm_install_domain|js_nm_install_events|js_nm_install_fs|js_nm_install_http|js_nm_install_inspector|js_nm_install_net|js_nm_install_readline|js_nm_install_repl|js_nm_install_stream|js_nm_install_tls|js_nm_install_tty|js_nm_install_worker_threads|js_nm_install_zlib|js_node_submod_install_all|js_node_submod_install_fs_promises|js_node_submod_install_readline_promises)$ => exact perry_runtime::async_hooks::register_roots -- these exact installer bodies inline the same private async root-registration slot; follow its sole actual callback rather than exempting an indirect call
 indirect exact js_runtime_install_compiled => exact perry_runtime::async_hooks::register_roots -- the compiled installer inlines REGISTER_ROOTS; follow the sole actual callback
 
-indirect exact perry_runtime::gc::gc_init => exact perry_runtime::fs::register_roots -- FS_REGISTER_ROOTS is filled by the native fs installer; follow the actual root-registration callback
+indirect exact perry_runtime::gc::gc_init => exact perry_runtime::fs::roots::register_roots -- FS_REGISTER_ROOTS is filled by the native fs installer; follow the actual root-registration callback
 indirect exact perry_runtime::fs_hook_slots::try_clone_registered_fd => exact perry_runtime::fs::try_clone_registered_fd -- the fs installer fills the state probe; empty means no filesystem-owned state
 indirect exact perry_runtime::fs_hook_slots::is_fs_stream_instance_value => exact perry_runtime::fs::is_fs_stream_instance_value -- the fs installer fills the state probe; empty means no filesystem-owned state
 indirect exact perry_runtime::fs_hook_slots::resolve_watch_queue => exact perry_runtime::fs::dir_glob_watch::watch_backend::watch_queue_tls::resolve -- fs installer fills the unchanged TLS storage resolver
@@ -469,7 +484,6 @@ indirect exact perry_runtime::perf_hook_slots::is_perf_entry_object => exact per
 indirect exact perry_runtime::perf_hook_slots::is_perf_entry_object_instance_of => exact perry_runtime::perf_hooks::is_perf_entry_object_instance_of -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::is_perf_hooks_shape_instance_of => exact perry_runtime::perf_hooks::is_perf_hooks_shape_instance_of -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::is_perf_observer_list_value => exact perry_runtime::perf_hooks::is_perf_observer_list_value -- performance installer fills the concrete backend operation
-indirect exact perry_runtime::perf_hook_slots::is_performance_namespace_value => exact perry_runtime::perf_hooks::is_performance_namespace_value -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::js_perf_clear_marks => exact js_perf_clear_marks -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::js_perf_clear_measures => exact js_perf_clear_measures -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::js_perf_clear_resource_timings => exact js_perf_clear_resource_timings -- performance installer fills the concrete backend operation
@@ -493,7 +507,6 @@ indirect exact perry_runtime::perf_hook_slots::note_event_loop_start => exact pe
 indirect exact perry_runtime::perf_hook_slots::perf_entry_to_json => exact perry_runtime::perf_hooks::perf_entry_to_json -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::perf_supported_entry_types_value => exact perry_runtime::perf_hooks::prototypes::perf_supported_entry_types_value -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::performance_namespace => exact perry_runtime::perf_hooks::performance_namespace -- performance installer fills the concrete backend operation
-indirect exact perry_runtime::perf_hook_slots::performance_prototype_method_value => exact perry_runtime::perf_hooks::prototypes::performance_prototype_method_value -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::validate_perf_list_filter_arg => exact perry_runtime::perf_hooks::validate_perf_list_filter_arg -- performance installer fills the concrete backend operation
 indirect exact perry_runtime::perf_hook_slots::register_installed_roots => exact perry_runtime::perf_hook_slots::register_roots -- selected performance root-registration callback
 indirect exact perry_runtime::gc::gc_init => exact perry_runtime::perf_hook_slots::register_roots -- per-thread initialization follows the installed performance roots
@@ -536,7 +549,7 @@ indirect exact perry_runtime::os_hook_slots::refresh_tty_stream_sizes => exact p
 indirect exact perry_runtime::os_hook_slots::remove_internal_process_listener => exact perry_runtime::os::os_process_emitter::remove_internal_process_listener -- process/OS installer selects the concrete operation
 indirect exact perry_runtime::os_hook_slots::signals_on_turnloop => exact perry_runtime::os::signal::signals_on_turnloop -- process/OS installer selects the concrete operation
 indirect exact perry_runtime::os_hook_slots::stdin_listeners_keep_loop_alive => exact perry_runtime::os::process_streams::stdin_listeners_keep_loop_alive -- process/OS installer selects the concrete operation
-indirect exact perry_runtime::os_hook_slots::stdin_push_bytes => exact perry_runtime::os::process_streams::stdin_push_bytes -- process/OS installer selects the concrete operation
+# stdin_push_bytes has a #[cfg(test)] hook only; no release indirect call needs delegation.
 indirect exact perry_runtime::os_hook_slots::register_installed_roots => exact perry_runtime::os_hook_slots::register_roots -- selected process root-registration callback
 indirect exact perry_runtime::gc::gc_init => exact perry_runtime::os_hook_slots::register_roots -- per-thread initialization follows selected process roots
 
@@ -616,6 +629,7 @@ indirect exact perry_runtime::gc::gc_init => exact perry_runtime::event_target_h
 indirect exact js_runtime_install_event_target => exact perry_runtime::event_target_hook_slots::register_roots -- inlined Web-event root-registration callback
 
 indirect exact perry_runtime::typedarray_hook_slots::coerce_for_kind => exact perry_runtime::typedarray::bigint::coerce_for_kind -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::dispatch_typed_array_method => exact perry_runtime::object::native_call_method::typed_array::typed_array_method_tower -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::format_typed_array => exact perry_runtime::typedarray::format::format_typed_array -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_copy => exact js_native_memory_copy -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::js_native_memory_fill_u32 => exact js_native_memory_fill_u32 -- typed-array installer fills the concrete operation
@@ -661,7 +675,7 @@ indirect exact perry_runtime::typedarray_hook_slots::prototype_constructor_patch
 indirect exact perry_runtime::typedarray_hook_slots::store_coerced => exact perry_runtime::typedarray::species::store_coerced -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::to_bigint_for_store => exact perry_runtime::typedarray::bigint::to_bigint_for_store -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::to_number => exact perry_runtime::typedarray::species::to_number -- typed-array installer fills the concrete operation
-indirect exact perry_runtime::typedarray_hook_slots::typed_array_alloc => exact perry_runtime::typedarray::typed_array_alloc -- typed-array installer fills the concrete operation
+indirect exact perry_runtime::typedarray_hook_slots::typed_array_alloc => exact perry_runtime::byte_cell_support::typed_array_alloc -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::typed_array_fast_index_get => exact perry_runtime::typedarray::typed_array_fast_index_get -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::typed_array_fast_index_set => exact perry_runtime::typedarray::typed_array_fast_index_set -- typed-array installer fills the concrete operation
 indirect exact perry_runtime::typedarray_hook_slots::typed_array_from_source_raw_values => exact perry_runtime::typedarray::construct::typed_array_from_source_raw_values -- typed-array installer fills the concrete operation
@@ -716,3 +730,6 @@ indirect exact perry_runtime::dyn_eval_hook_roots::register_installed_roots => e
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_active_functions_storage => exact perry_runtime::dyn_eval::function_owner::active_functions_storage::resolve -- evaluator installer fills existing function pin TLS resolver
 
 indirect exact perry_runtime::dyn_eval_hook_roots::resolve_pin_top_storage => exact perry_runtime::dyn_eval::function_owner::pin_top_storage::resolve -- evaluator installer fills existing function pin TLS resolver
+
+# interpreted program throw: counted with dynamic code
+program exact perry_runtime::dyn_eval::interp::exec_stmt -- the statement evaluator executes interpreted program text (interp_entry is inlined); exclude its program throws from the native throw class

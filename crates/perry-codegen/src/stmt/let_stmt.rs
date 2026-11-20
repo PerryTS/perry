@@ -1,5 +1,6 @@
 use super::let_buffer_views::{math_min_length_buffer_ids, register_noalias_buffer_view};
 use super::let_object_facts::record_imported_object_alias;
+use super::let_scalar_new::{is_scalar_split, scalar_rebind, scalar_slot};
 use super::let_stmt_facts::{
     buffer_local_alias_source, is_global_this_value, native_i32_alias_source,
     pod_view_count_source, record_array_length_snapshot, record_pod_rejection,
@@ -31,6 +32,13 @@ pub(crate) fn lower_let(
     // when the initializer emits no call. Invalidate its existing proof at
     // the binding, then use the same receiver-invariance proof as parameters.
     let immutable = !mutable && !ctx.reassigned_locals.contains(&id);
+    // DYNP E13: a for-in desugar's keys binding; its begin call then takes a
+    // bound slot, read by the desugar's `let __n = __keys.length`.
+    if let Some(perry_hir::Expr::ForInKeys(recv)) = init {
+        if let (perry_hir::Expr::LocalGet(recv), true) = (recv.as_ref(), immutable) {
+            ctx.for_in_keys_locals.insert(id, *recv);
+        }
+    }
     for state in ctx
         .receiver_descriptors
         .byte_receiver_binding(id, immutable)
@@ -47,6 +55,18 @@ pub(crate) fn lower_let(
     if super::element_shape_loop::lower_virtual_clone_binding(ctx, id)? {
         return Ok(());
     }
+    // Inside a packed clone an element binding (`const x = a[k]`,
+    // `stable_packed_accumulator::collect_numeric_element_lets`) is a Number
+    // in a plain F64 alloca: no root slot, no barrier. Accumulators, the
+    // map's other entries, are declared outside the clone, so a `Let` found
+    // here is always one of those bindings.
+    if let Some(slot) = ctx.numeric_accumulator_f64_slots.get(&id).cloned() {
+        if let Some(init) = init {
+            let value = crate::expr::lower_expr(ctx, init)?;
+            ctx.block().store(crate::types::DOUBLE, &value, &slot);
+            return Ok(());
+        }
+    }
     // `let C = SomeClass` aliases the local `C` to the class
     // `SomeClass` for `new C()` site rerouting. The HIR lowers
     // class identifiers referenced as values to `Expr::ClassRef`,
@@ -61,14 +81,17 @@ pub(crate) fn lower_let(
     ctx.local_id_to_name.insert(id, name.to_string());
     if let Some(perry_hir::Expr::ClassMethodHome {
         class_name,
-        is_static: false,
+        is_static,
     }) = init
     {
         if ctx.method_home_local == Some((id, true)) {
             // Read only by proven `super.m()` sites: no home value is needed.
             return Ok(());
         }
-        if !mutable && !ctx.in_static_member && ctx.class_stack.last() == Some(class_name) {
+        if !mutable
+            && *is_static == ctx.in_static_member
+            && ctx.class_stack.last() == Some(class_name)
+        {
             ctx.method_home_local = Some((id, false));
         }
     }
@@ -431,9 +454,19 @@ pub(crate) fn lower_let(
     // cell is the activation's). The declaration initializes that cell, the
     // same `LocalSet` store every write of the capture takes; a fresh slot
     // would shadow the cell the other states and closures read.
-    if ctx.locals.contains_key(&id)
+    //
+    // A scalar-replaced binding is the exception. Its `ctx.locals` entry is
+    // a dummy, and its fields live in `scalar_replaced` /
+    // `scalar_replaced_arrays`, which every read resolves through first. A
+    // second lowering of the same declaration, such as a loop region's G-body
+    // after its F-body, must store into those slots again. Routing it through
+    // `LocalSet` would heap-allocate into the dummy while the reads kept
+    // loading the field slots, which only the first copy wrote, so they read
+    // `undefined`. The scalar paths below reuse the existing slots.
+    if (ctx.locals.contains_key(&id)
         || ctx.local_slot_reps.contains_key(&id)
-        || ctx.closure_captures.contains_key(&id)
+        || ctx.closure_captures.contains_key(&id))
+        && !scalar_rebind(ctx, id, init)
     {
         // A birth table already bore this declaration's closure and stored it
         // in the binding's scope slot (`closure_births`). Record what the
@@ -641,16 +674,7 @@ pub(crate) fn lower_let(
     // substring allocations. The escape collector admits this exact shape and
     // rejects `.length`, mutation, captures, and dynamic indices.
     if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
-        if ctx.non_escaping_arrays.contains_key(&id)
-            && matches!(args.as_slice(), [perry_hir::Expr::String(s)] if !s.is_empty())
-            && matches!(
-                callee.as_ref(),
-                perry_hir::Expr::PropertyGet { object, property, .. }
-                    if is_string_expr(ctx, object)
-                        && matches!(object.as_ref(), perry_hir::Expr::LocalGet(_))
-                        && property == "split"
-            )
-        {
+        if ctx.non_escaping_arrays.contains_key(&id) && is_scalar_split(ctx, callee, args) {
             let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
                 unreachable!();
             };
@@ -663,11 +687,10 @@ pub(crate) fn lower_let(
                 .iter()
                 .max()
                 .map_or(0usize, |index| *index as usize + 1);
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let existing = ctx.scalar_replaced_arrays.get(&id).cloned();
             let mut slots = Vec::with_capacity(slot_count);
-            for _ in 0..slot_count {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+            for i in 0..slot_count {
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|v| v.get(i)));
                 slots.push(slot);
             }
 
@@ -748,8 +771,10 @@ pub(crate) fn lower_let(
                     .insert(id, length_slots);
             }
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }
@@ -760,7 +785,7 @@ pub(crate) fn lower_let(
     // load directly from the corresponding slot. See the
     // `collect_non_escaping_arrays` pass in collectors.rs for the
     // escape criteria.
-    if let Some(perry_hir::Expr::Array(elements, _)) = init {
+    if let Some(literal @ perry_hir::Expr::Array(elements, _)) = init {
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
@@ -771,10 +796,9 @@ pub(crate) fn lower_let(
             // entry onward — before the element store runs, and on paths where
             // it never runs at all. An uninitialized alloca would feed the
             // root-word decoder stack garbage.
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
-            for _ in 0..n {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+            let existing = ctx.scalar_replaced_arrays.get(&id).cloned();
+            for i in 0..n {
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|v| v.get(i)));
                 slots.push(slot);
             }
             // Evaluate each element expression first; store the
@@ -788,10 +812,17 @@ pub(crate) fn lower_let(
                 .unwrap_or_default();
             for (i, elem) in elements.iter().enumerate() {
                 let index_is_observed = used_indices.contains(&(i as u32));
-                if !index_is_observed && lower_unused_expr(ctx, elem)? {
+                // SNAP census: the element's parent is the literal.
+                let unused = !index_is_observed
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, elem)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, elem)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, elem)
+                })?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
                 // #6968: same rooting hole as the object-literal fields —
                 // the element alloca is the only reference to a heap value
@@ -840,8 +871,10 @@ pub(crate) fn lower_let(
             // still resolves; the actual scalar-replaced reads short-
             // circuit before hitting this slot.
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }
@@ -851,14 +884,13 @@ pub(crate) fn lower_let(
     // unique field; PropertyGet/Set already resolve through
     // `ctx.scalar_replaced`, so no additional read path is needed.
     // See `collect_non_escaping_object_literals` in collectors.rs.
-    if let Some(perry_hir::Expr::Object(props)) = init {
+    if let Some(literal @ perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
-            let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+            let existing = ctx.scalar_replaced.get(&id).cloned();
             let mut field_slots: std::collections::HashMap<String, String> =
                 std::collections::HashMap::with_capacity(field_order.len());
             for fname in &field_order {
-                let slot = ctx.func.alloca_entry(DOUBLE);
-                ctx.func.entry_allocas_push_store(DOUBLE, &undef, &slot);
+                let slot = scalar_slot(ctx, existing.as_ref().and_then(|m| m.get(fname)));
                 field_slots.insert(fname.clone(), slot);
             }
 
@@ -872,10 +904,17 @@ pub(crate) fn lower_let(
                 .cloned()
                 .unwrap_or_default();
             for (key, value_expr) in props {
-                if !used_fields.contains(key) && lower_unused_expr(ctx, value_expr)? {
+                // SNAP census: the field value's parent is the literal.
+                let unused = !used_fields.contains(key)
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, value_expr)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, value_expr)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, value_expr)
+                })?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
                     // #6968: the field alloca is this heap value's only
@@ -911,8 +950,10 @@ pub(crate) fn lower_let(
             // — the scalar-replaced PropertyGet/Set paths short-
             // circuit before loading this slot.
             ctx.local_types.insert(id, refined_ty);
-            let dummy_slot = ctx.func.alloca_entry(DOUBLE);
-            ctx.locals.insert(id, dummy_slot);
+            if !ctx.locals.contains_key(&id) {
+                let dummy_slot = ctx.func.alloca_entry(DOUBLE);
+                ctx.locals.insert(id, dummy_slot);
+            }
             return Ok(());
         }
     }
@@ -1068,18 +1109,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let slot = ctx
                     .i32_counter_slots
@@ -1140,25 +1185,27 @@ pub(crate) fn lower_let(
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
-    // And one PROFITABILITY term, which is not a safety term at all (#7128).
-    // Every rule above answers "may we?"; this one answers "should we?". A
-    // local written after its declaration, with no i32-consuming read anywhere
-    // and at least one double-consuming read inside a loop, pays a
-    // `sitofp`/`uitofp` per iteration and buys nothing back — measured at
-    // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
-    // where the mixed representation additionally costs the loop its
-    // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    let unprofitable = ctx
-        .native_facts
-        .unprofitable_canonical_i32_locals()
-        .contains(&id);
+    // "Should we?" is the whole-program facts' answer (representation RFC
+    // §10.3, P1; `codegen/facts_rep.rs`): a local they cover takes an i32
+    // slot exactly when they give it `I32`, which carries int demand (an
+    // index, a bitwise operand, `Math.imul` reached along copies). A counter
+    // that only feeds double arithmetic (#7128, `15_mandelbrot`) is `F64`
+    // there and stays out. A local the facts do not cover keeps the
+    // collectors' value proof.
+    let facts_rep = crate::codegen::facts_rep::local(ctx, id);
+    let no_int_demand = !matches!(facts_rep, None | Some(crate::codegen::FactsRep::I32));
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
-    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // A local the facts give `I32` is proven int32 (never -0) on every
+    // write by the whole-program interval: that proof is the value-level
+    // admission, and the per-function collectors' proofs are not needed.
+    let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
+    let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
-        && !unprofitable
-        && init_in_i32_range
+        && !no_int_demand
+        && init_in_i32_range;
+    let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
@@ -1199,7 +1246,7 @@ pub(crate) fn lower_let(
                 closure_referenced: ctx.repsel_closure_ref_locals.contains(&id),
                 array_row_alias: ctx.array_row_aliases.contains_key(&id),
                 not_index_used_or_bounded: !canonical_safe_local,
-                no_i32_consuming_use: unprofitable,
+                no_i32_consuming_use: no_int_demand,
                 context: ctx.repsel_context_denial,
             },
         );
@@ -1224,18 +1271,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 // i32-native init: compute directly in i32, single store.
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 ctx.block().store(I32, &v_i32, &i32_slot);
@@ -1415,18 +1466,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let unsigned_i32 = ctx.unsigned_i32_locals.contains(&id);
                 let blk = ctx.block();
@@ -1453,6 +1508,10 @@ pub(crate) fn lower_let(
                     init_expr,
                     ExpectedNativeRep::U32,
                 )?)
+            } else if crate::codegen::facts_int32_locals::checked_init(ctx, id) {
+                // Check mode: a proven local's initializer is lowered as a
+                // value and witnessed below (`accept_let_value`).
+                None
             } else if matches!(
                 refined_ty,
                 perry_hir::types::Type::Number | perry_hir::types::Type::Int32
@@ -1573,9 +1632,15 @@ pub(crate) fn lower_let(
                     // for a local source. A declared numeric/object type can
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
-                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                        && !const_array_walk::holds_no_string(ctx, id, &v)
+                        && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
+                    {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
+                    let v = crate::codegen::facts_number_locals::accept_let_value(
+                        ctx, id, init_expr, v,
+                    );
                     ctx.block().store(DOUBLE, &v, &slot);
                     v
                 }
@@ -1596,9 +1661,14 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                    && !const_array_walk::holds_no_string(ctx, id, &v)
+                    && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
+                {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
+                let v =
+                    crate::codegen::facts_number_locals::accept_let_value(ctx, id, init_expr, v);
                 ctx.block().store(DOUBLE, &v, &slot);
                 v
             };

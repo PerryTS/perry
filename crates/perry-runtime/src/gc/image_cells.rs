@@ -204,7 +204,9 @@ unsafe fn cell_shape_needs_visit(header: *mut GcHeader) -> bool {
     if sabotage::knocked(sabotage::DYNAMIC) {
         return false;
     }
-    if (*header).obj_type == GC_TYPE_ARRAY && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0 {
+    if crate::gc_type_is_array!((*header).obj_type)
+        && (*header).gc_flags & GC_FLAG_SHAPE_SHARED != 0
+    {
         return false;
     }
     if crate::gc_type_is_not_object!((*header).obj_type) {
@@ -411,5 +413,20 @@ pub(crate) mod sabotage {
 pub(super) unsafe fn visit_leaf_service_roots(mut visit: impl FnMut(u64)) {
     for header in image_remembered_headers() {
         visit_cell_slots(header, &mut |slot| visit(slot.read()));
+    }
+}
+
+/// The traced slots of `header` as (slot address, word, parent owned), for
+/// the image run. A slot that is not parent owned is a runtime root the
+/// receiver's tracing also emits (its shape record's keys and prototype
+/// words): it lives in that record, outside the cell.
+pub(crate) unsafe fn visit_cell_slots_raw(
+    header: *mut GcHeader,
+    visit: &mut dyn FnMut(usize, u64, bool),
+) {
+    unsafe {
+        visit_cell_slots(header, &mut |slot| {
+            visit(slot.slot as usize, slot.read(), slot.is_parent_owned())
+        })
     }
 }

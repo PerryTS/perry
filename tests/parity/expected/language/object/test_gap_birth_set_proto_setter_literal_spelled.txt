@@ -1,0 +1,5 @@
+DEC 250: Cannot add member Object.prototype.v: built-in objects are read-only in a compiled program
+lit-direct 3 v
+lit-fn 4 v
+lit-a 5 a,v
+lit-keyed 6 v

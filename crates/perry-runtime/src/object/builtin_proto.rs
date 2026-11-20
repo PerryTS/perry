@@ -68,6 +68,7 @@ use super::ObjectHeader;
 /// Number of [`BuiltinProto`] families.
 pub const FAMILIES: usize = crate::codegen_abi::BUILTIN_PROTO_FAMILIES;
 
+use perry_abi::lock::{refuses, LockHolder, LockKey, LockMutation};
 pub use perry_abi::BuiltinProto;
 
 /// What a mutation funnel is about to do to the object it reports (DEC 250).
@@ -141,8 +142,8 @@ pub fn pristine(family: BuiltinProto) -> bool {
         } else {
             (*crate::agent_ptrs::intrinsic_proto(BuiltinProto::Object as usize)).parent_class_id
         };
-        own < super::layout_desc::UNSHADOWED_WORD_END
-            && parent < super::layout_desc::UNSHADOWED_WORD_END
+        crate::codegen_abi::is_unshadowed_record_word(own)
+            && crate::codegen_abi::is_unshadowed_record_word(parent)
     }
 }
 
@@ -154,8 +155,9 @@ pub fn pristine(family: BuiltinProto) -> bool {
 pub fn prototype_unwritten(family: BuiltinProto) -> bool {
     // SAFETY: as in `pristine`.
     unsafe {
-        (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id
-            < super::layout_desc::UNSHADOWED_WORD_END
+        crate::codegen_abi::is_unshadowed_record_word(
+            (*crate::agent_ptrs::intrinsic_proto(family as usize)).parent_class_id,
+        )
     }
 }
 
@@ -201,6 +203,8 @@ pub(crate) fn note_array_custom_proto() {
 /// `obj` is a live `ObjectHeader` (a GC_TYPE_OBJECT), or null.
 #[inline(never)]
 pub(crate) unsafe fn seal_object(obj: *mut ObjectHeader, family: BuiltinProto) {
+    // A host family is sealed as a runtime prototype (`seal_built_host_intrinsic`).
+    debug_assert!(family.realm_intrinsic());
     seal_object_family(obj, family as usize);
 }
 
@@ -249,36 +253,157 @@ pub(crate) fn seal_built_intrinsic(family: BuiltinProto, proto: *mut ObjectHeade
     });
 }
 
+/// Seal the intrinsic prototype of the family `declaration` births, when the
+/// realm seals that family (`realm_seals_constructor_prototype`), the moment
+/// phase B of a two-phase realm has born it and before the realm global's
+/// slot names its constructor: the realm seal ran at the end of phase A and
+/// skipped it (its slot was unbound). No-op for any other family.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.seal_realm_family_of")]
+#[cold]
+#[inline(never)]
+pub(crate) fn seal_realm_family_of(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) {
+    let Some((family, _)) = BuiltinProto::REALM
+        .iter()
+        .find(|(_, ctor)| *ctor == declaration.name)
+    else {
+        return;
+    };
+    let proto = crate::array::intrinsic_prototype_addr_if_bound(declaration.identity);
+    // SAFETY: the realm's just-born prototype (a header read).
+    let is_object = unsafe { crate::value::addr_class::try_read_gc_header(proto) }
+        .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
+    if proto != 0 && is_object {
+        // `seal_built_intrinsic`'s three steps, written out: that function
+        // keeps its one caller (and its place in the start-up text).
+        let proto = proto as *mut ObjectHeader;
+        let _no_move = crate::gc::GcSuppressScope::new();
+        super::own_override::as_builtin_definition(|| unsafe {
+            trace_seal(*family, (*proto).parent_class_id);
+            seal_object(proto, *family);
+            crate::agent_ptrs::publish_intrinsic_proto(*family as usize, proto);
+        });
+    }
+}
+
+/// Seal a host family's prototype (`Buffer.prototype`) when the member install
+/// reached only through its feature group completes it
+/// (`typedarray_hook_slots::buffer_prototype_members`), and publish it in the
+/// family's agent slot. Its meta family is [`RUNTIME_FAMILY`]: it is a
+/// prototype the runtime builds, outside DEC 250's lock, and a write marks
+/// only that prototype, its own shadow bit, which is the family's
+/// [`prototype_unwritten`]. So the sealed meta family field holds a realm
+/// family only below [`BuiltinProto::REALM_INTRINSICS`].
+#[inline(never)]
+pub(crate) fn seal_built_host_intrinsic(family: BuiltinProto, proto: *mut ObjectHeader) {
+    debug_assert!(!family.realm_intrinsic());
+    if proto.is_null() {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    super::own_override::as_builtin_definition(|| unsafe {
+        trace_seal(family, (*proto).parent_class_id);
+        seal_object_family(proto, RUNTIME_FAMILY);
+        crate::agent_ptrs::publish_intrinsic_proto(family as usize, proto);
+    });
+}
+
 /// The meta family field of a sealed RUNTIME prototype (one the runtime
 /// builds, such as `%URL.prototype%` or a timer prototype; not a
-/// [`BuiltinProto`]). A write marks only that prototype.
-pub(crate) const RUNTIME_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+/// [`BuiltinProto`]; also the host family `Buffer`'s prototype,
+/// `seal_built_host_intrinsic`). A write marks only that prototype. It follows
+/// the locked families below, so DEC 250's lock set past the global is one
+/// contiguous range (`ITERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY`).
+pub(crate) const RUNTIME_FAMILY: usize = REGEXP_STRING_ITERATOR_FAMILY + 1;
 /// The meta family field of `%IteratorPrototype%` and of
 /// `%ArrayIteratorPrototype%`: built-in prototypes that are not a
 /// [`BuiltinProto`] family, sealed by `iterator_prototypes` (DEC 250 (i)).
-pub(crate) const ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 1;
-pub(crate) const ARRAY_ITERATOR_FAMILY: usize = RUNTIME_FAMILY + 2;
+pub(crate) const ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 1;
+pub(crate) const ARRAY_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 2;
+/// The meta family field of `%GeneratorPrototype%` and of
+/// `%AsyncGeneratorPrototype%` (DEC 250 as narrowed 2026-11-03): their image
+/// members (`next`, `return`, `throw`, `@@toStringTag`; not `constructor`)
+/// are locked, adds stay open. Sealed by `seal_generator_prototype` when
+/// `build_generator_tower` completes them.
+pub(crate) const GENERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 3;
+pub(crate) const ASYNC_GENERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 4;
+/// The meta family fields of `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` and
+/// `%RegExpStringIteratorPrototype%` (DEC 250 as narrowed 2026-11-03, like
+/// the generator prototypes): their image members (`next`,
+/// `@@toStringTag`) are locked, adds stay open. Sealed by
+/// `seal_iterator_prototypes` with the shared and array ones.
+pub(crate) const MAP_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 5;
+pub(crate) const SET_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 6;
+pub(crate) const STRING_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 7;
+pub(crate) const REGEXP_STRING_ITERATOR_FAMILY: usize = super::builtin_namespace::GLOBAL_FAMILY + 8;
 const _: () = assert!(
-    ARRAY_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
+    REGEXP_STRING_ITERATOR_FAMILY as u64 <= super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK,
     "the meta family field holds every sealed family"
 );
 
-/// Seal the two iterator prototypes the moment `iterator_prototypes` completes
-/// them, before any program code can reach them.
+/// Does the realm seal the prototype the constructor loop
+/// (`global_this::populate`) births for `declaration`? A family prototype is
+/// sealed by [`seal_realm`] before any program code can reach it, so it is
+/// born on the born-prototype lineage (`shapes::stamp_born_prototype_root`)
+/// and that seal's mark mints no shape. Every other one keeps the ordinary
+/// lineage until something marks it (a runtime prototype with a declared
+/// class or layout word is restamped onto that word's lineage first).
+pub(crate) fn realm_seals_constructor_prototype(
+    declaration: &crate::object::global_this_tables::BuiltinConstructorDeclaration,
+) -> bool {
+    BuiltinProto::ALL
+        .iter()
+        .any(|(family, ctor)| family.realm_intrinsic() && *ctor == declaration.name)
+}
+
+/// Seal the built-in iterator prototypes the moment `iterator_prototypes`
+/// completes them, before any program code can reach them: `shared`
+/// (`%IteratorPrototype%`), then the families in `ITERATOR_FAMILIES` order.
 ///
 /// # Safety
-/// Both are live, fully built ordinary objects (or null).
+/// Every one is a live, fully built ordinary object (or null).
 #[inline(never)]
 #[optimize(size)]
 pub(crate) unsafe fn seal_iterator_prototypes(
     shared: *mut ObjectHeader,
-    array_iterator: *mut ObjectHeader,
+    families: [*mut ObjectHeader; 5],
 ) {
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
         seal_object_family(shared, ITERATOR_FAMILY);
-        seal_object_family(array_iterator, ARRAY_ITERATOR_FAMILY);
+        for (proto, family) in families.into_iter().zip(ITERATOR_FAMILIES) {
+            seal_object_family(proto, family);
+        }
     });
+}
+
+/// The family of each built-in iterator prototype `seal_iterator_prototypes`
+/// seals past `%IteratorPrototype%`: Array, Map, Set, String, RegExp String.
+const ITERATOR_FAMILIES: [usize; 5] = [
+    ARRAY_ITERATOR_FAMILY,
+    MAP_ITERATOR_FAMILY,
+    SET_ITERATOR_FAMILY,
+    STRING_ITERATOR_FAMILY,
+    REGEXP_STRING_ITERATOR_FAMILY,
+];
+
+/// Seal `%GeneratorPrototype%` (or `%AsyncGeneratorPrototype%`) the moment
+/// its tower is built, before any program code can reach it.
+///
+/// # Safety
+/// `proto` is the live, fully built generator prototype (or null).
+#[inline(never)]
+#[optimize(size)]
+pub(crate) unsafe fn seal_generator_prototype(proto: *mut ObjectHeader, is_async: bool) {
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let family = if is_async {
+        ASYNC_GENERATOR_FAMILY
+    } else {
+        GENERATOR_FAMILY
+    };
+    super::own_override::as_builtin_definition(|| unsafe { seal_object_family(proto, family) });
 }
 
 /// DEC 250 (i): the prototypes on which the program adds no key: compiled code
@@ -286,10 +411,36 @@ pub(crate) unsafe fn seal_iterator_prototypes(
 /// iterable", `IteratorClose` finding no `return`).
 #[inline(always)]
 pub(crate) fn add_locked(family: usize) -> bool {
-    family == BuiltinProto::Object as usize
-        || family == BuiltinProto::Function as usize
-        || family == ITERATOR_FAMILY
-        || family == ARRAY_ITERATOR_FAMILY
+    lock_holder(family).is_some_and(LockHolder::add_locked)
+}
+
+/// The locked holder (`perry_abi::lock`) sealed family `family` is, if the
+/// lock covers it ([`locked_family`]).
+#[inline(always)]
+pub(crate) fn lock_holder(family: usize) -> Option<LockHolder> {
+    // A host family (`Buffer`, `REALM_INTRINSICS..FIRST`) is not locked:
+    // the program patches it as in node, which only sets its shadow bit.
+    if family < BuiltinProto::REALM_INTRINSICS {
+        BuiltinProto::from_index(family).map(LockHolder::Proto)
+    } else if family == ITERATOR_FAMILY {
+        Some(LockHolder::Iterator)
+    } else if family == ARRAY_ITERATOR_FAMILY {
+        Some(LockHolder::ArrayIterator)
+    } else if family == GENERATOR_FAMILY {
+        Some(LockHolder::Generator)
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        Some(LockHolder::AsyncGenerator)
+    } else if family == MAP_ITERATOR_FAMILY {
+        Some(LockHolder::MapIterator)
+    } else if family == SET_ITERATOR_FAMILY {
+        Some(LockHolder::SetIterator)
+    } else if family == STRING_ITERATOR_FAMILY {
+        Some(LockHolder::StringIterator)
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        Some(LockHolder::RegExpStringIterator)
+    } else {
+        None
+    }
 }
 
 /// DEC 250 (i): an array-index store reached `%Array.prototype%` or
@@ -299,7 +450,8 @@ pub(crate) fn add_locked(family: usize) -> bool {
 #[inline(never)]
 #[optimize(size)]
 pub(crate) fn refuse_index_add(family: BuiltinProto) {
-    if index_add_refused() {
+    if refuses(LockHolder::Proto(family), LockKey::Index, LockMutation::Add) && index_add_refused()
+    {
         throw_locked(family as usize, &Violation::AddIndex);
     }
 }
@@ -376,6 +528,9 @@ pub(crate) unsafe fn name_runtime_prototype(
 /// Seal every family's intrinsic prototype of THIS thread's realm. Called once
 /// at the end of `populate_global_this_builtins`, after every runtime-owned
 /// install, link and the prototype-address priming.
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 #[optimize(size)]
 pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     if global.is_null() {
@@ -383,7 +538,9 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     super::own_override::as_builtin_definition(|| unsafe {
-        for (family, name) in BuiltinProto::ALL {
+        // A host family (`Buffer`) is sealed when its prototype is built
+        // (`seal_built_intrinsic`); reading it here would build it.
+        for (family, name) in BuiltinProto::REALM {
             let proto = intrinsic_prototype_addr(family, global, name);
             if proto == 0 {
                 continue;
@@ -405,7 +562,7 @@ pub(crate) fn seal_realm(global: *mut ObjectHeader) {
                 // now so every later named write reaches a sealed object, and
                 // recognise the array itself by its memoized address
                 // ([`note_array_prototype_write`]).
-                crate::gc::GC_TYPE_ARRAY => {
+                crate::gc_array_type_pat!() => {
                     // DEC 250 (i): it never holds an element, so it keeps no
                     // element room: every element it could gain must then
                     // grow it, and `js_array_grow` refuses that. Its length is
@@ -475,7 +632,11 @@ unsafe fn constructor_prototype_addr(global: *mut ObjectHeader, name: &str) -> u
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
 #[inline(always)]
-pub(crate) unsafe fn note_write(obj: *const ObjectHeader, mutation: Mutation<'_>, site: &'static str) {
+pub(crate) unsafe fn note_write(
+    obj: *const ObjectHeader,
+    mutation: Mutation<'_>,
+    site: &'static str,
+) {
     if obj.is_null() {
         return;
     }
@@ -532,7 +693,9 @@ unsafe fn note_sealed_write(
             throw_locked(family, &violation);
         }
     }
-    if family < FAMILIES {
+    // The realm families; a host family (`Buffer`) is sealed as a runtime
+    // prototype (`seal_built_host_intrinsic`).
+    if family < BuiltinProto::REALM_INTRINSICS {
         // A runtime definition that ADDS a key to an add-locked prototype
         // after its seal changes what an absent-key answer (a pristine-guarded
         // miss, the lock's "never gains a key") already said: it withdraws
@@ -547,6 +710,11 @@ unsafe fn note_sealed_write(
         if !super::own_override::in_builtin_definition() {
             super::shadow::set_bit(obj.cast_mut());
         }
+    } else if (GENERATOR_FAMILY..=REGEXP_STRING_ITERATOR_FAMILY).contains(&family) {
+        // The generator and the Map/Set/String/RegExp String iterator
+        // prototypes: locked above (image members only); an add is the
+        // program's own member and nothing in the runtime answers from its
+        // absence.
     } else if family == ITERATOR_FAMILY || family == ARRAY_ITERATOR_FAMILY {
         // Locked above (adds included); nothing else models them, so a
         // definition add after the seal has no answer to withdraw: it aborts.
@@ -571,9 +739,7 @@ unsafe fn note_sealed_write(
 /// global, not a runtime prototype (URL, timers, …).
 #[inline(always)]
 pub(crate) fn locked_family(family: usize) -> bool {
-    family < super::builtin_namespace::FIRST
-        || family == ITERATOR_FAMILY
-        || family == ARRAY_ITERATOR_FAMILY
+    lock_holder(family).is_some()
 }
 
 /// The image member `mutation` would write on the locked intrinsic `obj`, if
@@ -590,38 +756,82 @@ unsafe fn locked_violation(
     }
     let keys = own_keys(obj);
     let image = image_key_count(meta, keys);
-    let adds = add_locked(sealed_family((*meta).flags));
-    let violation = match mutation {
-        Mutation::Relink => Some(Violation::Relink),
-        Mutation::Replace(slot) => image_position_of_slot(keys, image, slot)
-            .map(|pos| Violation::Replace(key_display(keys, pos))),
-        Mutation::Delete(key) => image_position_of_key(keys, image, key)
-            .map(|pos| Violation::Delete(key_display(keys, pos))),
+    let Some(holder) = lock_holder(sealed_family((*meta).flags)) else {
+        return None;
+    };
+    // The one decision (`perry_abi::lock::refuses`) with the key's class: an
+    // image position is `Image`, a key that is not own `Absent`, and
+    // `constructor` `Constructor` in either case (owner ruling 2026-11-03).
+    // The key text is built only when the class alone would be refused.
+    let decide = |class: LockKey,
+                  m: LockMutation,
+                  text: &dyn Fn() -> String,
+                  wrap: fn(String) -> Violation| {
+        if !refuses(holder, class, m) {
+            return None;
+        }
+        let k = text();
+        let class = if k == ".constructor" {
+            LockKey::Constructor
+        } else {
+            class
+        };
+        refuses(holder, class, m).then(|| wrap(k))
+    };
+    match mutation {
+        Mutation::Relink => {
+            refuses(holder, LockKey::Absent, LockMutation::Relink).then_some(Violation::Relink)
+        }
+        Mutation::Replace(slot) => {
+            let pos = image_position_of_slot(keys, image, slot)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Replace,
+                &|| key_display(keys, pos),
+                Violation::Replace,
+            )
+        }
+        Mutation::Delete(key) => {
+            let pos = image_position_of_key(keys, image, key)?;
+            decide(
+                LockKey::Image,
+                LockMutation::Delete,
+                &|| key_display(keys, pos),
+                Violation::Delete,
+            )
+        }
         Mutation::Redefine(key) => match image_position_of_key(keys, image, key) {
-            Some(pos) => Some(Violation::Redefine(key_display(keys, pos))),
-            None if adds && image_position_of_key(keys, keys.count(), key).is_none() => {
-                Some(Violation::Add(key_text(key)))
-            }
+            Some(pos) => decide(
+                LockKey::Image,
+                LockMutation::Redefine,
+                &|| key_display(keys, pos),
+                Violation::Redefine,
+            ),
+            // Defining a key that is not own adds it.
+            None if image_position_of_key(keys, keys.count(), key).is_none() => decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| key_text(key),
+                Violation::Add,
+            ),
             None => None,
         },
-        Mutation::Add(key) => adds.then(|| Violation::Add(key_text(key))),
-        Mutation::Stamp(published) if adds => {
-            stamped_add(obj, keys, published).map(Violation::Add)
+        Mutation::Add(key) => decide(
+            LockKey::Absent,
+            LockMutation::Add,
+            &|| key_text(key),
+            Violation::Add,
+        ),
+        Mutation::Stamp(published) if refuses(holder, LockKey::Absent, LockMutation::Add) => {
+            let k = stamped_add(obj, keys, published)?;
+            decide(
+                LockKey::Absent,
+                LockMutation::Add,
+                &|| k.clone(),
+                Violation::Add,
+            )
         }
         Mutation::Stamp(_) | Mutation::Restructure | Mutation::Publication => None,
-    };
-    // Owner ruling 2026-11-03: `constructor` of a built-in prototype stays
-    // patchable (Next.js redefines `Date.prototype.constructor`). The key is
-    // exempt, not one mutation of it: after its (admitted) delete, defining it
-    // again is an add of the same exempt key, never refused.
-    match &violation {
-        Some(
-            Violation::Replace(k) | Violation::Delete(k) | Violation::Redefine(k) | Violation::Add(k),
-        ) if k == ".constructor" =>
-        {
-            None
-        }
-        _ => violation,
     }
 }
 
@@ -677,7 +887,9 @@ unsafe fn image_position_of_slot(keys: super::ObjectKeys, image: u32, slot: usiz
 unsafe fn entry_key(keys: super::ObjectKeys, pos: u32) -> Option<f64> {
     let value = keys.get(pos);
     let bits = value.bits();
-    if value.is_string() || (value.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0) {
+    if value.is_string()
+        || (value.is_pointer() && crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0)
+    {
         Some(f64::from_bits(bits))
     } else {
         None
@@ -775,6 +987,18 @@ fn locked_object_name(family: usize) -> String {
         String::from("Iterator.prototype")
     } else if family == ARRAY_ITERATOR_FAMILY {
         String::from("%ArrayIteratorPrototype%")
+    } else if family == GENERATOR_FAMILY {
+        String::from("%GeneratorPrototype%")
+    } else if family == ASYNC_GENERATOR_FAMILY {
+        String::from("%AsyncGeneratorPrototype%")
+    } else if family == MAP_ITERATOR_FAMILY {
+        String::from("%MapIteratorPrototype%")
+    } else if family == SET_ITERATOR_FAMILY {
+        String::from("%SetIteratorPrototype%")
+    } else if family == STRING_ITERATOR_FAMILY {
+        String::from("%StringIteratorPrototype%")
+    } else if family == REGEXP_STRING_ITERATOR_FAMILY {
+        String::from("%RegExpStringIteratorPrototype%")
     } else {
         crate::codegen_abi::BUILTIN_NAMESPACES[family - super::builtin_namespace::FIRST].to_string()
     }
@@ -788,7 +1012,11 @@ fn locked_object_name(family: usize) -> String {
 fn throw_locked(family: usize, violation: &Violation) -> ! {
     const WHY: &str = "built-in objects are read-only in a compiled program";
     // The hint names what still works: on an add-locked prototype nothing does.
-    let add = if add_locked(family) { "" } else { " (adding a new member is allowed)" };
+    let add = if add_locked(family) {
+        ""
+    } else {
+        " (adding a new member is allowed)"
+    };
     let object = locked_object_name(family);
     let message = match violation {
         Violation::Replace(member) => {
@@ -808,8 +1036,7 @@ fn throw_locked(family: usize, violation: &Violation) -> ! {
         Violation::AddIndex => format!("Cannot add an array index to built-in {object}: {WHY}"),
     };
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 /// The value-store hook (slot and spill stores): [`note_write`] for a sealed
@@ -871,13 +1098,9 @@ pub(crate) fn note_write_addr(addr: usize, mutation: Mutation<'_>, site: &'stati
         crate::gc_object_type_pat!() => unsafe {
             note_write(addr as *const ObjectHeader, mutation, site)
         },
-        crate::gc::GC_TYPE_ARRAY => note_array_prototype_write(addr, mutation, site),
+        crate::gc_array_type_pat!() => note_array_prototype_write(addr, mutation, site),
         crate::gc::GC_TYPE_CLOSURE => unsafe {
-            note_write(
-                (*(addr as *const crate::closure::ClosureHeader)).props,
-                mutation,
-                site,
-            );
+            crate::closure::props::note_write(addr, mutation, site);
         },
         _ => {}
     }
@@ -931,11 +1154,15 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
         match header.obj_type {
             crate::gc_object_type_pat!() => {
                 if property_key_is_index(key) && addr == crate::array::object_prototype_addr() {
-                    return index_add_refused();
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Object),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
                 }
                 sealed_write_refused(addr as *const ObjectHeader, key)
             }
-            crate::gc::GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
                 if live.is_null() {
                     return false;
@@ -943,14 +1170,15 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
                 if property_key_is_index(key)
                     && live as usize == crate::array::array_prototype_addr_if_resolved()
                 {
-                    return index_add_refused();
+                    return refuses(
+                        LockHolder::Proto(BuiltinProto::Array),
+                        LockKey::Index,
+                        LockMutation::Add,
+                    ) && index_add_refused();
                 }
                 sealed_write_refused(crate::array::array_property_bag(live), key)
             }
-            crate::gc::GC_TYPE_CLOSURE => sealed_write_refused(
-                (*(addr as *const crate::closure::ClosureHeader)).props,
-                key,
-            ),
+            crate::gc::GC_TYPE_CLOSURE => crate::closure::props::sealed_write_refused(addr, key),
             _ => false,
         }
     }
@@ -961,16 +1189,43 @@ pub(crate) fn lock_refuses_write(receiver: f64, key: f64) -> bool {
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
-unsafe fn sealed_write_refused(obj: *const ObjectHeader, key: f64) -> bool {
-    if obj.is_null() || super::own_override::in_builtin_definition() {
+#[inline(always)]
+pub(crate) unsafe fn sealed_write_refused(obj: *const ObjectHeader, key: f64) -> bool {
+    sealed_write_refused_in(obj as usize, key)
+}
+
+/// The owner of a locked intrinsic's keys, as the lock gate sees it
+/// (integrity, DESIGN_FR step 1).
+impl super::overflow::home::ObjHome {
+    /// A redefinition of `key` on the owner writes a member its lock refuses
+    /// (`meta`: the owner's sealed-intrinsic meta).
+    #[inline(always)]
+    pub(crate) unsafe fn redefine_violates(
+        owner: usize,
+        meta: *mut super::ObjectMeta,
+        key: f64,
+    ) -> bool {
+        locked_violation(
+            owner as *const ObjectHeader,
+            meta,
+            Mutation::Redefine(Key::Value(key)),
+        )
+        .is_some()
+    }
+}
+
+/// [`sealed_write_refused`] on an owner of home kind `H` (`owner` 0: none).
+#[inline]
+unsafe fn sealed_write_refused_in(owner: usize, key: f64) -> bool {
+    if owner == 0 || super::own_override::in_builtin_definition() {
         return false;
     }
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+    let meta = super::overflow::home::ObjHome::meta(owner);
     if meta.is_null() || (*meta).flags & super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC == 0 {
         return false;
     }
     locked_family(sealed_family((*meta).flags))
-        && locked_violation(obj, meta, Mutation::Redefine(Key::Value(key))).is_some()
+        && super::overflow::home::ObjHome::redefine_violates(owner, meta, key)
 }
 
 /// Is the property key `key` an array index (a canonical decimal in
@@ -1014,7 +1269,9 @@ unsafe fn added_key(obj: *const ObjectHeader, mutation: Mutation<'_>) -> Option<
         Mutation::Redefine(key) => {
             let keys = own_keys(obj);
             let count = if keys.is_null() { 0 } else { keys.count() };
-            image_position_of_key(keys, count, key).is_none().then(|| key_text(key))
+            image_position_of_key(keys, count, key)
+                .is_none()
+                .then(|| key_text(key))
         }
         Mutation::Stamp(published) => stamped_add(obj, own_keys(obj), published),
         _ => None,
@@ -1127,7 +1384,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     if v.is_any_string() {
         return Some(ReceiverFact::Builtin(BuiltinProto::String, false));
     }
-    if v.is_number() || v.is_int32() {
+    if v.is_number() {
         return Some(ReceiverFact::Builtin(BuiltinProto::Number, false));
     }
     if v.is_bool() {
@@ -1139,7 +1396,7 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
     if matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     ) && header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
@@ -1152,17 +1409,23 @@ fn receiver_fact(recv: f64) -> Option<ReceiverFact> {
     }
     let family = match header.obj_type {
         crate::gc::GC_TYPE_PROXY => return Some(ReceiverFact::Proxy),
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => BuiltinProto::Array,
         crate::gc::GC_TYPE_MAP => BuiltinProto::Map,
         crate::gc::GC_TYPE_SET => BuiltinProto::Set,
         crate::gc::GC_TYPE_DATE_CELL => BuiltinProto::Date,
         crate::gc::GC_TYPE_CLOSURE => BuiltinProto::Function,
         _ => return None,
     };
-    Some(ReceiverFact::Builtin(
-        family,
-        family == BuiltinProto::Array && header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0,
-    ))
+    // The receiver's own link: an array's header bit; a Map, Set or Date
+    // cell's meta record (its own `[[Prototype]]` or an own key lives there).
+    let own = if family == BuiltinProto::Array {
+        header._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO != 0
+    } else {
+        let addr = (bits & crate::value::POINTER_MASK) as usize;
+        // SAFETY: `header` is this live cell's validated header.
+        unsafe { super::cell_meta::builtin_cell_has_meta(addr, header.obj_type) }
+    };
+    Some(ReceiverFact::Builtin(family, own))
 }
 
 /// The intrinsic's shadow bit and the receiver's own prototype link are
@@ -1211,6 +1474,18 @@ pub(crate) unsafe fn redirect_call(
     argc: usize,
 ) -> Option<f64> {
     select_and_call(recv, recv, name, args, argc, false, None)
+}
+
+/// `Call(Get(recv, name), recv, args)` whatever the method is: the ordinary
+/// call for a primitive receiver an Array site refused. Its `Get` may select
+/// ANOTHER kind's builtin (`String.prototype.at` for a String), which must run
+/// as itself, never as the Array body the site was folded to.
+///
+/// # Safety
+/// `recv` and `args` are NaN-boxed values live at the call.
+pub(crate) unsafe fn complete_call(recv: f64, name: &[u8], args: &[f64]) -> f64 {
+    select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
+        .expect("a complete call always calls")
 }
 
 /// `Call(Get(holder, name), this, args)` — the one body behind every generic
@@ -1380,6 +1655,23 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let name = std::slice::from_raw_parts(name_ref.ptr, name_ref.len);
+    // `ta.set(source, offset)` whose `Get` structure answers: the builtin's
+    // body, as the typed-array tower runs it (a missing offset is 0).
+    if mode == GENERIC_RECEIVER && name == b"set" {
+        if let Some(ta) = super::typed_array_chain::builtin_set_receiver(recv) {
+            let source = if argc > 0 && !args.is_null() {
+                *args
+            } else {
+                f64::from_bits(crate::value::TAG_UNDEFINED)
+            };
+            let offset = if argc > 1 && !args.is_null() {
+                *args.add(1)
+            } else {
+                0.0
+            };
+            return crate::typedarray_hook_slots::js_typed_array_set_from(ta, source, offset);
+        }
+    }
     // The name may live in `scratch`; own it across the calls below.
     let name: Vec<u8> = name.to_vec();
     let family = match mode {
@@ -1435,7 +1727,7 @@ pub extern "C-unwind" fn js_borrowed_object_has_own(this: f64, key: f64) -> f64 
     if let Some(v) = borrowed_object_redirect(b"hasOwnProperty", this, &[key]) {
         return v;
     }
-    super::js_object_has_own(this, key)
+    super::object_ops::has_own::object_prototype_has_own_property(this, key)
 }
 
 #[no_mangle]
@@ -1499,27 +1791,19 @@ pub extern "C" fn js_array_pop_f64_site(arr: *mut crate::array::ArrayHeader) -> 
 
 /// A Map/Set method name the by-name natives do not implement (#11915): the
 /// spec call, `Call(Get(recv, name), recv, args)` — `m.isPrototypeOf(x)`,
-/// `m.foo()` on a relinked `Map.prototype`, or the TypeError for a missing
-/// method — instead of the old silent `undefined`. A builtin closure found
-/// here is called as a value; one level only, so a builtin body that
-/// dispatches the same name by name again answers `undefined` as before
-/// rather than recursing.
+/// `m.toLocaleString()` (whose body invokes `toString`, an ordinary nested
+/// call here), `m.foo()` on a relinked `Map.prototype`, or the TypeError for
+/// a missing method.
+///
+/// A method reached here that dispatches by name back into this lookup can
+/// form a cycle of runtime frames only, which no compiled prologue's stack
+/// check sees; the same check at this entry bounds it, so a runaway
+/// recursion through this path throws node's `RangeError` instead of running
+/// into the guard page. No state of its own: the agent's stack limit is the
+/// one every prologue reads.
 #[optimize(size)]
 pub(crate) unsafe fn call_unknown_collection_method(recv: f64, name: &[u8], args: &[f64]) -> f64 {
-    thread_local! {
-        static ACTIVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    }
-    if ACTIVE.with(|a| a.get()) {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    }
-    struct Reset;
-    impl Drop for Reset {
-        fn drop(&mut self) {
-            ACTIVE.with(|a| a.set(false));
-        }
-    }
-    ACTIVE.with(|a| a.set(true));
-    let _reset = Reset;
+    crate::stack_guard::check_native_stack();
     select_and_call(recv, recv, name, args.as_ptr(), args.len(), true, None)
         .unwrap_or(f64::from_bits(crate::value::TAG_UNDEFINED))
 }
@@ -1566,6 +1850,22 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call3(
 ) -> f64 {
     let args = [a0, a1, a2];
     js_builtin_proto_generic_call(GENERIC_RECEIVER, recv, method_id, args.as_ptr(), 3)
+}
+
+/// `Get(recv, "size")`: the miss of a Map / Set `size` read whose receiver
+/// failed the brand test (codegen `collection_receiver::lower_collection_size`):
+/// an own or inherited `size` (a getter runs with `recv` as `this`),
+/// `undefined`, or node's TypeError for null / undefined.
+#[no_mangle]
+pub extern "C-unwind" fn js_collection_size_get(recv: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
+    // The interned key may allocate on first use; the receiver is rooted.
+    let key = crate::string::canonical_key(b"size");
+    crate::value::js_dyn_index_get(
+        recv.get_nanbox_f64(),
+        crate::value::js_nanbox_string(key as i64),
+    )
 }
 
 /// Contract builds: a site that took the direct builtin path must

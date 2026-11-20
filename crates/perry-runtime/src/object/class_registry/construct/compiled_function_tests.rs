@@ -6,11 +6,19 @@ extern "C" fn empty_body(_closure: *const ClosureHeader, _this: crate::closure::
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
+/// A compiled constructing function as codegen emits it: one own slot after
+/// the captures holds `prototype` (the family's SLOT entry).
 fn compiled_function() -> f64 {
-    let closure = crate::closure::js_closure_alloc(
-        crate::fn_info!(empty_body, 0; with_declared(0), with_flags(FN_COMPILED_BODY)),
-        0,
-    );
+    static INFO: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    let info = *INFO.get_or_init(|| {
+        let base: *const crate::closure::JsFunctionInfo =
+            crate::fn_info!(empty_body, 0; with_declared(0), with_flags(FN_COMPILED_BODY));
+        let mut info = unsafe { std::ptr::read(base) };
+        info.own_slots = 1;
+        Box::leak(Box::new(info)) as *const crate::closure::JsFunctionInfo as usize
+    });
+    let closure =
+        crate::closure::js_closure_alloc(info as *const crate::closure::JsFunctionInfo, 0);
     crate::value::js_nanbox_pointer(closure as i64)
 }
 
@@ -168,7 +176,7 @@ fn only_compiled_ordinary_bodies_take_the_lane() {
 }
 
 #[test]
-fn construct_site_revalidates_the_current_function_bag_and_prototype() {
+fn construct_site_revalidates_the_current_prototype_slot_and_prototype() {
     let _global = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let site = std::array::from_fn::<_, 4, _>(|_| AtomicU64::new(0));
@@ -238,7 +246,7 @@ fn construct_site_revalidates_the_current_function_bag_and_prototype() {
 }
 
 #[test]
-fn construct_site_uses_a_spilled_prototype_from_the_current_bag() {
+fn construct_site_reads_the_prototype_slot_beside_user_keys() {
     let _global = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
     let site = std::array::from_fn::<_, 4, _>(|_| AtomicU64::new(0));
@@ -263,13 +271,7 @@ fn construct_site_uses_a_spilled_prototype_from_the_current_bag() {
         assert_ne!(
             site[0].load(Ordering::Relaxed) & FUNCTION_SITE,
             0,
-            "a spill bag must prime the memo"
-        );
-        let position = (site[2].load(Ordering::Relaxed) >> 32) as u32;
-        let live = (site[3].load(Ordering::Relaxed) >> 32) as u32;
-        assert!(
-            position >= live,
-            "the fixture must exercise the spill proof"
+            "user keys on the function must not keep the site from priming"
         );
         assert!(site_prototype_object(closure, site.as_ptr()).is_some());
         assert_eq!(
@@ -389,4 +391,55 @@ fn function_and_object_create_share_the_birth_allocator_without_extra_records() 
             "the shared allocator adds no persistent caching to Object.create"
         );
     }
+}
+
+extern "C" fn accept_body(_closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+    f64::from_bits(crate::value::TAG_TRUE)
+}
+
+/// `F` owning an `@@hasInstance` that accepts every value.
+fn with_accepting_hook(func: f64) {
+    let has_instance = crate::symbol::well_known_symbol("hasInstance");
+    let sym = f64::from_bits(crate::value::JSValue::pointer(has_instance as *const u8).bits());
+    let accept =
+        crate::closure::js_closure_alloc(crate::fn_info!(accept_body, 0; with_declared(0)), 0);
+    let accept = crate::value::js_nanbox_pointer(accept as i64);
+    unsafe { crate::symbol::js_object_set_symbol_property(func, sym, accept) };
+}
+
+#[test]
+fn instanceof_calls_a_function_s_own_has_instance() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let func = compiled_function();
+    let _ = construct(func);
+    let plain = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    assert_eq!(
+        crate::object::instanceof::js_instanceof_dynamic(plain, func).to_bits(),
+        crate::value::TAG_FALSE,
+        "premise: the ordinary answer"
+    );
+    with_accepting_hook(func);
+    assert_eq!(
+        crate::object::instanceof::js_instanceof_dynamic(plain, func).to_bits(),
+        crate::value::TAG_TRUE,
+        "the own hook (found in the function owner's symbol keys) answers"
+    );
+}
+
+#[test]
+fn instanceof_calls_a_has_instance_inherited_from_a_parent_function() {
+    let _global = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let parent = compiled_function();
+    let child = compiled_function();
+    let _ = construct(child);
+    with_accepting_hook(parent);
+    crate::object::js_object_set_prototype_of(child, parent);
+    let plain = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    assert_eq!(
+        crate::object::instanceof::js_instanceof_dynamic(plain, child).to_bits(),
+        crate::value::TAG_TRUE,
+        "`class D extends F`: the linked chain's hop F proves no symbol absence, its hook answers"
+    );
 }

@@ -92,10 +92,6 @@ pub(crate) fn cp_signal_from_value(signal: f64) -> i32 {
     // `cp_value_to_string` routes through the unified accessor, which coerces
     // numbers to their string form ("9"), and "9" is not a signal name. An
     // int32 can also arrive NaN-boxed, which a raw `is_finite()` misses.
-    if js.is_int32() {
-        let n = js.as_int32();
-        return if n == 0 { CP_SIGTERM } else { n };
-    }
     if signal.is_finite() {
         let n = signal as i32;
         return if n == 0 { CP_SIGTERM } else { n };
@@ -111,10 +107,6 @@ pub(crate) fn cp_signal_from_value(signal: f64) -> i32 {
 /// fractional, and non-signal values synchronously like Node.
 pub(crate) fn cp_signal_is_valid(signal: f64) -> bool {
     let js = JSValue::from_bits(signal.to_bits());
-    if js.is_int32() {
-        let n = js.as_int32();
-        return n == 0 || cp_signal_number(cp_signal_name(n)) == Some(n);
-    }
     if js.is_number() {
         let number = js.as_number();
         let n = number as i32;

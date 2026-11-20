@@ -43,6 +43,7 @@ fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -78,6 +79,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -119,6 +124,7 @@ fn counter_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -170,6 +176,7 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -195,6 +202,7 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         }),
         receiver: Box::new(Expr::LocalGet(recv_id)),
         strict,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -254,6 +262,10 @@ fn emit(m: &Module) -> String {
 /// Runtime route/shape/store attribution is checked separately by the isolated
 /// executable. These IR assertions never certify retained-tier cost parity.
 fn assert_versioned_loop_lowered(ir: &str, what: &str) {
+    let blocks: Vec<_> = ir
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(':'))
+        .collect();
     for label in [
         "rloop.guard.",
         "rloop.fast",
@@ -261,7 +273,7 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "rloop.version.plain",
     ] {
         assert!(
-            ir.contains(label),
+            blocks.iter().any(|block| block.starts_with(label)),
             "{what}: missing generic replacement `{label}`"
         );
     }
@@ -272,7 +284,10 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "for.class_field_fast",
         "for.class_field_slow",
     ] {
-        assert!(!ir.contains(label), "{what}: legacy tier remains `{label}`");
+        assert!(
+            !blocks.iter().any(|block| block.starts_with(label)),
+            "{what}: legacy tier remains `{label}`"
+        );
     }
     let fast = ir
         .lines()

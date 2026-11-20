@@ -160,6 +160,7 @@ pub(super) fn compile_method(
     guarded_undefined_clone: bool,
     pshape_arg_clone: bool,
     generator_owner: bool,
+    sig: Option<&super::signature_entry::TypedMethod>,
 ) -> Result<()> {
     let public_llvm_name = methods
         .get(&(class.name.clone(), method.name.clone()))
@@ -285,7 +286,32 @@ pub(super) fn compile_method(
         public_llvm_name.clone()
     };
 
-    // Build the param list: (this, arg0, arg1, ...). All are doubles.
+    // An indexed clone's index parameters are non-negative i32 values on
+    // every route (`index_entry::clone_args`): they arrive raw.
+    // Exactly the clone named `nonnegative_index_method_name`: the
+    // fast-array and false-default variants keep their own names and ABI.
+    let raw_index_entry = is_index_clone
+        && !fast_array_handle_clone
+        && !(guarded_undefined_clone && guarded_falsy_field_default.is_some())
+        && !generator_owner
+        && super::index_entry::raw_i32_enabled();
+    let raw_index_param_ids: HashSet<u32> = match sig {
+        // P2: `M$sig`'s I32 registers are raw i32 (DESIGN-p2 §3.1).
+        Some(tm) => super::signature_entry::raw_i32_params(method, &tm.plan),
+        None => nonnegative_index_params
+            .filter(|_| raw_index_entry)
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .collect(),
+    };
+    let llvm_name = match sig {
+        Some(_) => format!("{public_llvm_name}$sig"),
+        None => llvm_name,
+    };
+
+    // Build the param list: (this, arg0, arg1, ...). All are doubles except
+    // an indexed clone's raw i32 index parameters.
     let mut params: Vec<(LlvmType, String)> =
         Vec::with_capacity(method.params.len() + 1 + fast_array_param_ids.len());
     if generator_owner {
@@ -293,7 +319,11 @@ pub(super) fn compile_method(
     }
     params.push((DOUBLE, "%this_arg".to_string()));
     for p in &method.params {
-        params.push((DOUBLE, format!("%arg{}", p.id)));
+        if raw_index_param_ids.contains(&p.id) {
+            params.push((I32, super::index_entry::raw_param_name(p.id)));
+        } else {
+            params.push((DOUBLE, format!("%arg{}", p.id)));
+        }
     }
     for id in &fast_array_param_ids {
         params.push((I64, format!("%fast_array_handle{id}")));
@@ -302,7 +332,32 @@ pub(super) fn compile_method(
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let lowered_function_index = llmod.function_count();
-    let lf = llmod.define_function(&llvm_name, DOUBLE, params);
+    let llvm_name = if raw_index_entry {
+        // The double-ABI symbol every other route names becomes the adapter.
+        super::index_entry::emit_double_adapter(llmod, &llvm_name, method, &raw_index_param_ids)
+    } else {
+        llvm_name
+    };
+    let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
+    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
+    let sig_record_return = sig
+        .and_then(|tm| tm.plan.record.as_ref())
+        .and_then(|r| r.ret);
+    if sig_record_return.is_some() {
+        params.push((
+            crate::types::PTR,
+            super::record_sig::RESULT_PARAM.to_string(),
+        ));
+    }
+    let lf = llmod.define_function(
+        &llvm_name,
+        super::signature_entry::sig_llvm_ty(sig_return.unwrap_or(super::FactsRep::Boxed)),
+        params,
+    );
+    if sig.is_some() {
+        lf.linkage = "internal".to_string();
+    }
     // Plain `$pshape` clones are producer-published capabilities and need
     // external linkage for guarded calls from importing modules. The stricter
     // array-cache clone remains module-local: only containment-proven locals
@@ -320,7 +375,10 @@ pub(super) fn compile_method(
         lf.linkage = "internal".to_string();
     }
     super::helpers::apply_pshape_inline_policy(lf, method, is_pshape_clone || pshape_arg_clone);
-    if is_index_clone {
+    // P2 (CWN 11-09): `M$sig` subsuming main's index clone inherits its
+    // admission, and so takes no other admission below.
+    let index_admitted = is_index_clone || sig.is_some_and(|tm| tm.index_admission);
+    if index_admitted {
         lf.pre_statepoint_inline = true;
     }
     // #8872: methods participate in the same allocation-hot analysis as
@@ -358,7 +416,7 @@ pub(super) fn compile_method(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(
+            cross_module.closure_writes.pointer_locals(
                 &method.params,
                 method_body,
                 &flat_const_ids,
@@ -373,6 +431,8 @@ pub(super) fn compile_method(
     let this_shadow_slot_idx = shadow_slot_map.len() as u32;
 
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, method.id);
 
     let current_closure_slot = if generator_owner {
         lf.reserve_shadow_slot().map(|idx| {
@@ -398,12 +458,30 @@ pub(super) fn compile_method(
 
     // Allocate slots for `this` and each parameter; pre-populate with
     // the incoming values.
-    let index_param_ids: HashSet<u32> = nonnegative_index_params
-        .unwrap_or_default()
-        .iter()
-        .copied()
-        .collect();
+    // P2: `M$sig`'s unwritten I32 parameters take the index clone's i32 slot
+    // (the `$idx` raw body, generalised); only those whose interval has
+    // `lo >= 0` are non-negative (T1).
+    let index_param_ids: HashSet<u32> = match sig {
+        Some(tm) => super::signature_entry::slot_i32_params(method, &tm.plan),
+        None => nonnegative_index_params
+            .unwrap_or_default()
+            .iter()
+            .copied()
+            .collect(),
+    };
+    let nonnegative_param_ids: HashSet<u32> = match sig {
+        Some(tm) => super::signature_entry::nonnegative_params(method, &tm.plan),
+        None => index_param_ids.clone(),
+    };
     let mut index_i32_param_slots: HashMap<u32, String> = HashMap::new();
+    // Parameters the whole-program facts prove Number on every entry hold
+    // their plain double for the whole body and own no root slot.
+    let facts_number_params = super::facts_number_locals::facts_number_params(
+        &cross_module.wpfacts,
+        &method.params,
+        method_body,
+        &method_boxed_vars,
+    );
     let (this_slot, locals): (String, HashMap<u32, String>) = {
         let blk = lf.block_mut(0).unwrap();
         let this_slot = blk.alloca(DOUBLE);
@@ -416,9 +494,19 @@ pub(super) fn compile_method(
         }
         let mut map = HashMap::new();
         for p in &method.params {
-            let arg_name = format!("%arg{}", p.id);
+            let raw_index = raw_index_param_ids.contains(&p.id);
+            let arg_name = if raw_index {
+                // The double view of the raw index: the same Number, in its
+                // canonical (plain double) encoding.
+                blk.sitofp(I32, &super::index_entry::raw_param_name(p.id), DOUBLE)
+            } else {
+                format!("%arg{}", p.id)
+            };
+            let number = facts_number_params.contains(&p.id);
             let slot = super::arguments::store_param_slot(blk, p, &method_boxed_vars, &arg_name);
-            if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
+            if number {
+                shadow_slot_map.remove(&p.id);
+            } else if let Some(slot_idx) = shadow_slot_map.get(&p.id).copied() {
                 blk.call_void(
                     "js_shadow_slot_bind",
                     &[(I32, &slot_idx.to_string()), (PTR, &slot)],
@@ -426,13 +514,15 @@ pub(super) fn compile_method(
             }
             map.insert(p.id, slot);
             if index_param_ids.contains(&p.id) {
-                // A statically proven route normally passes a plain double;
-                // the guarded stable public entry may also pass Perry's
-                // canonical INT32 NaN-box. Both entries prove the exact same
-                // signed-i32 value class before reaching this body, so use the
-                // shared already-guarded conversion rather than `fptosi`
-                // (which cannot consume a tagged INT32 value).
-                let raw_i32 = super::typed_abi::emit_typed_i32_raw_assuming_guarded(blk, &arg_name);
+                // Every route proved the signed-i32 value class before this
+                // body. A raw parameter is that value; otherwise every route
+                // passes an exact int32 double, which the shared
+                // already-guarded conversion reads with one `fptosi`.
+                let raw_i32 = if raw_index {
+                    super::index_entry::raw_param_name(p.id)
+                } else {
+                    super::typed_abi::emit_typed_i32_raw_assuming_guarded(blk, &arg_name)
+                };
                 let i32_slot = blk.alloca(I32);
                 blk.store(I32, &raw_i32, &i32_slot);
                 index_i32_param_slots.insert(p.id, i32_slot);
@@ -474,12 +564,20 @@ pub(super) fn compile_method(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(Some(method.id));
     let _opt_report_scope = crate::opt_report::enter_method_region(
         &format!("{}.{}", class.name, method.name),
         cross_module
             .module_dispatch
             .return_shape_method_class(&class.name, &method.name, method.id)
             .is_some(),
+    );
+    // Lets the whole-program interval proof shows hold only int32 values.
+    let facts_int32_lets = super::facts_int32_locals::lets(
+        &cross_module.wpfacts,
+        method_body,
+        &method_boxed_vars,
+        module_globals,
     );
     let mut native_facts = crate::collectors::collect_native_region_fact_graph(
         method_body,
@@ -496,18 +594,31 @@ pub(super) fn compile_method(
         &cross_module.module_dispatch,
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        &facts_int32_lets,
     );
-    // Closed World 5d: the body's typed locals (no entry proofs here).
+    // Closed World 5d: the body's typed locals; the only entry proofs are the
+    // facts-proven Number parameters.
     let mut code_unit_locals = std::collections::HashSet::new();
+    let facts_number_proofs: HashMap<u32, perry_hir::types::Type> = facts_number_params
+        .iter()
+        .map(|id| (*id, perry_hir::types::Type::Number))
+        .collect();
     let typed_locals = crate::collectors::typed_locals::apply(
         method_body,
-        &std::collections::HashMap::new(),
+        &facts_number_proofs,
         &outer_proofs,
         &method_boxed_vars,
         module_globals,
         &mut native_facts.representation.number_by_construction_locals,
         &mut code_unit_locals,
     );
+    let facts_number_lets = super::facts_number_locals::facts_number_lets(
+        &cross_module.wpfacts,
+        method_body,
+        &method_boxed_vars,
+        module_globals,
+    );
+    super::helpers::drop_number_local_root_slots(&mut shadow_slot_map, &facts_number_lets);
     super::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
@@ -573,10 +684,15 @@ pub(super) fn compile_method(
         reassigned_locals.remove(&method.params[index].id);
     }
     let mut ctx = FnCtx {
+        for_in_facts: Default::default(),
+        for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -608,6 +724,7 @@ pub(super) fn compile_method(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -625,6 +742,8 @@ pub(super) fn compile_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -677,6 +796,8 @@ pub(super) fn compile_method(
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -700,6 +821,7 @@ pub(super) fn compile_method(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -734,6 +856,8 @@ pub(super) fn compile_method(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: &facts_number_lets,
+        facts_int32_locals: &facts_int32_lets,
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -746,6 +870,7 @@ pub(super) fn compile_method(
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -759,6 +884,9 @@ pub(super) fn compile_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -785,6 +913,9 @@ pub(super) fn compile_method(
         ),
         spec_i32_params: index_param_ids.clone(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return,
+        sig_record_return,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -814,6 +945,7 @@ pub(super) fn compile_method(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
+        life_claims: native_facts.life_claims(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
@@ -880,7 +1012,6 @@ pub(super) fn compile_method(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -888,9 +1019,14 @@ pub(super) fn compile_method(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
-        int_range_facts: Vec::new(),
+        int32_shadow_plan: crate::expr::int32_shadow::plan(method_body),
+        int32_shadows: std::collections::HashMap::new(),
+        int_range_facts: match sig {
+            Some(tm) => super::signature_entry::param_range_facts(method, &tm.plan),
+            None => Vec::new(),
+        },
         next_loop_proof_scope_id: 0,
-        nonnegative_integer_locals: index_param_ids,
+        nonnegative_integer_locals: nonnegative_param_ids,
         elided_arguments: HashMap::new(),
         native_rep_records: Vec::new(),
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
@@ -955,6 +1091,9 @@ pub(super) fn compile_method(
         Some(method_body),
         super::arguments::ArgumentsCallee::Undefined,
     );
+    for p in &method.params {
+        crate::expr::int32_shadow::materialize(&mut ctx, p.id)?;
+    }
 
     // Constructors emitted as standalone cross-module LLVM functions (named
     // `<prefix>__<class>_constructor`) must bake the field initializers into
@@ -1153,6 +1292,11 @@ pub(super) fn compile_method(
                         } else {
                             // No callable ctor symbol — bail.
                             crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
+                            super::facts_number_locals::emit_param_witnesses(
+                                &mut ctx,
+                                &facts_number_params,
+                            );
+                            super::facts_rep::bind_params(&mut ctx, &facts_number_params);
                             stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
                                 format!("lowering body of method '{}::{}'", class.name, method.name)
                             })?;
@@ -1621,7 +1765,10 @@ pub(super) fn compile_method(
     };
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &method.params);
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
+    super::facts_number_locals::emit_param_witnesses(&mut ctx, &facts_number_params);
+    super::facts_rep::bind_params(&mut ctx, &facts_number_params);
     if !method.is_async && !method.is_generator {
         ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, method_body);
     }
@@ -1637,9 +1784,14 @@ pub(super) fn compile_method(
             )
         })?;
     } else {
+        // N2: the held suffix of a plain method body (`stmt::fn_base`).
+        if !is_constructor_method && !method.is_generator {
+            stmt::fn_base::plan(&mut ctx, method_body);
+        }
         stmt::lower_stmts(&mut ctx, method_body).with_context(|| {
             format!("lowering body of method '{}::{}'", class.name, method.name)
         })?;
+        stmt::fn_base::finish(&mut ctx);
     }
 
     // #8648: pre-#8630 this symbol ended in `ret undefined`, and every caller
@@ -1661,8 +1813,21 @@ pub(super) fn compile_method(
             ctx.block().br(&target.after_label);
         }
         ctx.current_block = *after_idx;
+        crate::verify_facts::life_measure::ctor_return(&mut ctx, &target.result_slot)?;
     }
 
+    if !ctx.block().is_terminated() {
+        if let Some(r) = ctx.sig_record_return {
+            // A completion without `return` is the absent record.
+            super::record_sig::lower_return(&mut ctx, r, None)?;
+        }
+    }
+    if !ctx.block().is_terminated() && ctx.sig_return == Some(super::FactsRep::I32) {
+        // P2: the facts prove an I32 entry never completes normally.
+        let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+        super::signature_entry::witness_return(&mut ctx, super::FactsRep::I32, &undef);
+        ctx.block().unreachable();
+    }
     if !ctx.block().is_terminated() {
         let undef = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         let return_value =
@@ -1696,6 +1861,8 @@ pub(super) fn compile_method(
             ctx.block().ret(DOUBLE, &return_value);
         }
     }
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);
 
@@ -1706,7 +1873,7 @@ pub(super) fn compile_method(
     // inliner so direct method chains can flatten without guessing from HIR
     // statement count.  Indexed clones are already admitted above and
     // pshape-argument clones do not carry an exact receiver proof.
-    if is_pshape_clone && !is_index_clone && !method.is_async && !method.is_generator {
+    if is_pshape_clone && !index_admitted && !method.is_async && !method.is_generator {
         let callable_worker = llmod.callable_worker;
         let lowered = llmod
             .function_mut(lowered_function_index)
@@ -1726,7 +1893,7 @@ pub(super) fn compile_method(
     // budget. Clones and wrappers are excluded; async and generator bodies
     // are state machines.
     if !is_pshape_clone
-        && !is_index_clone
+        && !index_admitted
         && !arguments_length_clone
         && !ptr_array_cache_clone
         && !guarded_undefined_clone

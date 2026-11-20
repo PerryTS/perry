@@ -44,14 +44,11 @@ fn primitive_containers_are_per_site() {
 
 #[test]
 fn builtin_function_values_share_one_field_per_key() {
-    // A store onto one builtin function value under a key no native
-    // declares is read back from another (rule R1: natives alias, so every
-    // native function value shares the field): the read holds the stored
-    // object, not ⊤.
+    // A computed member is anonymous: its field write can reach any native.
     let pf = facts(
         r#"
         class A { a = 1; }
-        const f: any = [].map;
+        const f: any = [][process.argv[2] ?? "map"];
         f.tag = new A();
         const g: any = "".slice;
         const t = g.tag;
@@ -61,4 +58,32 @@ fn builtin_function_values_share_one_field_per_key() {
     let s = site(&pf, "a");
     assert_eq!(classes(s), ["A"], "{}", pf.dump_text());
     assert!(!s.top, "{}", pf.dump_text());
+}
+
+#[test]
+fn identified_array_and_string_functions_have_distinct_fields() {
+    let pf = facts(
+        r#"
+        class A { a = 1; }
+        const f: any = [].map;
+        f.tag = new A();
+        const g: any = "".slice;
+        console.log(g.tag.a);
+    "#,
+    );
+    assert!(classes(site(&pf, "a")).is_empty(), "{}", pf.dump_text());
+}
+
+#[test]
+fn an_anonymous_native_read_sees_an_identified_native_write() {
+    let pf = facts(
+        r#"
+        class A { a = 1; }
+        const f: any = [].map;
+        f.tag = new A();
+        const g: any = [][process.argv[2] ?? "map"];
+        console.log(g.tag.a);
+    "#,
+    );
+    assert_eq!(classes(site(&pf, "a")), ["A"], "{}", pf.dump_text());
 }

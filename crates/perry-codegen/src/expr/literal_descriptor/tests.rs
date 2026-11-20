@@ -40,6 +40,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let class = Class {
         id: 101,
@@ -75,6 +76,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -321,6 +323,7 @@ fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -480,6 +483,7 @@ fn born_wide_global_binding_and_static_putvalue_key() {
         key: Box::new(Expr::String("z".into())),
         value: Box::new(Expr::Number(3.0)),
         strict: false,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })];
@@ -594,6 +598,7 @@ fn born_wide_array_element_evidence() {
             field_writeback: None,
         }),
         literal_binding(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1002)),
@@ -614,6 +619,7 @@ fn born_wide_array_element_evidence() {
         },
         added_store(
             Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1002)),

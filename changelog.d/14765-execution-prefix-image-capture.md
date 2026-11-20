@@ -1,0 +1,1 @@
+Execution-prefix image capture and emit behind a build knob (off by default): links, runs to the start of the entry body, captures live heap cells by a read-only mark, relinks with them in a fixed-address section and proves layout equality, or refuses with a listed reason. Nothing restores from the image yet; builds without the knob are unchanged.

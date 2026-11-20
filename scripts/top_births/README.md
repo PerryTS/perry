@@ -38,11 +38,11 @@ Each first-cause record (a node's predecessor, an injection, a token's escape-fi
 ## Checks
 
 ```
-python3 scripts/top_births/test_analysis.py
-python3 scripts/top_births/test_causal.py
-python3 scripts/top_births/test_capture.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
-python3 scripts/top_births/test_openers.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
-python3 scripts/top_births/test_arrival.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
+python3 tests/tooling/infrastructure/top_births/test_analysis.py
+python3 tests/tooling/infrastructure/top_births/test_causal.py
+python3 tests/integration/harnesses/top_births/test_capture.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
+python3 tests/integration/harnesses/top_births/test_openers.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
+python3 tests/integration/harnesses/top_births/test_arrival.py --perry /path/to/perry --runtime /path/to/release --workspace /path/to/worktree
 ```
 
 The capture check is red on a pristine compiler without the feature. It asserts a live recorded birth, checks that its suppression actually removes TOP, and checks the census-off arm. The graph checks cover SCCs, shared causes, identity deduplication, weighted mass, escaped-input relabelling and native gate dependencies.

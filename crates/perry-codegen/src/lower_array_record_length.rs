@@ -59,6 +59,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             });
             let mut second = m.functions[0].clone();
             second.id = 2;

@@ -123,6 +123,8 @@ pub(super) struct Info {
     pub length: u64,
     pub declared: u64,
     pub plain_params: u64,
+    /// Literal text of the record's with_name builder, if any.
+    pub name: Option<String>,
 }
 
 impl Info {
@@ -177,6 +179,9 @@ impl Info {
         ] {
             facts.insert(name.into(), Value::Number(value.to_string()));
         }
+        if let Some(name) = &self.name {
+            facts.insert("name".into(), Value::String(name.clone()));
+        }
         facts.insert("source_symbol".into(), Value::String(source_symbol));
         facts.insert("native_method".into(), Value::Bool(native_method));
         Value::Object(facts)
@@ -190,6 +195,12 @@ impl Info {
         let name = ts.first().ok_or("empty fn_info builder")?.text;
         if ts.get(1).is_none_or(|t| t.text != "(") || ts.last().is_none_or(|t| t.text != ")") {
             return Err(format!("malformed fn_info builder: {}", text(ts)));
+        }
+        if name == "with_name" {
+            // The text is static data of the record; the flag that licenses its tail is the ABI fact.
+            self.flags |= u64::from(perry_abi::FN_HAS_NAME);
+            self.name = Some(text(&ts[2..ts.len() - 1]));
+            return Ok(());
         }
         let args = split(&ts[2..ts.len() - 1], ",")
             .iter()
@@ -284,6 +295,7 @@ pub(super) fn fn_info(ts: &[Token<'_>], constants: &BTreeMap<String, u64>) -> Re
         length: 0,
         declared: 0,
         plain_params: 0,
+        name: None,
     };
     if let Some(builders) = clauses.get(1) {
         for builder in split(builders, ",") {

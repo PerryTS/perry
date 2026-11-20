@@ -495,12 +495,14 @@ impl<const WORDS: usize> RegistryAddrIndex<WORDS> {
 mod tests {
     use super::*;
 
+    #[cfg(target_pointer_width = "64")]
     /// Synthetic wrapper addresses: 8-byte aligned, above the handle band,
     /// spread the way `gc_malloc` results are rather than densely packed.
     fn wrapper_addrs(count: usize) -> Vec<usize> {
         (0..count).map(|i| 0x7F00_0000_1000usize + i * 96).collect()
     }
 
+    #[cfg(target_pointer_width = "64")]
     fn probe_addrs(count: usize) -> Vec<usize> {
         (0..count).map(|i| 0x6100_0000_0008usize + i * 64).collect()
     }
@@ -510,6 +512,7 @@ mod tests {
         passes as f64 / probes.len() as f64
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn wider_filter_uses_the_full_width_for_each_probe() {
         let mut high_half_seen = [false; 3];
@@ -523,6 +526,7 @@ mod tests {
         assert!(high_half_seen.into_iter().all(|seen| seen));
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn index_supports_duplicate_admission_and_address_reuse() {
         let index: RegistryAddrIndex<256> = RegistryAddrIndex::new();
@@ -545,6 +549,7 @@ mod tests {
         assert!(index.may_contain(addr));
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn concurrent_refreshes_preserve_published_live_addresses() {
         use std::sync::Barrier;
@@ -587,6 +592,7 @@ mod tests {
         assert!(pass_rate(&index, &probe_addrs(20_000)) < 0.02);
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The 644-address population reported in #10110 must fit in the proposed
     /// canonical-owner width. The default width is a saturation witness.
     #[test]
@@ -624,6 +630,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Retirement must actually narrow the index, and must never drop a live
     /// address while doing it. A refresh that kept retired addresses would make
     /// this type no better than the monotone filter.
@@ -661,6 +668,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The defect the census measured is a WALK: bits accrue per admission, so a
     /// long session saturates even a filter sized for its live set. Churn a
     /// population two orders of magnitude larger than what is ever live and
@@ -721,6 +729,7 @@ mod tests {
         assert!(LATCH.is_armed());
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn empty_filter_contains_nothing() {
         let f: RegistryAddrFilter = RegistryAddrFilter::new();
@@ -733,6 +742,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The one direction that must never fail: an admitted address is always
     /// accepted afterwards. A Bloom filter is allowed to accept addresses it
     /// was never given; it is never allowed to reject one it was.
@@ -756,6 +766,7 @@ mod tests {
         assert!(f.bits_set() > 0);
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// A filter that accepted everything would satisfy the test above without
     /// doing anything, so this is the half that makes it able to fail: with a
     /// realistic population the filter must still reject the overwhelming
@@ -779,6 +790,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn concurrent_filter_admits_never_drop_an_address() {
         static FILTER: RegistryAddrFilter = RegistryAddrFilter::new();
@@ -807,6 +819,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn filter_admit_is_visible_to_another_thread() {
         static FILTER: RegistryAddrFilter = RegistryAddrFilter::new();

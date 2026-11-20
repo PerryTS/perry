@@ -773,6 +773,12 @@ impl ComposeEngine {
         }
     }
 
+    /// Tear down services in reverse dependency order using one container snapshot
+    /// after session rollback. Project/service labels select snapshot IDs; resolved
+    /// names remain a fallback for legacy containers. Orphans use the same snapshot.
+    /// Label-based discovery does not reconcile IDs appearing after the snapshot;
+    /// legacy name fallback remains best-effort, not an atomic reconciliation.
+    /// Callers must serialize deployment and teardown or run teardown again.
     pub async fn down(
         &self,
         services: &[String],
@@ -806,23 +812,44 @@ impl ComposeEngine {
         let mut final_order = target;
         final_order.reverse();
 
-        for svc_name in final_order {
-            let container_info = self.backend.list(true).await?;
-            let containers_to_remove: Vec<String> = container_info
-                .into_iter()
-                .filter(|c| {
-                    c.labels
-                        .get("perry.compose.project")
-                        .map(|v| v == &self.project_name)
-                        .unwrap_or(false)
-                        && c.labels
-                            .get("perry.compose.service")
-                            .map(|v| v == svc_name)
-                            .unwrap_or(false)
-                })
-                .map(|c| c.id)
-                .collect();
+        let mut by_service: HashMap<String, Vec<String>> = HashMap::new();
+        let mut orphans = Vec::new();
+        if !final_order.is_empty() || remove_orphans {
+            let snapshot = match self.backend.list(true).await {
+                Ok(snapshot) => snapshot,
+                Err(e) if final_order.is_empty() => {
+                    // An orphan-only sweep is best-effort; service teardown
+                    // still propagates enumeration errors before name fallback.
+                    tracing::warn!(
+                        target: "perry::compose::down",
+                        project = %self.project_name,
+                        error = %e,
+                        "remove_orphans: could not list containers; skipping orphan sweep"
+                    );
+                    Vec::new()
+                }
+                Err(e) => return Err(e),
+            };
+            for container in snapshot {
+                if container.labels.get("perry.compose.project") != Some(&self.project_name) {
+                    continue;
+                }
+                let Some(service) = container.labels.get("perry.compose.service") else {
+                    continue;
+                };
+                if self.spec.services.contains_key(service) {
+                    by_service
+                        .entry(service.clone())
+                        .or_default()
+                        .push(container.id);
+                } else if remove_orphans {
+                    orphans.push(container.id);
+                }
+            }
+        }
 
+        for svc_name in final_order {
+            let containers_to_remove = by_service.remove(svc_name).unwrap_or_default();
             for cid in containers_to_remove {
                 let _ = self.backend.stop(&cid, Some(10)).await;
                 let _ = self.backend.remove(&cid, true).await;
@@ -833,53 +860,11 @@ impl ComposeEngine {
             let _ = self.backend.remove(&container_name, true).await;
         }
 
-        // Orphan removal (`down --remove-orphans` semantics): containers
-        // that still carry THIS project's `perry.compose.project` label
-        // but whose `perry.compose.service` key is no longer in the
-        // current spec — typically left behind when a service was
-        // renamed or deleted between deploys. Every container the
-        // engine creates is stamped with both labels in `up()`, so the
-        // label pair is the ownership test; unlabelled containers (or
-        // ones without a service label) were never ours and are left
-        // alone, as are other projects' containers. Runs BEFORE network
-        // removal so an orphan attached to a project network doesn't
-        // keep the network alive. Pre-fix this flag was parsed at the
-        // FFI boundary and then discarded (`_remove_orphans`).
-        if remove_orphans {
-            match self.backend.list(true).await {
-                Ok(all) => {
-                    for c in all {
-                        let ours = c
-                            .labels
-                            .get("perry.compose.project")
-                            .map(|v| v == &self.project_name)
-                            .unwrap_or(false);
-                        if !ours {
-                            continue;
-                        }
-                        let orphan = c
-                            .labels
-                            .get("perry.compose.service")
-                            .map(|svc| !self.spec.services.contains_key(svc))
-                            .unwrap_or(false);
-                        if orphan {
-                            let _ = self.backend.stop(&c.id, Some(10)).await;
-                            let _ = self.backend.remove(&c.id, true).await;
-                        }
-                    }
-                }
-                Err(e) => {
-                    // Best-effort like the rest of down(): a backend
-                    // that can't list containers shouldn't abort the
-                    // network/volume teardown below.
-                    tracing::warn!(
-                        target: "perry::compose::down",
-                        project = %self.project_name,
-                        error = %e,
-                        "remove_orphans: could not list containers; skipping orphan sweep"
-                    );
-                }
-            }
+        // Orphans carry this project's labels but name no service in the spec.
+        // Remove them before networks so attached orphans cannot keep those alive.
+        for cid in orphans {
+            let _ = self.backend.stop(&cid, Some(10)).await;
+            let _ = self.backend.remove(&cid, true).await;
         }
 
         if let Some(networks) = &self.spec.networks {
@@ -1222,3 +1207,7 @@ pub async fn remove_if_exists(
         Err(e) => Err(e),
     }
 }
+
+#[cfg(test)]
+#[path = "tests/mod.rs"]
+mod down_tests;

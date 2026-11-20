@@ -246,7 +246,10 @@ pub fn preferences_get(key_ptr: *const u8) -> f64 {
         };
 
         if entry.is_null() {
-            return finish(env, 0.0);
+            // Absent key: `undefined`, per the documented contract (and what
+            // Apple/GTK/Windows return). 0.0 made `typeof v === "number"`
+            // fallbacks silently read 0 for every unset numeric preference.
+            return finish(env, f64::from_bits(0x7FFC_0000_0000_0001));
         }
 
         // Branch on runtime type without throwing.

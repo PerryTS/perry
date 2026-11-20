@@ -226,6 +226,14 @@ impl RegCounter {
         }
     }
 
+    /// The body-kind flags recorded for `body` so far (0: none known).
+    pub(crate) fn fn_info_flags(&self, body: &str) -> u32 {
+        match &*self.fn_infos.borrow() {
+            Some(infos) => infos.borrow().flags_of(body),
+            None => 0,
+        }
+    }
+
     /// Record a fact about `body`, a body this module defines.
     pub(crate) fn note_fn_info(
         &self,

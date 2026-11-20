@@ -19,7 +19,7 @@ use crate::object::descriptors::{OwnNamesSnapshot, OwnProperty};
 use super::{
     fs_thread_codec, unsupported_transfer_type_name, SerializedValue, VIEW_KIND_DATA_VIEW,
 };
-use super::{BIGINT_TAG, INT32_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+use super::{BIGINT_TAG, INTERNAL_WORD_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
 use super::{TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{real_capture_count, ClosureHeader};
@@ -122,7 +122,7 @@ pub unsafe fn serialize_message_with_ports(
         .iter()
         .map(|&addr| crate::buffer::view::backing_of(addr))
         .collect();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         write_value(
             CloneMode::Message,
             bits,
@@ -138,7 +138,7 @@ pub unsafe fn serialize_message_with_ports(
             drop(backings);
             drop(_roots);
             drop(scope);
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
     };
     if let Some(name) = super::first_unsupported_transfer_type(&value) {
@@ -256,11 +256,11 @@ unsafe fn write_value(
         match &writer.failure {
             Some(Failure::Unsupported(name)) => return SerializedValue::Unsupported(name),
             Some(Failure::Thrown(thrown)) => {
-                let bits = thrown.get_nanbox_u64();
+                let caught = thrown.caught();
                 drop(value);
                 drop(writer);
                 drop(scope);
-                crate::exception::js_throw(f64::from_bits(bits));
+                crate::exception::rethrow_caught(caught);
             }
             None => {}
         }
@@ -313,7 +313,7 @@ unsafe fn build_pending(pending: &[Pending]) {
 }
 
 enum Failure<'a> {
-    Thrown(RuntimeHandle<'a>),
+    Thrown(crate::exception::RootedCaught<'a>),
     Unsupported(&'static str),
 }
 
@@ -457,7 +457,7 @@ impl Writer<'_> {
             _ => {}
         }
         let tag = bits & TAG_MASK;
-        if tag == INT32_TAG {
+        if tag == INTERNAL_WORD_TAG {
             return SerializedValue::Inline(bits);
         }
         if tag == STRING_TAG {
@@ -555,7 +555,7 @@ impl Writer<'_> {
             return self.pointer(POINTER_TAG | live as u64);
         }
         match header.obj_type {
-            gc::GC_TYPE_ARRAY => self.array(addr, addr),
+            crate::gc_array_type_pat!() => self.array(addr, addr),
             gc::GC_TYPE_LAZY_ARRAY => {
                 let lazy = addr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
@@ -670,7 +670,10 @@ impl Writer<'_> {
         let capacity = (*arr).capacity as usize;
         if self.mode == CloneMode::Message {
             let data_layout = self.data_array_layout(arr);
+            // A sparse Array (`length > capacity`) has no `length` slots to
+            // copy, whatever its layout word says.
             if data_layout
+                && len <= capacity
                 && crate::array::array_numeric_layout_resolved(arr)
                     == Some(crate::array::NumericArrayLayout::RawF64)
             {
@@ -872,6 +875,12 @@ impl Writer<'_> {
         if self.mode == CloneMode::Message {
             return self.message_object(obj);
         }
+        // An elements-backed object keeps its indices outside its keys: its
+        // own properties come from the own-names snapshot, the authority every
+        // other own-property reader uses.
+        if crate::array::subclass_elements::own_elements(obj as usize).is_some() {
+            return self.own_names_object(obj);
+        }
         let keys_view = crate::object::object_keys(obj);
         let mut names = Vec::new();
         let mut fields = Vec::new();
@@ -915,6 +924,57 @@ impl Writer<'_> {
             CloneMode::Thread => super::constfn_transfer::snapshot(obj, Some(&names), fields.len()),
             CloneMode::Message => None,
         };
+        SerializedValue::Object {
+            final_constfn,
+            class_id: 0,
+            parent_class_id: 0,
+            fields,
+            keys: Some(names),
+        }
+    }
+
+    /// A thread copy of an object whose own properties are not all in its
+    /// keys: every own enumerable string-keyed property in own-key order. As
+    /// on the slot path, an accessor is not run and crosses as `undefined`.
+    #[cold]
+    #[optimize(size)]
+    unsafe fn own_names_object(
+        &mut self,
+        obj: *const crate::object::ObjectHeader,
+    ) -> SerializedValue {
+        let owner = self
+            .scope
+            .root_nanbox_u64(JSValue::pointer(obj.cast()).bits());
+        let snapshot = OwnNamesSnapshot::collect(self.scope, &owner);
+        let mut names = Vec::with_capacity(snapshot.count() as usize);
+        let mut fields = Vec::with_capacity(snapshot.count() as usize);
+        let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..snapshot.count() {
+            let Some((_, property)) = snapshot.property(&owner, i) else {
+                continue;
+            };
+            let (value, flags) = property.value_and_flags();
+            if flags & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                continue;
+            }
+            let Some(name) = crate::string::js_string_key_bytes(
+                JSValue::from_bits(snapshot.key(i).to_bits()),
+                &mut short,
+            )
+            .map(<[u8]>::to_vec) else {
+                continue;
+            };
+            let bits = if flags & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+                TAG_UNDEFINED
+            } else {
+                value
+            };
+            names.push(name);
+            fields.push(self.value(bits));
+        }
+        let obj = (owner.get_nanbox_u64() & crate::value::POINTER_MASK)
+            as *const crate::object::ObjectHeader;
+        let final_constfn = super::constfn_transfer::snapshot(obj, Some(&names), fields.len());
         SerializedValue::Object {
             final_constfn,
             class_id: 0,
@@ -1063,14 +1123,14 @@ impl Writer<'_> {
         if get == 0 || get == TAG_UNDEFINED {
             return Some(TAG_UNDEFINED);
         }
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             crate::object::invoke_accessor_getter(get, f64::from_bits(receiver)).bits()
         });
         self.refresh_identities();
         match result {
             Ok(bits) => Some(bits),
             Err(error) => {
-                self.failure = Some(Failure::Thrown(self.scope.root_nanbox_f64(error)));
+                self.failure = Some(Failure::Thrown(error.root(self.scope)));
                 None
             }
         }
@@ -1465,23 +1525,60 @@ impl Writer<'_> {
         if crate::event_target_hook_slots::is_dom_exception_error(err) {
             return self.unsupported("DOMException");
         }
-        // The stack text is formatted on first read, which allocates.
-        if (*err).stack.is_null() && self.mode == CloneMode::Message {
-            let root = self.scope.root_nanbox_u64(bits);
-            crate::error::js_error_get_stack(err as *mut crate::error::ErrorHeader);
-            self.refresh_identities();
-            return self.error(
-                root.get_nanbox_u64(),
-                (root.get_nanbox_u64() & POINTER_MASK) as usize,
-            );
-        }
-        if (*err).stack.is_null() {
+        if (*err).stack.is_null() && self.mode == CloneMode::Thread {
             self.to_build.push(Pending::ErrorStack(bits));
             return SerializedValue::Inline(TAG_UNDEFINED);
         }
         if let Err(seen) = self.begin(Some(addr)) {
             return seen;
         }
+        let index = self.next_index as usize - 1;
+        // Select the own data value before a reentrant stack getter can
+        // replace it, and retain it across any collection that getter causes.
+        let message_cause = if self.mode == CloneMode::Message {
+            let key = self.scope.root_nanbox_u64(
+                JSValue::string_ptr(crate::string::js_string_from_bytes(b"cause".as_ptr(), 5))
+                    .bits(),
+            );
+            self.refresh_identities();
+            let receiver = JSValue::pointer(self.source(index, err).cast()).bits();
+            match crate::object::descriptors::own_property(
+                f64::from_bits(receiver),
+                key.get_nanbox_f64(),
+            ) {
+                Some(OwnProperty::Data(value, _)) => Some(self.scope.root_nanbox_f64(value)),
+                _ => None,
+            }
+        } else {
+            None
+        };
+        let stack = if self.mode == CloneMode::Message {
+            // Message cloning observes non-enumerable stack overrides and
+            // propagates their exceptions through the writer's rooted failure.
+            let result = crate::exception::catch_thrown(|| {
+                crate::value::js_dynamic_object_get_property(
+                    f64::from_bits(JSValue::pointer(self.source(index, err).cast()).bits()),
+                    b"stack".as_ptr().cast(),
+                    5,
+                )
+            });
+            self.refresh_identities();
+            match result {
+                Ok(value) => {
+                    let value = self.scope.root_nanbox_f64(value);
+                    let text = crate::value::js_get_string_pointer_unified(value.get_nanbox_f64())
+                        as *const crate::string::StringHeader;
+                    (!text.is_null()).then(|| string_bytes(text))
+                }
+                Err(error) => {
+                    self.failure = Some(Failure::Thrown(error.root(self.scope)));
+                    return SerializedValue::Inline(TAG_UNDEFINED);
+                }
+            }
+        } else {
+            Some(string_bytes((*err).stack))
+        };
+        let err = self.source(index, err);
         let flags = (*err).flags;
         let name = if (*err).name.is_null() {
             b"Error".to_vec()
@@ -1491,9 +1588,12 @@ impl Writer<'_> {
         let message = (flags & crate::error::ERROR_FLAG_HAS_MESSAGE != 0
             && !(*err).message.is_null())
         .then(|| string_bytes((*err).message));
-        let stack = Some(string_bytes((*err).stack));
-        let cause = (flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0)
-            .then(|| Box::new(self.value((*err).cause.to_bits())));
+        let cause = if self.mode == CloneMode::Message {
+            message_cause.map(|value| Box::new(self.value(value.get_nanbox_u64())))
+        } else {
+            (flags & crate::error::ERROR_FLAG_HAS_CAUSE != 0)
+                .then(|| Box::new(self.value((*err).cause.to_bits())))
+        };
         SerializedValue::Error {
             name,
             message,

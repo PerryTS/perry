@@ -6,31 +6,6 @@
 //! or never NativeMember, and the entries a `get` returns did not flow.
 use super::*;
 
-fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 fn verdicts(pf: &ProgramFacts, key: &str, call: bool) -> Vec<Verdict> {
     let mut s: Vec<_> = pf
         .sites
@@ -149,8 +124,7 @@ fn a_private_field_value_reaches_a_public_copy() {
 
 #[test]
 fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
-    let src = r#"
-        declare const ext: any;
+    let src = r#"const ext: any = (globalThis as any)[process.argv[2]];
         class E {
           #t: Map<string, any> = new Map<string, any>();
           leak(): void { ext(this.#t); }
@@ -173,4 +147,29 @@ fn a_private_map_handed_to_unknown_code_keeps_its_calls() {
         "{v:?}\n{}",
         pf.dump_text()
     );
+}
+
+fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

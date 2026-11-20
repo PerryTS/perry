@@ -19,7 +19,7 @@
 //! that reads the binding through the global sees the `undefined` it was
 //! defined with.
 //!
-//! The user-visible shape (test-files/test_gap_diagchannel_3082_3084_3085_3086.ts,
+//! The user-visible shape (tests/parity/node-suite/diagnostics_channel/test_gap_diagchannel_3082_3084_3085_3086.ts,
 //! and any ES module at all after #7105 started emitting `PreallocateBoxes` for
 //! module-top-level blocks):
 //!
@@ -68,6 +68,7 @@ pub(super) fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -103,6 +104,10 @@ pub(super) fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -145,6 +150,7 @@ fn hoisted_writer(fn_local: u32, target: u32) -> Stmt {
             mutable_captures: vec![target],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,
@@ -310,6 +316,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

@@ -34,7 +34,7 @@ This pattern combines several production-grade primitives:
 | `container_name: 'app-db'` | Forces a stable container name so docker's embedded DNS resolves `app-db` to the postgres container's IP. **See the [DNS gotcha below](#cross-service-dns).** |
 | `healthcheck: { test: [...], interval, retries, start_period }` | Per-service liveness probe. Compose-spec § service.healthcheck shape — Perry's engine honors it for `depends_on` gating. |
 | `depends_on: { db: { condition: 'service_healthy' } }` | Holds the dependent service back until the dependency reports healthy. Three valid conditions: `service_started`, `service_healthy`, `service_completed_successfully`. |
-| `networks: { ..., internal: true }` | Marks the network as internal-only — postgres is unreachable from the host or from sibling stacks. See [Networking](./networking.md). |
+| `networks: { ..., internal: true }` | Marks the network as internal-only — postgres is unreachable from the host or from sibling stacks. See [Networking](networking.md). |
 | `restart: 'unless-stopped'` | The runtime restarts the container after a crash, but not after an explicit `docker stop`. |
 
 The full `ComposeSpec` shape is exported from `perry/compose` as
@@ -47,7 +47,7 @@ non-external volumes and networks as `<name>_<declared-name>`, exactly
 like docker-compose's project prefix. It defaults to `"perry-stack"`
 when omitted, so set it whenever more than one stack can run on the
 same host (see [Volumes → Volume naming and
-ownership](./volumes.md#volume-naming-and-ownership)).
+ownership](volumes.md#volume-naming-and-ownership)).
 
 ### Recognised Service fields
 
@@ -150,6 +150,14 @@ service key no longer exists in the spec.
 | `volumes` | `boolean` | `false` | Also remove named volumes after containers + networks. |
 | `removeOrphans` | `boolean` | `false` | Remove **orphaned containers**: ones still carrying this stack's `perry.compose.project` label whose `perry.compose.service` key is no longer in the spec (service renamed/deleted between deploys). Strictly label-scoped — other projects' containers and anything not created by Perry are never touched. |
 
+`down()` discovers labelled container IDs from one snapshot after session
+rollback and reuses it for the orphan sweep. Containers appearing after that
+snapshot are not rediscovered during the same call; legacy name-based cleanup
+remains best-effort. Serialize deployment and teardown, or run teardown again
+from a fresh compose handle once the concurrent deployment has finished:
+`down()` consumes its handle, so a second call on the same handle rejects with
+`Invalid compose handle`. This is not an atomic reconciliation.
+
 ## Status / logs / exec
 
 ```typescript
@@ -198,7 +206,7 @@ not when each service is *ready*. To block until the stack is serving:
    'service_healthy' } }`, dependent services wait for the dependency
    to report healthy.
 2. **Run an explicit probe loop in your code.** The
-   [Forgejo example](./production-patterns.md) does this for both
+   [Forgejo example](production-patterns.md) does this for both
    postgres (`pg_isready`) and Forgejo (`/api/healthz` over HTTP), each
    with its own timeout budget.
 
@@ -223,9 +231,9 @@ try {
 
 ## See also
 
-- [Networking](./networking.md) — networks, ports, and the DNS gotcha.
-- [Volumes](./volumes.md) — preserving data across `down()`.
-- [Production patterns](./production-patterns.md) — case study with
+- [Networking](networking.md) — networks, ports, and the DNS gotcha.
+- [Volumes](volumes.md) — preserving data across `down()`.
+- [Production patterns](production-patterns.md) — case study with
   the Forgejo example.
-- [Security](./security.md) — image verification and capability
+- [Security](security.md) — image verification and capability
   isolation.

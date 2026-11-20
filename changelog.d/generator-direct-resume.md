@@ -1,0 +1,1 @@
+for-of over a proven sync generator resumes its body directly, without the runtime iterator step, and the generator resume boundary no longer sets up a trap frame (the body completes itself on a throw).

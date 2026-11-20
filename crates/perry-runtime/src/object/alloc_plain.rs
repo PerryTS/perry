@@ -91,7 +91,8 @@ pub(super) fn class_keys_birth_rep(
 /// deprecated: a birth still carries it, `birth_fill_f64_lanes`).
 pub(super) fn shape_rep_of(shape_id: LayoutWord) -> u64 {
     crate::object::shapes::shape_record_for_word(shape_id).map_or(super::field_rep::REP_ANY, |r| {
-        super::field_rep::identity(r.rep())
+        // `11` kept: an I32 lane (I32 at rest, PR C) is a birth lane too.
+        super::field_rep::identity_with_special(r.rep())
     })
 }
 

@@ -1,0 +1,1 @@
+Pure summary encoding now consumes a sealed body input with typed local, absolute and environment operands. The existing batch planner supplies its unchanged ownership and seed snapshots through an adapter. Export body reach through one stable identity set with an explicit completeness flag.

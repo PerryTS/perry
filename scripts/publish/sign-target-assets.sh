@@ -22,7 +22,7 @@ while IFS=$'\t' read -r tgz kind triple version package; do
   cp "$tgz" "$assets/$name"
   (cd "$assets" && shasum -a 256 "$name" > "$name.sha256")
   kind_args=()
-  if [ "$kind" = ext ]; then kind_args=(--ext); fi
+  if [ "$kind" != target ]; then kind_args=("--$kind"); fi
   "$work/perry" updater sign-target-manifest ${kind_args[@]+"${kind_args[@]}"} \
     --artifact "$assets/$name" --triple "$triple" \
     --url "https://github.com/${REPO}/releases/download/${TAG}/${name}" \

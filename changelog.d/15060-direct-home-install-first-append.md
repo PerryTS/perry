@@ -1,0 +1,1 @@
+The first property added to a plain object past its inline slots installs its overflow table directly into the object's home, without the out-of-line install call on that hot first append (solo__build_dyn −14 instructions per iteration).

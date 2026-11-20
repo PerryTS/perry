@@ -87,6 +87,7 @@ fn function(id: u32, params: Vec<u32>, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -210,6 +211,7 @@ fn a_closure_write_is_a_write() {
         is_async: false,
         is_generator: false,
         is_strict: true,
+        construct_only: false,
     };
     let ids = stable(
         vec![let_(1, literal()), let_(2, closure), product(1)],

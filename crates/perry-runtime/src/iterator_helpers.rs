@@ -19,10 +19,7 @@ use crate::closure::{is_closure_ptr, ClosureHeader, JsThis};
 // retired from-space object — and it now comes from the one rooted,
 // shared-shape constructor in `crate::iter_result`.
 use crate::iter_result::make_iter_result;
-use crate::object::{
-    js_object_alloc, js_object_get_field, js_object_set_field,
-    ObjectHeader,
-};
+use crate::object::{js_object_alloc, js_object_get_field, js_object_set_field, ObjectHeader};
 use crate::value::{js_nanbox_get_pointer, js_nanbox_pointer, JSValue, TAG_UNDEFINED};
 use std::cell::Cell;
 
@@ -127,11 +124,11 @@ fn is_nullish(value: f64) -> bool {
 fn throw_error(range: bool, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     let err = if range {
-        crate::error::js_rangeerror_new(msg)
+        crate::error::CoreError::range_error(msg)
     } else {
-        crate::error::js_typeerror_new(msg)
+        crate::error::CoreError::type_error(msg)
     };
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn type_error(message: &str) -> ! {
@@ -211,7 +208,7 @@ unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     let arg = scope.root_nanbox_f64(arg);
     let next = scope.root_nanbox_f64(next);
     let obj_h = scope.root_raw_mut_ptr(js_object_alloc(ITERATOR_HELPER_CLASS_ID, FIELD_COUNT));
-    let obj = js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    let obj = obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64));
     set_field(obj, F_ITERATED, iterated.get_nanbox_f64());
     set_field(obj, F_OP, op as f64);
     set_field(obj, F_ARG, arg.get_nanbox_f64());
@@ -224,12 +221,14 @@ unsafe fn alloc_helper(op: i32, iterated: f64, arg: f64, next: f64) -> f64 {
     set_field(obj, F_COUNTER, 0.0);
     set_field(obj, F_GEN_STATE, GEN_START);
     if op == OP_WRAP {
-        crate::object::attach_wrap_for_valid_iterator_prototype(obj_h.get_raw_mut_ptr());
+        obj_h.with_mut_ptr(crate::object::attach_wrap_for_valid_iterator_prototype);
     } else {
         // `%IteratorHelperPrototype%`, whose parent is `%Iterator.prototype%`.
-        crate::object::attach_iterator_prototype(obj_h.get_raw_mut_ptr(), ITERATOR_HELPER_CLASS_ID);
+        obj_h.with_mut_ptr(|obj| {
+            crate::object::attach_iterator_prototype(obj, ITERATOR_HELPER_CLASS_ID)
+        });
     }
-    js_nanbox_pointer(obj_h.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    obj_h.with_mut_ptr::<ObjectHeader, _>(|obj| js_nanbox_pointer(obj as i64))
 }
 
 /// A new helper of `op` over `iterated` (a record or helper).
@@ -321,19 +320,19 @@ pub(crate) unsafe fn helper_step(iterated: f64) -> Option<f64> {
     let helper = scope.root_nanbox_f64(iterated);
     set_field(iterated, F_GEN_STATE, GEN_RUNNING);
     let close = Cell::new(false);
-    match crate::exception::catch_js_throw(|| run_op(&helper, op, &close)) {
+    match crate::exception::catch_thrown(|| run_op(&helper, op, &close)) {
         Ok(value) => {
             let state = if value.is_some() { GEN_YIELD } else { GEN_DONE };
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, state);
             value
         }
         Err(error) => {
-            let error = scope.root_nanbox_f64(error);
+            let error = error.root(&scope);
             set_field(helper.get_nanbox_f64(), F_GEN_STATE, GEN_DONE);
             if close.get() {
                 close_quietly(field(helper.get_nanbox_f64(), F_ITERATED));
             }
-            crate::exception::js_throw(error.get_nanbox_f64())
+            crate::exception::rethrow_caught(error.caught())
         }
     }
 }
@@ -490,7 +489,7 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
     // flatMap's inner iterator first, then the underlying one (concat has
     // only its active inner iterator).
     set_field(h(), F_GEN_STATE, GEN_RUNNING);
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let inner = field(h(), F_STATE);
         if op == OP_CONCAT {
             if is_object(inner) {
@@ -499,18 +498,18 @@ pub(crate) unsafe fn helper_return(obj: *mut ObjectHeader) -> f64 {
             return;
         }
         if op == OP_FLATMAP && is_object(inner) {
-            if let Err(error) = crate::exception::catch_js_throw(|| close_normal(inner)) {
+            if let Err(error) = crate::exception::catch_thrown(|| close_normal(inner)) {
                 let scope = crate::gc::RuntimeHandleScope::new();
-                let error = scope.root_nanbox_f64(error);
+                let error = error.root(&scope);
                 close_quietly(field(h(), F_ITERATED));
-                crate::exception::js_throw(error.get_nanbox_f64());
+                crate::exception::rethrow_caught(error.caught());
             }
         }
         close_normal(field(h(), F_ITERATED));
     });
     set_field(h(), F_GEN_STATE, GEN_DONE);
     if let Err(error) = result {
-        crate::exception::js_throw(error);
+        crate::exception::rethrow_caught(error);
     }
     done()
 }
@@ -521,7 +520,8 @@ pub(crate) unsafe fn drain_to_array(iterated: f64) -> f64 {
     let iterated = scope.root_nanbox_f64(iterated);
     let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
     while let Some(v) = helper_step(iterated.get_nanbox_f64()) {
-        arr.set_raw_mut_ptr(crate::array::js_array_push_f64(arr.get_raw_mut_ptr(), v));
+        let updated = arr.with_mut_ptr(|array| crate::array::js_array_push_f64(array, v));
+        arr.set_raw_mut_ptr(updated);
     }
-    js_nanbox_pointer(arr.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    arr.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| js_nanbox_pointer(array as i64))
 }

@@ -244,13 +244,18 @@ pub(super) fn transform_static_literal_requires_with_bunfs(
                     // closed program nothing publishes into the loader's path
                     // registry and the call must read the target's record.
                     // A program that is not closed keeps the loader call.
-                    if replace_json_requires && alias == "require" && !require_is_create_require_bound {
-                        if let Some(edge_target) = crate::commands::compile::cjs_wrap::static_edge_target(
-                            specifier,
-                            source_path,
-                            Some(compile_packages),
-                            None,
-                        ) {
+                    if replace_json_requires
+                        && alias == "require"
+                        && !require_is_create_require_bound
+                    {
+                        if let Some(edge_target) =
+                            crate::commands::compile::cjs_wrap::static_edge_target(
+                                specifier,
+                                source_path,
+                                Some(compile_packages),
+                                None,
+                            )
+                        {
                             let edge = edges
                                 .entry(edge_target.clone())
                                 .or_insert_with(|| {
@@ -1332,9 +1337,16 @@ const text = 'require("./local")';
         let dir = tempfile::tempdir().unwrap();
         let dom = dir.path().join("node_modules").join("fakedom");
         std::fs::create_dir_all(dom.join("lib")).unwrap();
-        std::fs::write(dom.join("package.json"), r#"{ "name": "fakedom", "main": "./lib" }"#)
-            .unwrap();
-        std::fs::write(dom.join("lib").join("index.js"), "exports.parse = (s) => s;").unwrap();
+        std::fs::write(
+            dom.join("package.json"),
+            r#"{ "name": "fakedom", "main": "./lib" }"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dom.join("lib").join("index.js"),
+            "exports.parse = (s) => s;",
+        )
+        .unwrap();
         let source = r#"
 function createParser() { var Dom = require("fakedom"); return Dom.parse; }
 function again() { return require("fakedom"); }
@@ -1359,9 +1371,19 @@ export default createParser();
             )),
             "{got}"
         );
-        assert!(got.contains("var Dom = __perry_require_static_1();"), "{got}");
-        assert!(got.contains("return __perry_require_static_1(); }"), "{got}");
-        assert_eq!(got.matches("function __perry_require_static_1()").count(), 1, "{got}");
+        assert!(
+            got.contains("var Dom = __perry_require_static_1();"),
+            "{got}"
+        );
+        assert!(
+            got.contains("return __perry_require_static_1(); }"),
+            "{got}"
+        );
+        assert_eq!(
+            got.matches("function __perry_require_static_1()").count(),
+            1,
+            "{got}"
+        );
         assert!(
             got.contains(r#"if (__perry_cjs_open()) { return require("fakedom"); } else { return __perry_cjs_init(__perry_cjs_rec_1).exports; }"#),
             "{got}"

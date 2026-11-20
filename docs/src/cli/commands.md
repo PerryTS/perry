@@ -35,6 +35,48 @@ feature-gated subcommand in the installed binary, use `perry <command> --help`.
 
 See also: [perry.toml Reference](perry-toml.md) for project configuration.
 
+## install
+
+`perry install` delegates package resolution to Bun or npm with
+`--ignore-scripts`, scans the installed packages, and runs lifecycle scripts
+only after explicit approval. No package name or prefix is trusted by default,
+including native-build dependencies such as `esbuild` and `sharp`.
+
+Approve a dependency for one invocation:
+
+```bash
+perry install --run-scripts esbuild
+```
+
+Or record approval in the project's `package.json`:
+
+```json
+{
+  "perry": {
+    "allowScripts": ["esbuild", "@scope/native-addon"]
+  }
+}
+```
+
+Approvals use installed dependency names, including scopes and aliases, not
+the package's self-declared `name`. They apply to every installed version with
+that name, including nested dependencies. For an alias such as
+`"build-tool": "npm:esbuild@..."`, approve `build-tool`, not `esbuild`.
+Keep approvals narrow and review their sources and versions: approved scripts
+run with your full privileges and inherited environment, without a sandbox.
+Typosquatting checks inspect the declared package name, but `--allow-risky`
+overrides select the installed name, just like script approvals.
+
+Discovery follows the installed dependency graph, including symlinks into Bun
+and pnpm stores and dependency links beside their physical packages. A cached
+package's own store name does not independently grant script approval.
+Multiple approved aliases to one physical package execute its
+lifecycle scripts once per invocation; dependency-link cycles terminate.
+
+`--run-scripts-all` explicitly approves every installed package. Neither form
+of script approval bypasses the malware-scan gate. `--skip-scan` skips scanning
+and leaves all lifecycle scripts disabled, even with script-approval flags.
+
 ## compile
 
 Compile TypeScript to a native executable.

@@ -357,6 +357,19 @@ impl RootScanCycleState {
         }
     }
 
+    #[cfg(perry_gc_instruments)]
+    fn life_why_name(&self) -> &'static str {
+        match self.subphase {
+            RootScanSubphase::ConservativeStack => "conservative_stack",
+            RootScanSubphase::MutableSlots => "mutable_slots",
+            RootScanSubphase::MutableRegisteredScanners => "mutable_registered_scanners",
+            RootScanSubphase::LegacyRegisteredScanners => "legacy_registered_scanners",
+            RootScanSubphase::RememberedSet => "remembered_set",
+            RootScanSubphase::ImageCells => "image_cells",
+            RootScanSubphase::Done => "root_done",
+        }
+    }
+
     fn trace_phase_name(&self) -> &'static str {
         match self.subphase {
             RootScanSubphase::RememberedSet => "remembered_set_marking",
@@ -648,6 +661,7 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        crate::snap_funnel!(Gc);
         super::allocation_pacing::begin_full();
         // Build the lazy stack-map index HERE, not only at the entry points.
         //
@@ -843,6 +857,7 @@ impl GcCycleState {
         &mut self,
         budget: GcWorkBudget,
     ) -> GcCycleStepResult {
+        crate::snap_funnel!(Gc);
         let _allocation_guard = super::allocation_pacing::CollectorStepGuard::enter();
         let phase_before = self.phase;
         if self.phase == GcCyclePhase::Complete {
@@ -1053,6 +1068,8 @@ impl GcCycleState {
                 .as_ref()
                 .expect("root scan state exists")
                 .trace_phase_name();
+            #[cfg(perry_gc_instruments)]
+            super::life_why::phase(self.root_scan.as_ref().map_or("", |r| r.life_why_name()));
             let phase_start = if DIAGNOSTICS {
                 trace_phase_start(&self.trace)
             } else {
@@ -1085,6 +1102,8 @@ impl GcCycleState {
     }
 
     fn step_mark_propagation<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
+        #[cfg(perry_gc_instruments)]
+        super::life_why::phase("propagation");
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let phase_start = if DIAGNOSTICS {
             trace_phase_start(&self.trace)
@@ -1107,6 +1126,8 @@ impl GcCycleState {
             // synchronous full cycle (block persistence has not run yet).
             if self.minor.is_none() && !self.progress_kind.is_budgeted() {
                 super::census::census_pass1_if_armed();
+                #[cfg(perry_gc_instruments)]
+                super::diagnostic_hooks::life_full_marked();
             }
         }
         if DIAGNOSTICS {
@@ -1126,30 +1147,31 @@ impl GcCycleState {
     /// memory. Issues #43/#44.
     ///
     /// So the question the pass should ask is "can a root-invisible register
-    /// hold a live object here?", and the answer is no in three cases:
+    /// hold a live object here?". A register or runtime-helper local can only
+    /// hold an unrooted object where the collection runs INSIDE runtime code at
+    /// an allocation point, and every such site asks for the conservative
+    /// stack+register scan (`ManualGcScanGuard::force_full_scan`: the old-reclaim
+    /// and nursery-churn valves, emergency reclaim, `perry/gc` `minor()`; see
+    /// `scan_fallback::ConservativeScanSite`). A collection that does not ask for
+    /// the scan is at a precise point (a safepoint poll, the pump boundary, an
+    /// explicit `gc()`): every value live in a generated frame is rooted there
+    /// (statepoint map or shadow slot, the two lowerings of one root-set
+    /// analysis) and runtime-helper locals are rooted by handle scopes. The
+    /// copying minor already MOVES objects at exactly these points, which is
+    /// only sound because the root set there is complete.
     ///
-    /// * the conservative stack+register scan RAN, which pins exactly those
-    ///   objects — the original condition, and the only one this used to test.
-    ///   "Ran" means a scan that does something: on a target with no stack walk
-    ///   (wasm32-wasip1) a `Scan` decision pins nothing, so there it is not
-    ///   evidence of anything and the window stays (see
-    ///   `roots::conservative_scan_is_effective`);
-    /// * no generated frame is live on this thread, so there is no register
-    ///   holding a JS value at all. This is verbatim the completeness argument
-    ///   `pressure.rs` already makes for skipping `force_full_scan`;
-    /// * the collection is an explicit `gc()`. A call is a statepoint: every
-    ///   value live across it is rooted by codegen, because it has to survive
-    ///   the call whether or not the call collects. That is #7558's argument
-    ///   for dropping the conservative scan from `manual_gc_collect_now`, and
-    ///   it is the same argument.
+    /// So the window substitutes for the scan exactly where the scan was
+    /// requested and cannot run: a `Scan` decision on a target with no stack
+    /// walk (wasm32, `roots::conservative_scan_is_effective`). Where the scan
+    /// ran, it pinned those objects itself; where none was requested, there are
+    /// none. Native never runs the pass (its scan is effective), as before.
     ///
-    /// Before this, only the first case skipped, so the modern precise-root
-    /// paths — every explicit `gc()` and every safepoint-driven collection —
-    /// ran the pass and force-marked their recent window. That is not a small
-    /// effect: the pass pushes each resurrected object onto the trace
-    /// worklist, so it also retains everything reachable FROM the dead
-    /// objects. Measured on a 30-line fixture that drops 11,000 objects and
-    /// calls `gc()`: 13,364 objects force-marked, none reachable from a root.
+    /// This used to also run whenever a shadow frame was live, which on wasm is
+    /// the whole program (the event loop runs inside the generated main's
+    /// frame), so every precise safepoint and pump-boundary cycle force-marked
+    /// its recent window. The pass pushes each resurrected object onto the trace
+    /// worklist, so it also retains everything reachable FROM the dead objects
+    /// (#9628: 13,364 objects force-marked by one `gc()`, none reachable).
     ///
     /// `PERRY_GC_BLOCK_PERSIST_ALWAYS=1` restores the pre-#9628 behaviour for
     /// bisection.
@@ -1157,17 +1179,7 @@ impl GcCycleState {
         if block_persist_always_enabled() {
             return false;
         }
-        if matches!(
-            super::roots::conservative_stack_scan_decision(),
-            super::roots::ConservativeStackScanDecision::Scan
-        ) && super::roots::conservative_scan_is_effective()
-        {
-            return true;
-        }
-        if !super::roots::shadow_stack_has_active_frame() {
-            return true;
-        }
-        matches!(self.trigger_kind, GcTriggerKind::Manual)
+        super::roots::collection_point_is_precise()
     }
 
     fn step_block_persistence<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {

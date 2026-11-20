@@ -56,6 +56,7 @@ fn counted_store_loop(target: u32, value: Expr) -> Stmt {
             value: Box::new(value),
             receiver: Box::new(Expr::LocalGet(target)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -80,6 +81,7 @@ fn grown_global_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m.init = vec![
         Stmt::Let {

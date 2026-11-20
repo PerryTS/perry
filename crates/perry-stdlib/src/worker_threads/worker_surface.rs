@@ -85,7 +85,7 @@ pub extern "C" fn js_worker_threads_worker_on(receiver: i64, event: f64, callbac
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
+    let callback_value = f64::from_bits(callback as u64);
     worker_add_listener(worker_id, event, callback_value, false, false)
 }
 
@@ -94,7 +94,7 @@ pub extern "C" fn js_worker_threads_worker_once(receiver: i64, event: f64, callb
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
+    let callback_value = f64::from_bits(callback as u64);
     worker_add_listener(worker_id, event, callback_value, true, false)
 }
 
@@ -109,7 +109,7 @@ pub extern "C" fn js_worker_threads_worker_add_event_listener(
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let callback_value = perry_runtime::value::js_nanbox_pointer(callback);
+    let callback_value = f64::from_bits(callback as u64);
     worker_add_listener(worker_id, event, callback_value, false, true)
 }
 
@@ -120,7 +120,10 @@ pub extern "C" fn js_worker_threads_worker_remove_event_listener(
     event: f64,
     callback: i64,
 ) -> f64 {
-    js_worker_threads_worker_off(receiver, event, callback)
+    let Some(worker_id) = worker_id_from_receiver(receiver) else {
+        return js_undefined();
+    };
+    worker_remove_listener(worker_id, event, f64::from_bits(callback as u64), true)
 }
 
 #[no_mangle]
@@ -128,17 +131,7 @@ pub extern "C" fn js_worker_threads_worker_off(receiver: i64, event: f64, callba
     let Some(worker_id) = worker_id_from_receiver(receiver) else {
         return js_undefined();
     };
-    let Some(event) = event_name(event) else {
-        return js_undefined();
-    };
-    let callback_bits = perry_runtime::value::js_nanbox_pointer(callback).to_bits();
-    let mut workers = WORKERS.lock().unwrap();
-    if let Some(worker) = workers.get_mut(&worker_id) {
-        if let Some(listeners) = worker.listeners.get_mut(&event) {
-            listeners.retain(|listener| listener.callback_bits != callback_bits);
-        }
-    }
-    js_undefined()
+    worker_remove_listener(worker_id, event, f64::from_bits(callback as u64), false)
 }
 
 #[no_mangle]
@@ -320,13 +313,12 @@ pub(super) fn worker_object(
             worker_id,
         ),
     );
-    set(
-        "on",
-        closure_value_with_worker_id(
-            perry_runtime::fn_info!(worker_on, 2; with_declared(2)),
-            worker_id,
-        ),
-    );
+    let on = scope.root_nanbox_f64(closure_value_with_worker_id(
+        perry_runtime::fn_info!(worker_on, 2; with_declared(2)),
+        worker_id,
+    ));
+    set("on", on.get_nanbox_f64());
+    set("addListener", on.get_nanbox_f64());
     set(
         "once",
         closure_value_with_worker_id(
@@ -334,13 +326,12 @@ pub(super) fn worker_object(
             worker_id,
         ),
     );
-    set(
-        "off",
-        closure_value_with_worker_id(
-            perry_runtime::fn_info!(worker_off, 2; with_declared(2)),
-            worker_id,
-        ),
-    );
+    let off = scope.root_nanbox_f64(closure_value_with_worker_id(
+        perry_runtime::fn_info!(worker_off, 2; with_declared(2)),
+        worker_id,
+    ));
+    set("off", off.get_nanbox_f64());
+    set("removeListener", off.get_nanbox_f64());
     set(
         "addEventListener",
         closure_value_with_worker_id(

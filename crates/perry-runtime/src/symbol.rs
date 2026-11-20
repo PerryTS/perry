@@ -36,11 +36,11 @@ pub use accessors::symbol_accessor_held_for_test;
 
 // Symbol constructor + value FFI (no_mangle entry points re-exported so existing
 // `crate::symbol::js_symbol_*` call paths keep resolving).
+pub(crate) use constructors::symbol_for_text;
 pub use constructors::{
     js_symbol_description, js_symbol_equals, js_symbol_for, js_symbol_key_for, js_symbol_new,
     js_symbol_new_empty, js_symbol_to_string, js_symbol_typeof,
 };
-pub(crate) use constructors::symbol_for_text;
 
 // Symbol-keyed own property operations.
 pub(crate) use properties::{
@@ -63,13 +63,15 @@ pub use properties::{
 pub(crate) use get::has_declared_prototype_symbol_property;
 pub use get::js_object_get_symbol_property;
 pub(crate) use get::{
-    has_own_symbol_property, inherited_symbol_property,
+    class_instance_generator_symbol_method, has_own_symbol_property, inherited_symbol_property,
     js_object_get_symbol_property_with_receiver, own_symbol_property, own_symbol_slot,
     OwnSymbolSlot,
 };
 
 // Iterator protocol, getOwnPropertySymbols, ToPrimitive.
-pub(crate) use iterator::{class_ref_resolves_iterator, get_iterator_from_method};
+pub(crate) use iterator::{
+    class_ref_resolves_iterator, get_iterator_from_method, iterator_from_method,
+};
 pub use iterator::{
     js_get_iterator, js_iterator_result_validate, js_object_get_own_property_symbols,
     js_to_primitive,
@@ -216,13 +218,6 @@ pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: 
         let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
         debug_assert!((*cell).symbol.registered & perry_abi::SYMBOL_NATIVE_TEXT != 0);
         (*cell).description_text = Some(std::sync::Arc::from(description));
-    }
-}
-#[cfg(test)]
-pub(crate) fn test_clear_persistent_description(sym_ptr: usize) {
-    unsafe {
-        let cell = (sym_ptr - crate::gc::GC_HEADER_SIZE) as *mut PersistentSymbol;
-        (*cell).description_text = None;
     }
 }
 
@@ -756,6 +751,17 @@ pub(crate) fn store_class_static_symbol_root(class_id: u32, sym_key: usize, valu
     store_object_symbol_property_root(owner, sym_key, value_bits);
 }
 
+/// Is the raw word `addr` a cell of the process immortal symbol space
+/// ([`space::holds`]: range and cell stride, no read)? For the snapshot
+/// census key-name rule, which names a persistent symbol by what it is
+/// (kind and description), never by its cell address: cells are bump
+/// allocated in creation order, so an address is a creation ordinal.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[inline(always)]
+pub(crate) fn in_symbol_space(addr: usize) -> bool {
+    space::holds(addr)
+}
+
 #[cfg(test)]
 mod wellknown_desc_tests {
     use super::*;
@@ -895,6 +901,7 @@ mod symbol_identity_is_header {
         by_value
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn symbol_identity_is_header() {
         // SYMBOL_MAGIC in a cell whose header is not a symbol's: rejected.
@@ -1010,4 +1017,9 @@ mod symbol_identity_is_header {
             libc::munmap(page, 4096);
         }
     }
+}
+
+/// The address range of the persistent-symbol space; empty until it is mapped.
+pub(crate) fn snap_image_space() -> (usize, usize) {
+    space::image_range()
 }

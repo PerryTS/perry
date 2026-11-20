@@ -897,29 +897,70 @@ mod tests {
         (before - after) as i32
     }
 
-    #[test]
-    fn stdlib_bridge_does_not_hard_reference_extension_pumps() {
-        let source = include_str!("async_bridge.rs");
-        let extension_symbols = [
-            "js_ws_process_pending",
-            "js_ws_has_pending",
-            "js_net_process_pending",
-            "js_ext_net_has_active_handles",
-            "js_node_http_server_process_pending",
-            "js_node_http_server_has_active",
-            "js_http_process_pending",
-            "js_http_has_pending",
-            "js_ext_http_client_inflight",
-            "js_ext_zlib_process_pending",
-            "js_ext_zlib_has_active_handles",
-        ];
+    static EXTENSION_PUMP_RUNS: AtomicUsize = AtomicUsize::new(0);
 
-        for symbol in extension_symbols {
-            assert!(
-                !source.contains(&format!("fn {symbol}(")),
-                "stdlib must discover {symbol} through the runtime registry, not an extern declaration"
-            );
+    extern "C" fn extension_pump() -> i32 {
+        EXTENSION_PUMP_RUNS.fetch_add(1, Ordering::AcqRel);
+        0
+    }
+
+    extern "C" fn extension_idle() -> i32 {
+        0
+    }
+
+    extern "C" {
+        fn js_run_stdlib_pump();
+    }
+
+    const PUMP_CHILD_ENV: &str = "PERRY_STDLIB_AUX_PUMP_CHILD";
+
+    /// The stdlib bridge settles its queue from the host pump whether or not
+    /// an extension is linked; an extension pump registered with the runtime
+    /// runs on the same tick without the bridge naming it. Aux pumps cannot be
+    /// unregistered, so the body runs in a re-executed child: it starts with
+    /// no extension pump and leaves none behind for other tests.
+    #[test]
+    fn host_pump_drives_the_bridge_with_and_without_a_registered_extension_pump() {
+        if std::env::var_os(PUMP_CHILD_ENV).is_none() {
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "common::async_bridge::tests::host_pump_drives_the_bridge_with_and_without_a_registered_extension_pump",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(PUMP_CHILD_ENV, "1")
+                .status()
+                .expect("re-run the test binary");
+            assert!(status.success(), "host pump child failed: {status}");
+            return;
         }
+        let _queues = own_pending_queues();
+        ensure_pump_registered();
+
+        let before_extension = crate::perry_ffi_async::perry_ffi_promise_new();
+        queue_deferred_resolution(before_extension as usize, true, || 1.0f64.to_bits());
+        unsafe { js_run_stdlib_pump() };
+        assert_eq!(
+            perry_runtime::promise::js_promise_state(before_extension),
+            1
+        );
+        assert_eq!(
+            perry_runtime::promise::js_promise_value(before_extension),
+            1.0
+        );
+        assert_eq!(EXTENSION_PUMP_RUNS.load(Ordering::Acquire), 0);
+
+        perry_ffi::register_aux_event_pump(extension_pump, extension_idle);
+        let with_extension = crate::perry_ffi_async::perry_ffi_promise_new();
+        queue_deferred_resolution(with_extension as usize, true, || 2.0f64.to_bits());
+        unsafe { js_run_stdlib_pump() };
+        assert_eq!(perry_runtime::promise::js_promise_state(with_extension), 1);
+        assert_eq!(
+            perry_runtime::promise::js_promise_value(with_extension),
+            2.0
+        );
+        assert!(EXTENSION_PUMP_RUNS.load(Ordering::Acquire) >= 1);
     }
 
     #[test]

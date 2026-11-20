@@ -5,20 +5,65 @@ use crate::value::JSValue;
 use std::ffi::c_void;
 use std::ptr;
 
+/// `napi_typedarray_type`, numbered as js_native_api_types.h numbers it
+/// (not as Perry numbers its element kinds).
 #[repr(i32)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NapiTypedarrayType {
     Int8Array = 0,
     Uint8Array = 1,
-    Int16Array = 2,
-    Uint16Array = 3,
-    Int32Array = 4,
-    Uint32Array = 5,
-    Float32Array = 6,
-    Float64Array = 7,
-    Uint8ClampedArray = 8,
+    Uint8ClampedArray = 2,
+    Int16Array = 3,
+    Uint16Array = 4,
+    Int32Array = 5,
+    Uint32Array = 6,
+    Float32Array = 7,
+    Float64Array = 8,
     Bigint64Array = 9,
     Biguint64Array = 10,
+    Float16Array = 11,
+}
+
+impl NapiTypedarrayType {
+    fn from_element_kind(kind: u8) -> Self {
+        use crate::typedarray::*;
+        match kind {
+            KIND_INT8 => Self::Int8Array,
+            KIND_UINT8 => Self::Uint8Array,
+            KIND_UINT8_CLAMPED => Self::Uint8ClampedArray,
+            KIND_INT16 => Self::Int16Array,
+            KIND_UINT16 => Self::Uint16Array,
+            KIND_INT32 => Self::Int32Array,
+            KIND_UINT32 => Self::Uint32Array,
+            KIND_FLOAT32 => Self::Float32Array,
+            KIND_FLOAT64 => Self::Float64Array,
+            KIND_BIGINT64 => Self::Bigint64Array,
+            KIND_BIGUINT64 => Self::Biguint64Array,
+            KIND_FLOAT16 => Self::Float16Array,
+            other => unreachable!("typed-array element kind {other}"),
+        }
+    }
+
+    /// The Perry element kind for a raw `napi_typedarray_type` from C, or
+    /// `None` for a number the header does not define.
+    fn element_kind(raw: i32) -> Option<u8> {
+        use crate::typedarray::*;
+        Some(match raw {
+            0 => KIND_INT8,
+            1 => KIND_UINT8,
+            2 => KIND_UINT8_CLAMPED,
+            3 => KIND_INT16,
+            4 => KIND_UINT16,
+            5 => KIND_INT32,
+            6 => KIND_UINT32,
+            7 => KIND_FLOAT32,
+            8 => KIND_FLOAT64,
+            9 => KIND_BIGINT64,
+            10 => KIND_BIGUINT64,
+            11 => KIND_FLOAT16,
+            _ => return None,
+        })
+    }
 }
 
 fn checked_length(env: NapiEnv, length: usize, what: &'static str) -> Result<u32, NapiStatus> {
@@ -40,18 +85,41 @@ fn pointer_owner(env: NapiEnv, value: NapiValue) -> Result<usize, NapiStatus> {
 
 #[derive(Clone, Copy)]
 enum NapiTypedArrayOwner {
-    Registered(usize),
+    /// A typed array and its Perry element kind.
+    Registered(usize, u8),
     Uint8Buffer(usize),
 }
 
 fn classify_typed_array_owner(owner: usize) -> Option<NapiTypedArrayOwner> {
-    if crate::typedarray_hook_slots::lookup_typed_array_kind(owner).is_some() {
-        Some(NapiTypedArrayOwner::Registered(owner))
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(owner) {
+        Some(NapiTypedArrayOwner::Registered(owner, kind))
     } else if crate::object::typed_array_proto_thunks::is_typed_array_buffer(owner) {
         Some(NapiTypedArrayOwner::Uint8Buffer(owner))
     } else {
         None
     }
+}
+
+/// Whether `owner` is an ArrayBufferView (a typed array, a Buffer or a
+/// DataView): the values Node's `napi_is_buffer` / `napi_get_buffer_info`
+/// accept (`node::Buffer::HasInstance` is `IsArrayBufferView`).
+fn is_array_buffer_view(owner: usize) -> bool {
+    classify_typed_array_owner(owner).is_some() || crate::buffer::is_data_view(owner)
+}
+
+/// The data pointer of an ArrayBuffer or a view at `byte_offset`: its
+/// backing store's data plus the offset, NULL once the store is detached
+/// (V8's `Data()` of a detached ArrayBuffer).
+unsafe fn store_data(addr: usize, byte_offset: usize) -> *mut c_void {
+    let store_owner = crate::buffer::store::owner(addr);
+    if (*crate::buffer::store::header(store_owner))._reserved & crate::codegen_abi::BYTES_DETACHED
+        != 0
+    {
+        return ptr::null_mut();
+    }
+    crate::buffer::store::owner_data(store_owner)
+        .add(byte_offset)
+        .cast::<c_void>()
 }
 
 fn write_pointer_handle(env: NapiEnv, pointer: *const u8, result: *mut NapiValue) -> NapiStatus {
@@ -147,8 +215,10 @@ pub unsafe extern "C" fn napi_create_external_buffer(
         Ok(length) => length,
         Err(status) => return status,
     };
+    // Node: `node::Buffer::New` over the external bytes (a Buffer, not an
+    // ArrayBuffer).
     let buffer = crate::buffer::store::store_alloc(
-        crate::gc::GC_TYPE_BUFFER_ARRAY_BUFFER,
+        crate::gc::GC_TYPE_BUFFER,
         length,
         crate::buffer::store::Init::Foreign(data.cast()),
     );
@@ -168,7 +238,7 @@ pub unsafe extern "C" fn napi_is_buffer(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
-    *result = pointer_owner(env, value).is_ok_and(crate::buffer::is_node_buffer);
+    *result = pointer_owner(env, value).is_ok_and(is_array_buffer_view);
     ok(env)
 }
 
@@ -179,16 +249,17 @@ pub unsafe extern "C" fn napi_get_buffer_info(
     data: *mut *mut c_void,
     length: *mut usize,
 ) -> NapiStatus {
+    // Any ArrayBufferView, as Node: data and byte length of the view
+    // (`Buffer::Data` / `ByteLength`); detached -> NULL and 0.
     let owner = match pointer_owner(env, value) {
-        Ok(owner) if crate::buffer::is_node_buffer(owner) => owner,
+        Ok(owner) if is_array_buffer_view(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be a Buffer"),
     };
-    let buffer = owner as *const BufferHeader;
     if !data.is_null() {
-        *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
+        *data = store_data(owner, crate::buffer::buffer_byte_offset(owner) as usize);
     }
     if !length.is_null() {
-        *length = crate::buffer::store::length(buffer as usize);
+        *length = crate::buffer::store::length(owner) * crate::buffer::store::element_size(owner);
     }
     ok(env)
 }
@@ -340,12 +411,11 @@ pub unsafe extern "C" fn napi_get_arraybuffer_info(
             )
         }
     };
-    let buffer = owner as *const BufferHeader;
     if !data.is_null() {
-        *data = crate::buffer::resolve_span_data_ptr(buffer) as *mut c_void;
+        *data = store_data(owner, 0);
     }
     if !byte_length.is_null() {
-        *byte_length = crate::buffer::store::length(buffer as usize);
+        *byte_length = crate::buffer::store::length(owner);
     }
     ok(env)
 }
@@ -353,7 +423,7 @@ pub unsafe extern "C" fn napi_get_arraybuffer_info(
 #[no_mangle]
 pub unsafe extern "C" fn napi_create_typedarray(
     env: NapiEnv,
-    kind: NapiTypedarrayType,
+    kind: i32,
     length: usize,
     arraybuffer: NapiValue,
     byte_offset: usize,
@@ -362,6 +432,9 @@ pub unsafe extern "C" fn napi_create_typedarray(
     if result.is_null() {
         return set_status(env, NapiStatus::InvalidArg, "result must not be null");
     }
+    let Some(element_kind) = NapiTypedarrayType::element_kind(kind) else {
+        return set_status(env, NapiStatus::InvalidArg, "unknown typed array type");
+    };
     let arraybuffer_bits = match value_bits(env, arraybuffer) {
         Ok(bits) => bits,
         Err(status) => return set_status(env, status, "ArrayBuffer is not a live handle"),
@@ -390,7 +463,7 @@ pub unsafe extern "C" fn napi_create_typedarray(
     };
     match catch_value_call(env, || {
         let typed_array = crate::typedarray_hook_slots::js_typed_array_view(
-            kind as i32,
+            element_kind as i32,
             f64::from_bits(arraybuffer_bits),
             byte_offset as f64,
             length as f64,
@@ -439,59 +512,41 @@ pub unsafe extern "C" fn napi_get_typedarray_info(
         Some(owner) => owner,
         _ => return set_status(env, NapiStatus::InvalidArg, "value must be a TypedArray"),
     };
-    let (reported_kind, reported_length, reported_data, backing, reported_offset) = match owner {
-        NapiTypedArrayOwner::Registered(owner) => {
-            let typed_array = owner as *mut TypedArrayHeader;
-            let backing = crate::typedarray_view::js_typed_array_backing_buffer(typed_array);
-            let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
-            let refreshed = refreshed_owner as *mut TypedArrayHeader;
-            (
-                std::mem::transmute::<i32, NapiTypedarrayType>(
-                    crate::typedarray_hook_slots::lookup_typed_array_kind(refreshed as usize)
-                        .expect("admitted typed-array kind") as i32,
-                ),
-                crate::buffer::store::length(refreshed as usize),
-                crate::buffer::bytes::no_gc(|_| {
-                    crate::buffer::bytes::span(
-                        crate::value::js_nanbox_pointer(refreshed as i64),
-                        false,
-                    )
-                    .expect("admitted typed-array span")
-                    .ptr
-                    .cast::<c_void>()
-                }),
-                backing,
-                crate::typedarray_view::js_typed_array_byte_offset(refreshed) as usize,
-            )
+    // Every answer is a field of the view's own header; the ArrayBuffer
+    // object is resolved only for a caller that asks for it (Node calls
+    // Buffer() only then: materializing it is the one costly part).
+    let (addr, reported_kind) = match owner {
+        NapiTypedArrayOwner::Registered(addr, kind) => {
+            (addr, NapiTypedarrayType::from_element_kind(kind))
         }
-        NapiTypedArrayOwner::Uint8Buffer(owner) => {
-            let backing = crate::buffer::buffer_backing_array_buffer(owner);
-            let refreshed_owner = pointer_owner(env, typedarray).unwrap_or(owner);
-            let refreshed = refreshed_owner as *const BufferHeader;
-            (
-                NapiTypedarrayType::Uint8Array,
-                crate::buffer::js_buffer_length(refreshed).max(0) as usize,
-                crate::buffer::resolve_span_data_ptr(refreshed) as *mut c_void,
-                backing as *mut BufferHeader,
-                crate::buffer::buffer_byte_offset(refreshed_owner) as usize,
-            )
-        }
+        NapiTypedArrayOwner::Uint8Buffer(addr) => (addr, NapiTypedarrayType::Uint8Array),
     };
+    if !arraybuffer.is_null() {
+        let backing = match owner {
+            NapiTypedArrayOwner::Registered(..) => {
+                crate::typedarray_view::js_typed_array_backing_buffer(addr as *mut TypedArrayHeader)
+                    as usize
+            }
+            NapiTypedArrayOwner::Uint8Buffer(_) => crate::buffer::buffer_backing_array_buffer(addr),
+        };
+        *arraybuffer = add_handle(env, JSValue::pointer(backing as *const u8).bits())
+            .unwrap_or(ptr::null_mut());
+    }
     if !kind.is_null() {
         *kind = reported_kind;
     }
+    // Detached or out of bounds: length 0 and byte offset 0 (V8's Length()
+    // and ByteOffset()); data is the backing store's data plus that offset,
+    // NULL once the store is detached.
+    let reported_offset = crate::buffer::buffer_byte_offset(addr) as usize;
     if !length.is_null() {
-        *length = reported_length;
-    }
-    if !data.is_null() {
-        *data = reported_data;
+        *length = crate::buffer::store::length(addr);
     }
     if !byte_offset.is_null() {
         *byte_offset = reported_offset;
     }
-    if !arraybuffer.is_null() {
-        *arraybuffer =
-            add_handle(env, JSValue::pointer(backing.cast()).bits()).unwrap_or(ptr::null_mut());
+    if !data.is_null() {
+        *data = store_data(addr, reported_offset);
     }
     ok(env)
 }

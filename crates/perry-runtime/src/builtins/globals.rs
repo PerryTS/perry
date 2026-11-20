@@ -151,8 +151,7 @@ fn string_from_decoded(out: &[u8]) -> i64 {
 fn throw_uri_malformed() -> ! {
     let message = b"URI malformed";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_urierror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::uri_error(msg))
 }
 
 fn hex_digit(b: u8) -> Option<u8> {
@@ -186,7 +185,8 @@ fn extract_str_from_nanbox(value: f64) -> String {
 /// preserved). Used by the decode family, which must operate byte-wise per the
 /// Decode algorithm rather than dropping non-UTF-8 input.
 fn extract_coerced_bytes(value: f64) -> Vec<u8> {
-    let str_ptr = crate::builtins::js_string_coerce(value);
+    // Abstract ToString rejects a Symbol, including one returned by a hook.
+    let str_ptr = crate::builtins::js_template_string_coerce(value);
     if (str_ptr as usize) < 0x1000 {
         return Vec::new();
     }
@@ -207,7 +207,7 @@ fn extract_string_bytes_from_nanbox(value: f64) -> ExtractedStringBytes {
     // encodeURI/encodeURIComponent apply ToString to the argument (sec-encodeuri
     // step 1), so objects/numbers coerce via toString/valueOf rather than
     // yielding the empty string (test262 encodeURI/encodeURIComponent A6_T1).
-    let str_ptr = crate::builtins::js_string_coerce(value) as *const StringHeader;
+    let str_ptr = crate::builtins::js_template_string_coerce(value) as *const StringHeader;
     if (str_ptr as usize) < 0x1000 {
         return ExtractedStringBytes {
             bytes: Vec::new(),
@@ -292,8 +292,7 @@ fn throw_if_symbol(value: f64) {
     {
         let msg = b"Cannot convert a Symbol value to a string";
         let msg_str = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg_str);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
     }
 }
 
@@ -378,8 +377,7 @@ fn hex4_chars(cs: &[char]) -> Option<u16> {
 
 fn throw_structured_clone_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 use crate::messaging::port_transfer::throw_data_clone_error;
@@ -406,7 +404,7 @@ fn gc_type_for_pointer(addr: usize) -> Option<u8> {
 
 fn is_array_value(value: f64) -> bool {
     pointer_addr(value)
-        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc::GC_TYPE_ARRAY))
+        .is_some_and(|addr| gc_type_for_pointer(addr) == Some(crate::gc_array_type_pat!()))
 }
 
 fn get_object_property(value: f64, name: &[u8]) -> f64 {
@@ -460,7 +458,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let options = scope.root_nanbox_f64(options);
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let list = collect_transfer_list(options.get_nanbox_f64());
         crate::messaging::port_transfer::serialize(value.get_nanbox_f64(), list, None, |list| list)
             .map(|message| {
@@ -479,7 +477,7 @@ pub extern "C" fn js_structured_clone_with_options(value: f64, options: f64) -> 
             }
             _ => &error,
         }),
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 
@@ -510,6 +508,7 @@ pub extern "C" fn js_queue_microtask(callback: i64) {
 
 #[no_mangle]
 pub extern "C" fn js_queue_next_tick(callback: i64) {
+    crate::effect!(host_write, tick);
     queue_microtask_with_type(callback, "TickObject", Vec::new());
 }
 
@@ -523,6 +522,7 @@ pub extern "C" fn js_queue_next_tick(callback: i64) {
 /// `n_args == 0`.
 #[no_mangle]
 pub unsafe extern "C" fn js_queue_next_tick_args(callback: i64, args_ptr: *const f64, n_args: i32) {
+    crate::effect!(host_write, tick);
     let args: Vec<f64> = if args_ptr.is_null() || n_args <= 0 {
         Vec::new()
     } else {
@@ -590,6 +590,7 @@ pub fn restore_queued_microtask_contexts() {
         let mut stack = stack.borrow_mut();
         while let Some(previous) = stack.pop() {
             crate::async_context::restore_context(previous);
+            crate::snap_census::job_exit();
         }
     });
 }
@@ -637,6 +638,8 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 let callback_handle =
                     scope.root_raw_const_ptr(cb as *const crate::closure::ClosureHeader);
                 let arg_handles = scope.root_nanbox_f64_slice(&args);
+                #[cfg(perry_gc_instruments)]
+                crate::snap_census::job_enter(context.snap_init);
                 let previous = crate::async_context::enter_context(&context);
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     stack.borrow_mut().push(previous);
@@ -742,6 +745,7 @@ pub(crate) fn drain_queued_microtasks_count() -> i32 {
                 QUEUED_MICROTASK_PREV_CONTEXTS.with(|stack| {
                     if let Some(previous) = stack.borrow_mut().pop() {
                         crate::async_context::restore_context(previous);
+                        crate::snap_census::job_exit();
                     }
                 });
                 ran += 1;
@@ -814,6 +818,51 @@ pub(crate) fn test_seed_queued_job_owner(async_id: u64, resource: f64) {
             resource,
             args: Vec::new(),
         });
+    });
+}
+
+/// SNAPK4 census: the queued nextTick jobs in queue order, one
+/// `(owner, code)` per job: the init that queued it
+/// (`AsyncContextSnapshot::snap_init`, stamped at enqueue) and its callback's
+/// code address. None while the queue is borrowed.
+/// Non-test readers exist only in the linux-x86_64 census runner; kept for
+/// the `cfg(all(test, perry_gc_instruments))` unit tests elsewhere.
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(dead_code)
+)]
+pub(crate) fn snap_pending_ticks() -> Option<Vec<(u32, usize)>> {
+    QUEUED_MICROTASKS.with(|q| {
+        q.try_borrow().ok().map(|q| {
+            q.iter()
+                .map(|job| {
+                    (
+                        job.context.snap_init,
+                        crate::promise::snap_closure_code(
+                            job.callback as *const crate::closure::ClosureHeader,
+                        ),
+                    )
+                })
+                .collect()
+        })
+    })
+}
+
+/// SNAPK4 census tests: queue a nextTick job owned by `owner` directly.
+#[cfg(all(test, perry_gc_instruments))]
+pub(crate) fn test_push_tick(callback: i64, owner: u32) {
+    let mut context = crate::async_context::capture_context();
+    context.snap_init = owner;
+    QUEUED_MICROTASKS.with(|q| {
+        q.borrow_mut().push_back(QueuedMicrotask {
+            callback,
+            context,
+            async_id: 0,
+            trigger_async_id: 0,
+            resource: f64::from_bits(crate::value::TAG_UNDEFINED),
+            args: Vec::new(),
+        })
     });
 }
 

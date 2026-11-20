@@ -786,8 +786,8 @@ of being unfair.
 ## 3. Memory + GC stability
 
 [`scripts/run_memory_stability_tests.sh`](../scripts/run_memory_stability_tests.sh)
-+ [`test-files/test_memory_*.ts`](../test-files/) +
-[`test-files/test_gc_*.ts`](../test-files/) — 6 tests × 3 GC mode
++ [`tests/fixtures/programs/test_memory_*.ts`](../tests/fixtures/programs/) +
+[`tests/fixtures/programs/test_gc_*.ts`](../tests/fixtures/programs/) — 6 tests × 3 GC mode
 combos (default / mark-sweep escape hatch / gen-gc + write
 barriers) = 18 runs per CI invocation.
 

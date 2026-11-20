@@ -1131,6 +1131,7 @@ pub fn collect_refs_in_closure_bodies_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_refs_in_closure_bodies_stmt(s, out);
@@ -1213,6 +1214,7 @@ pub fn collect_top_level_let_ids_stmt(stmt: &Stmt, out: &mut std::collections::H
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_top_level_let_ids_stmt(s, out);
@@ -1708,6 +1710,7 @@ fn lower_stmts_using_aware_inner(
                         }],
                         catch: Some(dispose_catch),
                         finally: None,
+                        forof_completion: None,
                     },
                     Stmt::If {
                         condition: Expr::LocalGet(has),
@@ -1743,6 +1746,7 @@ fn lower_stmts_using_aware_inner(
                         body: wrapped,
                         catch: Some(body_catch),
                         finally: Some(finally_stmts),
+                        forof_completion: None,
                     },
                 ];
             }

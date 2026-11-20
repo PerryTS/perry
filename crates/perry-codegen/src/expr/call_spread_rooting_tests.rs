@@ -55,6 +55,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,
@@ -135,8 +136,9 @@ fn assert_every_fold_rereads_the_accumulator(ir: &str, what: &str) {
         let part = nth_operand(ir, fold, 1);
         let def = definition_line(ir, &acc)
             .unwrap_or_else(|| panic!("{what}: no definition for the accumulator {acc} in:\n{ir}"));
-        let window = definition_line(ir, &part)
-            .unwrap_or_else(|| panic!("{what}: no definition for the spread part {part} in:\n{ir}"));
+        let window = definition_line(ir, &part).unwrap_or_else(|| {
+            panic!("{what}: no definition for the spread part {part} in:\n{ir}")
+        });
         assert!(
             def > window,
             "{what}: js_array_spread_append at line {fold} reads {acc}, defined at line {def}, \

@@ -25,6 +25,7 @@ fn branch(initialized: bool) -> Vec<Stmt> {
                 mutable_captures: vec![101],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -66,6 +67,7 @@ fn assert_each_continuation_allocates(initialized: bool) {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let ir = String::from_utf8(
         crate::compile_module(&module, super::prealloc_module_global_tests::ir_opts()).unwrap(),

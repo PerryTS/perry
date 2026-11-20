@@ -241,7 +241,11 @@ console.log("own-value:", o.a);
 console.log("add-refused:", refused, o.perryInherited);
 "#,
     );
-    for expected in ["inherited-value: 7", "own-value: 1", "add-refused: true undefined"] {
+    for expected in [
+        "inherited-value: 7",
+        "own-value: 1",
+        "add-refused: true undefined",
+    ] {
         assert!(
             stdout.contains(expected),
             "missing {expected:?}\nstdout:\n{stdout}"

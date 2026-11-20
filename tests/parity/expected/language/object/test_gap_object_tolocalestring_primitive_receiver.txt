@@ -1,0 +1,16 @@
+DEC 250: Cannot redefine built-in member Boolean.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+true: true
+false: false
+DEC 250: Cannot redefine built-in member String.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+string: abc
+DEC 250: Cannot redefine built-in member Symbol.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+symbol: Symbol(s)
+object: object:own
+DEC 250: Cannot redefine built-in member Boolean.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+data: true
+DEC 250: Cannot redefine built-in member String.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+data noncallable: missed
+DEC 250: Cannot redefine built-in member Boolean.prototype.toString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+accessor noncallable: missed
+DEC 250: Cannot redefine built-in member Number.prototype.toLocaleString: built-in objects are read-only in a compiled program (adding a new member is allowed)
+typed array noncallable: missed

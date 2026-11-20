@@ -27,6 +27,7 @@ fn native_call(module_name: &str, class: Option<&str>, method: &str, receiver: b
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(
@@ -164,6 +165,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     key: Box::new(Expr::LocalGet(2)),
                     value: Box::new(Expr::Number(42.0)),
                     strict,
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                 }),

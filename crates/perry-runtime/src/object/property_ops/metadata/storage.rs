@@ -17,12 +17,8 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     // Class-prototype aliases retain the established decorator scoping rule,
     // but the constructor's actual function bag now owns the metadata.
     let _no_move = crate::gc::GcSuppressScope::new();
-    // A numeric target must not be reinterpreted as the internal constructor key.
-    if crate::value::JSValue::from_bits(target.to_bits()).is_int32() {
-        return std::ptr::null_mut();
-    }
     let bits = normalize_target_bits(target);
-    let target = if bits & !POINTER_MASK == crate::value::INT32_TAG {
+    let target = if bits & !POINTER_MASK == crate::value::INTERNAL_WORD_TAG {
         crate::object::class_constructor_ref_value(bits as u32)
     } else {
         f64::from_bits(bits)
@@ -36,21 +32,16 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     } else {
         None
     };
-    let owner = crate::object::descriptor_state::descriptor_holder(addr);
-    if owner.is_null() {
-        return std::ptr::null_mut();
-    }
-    // A1_UNPROVEN: record-first: holder may be the user object (kind-A/B question for S0f).
-    let mut meta = crate::meta_read!(crate::meta_obj_runtime_born!(owner as *mut _));
+    let target = crate::object::descriptor_state::owner_key_target(addr);
+    let mut meta = target.meta(crate::object::MetaReason::ReflectMetadata, false);
     if meta.is_null() {
         if !create {
             return std::ptr::null_mut();
         }
-        // A1_UNPROVEN: descriptor_holder(addr) may return the user object itself (kind-A/B question for S0b-S0e).
-        meta = crate::object::object_meta_ensure(
-            crate::meta_obj_runtime_born!(owner),
-            crate::object::MetaReason::ReflectMetadata,
-        );
+        meta = target.meta(crate::object::MetaReason::ReflectMetadata, true);
+        if meta.is_null() {
+            return std::ptr::null_mut();
+        }
     }
     if (*meta).reflect_metadata == 0 && create {
         let record = crate::object::js_object_alloc_null_proto(0, 0);

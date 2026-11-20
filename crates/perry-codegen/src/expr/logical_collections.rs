@@ -43,7 +43,7 @@
 
 use anyhow::{bail, Result};
 use perry_hir::types::Type as HirType;
-use perry_hir::Expr;
+use perry_hir::{Expr, ObjectPart};
 
 use crate::lower_conditional::lower_logical;
 use crate::nanbox::{double_literal, POINTER_MASK_I64, TAG_UNDEFINED};
@@ -276,7 +276,7 @@ fn lower_captureless_some_inline(
             let type_addr = blk.sub(I64, &raw, "8");
             let type_ptr = blk.inttoptr(I64, &type_addr);
             let obj_type = blk.load(I8, &type_ptr);
-            let is_array = blk.icmp_eq(I8, &obj_type, "1"); // GC_TYPE_ARRAY
+            let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &obj_type);
             let flags_addr = blk.sub(I64, &raw, "7");
             let flags_ptr = blk.inttoptr(I64, &flags_addr);
             let gc_flags = blk.load(I8, &flags_ptr);
@@ -574,7 +574,37 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_private_lexical_brand_pop", &[]))
         }
-        Expr::Logical { op, left, right } => lower_logical(ctx, *op, left, right),
+        // The `this.F` hoist's version test: a compile-time answer. True only
+        // in a body lowered with a proven `this` of exactly this class.
+        Expr::ThisProvenClass(class) => {
+            let proven = !crate::stmt::this_field_fast_off()
+                && ctx
+                    .ptr_shape_region_class(&Expr::This)
+                    .is_some_and(|c| c == *class);
+            let bits = if proven {
+                crate::nanbox::TAG_TRUE_I64
+            } else {
+                crate::nanbox::TAG_FALSE_I64
+            };
+            Ok(ctx.block().bitcast_i64_to_double(bits))
+        }
+        Expr::Logical { op, left, right } => {
+            // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+            if matches!(op, perry_hir::LogicalOp::Coalesce) {
+                if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+                    return Ok(ctx
+                        .block()
+                        .sitofp(crate::types::I32, &v, crate::types::DOUBLE));
+                }
+                // An Array of Numbers: the nullish test is on the read's
+                // miss arm only (`index_get::rep_default`).
+                if let Some(v) = super::index_get::rep_default::try_lower(ctx, left, right, false)?
+                {
+                    return Ok(v);
+                }
+            }
+            lower_logical(ctx, *op, left, right)
+        }
 
         // -------- arr.filter(callback) --------
         // Mirrors ArrayMap: takes a closure header pointer, returns
@@ -1121,9 +1151,51 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // nullish/prototype-aware enumerator for every other receiver.
         Expr::ForInKeys(obj) => {
             let obj_box = lower_expr(ctx, obj)?;
-            let blk = ctx.block();
-            let arr_handle = blk.call(I64, "js_for_in_keys_stable_value", &[(DOUBLE, &obj_box)]);
-            Ok(nanbox_pointer_inline(blk, &arr_handle))
+            // The loop fact of the receiver and its just-born snapshot (DYNP
+            // E3c): what makes the per-key deletion check a few loads. It
+            // lives in an entry slot born zero per invocation and written by
+            // the snapshot's own entry (E3f: read off the copy), so it
+            // belongs to this one loop execution.
+            if let Expr::LocalGet(obj_id) = obj.as_ref() {
+                let slot = match ctx.for_in_facts.get(obj_id) {
+                    Some(s) => s.clone(),
+                    None => {
+                        let s = ctx.func.alloca_entry(I64);
+                        ctx.func.entry_allocas_push_store(I64, "0", &s);
+                        ctx.for_in_facts.insert(*obj_id, s.clone());
+                        s
+                    }
+                };
+                // DYNP E13: the loop's bound slot when its keys are bound by
+                // the desugar's `let __keys` (`for_in_keys_locals`): the keys
+                // may then be the receiver's own key list in place, and the
+                // bound is read from this slot (`let __n`), not their length.
+                let in_place = ctx.for_in_keys_locals.values().any(|r| r == obj_id);
+                let len = if in_place {
+                    let s = match ctx.for_in_lens.get(obj_id) {
+                        Some(s) => s.clone(),
+                        None => {
+                            let s = ctx.func.alloca_entry(I64);
+                            ctx.func.entry_allocas_push_store(I64, "0", &s);
+                            ctx.for_in_lens.insert(*obj_id, s.clone());
+                            s
+                        }
+                    };
+                    s
+                } else {
+                    "null".to_string()
+                };
+                let arr_handle = ctx.block().call(
+                    I64,
+                    "js_for_in_begin",
+                    &[(DOUBLE, &obj_box), (PTR, &slot), (PTR, &len)],
+                );
+                return Ok(nanbox_pointer_inline(ctx.block(), &arr_handle));
+            }
+            let arr_handle = ctx
+                .block()
+                .call(I64, "js_for_in_keys_value", &[(DOUBLE, &obj_box)]);
+            Ok(nanbox_pointer_inline(ctx.block(), &arr_handle))
         }
 
         // -------- isFinite(x) — global, coerces to Number first --------
@@ -1301,6 +1373,95 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // traps / `with` / rest-destructuring), the `in`-operator entry point
         // first enforces ECMA-262 13.10.1 step 5: a non-Object right operand
         // (`"x" in 5`, `... in null`, `... in Symbol()`, …) throws a TypeError.
+        // The for-in deletion check `keys[i] in obj` of a loop whose fact
+        // this function took (`Expr::ForInKeys` above): the runtime answers
+        // the own key still at its place from the fact with a few loads, else
+        // the complete `in`. The key is read by the runtime from the
+        // snapshot itself: the loop's own just-born array, reachable from no
+        // other code, indexed by the loop counter below its length.
+        Expr::In { property, object }
+            if matches!(
+                (property.as_ref(), object.as_ref()),
+                (Expr::IndexGet { element_offset: 0, byte_offset: 0, byte_end: 0, index, object: keys }, Expr::LocalGet(o))
+                    if matches!(index.as_ref(), Expr::LocalGet(_))
+                        && matches!(keys.as_ref(), Expr::LocalGet(_))
+                        && ctx.for_in_facts.contains_key(o)
+            ) =>
+        {
+            let (
+                Expr::IndexGet {
+                    index,
+                    object: keys,
+                    ..
+                },
+                Expr::LocalGet(o),
+            ) = (property.as_ref(), object.as_ref())
+            else {
+                unreachable!()
+            };
+            let slot = ctx.for_in_facts[o].clone();
+            if let Expr::LocalGet(k) = keys.as_ref() {
+                ctx.for_in_snapshots.insert(*k);
+            }
+            // Three local reads and a load: nothing allocates before the call.
+            let obj_v = lower_expr(ctx, object)?;
+            let keys_v = lower_expr(ctx, keys)?;
+            let idx = lower_expr(ctx, index)?;
+            let fact = ctx.block().load(I64, &slot);
+            // A layout fact answers in compiled code (DYNP E3d): for `i < n`
+            // (fact bits 32..62, no table bit) the key is the layout's key `i`,
+            // live while the receiver's layout word is still the fact's word
+            // `W0` (see `key_live_by_fact`). Everything else calls.
+            let i = ctx.block().fptosi(DOUBLE, &idx, I64);
+            let hi = ctx.block().lshr(I64, &fact, "32");
+            // Bits 32..62 hold n; bit 62 (table) lands in bit 30 of `hi`.
+            let n_tbl = ctx.block().and(I64, &hi, "2147483647");
+            // A table fact has bit 30 of `n_tbl` set, so `i < n_tbl` only for
+            // a layout fact masked separately below.
+            let n = ctx.block().and(I64, &hi, "1073741823");
+            let is_tbl = ctx.block().icmp_ne(I64, &n_tbl, &n);
+            let in_prefix = ctx.block().icmp_ult(I64, &i, &n);
+            let not_tbl = ctx.block().xor(crate::types::I1, &is_tbl, "true");
+            let layout_hit = ctx.block().and(crate::types::I1, &in_prefix, &not_tbl);
+            let word_b = ctx.new_block("forin.live.word");
+            let call_b = ctx.new_block("forin.live.call");
+            let join_b = ctx.new_block("forin.live.join");
+            let word_l = ctx.block_label(word_b);
+            let call_l = ctx.block_label(call_b);
+            let join_l = ctx.block_label(join_b);
+            ctx.block().cond_br(&layout_hit, &word_l, &call_l);
+            ctx.current_block = word_b;
+            let obj_i = crate::expr::helpers::unbox_to_i64(ctx.block(), &obj_v);
+            let obj_p = ctx.block().inttoptr(I64, &obj_i);
+            let word_p = ctx.block().gep(crate::types::I8, &obj_p, &[(I64, "4")]);
+            let word = ctx.block().load(crate::types::I32, &word_p);
+            let w0 = ctx.block().trunc(I64, &fact, crate::types::I32);
+            let same = ctx.block().icmp_eq(crate::types::I32, &word, &w0);
+            let word_end = ctx.block().label.clone();
+            ctx.block().cond_br(&same, &join_l, &call_l);
+            ctx.current_block = call_b;
+            let called = ctx.block().call(
+                DOUBLE,
+                "js_for_in_key_live",
+                &[
+                    (DOUBLE, &obj_v),
+                    (DOUBLE, &keys_v),
+                    (DOUBLE, &idx),
+                    (I64, &fact),
+                ],
+            );
+            let call_end = ctx.block().label.clone();
+            ctx.block().br(&join_l);
+            ctx.current_block = join_b;
+            let t = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_TRUE));
+            Ok(ctx.block().phi(
+                DOUBLE,
+                &[
+                    (t.as_str(), word_end.as_str()),
+                    (called.as_str(), call_end.as_str()),
+                ],
+            ))
+        }
         Expr::In { property, object } => {
             // HasProperty through the object's own layout (the shape
             // presence answer), then the complete operation; no site state.
@@ -1439,8 +1600,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             rooting::with_operands_rooted(ctx, &operands, |ctx, vals| {
                 let r_d = vals.get(1).cloned().unwrap_or_else(|| "0.0".to_string());
                 let blk = ctx.block();
-                let s_handle = blk.call(I64, "js_string_coerce", &[(DOUBLE, &vals[0])]);
-                Ok(blk.call(DOUBLE, "js_parse_int", &[(I64, &s_handle), (DOUBLE, &r_d)]))
+                Ok(blk.call(
+                    DOUBLE,
+                    "js_parse_int_value",
+                    &[(DOUBLE, &vals[0]), (DOUBLE, &r_d)],
+                ))
             })
         }
         Expr::ParseFloat(string) => {
@@ -1507,12 +1671,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // A leading spread births its result directly. Otherwise the
             // source-ordered prefix is built before the spread expression is
             // evaluated. The fresh accumulator cannot escape during building.
-            let initial = if parts.first().is_some_and(|(key, _)| key.is_none()) {
+            let initial = if matches!(parts.first(), Some(ObjectPart::Spread(_))) {
                 double_literal(f64::from_bits(TAG_UNDEFINED))
             } else {
                 let count = parts
                     .iter()
-                    .filter(|(key, _)| key.is_some())
+                    .filter(|part| part.defines_key())
                     .count()
                     .to_string();
                 let handle = ctx
@@ -1526,30 +1690,76 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 &initial,
                 true,
                 |ctx, acc| {
-                    for (index, (key, value_expr)) in parts.iter().enumerate() {
-                        let value = lower_expr(ctx, value_expr)?;
-                        if let Some(key) = key {
-                            let key_idx = ctx.strings.intern(key);
-                            let global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-                            let key_box = ctx.block().load(DOUBLE, &global);
-                            acc.call(
-                                ctx,
-                                DOUBLE,
-                                "js_object_literal_define",
-                                &[Arg::Plain(DOUBLE, &key_box), Arg::Plain(DOUBLE, &value)],
-                            );
-                        } else {
-                            // The helper returns the current (possibly new or
-                            // evacuated) accumulator; publish it in the root.
-                            acc.advance(
-                                ctx,
-                                if index == 0 {
-                                    "js_object_spread_fresh_leading"
-                                } else {
-                                    "js_object_spread_fresh"
-                                },
-                                &[Arg::Plain(DOUBLE, &value)],
-                            );
+                    for (index, part) in parts.iter().enumerate() {
+                        match part {
+                            ObjectPart::Define(key, value_expr) => {
+                                let value = lower_expr(ctx, value_expr)?;
+                                let key_idx = ctx.strings.intern(key);
+                                let global =
+                                    format!("@{}", ctx.strings.entry(key_idx).handle_global);
+                                let key_box = ctx.block().load(DOUBLE, &global);
+                                acc.call(
+                                    ctx,
+                                    DOUBLE,
+                                    "js_object_literal_define",
+                                    &[Arg::Plain(DOUBLE, &key_box), Arg::Plain(DOUBLE, &value)],
+                                );
+                            }
+                            ObjectPart::Computed {
+                                key,
+                                value: value_expr,
+                            } => {
+                                // `[key]: value`: the key, its ONE ToPropertyKey
+                                // (a user `toString` / `Symbol.toPrimitive` runs
+                                // here, before the value), the value, then the
+                                // definition on the path static keys take. The
+                                // property key (a string or a symbol) is rooted
+                                // across the value's lowering.
+                                let key_value = lower_expr(ctx, key)?;
+                                let property_key = ctx.block().call(
+                                    DOUBLE,
+                                    "js_object_literal_to_property_key",
+                                    &[(DOUBLE, &key_value)],
+                                );
+                                rooting::with_rooted_accumulator(
+                                    ctx,
+                                    Repr::Boxed,
+                                    &property_key,
+                                    true,
+                                    |ctx, pk| {
+                                        let value = lower_expr(ctx, value_expr)?;
+                                        acc.call(
+                                            ctx,
+                                            DOUBLE,
+                                            "js_object_literal_define",
+                                            &[pk.as_arg(), Arg::Plain(DOUBLE, &value)],
+                                        );
+                                        Ok(())
+                                    },
+                                    |_ctx, _| Ok(()),
+                                )?;
+                            }
+                            ObjectPart::Spread(value_expr) => {
+                                let value = lower_expr(ctx, value_expr)?;
+                                // The helper returns the current (possibly new or
+                                // evacuated) accumulator; publish it in the root.
+                                // It is born with room for the keys the literal
+                                // defines after this part, static or computed.
+                                let tail = parts[index + 1..]
+                                    .iter()
+                                    .filter(|part| part.defines_key())
+                                    .count()
+                                    .to_string();
+                                acc.advance(
+                                    ctx,
+                                    if index == 0 {
+                                        "js_object_spread_fresh_leading"
+                                    } else {
+                                        "js_object_spread_fresh"
+                                    },
+                                    &[Arg::Plain(DOUBLE, &value), Arg::Plain(I32, &tail)],
+                                );
+                            }
                         }
                     }
                     Ok(())
@@ -1571,12 +1781,41 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(site) = crate::layout_desc::create_families::site(ctx, expr) {
                 return crate::layout_desc::create_families::lower_assign(ctx, &site, expr);
             }
-            let target_box = lower_expr(ctx, target)?;
-            let acc = ctx.block().call(
-                DOUBLE,
-                "js_object_assign_validate_target",
-                &[(DOUBLE, &target_box)],
-            );
+            // `Object.assign({}, s, ...)`: the empty literal (`Expr::Object`,
+            // or the keyless literal-shape class it lowers to) is visible to
+            // nothing until the first copy, so it is created after `s` is
+            // evaluated, born with room for `s`'s own keys.
+            let empty_literal = match &**target {
+                Expr::Object(props) => props.is_empty(),
+                Expr::New {
+                    class_name, args, ..
+                } => {
+                    args.is_empty()
+                        && ctx
+                            .classes
+                            .get(class_name)
+                            .is_some_and(|c| c.is_literal_shape() && c.fields.is_empty())
+                }
+                _ => false,
+            };
+            let (acc, sources) = match sources.split_first() {
+                Some((first, rest)) if empty_literal => {
+                    let first_box = lower_expr(ctx, first)?;
+                    let acc =
+                        ctx.block()
+                            .call(DOUBLE, "js_object_assign_fresh", &[(DOUBLE, &first_box)]);
+                    (acc, rest)
+                }
+                _ => {
+                    let target_box = lower_expr(ctx, target)?;
+                    let acc = ctx.block().call(
+                        DOUBLE,
+                        "js_object_assign_validate_target",
+                        &[(DOUBLE, &target_box)],
+                    );
+                    (acc, sources.as_slice())
+                }
+            };
             // Stash target in a temp slot if there are multiple sources, so
             // each helper call uses the same SSA value (defensive: helper
             // returns target_f64 unchanged, but the chain is clearer when we

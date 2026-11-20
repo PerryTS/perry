@@ -23,6 +23,7 @@ fn async_generator_with_delegations(id: FuncId, delegations: usize) -> Function 
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -86,6 +87,7 @@ fn return_before_start_does_not_enter_finally() {
             0,
             Box::new(Expr::Number(1.0)),
         ))]),
+        forof_completion: None,
     }];
     module.functions.push(function);
     transform_generators(&mut module);

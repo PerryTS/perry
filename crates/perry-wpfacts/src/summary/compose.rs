@@ -134,13 +134,44 @@ pub(super) fn compose(
                     let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
                         .map(|i| m.capture_param(g, i))
                         .collect();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps);
+                    // `arguments` takes every argument, a rest array those
+                    // after the parameters.
+                    let has_arguments = m.funcs[g as usize].has_arguments;
+                    let first = if has_arguments { 0 } else { sg.params.len() };
+                    let rest_store = (sg.rest != NO_NODE).then(|| (m.anon_store_site(), first));
+                    // With no spread argument, argument `i` is the rest
+                    // array's index `i - n` (`Model::rest_elem_node`).
+                    let call = &s.calls[*ci].1;
+                    let slot_keys: Vec<Key> = match call.spread.is_empty() && !has_arguments {
+                        true => (first..call.args.len().max(first))
+                            .map(|i| Key::Named(m.atom(&format!("[[Index{}]]", i - first))))
+                            .collect(),
+                        false => Vec::new(),
+                    };
+                    let elem = m.elem_key();
+                    // RULE RP (`gen/ret_param.rs`): the expanded call's
+                    // result is its own argument, not `g`'s result.
+                    let rp = m.funcs[g as usize]
+                        .ret_param
+                        .filter(|_| !m.funcs[g as usize].no_summary)
+                        .map(|i| i as usize);
+                    expand(
+                        &mut s,
+                        *ci,
+                        &sg,
+                        &obs_of(g, m),
+                        &caps,
+                        rest_store,
+                        elem,
+                        &slot_keys,
+                        rp,
+                    );
                     any = true;
                     n += 1;
                 }
             }
             if any {
-                compress(&mut s);
+                compress(&mut s, &m.binding_reads);
                 m.sum.of.insert(f, Rc::new(s));
             }
         }
@@ -154,16 +185,30 @@ pub(super) fn compose(
 /// (and into `g`'s observation parameters `gobs`), missing ones undefined,
 /// spread elements into every parameter, `g`'s result into the call's.
 /// A hidden capture parameter (`caps`) takes its class environment slot,
-/// not the call's argument (DECISIONS 117, 127).
+/// not the call's argument (DECISIONS 117, 127). A spread entry is the
+/// List CreateListFromIterable built (13.3.8.1): it is read at its
+/// elements (`elem`), never at a member of a prototype chain; a rest
+/// array stores its arguments at `elem` too. `ret_param`: `g` returns
+/// that parameter at every completion (RULE RP, `Model::ret_param_into`):
+/// the call's result is the call's argument there (`undefined` when it
+/// passes fewer), unless a spread or a capture slot decides the position.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expand(
     s: &mut Summary,
     ci: usize,
     g: &Summary,
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
+    rest_store: Option<(SiteId, usize)>,
+    elem: Key,
+    slot_keys: &[Key],
+    ret_param: Option<usize>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
+    // Rule M1: what the expansion copies runs where call `ci` does.
+    let reach = s.call_reach.get(ci).copied().unwrap_or(REACH_ALL);
+    let e0 = s.edges.len();
     let tr = |x: NodeId| {
         if is_slot(x) {
             SLOT | (off + (x & !SLOT))
@@ -180,8 +225,8 @@ pub(super) fn expand(
     };
     s.nslots += g.nslots;
     s.orig.extend_from_slice(&g.orig);
-    for (i, t, p) in &g.seeds {
-        s.seeds.push((off + i, t.clone(), *p));
+    for (i, t, p, refuted) in &g.seeds {
+        s.seeds.push((off + i, t.clone(), *p, *refuted));
     }
     for &(a, b) in &g.edges {
         s.edges.push((tr(a), tr(b)));
@@ -229,9 +274,28 @@ pub(super) fn expand(
             } else {
                 if undef == NO_NODE {
                     undef = fresh(s);
-                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF));
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
                 }
                 s.edges.push((undef, d));
+            }
+        }
+    }
+    // The callee run's fresh rest array takes this call's arguments after
+    // the parameters and its spread elements (8.6.3 BindingRestElement).
+    let rest = rest_store.map(|(site, first)| (tr(g.rest), elem, site, first));
+    if let Some((r, key, site, first)) = rest {
+        for i in first..call.args.len() {
+            if call.args[i] != NO_NODE {
+                let key = slot_keys.get(i - first).copied().unwrap_or(key);
+                s.cons.push((
+                    r,
+                    Cons::Store {
+                        key,
+                        src: call.args[i],
+                        site,
+                    },
+                ));
             }
         }
     }
@@ -240,10 +304,20 @@ pub(super) fn expand(
         s.cons.push((
             sp,
             Cons::Load {
-                key: Key::any(),
+                key: elem,
                 dst: elems,
             },
         ));
+        if let Some((r, key, site, _)) = rest {
+            s.cons.push((
+                r,
+                Cons::Store {
+                    key,
+                    src: elems,
+                    site,
+                },
+            ));
+        }
         for (i, ds) in dsts.iter().enumerate() {
             if caps.get(i).copied().flatten().is_some() {
                 continue;
@@ -265,12 +339,12 @@ pub(super) fn expand(
             ThisArg::Node(n) => n,
             ThisArg::Tok(x) => {
                 let n = fresh(s);
-                s.seeds.push((n & !SLOT, vec![x], 0));
+                s.seeds.push((n & !SLOT, vec![x], 0, false));
                 n
             }
             ThisArg::Undef => {
                 let n = fresh(s);
-                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF));
+                s.seeds.push((n & !SLOT, Vec::new(), prim::UNDEF, false));
                 n
             }
         };
@@ -279,218 +353,42 @@ pub(super) fn expand(
         }
     }
     let r = tr(g.ret);
-    if r != NO_NODE && call.ret != NO_NODE {
-        s.edges.push((r, call.ret));
-    }
-}
-
-/// Remove what an instance does not need: relays inside the slice become
-/// direct edges, slots that reach nothing go, and read rules into such
-/// slots go (the observation layer runs them on a superset of tokens).
-pub fn compress(s: &mut Summary) {
-    let n = s.nslots as usize;
-    let sl = |x: NodeId| {
-        if is_slot(x) {
-            Some((x & !SLOT) as usize)
-        } else {
-            None
-        }
-    };
-    let mut pinned = vec![false; n];
-    for &p in s.params.iter().chain([&s.ret, &s.this]) {
-        if let Some(i) = sl(p) {
-            pinned[i] = true;
-        }
-    }
-    // Outer slots are the context's nodes; closure values and their terms
-    // are read when an instance is filled.
-    for &o in &s.outer {
-        pinned[o as usize] = true;
-    }
-    for &(b, _) in &s.births {
-        pinned[b as usize] = true;
-    }
-    for (c, _, terms, _) in &s.closures {
-        pinned[*c as usize] = true;
-        for &x in terms {
-            if let Some(i) = sl(x) {
-                pinned[i] = true;
-            }
-        }
-    }
-    let mut seeded = vec![false; n];
-    for &(i, _, _) in &s.seeds {
-        seeded[i as usize] = true;
-    }
-    // Uses as a rule holder or field, or a call operand.
-    let mut uses = vec![0u32; n];
-    let mut cons: Vec<Option<(NodeId, Cons)>> = s.cons.drain(..).map(Some).collect();
-    for (h, c) in cons.iter().flatten() {
-        for x in std::iter::once(*h).chain(cons_fields(c).0) {
-            if let Some(i) = sl(x) {
-                uses[i] += 1;
-            }
-        }
-    }
-    for (_, cs) in &s.calls {
-        for x in call_nodes(cs) {
-            if let Some(i) = sl(x) {
-                uses[i] += 1;
-            }
-        }
-    }
-    let mut out: Vec<FxHashSet<NodeId>> = vec![FxHashSet::default(); n];
-    let mut inn: Vec<FxHashSet<NodeId>> = vec![FxHashSet::default(); n];
-    let mut abs_edges: FxHashSet<(NodeId, NodeId)> = FxHashSet::default();
-    let add_edge = |a: NodeId,
-                    b: NodeId,
-                    out: &mut Vec<FxHashSet<NodeId>>,
-                    inn: &mut Vec<FxHashSet<NodeId>>,
-                    abs_edges: &mut FxHashSet<(NodeId, NodeId)>| {
-        if a == b {
-            return;
-        }
-        match (sl(a), sl(b)) {
-            (None, None) => {
-                abs_edges.insert((a, b));
-            }
-            (ia, ib) => {
-                if let Some(i) = ia {
-                    out[i].insert(b);
-                }
-                if let Some(j) = ib {
-                    inn[j].insert(a);
+    let rp =
+        ret_param.filter(|&i| call.spread.is_empty() && caps.get(i).copied().flatten().is_none());
+    if call.ret != NO_NODE {
+        match rp {
+            Some(i) if i < call.args.len() => {
+                if call.args[i] != NO_NODE {
+                    s.edges.push((call.args[i], call.ret));
                 }
             }
-        }
-    };
-    for &(a, b) in &s.edges {
-        add_edge(a, b, &mut out, &mut inn, &mut abs_edges);
-    }
-    let mut dead = vec![false; n];
-    let mut changed = true;
-    while changed {
-        changed = false;
-        // (c) read rules into slots that reach nothing.
-        for k in 0..cons.len() {
-            let Some((_, c)) = &cons[k] else { continue };
-            let Some(i) = read_dst(c).and_then(sl) else {
-                continue;
-            };
-            if pinned[i] || !out[i].is_empty() || uses[i] != 1 {
-                continue;
-            }
-            let (h, c) = cons[k].take().unwrap();
-            for x in std::iter::once(h).chain(cons_fields(&c).0) {
-                if let Some(j) = sl(x) {
-                    uses[j] -= 1;
+            Some(_) => {
+                if undef == NO_NODE {
+                    undef = fresh(s);
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
                 }
+                s.edges.push((undef, call.ret));
             }
-            changed = true;
+            None if r != NO_NODE => s.edges.push((r, call.ret)),
+            None => {}
         }
-        for i in 0..n {
-            if dead[i] || pinned[i] || uses[i] != 0 {
-                continue;
-            }
-            if out[i].is_empty() {
-                // (b) reaches nothing.
-                for a in std::mem::take(&mut inn[i]) {
-                    if let Some(j) = sl(a) {
-                        out[j].remove(&(SLOT | i as u32));
+    }
+    if !s.cons_reach.is_empty() || !s.call_reach.is_empty() {
+        s.cons_reach.resize(s.cons.len(), reach);
+        s.call_reach.resize(s.calls.len(), reach);
+        if reach != REACH_ALL {
+            let had: FxHashSet<(NodeId, NodeId)> = s.edges[..e0].iter().copied().collect();
+            for k in e0..s.edges.len() {
+                let e = s.edges[k];
+                match s.edge_reach.get_mut(&e) {
+                    Some(m) => *m |= reach,
+                    None if !had.contains(&e) => {
+                        s.edge_reach.insert(e, reach);
                     }
+                    None => {}
                 }
-                dead[i] = true;
-                changed = true;
-            } else if !seeded[i] && (inn[i].len() <= 1 || out[i].len() == 1) {
-                // (a) a relay: predecessors straight to successors.
-                let ins = std::mem::take(&mut inn[i]);
-                let outs = std::mem::take(&mut out[i]);
-                let me = SLOT | i as u32;
-                for &a in &ins {
-                    if let Some(j) = sl(a) {
-                        out[j].remove(&me);
-                    }
-                }
-                for &b in &outs {
-                    if let Some(j) = sl(b) {
-                        inn[j].remove(&me);
-                    }
-                }
-                for &a in &ins {
-                    for &b in &outs {
-                        add_edge(a, b, &mut out, &mut inn, &mut abs_edges);
-                    }
-                }
-                dead[i] = true;
-                changed = true;
             }
         }
     }
-    // Renumber the live slots.
-    let mut map = vec![u32::MAX; n];
-    let mut orig = Vec::new();
-    for i in 0..n {
-        if !dead[i] {
-            map[i] = orig.len() as u32;
-            orig.push(s.orig[i]);
-        }
-    }
-    let rn = |x: NodeId| match sl(x) {
-        Some(i) if map[i] != u32::MAX => SLOT | map[i],
-        Some(_) => NO_NODE,
-        None => x,
-    };
-    let mut edges: Vec<(NodeId, NodeId)> = Vec::new();
-    for i in 0..n {
-        if dead[i] {
-            continue;
-        }
-        let mut v: Vec<NodeId> = out[i].iter().copied().collect();
-        v.sort_unstable();
-        for b in v {
-            edges.push((rn(SLOT | i as u32), rn(b)));
-        }
-        let mut v: Vec<NodeId> = inn[i]
-            .iter()
-            .copied()
-            .filter(|&a| sl(a).is_none())
-            .collect();
-        v.sort_unstable();
-        for a in v {
-            edges.push((a, rn(SLOT | i as u32)));
-        }
-    }
-    let mut ae: Vec<_> = abs_edges.into_iter().collect();
-    ae.sort_unstable();
-    edges.extend(ae);
-    s.edges = edges;
-    s.cons = cons
-        .into_iter()
-        .flatten()
-        .map(|(h, c)| (rn(h), map_cons(&c, rn, |k| k)))
-        .collect();
-    for (_, cs) in s.calls.iter_mut() {
-        *cs = map_call(cs, rn);
-    }
-    s.seeds = s
-        .seeds
-        .drain(..)
-        .filter(|(i, _, _)| !dead[*i as usize])
-        .map(|(i, t, p)| (map[i as usize], t, p))
-        .collect();
-    s.params = s.params.iter().map(|&p| rn(p)).collect();
-    s.ret = rn(s.ret);
-    s.this = rn(s.this);
-    s.outer = s.outer.iter().map(|&o| map[o as usize]).collect();
-    for (b, _) in s.births.iter_mut() {
-        *b = map[*b as usize];
-    }
-    for (c, _, terms, _) in s.closures.iter_mut() {
-        *c = map[*c as usize];
-        for x in terms.iter_mut() {
-            *x = rn(*x);
-        }
-    }
-    s.nslots = orig.len() as u32;
-    s.orig = orig;
 }

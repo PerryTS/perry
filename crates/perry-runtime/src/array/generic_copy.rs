@@ -1,6 +1,6 @@
 //! The spec-generic bodies of the `Array.prototype` methods that build a new
 //! array from an arbitrary array-like receiver: `flatMap`, `toReversed`,
-//! `toSorted` and `with`.
+//! `toSorted`, `toSpliced` and `with`.
 //!
 //! The dense-array bodies (`js_array_flatMap`, `js_array_to_reversed`, ...)
 //! read an `ArrayHeader`'s elements directly. A receiver that is not an Array
@@ -94,6 +94,67 @@ pub extern "C" fn js_arraylike_with(recv: f64, index: f64, value: f64) -> f64 {
         } else {
             al_get(recv_h.get_nanbox_f64(), k)
         };
+        push_rooted(&result, v);
+    }
+    result.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)
+}
+
+/// `ToIntegerOrInfinity(value)` relative to `len`, clamped to `[0, len]`: the
+/// `relativeStart` step of `toSpliced` / `splice`.
+fn relative_index(value: f64, len: i64) -> i64 {
+    let rel = crate::builtins::js_number_coerce(value);
+    let rel = if rel.is_nan() { 0.0 } else { rel.trunc() };
+    if rel < 0.0 {
+        (len as f64 + rel).max(0.0) as i64
+    } else {
+        rel.min(len as f64) as i64
+    }
+}
+
+/// `Array.prototype.toSpliced(start, skipCount, ...items)` over an array-like
+/// receiver (§23.1.3.35): every kept index is `Get` (holes become
+/// `undefined`), the result is always a plain Array (no species), and the
+/// arguments convert in order (`start`, then `skipCount`) before any read.
+pub(super) fn js_arraylike_toSpliced(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let args: Vec<f64> = (0..args_len)
+        .map(|i| super::generic_object::arg_at(args_ptr, args_len, i))
+        .collect();
+    let args_h = scope.root_nanbox_f64_slice(&args);
+    let recv_h = scope.root_nanbox_f64(to_object(recv));
+    let len = al_length(recv_h.get_nanbox_f64());
+    let start = if args_len > 0 {
+        relative_index(args_h[0].get_nanbox_f64(), len)
+    } else {
+        0
+    };
+    let skip = match args_len {
+        0 => 0,
+        1 => len - start,
+        _ => {
+            let sc = crate::builtins::js_number_coerce(args_h[1].get_nanbox_f64());
+            let sc = if sc.is_nan() { 0.0 } else { sc.trunc() };
+            sc.max(0.0).min((len - start) as f64) as i64
+        }
+    };
+    let insert = args_len.saturating_sub(2) as i64;
+    let new_len = len + insert - skip;
+    if new_len > 9_007_199_254_740_991 {
+        crate::collection_iter::throw_type_error("Invalid array length");
+    }
+    if new_len > u32::MAX as i64 {
+        crate::array::array_length_range_error();
+    }
+    let result = scope.root_raw_mut_ptr(js_array_alloc(new_len as u32));
+    for k in 0..start {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
+        push_rooted(&result, v);
+    }
+    for item in args_h.iter().skip(2) {
+        push_rooted(&result, item.get_nanbox_f64());
+    }
+    for k in start + skip..len {
+        let v = al_get(recv_h.get_nanbox_f64(), k);
         push_rooted(&result, v);
     }
     result.with_mut_ptr::<ArrayHeader, _>(nanbox_arr)

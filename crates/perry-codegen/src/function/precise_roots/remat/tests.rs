@@ -274,6 +274,7 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,

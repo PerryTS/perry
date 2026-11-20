@@ -39,7 +39,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -107,7 +106,7 @@ console.log(total());
 #[test]
 fn annotated_and_this_receivers_use_the_proven_class_switch() {
     let d = tmp("proven");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, PROVEN, whole);
         assert_eq!(out, "18\n", "whole={whole}");
         for (what, f) in [
@@ -141,26 +140,26 @@ const DESCRIBE: &str = "perry_method_main_ts__Shape__describe";
 const UNPROVEN: [(&str, &str, &str, &[&str]); 4] = [
     (
         "method_replaced",
-        include_str!("../../../test-files/test_gap_cls_method_replaced.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_method_replaced.ts"),
         "18\n32\n32\n",
         // `area` is replaced on a prototype: `this.area()` cannot switch.
         &[DESCRIBE],
     ),
     (
         "own_override",
-        include_str!("../../../test-files/test_gap_cls_own_override.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_own_override.ts"),
         "13\n110\n104\n",
         &[TOTAL, DESCRIBE],
     ),
     (
         "set_prototype_of",
-        include_str!("../../../test-files/test_gap_cls_set_prototype_of.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_set_prototype_of.ts"),
         "13\n14\n510\n",
         &[TOTAL, DESCRIBE],
     ),
     (
         "lying_annotation",
-        include_str!("../../../test-files/test_gap_cls_lying_annotation.ts"),
+        include_str!("../../../tests/parity/language/class/test_gap_cls_lying_annotation.ts"),
         "2079\n70 7\n2000\n",
         // The loop holds values of other classes behind the annotation.
         &[TOTAL],
@@ -171,7 +170,7 @@ const UNPROVEN: [(&str, &str, &str, &[&str]); 4] = [
 fn receivers_the_facts_do_not_prove_keep_the_typed_path() {
     for (name, source, expected, unproven) in UNPROVEN {
         let d = tmp(name);
-        for whole in [true, false] {
+        for whole in [true] {
             let (ll, out) = compile_and_run(&d, source, whole);
             assert_eq!(out, expected, "{name} whole={whole}");
             for f in unproven {

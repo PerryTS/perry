@@ -275,10 +275,10 @@ tiers](../testing/ci-tiers.md). The full tier is:
   `cargo test --workspace`, the gap suite, `gc-stress`, Windows x64 + ARM64 builds,
   compiler-output gates, `repsel-census`, `harmonyos-smoke`, `security-audit`),
   plus `binary-size` and
-- `parity` — every case of `test-files/` and `test-parity/node-suite/` in
-  auto-optimize mode must match `test-parity/snapshots/linux-auto/` in both
+- `parity` — every case of `tests/fixtures/programs/` and `tests/parity/node-suite/` in
+  auto-optimize mode must match `tests/parity/snapshots/linux-auto/` in both
   directions
-- `compile-smoke` — must compile every file under `test-files/`, plus the UI
+- `compile-smoke` — must compile every file under `tests/fixtures/programs/`, plus the UI
   styling matrix, Fastify integration and memory-stability tests
 - `doc-tests` (macOS + Windows) — must compile + run every example under
   `docs/examples/`
@@ -345,3 +345,7 @@ a release has been cut is not something a PR author can fix.
   the legacy release-packages distribution legs, dispatch it with
   `existing_tag=vX.Y.Z`; add `publish_npm=true` only when the idempotent npm leg
   itself also needs retrying.
+- **Release assets missing after npm published**: dispatch release-packages with
+  `existing_tag=vX.Y.Z` and `assets_from_run=<run id>` naming the completed
+  release-packages run at that tag. It rebuilds nothing, skips npm, and attaches
+  only the package tarballs whose bytes match the public npm SHA-1.

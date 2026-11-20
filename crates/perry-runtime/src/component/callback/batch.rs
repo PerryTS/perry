@@ -148,8 +148,7 @@ impl<'a> InvocationFrame<'a> {
         Self {
             frame: Frame {
                 owner: FrameValue::Row(slot(0)),
-                error: FrameValue::Row(slot(1)),
-                threw: Cell::new(false),
+                error: super::FrameError::new(FrameValue::Row(slot(1))),
             },
             snapshot: slot(2),
             metadata: slot(3),
@@ -167,7 +166,7 @@ impl<'a> InvocationFrame<'a> {
         }
     }
 
-    pub fn run(&self, completion: impl FnOnce() -> f64) -> Result<f64, f64> {
+    pub fn run(&self, completion: impl FnOnce() -> f64) -> Result<f64, crate::exception::Caught> {
         let metadata = JSValue::from_bits(self.metadata.get_nanbox_f64().to_bits());
         let ids = AsyncResourceIds {
             async_id: if metadata.is_undefined() {
@@ -183,12 +182,18 @@ impl<'a> InvocationFrame<'a> {
     /// Retirement must still execute when a before hook throws. Restore the
     /// saved ALS context without calling that hook again, then restore the
     /// caller context even when a destructor throws.
-    pub fn run_cleanup(&self, completion: impl FnOnce() -> f64) -> Result<f64, f64> {
+    pub fn run_cleanup(
+        &self,
+        completion: impl FnOnce() -> f64,
+    ) -> Result<f64, crate::exception::Caught> {
         let scope = RuntimeHandleScope::new();
         let previous = scope.root_raw_mut_ptr(als::alloc_snapshot_holder(als::capture_context()));
         drop(als::enter_context(&self.context()));
-        let outcome = crate::exception::catch_js_throw(completion);
-        let value = scope.root_nanbox_f64(outcome.unwrap_or_else(|error| error));
+        let outcome = crate::exception::catch_thrown(completion);
+        let value = match outcome {
+            Ok(value) => Ok(scope.root_nanbox_f64(value)),
+            Err(error) => Err(error.root(&scope)),
+        };
         unsafe {
             als::restore_context(
                 (*previous.get_raw_mut_ptr::<als::AsyncSnapshotHolder>())
@@ -196,10 +201,9 @@ impl<'a> InvocationFrame<'a> {
                     .clone(),
             );
         }
-        if outcome.is_err() {
-            Err(value.get_nanbox_f64())
-        } else {
-            Ok(value.get_nanbox_f64())
+        match value {
+            Err(error) => Err(error.caught()),
+            Ok(value) => Ok(value.get_nanbox_f64()),
         }
     }
 }

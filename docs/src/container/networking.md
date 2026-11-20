@@ -145,9 +145,9 @@ Common per-network knobs you'll want for production:
 
 ## See also
 
-- [Compose orchestration](./compose.md) — full `up()` / `down()`
+- [Compose orchestration](compose.md) — full `up()` / `down()`
   reference.
-- [Production patterns](./production-patterns.md) — Forgejo example
+- [Production patterns](production-patterns.md) — Forgejo example
   uses the internal-db-net + public-web-net split.
-- [Volumes](./volumes.md) — companion concept: networks without
+- [Volumes](volumes.md) — companion concept: networks without
   volumes is rare in production stacks.

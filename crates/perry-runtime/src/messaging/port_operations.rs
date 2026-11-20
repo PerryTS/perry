@@ -101,8 +101,7 @@ fn dispatch_validated(
 
 fn invalid_receiver() -> ! {
     let message = key("Illegal invocation");
-    let error = crate::error::js_typeerror_new(message);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(message))
 }
 
 /// Read the message and optional transfer list without padding away absence.

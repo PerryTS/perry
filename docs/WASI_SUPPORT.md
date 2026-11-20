@@ -335,9 +335,11 @@ command smoke, acceptance and pinned-Node comparison suites for core PRs and
 in the sweep/full tiers. It builds the compiler and WASI runtime from the same
 revision and feeds the required `pr-gate`; a planned job that is skipped,
 missing, cancelled or failed makes that gate fail. Docs-only PRs skip execution.
-The same job also runs both typed-component harnesses, including resource
-lifetimes, moving GC and Rust/Perry composition, and retains their execution
-evidence. The command-profile promotion uses the demonstrated Linux baseline
+A parallel `wasi-components` job runs both typed-component harnesses,
+including resource lifetimes, moving GC and Rust/Perry composition, and
+retains their execution evidence; `wasi-native` runs the `target-wasi` unit
+tests, `wasi-component-units` the component-model unit tests, and
+`wasi-execution-p1` the preview 1 suites. The gate requires all five. The command-profile promotion uses the demonstrated Linux baseline
 in run39574495557; component qualification is recorded separately in
 [WASI_COMPONENTS.md](WASI_COMPONENTS.md).
 The baseline repair landed in [PR #12931](https://github.com/PerryTS/perry/pull/12931);
@@ -393,7 +395,7 @@ and `PERRY_GC_VERIFY_EVACUATION=1` in the guest environment.
 Harness and ABI checks:
 
 ```powershell
-python scripts/test_wasi_run.py
+python tests/tooling/infrastructure/test_wasi_run.py
 python scripts/runtime_abi_check.py --self-test
 python scripts/runtime_abi_check.py --check-wasm-abi
 python -X utf8 scripts/check_actions_topology.py

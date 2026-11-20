@@ -21,6 +21,8 @@ struct Endpoint {
     owner: Owner,
     inbox: VecDeque<SerializedValue>,
     worker: Option<(AgentId, u64)>,
+    dispatch_depth: usize,
+    closing: bool,
 }
 #[derive(Default)]
 struct Transport {
@@ -47,6 +49,9 @@ pub fn route_worker(lease: Lease, worker_id: u64) {
 fn matches(endpoint: &Endpoint, lease: Lease) -> bool {
     endpoint.generation == lease.generation && endpoint.owner == Owner::Agent(lease.agent)
 }
+fn open(endpoint: &Endpoint, lease: Lease) -> bool {
+    matches(endpoint, lease) && !endpoint.closing
+}
 pub fn pair() -> (Lease, Lease) {
     static REGISTER: std::sync::Once = std::sync::Once::new();
     REGISTER.call_once(|| crate::agent::register_retire_hook(retire));
@@ -64,6 +69,8 @@ pub fn pair() -> (Lease, Lease) {
                 owner: Owner::Agent(agent),
                 inbox: VecDeque::new(),
                 worker: None,
+                dispatch_depth: 0,
+                closing: false,
             },
         );
     }
@@ -87,7 +94,7 @@ pub fn alive(lease: Lease) -> bool {
             .unwrap()
             .endpoints
             .get(&lease.endpoint)
-            .is_some_and(|endpoint| matches(endpoint, lease))
+            .is_some_and(|endpoint| open(endpoint, lease))
 }
 pub fn closed(lease: Lease) -> bool {
     let table = TRANSPORT.lock().unwrap();
@@ -136,7 +143,7 @@ pub fn send(lease: Lease, message: SerializedValue) -> bool {
         let peer = table
             .endpoints
             .get(&lease.endpoint)
-            .filter(|endpoint| matches(endpoint, lease))
+            .filter(|endpoint| open(endpoint, lease))
             .map(|endpoint| endpoint.peer);
         let peer = peer.filter(|id| {
             lost = matches!(message.as_ref(), Some(SerializedValue::Message { data, .. })
@@ -179,16 +186,58 @@ pub fn enqueue(lease: Lease, message: SerializedValue) {
 pub fn close(lease: Lease) {
     let removed = {
         let mut table = TRANSPORT.lock().unwrap();
-        if !table
+        let Some(endpoint) = table
             .endpoints
-            .get(&lease.endpoint)
-            .is_some_and(|endpoint| matches(endpoint, lease))
-        {
+            .get_mut(&lease.endpoint)
+            .filter(|endpoint| matches(endpoint, lease))
+        else {
+            return;
+        };
+        if endpoint.dispatch_depth != 0 {
+            endpoint.closing = true;
             return;
         }
         remove_pair(&mut table, lease.endpoint)
     };
     dispose(removed);
+}
+
+/// A closing dispatch retains its inbox, but cannot send or transfer its lease.
+pub struct DispatchGuard(Lease);
+
+pub fn begin_dispatch(lease: Lease) -> Option<DispatchGuard> {
+    if lease.agent != current_agent() {
+        return None;
+    }
+    let mut table = TRANSPORT.lock().unwrap();
+    let endpoint = table.endpoints.get_mut(&lease.endpoint)?;
+    if !open(endpoint, lease) {
+        return None;
+    }
+    endpoint.dispatch_depth += 1;
+    Some(DispatchGuard(lease))
+}
+
+impl Drop for DispatchGuard {
+    fn drop(&mut self) {
+        let removed = {
+            let mut table = TRANSPORT.lock().unwrap();
+            let Some(endpoint) = table
+                .endpoints
+                .get_mut(&self.0.endpoint)
+                .filter(|endpoint| matches(endpoint, self.0))
+            else {
+                return;
+            };
+            endpoint.dispatch_depth -= 1;
+            if endpoint.closing && endpoint.dispatch_depth == 0 {
+                remove_pair(&mut table, self.0.endpoint)
+            } else {
+                Vec::new()
+            }
+        };
+        dispose(removed);
+    }
 }
 fn remove_pair(table: &mut Transport, id: u64) -> Vec<Endpoint> {
     let mut removed = Vec::new();
@@ -267,12 +316,12 @@ pub fn commit(leases: &[Lease], source: Option<Lease>) -> Result<Vec<Arc<Ticket>
         !table
             .endpoints
             .get(&lease.endpoint)
-            .is_some_and(|endpoint| matches(endpoint, lease))
+            .is_some_and(|endpoint| open(endpoint, lease))
     }) || leases.iter().any(|lease| {
         !table
             .endpoints
             .get(&lease.endpoint)
-            .is_some_and(|endpoint| matches(endpoint, *lease))
+            .is_some_and(|endpoint| open(endpoint, *lease))
     }) {
         return Err("Cannot clone object of unsupported type.".into());
     }
@@ -280,6 +329,7 @@ pub fn commit(leases: &[Lease], source: Option<Lease>) -> Result<Vec<Arc<Ticket>
         .iter()
         .map(|lease| {
             let endpoint = table.endpoints.get_mut(&lease.endpoint).unwrap();
+            endpoint.dispatch_depth = 0;
             endpoint.generation += 1;
             endpoint.owner = Owner::Transit;
             Arc::new(Ticket {

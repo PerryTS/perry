@@ -1,5 +1,44 @@
 use super::*;
 
+#[test]
+fn callable_workers_preserve_fixed_generator_controls() {
+    let mut source = String::new();
+    for i in 0..16 {
+        source.push_str(&format!("const pad{i} = (x: any) => x;\n"));
+    }
+    source.push_str("const gen = function* () { yield 1; yield 2; };\n");
+    for i in 16..63 {
+        source.push_str(&format!("const pad{i} = (x: any) => x;\n"));
+    }
+    source.push_str("console.log(gen().next().value);\n");
+    let ast = perry_parser::parse_typescript(&source, "generator-workers.ts").unwrap();
+    let mut hir =
+        perry_hir::lower_module(&ast, "generator-workers", "generator-workers.ts").unwrap();
+    perry_transform::transform_generators_without_private_frames(&mut hir);
+    // Four workers split 65 closures into chunks of 17. The wrapper is the
+    // last closure in the first chunk; its resume body starts the next one.
+    assert_eq!(
+        perry_hir::emitted_closures::emitted_closures(&hir).len(),
+        65
+    );
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(String::from_utf8_lossy(&serial).contains("fptosi double"));
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
+}
+
 fn module() -> perry_hir::Module {
     let mut source =
         String::from("const shared = 'shared'; const proto = { method() { return 'ok'; } };\n");
@@ -53,6 +92,91 @@ fn callable_workers_preserve_serial_ir() {
     );
     assert!(text.contains(".str."), "literal relocation must be live");
     assert!(!text.contains("__perry_callable_site_"));
+}
+
+/// Dead-body removal reads the module's body classifications while each
+/// body is lowered. A worker must see them too: whether a module lowers in
+/// parallel depends on the free CPU slots at that moment, so without them
+/// the same compile emits an inactive body as a trap or in full.
+#[test]
+fn callable_workers_keep_dead_body_removal() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::verify_facts::DCE_FOR_TESTS.with(|d| d.set(false));
+        }
+    }
+    crate::verify_facts::DCE_FOR_TESTS.with(|d| d.set(true));
+    let _restore = Restore;
+    let hir = module();
+    let bodies: std::collections::BTreeMap<(u32, String), bool> = hir
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ((f.id, String::new()), i % 2 == 0))
+        .collect();
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    program_facts: crate::codegen::ProgramFactsView {
+                        verification_bodies: Some(std::sync::Arc::new(bodies.clone())),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(
+        String::from_utf8_lossy(&serial).contains("llvm.trap"),
+        "an inactive body must trap"
+    );
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
+}
+
+/// A constructor's `this[key] = v` store reads the module's constructor-layout
+/// plans while its body is lowered. A worker must see them too, or it emits
+/// the generic store where the serial loop emits the family store.
+#[test]
+fn callable_workers_keep_constructor_layout_stores() {
+    let mut source = String::from(
+        "const a = Symbol('a'), b = Symbol('b');\n\
+         const F = function (this: any, n: any) { this.x = n; this[a] = n; this[b] = 'q'; this.z = 1; };\n\
+         function mk(k: symbol) { return function H(this: any) { this.first = 1; this[k] = 2; this.last = 3; }; }\n",
+    );
+    for i in 0..72 {
+        source.push_str(&format!(
+            "const pc{i} = function (x: any) {{ return '' + x + '{i}'; }};\n"
+        ));
+    }
+    source.push_str("console.log(new (F as any)(1)[a], new (mk(b) as any)()[b], pc0(0));");
+    let parsed = perry_parser::parse_typescript(&source, "callable-plans.ts").unwrap();
+    let hir = perry_hir::lower_module(&parsed, "callable-plans", "callable-plans.ts").unwrap();
+    let compile = |jobs| {
+        with_jobs(jobs, || {
+            crate::compile_module(
+                &hir,
+                crate::CompileOptions {
+                    emit_ir_only: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        })
+    };
+    let serial = compile(1);
+    assert!(
+        String::from_utf8_lossy(&serial).contains("call double @perry_function_family_symbol_set"),
+        "the family store must be live"
+    );
+    assert_same(&serial, &compile(4));
+    assert_same(&serial, &compile(3));
 }
 
 #[test]

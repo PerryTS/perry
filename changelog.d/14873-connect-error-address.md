@@ -1,0 +1,1 @@
+A refused `net` connect now names the address it tried, as Node does: the error message reads `connect ECONNREFUSED 127.0.0.1:27017` and the error carries `address` and `port`. mongodb's server-selection error, which repeats this message, now matches Node (#11043).

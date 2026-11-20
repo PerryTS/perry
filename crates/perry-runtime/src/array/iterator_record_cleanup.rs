@@ -40,19 +40,13 @@ pub unsafe extern "C-unwind" fn js_array_record_abrupt(
 ) -> ! {
     let scope = crate::gc::RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
-    let error = scope.root_nanbox_f64(crate::exception::js_get_exception());
+    let error = crate::exception::pending_exception().root(&scope);
     crate::exception::js_clear_exception();
-    let error = if state != 2.0 {
-        js_array_record_finish(
-            receiver.get_nanbox_f64(),
-            index,
-            error.get_nanbox_f64(),
-            flags | 4,
-        )
-    } else {
-        error.get_nanbox_f64()
-    };
-    crate::exception::js_throw(error)
+    if state != 2.0 {
+        // Throw completion takes precedence over IteratorClose's own outcome.
+        let _ = js_array_record_finish(receiver.get_nanbox_f64(), index, error.value(), flags | 4);
+    }
+    crate::exception::rethrow_caught(error.caught())
 }
 
 #[cfg(feature = "keepalive-anchors")]

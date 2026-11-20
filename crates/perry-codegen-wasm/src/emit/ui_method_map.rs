@@ -47,7 +47,8 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         }
         "setForeground" | "set_foreground" | "textSetColor" => "perry_ui_set_foreground",
         "setFontSize" | "set_font_size" | "textSetFontSize" => "perry_ui_set_font_size",
-        "setFontWeight" | "set_font_weight" | "textSetFontWeight" => "perry_ui_set_font_weight",
+        "setFontWeight" | "set_font_weight" => "perry_ui_set_font_weight",
+        "textSetFontWeight" => "perry_ui_text_set_font_weight",
         "setFontFamily" | "set_font_family" | "textSetFontFamily" => "perry_ui_set_font_family",
         "textSetLetterSpacing" => "perry_ui_text_set_letter_spacing",
         "textSetLineHeight" => "perry_ui_text_set_line_height",
@@ -153,6 +154,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "textfieldGetSelectionStart" => "perry_ui_textfield_get_selection_start",
         "textfieldGetSelectionEnd" => "perry_ui_textfield_get_selection_end",
         "textfieldSetString" => "perry_ui_textfield_set_string",
+        "textfieldSetInputType" => "perry_ui_textfield_set_input_type",
         "textfieldGetString" => "perry_ui_textfield_get_string",
         "textfieldBlurAll" => "perry_ui_textfield_blur_all",
         "textfieldSetOnSubmit" => "perry_ui_textfield_set_on_submit",

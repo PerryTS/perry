@@ -113,11 +113,13 @@ pub(crate) fn emit_driver(
                         body: vec![],
                     }),
                     finally: None,
+                    forof_completion: None,
                 }],
                 else_branch: Some(close),
             }],
             else_branch: None,
         }]),
+        forof_completion: None,
     });
 }
 

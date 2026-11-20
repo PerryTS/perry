@@ -5,7 +5,7 @@
 //! program output would stay green if the fast path silently stopped
 //! applying — CLAUDE.md's fourth way a gate can be unable to fail. Behaviour
 //! is covered separately by the `.ts` semantics matrix
-//! (`test-parity/language/map/test_gap_map_view_for_of.ts`, byte-compared against node).
+//! (`tests/parity/language/map/test_gap_map_view_for_of.ts`, byte-compared against node).
 //!
 //! The verdict is read off the lowered HIR: the Map/Set index fast path emits
 //! `MapEntryKeyAt` / `MapEntryValueAt` / `SetValueAt` reads, the generic
@@ -270,6 +270,7 @@ fn method_map_destructuring_preserves_key_and_value_types() {
                     body,
                     catch,
                     finally,
+                    ..
                 } => binding_type(body, wanted)
                     .or_else(|| catch.as_ref().and_then(|c| binding_type(&c.body, wanted)))
                     .or_else(|| finally.as_deref().and_then(|s| binding_type(s, wanted))),

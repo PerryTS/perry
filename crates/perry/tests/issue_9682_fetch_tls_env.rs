@@ -40,7 +40,7 @@ impl Drop for TlsServer {
 }
 
 fn start_tls_server(workspace: &Path) -> TlsServer {
-    let key = workspace.join("test-parity/node-suite/tls/fixtures/localhost-key.pem");
+    let key = workspace.join("tests/parity/node-suite/tls/fixtures/localhost-key.pem");
     let certificate = workspace.join("crates/perry/tests/fixtures/issue_9682-leaf-cert.pem");
     let script = r#"
 const fs = require("node:fs");
@@ -179,7 +179,7 @@ fn run_case(binary: &Path, url: &str, environment: Option<(&str, &std::ffi::OsSt
 #[test]
 fn fetch_and_https_share_node_tls_environment() {
     let workspace = workspace_root();
-    let ca = workspace.join("test-parity/node-suite/tls/fixtures/localhost-cert.pem");
+    let ca = workspace.join("tests/parity/node-suite/tls/fixtures/localhost-cert.pem");
     let server = start_tls_server(&workspace);
     let url = format!("https://127.0.0.1:{}/", server.port);
     let dir = tempfile::tempdir().expect("tempdir");

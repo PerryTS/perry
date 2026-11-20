@@ -1,0 +1,1 @@
+Reduce compiler whole-program facts solver memory by addressing pending deliveries with successor-prefix boundaries and storing only pending events in a shared paged work queue. Facts and deterministic delivery work remain unchanged.

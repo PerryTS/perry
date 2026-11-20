@@ -6,6 +6,7 @@
 //! class dispatch and native constructor brand/prototype dispatch.
 
 use super::*;
+use crate::object::overflow::home::ObjHome;
 
 #[derive(Clone, Copy)]
 enum RhsKind {
@@ -83,6 +84,16 @@ impl InstanceofRhs {
 
 #[no_mangle]
 pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
+    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // A typed array against the realm's typed-array constructor, answered from
+    // structure before any other classification (none of which concerns them).
+    if let Some(matched) = unsafe { typed_array_instanceof_front(value, type_ref) } {
+        return f64::from_bits(if matched {
+            crate::value::TAG_TRUE
+        } else {
+            TAG_FALSE
+        });
+    }
     // Proxy ids are registry handles, not closure headers. Resolve their
     // observable @@hasInstance/prototype reads before any constructor probe
     // or unwrapping of the left operand (#10364).
@@ -90,7 +101,18 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     if matches!(rhs.kind, RhsKind::Proxy) {
         return super::proxy_rhs::proxy_instanceof(value, type_ref);
     }
-    const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+    // The realm's typed-array constructor whose `@@hasInstance` is the default
+    // one: OrdinaryHasInstance from structure, before every probe below (none
+    // of which concerns this constructor).
+    if let (RhsKind::Native, Some((closure, info))) = (rhs.kind, rhs.closure) {
+        if let Some(matched) = unsafe { typed_array_constructor_instanceof(value, closure, info) } {
+            return f64::from_bits(if matched {
+                crate::value::TAG_TRUE
+            } else {
+                TAG_FALSE
+            });
+        }
+    }
     // `proxy instanceof C` uses the proxy's `[[GetPrototypeOf]]`, which (absent a
     // trap) forwards to the target — so it is equivalent to `target instanceof
     // C`. The proxy itself is a small registered id with no class chain, so
@@ -114,19 +136,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
     // its intrinsic one: a linked function's `@@hasInstance` is GetMethod's
     // full [[Get]] over its chain (the intrinsic thunk, reached, answers the
     // same ordinary walk).
-    let linked = rhs
-        .closure
-        .is_some_and(|(closure, _)| unsafe { linked_chain_may_hook(closure) });
+    let linked = rhs.closure.is_some_and(|(closure, _)| unsafe {
+        linked_chain_may_hook(
+            closure,
+            crate::symbol::well_known_symbol("hasInstance") as usize,
+        )
+    });
     let symbols_absent = !linked
         && rhs.closure.is_some_and(|(closure, _)| unsafe {
-            let bag = (*closure).props;
-            bag.is_null()
-                || !crate::object::overflow::shadowed(bag)
-                    && crate::object::shapes::object_shape_record(bag).is_some_and(|record| {
-                        // A legacy dictionary can have an ordinary keyless shape;
-                        // its private key list carries no immutable absence proof.
-                        record.keys() != 0 && record.proves_no_symbols()
-                    })
+            crate::closure::props::proves_no_symbols(closure as usize)
         });
     if !symbols_absent {
         let hi_sym = crate::symbol::well_known_symbol("hasInstance");
@@ -138,12 +156,10 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // admission. Class immediates and other representations retain
             // their ordinary symbol query.
             let owns_hook = if let Some((closure, _)) = rhs.closure {
-                let bag = unsafe { (*closure).props };
                 linked
-                    || !bag.is_null()
-                        && unsafe {
-                            super::shaped_symbols::position(bag, hi_sym as usize).is_some()
-                        }
+                    || unsafe {
+                        crate::closure::props::owns_symbol(closure as usize, hi_sym as usize)
+                    }
             } else {
                 unsafe { crate::symbol::js_object_has_own_symbol(type_ref, hi_f64) }
             };
@@ -270,6 +286,17 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 TAG_FALSE
             });
         }
+        // A class function object had its `@@hasInstance` resolved above on
+        // its actual chain (`linked_chain_may_hook`, then the complete read).
+        // A class-ref immediate had only its own keys asked.
+        if rhs.closure.is_some() {
+            return super::static_dispatch::instanceof_class_resolved(
+                value,
+                class_id,
+                primitive,
+                lhs_non_proxy,
+            );
+        }
         return super::static_dispatch::instanceof_classified(
             value,
             class_id,
@@ -306,16 +333,12 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             // `class X extends Temporal.<Type>` instance: a plain heap object whose
             // [[Prototype]] chain reaches `Temporal.<Type>.prototype`. It carries
             // the brand via a stashed cell rather than the Temporal-cell tag, so
-            // recover that cell and compare its kind. The receiver reaches here both
-            // NaN-boxed (top16 == 0x7FFD) and as a raw-I64 heap pointer (top16 == 0,
-            // how module-level object vars are stored) — accept both. (#5587)
+            // recover that cell and compare its kind. (#5587)
             {
                 let bits = value.to_bits();
                 let top16 = bits >> 48;
                 let raw = if top16 == 0x7FFD {
                     (bits & crate::value::POINTER_MASK) as usize
-                } else if top16 == 0 {
-                    bits as usize
                 } else {
                     0
                 };
@@ -345,6 +368,15 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         use super::super::global_this_tables::BuiltinInstanceIdentity;
         let matched = match declaration.instance_identity {
             Some(BuiltinInstanceIdentity::Class(class_id)) => {
+                if let Some(matched) = unsafe {
+                    crate::object::typed_array_chain::typed_array_has_instance(value, class_id)
+                } {
+                    return f64::from_bits(if matched {
+                        crate::value::TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    });
+                }
                 return super::static_dispatch::native_with_constructor(
                     value,
                     class_id,
@@ -698,19 +730,136 @@ mod tests {
     }
 }
 
-/// Can the chain a linked function `closure` names supply an `@@hasInstance`
-/// other than `%Function.prototype%`'s default? Walks the hops before that
-/// default (or null): each must prove it owns no symbol key from its shape.
-/// `false` for a function on its intrinsic chain, or one whose linked chain
-/// proves absence hop by hop (a builtin constructor linked to its parent).
+/// `value instanceof C` for `C` the realm's typed-array constructor `closure`
+/// (its intrinsic body and identity, `declaration_of_constructor`), when
+/// GetMethod(C, @@hasInstance) is `%Function.prototype%`'s
+/// (`Function.prototype[@@hasInstance]` is neither writable nor
+/// configurable): `C` owns no `@@hasInstance` and no hop of its linked chain
+/// before `%Function.prototype%` does. That method is OrdinaryHasInstance(C,
+/// value), and `C.prototype` (neither writable nor configurable) is its kind's
+/// intrinsic prototype: `typed_array_chain::typed_array_constructor_has_instance`
+/// answers it from structure. `None` for every other case.
 ///
 /// # Safety
-/// `closure` is a proven, live closure cell.
-unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -> bool {
+/// `closure` is a live closure cell and `info` its admitted info.
+unsafe fn typed_array_constructor_instanceof(
+    value: f64,
+    closure: *const crate::closure::ClosureHeader,
+    info: &'static crate::closure::JsFunctionInfo,
+) -> Option<bool> {
+    use super::super::global_this_tables::BuiltinInstanceIdentity;
+    let declaration = super::super::global_this_tables::declaration_of_constructor(closure, info)?;
+    let Some(BuiltinInstanceIdentity::Class(class_id)) = declaration.instance_identity else {
+        return None;
+    };
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    let hi_sym = crate::symbol::well_known_symbol("hasInstance") as usize;
+    if hi_sym == 0 || !bag_lacks_symbol((*closure).props, hi_sym) {
+        return None;
+    }
+    if linked_chain_may_hook(closure, hi_sym) {
+        return None;
+    }
+    crate::object::typed_array_chain::typed_array_constructor_has_instance(value, class_id)
+}
+
+/// Does the property bag `bag` (null: none) own no `hi_sym` key? From its
+/// shape (no symbol key at all) or its key list (no entry for that symbol).
+///
+/// # Safety
+/// `bag` is null or a live `GC_TYPE_OBJECT` cell.
+#[inline]
+unsafe fn bag_lacks_symbol(bag: *mut ObjectHeader, hi_sym: usize) -> bool {
+    bag.is_null()
+        || !crate::object::overflow::shadowed(bag)
+            && crate::object::shapes::object_shape_record(bag)
+                .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+        || super::shaped_symbols::position(bag, hi_sym).is_none()
+}
+
+/// `value instanceof C` (ECMA-262 13.10.2 InstanceofOperator) for `value` a
+/// typed array and `C` the realm's typed-array constructor of some kind:
+///
+/// * `C` is a function cell whose immutable constructor identity
+///   (`declaration_of_constructor`) names a typed-array kind;
+/// * GetMethod(C, @@hasInstance) is `%Function.prototype%[@@hasInstance]`
+///   (neither writable nor configurable): `C` owns no `@@hasInstance` and no
+///   hop of its linked chain before `%Function.prototype%` does. That method
+///   is OrdinaryHasInstance(C, value), and `C.prototype` (neither writable nor
+///   configurable) is the kind's intrinsic prototype;
+/// * `typed_array_chain::typed_array_has_instance` answers that from the
+///   value's structure when its chain is the default one.
+///
+/// `None` for every other operand pair or chain: the complete operation.
+/// Reads no property through a getter and runs no code.
+///
+/// # Safety
+/// Both operands are any NaN-boxed values.
+#[inline]
+unsafe fn typed_array_instanceof_front(value: f64, type_ref: f64) -> Option<bool> {
+    use crate::value::{POINTER_MASK, POINTER_TAG};
+    let (vb, rb) = (value.to_bits(), type_ref.to_bits());
+    if vb & !POINTER_MASK != POINTER_TAG || rb & !POINTER_MASK != POINTER_TAG {
+        return None;
+    }
+    // The left operand first: the cheap refusal for every value that is no
+    // typed array (one header read).
+    let vaddr = (vb & POINTER_MASK) as usize;
+    let vty = crate::value::addr_class::try_read_gc_header(vaddr)?.obj_type;
+    if !crate::gc::is_typed_array_type(vty) {
+        return None;
+    }
+    let closure = (rb & POINTER_MASK) as *const crate::closure::ClosureHeader;
+    let info = crate::closure::closure_info(closure)?;
+    use super::super::global_this_tables::BuiltinInstanceIdentity;
+    let declaration = super::super::global_this_tables::declaration_of_constructor(closure, info)?;
+    let Some(BuiltinInstanceIdentity::Class(class_id)) = declaration.instance_identity else {
+        return None;
+    };
+    let first = crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY;
+    let last = crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY;
+    if !(first..=last).contains(&class_id) {
+        return None;
+    }
+    // GetMethod(C, @@hasInstance): C's own key list, then its linked chain.
+    let hi_sym = crate::symbol::well_known_symbol("hasInstance") as usize;
+    if hi_sym == 0 {
+        return None;
+    }
+    if !bag_lacks_symbol((*closure).props, hi_sym) || linked_chain_may_hook(closure, hi_sym) {
+        return None;
+    }
+    crate::object::typed_array_chain::typed_array_has_instance(value, class_id)
+}
+
+/// Can the chain a linked function `closure` names supply an `@@hasInstance`
+/// other than `%Function.prototype%`'s default? Walks the hops before that
+/// default (or null): each must prove it owns no `@@hasInstance` (`hi_sym`),
+/// from its shape (no symbol key at all) or its key list (no entry for that
+/// symbol, the test the receiver's own bag takes). `false` for a function on
+/// its intrinsic chain, or one whose linked chain proves absence hop by hop
+/// (a builtin constructor linked to its parent: `Float32Array` to
+/// `%TypedArray%`, which owns `@@species`).
+///
+/// # Safety
+/// `closure` is a proven, live closure cell; `hi_sym` is the
+/// `Symbol.hasInstance` header, or 0.
+unsafe fn linked_chain_may_hook(
+    closure: *const crate::closure::ClosureHeader,
+    hi_sym: usize,
+) -> bool {
     let Some(mut bits) = crate::closure::closure_static_prototype(closure as usize) else {
         return false;
     };
-    let fp = crate::object::builtin_prototype_value("Function").to_bits();
+    // `%Function.prototype%` itself, by identity (no by-name realm lookup).
+    let fp = crate::value::js_nanbox_pointer(crate::array::intrinsic_prototype_addr(
+        crate::object::BuiltinConstructorIdentity::Function,
+    ) as i64)
+    .to_bits();
     for _ in 0..32 {
         let v = crate::JSValue::from_bits(bits);
         if bits == fp || v.is_null() {
@@ -722,13 +871,24 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
         let addr = v.as_pointer::<u8>() as usize;
         let proves = |bag: *mut ObjectHeader| {
             bag.is_null()
-                || !crate::object::overflow::shadowed(bag)
-                    && crate::object::shapes::object_shape_record(bag)
-                        .is_some_and(|record| record.keys() != 0 && record.proves_no_symbols())
+                || ObjHome::proves_no_symbols(bag as usize)
+                || hi_sym != 0 && ObjHome::own_symbol_position(bag as usize, hi_sym).is_none()
         };
         if crate::closure::is_closure_ptr(addr) {
             let hop = addr as *const crate::closure::ClosureHeader;
-            if crate::closure::shape::is_class_info((*hop).info) || !proves((*hop).props) {
+            // A function's own `@@hasInstance` is a key of its bag. A class
+            // hop may also hold one where `[[Get]]` on the function does not
+            // read it: its class's static-symbol table or its lifted
+            // `static [Symbol.hasInstance]` hook. Such a hop takes the full
+            // read and the class dispatch, as before; a hop with neither is
+            // answered by its bag like any function.
+            if crate::closure::shape::is_class_info((*hop).info) && class_hop_may_hook(hop, hi_sym)
+            {
+                return true;
+            }
+            if !(crate::closure::props::proves_no_symbols(hop as usize)
+                || hi_sym != 0 && !crate::closure::props::owns_symbol(hop as usize, hi_sym))
+            {
                 return true;
             }
             bits = match crate::closure::closure_static_prototype(addr) {
@@ -754,4 +914,25 @@ unsafe fn linked_chain_may_hook(closure: *const crate::closure::ClosureHeader) -
         }
     }
     true
+}
+
+/// May the class constructor `hop` hold an `@@hasInstance` outside its own
+/// bag: an entry of its class's static-symbol table (a computed static
+/// field, a static accessor, `Object.defineProperty(C, Symbol.hasInstance,
+/// …)`), or a lifted `static [Symbol.hasInstance]` method registered for its
+/// class id or a parent class id? Both registries are latched: an idle one
+/// answers with one load. A class whose id cannot be read may.
+///
+/// # Safety
+/// `hop` is a proven, live class constructor closure.
+unsafe fn class_hop_may_hook(hop: *const crate::closure::ClosureHeader, hi_sym: usize) -> bool {
+    if hi_sym == 0 {
+        return true;
+    }
+    let Some(class_id) = crate::object::class_value::class_closure_id_unchecked(hop) else {
+        return true;
+    };
+    let hi_f64 = f64::from_bits(crate::value::JSValue::pointer(hi_sym as *const u8).bits());
+    crate::symbol::class_static_symbol_lookup(class_id, hi_f64).is_some()
+        || crate::object::lookup_has_instance_hook(class_id).is_some()
 }

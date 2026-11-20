@@ -460,8 +460,13 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
             ));
         }
         for label in &book {
-            let pred_body =
-                verify_gate_instance(ir, stem, label, check_value_predicate, Some(OBLIGATIONS_CALL))?;
+            let pred_body = verify_gate_instance(
+                ir,
+                stem,
+                label,
+                check_value_predicate,
+                Some(OBLIGATIONS_CALL),
+            )?;
             if !store_dominates_gate(ir, label, &pred_body) {
                 return Err(format!(
                     "{stem}: the slot store must stay UNCONDITIONAL, in the block                      that branches into %{label} — a guard that also skips the                      store is a dropped write:\n{pred_body}"
@@ -477,7 +482,13 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
         ));
     }
     for label in &barrier_labels {
-        verify_gate_instance(ir, stem, label, check_generation_predicate, Some(BARRIER_CALL))?;
+        verify_gate_instance(
+            ir,
+            stem,
+            label,
+            check_generation_predicate,
+            Some(BARRIER_CALL),
+        )?;
     }
     match kind {
         StemKind::GenerationTested | StemKind::ObligationsCall => {}
@@ -504,8 +515,7 @@ fn verify_stem_function(ir: &str, stem: &str, kind: StemKind) -> Result<(), Stri
                 ));
             }
             for label in &book {
-                let pred_body =
-                    verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
+                let pred_body = verify_gate_instance(ir, stem, label, check_value_predicate, None)?;
                 if !store_dominates_gate(ir, label, &pred_body) {
                     return Err(format!(
                         "{stem}: the slot store must stay UNCONDITIONAL, in the block                          that branches into %{label} — a guard that also skips the                          store is a dropped write:\n{pred_body}"
@@ -578,13 +588,11 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(ARR_ID)),
-                    index: Box::new(Expr::LocalGet(IDX_ID)),
-                    value: Box::new(Expr::LocalGet(VAL_ID)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(ARR_ID)),
+                    Box::new(Expr::LocalGet(IDX_ID)),
+                    Box::new(Expr::LocalGet(VAL_ID)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -596,6 +604,7 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     let mut opts = ir_opts();
@@ -680,13 +689,11 @@ fn idxset_recv_global_ir() -> String {
                 // multi-statement store bodies, this probe goes red again —
                 // deliberately — and must be re-shaped, not deleted.
                 body: vec![
-                    Stmt::Expr(Expr::IndexSet {
-                        object: Box::new(Expr::LocalGet(G_ID)),
-                        index: Box::new(Expr::LocalGet(IDX_ID)),
-                        value: Box::new(Expr::LocalGet(VAL_ID)),
-                        byte_offset: 0,
-                        byte_end: 0,
-                    }),
+                    Stmt::Expr(Expr::synthetic_index_set(
+                        Box::new(Expr::LocalGet(G_ID)),
+                        Box::new(Expr::LocalGet(IDX_ID)),
+                        Box::new(Expr::LocalGet(VAL_ID)),
+                    )),
                     Stmt::Expr(Expr::Call {
                         byte_end: 0,
                         callee: Box::new(Expr::LocalGet(VAL_ID)),
@@ -706,6 +713,7 @@ fn idxset_recv_global_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -770,18 +778,17 @@ fn idxset_recv_captured_ir() -> String {
                             op: UpdateOp::Increment,
                             prefix: false,
                         }),
-                        body: vec![Stmt::Expr(Expr::IndexSet {
-                            object: Box::new(Expr::LocalGet(ARR_ID)),
-                            index: Box::new(Expr::LocalGet(IDX_ID)),
-                            value: Box::new(Expr::LocalGet(VAL_ID)),
-                            byte_offset: 0,
-                            byte_end: 0,
-                        })],
+                        body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                            Box::new(Expr::LocalGet(ARR_ID)),
+                            Box::new(Expr::LocalGet(IDX_ID)),
+                            Box::new(Expr::LocalGet(VAL_ID)),
+                        ))],
                     }],
                     captures: vec![ARR_ID, VAL_ID],
                     mutable_captures: Vec::new(),
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -806,6 +813,7 @@ fn idxset_recv_captured_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -845,6 +853,7 @@ fn apush_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -877,13 +886,11 @@ fn idxset_runtime_key_ir() -> String {
         ],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARR_ID)),
-                index: Box::new(Expr::LocalGet(IDX_ID)),
-                value: Box::new(Expr::LocalGet(VAL_ID)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARR_ID)),
+                Box::new(Expr::LocalGet(IDX_ID)),
+                Box::new(Expr::LocalGet(VAL_ID)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
         is_async: false,
@@ -894,6 +901,7 @@ fn idxset_runtime_key_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -922,13 +930,11 @@ fn dynarr_set_ir() -> String {
         params: vec![param(ARR_ID, "a"), param(IDX_ID, "k"), param(VAL_ID, "v")],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(ARR_ID)),
-                index: Box::new(Expr::LocalGet(IDX_ID)),
-                value: Box::new(Expr::LocalGet(VAL_ID)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(ARR_ID)),
+                Box::new(Expr::LocalGet(IDX_ID)),
+                Box::new(Expr::LocalGet(VAL_ID)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
         is_async: false,
@@ -939,6 +945,7 @@ fn dynarr_set_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
@@ -950,7 +957,32 @@ fn dynarr_set_ir() -> String {
 /// bounded-index proof, and that proof is what routes the store through the
 /// `idxset.bounded` arm. Counter and `v: Any` reasoning as in
 /// `idxset_inbounds_ir`.
+///
+/// The proof is the length hoist, kept only when the loop's sites run no
+/// program code (#14537, `crate::quiet`): the whole-program solve's word,
+/// which a unit test does not run. The probe is compiled with the facts
+/// `perry compile` gives this program ([`idxset_bounded_quiet_facts`]); without
+/// them the store takes the ordinary in-bounds arm
+/// ([`idxset_bounded_without_the_quiet_facts_stores_through_the_inbounds_barrier`]).
 fn idxset_bounded_ir() -> String {
+    idxset_bounded_ir_with(true)
+}
+
+/// The quiet-site facts of `idxset_bounded_ir`'s program by the solve
+/// (`PERRY_FACTS_DUMP` of it: `a.length` a quiet read with a primitive
+/// value, `a[i] = v` a quiet element site). The HIR has offset 0 at both.
+fn idxset_bounded_quiet_facts() -> crate::codegen::ProgramFactsView {
+    let mut elision = crate::codegen::ElisionFacts::default();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    crate::codegen::ProgramFactsView {
+        elision: std::sync::Arc::new(elision),
+        ..Default::default()
+    }
+}
+
+fn idxset_bounded_ir_with(quiet: bool) -> String {
     let mut m = Module::new("idxset_bounded_census.ts");
     m.functions = vec![Function {
         id: 1,
@@ -997,13 +1029,11 @@ fn idxset_bounded_ir() -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(ARR_ID)),
-                    index: Box::new(Expr::LocalGet(IDX_ID)),
-                    value: Box::new(Expr::LocalGet(VAL_ID)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(ARR_ID)),
+                    Box::new(Expr::LocalGet(IDX_ID)),
+                    Box::new(Expr::LocalGet(VAL_ID)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID))),
         ],
@@ -1015,9 +1045,14 @@ fn idxset_bounded_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
-    String::from_utf8(compile_module(&m, ir_opts()).expect("module compiles"))
+    let mut opts = ir_opts();
+    if quiet {
+        opts.program_facts = idxset_bounded_quiet_facts();
+    }
+    String::from_utf8(compile_module(&m, opts).expect("module compiles"))
         .expect("LLVM IR should be UTF-8")
 }
 
@@ -1067,6 +1102,7 @@ fn private_field_set_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     m.classes = vec![Class {
         id: CLASS_ID,
@@ -1100,6 +1136,7 @@ fn private_field_set_ir() -> String {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }];
@@ -1179,6 +1216,7 @@ fn generator_state_ir() -> String {
                     mutable_captures: vec![1],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -1199,6 +1237,7 @@ fn generator_state_ir() -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     String::from_utf8(compile_module(&m, ir_opts()).expect("generator state compiles"))
         .expect("LLVM IR should be UTF-8")
@@ -1317,7 +1356,10 @@ fn the_store_site_keeps_only_the_fast_store_inline() {
         let functions: Vec<_> = function_bodies(&ir)
             .filter(|f| !all_numbered_labels(f, &format!("{stem}.gc_bookkeeping.")).is_empty())
             .collect();
-        assert!(!functions.is_empty(), "{stem}: the probe must reach the arm");
+        assert!(
+            !functions.is_empty(),
+            "{stem}: the probe must reach the arm"
+        );
         for f in functions {
             for inline in [
                 "@js_write_barrier_slot_validated_parent(",
@@ -1588,4 +1630,22 @@ fn generator_fixed_slot_store_uses_the_shared_barrier_operation() {
         !mutated.contains(call),
         "removed operation fails the witness"
     );
+}
+
+/// The `idxset.bounded` probe without the quiet-site facts (#14537): the
+/// length hoist is refused, so no store of the loop takes the bounded arm.
+/// "No `idxset.bounded` block" must not mean "no barrier": the store takes
+/// the ordinary in-bounds arm, and that arm's barrier passes the same
+/// uniform floor (reached, real, live, value-tested) as every census stem.
+#[test]
+fn idxset_bounded_without_the_quiet_facts_stores_through_the_inbounds_barrier() {
+    assert_default_barrier_env_not_disabled();
+    let ir = idxset_bounded_ir_with(false);
+    assert!(
+        !ir.contains("\nidxset.bounded"),
+        "without the facts' word on the loop's sites no store may take the bounded arm\n{ir}"
+    );
+    if let Err(err) = verify_stem_ir(&ir, "idxset.inbounds", StemKind::ValueAndGenerationTested) {
+        panic!("the refused loop's store must keep a live verified barrier: {err}\n{ir}");
+    }
 }

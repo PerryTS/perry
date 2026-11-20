@@ -18,7 +18,11 @@ fn compile(root: &Path) -> (Output, PathBuf) {
         .join("../..")
         .canonicalize()
         .unwrap();
-    let executable = root.join(if cfg!(windows) { "app.exe" } else { "app-native" });
+    let executable = root.join(if cfg!(windows) {
+        "app.exe"
+    } else {
+        "app-native"
+    });
     let output = Command::new(compiler)
         .current_dir(root)
         .env("PERRY_RUNTIME_DIR", runtime)
@@ -83,7 +87,10 @@ fn local_declaration_merges_with_an_imported_type() {
         String::from_utf8_lossy(&compile.stdout),
         String::from_utf8_lossy(&compile.stderr)
     );
-    let run = Command::new(&executable).current_dir(&root).output().unwrap();
+    let run = Command::new(&executable)
+        .current_dir(&root)
+        .output()
+        .unwrap();
     assert!(run.status.success(), "{:?}", run);
     // node on tsc's emit prints the same line.
     assert_eq!(String::from_utf8_lossy(&run.stdout), "4 x object 7\n");
@@ -111,7 +118,10 @@ fn local_declaration_repeating_an_imported_value_is_rejected() {
         ],
     );
     let (compile, _) = compile(&root);
-    assert!(!compile.status.success(), "an imported function binds its name");
+    assert!(
+        !compile.status.success(),
+        "an imported function binds its name"
+    );
     let stderr = String::from_utf8_lossy(&compile.stderr);
     assert!(
         stderr.contains("SyntaxError: Identifier 'helper' has already been declared"),

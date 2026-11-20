@@ -10,7 +10,10 @@
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, Result};
+// `Context::context` is only reached from the linux-gnu libc probe below.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+use anyhow::Context;
 
 /// The symbol the runtime reads (`process/report.rs`).
 const SYMBOL: &str = "perry_glibc_version_compiler";

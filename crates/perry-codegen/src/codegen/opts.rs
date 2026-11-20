@@ -32,6 +32,8 @@ pub struct AppMetadata {
     /// `process.argv[1]` with the script path, matching Node/Bun's argv shape.
     /// It is compiler metadata rather than a user-configurable manifest field.
     pub entry_source_path: Option<String>,
+    /// Canonical source path of this module, used by its static stack frame.
+    pub module_source_path: Option<String>,
     /// The module format Node declares for the entry before looking at its
     /// syntax: `Some(true)` for `.mjs`/`.mts` or a nearest package.json with
     /// `"type": "module"`, `Some(false)` for `.cjs`/`.cts` or
@@ -57,6 +59,7 @@ impl Default for AppMetadata {
             app_group: None,
             update_config: None,
             entry_source_path: None,
+            module_source_path: None,
             entry_declared_esm: None,
             native_provider_installs: Vec::new(),
         }
@@ -280,6 +283,7 @@ pub struct CompileOptions {
     pub namespace_imports: Vec<String>,
     /// Namespace local -> owning compiled module prefix, before following re-exports.
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -494,6 +498,12 @@ pub struct CompileOptions {
     /// module globals. For Eager modules the redundant calls
     /// short-circuit on the guard's first-write check.
     pub module_init_deps: Vec<String>,
+    pub module_deferred_init_deps: Vec<String>,
+    pub module_deferred_readiness: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
 
     /// Issue #842: true iff this module is the target of at least one
     /// `await import("./this_module.ts")` site anywhere in the program.
@@ -607,6 +617,8 @@ pub enum NamespaceEntryKind {
     /// nested value IS the target module's `@__perry_ns_<source_prefix>`
     /// global, populated by the target's own `__init`.
     NestedNamespace { source_prefix: String },
+    /// A namespace value exported from an import-defer binding.
+    DeferredNamespace { source_prefix: String },
     /// `export * as Name from "node:..."` (or another Perry-native module).
     /// Native modules have no compiled `@__perry_ns_*` global, so codegen asks
     /// the runtime to materialize their namespace directly.
@@ -874,6 +886,7 @@ impl ImportedCtor {
 /// adding five more individual parameters to every compile_* function.
 /// Built once in `compile_module` from `CompileOptions`.
 pub(crate) struct CrossModuleCtx<'a> {
+    pub closure_writes: crate::collectors::ClosureWrites<'a>,
     pub numeric_order_functions: &'a [perry_hir::Function],
     pub numeric_order_closures: &'a [(u32, perry_hir::Expr)],
     /// Closure regions of the splitter (`split_regions`): one body each,
@@ -900,6 +913,7 @@ pub(crate) struct CrossModuleCtx<'a> {
     pub namespace_self_import: bool,
     pub namespace_imports: std::collections::HashSet<String>,
     pub namespace_source_prefixes: std::collections::HashMap<String, String>,
+    pub deferred_namespace_imports: std::collections::HashSet<String>,
     /// #7189: `(namespace local, member)` pairs whose member is itself a MODULE
     /// NAMESPACE, from `export * as ns from "./m.ts"` in the imported module.
     ///
@@ -1149,6 +1163,9 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// entry (internal linkage, named by `spec_function_name`). Mutually
     /// exclusive with the typed_abi clone families.
     pub spec_abi_functions: std::collections::HashMap<u32, super::spec_abi::SpecFnPlan>,
+    /// P2 (DESIGN-p2 §3.2): typed class methods by HIR function id
+    /// (`signature_entry::select_methods`).
+    pub typed_methods: std::collections::HashMap<u32, super::signature_entry::TypedMethod>,
     /// Declared return types independently verified from the specialized
     /// body's guarded inputs and runtime-derived constructions. A direct call
     /// result may become a local proof only when its arguments also route to
@@ -1290,16 +1307,15 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// Bindings whose object no code writes for their whole life
     /// (`collectors::contents_stable_bindings`), module-wide.
     pub contents_stable_bindings: std::collections::HashSet<u32>,
+    /// Empty-literal bindings a later loop pushes into
+    /// (`collectors::loop_pushed_arrays`), module-wide.
+    pub loop_pushed_arrays: crate::collectors::PushedArrays,
     /// Bindings assigned before any reader can run
     /// (`collectors::definite_init`), module-wide.
     pub definite_init: crate::collectors::DefiniteInit,
     /// Debug/benchmark switch that forces Buffer/Uint8Array accesses through
     /// the generic helper path.
     pub disable_buffer_fast_path: bool,
-    /// #6405: set when this module assigns a Buffer numeric read-method name as
-    /// an own property (`buf.readUInt8 = fn`). Threaded into every FnCtx so the
-    /// inline read intrinsic deopts to own-prop-aware runtime dispatch.
-    pub program_shadows_buffer_read_method: bool,
     /// (Issue #50) Module-level `const` 2D int arrays folded into flat
     /// `[N x i32]` LLVM constants. Maps local_id → info. Populated by
     /// scanning `hir.init`; threaded through every FnCtx so the IndexGet
@@ -1382,6 +1398,12 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// fires before the body — transitively pulls in any Deferred dep
     /// chain reached only through this module's re-exports.
     pub module_init_deps: Vec<String>,
+    pub module_deferred_init_deps: Vec<String>,
+    pub module_deferred_readiness: Vec<String>,
+    /// Selects async module evaluation only for a program containing TLA.
+    pub program_has_tla: bool,
+    /// A synchronous require cannot evaluate this module's async graph.
+    pub module_graph_has_tla: bool,
     /// Issue #842: true iff this module is the target of at least one
     /// dynamic `import()` site in the program. Forces emission of
     /// `@__perry_ns_<prefix>` + populator even when `namespace_entries`

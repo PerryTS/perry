@@ -1,7 +1,7 @@
 use super::*;
 
 // Sanity tests at the helper level. End-to-end tests live in
-// test-files/test_deforest_*.ts (compiled + run vs Node).
+// tests/fixtures/programs/test_deforest_*.ts (compiled + run vs Node).
 
 #[test]
 fn detects_simple_producer() {
@@ -35,6 +35,7 @@ fn detects_simple_producer() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let info = analyze_producer(&func).expect("should detect producer");
     assert_eq!(info.out_local_id, 10);
@@ -194,6 +195,7 @@ fn rejects_producer_called_inside_closure() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -225,6 +227,7 @@ fn rejects_producer_called_inside_closure() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let mut module = Module::new("m");
@@ -282,6 +285,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let mut module = Module::new("m");
@@ -353,6 +357,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -377,6 +382,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -489,6 +495,7 @@ fn producer_and_plain_caller() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("m");
     // #8104: one fuse site so the producer clears the profitability gate —
@@ -614,6 +621,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -638,6 +646,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -708,6 +717,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -732,6 +742,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -879,12 +890,10 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
             }),
             body: vec![Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
-                value: Box::new(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(40)),
-                    index: Box::new(Expr::LocalGet(41)),
-                }),
+                value: Box::new(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(40)),
+                    Box::new(Expr::LocalGet(41)),
+                )),
                 field_writeback: None,
             })],
         },
@@ -971,12 +980,10 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 }),
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: outer,
-                    value: Box::new(Expr::IndexGet {
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(child)),
-                        index: Box::new(Expr::LocalGet(j)),
-                    }),
+                    value: Box::new(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(child)),
+                        Box::new(Expr::LocalGet(j)),
+                    )),
                     field_writeback: None,
                 })],
             },
@@ -990,6 +997,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -1023,5 +1031,6 @@ fn make_simple_producer() -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }

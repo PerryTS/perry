@@ -170,7 +170,28 @@ unsafe fn present_alert(title: &str, message: &str, labels: &[String], callback:
     for (idx, label) in labels.iter().enumerate() {
         let ns_label = NSString::from_str(label);
         let idx_i = idx as i64;
-        // UIAlertActionStyleDefault = 0
+        // UIAlertActionStyle: 0 default, 1 cancel, 2 destructive. Apps pass
+        // plain labels, so pick the native style from well-known verbs.
+        let style: i64 = if label == "Cancel" || label == "Abbrechen" {
+            1
+        } else if [
+            "Delete",
+            "Remove",
+            "Discard",
+            "Archive",
+            "Sign out",
+            "Suspend",
+            "Löschen",
+            "Entfernen",
+            "Verwerfen",
+        ]
+        .iter()
+        .any(|p| label.starts_with(p))
+        {
+            2
+        } else {
+            0
+        };
         let handler = block2::RcBlock::new(move |_action: *mut AnyObject| {
             if callback != 0.0 {
                 let pkg = Box::new((callback, idx_i));
@@ -184,7 +205,7 @@ unsafe fn present_alert(title: &str, message: &str, labels: &[String], callback:
         let action: *mut AnyObject = msg_send![
             action_cls,
             actionWithTitle: &*ns_label,
-            style: 0i64,
+            style: style,
             handler: &*handler
         ];
         if !action.is_null() {

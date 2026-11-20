@@ -12,6 +12,7 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
     let mut emit_drain = false;
     let mut writable_length = 0;
     let mut close_now = false;
+    let mut finish_now = false;
     let mut found = false;
     {
         let mut guard = cp_live_lock();
@@ -29,6 +30,7 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
                     emit_drain = stdin.need_drain && !stdin.end_pending && !broken;
                     stdin.need_drain = false;
                     close_now = stdin.end_pending || broken;
+                    finish_now = stdin.end_pending && !broken;
                 }
             }
             if close_now {
@@ -44,23 +46,29 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
     let Some(cp_bits) = cp_lookup_cp_bits(handle) else {
         return;
     };
-    let stream = cp_stdio_stream(f64::from_bits(cp_bits), 0);
-    if super::cp_object_ptr(stream).is_none() {
+    // The stream is re-read through its root after every listener and
+    // callback, which allocate and can move it.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stream = scope.root_nanbox_f64(cp_stdio_stream(f64::from_bits(cp_bits), 0));
+    if super::cp_object_ptr(stream.get_nanbox_f64()).is_none() {
         return;
     }
-    cp_set_field(stream, b"writableLength", writable_length as f64);
+    cp_set_field(
+        stream.get_nanbox_f64(),
+        b"writableLength",
+        writable_length as f64,
+    );
     if writable_length == 0 {
-        cp_set_field(stream, b"writableNeedDrain", TAG_FALSE_F64);
+        cp_set_field(stream.get_nanbox_f64(), b"writableNeedDrain", TAG_FALSE_F64);
     }
     // The callbacks came out of the registry root; re-root them across the
     // `'drain'` listeners and the calls, which allocate.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let handles: Vec<_> = callbacks
         .iter()
         .map(|bits| scope.root_nanbox_f64(f64::from_bits(*bits)))
         .collect();
     if emit_drain {
-        cp_emit(stream, "drain", &[]);
+        cp_emit(stream.get_nanbox_f64(), "drain", &[]);
     }
     for callback in &handles {
         let args: [f64; 0] = [];
@@ -72,6 +80,9 @@ pub(super) fn cp_stdin_written(handle: u64, len: usize, broken: bool) {
                 0,
             );
         }
+    }
+    if finish_now {
+        cp_stdin_finish(stream.get_nanbox_f64());
     }
 }
 

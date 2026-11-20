@@ -2,6 +2,17 @@
 
 Perry compiles a practical subset of TypeScript. This page documents what's not supported or works differently from Node.js/tsc.
 
+## Error stacks
+
+Compiled ESM module bodies appear in `Error.stack` as `at file:///path`;
+CommonJS source bodies use `at Object.<anonymous> (/path)`. These frames
+include the baked source filename, including any source-root remapping.
+Source line and column positions are unavailable. Inlined function frames
+are not reconstructed, and runtime frames remain excluded. An Error captured
+while an entry imports a dependency or drives async callbacks can also show
+an outer entry frame. `Error.captureStackTrace` records frames at the call;
+its optional `constructorOpt` filter is not applied.
+
 ## No Runtime Type Validation
 
 Declared TypeScript types are not enforced at runtime — Perry doesn't generate

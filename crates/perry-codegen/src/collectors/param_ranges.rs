@@ -186,6 +186,7 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, module_constants, scan);
             if let Some(catch) = catch {
@@ -385,6 +386,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 

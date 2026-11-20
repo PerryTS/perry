@@ -72,6 +72,7 @@ fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -107,6 +108,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -148,6 +153,7 @@ fn cell_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -192,6 +198,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -204,6 +211,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -294,6 +302,7 @@ fn walk_module(recurse: bool) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     // Straight-line, ONE call site, no loop: the only thing that can admit
     // `walk` is the recursion itself.
@@ -345,6 +354,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
                 mutable_captures: Vec::new(),
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -428,7 +438,16 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        // A self-call keeps the body's entry stack check (a leaf body that
+        // cannot recurse drops it, `expr::stack_guard::finish_stack_guard`),
+        // and with it the hot-cache read this test inspects.
+        body: vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::FuncRef(WALK_ID)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }))],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -437,6 +456,7 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     module.init_kind = ModuleInitKind::Eager;
     let ir = ir_for_target(module, "arm64-apple-macosx15.0.0");

@@ -17,6 +17,8 @@ use std::collections::HashMap;
 
 use taffy::prelude::{auto, length, percent, AvailableSpace, NodeId, Size, Style};
 use taffy::{Dimension, Display, LengthPercentage, Rect as TaffyRect, TaffyTree};
+use unicode_segmentation::UnicodeSegmentation;
+use unicode_width::UnicodeWidthStr;
 
 use super::style::{AlignItems, BoxStyle, Edges, FlexDirection, JustifyContent, Length as TuiLen};
 use super::tree::{lookup, Node};
@@ -67,10 +69,10 @@ fn build_taffy_tree(
     let node = lookup(handle)?;
     match node {
         Node::Text { content, .. } => {
-            // Text leaf — size = 1 row × content length cols. Use
-            // char count, not byte length, so multi-byte UTF-8
-            // characters don't over-size the cell rect.
-            let cols = content.chars().count() as f32;
+            let cols = content
+                .graphemes(true)
+                .map(UnicodeWidthStr::width)
+                .sum::<usize>() as f32;
             let style = Style {
                 size: Size {
                     width: length(cols),
@@ -135,17 +137,17 @@ fn box_style_to_taffy(s: &BoxStyle) -> Style {
         FlexDirection::Column => taffy::FlexDirection::Column,
     };
     let justify = match s.justify_content {
-        JustifyContent::Start => Some(taffy::JustifyContent::START),
-        JustifyContent::Center => Some(taffy::JustifyContent::CENTER),
-        JustifyContent::End => Some(taffy::JustifyContent::END),
-        JustifyContent::SpaceBetween => Some(taffy::JustifyContent::SPACE_BETWEEN),
-        JustifyContent::SpaceAround => Some(taffy::JustifyContent::SPACE_AROUND),
+        JustifyContent::Start => taffy::JustifyContent::START,
+        JustifyContent::Center => taffy::JustifyContent::CENTER,
+        JustifyContent::End => taffy::JustifyContent::END,
+        JustifyContent::SpaceBetween => taffy::JustifyContent::SPACE_BETWEEN,
+        JustifyContent::SpaceAround => taffy::JustifyContent::SPACE_AROUND,
     };
     let align = match s.align_items {
-        AlignItems::Start => Some(taffy::AlignItems::START),
-        AlignItems::Center => Some(taffy::AlignItems::CENTER),
-        AlignItems::End => Some(taffy::AlignItems::END),
-        AlignItems::Stretch => Some(taffy::AlignItems::STRETCH),
+        AlignItems::Start => taffy::AlignItems::START,
+        AlignItems::Center => taffy::AlignItems::CENTER,
+        AlignItems::End => taffy::AlignItems::END,
+        AlignItems::Stretch => taffy::AlignItems::STRETCH,
     };
     Style {
         display: Display::Flex,
@@ -216,6 +218,52 @@ mod tests {
     use super::super::color::Color;
     use super::super::tree::{box_add_child, register, Node};
     use super::*;
+
+    #[test]
+    fn text_layout_uses_terminal_columns() {
+        for (content, expected) in [("你好", 4), ("e\u{301}", 1), ("👩‍💻", 2), ("🇨🇳", 2)]
+        {
+            let handle = register(Node::Text {
+                content: content.to_string(),
+                fg: Color::Default,
+                bg: Color::Default,
+                style: Style::default(),
+            });
+            assert_eq!(
+                compute_layout(handle, 80, 24)[&handle].width,
+                expected,
+                "{content}"
+            );
+        }
+    }
+
+    #[test]
+    fn unicode_siblings_start_after_the_previous_display_columns() {
+        let children: Vec<_> = ["你", "e\u{301}", "👩‍💻", "x"]
+            .into_iter()
+            .map(|content| {
+                register(Node::Text {
+                    content: content.to_string(),
+                    fg: Color::Default,
+                    bg: Color::Default,
+                    style: Style::default(),
+                })
+            })
+            .collect();
+        let root = register(Node::Box {
+            children: children.clone(),
+            fg: Color::Default,
+            bg: Color::Default,
+            style: BoxStyle {
+                flex_direction: FlexDirection::Row,
+                ..BoxStyle::default()
+            },
+        });
+        let rects = compute_layout(root, 80, 24);
+        for (handle, expected) in children.into_iter().zip([0, 2, 3, 5]) {
+            assert_eq!(rects[&handle].col, expected);
+        }
+    }
 
     #[test]
     fn vertical_stack_default_lays_out_one_per_row() {

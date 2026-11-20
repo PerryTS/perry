@@ -68,6 +68,10 @@ fn broadcast_constructor_distinguishes_missing_name_and_implicit_symbol_conversi
         crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *const _,
         key,
     );
+    assert!(
+        JSValue::from_bits(name.to_bits()).is_string(),
+        "name must be a string"
+    );
     assert_eq!(
         crate::string::string_as_str(
             crate::value::js_get_string_pointer_unified(name) as *const StringHeader,

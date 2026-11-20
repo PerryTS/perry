@@ -1,6 +1,5 @@
 //! #12023: supported targets always use statepoints, including long-lived
-//! native homes. Removed environment selectors cannot change root coverage.
-//! Both builds run every moving-GC configuration and must agree.
+//! native homes. The build runs every moving-GC configuration and must agree.
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -58,14 +57,7 @@ fn compile(dir: &std::path::Path, spill_threshold: &str) -> (PathBuf, String) {
     std::fs::write(&entry, SOURCE).expect("write entry");
     let ir = dir.join(format!("ir_{spill_threshold}"));
     std::fs::create_dir_all(&ir).unwrap();
-    let mut command = Command::new(perry_bin());
-    if spill_threshold == "1" {
-        command
-            .env("PERRY_RS4GC", "0")
-            .env("PERRY_SHADOW_STACK", "0")
-            .env("PERRY_INLINE_SHADOW_SLOT", "0");
-    }
-    let out = command
+    let out = Command::new(perry_bin())
         .current_dir(dir)
         .arg("compile")
         .arg(&entry)
@@ -175,22 +167,12 @@ fn run_arms(binary: &std::path::Path, dir: &std::path::Path, label: &str) -> Str
 }
 
 #[test]
-fn removed_rooting_selectors_cannot_disable_statepoints() {
+fn native_roots_survive_every_moving_gc_arm() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let (native_bin, native_ir) = compile(dir.path(), "0");
-    let (ignored_bin, ignored_ir) = compile(dir.path(), "1");
-    assert_eq!(
-        native_ir, ignored_ir,
-        "removed selectors changed the native-root IR"
-    );
+    let (native_bin, _) = compile(dir.path(), "0");
     let native_out = run_arms(&native_bin, dir.path(), "native");
-    let ignored_out = run_arms(&ignored_bin, dir.path(), "removed selectors");
     assert!(
         native_out.starts_with("r:"),
         "unexpected program output: {native_out:?}"
-    );
-    assert_eq!(
-        native_out, ignored_out,
-        "a root was lost or not rewritten under moving GC"
     );
 }

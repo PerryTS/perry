@@ -105,10 +105,13 @@ def self_test() -> None:
         else:
             raise AssertionError(f"accepted unsafe/malformed metadata: {settings!r}")
     print("GC matrix fixture env self-test: PASS (syntax, injection rejection, OFF/control isolation)")
-    from gc_matrix_fixture_env_test import self_test as routing_self_test
+    from runpy import run_path
+
+    tests = Path(__file__).resolve().parents[1] / "tests/tooling"
+    routing_self_test = run_path(str(tests / "infrastructure/gc/gc_matrix_fixture_env_test.py"))["self_test"]
 
     routing_self_test()
-    from parity_fixture_limits_test import self_test as limits_self_test
+    limits_self_test = run_path(str(tests / "parity/parity_fixture_limits_test.py"))["self_test"]
     limits_self_test()
 
 

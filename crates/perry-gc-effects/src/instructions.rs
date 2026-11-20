@@ -639,6 +639,9 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
         if arch == Arch::X86 {
             let call = mn.starts_with("call");
             if !call && !mn.starts_with('j') {
+                for (_, t) in &ins.relocs {
+                    node.refs.insert(node.fmt.norm(t));
+                }
                 continue;
             }
             if !ins.ops.starts_with('*') {
@@ -679,6 +682,9 @@ pub(crate) fn analyze_node(node: &mut Node, insns: &[Insn], arch: Arch) {
                 continue;
             }
             if !["blr", "br"].contains(&mn) && !starts(mn, &["blra", "bra"]) {
+                for (_, t) in &ins.relocs {
+                    node.refs.insert(node.fmt.norm(t));
+                }
                 continue;
             }
             let reg = a64_family(ins.ops.split(',').next().unwrap().trim())

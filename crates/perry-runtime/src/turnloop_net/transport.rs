@@ -1671,6 +1671,9 @@ unsafe fn dispatch_stream(
                 }
                 sink::emit(route, event);
             }
+            for _ in 0..defer_eof::purge(defer_eof::Key::Link(link.0), handle) {
+                release(link);
+            }
             // The handle's ref, taken at install. Last: the sink ran with the
             // cell pinned.
             release(link);
@@ -1716,6 +1719,9 @@ unsafe fn dispatch_stream(
             }
             let bytes = lease.as_ref().map(|l| l.as_slice()).unwrap_or(&[]);
             debug_assert!(bytes.len() == n || lease.is_none());
+            if n != 0 {
+                defer_eof::note_data(defer_eof::Key::Link(link.0));
+            }
             sink::emit(route, NetCompletion::data(id, bytes).linked());
             drop(lease);
         }
@@ -1735,7 +1741,12 @@ unsafe fn dispatch_stream(
                 }
                 entry.read_op = None;
             }
-            sink::emit(route, NetCompletion::eof(id).linked());
+            if defer_eof::park(defer_eof::Key::Link(link.0), route, handle) {
+                // Pins the cell until the parked EOF is delivered or dropped.
+                hold(link);
+            } else {
+                sink::emit(route, NetCompletion::eof(id).linked());
+            }
         }
         OpResult::Wrote(n) => {
             let Some(c) = current(link, handle) else {
@@ -1818,6 +1829,29 @@ unsafe fn dispatch_stream(
         }
         _ => {}
     }
+}
+
+/// Deliver an EOF `defer_eof` parked, if the incarnation that read it is
+/// still installed, then drop the ref the park took.
+///
+/// # Safety
+/// The parked EOF's ref pins `link`'s cell.
+pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>) {
+    if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
+        if let Some(c) = current(link, handle) {
+            let route = c.route;
+            sink::emit(route, NetCompletion::eof(link.0 as i64).linked());
+        }
+    }
+    release(link);
+}
+
+/// Drop the ref of an EOF `defer_eof` parked and will never deliver.
+///
+/// # Safety
+/// As [`deliver_parked_eof`].
+pub(super) unsafe fn release_parked_eof(cell: usize) {
+    release(OwnerLink(cell));
 }
 
 unsafe fn accepted(

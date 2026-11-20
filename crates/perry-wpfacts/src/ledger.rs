@@ -46,6 +46,8 @@ pub(crate) enum Unknown {
     ModuleNamespace,
     /// A function value without a known body.
     FunctionWithoutIdentity,
+    /// An installed accessor whose callable body is unknown.
+    UnknownAccessorFunction,
     /// Host input: native modules, process, host globals.
     ExternalInput,
     /// A reflective operation took the object (defineProperty, delete,
@@ -110,6 +112,7 @@ impl Unknown {
             EscapedObjectField => "escaped-object-field",
             ModuleNamespace => "module-namespace",
             FunctionWithoutIdentity => "function-without-identity",
+            UnknownAccessorFunction => "unknown-accessor-function",
             ExternalInput => "external-input",
             ReflectiveOperation => "reflective-operation",
             DynamicCode => "dynamic-code",
@@ -206,6 +209,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || w.contains("from unmodeled code")
             || w.contains("unknown code")
             || starts("unknown holder of the box")
+            || w.contains("hands its resource to async_hooks init")
             || starts("unregistered function id")
             || starts("bind with spread arguments")
             || w.contains("decorator")
@@ -214,8 +218,11 @@ pub(crate) fn route(why: &str) -> Option<Route> {
         } else if starts("argument of native ")
             || starts("argument of builtin ")
             || starts("argument of a primitive method")
+            // Class.prototype.method: the argument of a native method the realm declares.
+            || w.strip_prefix("argument of ").is_some_and(|r| r.contains('.') && !r.contains(' '))
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")
@@ -224,9 +231,13 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("RegExp operand")
             || starts("getOwnPropertyDescriptor")
             || starts("__lookupGetter__ result")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("To")
             || starts("replace")
             || starts("array join")
+            || w.contains(" coerces its ")
             || starts("sort comparator")
             || starts("spread argument iteration")
             || starts("JSON.stringify")
@@ -342,10 +353,9 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("re-exported by ")
         {
             ModuleNamespace
-        } else if starts("unregistered function id")
-            || starts("accessor of unknown function value")
-            || starts("unresolved class value")
-        {
+        } else if starts("accessor of unknown function value") {
+            UnknownAccessorFunction
+        } else if starts("unregistered function id") || starts("unresolved class value") {
             FunctionWithoutIdentity
         } else if starts("result of an unknown function") {
             UnknownCalleeEscape
@@ -355,10 +365,15 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("__lookupGetter__ result")
+            || starts("result of a getter the realm does not declare")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
             || starts("result of an unmodeled native accessor lookup")
+            || starts("a closure native's captures")
         {
             OpaqueBuiltin
         } else if starts("global ")
@@ -389,6 +404,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("iteratorRestAppend")
             || starts("cjsRequireEdge")
             || starts("unknown result alternative")
+            || starts("value a finally capability is resolved with")
         {
             UnmodeledConstruct
         } else {

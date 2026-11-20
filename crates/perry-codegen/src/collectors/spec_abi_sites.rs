@@ -475,6 +475,7 @@ fn stmts_return_value(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_return_value(body)
                 || catch.as_ref().is_some_and(|c| stmts_return_value(&c.body))
@@ -860,6 +861,7 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             body,
             catch,
             finally,
+            ..
         } => {
             walk_stmts(body, depth, scan);
             if let Some(c) = catch {
@@ -1054,7 +1056,8 @@ fn judge_sites_in_body(
     // Use the same transitive, all-writes range proof as canonical i32 slots.
     // Empty auxiliary sets only under-approximate clamp/flat-array cases; they
     // cannot admit a local the integer-local provenance judge would reject.
-    let integer_locals = body_integer_locals(stmts, params);
+    let mut integer_locals = body_integer_locals(stmts, params);
+    integer_locals.extend(env.proven_int32.iter().copied());
     let mut ready: HashSet<u32> = ta_ready_at_entry(env.ta, env.definite, body);
     for s in stmts {
         judge_stmt(s, env, env.number_arrays, &integer_locals, &ready, out);
@@ -1071,6 +1074,10 @@ pub(crate) struct JudgeEnv<'a> {
     ta: &'a HashMap<u32, SpecTaBinding>,
     number_arrays: &'a HashSet<u32>,
     definite: &'a super::DefiniteInit,
+    /// Bindings the whole-program interval proof shows hold only int32
+    /// values (`ElisionFacts::int32_inputs`): integer locals beside the
+    /// body's own proof, as codegen admits them (`collectors::hir_facts`).
+    proven_int32: &'a std::collections::BTreeSet<u32>,
 }
 
 /// The `TaPtr` bindings ready when `body` (`None` = module init, else the
@@ -1164,6 +1171,7 @@ fn judge_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 judge_stmt(st, env, number_arrays, integer_locals, ready, out);
@@ -1268,7 +1276,12 @@ fn judge_expr(
 /// [`collect_spec_abi_facts_with`] over the module's own definite-init facts.
 #[cfg(test)]
 pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
-    collect_spec_abi_facts_with(hir, &super::definite_init::collect(hir))
+    collect_spec_abi_facts_with(
+        hir,
+        &super::definite_init::collect(hir),
+        &Default::default(),
+        &Default::default(),
+    )
 }
 
 /// Run the whole pre-pass on a module. `definite` is the module's
@@ -1277,6 +1290,8 @@ pub fn collect_spec_abi_facts(hir: &Module) -> SpecAbiModuleFacts {
 pub fn collect_spec_abi_facts_with(
     hir: &Module,
     definite: &super::DefiniteInit,
+    proven_int32: &std::collections::BTreeSet<u32>,
+    native_member_calls: &std::collections::BTreeSet<u32>,
 ) -> SpecAbiModuleFacts {
     let mut scan = scan_whole_module(hir);
 
@@ -1373,7 +1388,7 @@ pub fn collect_spec_abi_facts_with(
     // The callee hoists the data pointer and length through the header once,
     // so only a sealed binding may be passed: observing `.buffer` rebinds the
     // storage, and `buffer.transfer()` detaches it.
-    let exposed = super::sealed_buffers::buffer_exposure(hir).exposed;
+    let exposed = super::sealed_buffers::buffer_exposure(hir, native_member_calls).exposed;
     let mut collect_ta = |stmts: &[Stmt]| {
         for s in stmts {
             let Stmt::Let {
@@ -1444,6 +1459,7 @@ pub fn collect_spec_abi_facts_with(
         ta: &ta_bindings,
         number_arrays: &number_array_bindings,
         definite,
+        proven_int32,
     };
     judge_sites_in_body(&hir.init, &[], None, &env, &mut call_sites);
     for f in &hir.functions {
@@ -1550,6 +1566,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_stmts(body, param_id, uses);
                 if let Some(catch) = catch {
@@ -1596,6 +1613,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 contains_loop(body)
                     || catch

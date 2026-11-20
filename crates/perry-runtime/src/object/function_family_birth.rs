@@ -261,9 +261,9 @@ unsafe fn try_symbol_store(
     {
         return false;
     }
-    if !function_layout_admits_store(obj, d, position, key) {
+    let Some(prototype) = function_layout_admits_store(obj, d, position, key) else {
         return false;
-    }
+    };
     let _no_gc = crate::gc::GcSuppressScope::new();
     if *super::header::object_slot_at(obj as *mut _, u32::from(k.off)) == TAG_HOLE {
         if (position + 1..d.key_count).any(|i| {
@@ -272,7 +272,7 @@ unsafe fn try_symbol_store(
         }) {
             return false;
         }
-        if !symbol_chain_allows_add(target, key) {
+        if !super::layout_probe::symbol_link_admits_add(prototype, key.to_bits()) {
             return false;
         }
         crate::symbol::note_symbol_key_installed((key.to_bits() & POINTER_MASK) as usize);
@@ -298,35 +298,32 @@ unsafe fn try_symbol_store(
 /// its prototype through its own record, so the holder read is the one the
 /// birth wrote for that prototype. The key at `position` is still compared
 /// directly, and the entry must be the descriptor's optional plain data
-/// entry: anything else takes the complete `[[Set]]`.
+/// entry: anything else takes the complete `[[Set]]`. The answer is that
+/// record's [[Prototype]] link, which an add at a hole must still ask.
 #[inline]
 unsafe fn function_layout_admits_store(
     obj: *const ObjectHeader,
     d: &PerryLayoutDesc,
     position: u32,
     key: f64,
-) -> bool {
+) -> Option<u64> {
     let word = (*obj).parent_class_id;
     if !super::shapes::is_site_matchable_layout_word(word)
         || (position < 32 && (d.rep >> (2 * position)) & 0b11 != 0)
     {
-        return false;
+        return None;
     }
     // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER != 0 {
-        return false;
+        return None;
     }
-    let Some(tag) = birth_tag(d) else {
-        return false;
-    };
+    let tag = birth_tag(d)?;
     // The receiver is the carrier of its own word.
-    let Some(record) = super::shapes::shape_record_of_receiver(word) else {
-        return false;
-    };
+    let record = super::shapes::shape_record_of_receiver(word)?;
     let prototype_bits = record.prototype_word();
     if prototype_bits & crate::value::TAG_MASK != crate::value::POINTER_TAG {
-        return false;
+        return None;
     }
     // Any receiver can reach here, so its prototype may be any heap kind;
     // only an ordinary object carries the holder metadata.
@@ -334,68 +331,28 @@ unsafe fn function_layout_admits_store(
     if crate::value::addr_class::try_read_gc_header(address)
         .is_none_or(|gc| crate::object_lacks_meta_word!(gc.obj_type))
     {
-        return false;
+        return None;
     }
     let prototype = address as *const ObjectHeader;
     // A1_UNPROVEN: record-first: d layout kind (kind-A/B question for S0f).
     let Some(holder) =
         crate::meta_read!(crate::meta_obj_runtime_born!(prototype as *mut _)).as_ref()
     else {
-        return false;
+        return None;
     };
     if holder.function_layout_birth != (u64::from(tag) << 32) | u64::from(word) {
-        return false;
+        return None;
     }
     let keys = record.keys() as *const crate::array::ArrayHeader;
     if keys.is_null()
         || *crate::array::array_elements_ptr(keys).add(position as usize) != key.to_bits()
     {
-        return false;
+        return None;
     }
     let entry = super::key_attrs::keys_entry(keys, position);
-    entry == super::key_attrs::ENTRY_OPTIONAL
-        && super::key_attrs::entry_is_plain_writable_data(entry)
-}
-
-/// Only ordinary physical prototype layouts are admitted, and every live
-/// descriptor is checked anew. No accessor or user code is invoked here.
-unsafe fn symbol_chain_allows_add(receiver: f64, key: f64) -> bool {
-    use crate::value::{POINTER_MASK, POINTER_TAG, TAG_MASK, TAG_NULL};
-    let mut prototype = super::js_object_get_prototype_of(receiver);
-    for _ in 0..64 {
-        let bits = prototype.to_bits();
-        if bits == TAG_NULL {
-            return true;
-        }
-        if bits & TAG_MASK != POINTER_TAG {
-            return false;
-        }
-        let address = (bits & POINTER_MASK) as usize;
-        let Some(gc) = crate::value::addr_class::try_read_gc_header(address) else {
-            return false;
-        };
-        if crate::object_lacks_meta_word!(gc.obj_type) {
-            return false;
-        }
-        let obj = address as *const ObjectHeader;
-        if (*obj).class_id != 0
-            || (!crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, gc.obj_type))
-                .is_null()
-                && (*crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, gc.obj_type)))
-                    .flags
-                    & super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
-                    != 0)
-        {
-            return false;
-        }
-        if let Some(entry) =
-            super::shaped_symbols::entry(address, (key.to_bits() & POINTER_MASK) as usize)
-        {
-            return super::key_attrs::entry_is_plain_writable_data(entry);
-        }
-        prototype = super::js_object_get_prototype_of(prototype);
-    }
-    false
+    (entry == super::key_attrs::ENTRY_OPTIONAL
+        && super::key_attrs::entry_is_plain_writable_data(entry))
+    .then_some(prototype_bits)
 }
 
 /// Checked fixed-position symbol store, preserving full borrowed-call and

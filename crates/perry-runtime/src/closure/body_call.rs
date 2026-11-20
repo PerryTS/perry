@@ -82,6 +82,7 @@ macro_rules! js_body_fn_ty {
 /// `fn_info!(native_args body, declared; ...)`.
 #[macro_export]
 macro_rules! fn_info {
+    (#[realm($($facts:tt)*)] declare $item:item) => { $item };
     // Runtime and native provider crates use the same exported record emitter.
     (#[realm($($facts:tt)*)] export $($body:ident)::+, $n:tt; $($m:ident($($a:tt)*)),*; bind $binding:ident, $metadata:ident) => {
         $crate::realm_fn_info_bind!($binding, $metadata, $crate::fn_info!(export $($body)::+, $n; $($m($($a)*)),*); $($facts)*);
@@ -119,6 +120,16 @@ macro_rules! fn_info {
         static INFO: $crate::codegen_abi::NativeFunctionInfo = $crate::codegen_abi::NativeFunctionInfo::new(
             $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@uty $n))
                 $($(.$m($($a),*))*)?, &OWNER);
+        &INFO.info as *const $crate::closure::JsFunctionInfo
+    }};
+    // A record that names itself (`with_name("text")` first) keeps the JS-visible
+    // name in the same static: no run-time naming call, no owner state.
+    ($(#[realm($($facts:tt)*)])? $body:path, $n:tt; with_name($name:literal) $(, $m:ident($($a:expr),*))* $(,)?) => {{
+        static OWNER: $crate::codegen_abi::FunctionMetadataOwner = $crate::codegen_abi::FunctionMetadataOwner::native();
+        const NAME: &str = $name;
+        static INFO: $crate::codegen_abi::NamedNativeFunctionInfo<{ NAME.len() }> = $crate::codegen_abi::NamedNativeFunctionInfo::new(
+            $crate::closure::JsFunctionInfo::of($body as $crate::fn_info!(@ty $n))
+                $(.$m($($a),*))*, &OWNER, NAME);
         &INFO.info as *const $crate::closure::JsFunctionInfo
     }};
     ($(#[realm($($facts:tt)*)])? $body:path, $n:tt $(; $($m:ident($($a:expr),*)),* $(,)?)?) => {{

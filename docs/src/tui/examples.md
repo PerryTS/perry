@@ -1,6 +1,6 @@
 # Examples
 
-End-to-end `perry/tui` programs covering the typical interactive-CLI shapes. Each example also lives in `test-files/test_perry_tui_inkcompat_*.ts` in the repo and is exercised by CI on every PR.
+End-to-end `perry/tui` programs covering the typical interactive-CLI shapes. Each example also lives in `tests/fixtures/programs/test_perry_tui_inkcompat_*.ts` in the repo and is exercised by CI on every PR.
 
 ## Counter
 

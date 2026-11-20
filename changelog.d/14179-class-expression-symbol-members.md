@@ -1,0 +1,1 @@
+Computed symbol methods and accessors belong to each evaluation of a class expression, including static members. Symbol reflection, inherited calls and deletion read the actual prototype or constructor, so keys from earlier evaluations do not leak into later classes.

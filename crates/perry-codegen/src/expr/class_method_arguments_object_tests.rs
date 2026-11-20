@@ -81,6 +81,7 @@ fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -116,6 +117,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -208,6 +213,7 @@ fn module_with_tail(tail: Param) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         getters: Vec::new(),
         setters: Vec::new(),
@@ -220,6 +226,7 @@ fn module_with_tail(tail: Param) -> Module {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }];
@@ -329,6 +336,7 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(TAIL_ID)),

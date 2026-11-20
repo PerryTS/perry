@@ -67,6 +67,10 @@ pub struct LlFunction {
     /// It joins the early inliner only when the facts prove a call site closed
     /// over it (`codegen/closed_targets.rs`).
     pub closed_target_preinline: bool,
+    /// The bodies the facts close this function's call sites over
+    /// (`codegen/closed_targets.rs`). It travels with the function, so a body
+    /// lowered on a callable worker reports its sites like any other.
+    pub(crate) closed_callees: Vec<String>,
     /// When true, keep a small routing wrapper as an optimization boundary.
     /// Used when inlining would duplicate guarded fast/fallback call graphs.
     pub no_inline: bool,
@@ -336,6 +340,7 @@ impl LlFunction {
             preinline_after_naming: None,
             guarded_preinline: false,
             closed_target_preinline: false,
+            closed_callees: Vec::new(),
             no_inline: false,
             disable_tail_calls: false,
             nanbox_operands: false,
@@ -1281,6 +1286,21 @@ impl LlFunction {
     /// Every decision that reads compile state (the root backend, which is
     /// per-thread) is made here, on the thread that owns the function; the
     /// returned plan applies on any thread.
+    /// Whether this body's roots lower to native stack maps at text finish
+    /// (`lower_precise_roots_to_native_stack`), which removes its shadow-slot
+    /// bookkeeping calls.
+    pub(crate) fn precise_roots_lowered(&self) -> bool {
+        self.stack_map_requested
+    }
+
+    /// Whether this body's `js_shadow_slot_bind` / `js_shadow_slot_set` calls
+    /// are dropped when its text is finished (`lower_roots_for_rs4gc` removes
+    /// every one), so no analysis of the body may count them as calls.
+    /// `PERRY_UNBOXED_CLASS_FIELDS=0` keeps counting them.
+    pub(crate) fn shadow_slot_calls_vanish(&self) -> bool {
+        self.precise_roots_lowered() && !crate::stmt::this_field_fast_off()
+    }
+
     pub(crate) fn text_finish(&self, gc_leaf_callees: &HashSet<String>) -> TextFinish {
         TextFinish {
             name: self.name.clone(),
@@ -1908,6 +1928,15 @@ impl TextFinish {
         // unmarked and therefore remain statepoints.
         let ir = if self.annotate_leaf_calls {
             crate::gc_call_effects::annotate_transitive_leaf_calls(&ir, gc_leaf_callees)
+        } else {
+            ir
+        };
+        // A root re-read with no safepoint since the previous one reuses its
+        // launder output (`precise_roots/reload_reuse.rs`). After the leaf
+        // stamping above, so a direct call the whole-module analysis proved
+        // cannot collect does not end the stretch.
+        let ir = if self.precise_roots.is_some() {
+            precise_roots::reload_reuse::reuse_root_reloads(&ir)
         } else {
             ir
         };

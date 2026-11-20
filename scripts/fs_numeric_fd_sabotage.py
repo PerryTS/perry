@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutant for test-parity/node-suite/fs/test_gap_fs_numeric_fd_paths.ts: classify a buffer
+"""Mutant for tests/parity/node-suite/fs/test_gap_fs_numeric_fd_paths.ts: classify a buffer
 probe word by stripping ANY tag (the pre-fix shape) instead of by tag first,
 so a numeric fd reaches a header read. After rebuilding perry, perry-runtime,
 perry-runtime-static and perry-stdlib-static the gap test must crash or

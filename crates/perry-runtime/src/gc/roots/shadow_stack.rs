@@ -507,18 +507,34 @@ pub extern "C" fn js_shadow_state_addr() -> *mut ShadowStackState {
 pub extern "C" fn js_shadow_frame_pop(frame_handle: u64) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        let base = frame_handle as usize;
-        // `base >= len`, not `base + HEADER_SLOTS > len`: the addition form
-        // wraps for a handle near `usize::MAX` and lets exactly the corrupted
-        // handles this guard exists for slip through into an unchecked read.
-        if base >= s.len {
+        let Some(base) = frame_base(s, frame_handle) else {
             report_corrupt_frame_pop(frame_handle);
             return;
-        }
+        };
         s.frame_top = (*s.ptr.add(base)).value as usize;
         // `ShadowEntry: Copy`, so shrinking has no drop glue to run.
         s.set_slots_len(base);
     });
+}
+
+/// The buffer index a frame handle names, or `None` for a handle that names
+/// no installed frame.
+///
+/// A handle is a `usize` index carried in the `u64` ABI word codegen declares
+/// on every target. Decoding it with `as usize` dropped the high word on
+/// wasm32: a NaN-boxed `undefined` (`0x7FFC_0000_0000_0001`) became index 1
+/// and `(1 << 32) | h` became the real frame `h`, so the malformed-handle
+/// guard popped a live frame there. A word that does not fit `usize` is out
+/// of range by definition.
+///
+/// `base >= len`, not `base + HEADER_SLOTS > len`: the addition form wraps
+/// for a handle near `usize::MAX` and lets exactly the corrupted handles the
+/// guard exists for slip through into an unchecked read.
+#[inline(always)]
+fn frame_base(s: &ShadowStackState, frame_handle: u64) -> Option<usize> {
+    usize::try_from(frame_handle)
+        .ok()
+        .filter(|&base| base < s.len)
 }
 
 /// Report an out-of-range `js_shadow_frame_pop` handle without unwinding.
@@ -747,10 +763,9 @@ pub(crate) fn frame_root_restore(sp: FrameRootSavepoint) {
 pub extern "C" fn js_shadow_frame_restore_to(frame_handle: u64) {
     SHADOW.with(|cell| unsafe {
         let s = &mut *cell.get();
-        let base = frame_handle as usize;
-        if base >= s.len {
+        let Some(base) = frame_base(s, frame_handle) else {
             return;
-        }
+        };
         let slots = (*s.ptr.add(base)).bound;
         let end = base + SHADOW_STACK_HEADER_SLOTS + slots;
         if end <= s.len {

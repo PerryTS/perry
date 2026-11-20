@@ -85,6 +85,24 @@ pub struct BirthShape {
 }
 
 impl BirthShape {
+    /// The facts of the declared empty ordinary layout (native row
+    /// `EMPTY_ORDINARY_LAYOUT_ROW`, seeded by the runtime at agent creation):
+    /// a literal with no key, no live slot, no typed lane, no rep, no
+    /// ConstFn/private/brand/attribute fact. A literal whose late keys are
+    /// holes of its family names those keys and is not this content.
+    pub fn is_empty_ordinary(&self) -> bool {
+        self.keys.is_empty()
+            && self.key_count == 0
+            && self.live == 0
+            && matches!(self.proto, BirthProto::Literal)
+            && self.typed.is_none()
+            && self.rep == 0
+            && self.constfn.is_empty()
+            && self.private.is_empty()
+            && self.brands.is_empty()
+            && self.attrs.is_empty()
+    }
+
     /// A completed (final) content: ConstFn lanes or private facts. Never an
     /// allocation's birth.
     pub fn is_completed(&self) -> bool {
@@ -747,19 +765,9 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
         }
         entries
     };
-    let mut special = 0u32;
-    for slot in 0..32 {
-        if (rep >> (slot * 2)) & 3 == 3 {
-            special |= 1 << slot;
-        }
-    }
-    let covered = constfn
-        .iter()
-        .filter(|entry| entry.slot < 32)
-        .fold(0u32, |mask, entry| mask | (1 << entry.slot));
-    if special != covered {
-        return None;
-    }
+    // A `11` lane without a body entry is an I32 lane (`field_rep`: a `11`
+    // lane outside the ConstFn mask is I32 at rest), so a body needs a `11`
+    // lane (checked above) but a `11` lane does not need a body.
     Some((
         id,
         BirthShape {
@@ -806,6 +814,18 @@ pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
         m.borrow().keys().any(|s| {
             s.constfn.iter().any(|i| i.slot as u32 == slot)
                 && s.keys.split(|&b| b == 0).nth(slot as usize) == name
+        })
+    })
+}
+
+/// Does any completed shape hold a constant function at `slot` under the key
+/// `key`? The family-layout twin of `slot_may_be_constfn`: a family class's
+/// birth keys are not in constructor order, so the key names the slot.
+pub(crate) fn key_may_be_constfn_at(key: &str, slot: u32) -> bool {
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow().keys().any(|s| {
+            s.constfn.iter().any(|i| i.slot as u32 == slot)
+                && s.keys.split(|&b| b == 0).nth(slot as usize) == Some(key.as_bytes())
         })
     })
 }

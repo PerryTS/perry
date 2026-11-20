@@ -309,18 +309,11 @@ fn deliver(event: Event) {
             let Some((socket_bits, context)) = live(id) else {
                 return;
             };
-            let family = if src.is_ipv4() { "IPv4" } else { "IPv6" };
             let previous = crate::async_context::enter_context(&context);
             crate::async_context::push_context_guard(
                 crate::async_context::ContextGuardAction::RestoreSnapshot(previous),
             );
-            crate::dgram::dgram_emit_message(
-                socket_bits,
-                &data,
-                &src.ip().to_string(),
-                src.port(),
-                family,
-            );
+            crate::dgram::dgram_emit_message(socket_bits, &data, src);
             if let Some(action) = crate::async_context::pop_context_guard() {
                 crate::async_context::apply_context_guard(action);
             }

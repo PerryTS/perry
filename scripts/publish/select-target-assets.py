@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Select a complete target/ext set; recovery accepts only public npm bytes."""
+"""Select a complete set of on-demand packages; recovery accepts only public npm bytes."""
 import argparse
 import hashlib
 import json
@@ -14,20 +14,20 @@ def select(root, catalog, version, verify_npm):
     triples = json.loads(catalog.read_text())
     expected = {
         f"@perryts/perry-{kind}-{triple}": (kind, triple)
-        for kind, key in (("target", "targets"), ("ext", "ext"))
-        for triple in triples[key]
+        for kind, key in (("target", "targets"), ("ext", "ext"), ("ui", "ui"), ("wasm-host", "wasm-host"))
+        for triple in triples.get(key, [])  # older build commits predate ui and wasm-host
     }
     candidates = {name: [] for name in expected}
     for path in sorted(root.rglob("*.tgz")):
         # npm-pack-check's root also contains the wrapper and host packages.
-        if not path.name.startswith(("perryts-perry-target-", "perryts-perry-ext-")):
+        if not path.name.startswith(tuple(f"perryts-perry-{kind}-" for kind in ("target", "ext", "ui", "wasm-host"))):
             continue
         with tarfile.open(path, "r:gz") as archive:
             package = json.load(archive.extractfile("package/package.json"))
             target = json.load(archive.extractfile("package/target.json"))
         name = package["name"]
         if name not in expected or target["target_triple"] != expected[name][1]:
-            raise ValueError(f"{path}: unexpected target/ext package {name}")
+            raise ValueError(f"{path}: unexpected on-demand package {name}")
         packed_version = package["version"]
         if target["perry_version"] != packed_version or (version and packed_version != version):
             raise ValueError(f"{path}: package/target version does not match {version or packed_version}")

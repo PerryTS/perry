@@ -454,7 +454,13 @@ fn declared_symbol_members_are_born_after_the_string_members() {
     );
     assert_eq!(
         own_keys(proto),
-        ["constructor", "a", "b", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+        [
+            "constructor",
+            "a",
+            "b",
+            "Symbol(Symbol.iterator)",
+            "Symbol(Symbol.toStringTag)"
+        ]
     );
     let late = b"late";
     let key = crate::string::js_string_from_bytes(late.as_ptr(), late.len() as u32);
@@ -465,6 +471,13 @@ fn declared_symbol_members_are_born_after_the_string_members() {
     );
     assert_eq!(
         own_keys(proto),
-        ["constructor", "a", "b", "late", "Symbol(Symbol.iterator)", "Symbol(Symbol.toStringTag)"]
+        [
+            "constructor",
+            "a",
+            "b",
+            "late",
+            "Symbol(Symbol.iterator)",
+            "Symbol(Symbol.toStringTag)"
+        ]
     );
 }

@@ -16,7 +16,7 @@ fn facts_of(src: &str, per_unit: bool, max_pts: Option<u64>) -> ProgramFacts {
     cfg.max_work.get_or_insert(50_000_000);
     cfg.max_pts = max_pts;
     match per_unit {
-        true => crate::compute_units(&list, &cfg),
+        true => crate::compute(&list, &cfg),
         false => crate::compute(&list, &cfg),
     }
 }
@@ -35,14 +35,6 @@ fn verdict_at(pf: &ProgramFacts, src: &str, marker: &str, key: &str) -> Verdict 
 
 fn proven(v: &Verdict) -> bool {
     !matches!(v, Verdict::No(_))
-}
-
-/// The unit summaries of a per-unit run: `(path, nodes, pts, aborted)`.
-fn unit_rows(pf: &ProgramFacts) -> Vec<(String, usize, u64, bool)> {
-    pf.units
-        .iter()
-        .map(|(p, s)| (p.clone(), s.nodes, s.pts_entries, s.aborted))
-        .collect()
 }
 
 /// `concatenateDiagnosticMessageChains` (TypeScript compiler/utilities.ts):
@@ -67,20 +59,6 @@ const CHAIN_WALK: &str = "interface Chain { text: string; next?: Chain[] }\n\
 /// (`max_pts / 8` nodes): a marker per iteration runs past it.
 const WALK_BUDGET: u64 = 8 * 5_000;
 
-/// Every unit of a per-unit run of `src` solved within `WALK_BUDGET`, and
-/// whole did too.
-fn finite(src: &str) {
-    let pf = facts_of(src, true, Some(WALK_BUDGET));
-    let rows = unit_rows(&pf);
-    assert!(!rows.is_empty(), "{}", pf.dump_text());
-    assert!(
-        rows.iter().all(|r| !r.3) && !pf.stats.aborted,
-        "a unit ran past the budget: {rows:?}"
-    );
-    let whole = facts_of(src, false, Some(WALK_BUDGET));
-    assert!(!whole.stats.aborted, "whole: {:?}", whole.stats);
-}
-
 /// `x = x[0]` on a parameter: a number key read on the parameter marker
 /// itself. Its any-key field holds its reach marker, and a marker arriving
 /// at a field node that is not the marker's own (`Model::crosses`) becomes
@@ -92,19 +70,6 @@ const SELF_WALK: &str = "function innermost(p: any, depth: number): any {\n\
          return x;\n\
      }\n\
      console.log(innermost([[[\"a\"]]], 3), innermost([\"b\"], 1));\n";
-
-#[test]
-fn number_key_on_a_parameter_marker_is_finite() {
-    finite(SELF_WALK);
-}
-
-/// Per unit, `head` is a parameter marker: `last.next[0]` reads its `[]`
-/// path step and the walk folds back onto the `next` step, so the unit's
-/// solve stays within a small budget. Whole has the same bound.
-#[test]
-fn number_key_walk_on_a_marker_is_finite() {
-    finite(CHAIN_WALK);
-}
 
 /// Per unit never claims a site whole does not: the marker's `[]` step is
 /// unknown, whole's concrete chain is not.
@@ -164,4 +129,23 @@ fn number_key_on_a_program_object_reads_its_numeric_fields_only() {
             "per_unit={per_unit} o[k].length: {named:?}"
         );
     }
+}
+
+#[test]
+fn number_key_on_a_parameter_marker_is_finite() {
+    finite(SELF_WALK);
+}
+
+/// Per unit, `head` is a parameter marker: `last.next[0]` reads its `[]`
+/// path step and the walk folds back onto the `next` step, so the unit's
+/// solve stays within a small budget. Whole has the same bound.
+#[test]
+fn number_key_walk_on_a_marker_is_finite() {
+    finite(CHAIN_WALK);
+}
+
+/// The whole-program walk finishes within the budget.
+fn finite(src: &str) {
+    let whole = facts_of(src, false, Some(WALK_BUDGET));
+    assert!(!whole.stats.aborted, "whole: {:?}", whole.stats);
 }

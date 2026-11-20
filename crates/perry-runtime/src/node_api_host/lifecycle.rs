@@ -12,7 +12,6 @@ pub type NapiAsyncCleanupHook =
 pub(crate) struct AsyncContextRecord {
     pub env_serial: u64,
     pub ids: AsyncResourceIds,
-    pub destroyed: bool,
 }
 
 pub(crate) struct CallbackScopeRecord {
@@ -106,7 +105,6 @@ pub unsafe extern "C" fn napi_async_init(
         let mut record = Box::new(AsyncContextRecord {
             env_serial: env.serial,
             ids,
-            destroyed: false,
         });
         let pointer = (&mut *record) as *mut AsyncContextRecord as NapiAsyncContext;
         env.async_context_lookup
@@ -123,12 +121,7 @@ pub unsafe extern "C" fn napi_async_init(
 
 #[no_mangle]
 pub unsafe extern "C" fn napi_async_destroy(env: NapiEnv, context: NapiAsyncContext) -> NapiStatus {
-    let ids = with_env_mut(env, |env| {
-        let record = env.async_context_mut(context)?;
-        record.destroyed = true;
-        Some(record.ids)
-    })
-    .flatten();
+    let ids = with_env_mut(env, |env| env.take_async_context(context)).flatten();
     let Some(ids) = ids else {
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };
@@ -159,7 +152,7 @@ pub unsafe extern "C" fn napi_make_callback(
         return set_status(env, NapiStatus::InvalidArg, "async context is not live");
     };
     if let Err(error) = crate::async_hook_slots::try_enter_resource_scope(ids) {
-        return store_pending_exception(env, error.to_bits());
+        return store_pending_exception(env, error.value().to_bits());
     }
     let call_status = napi_call_function(env, recv, function, argc, argv, result);
     let leave = crate::async_hook_slots::try_leave_resource_scope(ids.async_id);
@@ -167,7 +160,7 @@ pub unsafe extern "C" fn napi_make_callback(
         return call_status;
     }
     if let Err(error) = leave {
-        return store_pending_exception(env, error.to_bits());
+        return store_pending_exception(env, error.value().to_bits());
     }
     ok(env)
 }

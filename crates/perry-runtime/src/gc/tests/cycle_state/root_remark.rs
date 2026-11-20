@@ -115,6 +115,8 @@ fn post_remark_unshaded_root_stores_survive(window: &str) {
         object.write(crate::object::ObjectHeader {
             class_id: 0,
             parent_class_id: 0,
+            #[cfg(target_pointer_width = "32")]
+            _slot_alignment_padding: 0,
             meta: std::ptr::null_mut(),
         });
         let fields =

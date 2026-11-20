@@ -1,0 +1,1 @@
+`return()` on a generator suspended at a `yield` inside a `for...of` body now closes the loop iterator (calls its `return()`, so its `finally` blocks run) before the generator completes, as ECMA-262 27.5.3.4 and 14.7.5.7 require.

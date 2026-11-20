@@ -112,9 +112,45 @@ impl<'a> Gen<'a> {
         (n >= 0.0 && n <= i32::MAX as f64 && n.fract() == 0.0).then_some(n as u32)
     }
 
-    /// The constant string `e` evaluates to: a constant expression
-    /// (`const_eval`), or a constant binding whose initializer is one.
+    /// A constant string expression or immutable binding. Numeric index
+    /// paths keep their element representation in callers of this helper.
     pub(crate) fn const_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
+        match self.const_key_value(mi, e)? {
+            crate::gen_const::Const::Str(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// The node of a computed key: the key expression's own node, or,
+    /// for a read of an immutable binding (`const`, HIR's `mutable: false`
+    /// temps such as the computed key `params[0] += v` spills) whose
+    /// initializer is a numeric literal, that literal's node
+    /// (`Gen::num_literal`): the binding holds nothing else. A read before
+    /// its initialization throws (TDZ) and keys no access at all.
+    pub(crate) fn index_key_node(&mut self, fx: &crate::gen::Fx, index: &Expr) -> NodeId {
+        let i = self.expr_zs(fx, index);
+        if !matches!(index, Expr::LocalGet(_) | Expr::GlobalGet(_)) {
+            return i;
+        }
+        match self.const_key_value(fx.module, index) {
+            Some(crate::gen_const::Const::Num(n)) => self.num_literal(n),
+            _ => i,
+        }
+    }
+
+    /// A call's constant primitive argument as its ToPropertyKey spelling.
+    pub(crate) fn const_property_key(&mut self, mi: u32, e: &Expr) -> Option<String> {
+        use crate::gen_const::Const;
+        Some(match self.const_key_value(mi, e)? {
+            Const::Str(s) => s,
+            Const::Num(n) => perry_hir::js_number_to_string(n),
+            Const::Bool(b) => b.to_string(),
+            Const::Undef => "undefined".into(),
+            Const::Null => "null".into(),
+        })
+    }
+
+    fn const_key_value(&mut self, mi: u32, e: &Expr) -> Option<crate::gen_const::Const> {
         let mut seen: Vec<Binding> = Vec::new();
         let mut e = e.clone();
         loop {
@@ -141,10 +177,7 @@ impl<'a> Gen<'a> {
                 ConstInit::Lit(_) => return None,
             }
         }
-        match self.const_eval(mi, &e)? {
-            crate::gen_const::Const::Str(s) => Some(s),
-            _ => None,
-        }
+        self.const_eval(mi, &e)
     }
 
     /// The keys a store under computed key `e` may name, when they are a
@@ -255,26 +288,31 @@ impl<'a> Gen<'a> {
                         Expr::GlobalGet(id) => self.bound_literal((mi as u32, true, *id)),
                         _ => None,
                     };
+                    if name.is_none() {
+                        keys.push(Expr::Undefined);
+                    }
                     lits.extend(name.cloned());
                 }
                 Expr::ObjectDefineProperty(_, k, _)
-                | Expr::ReflectDefineProperty { key: k, .. }
-                    if matches!(k.as_ref(), Expr::LocalGet(_) | Expr::GlobalGet(_)) =>
-                {
-                    keys.push(k.as_ref().clone())
+                | Expr::ReflectDefineProperty { key: k, .. } => keys.push(k.as_ref().clone()),
+                Expr::RegisterClassComputedAccessor { key_expr, .. } => {
+                    keys.push(key_expr.as_ref().clone());
                 }
                 _ => {}
             });
             for k in &keys {
                 if let Some(s) = self.const_key(mi as u32, k) {
                     let a = self.m.atom(&s);
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
+                } else {
+                    let star = self.m.atom(crate::STAR_KEY);
+                    self.m.add_accessor_atom(star);
                 }
             }
             for name in lits {
                 for n in self.literal_keys(mi, &name) {
                     let a = self.m.atom(&n);
-                    self.m.accessor_atoms.insert(a);
+                    self.m.add_accessor_atom(a);
                 }
             }
         }

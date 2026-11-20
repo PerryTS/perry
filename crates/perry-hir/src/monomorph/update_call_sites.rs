@@ -98,6 +98,7 @@ fn update_call_sites_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             update_call_sites_in_stmts(body, ctx, lookup);
             if let Some(c) = catch {
@@ -250,7 +251,7 @@ fn update_call_sites_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts.iter_mut() {
+            for v in parts.iter_mut().flatten() {
                 update_call_sites_in_expr(v, ctx, lookup);
             }
         }

@@ -8,6 +8,8 @@
 //! and rewrite phases.
 
 mod analysis;
+#[cfg(test)]
+mod argument_order_tests;
 mod call_inliner;
 mod clamp;
 mod closure_analysis;
@@ -58,6 +60,7 @@ pub(crate) use substitute::{
 pub(crate) use super_detect::MAX_INLINE_EXPR_RECURSION_DEPTH;
 pub(crate) use super_detect::{enter_inline_expr_recursion, method_contains_lexical_super};
 
+use crate::local_occurrences::WriteCensus;
 use perry_hir::types::{FuncId, LocalId, Type};
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 use std::collections::{HashMap, HashSet};
@@ -138,6 +141,7 @@ pub fn inline_functions(
     cross_module::localize_cross_module_functions(module, extra_functions);
     let first_fresh_id = find_max_local_id_in_module(module).saturating_add(1);
     let span_remaps = crate::source_spans::RemapSession::start(first_fresh_id);
+    let _effects = crate::effects::Session::start(module);
     inline_functions_inner(
         module,
         extra_methods,
@@ -239,6 +243,7 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_are_safe(body, target, saw_target)
                     && catch
@@ -380,6 +385,7 @@ fn inline_functions_inner(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     for s in body {
                         walk_stmt_exprs(s, f);
@@ -673,6 +679,11 @@ fn inline_functions_inner(
     // is already true for the method parameter), leaving the method reading the
     // wrong value from the class field.
     let module_max_id = find_max_local_id_in_module(module);
+    // Which locals anything writes, for the argument-substitution rule
+    // (`WriteCensus::substitutes_arg`). Inlining keeps it true for the ids it
+    // covers: a copied body writes only locals already counted, and every
+    // id minted below is past its limit.
+    let census = &WriteCensus::of(module);
 
     // Phase 4: Inline calls in init statements.
     // Method calls are always safe (they access `this.field` via pointer indirection).
@@ -702,6 +713,7 @@ fn inline_functions_inner(
             &mut local_types,
             &mut exact_receiver_facts,
             &mut next_local_id,
+            census,
             None,
             &class_field_types,
             false,
@@ -738,6 +750,7 @@ fn inline_functions_inner(
             &mut local_types,
             &mut exact_receiver_facts,
             &mut local_id,
+            census,
             None,
             &class_field_types,
             false,
@@ -788,6 +801,7 @@ fn inline_functions_inner(
                 &mut local_types,
                 &mut exact_receiver_facts,
                 &mut local_id,
+                census,
                 Some(&class_name),
                 &class_field_types,
                 false,
@@ -820,6 +834,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_strict: false,
         }
     }
@@ -861,6 +876,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }
@@ -935,10 +951,12 @@ mod tests {
         let mut next_local_id = 100;
         let (setup, param_map) = call_inliner::build_inline_arg_bindings(
             &params,
+            &[],
             &[Expr::LocalGet(42)],
             &HashSet::new(),
             &HashSet::new(),
             &mut next_local_id,
+            &WriteCensus::unwritten(),
         )
         .unwrap();
 
@@ -968,10 +986,12 @@ mod tests {
         let mut next_local_id = 100;
         let (setup, param_map) = call_inliner::build_inline_arg_bindings(
             &params,
+            &[],
             &[Expr::LocalGet(42)],
             &HashSet::new(),
             &HashSet::new(),
             &mut next_local_id,
+            &WriteCensus::unwritten(),
         )
         .unwrap();
 
@@ -1220,6 +1240,7 @@ mod tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1281,6 +1302,7 @@ mod tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1297,6 +1319,7 @@ mod tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1371,6 +1394,7 @@ mod tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1503,6 +1527,7 @@ mod tests {
                 type_only: false,
                 runtime_erased: false,
                 is_dynamic: false,
+                is_deferred: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -1622,6 +1647,7 @@ mod tests {
                 byte_offset: 0,
                 deferred_error: None,
                 synchronous: true,
+                deferred: false,
             }))],
         );
         loads_relative_module.name = "loadAlpha".to_string();
@@ -1695,6 +1721,7 @@ mod tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1711,6 +1738,7 @@ mod tests {
             type_only: true,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,

@@ -2,7 +2,7 @@
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
 use super::perex_owner::{BuildError, GcProgram, HeapSubject};
-use super::perex_runtime::{self as host, CaptureMode, EngineError, Match};
+use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
@@ -54,7 +54,7 @@ pub(super) fn before_result_alloc() {
 /// Capture by reference when `f` can throw: its Rust frame can be abandoned by
 /// longjmp. Native ownership belongs in the caller, above this local trap.
 pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, EngineError> {
-    crate::exception::catch_js_throw(f).map_err(EngineError::Abrupt)
+    crate::exception::catch_thrown(f).map_err(EngineError::Abrupt)
 }
 
 pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
@@ -67,10 +67,10 @@ pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
 fn raise(error: EngineError) -> ! {
     // No allocation/poll precedes rethrowing the returned exception bits.
     if let EngineError::Abrupt(value) = error {
-        crate::exception::js_throw(value);
+        crate::exception::rethrow_caught(value);
     }
     if let EngineError::Build(BuildError::Abrupt(bits)) = error {
-        crate::exception::js_throw(f64::from_bits(bits));
+        crate::exception::rethrow_caught(bits);
     }
     let type_error = matches!(error, EngineError::Type(_));
     let (message, syntax) = match error {
@@ -104,14 +104,14 @@ fn raise(error: EngineError) -> ! {
     let text = scope.root_string_ptr(text);
     let exception = text.with_mut_ptr::<StringHeader, _>(|text| {
         if type_error {
-            crate::error::js_typeerror_new(text)
+            crate::error::CoreError::type_error(text)
         } else if syntax {
-            crate::error::js_syntaxerror_new(text)
+            crate::error::CoreError::syntax_error(text)
         } else {
-            crate::error::js_rangeerror_new(text)
+            crate::error::CoreError::range_error(text)
         }
     });
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(exception as i64))
+    crate::exception::throw_core(exception)
 }
 
 /// Construction and reinitialization publish the program. Each operation owns
@@ -750,9 +750,9 @@ fn execute_rooted_output<P: OutputProjection>(
         .filter(|index| captures.as_ref().is_some_and(|slots| *index < slots.len()));
     let (array, groups) = if let Some(index) = projected {
         let fresh = bind_heap_subject(*input)?;
-        let found = Match { full, captures };
+        let slots = captures.as_deref();
         let array = caught(|| {
-            super::perex_results::materialize_capture(&fresh, &found, position, index, budget, poll)
+            super::perex_results::materialize_capture(&fresh, slots, position, index, budget, poll)
         })??;
         (array, std::ptr::null_mut())
     } else {
@@ -760,7 +760,7 @@ fn execute_rooted_output<P: OutputProjection>(
         // the result as its receiver, exposing every capture and metadata.
         match output {
             ExecOutput::Object => {
-                let found = Match { full, captures };
+                let slots = captures.as_deref();
                 let scope = RuntimeHandleScope::new();
                 let fresh;
                 let (bound_subject, bound_program) = match reused {
@@ -786,7 +786,8 @@ fn execute_rooted_output<P: OutputProjection>(
                         input,
                         bound_subject,
                         bound_program,
-                        &found,
+                        full,
+                        slots,
                         position,
                         has_indices,
                         budget,
@@ -967,6 +968,15 @@ fn coerced_start(
 /// the TypeError for a non-writable `lastIndex` returned instead of thrown.
 /// Neither branch runs user code.
 fn store_last_index(re: *mut RegExpHeader, n: usize) -> Result<(), EngineError> {
-    super::set_last_index_caught(crate::value::js_nanbox_pointer(re as i64), n as f64)
-        .map_err(EngineError::Abrupt)
+    let receiver = crate::value::js_nanbox_pointer(re as i64);
+    // On the birth layout `lastIndex` is an own writable data property
+    // (22.2.3.1), so the Set is OrdinarySet's store of the value into its
+    // slot (10.1.9.2). A non-writable `lastIndex`, a frozen receiver or any
+    // other layout keeps the ordinary Set and its TypeError.
+    if let Some(re) = super::instance::birth_layout(receiver) {
+        // SAFETY: admitted just now; nothing collected since.
+        unsafe { super::instance::birth_set_last_index(re, n as f64) };
+        return Ok(());
+    }
+    super::set_last_index_caught(receiver, n as f64).map_err(EngineError::Abrupt)
 }

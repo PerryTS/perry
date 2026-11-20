@@ -71,12 +71,7 @@ fn non_element_numeric_keys_do_not_truncate_on_regular_lazy_or_materialized_arra
                 "packed state={state}, key={key}"
             );
         }
-        for (key, expected) in [
-            (0.0, 11.0),
-            (-0.0, 11.0),
-            (1.0, 22.0),
-            (f64::from_bits(JSValue::int32(2).bits()), 33.0),
-        ] {
+        for (key, expected) in [(0.0, 11.0), (-0.0, 11.0), (1.0, 22.0), (f64::from(2), 33.0)] {
             assert_eq!(js_dyn_index_get(array.get_nanbox_f64(), key), expected);
             assert_eq!(
                 js_packed_arraylike_index_get(array.get_nanbox_f64(), key),
@@ -132,5 +127,5 @@ fn boxed_integer_keys_keep_their_object_property_semantics() {
         })
     };
     assert_eq!(read(2.0), 42.0);
-    assert_eq!(read(f64::from_bits(JSValue::int32(2).bits())), 42.0);
+    assert_eq!(read(f64::from(2)), 42.0);
 }

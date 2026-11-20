@@ -59,6 +59,7 @@ fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: true,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -94,6 +95,7 @@ fn module_with(function: Function) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -521,6 +523,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
                     mutable_captures: vec![ACC],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -587,6 +590,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                     mutable_captures: vec![ACC],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,
@@ -860,9 +864,16 @@ fn literal_parts_get_no_symbol_check_and_the_value_part_is_tested_inline() {
     // is unchanged), but nothing consumes their handle loads.
     for handle in ir.lines().filter(|l| l.contains(".handle")) {
         let reg = handle.trim().split(" = ").next().unwrap();
+        // Whole-register uses only: `%r7` is a prefix of `%r71`.
+        let uses = ir
+            .match_indices(reg)
+            .filter(|(at, _)| {
+                !ir[at + reg.len()..]
+                    .starts_with(|c: char| c.is_ascii_alphanumeric() || matches!(c, '_' | '.'))
+            })
+            .count();
         assert_eq!(
-            ir.matches(reg).count(),
-            1,
+            uses, 1,
             "a literal's handle load must be unused ({reg}):\n{ir}"
         );
     }

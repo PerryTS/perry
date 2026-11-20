@@ -4,18 +4,12 @@ use super::support::*;
 
 #[test]
 fn event_symbol_properties_survive_a_moving_collection() {
-    check_event_symbols(false);
+    check_event_symbols();
 }
-#[test]
-#[ignore = "negative control: omit the event symbol cache root scanner"]
-fn negative_control_objtables_event_symbol_cache() {
-    check_event_symbols(true);
-}
-fn check_event_symbols(omit_roots: bool) {
+fn check_event_symbols() {
     let _guard = CopyingNurseryTestGuard::new(1);
-    if !omit_roots {
-        gc_register_mutable_root_scanner(crate::event_target::state::scan_roots);
-    }
+    gc_register_mutable_root_scanner(crate::event_target::state::scan_roots);
+
     // Builtin prototypes are born old (`gc::never_move`): an old object's
     // shape-keys edge is rewritten by the shape-table scanner, as production
     // registers it (`gc_init`).

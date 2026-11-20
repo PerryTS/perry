@@ -146,6 +146,7 @@ fn stmt_contains_lexical_super(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_lexical_super)
                 || catch

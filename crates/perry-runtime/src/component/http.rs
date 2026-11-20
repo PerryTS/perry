@@ -57,7 +57,7 @@ pub extern "C" fn js_component_http_server_new(options: f64) -> f64 {
     let mut output = Vec::new();
     let mut address = String::new();
     let mut native = None;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = host::ops();
         encoded = value::encode(options.get_nanbox_f64());
         bytes = serde_json::to_vec(&encoded).unwrap();
@@ -125,7 +125,7 @@ pub extern "C" fn js_component_http_handle(server: f64, component: f64, interfac
     let mut interface = String::new();
     let mut output = Vec::new();
     let mut native = None;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = host::ops();
         interface = string(interface_input.get_nanbox_f64());
         // Root submission context before Promise init hooks can collect or

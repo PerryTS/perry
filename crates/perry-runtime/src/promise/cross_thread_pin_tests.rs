@@ -57,6 +57,7 @@ fn rejection_releases_the_pin_too() {
     assert_eq!(unsafe { (*promise).native_pinned }, 0);
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn cross_thread_promise_survives_a_full_collection_while_only_native_code_holds_it() {
     let _guard = test_native_async_lock();

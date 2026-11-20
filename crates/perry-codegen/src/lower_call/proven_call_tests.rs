@@ -170,7 +170,11 @@ fn a_proven_set_of_up_to_four_bodies_calls_the_body_its_info_names() {
     for n in 2..=4 {
         let (once, ids) = once_with(n);
         assert!(!once.contains("js_closure_call"), "{once}");
-        assert_eq!(indirect_calls(&once), 0, "no indirect call (n={n}):\n{once}");
+        assert_eq!(
+            indirect_calls(&once),
+            0,
+            "no indirect call (n={n}):\n{once}"
+        );
         // One info load, no code-word load: the arms are direct calls.
         let compares: Vec<&str> = once
             .lines()
@@ -190,7 +194,11 @@ fn a_proven_set_of_up_to_four_bodies_calls_the_body_its_info_names() {
                 .lines()
                 .filter(|l| l.contains("call ") && (l.contains(&sym) || l.contains(&typed)))
                 .collect();
-            assert_eq!(calls.len(), 1, "one direct call of body {i} (n={n}):\n{once}");
+            assert_eq!(
+                calls.len(),
+                1,
+                "one direct call of body {i} (n={n}):\n{once}"
+            );
             // Each arm passes its own body's parameters: b3 declares two,
             // the call passes one, so its arm pads with undefined.
             let doubles = calls[0].matches("double ").count();
@@ -223,7 +231,10 @@ fn a_proven_set_of_five_bodies_is_one_load_and_an_indirect_call() {
     assert_eq!(indirect_calls(&once), 1, "one indirect call:\n{once}");
     assert!(!once.contains("icmp eq ptr"), "no info compare:\n{once}");
     for id in ids {
-        assert!(!once.contains(&format!("__{id}(")), "no direct call:\n{once}");
+        assert!(
+            !once.contains(&format!("__{id}(")),
+            "no direct call:\n{once}"
+        );
     }
 }
 

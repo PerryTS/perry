@@ -1,0 +1,1 @@
+Fix `perry compile` never finishing on a for-in loop whose body writes the iterated object under a key made from the loop key (`for (const k in o) o[k + "x"] = 1`). The facts solve ran the body once per key and each run named a new key; it now runs such a loop once with every key.

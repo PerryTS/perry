@@ -14,8 +14,8 @@ JSON
 printf '%s\n' 'module.exports = require("./addon.node");' > "$package/index.js"
 flags=(-shared)
 if [[ $(uname -s) == Darwin ]]; then flags+=(-undefined dynamic_lookup); else flags+=(-fPIC); fi
-"${CC:-cc}" "${flags[@]}" "$root/test-files/fixtures/honestptr-nan/addon.c" -o "$package/addon.node"
-cp "$root/test-files/fixtures/honestptr-nan/surface.ts" "$fixture/main.ts"
+"${CC:-cc}" "${flags[@]}" "$root/tests/fixtures/programs/fixtures/honestptr-nan/addon.c" -o "$package/addon.node"
+cp "$root/tests/fixtures/programs/fixtures/honestptr-nan/surface.ts" "$fixture/main.ts"
 cd "$fixture"
 node --expose-gc --experimental-strip-types main.ts > node.out
 if [[ ${1:-} == --node-only ]]; then cat node.out; exit 0; fi

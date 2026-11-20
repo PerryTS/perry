@@ -266,9 +266,8 @@ pub(crate) fn lower_member_tail(
                     // (global_this.rs), but the reroute-undo otherwise collapses
                     // them to `GlobalGet(0).<name>`, whose intrinsic path drops
                     // the metadata (`typeof` is "function" but `.name` was
-                    // undefined). `Array.fromAsync` is unreified and stays
-                    // undefined either way. Direct calls keep the intrinsic
-                    // fast path via the `!member_is_call_callee` gate.
+                    // undefined). Direct calls keep the intrinsic fast path
+                    // via the `!member_is_call_callee` gate.
                     // #4627: all six Number statics (isFinite / isInteger /
                     // isNaN / isSafeInteger / parseFloat / parseInt) are reified
                     // with metadata via install_constructor_static, so routing
@@ -993,6 +992,7 @@ pub(crate) fn lower_member_tail(
                 });
             }
             Ok(Expr::IndexGet {
+                element_offset: member.span.lo.0,
                 byte_offset: 0,
                 byte_end: 0,
                 object,

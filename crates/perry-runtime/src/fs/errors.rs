@@ -67,10 +67,11 @@ impl FsReadFailure {
     /// A read failure carries the opened path as Rust-owned metadata, so an
     /// async error never decodes a possibly moved JS input after allocation.
     /// Sync reads and numeric descriptors keep a pathless read diagnostic.
-    pub(crate) unsafe fn async_error_value(&self) -> f64 {
+
+    pub(crate) unsafe fn async_core_error(&self) -> crate::error::CoreError {
         match self.path.as_ref().or(self.read_path.as_ref()) {
-            Some(path) => build_fs_error_value(&self.err, self.syscall, path),
-            None => build_fs_error_value_no_path(&self.err, self.syscall),
+            Some(path) => fs_error(&self.err, self.syscall, path),
+            None => fs_error_no_path(&self.err, self.syscall),
         }
     }
 
@@ -78,6 +79,13 @@ impl FsReadFailure {
         match &self.path {
             Some(path) => build_fs_error_value(&self.err, self.syscall, path),
             None => build_fs_error_value_no_path(&self.err, self.syscall),
+        }
+    }
+
+    pub(crate) unsafe fn core_error(&self) -> crate::error::CoreError {
+        match &self.path {
+            Some(path) => fs_error(&self.err, self.syscall, path),
+            None => fs_error_no_path(&self.err, self.syscall),
         }
     }
 }
@@ -191,5 +199,6 @@ mod tests {
 }
 
 pub(crate) use crate::io_error::{
-    build_fs_error_value, build_fs_error_value_no_path, build_fs_error_value_with_dest,
+    build_fs_error_value, build_fs_error_value_no_path, build_fs_error_value_with_dest, fs_error,
+    fs_error_no_path, fs_error_with_dest,
 };

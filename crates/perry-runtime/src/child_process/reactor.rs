@@ -1339,7 +1339,7 @@ pub(crate) fn cp_reactor_pump() {
     // without parking — the `await` poll loop, and the lifecycle tests below —
     // would otherwise spin against a queue nothing can fill. (wasm32 has no
     // turnloop, so nothing is adopted and there is nothing to drain.)
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(all(not(unix), not(target_arch = "wasm32")))]
     crate::turnloop_proc::drain_pending();
     cp_reactor_pump_inner();
     CP_PUMPING.with(|p| p.set(false));
@@ -1379,8 +1379,17 @@ fn cp_reactor_pump_inner() {
         return;
     }
 
+    // Unix stdio lives in net.Socket, not turnloop_proc's handle table.
+    // Drive its completions only after spawn has had its callback turn.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    crate::event_pump::settle_loop_once();
+
     // --- Phase A: drain queued data/eof/exited events. ---
     let events = cp_take_own_events();
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    let reaped_child = events
+        .iter()
+        .any(|event| matches!(event, CpEvent::Exited { .. }));
     for ev in events {
         match ev {
             #[cfg(not(unix))]
@@ -1557,6 +1566,15 @@ fn cp_reactor_pump_inner() {
                 broken,
             } => cp_stdin_written(handle, len, broken),
         }
+    }
+
+    // A reaped peer has closed its descriptors. Collect its socket completions
+    // before onexit destroys stdin and cancels pending writes with a generic
+    // error. Socket-backed stdio does not populate turnloop_proc's table.
+    #[cfg(all(unix, not(target_arch = "wasm32")))]
+    if reaped_child {
+        crate::event_pump::settle_loop_once();
+        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
     }
 
     // --- Phase B: emit `exit` once a child has exited, and `close` once every

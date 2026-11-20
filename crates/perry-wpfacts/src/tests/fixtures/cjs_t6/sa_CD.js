@@ -90,14 +90,14 @@ function __perry_cjs_factory() {
     var exports = __cjs_module.exports;
     // The program's `require.cache` (the support module's object, whose keys
     // are the graph's module paths): this module's key is a slot.
-    const __perry_cjs_c = __perry_cjs_cache;
+    var __perry_cjs_c = __perry_cjs_cache;
     __perry_cjs_c["/t6/sa_CD.js"] = __cjs_module;
 
     // This module's own loader for the cold paths of `require` (a computed
     // specifier outside the graph, relative to this module), created on
     // first use: `createRequire` costs ~117k instructions. Only a program
     // that is not closed can compute a specifier or reload.
-    let __perry_cjs_reload_require;
+    var __perry_cjs_reload_require;
     function __perry_cjs_reloader() {
         
             if (__perry_cjs_reload_require === undefined) __perry_cjs_reload_require = __perry_cjs_create_require("/t6/sa_CD.js");

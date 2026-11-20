@@ -109,6 +109,7 @@ fn sentinel_abi(ts: &[super::Token<'_>], symbol: String, params: u64) -> Result<
             length: 0,
             declared: 0,
             plain_params: 0,
+            name: None,
         },
         body,
         address,

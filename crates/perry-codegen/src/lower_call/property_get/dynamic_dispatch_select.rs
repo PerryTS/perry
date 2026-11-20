@@ -118,10 +118,9 @@ pub(super) fn select_with_word(
         let function = implementors[i].1.clone();
         let own = (ctx.methods.get(&(class.clone(), property.to_string())) == Some(&function))
             .then_some(*id);
-        match arms
-            .iter_mut()
-            .find(|a| a.own.is_none() && own.is_none() && a.function == function && a.proof == proof)
-        {
+        match arms.iter_mut().find(|a| {
+            a.own.is_none() && own.is_none() && a.function == function && a.proof == proof
+        }) {
             Some(arm) => arm.class_ids.push(*id),
             None => arms.push(Arm {
                 rep: i,
@@ -176,7 +175,12 @@ pub(super) fn select_with_word(
                 _ => cid.clone(),
             };
             crate::proto_constants::emit_selected_contract(
-                ctx, recv, &answer, &class_id, property, &arm.function,
+                ctx,
+                recv,
+                &answer,
+                &class_id,
+                property,
+                &arm.function,
             );
         }
         let label = ctx.block().label.clone();
@@ -188,5 +192,8 @@ pub(super) fn select_with_word(
         .iter()
         .map(|(v, l)| (v.as_str(), l.as_str()))
         .collect();
-    (ctx.block().phi(I32, &refs), arms.iter().map(|a| a.rep).collect())
+    (
+        ctx.block().phi(I32, &refs),
+        arms.iter().map(|a| a.rep).collect(),
+    )
 }

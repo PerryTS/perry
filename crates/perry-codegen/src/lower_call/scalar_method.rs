@@ -317,6 +317,7 @@ fn lower_scalar_method_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();
@@ -422,6 +423,7 @@ fn lower_scalar_method_int32_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();
@@ -1161,10 +1163,8 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     ctx.current_block = fast_idx;
     let mut raw_locals = HashMap::new();
     for (id, value) in &guard_values {
-        raw_locals.insert(
-            *id,
-            crate::codegen::emit_typed_f64_to_raw_guarded(ctx.block(), value.as_str()),
-        );
+        // The guard admitted a plain double, the raw value itself.
+        raw_locals.insert(*id, value.clone());
     }
     let mut fast_args = Vec::with_capacity(args.len());
     for arg in args {

@@ -144,7 +144,11 @@ function make(n: number) {
 console.log(make(8)(8));
 "#,
     );
-    assert_eq!(dynamic_stores(&ir), 0, "every write is a Float32Array: the closure store is typed");
+    assert_eq!(
+        dynamic_stores(&ir),
+        0,
+        "every write is a Float32Array: the closure store is typed"
+    );
     assert!(typed_stores(&ir) > 0, "the store is the typed-array store");
 }
 
@@ -164,7 +168,11 @@ function run(): string {
 console.log(run());
 "#,
     );
-    assert_eq!(dynamic_stores(&ir), 0, "a write set of one class is a proof");
+    assert_eq!(
+        dynamic_stores(&ir),
+        0,
+        "a write set of one class is a proof"
+    );
     assert!(typed_stores(&ir) > 0, "the store is the typed-array store");
 }
 

@@ -47,6 +47,30 @@ pub(crate) struct Trace {
     pub stand_in_params: Vec<(NodeId, String, u32, Option<String>)>,
     /// `Model::top_predecessors`, built when a chain needs it.
     pub top_in: std::cell::OnceCell<FxHashMap<NodeId, Vec<NodeId>>>,
+    /// ROOTS1: the escaped function whose entry run (unknown code calls
+    /// it: `this`/parameters ⊤) is seeding, innermost last.
+    pub seed_by: Vec<Tok>,
+    /// ROOTS1: a ⊤ seed made while the escape of a token ran (an entry run
+    /// of an escaped function, a field of an escaped object): that token.
+    pub top_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS2: the escaped object a ⊤ seed is made into the fields of
+    /// (`Model::add_top_held`): the seed is that object's escape's, also
+    /// when it is made outside that escape (from the worklist).
+    pub seed_holder: Vec<Tok>,
+    /// ROOTS2: the callee token of each call bound to an unknown callee
+    /// (`TOP` or an undescribed builtin function), first one per call.
+    pub unknown_callee: BTreeMap<CallId, Tok>,
+    /// ROOTS1: each entry run from unknown code: function -> (its token,
+    /// reason, the escaping token that held it, if any).
+    pub entry_runs: BTreeMap<FnIdx, (Tok, u32, Option<Tok>)>,
+    /// ROOTS1: a throw region joined to ESCRAISE -> the escaped function.
+    pub raise_by: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a walk node joined to ESCACCESSORS -> the escaped holder.
+    pub acc_src: BTreeMap<NodeId, Tok>,
+    /// ROOTS1: a sunk node (`Model::sink_node`: what reaches it goes to
+    /// unknown code) -> the node whose rule sank it (an unknown callee or
+    /// receiver, a prototype chain holding ⊤).
+    pub store_top: BTreeMap<NodeId, NodeId>,
 }
 
 /// Diagnostic data only; never consulted by ordinary facts.
@@ -66,8 +90,16 @@ pub(crate) struct BirthCensus {
     pub top_edges: BTreeSet<(NodeId, NodeId)>,
     pub escapes: BTreeSet<(Tok, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
     pub sinks: BTreeSet<(NodeId, NodeId, u32, Tok, u32, Option<(Tok, Atom)>)>,
-    pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok)>,
+    /// (token, key, source node, call, parent, proto): `proto` is the prototype value node
+    /// a `settle_native_given` write is made for (`NO_NODE` for every other write).
+    pub writes: BTreeSet<(Tok, u32, NodeId, u32, Tok, NodeId)>,
+    /// The operation that gave `t` the prototype `src` (`Model::given_prototype`): its cause node and call.
+    pub given: BTreeMap<(Tok, NodeId), (NodeId, u32)>,
+    /// The prototype whose delayed give `settle_native_given` is writing (census only).
+    pub settling_proto: Option<NodeId>,
     pub reads: BTreeSet<(Tok, Atom, bool, u32)>,
+    /// The receiver a missed intrinsic method call was looked up on, by call.
+    pub read_origins: BTreeMap<u32, Tok>,
     pub pending_gate: Option<(Tok, Atom, bool, u32)>,
     pub active_gate: Option<(Tok, Atom)>,
     pub injecting: bool,
@@ -87,9 +119,6 @@ pub(crate) struct BirthCensus {
     pub inject_at: Option<(NodeId, Option<(Tok, Atom)>)>,
     /// The store (site, receiver node) whose rule is running.
     pub store_ctx: Option<(u32, Option<NodeId>)>,
-    /// A store into a builtin function value whose decision waits for the
-    /// worklist (`settle_bf_written`): its node's site.
-    pub bf_sites: BTreeMap<NodeId, u32>,
 }
 
 /// A node's first ⊤ (`birth-arrival`): the copy source it came from, or the
@@ -142,15 +171,21 @@ impl Model {
         let written = crate::builtins::census_native_written(self, t, a);
         let c = self.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
         let (call, id) = match miss {
-            NativeMiss::Load(n) | NativeMiss::Global(n, _) => (false, n),
-            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) => (true, n),
+            NativeMiss::Load(n)
+            | NativeMiss::Lookup(n, _)
+            | NativeMiss::Global(n, _)
+            | NativeMiss::Store(n, _) => (false, n),
+            NativeMiss::Call(_, n) | NativeMiss::PrimCall(_, n) | NativeMiss::New(n) => (true, n),
         };
+        if let NativeMiss::Call(origin, n) = miss {
+            c.read_origins.insert(n, origin);
+        }
         c.reads.insert((t, a, call, id));
         c.pending_gate = written.then_some((t, a, call, id));
     }
     /// The first write that opens gate (`t`, `k`): `note_native_write` for
-    /// a builtin prototype, ⊤ or a namespace, `write_builtin_fns` for every
-    /// builtin function value. A store names its site and receiver node.
+    /// a builtin prototype, ⊤ or a namespace. A store names its site and
+    /// receiver node; ordinary function-object fields open no global gate.
     pub(crate) fn census_opener(
         &mut self,
         t: Tok,
@@ -191,29 +226,6 @@ impl Model {
             c.store_ctx = ctx;
         }
     }
-    /// A deferred store into a builtin function value at node `n` (census only).
-    pub(crate) fn census_bf_site(&mut self, n: NodeId, site: u32) {
-        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
-            c.bf_sites.entry(n).or_insert(site);
-        }
-    }
-    /// The deferred store at node `n` opened every builtin function value.
-    pub(crate) fn census_bf_opened(&mut self, n: Option<NodeId>, site: Option<u32>) {
-        if !self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
-            return;
-        }
-        let Some(&t) = self.tok_index.get(&TokKind::BuiltinFn(crate::model::Native::Any)) else {
-            return;
-        };
-        let site = site.or_else(|| {
-            n.and_then(|n| {
-                let c = self.diagnostic.as_ref()?.census.as_ref()?;
-                c.bf_sites.get(&n).copied()
-            })
-        });
-        let store = site.map(|s| (s, n));
-        self.census_opener(t, None, "store into a builtin function value", store);
-    }
     pub(crate) fn census_native_write(&mut self, t: Tok, k: Option<Atom>) {
         let Some(d) = self.diagnostic.as_mut() else {
             return;
@@ -227,7 +239,32 @@ impl Model {
             d.cause_node.unwrap_or(NO_NODE),
             d.cur_call.unwrap_or(u32::MAX),
             d.escaping.last().copied().unwrap_or(u32::MAX),
+            c.settling_proto.unwrap_or(NO_NODE),
         ));
+    }
+    /// The operation giving `t` the prototype `src`, the first time (census only).
+    pub(crate) fn census_given(&mut self, t: Tok, src: NodeId) {
+        let Some(d) = self.diagnostic.as_mut() else {
+            return;
+        };
+        let Some(c) = d.census.as_mut() else {
+            return;
+        };
+        c.given.entry((t, src)).or_insert((
+            d.cause_node.unwrap_or(NO_NODE),
+            d.cur_call.unwrap_or(u32::MAX),
+        ));
+    }
+    /// What gave `t` the prototype `src`: (cause node, call), `None` when unrecorded.
+    pub(crate) fn census_given_by(&self, t: Tok, src: NodeId) -> Option<(NodeId, u32)> {
+        let c = self.diagnostic.as_ref()?.census.as_ref()?;
+        c.given.get(&(t, src)).copied()
+    }
+    /// Mark the writes made next as the delayed give of `proto` (census only).
+    pub(crate) fn census_settling(&mut self, proto: Option<NodeId>) {
+        if let Some(c) = self.diagnostic.as_mut().and_then(|d| d.census.as_mut()) {
+            c.settling_proto = proto;
+        }
     }
 }
 
@@ -282,8 +319,158 @@ struct Site {
 }
 
 impl Model {
-    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+    /// ROOTS1: unknown code calls escaped `ft` (an entry run): what its
+    /// run seeds is that escape's.
+    pub(crate) fn diagnostic_entry_begin(&mut self, ft: Tok, reason: u32) {
+        if self.diagnostic.is_none() {
+            return;
+        }
+        let f = self.tok_fn(ft);
+        let d = self.diagnostic.as_mut().unwrap();
+        let holder = d.escaping.iter().rev().find(|&&x| x != ft).copied();
+        d.entry_runs.entry(f).or_insert((ft, reason, holder));
+        d.seed_by.push(ft);
+    }
+    pub(crate) fn diagnostic_entry_end(&mut self) {
         if let Some(d) = &mut self.diagnostic {
+            d.seed_by.pop();
+        }
+    }
+    /// ROOTS2: a ⊤ seed into a field of escaped `holder`.
+    #[track_caller]
+    pub(crate) fn add_top_held(
+        &mut self,
+        n: NodeId,
+        holder: Tok,
+        why: impl FnOnce(&Self) -> String,
+    ) {
+        if let Some(d) = &mut self.diagnostic {
+            d.seed_holder.push(holder);
+        }
+        self.add_top(n, why);
+        if let Some(d) = &mut self.diagnostic {
+            d.seed_holder.pop();
+        }
+    }
+    /// ROOTS2: the call ids a reason names (`[call N]`, `[call N,M]`).
+    pub(crate) fn reason_calls(&self, reason: u32) -> Vec<CallId> {
+        let s = self.reasons.get(reason as usize).map_or("", |s| s);
+        let Some(i) = s.rfind("[call ") else {
+            return Vec::new();
+        };
+        s[i + 6..]
+            .split(']')
+            .next()
+            .unwrap_or("")
+            .split(',')
+            .filter_map(|x| x.trim().parse().ok())
+            .collect()
+    }
+    /// ROOTS1: the escape an escape-first record's unknown value came out
+    /// of: the token whose escape seeded the ⊤ at its deciding node (first
+    /// arrivals walked back to the seed), the holder an escaped accessor was
+    /// read from, the function whose throw region reached ESCRAISE. Dump only.
+    fn diagnostic_esc_via(&self, t: Tok, e: &EscFirst) -> (Option<Tok>, String) {
+        let Some(d) = self.diagnostic.as_ref() else {
+            return (None, "null".into());
+        };
+        let reason = self.reasons.get(e.reason as usize).map_or("", |s| s);
+        let tops = |n: NodeId| {
+            n != NO_NODE
+                && (n as usize) < self.nodes.len()
+                && self.nodes[n as usize].pts.contains_tok(TOP)
+        };
+        // The deciding node: the rule that sank the escape's node, the node
+        // itself, the unknown callee of its call; the first holding ⊤.
+        // ROOTS2: the receiver of (or a value passed to) a call of an
+        // unknown function value escapes because the callee is unknown: the
+        // callee decides, not what else the value's node holds. A callee
+        // that is an undescribed builtin function is the end itself.
+        let callee_first = true; /*ROOTS2-GREEN*/
+        let mut callee_dn = None;
+        if callee_first
+            && (reason.starts_with("receiver of a call of an unknown function value")
+                || reason.starts_with("passed to a call of an unknown function value"))
+        {
+            for c in self.reason_calls(e.reason) {
+                match d.unknown_calls.get(&c) {
+                    Some(&(Some(n), true)) if tops(n) => {
+                        callee_dn = Some(n);
+                        break;
+                    }
+                    Some(&(n, false)) => {
+                        let ct = d.unknown_callee.get(&c).copied();
+                        return (
+                            None,
+                            format!(
+                                "{{\"calleeBuiltin\":{},\"at\":{},\"call\":{c},\"atFunction\":{}}}",
+                                opt(ct),
+                                opt(n),
+                                opt(n.and_then(|n| self.diagnostic_owner(n)))
+                            ),
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let dn = callee_dn.or_else(|| {
+            [
+                e.node.and_then(|n| d.store_top.get(&n).copied()),
+                e.node,
+                e.call
+                    .and_then(|c| d.unknown_calls.get(&c))
+                    .and_then(|(n, _)| *n),
+            ]
+            .into_iter()
+            .flatten()
+            .find(|&n| tops(n))
+        });
+        if let Some(n) = dn {
+            let (seed, why) = self.diagnostic_root(n);
+            let by = d.top_by.get(&seed).copied();
+            let entry = by.and_then(|b| self.tok_fn_opt(b));
+            return (
+                by,
+                format!(
+                    "{{\"at\":{n},\"seed\":{seed},\"why\":{},\"by\":{},\"entryOf\":{}}}",
+                    quote(&why),
+                    by.map_or("null".into(), |b| b.to_string()),
+                    entry.map_or("null".into(), |f| f.to_string())
+                ),
+            );
+        }
+        if reason == "accessor function of a value unknown code holds" {
+            for (&n, &o) in &d.acc_src {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(o), format!("{{\"accessorOf\":{o}}}"));
+                }
+            }
+        }
+        if reason == "thrown into unknown code" {
+            for (&n, &f) in &d.raise_by {
+                if self.nodes[n as usize].pts.contains_tok(t) {
+                    return (Some(f), format!("{{\"raisedBy\":{f}}}"));
+                }
+            }
+        }
+        (None, "null".into())
+    }
+    fn tok_fn_opt(&self, t: Tok) -> Option<FnIdx> {
+        Some(self.tok_fn(t)).filter(|&f| f != NO_FN)
+    }
+    pub(crate) fn diagnostic_predecessor(&mut self, dst: NodeId, src: NodeId, reason: u32) {
+        let ruled = src == NO_NODE
+            || self
+                .reasons
+                .get(reason as usize)
+                .is_some_and(|s| !s.is_empty());
+        if let Some(d) = &mut self.diagnostic {
+            if ruled && !d.pred.contains_key(&dst) {
+                if let Some(&b) = d.seed_by.last().or(d.escaping.last()) {
+                    d.top_by.entry(dst).or_insert(b);
+                }
+            }
             if let Some(c) = &mut d.census {
                 if !c.arrivals.contains_key(&dst) {
                     let inj = c.inject_at.take().filter(|(n, _)| *n == dst);
@@ -431,16 +618,31 @@ impl Model {
         }
     }
 
-    /// A summary instance keeps its template call identity. `CallSite::site`
-    /// is an allocation context, and synthetic protocol calls may use zero:
-    /// it must never be used to attribute their callees to source call zero.
+    /// A summary instance keeps its template call identity; a call the
+    /// solver makes for a program call (a builtin calling a callback, a
+    /// bound target) reports that program call (`Model::solver_call`).
+    /// `CallSite::site` is an allocation context, and synthetic protocol
+    /// calls may use zero: it must never be used to attribute their callees
+    /// to source call zero.
     pub(crate) fn diagnostic_source_call(&self, call: CallId) -> Option<CallId> {
         let d = self.diagnostic.as_ref()?;
-        if d.source_calls.contains(&call) {
-            return Some(call);
+        let mut c = call;
+        loop {
+            if d.source_calls.contains(&c) {
+                return Some(c);
+            }
+            // Each step goes to an earlier call: the template's, or the one
+            // the solver made this call for.
+            let next = *self
+                .sum
+                .tmpl_of
+                .get(&c)
+                .or_else(|| self.sum.origin.get(&c))?;
+            if next >= c {
+                return None;
+            }
+            c = next;
         }
-        let source = *self.sum.tmpl_of.get(&call)?;
-        d.source_calls.contains(&source).then_some(source)
     }
     /// The function a node's rules run for: its body's owner, or the
     /// function of the run (instance or shared run) it belongs to.
@@ -530,6 +732,8 @@ impl Model {
         self.diagnostic.as_ref()?;
         let was = self.is_escaped(t);
         let cause = self.diagnostic_escape_cause();
+        // ROOTS2: the call the reason names, else the current one.
+        let rc = self.reason_calls(reason).first().copied();
         let d = self.diagnostic.as_mut()?;
         d.esc_causes.insert((t, cause));
         if let Some(c) = &mut d.census {
@@ -542,11 +746,15 @@ impl Model {
                 c.active_gate,
             ));
         }
-        let seq = if was { None } else { d.census.as_mut().map(|c| c.tick()) };
+        let seq = if was {
+            None
+        } else {
+            d.census.as_mut().map(|c| c.tick())
+        };
         let cand = (!was).then(|| EscFirst {
             reason,
             cause,
-            call: d.cur_call,
+            call: rc.or(d.cur_call),
             node: d.cause_node,
             seq,
         });
@@ -561,6 +769,20 @@ impl Model {
         d.escaping.pop();
         if let Some(c) = cand.filter(|_| now) {
             d.esc_first.entry(t).or_insert(c);
+            // Diagnostic (`PERRY_WPF_STOP_AFTER_ESCAPES=N`): the compile's
+            // pass ends after its Nth first escape; the dump holds what
+            // was collected so far (`aborted` true, nothing claimed).
+            static STOP: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+            let stop = *STOP.get_or_init(|| {
+                std::env::var("PERRY_WPF_STOP_AFTER_ESCAPES")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0)
+            });
+            if stop != 0 && d.esc_first.len() >= stop && self.act.as_ref().is_some_and(|a| a.fixed)
+            {
+                self.aborted = true;
+            }
         }
     }
     /// Marks `t` escaped (`mark_use`) by operation `why`; the dump names
@@ -660,6 +882,7 @@ impl Gen<'_> {
             Expr::IndexGet {
                 object,
                 index,
+                element_offset: _,
                 byte_offset,
                 byte_end,
             } => (
@@ -978,7 +1201,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
     let m = &g.m;
     let mut out = vec![format!(
         "{{\"record\":\"analysis\",\"aborted\":{},\"work\":{},\"maxWork\":{}}}",
-        m.aborted, m.work, m.max_work
+        m.aborted,
+        m.work.get(),
+        m.max_work
     )];
     let mut nodes = BTreeSet::new();
     let locations: BTreeMap<CallId, &Site> = d
@@ -1071,11 +1296,12 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             TokKind::Obj(l, c) => ("object", Some(*l), None, Some(*c)),
             TokKind::Func(f, c) => ("function", None, Some(*f), Some(*c)),
             TokKind::Bound(_) => ("bound", None, None, None),
+            TokKind::Proxy(_) => ("proxy", None, None, None),
             TokKind::ClassObj(l) => ("class", Some(*l), None, None),
             TokKind::Proto(l) => ("prototype", Some(*l), None, None),
             TokKind::Builtin(_) | TokKind::BuiltinFn(_) => ("builtin", None, None, None),
             TokKind::ModNs(_) => ("namespace", None, None, None),
-            TokKind::ObjectProto | TokKind::NativeProto(_) => {
+            TokKind::ObjectProto | TokKind::NativeProto(..) => {
                 ("native-prototype", None, None, None)
             }
         };
@@ -1118,15 +1344,54 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         }
     };
     let src_call = |c: Option<CallId>| c.map(|c| m.diagnostic_source_call(c).unwrap_or(c));
+    // An unknown call's `protocol`: a runtime protocol step the solver runs
+    // on a token (`Model::protocol_calls`: ToPrimitive, iteration), one per
+    // token and made for no one program call, so its `source` is itself.
     if let Some(d) = m.diagnostic.as_ref() {
         for (c, (n, top)) in &d.unknown_calls {
             let (root, origin) = n.map_or((NO_NODE, String::new()), |n| m.diagnostic_root(n));
-            out.push(format!("{{\"record\":\"unknown-call\",\"call\":{c},\"source\":{},\"node\":{},\"top\":{top},\"root\":{root},\"rootFunction\":{},\"label\":{},\"origin\":{}}}",
-                opt(src_call(Some(*c))), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
+            out.push(format!("{{\"record\":\"unknown-call\",\"call\":{c},\"source\":{},\"protocol\":{},\"node\":{},\"top\":{top},\"root\":{root},\"rootFunction\":{},\"label\":{},\"origin\":{}}}",
+                opt(src_call(Some(*c))), m.protocol_calls.contains(c), opt(*n), opt(m.diagnostic_owner(root)), quote(n.and_then(|n| m.labels.get(n as usize).copied()).unwrap_or("")), quote(&origin)));
         }
         for (t, e) in &d.esc_first {
-            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{}}}",
-                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&e.cause), opt(src_call(e.call)), opt(e.node), opt(e.seq)));
+            // ROOTS1: an escape whose unknown value came out of an earlier
+            // escape names it (`via`); a cause-less one takes it as cause.
+            let (via, top) = m.diagnostic_esc_via(*t, e);
+            // `op`: the operation the attempt ran in (the former cause).
+            let c = via.map_or(e.cause, Cause::Tok);
+            out.push(format!("{{\"record\":\"escape-first\",\"token\":{t},\"reason\":{},\"cause\":{},\"call\":{},\"node\":{},\"seq\":{},\"via\":{},\"op\":{},\"top\":{top}}}",
+                quote(m.reasons.get(e.reason as usize).map_or("", |s| s)), cause(&c), opt(src_call(e.call)), opt(e.node), opt(e.seq), opt(via), cause(&e.cause)));
+        }
+        // ROOTS2: each call an escape names, with its source position.
+        let mut named: BTreeSet<CallId> = d.unknown_calls.keys().copied().collect();
+        for e in d.esc_first.values() {
+            named.extend(e.call);
+            named.extend(m.reason_calls(e.reason));
+        }
+        for c in named {
+            let s = src_call(Some(c)).unwrap_or(c);
+            let (file, start, func) = match locations.get(&s) {
+                Some(l) => (
+                    quote(g.modules[l.module as usize].0),
+                    l.start.to_string(),
+                    Some(l.function).filter(|&f| f != NO_FN),
+                ),
+                None => (
+                    "null".to_string(),
+                    "null".to_string(),
+                    m.calls
+                        .get(c as usize)
+                        .and_then(|k| m.diagnostic_owner(k.ret)),
+                ),
+            };
+            out.push(format!(
+                "{{\"record\":\"call\",\"call\":{c},\"source\":{s},\"file\":{file},\"start\":{start},\"function\":{}}}",
+                opt(func)
+            ));
+        }
+        for (f, (ft, r, holder)) in &d.entry_runs {
+            out.push(format!("{{\"record\":\"entry-run\",\"function\":{f},\"token\":{ft},\"reason\":{},\"holder\":{}}}",
+                quote(m.reasons.get(*r as usize).map_or("", |s| s)), opt(*holder)));
         }
         for (t, (w, n)) in &d.esc_why {
             if let Some(&(f, i)) = m.param_marker.get(t) {
@@ -1250,13 +1515,13 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
         for (n, source, call, parent, reason, gate) in &c.sinks {
             out.push(format!("{{\"record\":\"birth-sink\",\"node\":{n},\"source\":{source},\"call\":{call},\"parent\":{parent},\"why\":{},\"gate\":{}}}",quote(&m.reasons[*reason as usize]),birth_gate(m,*gate)));
         }
-        for (t, k, n, call, parent) in &c.writes {
+        for (t, k, n, call, parent, proto) in &c.writes {
             let key = if *k == u32::MAX {
                 "null".into()
             } else {
                 quote(&m.atoms[*k as usize])
             };
-            out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"numeric\":{}}}", *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
+            out.push(format!("{{\"record\":\"birth-write\",\"token\":{t},\"key\":{key},\"source\":{n},\"call\":{call},\"parent\":{parent},\"proto\":{},\"numeric\":{}}}", if *proto == NO_NODE { "null".into() } else { proto.to_string() }, *k != u32::MAX && crate::solve::numeric_key(&m.atoms[*k as usize])));
         }
         let mut opened: Vec<_> = c.openers.iter().collect();
         opened.sort_by_key(|(_, o)| o.seq);
@@ -1288,7 +1553,14 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
                 opt((o.cause != NO_NODE).then_some(o.cause)), opt((o.call != u32::MAX).then_some(o.call)), o.parent, quote(&fname(o.func))));
         }
         for (t, k, call, id) in &c.reads {
-            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),matches!(m.toks[*t as usize],TokKind::Builtin(BuiltinNs::GlobalThis))));
+            let origin = if *call {
+                c.read_origins.get(id).map_or(String::from("null"), |o| {
+                    format!("{o},\"originName\":{}", quote(&m.tok_name(*o)))
+                })
+            } else {
+                String::from("null")
+            };
+            out.push(format!("{{\"record\":\"birth-read\",\"token\":{t},\"key\":{},\"isCall\":{call},\"id\":{id},\"origin\":{origin},\"opWrites\":{},\"numeric\":{},\"isGlobal\":{}}}",quote(&m.atoms[*k as usize]),crate::builtins::census_native_op_writes(m,*t),crate::solve::numeric_key(&m.atoms[*k as usize]),crate::builtins::global_object(m,*t)));
         }
     }
     let roots: Vec<_> = nodes.iter().map(|&n| m.diagnostic_root(n).0).collect();
@@ -1329,28 +1601,10 @@ pub(crate) fn collect(g: &Gen) -> Vec<String> {
             };
         }
         let (root, origin) = m.diagnostic_root(n);
-        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topOrigin\":{}}}",
-            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
+        out.push(format!("{{\"record\":\"node\",\"id\":{n},\"primitiveMask\":{},\"kindMask\":{mask},\"top\":{top},\"markerTop\":{marker_top},\"tokens\":{},\"label\":{},\"parameter\":{},\"observation\":{},\"topRoot\":{},\"topBy\":{},\"topOrigin\":{}}}",
+            v.prim,nums(toks),quote(m.labels.get(n as usize).copied().unwrap_or("")),v.param,v.obs,opt(top.then_some(root)),opt(top.then(|| m.diagnostic.as_ref().and_then(|d| d.top_by.get(&root).copied())).flatten()),quote(&if top&&m.explain{m.top_origin(n)}else{origin})));
     }
     out
-}
-
-/// Existing contract summary, observed only after fact derivation.
-pub(crate) fn value_brief(c: &crate::units::ValueContract) -> String {
-    format!(
-        "{{\"unknown\":{},\"why\":{},\"prim\":{},\"functions\":{},\"arrays\":{}}}",
-        c.unknown,
-        why_json(c),
-        c.prim,
-        strings(c.fns.iter().map(|f| f.name.clone())),
-        strings(
-            c.arrays
-                .iter()
-                .chain(&c.made_arrays)
-                .chain(&c.arrayboxes)
-                .cloned()
-        )
-    )
 }
 
 /// The reason an unknown value contract is unknown and the unit that
@@ -1370,4 +1624,664 @@ fn birth_gate(m: &Model, gate: Option<(Tok, Atom)>) -> String {
     gate.map_or("null".into(), |(t, a)| {
         format!("{{\"token\":{t},\"key\":{}}}", quote(&m.atoms[a as usize]))
     })
+}
+
+/// Off-by-default read-out (`PERRY_WPF_KEYREAD=1`): at the end of the
+/// solve, the decoded string set of every node of the functions along the
+/// three.js track-name chain (GLTF track build, sanitize/unique names,
+/// KeyframeTrack, PropertyBinding). `KF` = function, `KR` = node:
+/// id, label, prim bits, holds ⊤, strings (constants, prefix/infix/suffix
+/// entries, exclusion entries with their character sets, `ANY`).
+pub(crate) fn keyread(g: &Gen) {
+    if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
+        return;
+    }
+    const NAMES: &[&str] = KEYREAD_NAMES;
+    let m = &g.m;
+    let mut want = vec![false; m.funcs.len()];
+    for (i, f) in m.funcs.iter().enumerate() {
+        let module = g.modules.get(f.module as usize);
+        let file = module.map_or("", |(p, _)| *p);
+        let hit = keyread_fn(&NAMES, &f.name, file)
+            || NAMES.contains(&f.name.as_str())
+            || f.name.contains("KeyframeTrack")
+            || f.name.contains("PropertyBinding")
+            || f.name.contains("AnimationClip")
+            || (file.ends_with("GLTFLoader.js") && f.name.contains("nimation"));
+        if !hit {
+            continue;
+        }
+        want[i] = true;
+        let src = module.and_then(|(_, m)| m.closure_source_text.get(&f.func_id));
+        let span = src.and_then(|s| s.source_span).unwrap_or((0, 0));
+        eprintln!(
+            "KF {i} {} {file} {} {} params={:?} this={} ret={}",
+            f.name, span.0, span.1, f.params, f.this, f.ret
+        );
+    }
+    let dec = |a: Atom| -> String {
+        let s = &m.atoms[a as usize];
+        let esc = |t: &str| {
+            t.chars()
+                .take(60)
+                .map(|c| {
+                    if (c as u32) < 32 || c == ' ' {
+                        format!("\\x{:02x}", c as u32)
+                    } else {
+                        c.to_string()
+                    }
+                })
+                .collect::<String>()
+        };
+        if let Some((p, e, t)) = m.atom_pfx_excl(a) {
+            let cs: String = (0..128u32)
+                .filter(|b| e >> b & 1 == 1)
+                .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+                .collect();
+            format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+            let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
+            let e = u128::from_str_radix(h, 16).unwrap_or(0);
+            let cs: String = (0..128u32)
+                .filter(|b| e >> b & 1 == 1)
+                .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+                .collect();
+            format!("excl[{cs}]+{:?}", esc(t))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
+            format!("prefix({:?})", esc(r))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::INFIX_MARK) {
+            format!("infix({:?})", esc(r))
+        } else if let Some(r) = s.strip_prefix(crate::solve::strs::SUFFIX_MARK) {
+            format!("suffix({:?})", esc(r))
+        } else {
+            format!("{:?}", esc(s))
+        }
+    };
+    for n in 0..m.nodes.len() {
+        let f = m.node_fn.get(n).copied().unwrap_or(NO_FN);
+        if f == NO_FN || !want.get(f as usize).copied().unwrap_or(false) {
+            continue;
+        }
+        let nd = &m.nodes[n];
+        let l = m.labels.get(n).copied().unwrap_or("?");
+        let strs = match nd.strs {
+            0 => "-".to_string(),
+            STRS_TOP => "ANY".to_string(),
+            s => m
+                .str_atoms(s)
+                .iter()
+                .map(|&a| dec(a))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        };
+        eprintln!(
+            "KR {n} f{f} {l} prim={:#x} top={} ntok={} strs={strs}",
+            nd.prim,
+            nd.pts.contains_tok(TOP),
+            nd.pts.len()
+        );
+    }
+}
+
+const KEYREAD_NAMES: &[&str] = &[
+    "sanitizeNodeName",
+    "createUniqueName",
+    "_createAnimationTracks",
+    "loadAnimation",
+    "parseTrackName",
+    "bind",
+    "findNode",
+    "Composite",
+    "create",
+    "parse",
+    "toJSON",
+    "clone",
+    "CreateFromMorphTargetSequence",
+    "parseAnimation",
+    "_getTrackTypeForValueTypeName",
+    "getValueSize",
+    "validate",
+    "_bindTrack",
+    "_lendBinding",
+    "clipAction",
+    "subclip",
+];
+
+/// The functions of the track-name chain (`keyread`, `keysnap_plan`).
+fn keyread_fn(names: &[&str], name: &str, file: &str) -> bool {
+    names.contains(&name)
+        || name.contains("KeyframeTrack")
+        || name.contains("PropertyBinding")
+        || name.contains("AnimationClip")
+        || (file.ends_with("GLTFLoader.js") && name.contains("nimation"))
+}
+
+/// One string-set entry decoded (constants, prefix/infix/suffix entries,
+/// exclusion entries with their character sets).
+fn key_dec(m: &Model, a: Atom) -> String {
+    let s = &m.atoms[a as usize];
+    let esc = |t: &str| {
+        t.chars()
+            .take(60)
+            .map(|c| {
+                if (c as u32) < 32 || c == ' ' {
+                    format!("\\x{:02x}", c as u32)
+                } else {
+                    c.to_string()
+                }
+            })
+            .collect::<String>()
+    };
+    if let Some((p, e, t)) = m.atom_pfx_excl(a) {
+        let cs: String = (0..128u32)
+            .filter(|b| e >> b & 1 == 1)
+            .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+            .collect();
+        format!("pfxexcl({:?})[{cs}]+{:?}", esc(p), esc(t))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::EXCL_MARK) {
+        let (h, t) = r.split_once('\u{1}').unwrap_or((r, ""));
+        let e = u128::from_str_radix(h, 16).unwrap_or(0);
+        let cs: String = (0..128u32)
+            .filter(|b| e >> b & 1 == 1)
+            .map(|b| esc(&char::from_u32(b).unwrap().to_string()))
+            .collect();
+        format!("excl[{cs}]+{:?}", esc(t))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::PREFIX_MARK) {
+        format!("prefix({:?})", esc(r))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::INFIX_MARK) {
+        format!("infix({:?})", esc(r))
+    } else if let Some(r) = s.strip_prefix(crate::solve::strs::SUFFIX_MARK) {
+        format!("suffix({:?})", esc(r))
+    } else {
+        format!("{:?}", esc(s))
+    }
+}
+
+/// KEYSNAP plan (`PERRY_WPF_KEYREAD=1`): the track-name chain's nodes,
+/// snapshotted by `Model::keysnap_at` when the realm is first held and at
+/// the first escape before it. Positions are printed once here (`KP`).
+pub struct KeySnap {
+    nodes: Vec<NodeId>,
+    fn_file: FxHashMap<u32, String>,
+    call_pos: FxHashMap<NodeId, (String, u32)>,
+    at_hold: bool,
+    at_esc: bool,
+    /// KEYSNAP2: module files, the `name`/`uuid` loads of GLTFLoader's
+    /// chain functions, the last unknown-callee call before the hold.
+    mod_file: Vec<String>,
+    loads: Vec<(String, u32, String, NodeId)>,
+    unk: Option<(CallId, Tok, Tok)>,
+}
+
+pub(crate) fn keysnap_plan(g: &mut Gen) {
+    if std::env::var_os("PERRY_WPF_KEYREAD").is_none() {
+        return;
+    }
+    let file_of = |mi: u32| {
+        g.modules
+            .get(mi as usize)
+            .map_or("", |(p, _)| *p)
+            .to_string()
+    };
+    let mut want = vec![false; g.m.funcs.len()];
+    let mut fn_file = FxHashMap::default();
+    for (i, f) in g.m.funcs.iter().enumerate() {
+        let file = file_of(f.module);
+        if keyread_fn(KEYREAD_NAMES, &f.name, &file)
+            || (file.ends_with("three.core.js") && f.name.contains("_setValue"))
+            || f.name == "generateUUID"
+            || f.name.ends_with("createUniqueName")
+        {
+            want[i] = true;
+            fn_file.insert(i as u32, file);
+        }
+    }
+    let of = |n: NodeId| g.m.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+    let is = |n: NodeId| {
+        let f = of(n);
+        f != NO_FN && want.get(f as usize).copied().unwrap_or(false)
+    };
+    let nodes: Vec<NodeId> = (0..g.m.nodes.len() as NodeId).filter(|&n| is(n)).collect();
+    for s in &g.element_sites {
+        if is(s.recv) || is(s.idx) {
+            eprintln!(
+                "KP elem {} {} {:?} recv={} idx={} key={:?} f{}",
+                file_of(s.module),
+                s.byte_offset,
+                s.op,
+                s.recv,
+                s.idx,
+                s.key,
+                of(s.recv)
+            );
+        }
+    }
+    for &(mi, off, a, dst) in &g.load_sites {
+        if is(dst) {
+            eprintln!(
+                "KP load {} {off} .{} dst={dst} f{}",
+                file_of(mi),
+                g.m.atoms[a as usize],
+                of(dst)
+            );
+        }
+    }
+    let mut call_pos = FxHashMap::default();
+    for &(mi, off, r) in &g.call_results_at {
+        call_pos.insert(r, (file_of(mi), off));
+    }
+    let mod_file: Vec<String> = (0..g.modules.len() as u32).map(file_of).collect();
+    let mut loads = Vec::new();
+    for &(mi, off, a, dst) in &g.load_sites {
+        let k = g.m.atoms[a as usize].to_string();
+        let file = file_of(mi);
+        if is(dst) && file.ends_with("GLTFLoader.js") && (k == "name" || k == "uuid") {
+            loads.push((file, off, k, dst));
+        }
+    }
+    g.m.keysnap = Some(Box::new(KeySnap {
+        nodes,
+        fn_file,
+        call_pos,
+        at_hold: false,
+        at_esc: false,
+        mod_file,
+        loads,
+        unk: None,
+    }));
+}
+
+impl Model {
+    /// Print the KEYSNAP block once per occasion (`hold`: the realm is
+    /// first held; else: the first escape while it is not).
+    pub(crate) fn keysnap_at(
+        &mut self,
+        hold: bool,
+        producer: &str,
+        call: Option<CallId>,
+        reason: u32,
+        tok: Option<Tok>,
+    ) {
+        let Some(ks) = self.keysnap.as_mut() else {
+            return;
+        };
+        let done = if hold {
+            &mut ks.at_hold
+        } else {
+            &mut ks.at_esc
+        };
+        if *done {
+            return;
+        }
+        *done = true;
+        let ks = self.keysnap.take().expect("checked");
+        let what = if hold {
+            "KEYSNAP at realm hold"
+        } else {
+            "KEYSNAP at first escape"
+        };
+        let kind = |m: &Model, t: Tok| -> String {
+            let k = format!("{:?}", m.toks[t as usize]);
+            let k: String = k.chars().take(48).collect();
+            if crate::builtins::builtin_function(m, t) {
+                format!("{k}[bfn]")
+            } else {
+                k
+            }
+        };
+        eprintln!("{what}");
+        eprintln!("KS producer {producer}");
+        let rs = self
+            .reasons
+            .get(reason as usize)
+            .cloned()
+            .unwrap_or_else(|| "-".into());
+        eprintln!("KS reason {reason} {rs:?}");
+        let calls: Vec<CallId> = call
+            .into_iter()
+            .chain(if reason == u32::MAX {
+                vec![]
+            } else {
+                self.reason_calls(reason)
+            })
+            .collect();
+        for c in calls.iter().take(4) {
+            let ret = self.calls.get(*c as usize).map_or(NO_NODE, |cs| cs.ret);
+            let pos = ks
+                .call_pos
+                .get(&ret)
+                .map_or(("?".to_string(), 0), |p| p.clone());
+            eprintln!("KS call c{c} ret={ret} at {} {}", pos.0, pos.1);
+        }
+        if let Some(t) = tok {
+            eprintln!("KS tok {t} {}", kind(self, t));
+        }
+        eprintln!(
+            "KS progress pops={} work={} escaped={} nodes={}",
+            self.pops,
+            self.work.get(),
+            self.escaped.len(),
+            self.nodes.len()
+        );
+        for &n in &ks.nodes {
+            let nd = &self.nodes[n as usize];
+            let f = self.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+            let l = self.labels.get(n as usize).copied().unwrap_or("?");
+            let strs = match nd.strs {
+                0 => "-".to_string(),
+                STRS_TOP => "ANY".to_string(),
+                s => self
+                    .str_atoms(s)
+                    .iter()
+                    .map(|&a| key_dec(self, a))
+                    .collect::<Vec<_>>()
+                    .join(" | "),
+            };
+            let toks: Vec<Tok> = nd.pts.to_sorted();
+            let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+            for &t in &toks {
+                let k = kind(self, t);
+                let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string()
+                    + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+                *hist.entry(k).or_default() += 1;
+            }
+            let first: Vec<String> = toks
+                .iter()
+                .take(12)
+                .map(|&t| format!("{t}:{}", kind(self, t)))
+                .collect();
+            let file = ks.fn_file.get(&f).map_or("", |s| s.as_str());
+            eprintln!(
+                "KS {n} f{f} {file} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={strs} toks=[{}]",
+                nd.prim, nd.pts.contains_tok(TOP), toks.len(), first.join(", ")
+            );
+        }
+        self.keysnap2(&ks);
+        eprintln!("KS end");
+        self.keysnap = Some(ks);
+    }
+}
+
+impl Model {
+    /// KEYSNAP2: the last call whose callee is an unknown function value
+    /// (its receiver escapes next).
+    pub(crate) fn keysnap_note(&mut self, call: CallId, callee: Tok, recv: Tok) {
+        if let Some(ks) = self.keysnap.as_mut() {
+            ks.unk = Some((call, callee, recv));
+        }
+    }
+
+    fn ks2_kind(&self, t: Tok) -> String {
+        let k: String = format!("{:?}", self.toks[t as usize])
+            .chars()
+            .take(48)
+            .collect();
+        if crate::builtins::builtin_function(self, t) {
+            format!("{k}[bfn]")
+        } else {
+            k
+        }
+    }
+
+    fn ks2_fn(&self, ks: &KeySnap, f: FnIdx) -> String {
+        match self.funcs.get(f as usize) {
+            Some(fi) => format!(
+                "{}@{}",
+                fi.name,
+                ks.mod_file
+                    .get(fi.module as usize)
+                    .map_or("?", |s| s.as_str())
+            ),
+            None => "-".into(),
+        }
+    }
+
+    fn ks2_strs(&self, n: NodeId) -> String {
+        match self.nodes[n as usize].strs {
+            0 => "-".to_string(),
+            STRS_TOP => "ANY".to_string(),
+            s => self
+                .str_atoms(s)
+                .iter()
+                .take(24)
+                .map(|&a| key_dec(self, a))
+                .collect::<Vec<_>>()
+                .join(" | "),
+        }
+    }
+
+    /// EXCL-OK: every string entry is an exclusion entry or a constant
+    /// without `. [ ] : /`; OPEN otherwise ("-": no strings).
+    fn ks2_verdict(&self, n: NodeId) -> &'static str {
+        match self.nodes[n as usize].strs {
+            0 => "-",
+            STRS_TOP => "OPEN",
+            s => {
+                let ok = self.str_atoms(s).iter().all(|&a| {
+                    let t = &self.atoms[a as usize];
+                    if t.starts_with(crate::solve::strs::EXCL_MARK)
+                        || t.starts_with(crate::solve::strs::PFXEXCL_MARK)
+                    {
+                        true
+                    } else if t.starts_with(crate::solve::strs::PREFIX_MARK)
+                        || t.starts_with(crate::solve::strs::INFIX_MARK)
+                        || t.starts_with(crate::solve::strs::SUFFIX_MARK)
+                    {
+                        false
+                    } else {
+                        !t.chars().any(|c| matches!(c, '.' | '[' | ']' | ':' | '/'))
+                    }
+                });
+                if ok {
+                    "EXCL-OK"
+                } else {
+                    "OPEN"
+                }
+            }
+        }
+    }
+
+    fn ks2_node(&self, ks: &KeySnap, n: NodeId) -> String {
+        let nd = &self.nodes[n as usize];
+        let f = self.node_fn.get(n as usize).copied().unwrap_or(NO_FN);
+        let l = self.labels.get(n as usize).copied().unwrap_or("?");
+        let toks: Vec<Tok> = nd.pts.to_sorted();
+        let mut hist: BTreeMap<String, usize> = BTreeMap::new();
+        for &t in &toks {
+            let k = self.ks2_kind(t);
+            let k = k.split(['(', ' ', '{']).next().unwrap_or("").to_string()
+                + if k.ends_with("[bfn]") { "[bfn]" } else { "" };
+            *hist.entry(k).or_default() += 1;
+        }
+        let first: Vec<String> = toks
+            .iter()
+            .take(16)
+            .map(|&t| format!("{t}:{}", self.ks2_kind(t)))
+            .collect();
+        format!(
+            "n{n} {} {l} prim={:#x} top={} ntok={} kinds={hist:?} strs={} toks=[{}]",
+            self.ks2_fn(ks, f),
+            nd.prim,
+            nd.pts.contains_tok(TOP),
+            toks.len(),
+            self.ks2_strs(n),
+            first.join(", ")
+        )
+    }
+
+    fn keysnap2(&self, ks: &KeySnap) {
+        let name_a = self
+            .atoms
+            .iter()
+            .position(|s| &**s == "name")
+            .map(|a| a as Atom);
+        let want: crate::pts::FxHashSet<NodeId> = ks.loads.iter().map(|l| l.3).collect();
+        let uc = ks.unk.map(|u| u.0);
+        let mut recv_of: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+        let mut stores: Vec<(NodeId, NodeId, SiteId)> = Vec::new();
+        let mut callee: Vec<(NodeId, String)> = Vec::new();
+        for (n, nd) in self.nodes.iter().enumerate() {
+            let n = n as NodeId;
+            for c in nd.cons.iter() {
+                match c {
+                    Cons::Load { dst, .. } if want.contains(dst) => {
+                        recv_of.entry(*dst).or_default().push(n)
+                    }
+                    Cons::Store {
+                        key: Key::Named(a),
+                        src,
+                        site,
+                    } if Some(*a) == name_a => stores.push((n, *src, *site)),
+                    Cons::Call { call } if Some(*call) == uc => callee.push((n, "Call".into())),
+                    Cons::New { call } | Cons::NewProgram { call } if Some(*call) == uc => {
+                        callee.push((n, "New".into()))
+                    }
+                    Cons::CallThis { call, this } if Some(*call) == uc => {
+                        callee.push((n, format!("CallThis this={this}")))
+                    }
+                    Cons::MCall { key, call } if Some(*call) == uc => {
+                        callee.push((n, format!("MCall(receiver) key={key:?}")))
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A1: the name/uuid loads and their field nodes.
+        let mut rset: crate::pts::FxHashSet<Tok> = crate::pts::FxHashSet::default();
+        for (file, off, k, dst) in &ks.loads {
+            eprintln!("KS2 load {file} {off} .{k} {}", self.ks2_node(ks, *dst));
+            for &r in recv_of.get(dst).map_or(&[][..], |v| v.as_slice()) {
+                eprintln!("KS2   recv {}", self.ks2_node(ks, r));
+                let toks = self.nodes[r as usize].pts.to_sorted();
+                let ka = self
+                    .atoms
+                    .iter()
+                    .position(|s| &**s == k.as_str())
+                    .map(|a| a as Atom);
+                let mut seen: crate::pts::FxHashSet<NodeId> = crate::pts::FxHashSet::default();
+                for &t in &toks {
+                    if k == "name" {
+                        rset.insert(t);
+                    }
+                    if let Some(fnode) = ka.and_then(|a| self.fields.get(&(t, a)).copied()) {
+                        if seen.insert(fnode) && seen.len() <= 24 {
+                            eprintln!(
+                                "KS2   field tok {t}:{} -> {}",
+                                self.ks2_kind(t),
+                                self.ks2_node(ks, fnode)
+                            );
+                        }
+                    }
+                }
+                eprintln!("KS2   fields distinct={}", seen.len());
+            }
+        }
+        // A2: every `name` store whose receiver meets the `node.name` receivers.
+        let mut by_site: BTreeMap<SiteId, (NodeId, NodeId, usize)> = BTreeMap::new();
+        for &(s, v, site) in &stores {
+            let k = self.nodes[s as usize]
+                .pts
+                .to_sorted()
+                .iter()
+                .filter(|t| rset.contains(t))
+                .count();
+            if k > 0 {
+                by_site.entry(site).or_insert((s, v, k));
+            }
+        }
+        eprintln!(
+            "KS2 name-stores total={} meeting={} rset={}",
+            stores.len(),
+            by_site.len(),
+            rset.len()
+        );
+        for (site, (s, v, k)) in &by_site {
+            let st = self.stores.get(*site as usize);
+            eprintln!(
+                "KS2 store site={site} {} desc={:?} common={k} verdict={} recv=n{s}",
+                st.map_or("-".into(), |st| self.ks2_fn(ks, st.func)),
+                st.map_or("", |st| st.desc.as_str()),
+                self.ks2_verdict(*v)
+            );
+            eprintln!("KS2   value {}", self.ks2_node(ks, *v));
+        }
+        // B1/B2: the unknown call.
+        if let Some((c, t, x)) = ks.unk {
+            if let Some(cs) = self.calls.get(c as usize) {
+                let pos = |r: NodeId| {
+                    ks.call_pos
+                        .get(&r)
+                        .map_or("? 0".to_string(), |p| format!("{} {}", p.0, p.1))
+                };
+                eprintln!(
+                    "KS2 call c{c} this={:?} nargs={} nspread={} ret=n{} at {} site={} region=n{} fn={}",
+                    cs.this, cs.args.len(), cs.spread.len(), cs.ret, pos(cs.ret), cs.site, cs.region,
+                    self.ks2_fn(ks, self.node_fn.get(cs.ret as usize).copied().unwrap_or(NO_FN))
+                );
+                let site_ret = self.calls.get(cs.site as usize).map(|s| s.ret);
+                if let Some(sr) = site_ret {
+                    eprintln!(
+                        "KS2   site-call c{} ret=n{sr} at {} fn={}",
+                        cs.site,
+                        pos(sr),
+                        self.ks2_fn(ks, self.node_fn.get(sr as usize).copied().unwrap_or(NO_FN))
+                    );
+                }
+                eprintln!(
+                    "KS2   made_root={:?} keyed={:?} bound_synth={} protocol={} contract_new={} ctor={}",
+                    self.made_root.get(&c),
+                    self.solver_keyed.iter().filter(|(_, v)| v.0 == c).map(|(k, _)| *k).take(3).collect::<Vec<_>>(),
+                    self.bound_synth.contains(&c), self.protocol_calls.contains(&c), self.contract_new.contains(&c), self.ctor_calls.contains(&c)
+                );
+                if let ThisArg::Node(tn) = cs.this {
+                    eprintln!("KS2   this {}", self.ks2_node(ks, tn));
+                }
+                for &a in cs.args.iter().take(4) {
+                    eprintln!("KS2   arg {}", self.ks2_node(ks, a));
+                }
+            }
+            eprintln!(
+                "KS2 callee tok {t} {} name={}",
+                self.ks2_kind(t),
+                self.callee_name(t)
+            );
+            eprintln!(
+                "KS2 recv tok {x} {} name={}",
+                self.ks2_kind(x),
+                self.tok_name(x)
+            );
+            if let TokKind::Obj(tm, ctx) = self.toks[x as usize] {
+                if let Some(tp) = self.tmpls.get(tm as usize) {
+                    eprintln!(
+                        "KS2 tmpl {tm} ctx={ctx} display={:?} kind={:?}",
+                        tp.display, tp.kind
+                    );
+                }
+            }
+            for (n, how) in &callee {
+                eprintln!("KS2 callee-node {how} {}", self.ks2_node(ks, *n));
+            }
+            let cn: crate::pts::FxHashSet<NodeId> = callee.iter().map(|c| c.0).collect();
+            let mut k = 0;
+            for (n, nd) in self.nodes.iter().enumerate() {
+                for c in nd.cons.iter() {
+                    if let Cons::Load { key, dst } = c {
+                        if cn.contains(dst) && k < 8 {
+                            k += 1;
+                            let kk = match key {
+                                Key::Named(a) => self.atoms[*a as usize].to_string(),
+                                Key::Any(_) => "any".into(),
+                            };
+                            eprintln!(
+                                "KS2 callee-from n{dst} <- load .{kk} recv {}",
+                                self.ks2_node(ks, n as NodeId)
+                            );
+                        }
+                    }
+                }
+            }
+        } else {
+            eprintln!("KS2 call none (no unknown-callee call noted)");
+        }
+    }
 }

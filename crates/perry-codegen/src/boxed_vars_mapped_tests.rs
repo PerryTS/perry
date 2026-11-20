@@ -32,6 +32,7 @@ fn closure(id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> 
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -45,6 +46,7 @@ fn write() -> Stmt {
         object: Box::new(Expr::LocalGet(3)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(2)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -67,6 +69,7 @@ fn module(params: Vec<Param>, body: Vec<Stmt>) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     m
 }
@@ -125,6 +128,7 @@ fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
             byte_offset: 0,
         },
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),

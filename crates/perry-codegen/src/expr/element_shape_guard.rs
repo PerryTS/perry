@@ -59,9 +59,9 @@ use super::FnCtx;
 const POINTER_TAG_HI16: &str = "32765";
 /// `0x0FFFFF` — handles are <= this; real objects are above.
 const HANDLE_BAND_TOP: &str = crate::expr::receiver_range::HANDLE_BAND_TOP_LITERAL;
-/// `GC_TYPE_ARRAY`. The subclass brand (#7573/#7603): a `class X extends
-/// Array` instance is a plain `ObjectHeader` and must never reach the clone.
-const GC_TYPE_ARRAY: &str = "1";
+// The subclass brand (#7573/#7603) tests `GC_TYPE_ARRAY` through
+// `target_layout::emit_gc_type_is_array`: a `class X extends Array` instance
+// is a plain `ObjectHeader` and must never reach the clone.
 
 /// Mask over the `i32` at `obj - 8`, which spans `GcHeader { obj_type: u8 @-8,
 /// gc_flags: u8 @-7, _reserved: u16 @-6 }` on every (little-endian) target
@@ -312,7 +312,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
         let gt_addr = blk.sub(I64, &handleb, "8");
         let gt_ptr = blk.inttoptr(I64, &gt_addr);
         let gc_type = blk.load(I8, &gt_ptr);
-        let is_array = blk.icmp_eq(I8, &gc_type, GC_TYPE_ARRAY);
+        let is_array = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type);
         blk.cond_br(&is_array, post_brand_label, slow_label);
     }
 
@@ -419,7 +419,7 @@ pub(crate) fn emit_element_shape_loop_preheader_check(
     let gt_addr1 = blk.sub(I64, &handle1, "8");
     let gt_ptr1 = blk.inttoptr(I64, &gt_addr1);
     let gc_type1 = blk.load(I8, &gt_ptr1);
-    let is_array1 = blk.icmp_eq(I8, &gc_type1, GC_TYPE_ARRAY);
+    let is_array1 = crate::target_layout::emit_gc_type_is_array(blk, I8, &gc_type1);
 
     // `ArrayHeader { length: u32 @0, capacity: u32 @4 }`. The invariant's
     // query requires `verified_len == length`, and nothing has run since, so
@@ -706,7 +706,6 @@ mod tests {
             HANDLE_BAND_TOP,
             (crate::expr::receiver_range::HANDLE_FLOOR - 1).to_string()
         );
-        assert_eq!(GC_TYPE_ARRAY, "1");
 
         // Reconstruct the header mask from the individual runtime constants,
         // positioned by their byte offsets inside the i32 at `obj - 8`.

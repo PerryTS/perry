@@ -135,6 +135,7 @@ fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -217,6 +218,7 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
             body,
             catch,
             finally,
+            ..
         } => {
             count_local_refs_stmts(body, counts);
             if let Some(c) = catch {

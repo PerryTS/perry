@@ -57,7 +57,7 @@ fn run(binary: &Path, dir: &Path, expected: &str) {
 fn keepalive_requests_retire_their_ids_on_the_mutator() {
     compile_and_run(
         include_str!(
-            "../../../test-parity/node-suite/http/test_gap_http_keepalive_request_identity.ts"
+            "../../../tests/parity/node-suite/http/test_gap_http_keepalive_request_identity.ts"
         ),
         "phase 1 held 50 wrong 0\nphase 2 held 50 wrong 0\nrequests 100 bodies 100\nerrors none\n",
     );
@@ -66,7 +66,7 @@ fn keepalive_requests_retire_their_ids_on_the_mutator() {
 #[test]
 fn id_pressure_retires_every_id_on_the_mutator() {
     compile_and_run(
-        include_str!("../../../test-parity/node-suite/http/test_gap_http_handle_id_pressure.ts"),
+        include_str!("../../../tests/parity/node-suite/http/test_gap_http_handle_id_pressure.ts"),
         "served 300000 answered 300000 failed 0\nkept 300 intact 300 same as kept 0 weak hits 0\n",
     );
 }

@@ -1,0 +1,1 @@
+Whole-program facts: an own-property test helper whose builtin binding is read through the lowering's temporal-dead-zone check guards the same computed read as the helper without the check. The check must test the binding that is called; reassigned or mixed callees and additional expressions keep the read ordinary.

@@ -693,6 +693,9 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         flush_readable_decoder(stream);
         mark_stream_ended(stream);
         refresh_readable_aborted_flag(stream);
+        // node's `onEofChunk`: a reader waiting in `readable` learns of EOF
+        // while data it has not drained is still buffered.
+        schedule_readable_event(stream);
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
@@ -1308,8 +1311,7 @@ fn push_callback_value(stream: f64, value: f64) {
 fn throw_missing_stream_method(message: &str) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_METHOD_NOT_IMPLEMENTED");
-    let err = crate::error::js_error_new_with_message(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(s))
 }
 
 #[cold]
@@ -1317,8 +1319,7 @@ fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_NULL_VALUES");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[cold]
@@ -1911,6 +1912,9 @@ pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;
+
+#[cfg(test)]
+mod readable_eof_tests;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]

@@ -42,6 +42,7 @@ fn classify_data_view_accessor(method: &str) -> Option<(bool, i32)> {
         "Float64" => 7,
         "BigInt64" => 8,
         "BigUint64" => 9,
+        "Float16" => 10,
         _ => return None,
     };
     Some((is_set, kind_code))

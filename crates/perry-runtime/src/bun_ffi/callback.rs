@@ -525,8 +525,8 @@ fn close_record(record: &mut CallbackRecord) {
 
 unsafe fn native_arg_value(ty: u8, bits: u64) -> f64 {
     match ty {
-        T_F64 => super::number_value(f64::from_bits(bits)),
-        T_F32 => super::number_value(f32::from_bits(bits as u32) as f64),
+        T_F64 => super::float_value(f64::from_bits(bits)),
+        T_F32 => super::float_value(f32::from_bits(bits as u32) as f64),
         _ => call::convert_int_return(ty, bits),
     }
 }

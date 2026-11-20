@@ -44,9 +44,6 @@ fn null() -> f64 {
 
 fn fd_from_value(value: f64) -> Option<libc::c_int> {
     let value = JSValue::from_bits(value.to_bits());
-    if value.is_int32() {
-        return (value.as_int32() >= 0).then_some(value.as_int32());
-    }
     if !value.is_number() {
         return None;
     }

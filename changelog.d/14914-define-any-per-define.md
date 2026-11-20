@@ -1,0 +1,1 @@
+Fix a SIGTRAP when two `defineProperty` calls under one computed key (a data define, then an accessor define) were followed by a read: each define now installs its own descriptor in the whole-program facts, so dead-body removal keeps the getter.

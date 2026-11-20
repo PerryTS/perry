@@ -5,6 +5,13 @@ impl ShapeRecord {
     #[inline]
     pub(in crate::object) fn object_kind(&self) -> ShapeObjectKind {
         let code = (self.flags_and_kind & RECORD_KIND_MASK) >> RECORD_KIND_SHIFT;
+        // The field is written only by `ShapeRecord::new` from
+        // `ShapeObjectKind::code()`, whose largest code is
+        // RECORD_KIND_MAX_CODE; the codes are the declaration order, so the
+        // match below is the identity and costs nothing (no clamp of the
+        // unused top codes).
+        // SAFETY: the only writer stores `code()` (checked there).
+        unsafe { core::hint::assert_unchecked(code <= RECORD_KIND_MAX_CODE) };
         match code {
             0 => ShapeObjectKind::Ordinary,
             1 => ShapeObjectKind::Class,
@@ -18,7 +25,10 @@ impl ShapeRecord {
             9 => ShapeObjectKind::FunctionBound,
             10 => ShapeObjectKind::OrdinaryNativeAlias,
             11 => ShapeObjectKind::CallableOrdinary,
-            _ => ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
+            12 => ShapeObjectKind::OrdinaryUnmarkedNativeAlias,
+            13 => ShapeObjectKind::Arguments,
+            14 => ShapeObjectKind::ArgumentsStrict,
+            _ => ShapeObjectKind::OrdinaryIndexed,
         }
     }
 
@@ -31,5 +41,19 @@ impl ShapeRecord {
         self.flags_and_kind & (RECORD_KIND_MASK | u32::from(RECORD_FLAG_PRESENT))
             == u32::from(RECORD_FLAG_PRESENT)
             && self.live_inline_slot_count == field_count
+    }
+
+    /// "This record is of kind `kind`", answered on the stored field: one masked
+    /// compare against the encoded code, no decode (the hot tests fold with the
+    /// neighbouring flag bits, as `present() && kind_is(Ordinary)` does).
+    #[inline(always)]
+    pub(in crate::object) fn kind_is(&self, kind: ShapeObjectKind) -> bool {
+        self.flags_and_kind & RECORD_KIND_MASK == (kind.code() as u32) << RECORD_KIND_SHIFT
+    }
+
+    /// "Both records are of the same kind", on the stored fields (no decode).
+    #[inline(always)]
+    pub(in crate::object) fn same_kind_as(&self, other: &ShapeRecord) -> bool {
+        (self.flags_and_kind ^ other.flags_and_kind) & RECORD_KIND_MASK == 0
     }
 }

@@ -78,7 +78,7 @@ fn test_int32_store_without_typed_descriptor_is_left_verbatim() {
     unsafe {
         *fields = 0.0f64.to_bits();
     }
-    let int32_bits = crate::value::INT32_TAG | 5u64;
+    let int32_bits = crate::value::INTERNAL_WORD_TAG | 5u64;
     runtime_store_jsvalue_slot(obj as usize, fields as usize, 0, int32_bits);
 
     assert_eq!(

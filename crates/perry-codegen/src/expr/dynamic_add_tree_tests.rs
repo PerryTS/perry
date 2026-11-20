@@ -203,6 +203,7 @@ fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -345,6 +346,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
                 mutable_captures: vec![Z],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -460,6 +462,7 @@ fn declared_number_left_chain_declines_when_a_late_leaf_is_an_element_read() {
     let mut arr = param(P_A, "a");
     arr.ty = Type::Array(Box::new(Type::Number));
     let elem = |i: i64| Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(P_A)),

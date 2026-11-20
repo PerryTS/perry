@@ -717,7 +717,7 @@ where
             f(property);
             f(object);
         }
-        Expr::PrivateLexicalBrandPop => {}
+        Expr::PrivateLexicalBrandPop | Expr::ThisProvenClass(_) => {}
         Expr::PrivateLexicalBrand(object) | Expr::PrivateLexicalBrandPush(object) => {
             f(object);
         }
@@ -959,7 +959,7 @@ where
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 f(v);
             }
         }

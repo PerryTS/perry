@@ -225,15 +225,13 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         None
     };
     cp_apply_argv0(&mut command, opts_val);
-    cp_apply_options(&mut command, opts_val);
-    command.env("NODE_CHANNEL_FD", ipc_fd.to_string());
-    command.env(
-        "NODE_CHANNEL_SERIALIZATION_MODE",
-        if advanced { "advanced" } else { "json" },
+    cp_apply_fork_environment(
+        &mut command,
+        opts_val,
+        ipc_fd,
+        advanced,
+        native_exec_argv.as_deref(),
     );
-    if let Some(exec_argv) = native_exec_argv {
-        command.env("PERRY_PROCESS_EXEC_ARGV", exec_argv);
-    }
     cp_apply_detached(&mut command, opts_val);
     let launch = match cp_apply_live_stdio(&mut command, &stdio_kinds) {
         #[cfg(unix)]
@@ -315,6 +313,25 @@ pub extern "C" fn js_child_process_fork(module_ptr: i64, args_ptr: i64, opts_ptr
         crate::builtins::js_queue_next_tick(emit_closure as i64);
     }
     cp
+}
+
+/// Select the child's base before overlaying transport/bootstrap fields.
+pub(super) fn cp_apply_fork_environment(
+    command: &mut Command,
+    opts_val: f64,
+    ipc_fd: usize,
+    advanced: bool,
+    native_exec_argv: Option<&str>,
+) {
+    cp_apply_options(command, opts_val);
+    command.env("NODE_CHANNEL_FD", ipc_fd.to_string());
+    command.env(
+        "NODE_CHANNEL_SERIALIZATION_MODE",
+        if advanced { "advanced" } else { "json" },
+    );
+    if let Some(exec_argv) = native_exec_argv {
+        command.env("PERRY_PROCESS_EXEC_ARGV", exec_argv);
+    }
 }
 
 /// Compiler-seeded source entry exposed as `process.argv[1]`.
@@ -440,7 +457,8 @@ fn fork_launch(
         stdin_obj,
         extra_pipes,
     } = stdio;
-    let clear_environment = cp_object_ptr(cp_get_field(opts_val, b"env")).is_some();
+    let clear_environment = cp_object_ptr(cp_get_field(opts_val, b"env")).is_some()
+        || crate::process::private_environment_snapshot().is_some();
     let detached = cp_get_field(opts_val, b"detached").to_bits() == TAG_TRUE_F64.to_bits();
     match super::windows_fork::spawn(
         &command,

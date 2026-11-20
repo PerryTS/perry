@@ -82,11 +82,17 @@ mod tests {
     fn standard_wasi_triples_select_perry_target_names() {
         for name in ["wasi", "wasip2", "wasm32-wasip2"] {
             assert_eq!(canon(name).as_deref(), Some("wasi"), "{name}");
-            assert_eq!(Flavour::from_target(&canon(name).unwrap()), Some(Flavour::P2));
+            assert_eq!(
+                Flavour::from_target(&canon(name).unwrap()),
+                Some(Flavour::P2)
+            );
         }
         for name in ["wasip1", "wasm32-wasip1"] {
             assert_eq!(canon(name).as_deref(), Some("wasip1"), "{name}");
-            assert_eq!(Flavour::from_target(&canon(name).unwrap()), Some(Flavour::P1));
+            assert_eq!(
+                Flavour::from_target(&canon(name).unwrap()),
+                Some(Flavour::P1)
+            );
         }
     }
 
@@ -101,8 +107,13 @@ mod tests {
     #[test]
     fn wasi_0_3_names_fail_instead_of_linking_for_the_host() {
         for name in ["wasip3", "wasm32-wasip3"] {
-            let err = canonical_target(Some(name.to_string())).unwrap_err().to_string();
-            assert!(err.contains("WASI 0.3") && err.contains("--target wasi"), "{err}");
+            let err = canonical_target(Some(name.to_string()))
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains("WASI 0.3") && err.contains("--target wasi"),
+                "{err}"
+            );
         }
     }
 }

@@ -1,0 +1,132 @@
+//! Localizing the exports a kept wrapper member shares with its stdlib
+//! replacement.
+//!
+//! The fixed-point shared-deps pass keeps a bundled codegen unit (`core`,
+//! `alloc`, `std`, …) when a kept sibling needs a symbol only the wrapper's
+//! copy defines. The stdlib's name-matched unit still has to load for the
+//! symbols only IT defines, and both copies export the symbols they have in
+//! common (same crate hash, same instantiation) — a hard `ld: duplicate
+//! symbol` on Mach-O. Making the kept member's copy of the shared exports local
+//! leaves the stdlib as their single provider; the symbols the wrapper
+//! genuinely needs from its own copy stay global.
+//!
+//! That split is sound only for a member without mutable state. Code that
+//! called a localized export now runs the stdlib's copy, against the stdlib
+//! copy's statics, while the exports that stay global keep reading this
+//! member's. A member that defines writable or thread-local data is therefore
+//! left whole.
+
+use super::object_format::object_is_macho;
+use super::*;
+
+/// For each kept candidate, localize the exports its stdlib replacement also
+/// provides. Returns how many symbols were localized in total; a toolchain
+/// without `llvm-objcopy` leaves the archive as is.
+pub(super) fn localize_kept_shared_exports<'a>(
+    nm: &Path,
+    archive: &Path,
+    extract_dir: &Path,
+    kept: impl Iterator<Item = &'a String>,
+    replacement_by_candidate: &std::collections::HashMap<String, std::collections::HashSet<String>>,
+) -> Result<usize> {
+    let Some(objcopy) =
+        find_nightly_llvm_tool("llvm-objcopy").or_else(|| find_llvm_tool("llvm-objcopy"))
+    else {
+        return Ok(0);
+    };
+    let exported_by_member =
+        collect_archive_provided_symbols_by_member(nm, archive).ok_or_else(|| {
+            anyhow::anyhow!("failed to inspect archive index of {}", archive.display())
+        })?;
+    let mut total = 0usize;
+    for member in kept {
+        let (Some(exported), Some(replacement)) = (
+            exported_by_member.get(member),
+            replacement_by_candidate.get(member),
+        ) else {
+            continue;
+        };
+        total +=
+            localize_provided_by_replacement(&objcopy, extract_dir, member, exported, replacement)?;
+    }
+    Ok(total)
+}
+
+/// Localize, in the extracted Mach-O `member`, every extern symbol that
+/// `replacement` also provides, unless the member holds mutable state (see
+/// [`defines_mutable_state`]). Returns how many symbols were localized.
+///
+/// Expressed as a `--keep-global-symbols` keep-list: llvm-objcopy's
+/// `--localize-symbol` leaves `LC_DYSYMTAB` inconsistent on Mach-O (see
+/// [`dedup_ui_lib_against_linked_libs`]). Ring's C/assembly ABI stays global so
+/// the Rust and native halves of a kept Ring unit never split across archives.
+fn localize_provided_by_replacement(
+    objcopy: &Path,
+    extract_dir: &Path,
+    member: &str,
+    exported: &std::collections::HashSet<String>,
+    replacement: &std::collections::HashSet<String>,
+) -> Result<usize> {
+    let Some(member_path) = extracted_archive_member(extract_dir, member) else {
+        return Err(anyhow::anyhow!(
+            "failed to locate extracted archive member {member}"
+        ));
+    };
+    if !object_is_macho(&member_path) || defines_mutable_state(&member_path) {
+        return Ok(0);
+    }
+    let (shared, mut keep): (Vec<&String>, Vec<&String>) = exported
+        .iter()
+        .partition(|s| replacement.contains(*s) && !requires_bundled_native_companion(s));
+    if shared.is_empty() {
+        return Ok(0);
+    }
+    keep.sort();
+    let list_path = extract_dir.join(format!("{member}.keep-globals-list"));
+    std::fs::write(
+        &list_path,
+        keep.iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )?;
+    let out = Command::new(objcopy)
+        .arg(format!("--keep-global-symbols={}", list_path.display()))
+        .arg(&member_path)
+        .output()?;
+    let _ = std::fs::remove_file(&list_path);
+    if !out.status.success() {
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(anyhow::anyhow!(
+            "failed to localize shared exports in {member}: {stderr}"
+        ));
+    }
+    Ok(shared.len())
+}
+
+/// Whether the object at `path` defines writable or thread-local data; an
+/// object that cannot be read or parsed counts as stateful.
+fn defines_mutable_state(path: &Path) -> bool {
+    use object::{Object, ObjectSection, SectionKind};
+    let Ok(bytes) = std::fs::read(path) else {
+        return true;
+    };
+    let Ok(file) = object::File::parse(&*bytes) else {
+        return true;
+    };
+    file.sections().any(|section| {
+        section.size() > 0
+            && matches!(
+                section.kind(),
+                SectionKind::Data
+                    | SectionKind::UninitializedData
+                    | SectionKind::Common
+                    | SectionKind::Tls
+                    | SectionKind::UninitializedTls
+                    | SectionKind::TlsVariables
+            )
+    })
+}
+
+#[cfg(test)]
+mod tests;

@@ -335,12 +335,32 @@ impl<T> std::ops::IndexMut<usize> for CatchStack<T> {
 }
 
 macro_rules! catch_stacks {
-    ($($(#[$attr:meta])* $name:ident: unwind: $unwind:path, check: $check:path;)*) => {
+    ($($(#[$attr:meta])* $name:ident: $(record: $field:ident,)? unwind: $unwind:path, check: $check:path;)*) => {
+        /// Whether some stack of the per-thread record ([`CatchStacks`], the
+        /// entries that name their `record` field) holds an entry marked below
+        /// `sp`. A stack's restore pops nothing exactly when its top mark is at
+        /// or above `sp` (`CatchStack::unwound_len` keeps everything up to the
+        /// newest entry marked at or above it), so the top of each stack
+        /// decides. A stack borrowed elsewhere counts as holding one: its own
+        /// restore then meets the borrow as it always did.
+        fn record_holds_entry_below(stacks: &CatchStacks, sp: usize) -> bool {
+            fn below<T>(stack: &RefCell<CatchStack<T>>, sp: usize) -> bool {
+                stack
+                    .try_borrow()
+                    .map_or(true, |s| s.entries.last().is_some_and(|&(mark, _)| mark < sp))
+            }
+            $($( if below(&stacks.$field, sp) { return true; } )?)*
+            false
+        }
+
         /// Pop, on every managed stack, the entries pushed by frames below
         /// `sp` (module docs), and truncate the runtime-handle stack to
         /// `handle_height` (module docs: handles carry no mark). Runs no JS
-        /// and allocates nothing.
+        /// and allocates nothing. The stacks of the per-thread record are
+        /// read in one access first: when none holds an entry below `sp`,
+        /// their restores would pop nothing and are not run.
         pub(crate) fn unwind_managed_stacks(sp: usize, handle_height: usize) {
+            let record_below = CATCH_STACKS.with(|stacks| record_holds_entry_below(stacks, sp));
             #[cfg(test)]
             if !crate::native_payload::callback_sabotage("unwind_runtime_handles") {
                 crate::gc::runtime_handle_stack_restore_to(handle_height);
@@ -350,14 +370,17 @@ macro_rules! catch_stacks {
             $(
                 $(#[$attr])*
                 {
-                    #[cfg(test)]
-                    if crate::native_payload::callback_sabotage(concat!("unwind_", stringify!($name))) {
-                        // Sabotage hook (design §5 test 10): skip this stack.
-                    } else {
+                    let in_record = false $( || { let _ = stringify!($field); true } )?;
+                    if record_below || !in_record {
+                        #[cfg(test)]
+                        if crate::native_payload::callback_sabotage(concat!("unwind_", stringify!($name))) {
+                            // Sabotage hook (design §5 test 10): skip this stack.
+                        } else {
+                            $unwind(sp);
+                        }
+                        #[cfg(not(test))]
                         $unwind(sp);
                     }
-                    #[cfg(not(test))]
-                    $unwind(sp);
                 }
             )*
             if eh_check_enabled() {
@@ -394,37 +417,133 @@ catch_stacks! {
     // `runInAsyncScope`) whose normal restore code the throw skipped. Pure
     // thread-local swaps: no JS runs and nothing allocates. First, so a
     // restored snapshot is in place before any other subsystem is touched.
-    async_context: unwind: crate::async_context::unwind_context_guards,
+    async_context: record: context_guards, unwind: crate::async_context::unwind_context_guards,
     check: crate::async_context::check_context_guard_marks;
     // #1830, #6951: expression temp roots (compiled FFI-fallback brackets and
     // runtime pushes).
     temp_roots: unwind: crate::gc::temp_roots_unwind_to,
     check: crate::gc::temp_roots_check_marks;
     // #5591: skipped method guards must not wedge the recursion counter.
-    call_method: unwind: crate::object::call_method_depth_unwind_to,
+    call_method: record: call_method, unwind: crate::object::call_method_depth_unwind_to,
     check: crate::object::call_method_depth_check_marks;
     // Includes removal of the process-wide outer-pump contribution.
-    pump: unwind: crate::stdlib_pump::pump_depth_unwind_to,
+    pump: record: pump, unwind: crate::stdlib_pump::pump_depth_unwind_to,
     check: crate::stdlib_pump::pump_depth_check_marks;
     // #9082: abandoned walks must no longer inhibit compaction.
-    set_foreach: unwind: crate::set::set_foreach_unwind_to,
+    set_foreach: record: set_foreach, unwind: crate::set::set_foreach_unwind_to,
     check: crate::set::set_foreach_check_marks;
-    map_foreach: unwind: crate::map::map_foreach_unwind_to,
+    map_foreach: record: map_foreach, unwind: crate::map::map_foreach_unwind_to,
     check: crate::map::map_foreach_check_marks;
-    prototype_resolution: unwind: crate::object::prototype_chain::resolution_stack_unwind_to,
+    prototype_resolution: record: prototype_resolution, unwind: crate::object::prototype_chain::resolution_stack_unwind_to,
     check: crate::object::prototype_chain::resolution_stack_check_marks;
-    static_private_owner: unwind: crate::object::static_private_owner_unwind_to,
+    static_private_owner: record: static_private_owner, unwind: crate::object::static_private_owner_unwind_to,
     check: crate::object::static_private_owner_check_marks;
-    private_lexical_brand: unwind: crate::object::private_lexical_brand_unwind_to,
+    private_lexical_brand: record: private_lexical_brand, unwind: crate::object::private_lexical_brand_unwind_to,
     check: crate::object::private_lexical_brand_check_marks;
-    derived_super_binding: unwind: crate::object::derived_super_binding_unwind_to,
+    derived_super_binding: record: derived_super_binding, unwind: crate::object::derived_super_binding_unwind_to,
     check: crate::object::derived_super_binding_check_marks;
-    private_member_access_hints: unwind: crate::object::private_member_access_hints_unwind_to,
+    private_member_access_hints: record: private_member_access_hints, unwind: crate::object::private_member_access_hints_unwind_to,
     check: crate::object::private_member_access_hints_check_marks;
     // #10848: a throwing native-namespace override must not leave its pair
     // marked running.
-    namespace_override: unwind: crate::object::namespace_override_unwind_to,
+    namespace_override: record: namespace_override, unwind: crate::object::namespace_override_unwind_to,
     check: crate::object::namespace_override_check_marks;
+}
+
+use std::cell::RefCell;
+
+/// Every frame-marked stack a landing pad restores, in one per-thread record:
+/// one thread-local access reaches them all, so the wasm EH checkpoint reads
+/// every depth with one access (it read eleven thread-locals per trap/try
+/// entry). Each stack's owning module names its field through a
+/// [`CatchStackKey`] and uses it as it used its own thread-local.
+pub(crate) struct CatchStacks {
+    pub(crate) context_guards: RefCell<CatchStack<crate::async_context::ContextGuardAction>>,
+    pub(crate) call_method: RefCell<CatchStack<()>>,
+    pub(crate) pump: RefCell<CatchStack<()>>,
+    pub(crate) set_foreach: RefCell<CatchStack<usize>>,
+    pub(crate) map_foreach: RefCell<CatchStack<usize>>,
+    pub(crate) prototype_resolution: RefCell<CatchStack<u64>>,
+    pub(crate) static_private_owner: RefCell<CatchStack<u64>>,
+    pub(crate) private_lexical_brand: RefCell<CatchStack<u64>>,
+    pub(crate) derived_super_binding:
+        RefCell<CatchStack<crate::object::this_binding::DerivedSuperBinding>>,
+    pub(crate) private_member_access_hints:
+        RefCell<CatchStack<crate::object::field_get_set::ic_miss::PrivateMemberAccessHint>>,
+    pub(crate) namespace_override: RefCell<CatchStack<(String, String)>>,
+}
+
+impl CatchStacks {
+    const fn new() -> Self {
+        Self {
+            context_guards: RefCell::new(CatchStack::new()),
+            call_method: RefCell::new(CatchStack::new()),
+            pump: RefCell::new(CatchStack::new()),
+            set_foreach: RefCell::new(CatchStack::new()),
+            map_foreach: RefCell::new(CatchStack::new()),
+            prototype_resolution: RefCell::new(CatchStack::new()),
+            static_private_owner: RefCell::new(CatchStack::new()),
+            private_lexical_brand: RefCell::new(CatchStack::new()),
+            derived_super_binding: RefCell::new(CatchStack::new()),
+            private_member_access_hints: RefCell::new(CatchStack::new()),
+            namespace_override: RefCell::new(CatchStack::new()),
+        }
+    }
+}
+
+crate::perry_thread_local! {
+    static CATCH_STACKS: CatchStacks = const { CatchStacks::new() };
+}
+
+/// One stack of [`CatchStacks`], used like the thread-local it replaces.
+pub(crate) struct CatchStackKey<T: 'static> {
+    field: fn(&CatchStacks) -> &RefCell<CatchStack<T>>,
+}
+
+impl<T: 'static> CatchStackKey<T> {
+    pub(crate) const fn new(field: fn(&CatchStacks) -> &RefCell<CatchStack<T>>) -> Self {
+        Self { field }
+    }
+
+    #[inline(always)]
+    pub(crate) fn with<R>(&'static self, f: impl FnOnce(&RefCell<CatchStack<T>>) -> R) -> R {
+        CATCH_STACKS.with(|stacks| f((self.field)(stacks)))
+    }
+}
+
+/// The depth of every [`CatchStacks`] stack, read in one access.
+#[cfg(any(test, target_os = "wasi"))]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct CatchStackDepths {
+    pub(crate) context_guards: usize,
+    pub(crate) call_method: usize,
+    pub(crate) pump: usize,
+    pub(crate) set_foreach: usize,
+    pub(crate) map_foreach: usize,
+    pub(crate) prototype_resolution: usize,
+    pub(crate) static_private_owner: usize,
+    pub(crate) private_lexical_brand: usize,
+    pub(crate) derived_super_binding: usize,
+    pub(crate) private_member_access_hints: usize,
+    pub(crate) namespace_override: usize,
+}
+
+#[cfg(any(test, target_os = "wasi"))]
+#[inline]
+pub(crate) fn catch_stack_depths() -> CatchStackDepths {
+    CATCH_STACKS.with(|s| CatchStackDepths {
+        context_guards: s.context_guards.borrow().len(),
+        call_method: s.call_method.borrow().len(),
+        pump: s.pump.borrow().len(),
+        set_foreach: s.set_foreach.borrow().len(),
+        map_foreach: s.map_foreach.borrow().len(),
+        prototype_resolution: s.prototype_resolution.borrow().len(),
+        static_private_owner: s.static_private_owner.borrow().len(),
+        private_lexical_brand: s.private_lexical_brand.borrow().len(),
+        derived_super_binding: s.derived_super_binding.borrow().len(),
+        private_member_access_hints: s.private_member_access_hints.borrow().len(),
+        namespace_override: s.namespace_override.borrow().len(),
+    })
 }
 
 #[cfg(test)]

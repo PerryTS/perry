@@ -125,11 +125,37 @@ pub extern "C" fn js_stream_handle_is_registered(id: usize) -> bool {
 /// #1545: classify a Web Streams registry id for `instanceof`, dispatch,
 /// and `Object.prototype.toString` tags.
 /// 0 = not a stream, 1 = ReadableStream, 2 = WritableStream, 3 = reader,
-/// 4 = writer, 5 = TransformStream.
+/// 4 = writer, 5 = TransformStream; a readable stream's controller (RSTREAM
+/// R2: `stream id | STREAM_CONTROLLER_BIT`, live while the stream is) is
+/// 6 = ReadableStreamDefaultController, 7 = TransformStreamDefaultController
+/// (the readable side of a TransformStream), 8 = ReadableByteStreamController;
+/// 9 = ReadableStreamBYOBReader; a byte stream's BYOB request (`stream id |
+/// STREAM_BYOB_REQUEST_BIT`) is 10 = ReadableStreamBYOBRequest.
 #[no_mangle]
 pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     if !(STREAM_HANDLE_ID_START..STREAM_HANDLE_ID_END).contains(&id) {
         return 0;
+    }
+    let requested = byob_request_id_stream(id);
+    if requested != 0 {
+        return match READABLE_STREAMS.lock().unwrap().get(&requested) {
+            Some(s) if s.is_byte_stream => 10,
+            _ => 0,
+        };
+    }
+    let controlled = controller_id_stream(id);
+    if controlled != 0 {
+        let is_byte_stream = match READABLE_STREAMS.lock().unwrap().get(&controlled) {
+            Some(s) => s.is_byte_stream,
+            None => return 0,
+        };
+        return if transform_writable_for_readable(controlled).is_some() {
+            7
+        } else if is_byte_stream {
+            8
+        } else {
+            6
+        };
     }
     if READABLE_STREAMS
         .lock()
@@ -145,8 +171,14 @@ pub extern "C" fn js_stream_handle_kind(id: usize) -> u8 {
     {
         return 2;
     }
-    if READERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
-        return 3;
+    match READERS
+        .lock()
+        .ok()
+        .and_then(|m| m.get(&id).map(|r| r.is_byob))
+    {
+        Some(true) => return 9,
+        Some(false) => return 3,
+        None => {}
     }
     if WRITERS.lock().map(|m| m.contains_key(&id)).unwrap_or(false) {
         return 4;
@@ -196,6 +228,17 @@ pub(crate) unsafe fn dispatch_stream_method(
         .copied()
         .unwrap_or(f64::from_bits(TAG_UNDEFINED));
 
+    // A byte stream's BYOB request handle answers its two operations.
+    let requested = byob_request_id_stream(id);
+    if requested != 0 {
+        return match method {
+            "respond" => Some(super::byob::byob_request_respond(requested, arg0)),
+            "respondWithNewView" => Some(super::byob::byob_request_respond_with_new_view(
+                requested, arg0,
+            )),
+            _ => None,
+        };
+    }
     // IDs have one registry owner; eviction clears every registry before reuse.
     // Skip registries that cannot handle this method, dropping each guard
     // before the FFI call re-locks it. Controllers alias only readable IDs.
@@ -229,17 +272,7 @@ pub(crate) unsafe fn dispatch_stream_method(
     }
     let is_readable = matches!(
         method,
-        "getReader"
-            | "values"
-            | "@@asyncIterator"
-            | "cancel"
-            | "tee"
-            | "pipeTo"
-            | "pipeThrough"
-            | "enqueue"
-            | "close"
-            | "terminate"
-            | "error"
+        "getReader" | "values" | "@@asyncIterator" | "cancel" | "tee" | "pipeTo" | "pipeThrough"
     ) && READABLE_STREAMS.lock().unwrap().contains_key(&id);
     if is_readable {
         match method {
@@ -264,15 +297,24 @@ pub(crate) unsafe fn dispatch_stream_method(
                 }
                 return Some(js_readable_stream_pipe_through_pair(handle, arg0, arg1));
             }
-            // #1644: a readable handle is also its own controller. The
-            // start/transform/flush callbacks receive it as `controller`, so
-            // `controller.enqueue/close/error/terminate` dispatch here when the
-            // controller param is generically typed.
+            _ => return None,
+        }
+    }
+    // RSTREAM R3: a controller (start/pull/transform/flush callbacks receive
+    // it) is its own handle; its methods never answer on the stream itself.
+    let controlled = controller_id_stream(id);
+    let kind = if controlled != 0 {
+        js_stream_handle_kind(id)
+    } else {
+        0
+    };
+    if kind != 0 {
+        match method {
             "enqueue" => return Some(js_readable_stream_controller_enqueue(handle, arg0)),
-            "close" => return Some(js_readable_stream_controller_close(handle)),
-            "terminate" => {
+            "close" if kind != 7 => return Some(js_readable_stream_controller_close(handle)),
+            "terminate" if kind == 7 => {
                 let result = js_readable_stream_controller_close(handle);
-                if let Some(writable_id) = transform_writable_for_readable(id) {
+                if let Some(writable_id) = transform_writable_for_readable(controlled) {
                     let reason = f64::from_bits(make_type_error_with_message(
                         "Invalid state: TransformStream has been terminated",
                     ));
@@ -318,13 +360,14 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     // undefined). `locked` is the one #1670 exercises (`res.body.locked`).
     match (kind, name) {
         (1, "locked") => return js_readable_stream_locked(handle),
-        (1, "desiredSize") => return js_readable_stream_controller_desired_size(handle),
+        (6..=8, "desiredSize") => return js_readable_stream_controller_desired_size(handle),
         // Non-null only while a BYOB read is parked on this byte stream (#4915).
-        (1, "byobRequest") => {
+        (8, "byobRequest") => {
             return super::byob::js_readable_stream_controller_byob_request(handle)
         }
         (2, "locked") => return js_writable_stream_locked(handle),
-        (3, "closed") => return box_promise(js_reader_closed(handle)),
+        (3 | 9, "closed") => return box_promise(js_reader_closed(handle)),
+        (10, "view") => return super::byob::byob_request_view(handle),
         (4, "closed") => return box_promise(js_writer_closed(handle)),
         (4, "ready") => return box_promise(js_writer_ready(handle)),
         (4, "desiredSize") => return js_writer_desired_size(handle),
@@ -342,22 +385,23 @@ pub(crate) unsafe fn dispatch_stream_property(handle: f64, name: &str) -> f64 {
     // `js_class_method_bind` stores the raw pointer in the closure.
     // The receiver is the raw float handle (not NaN-boxed) so that when the
     // bound method is called, `js_native_call_method`'s stream branch fires.
+    // RSTREAM R5: a family with a prototype answers with the prototype's own
+    // member (`s.getReader === ReadableStream.prototype.getReader`).
+    if let Some(member) = super::prototypes::prototype_member(kind, name) {
+        return member;
+    }
     let method: Option<&'static [u8]> = match (kind, name) {
-        (1, "getReader") => Some(b"getReader"),
-        (1, "cancel") => Some(b"cancel"),
-        (1, "tee") => Some(b"tee"),
-        (1, "pipeTo") => Some(b"pipeTo"),
-        (1, "pipeThrough") => Some(b"pipeThrough"),
         (2, "getWriter") => Some(b"getWriter"),
         (2, "abort") => Some(b"abort"),
         (2, "close") => Some(b"close"),
-        (3, "read") => Some(b"read"),
-        (3, "releaseLock") => Some(b"releaseLock"),
-        (3, "cancel") => Some(b"cancel"),
         (4, "write") => Some(b"write"),
         (4, "close") => Some(b"close"),
         (4, "abort") => Some(b"abort"),
         (4, "releaseLock") => Some(b"releaseLock"),
+        (7 | 8, "enqueue") => Some(b"enqueue"),
+        (7 | 8, "error") => Some(b"error"),
+        (8, "close") => Some(b"close"),
+        (7, "terminate") => Some(b"terminate"),
         _ => None,
     };
     if let Some(name_bytes) = method {

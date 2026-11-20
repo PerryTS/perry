@@ -140,14 +140,3 @@ pub(crate) fn from_owner(owner: f64) -> f64 {
         }
     }
 }
-#[cfg(test)]
-pub(crate) unsafe fn clear_imports(context: f64) {
-    if let Some(cell) = cell(context) {
-        let bag = JSValue::from_bits((*cell).owner).as_pointer::<crate::array::ArrayHeader>();
-        crate::array::js_array_set_f64(
-            bag as *mut crate::array::ArrayHeader,
-            0,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-    }
-}

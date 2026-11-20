@@ -25,6 +25,8 @@ unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool)
             length: slots as u32,
             capacity: slots as u32,
             named: std::ptr::null_mut(),
+            #[cfg(target_pointer_width = "32")]
+            _ek_pad: 0,
             ek_prefix: 0,
             ek_kind: 0,
         });
@@ -33,6 +35,8 @@ unsafe fn raw_birth(kind: u8, shape: u32, child: *mut u8, premature_drain: bool)
         object.write(crate::object::ObjectHeader {
             class_id: 0,
             parent_class_id: 0,
+            #[cfg(target_pointer_width = "32")]
+            _slot_alignment_padding: 0,
             meta: std::ptr::null_mut(),
         });
         crate::object::shapes::store_kind::premark_plain_ordinary(object);

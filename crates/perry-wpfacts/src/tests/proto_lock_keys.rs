@@ -32,12 +32,14 @@ fn v_proven(src: &str, marker: &str) -> (bool, String) {
     (!matches!(s.verdict, Verdict::No(_)), pf.dump_text())
 }
 
-/// `holder` is the receiver of `holder[k](n)`; `store` runs before.
+/// `holder` is the receiver of `holder[k](n)`; `store` runs before. `top`
+/// is a global under a computed key: unknown, and no unseen module runs
+/// (one could replace the global `Map` the arms read).
 fn program(holder: &str, store: &str, key: &str) -> String {
     format!(
         "class N {{ v = 1; }}
         const tab: any = {holder};
-        const top: any = (globalThis as any).someHost;
+        const top: any = (globalThis as any)[process.argv[2]];
         {store}
         function run(k: any, n: N): number {{ return tab[k](n); }}
         console.log(run({key}, new N()), run({key}, new N()));"
@@ -60,8 +62,11 @@ fn number_key_top_store_writes_no_locked_chain() {
 }
 
 /// A computed key may name `constructor`, which the lock exempts: a store
-/// into ⊤ under a computed key may have written it, so a computed call
-/// runs what was stored and `n` escapes; a number-key store did not.
+/// into ⊤ under a computed key may have written it, so `tab[k]` may read
+/// what was stored there. A stored `1` is not callable (the call throws,
+/// nothing receives `n`), and the original `constructor` (`Object`) hands
+/// `n` back: `n.v` is proven. Twin: a stored value unknown code holds (⊤)
+/// may be the callee, so `n` escapes.
 #[test]
 fn computed_key_meets_the_exempt_constructor() {
     let key = "String(Math.random())";
@@ -69,7 +74,18 @@ fn computed_key_meets_the_exempt_constructor() {
         &program(TABLE, "top[String(Math.random())] = 1;", key),
         "/*A*/",
     );
-    assert!(!p, "a computed ⊤ store may write `constructor`\n{dump}");
+    assert!(
+        p,
+        "a stored number is not callable: nothing receives n\n{dump}"
+    );
+    let (p, dump) = v_proven(
+        &program(TABLE, "top[String(Math.random())] = top;", key),
+        "/*A*/",
+    );
+    assert!(
+        !p,
+        "a computed ⊤ store of ⊤ may write `constructor`\n{dump}"
+    );
     let (p, dump) = v_proven(&program(TABLE, "top[0] = 1;", key), "/*A*/");
     assert!(p, "a number-key ⊤ store writes no `constructor`\n{dump}");
 }
@@ -82,7 +98,7 @@ fn open_chain_still_takes_the_number_key_write() {
     let src = |store: &str| {
         format!(
             "class N {{ v = 1; }}
-            const top: any = (globalThis as any).someHost;
+            const top: any = (globalThis as any)[process.argv[2]];
             {store}
             const mp: any = new Map();
             function run(k: number, n: N): number {{ try {{ mp[k](n); }} catch {{}} return /*A*/ n.v; }}
@@ -107,14 +123,14 @@ fn open_chain_still_takes_the_number_key_write() {
 /// `f.go` throws, `n` stays the program's. The async and generator
 /// function prototypes take adds: there the call may run what was stored.
 fn fn_program(decl: &str, store: &str, call: &str) -> String {
-    format!(
+    unseen(&format!(
         "class N {{ v = 1; }}
         const top: any = (globalThis as any).someHost;
         {store}
         {decl}
         function run(n: N): number {{ try {{ {call}; }} catch {{}} return /*A*/ n.v; }}
         console.log(run(new N()), run(new N()));"
-    )
+    ))
 }
 
 const PLAIN_FNS: [(&str, &str); 5] = [

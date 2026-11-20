@@ -20,6 +20,8 @@ crate::perry_thread_local! {
 /// collecting action here, so no handle is needed for it.
 pub(super) fn new(data: impl FnOnce() -> *const RegExpData) -> *mut RegExpHeader {
     let shape = BIRTH_SHAPE.with(Cell::get);
+    #[cfg(perry_gc_instruments)]
+    crate::wpfacts_check::family::born("regex_engine", || "a RegExp is born".into());
     if shape != 0 {
         let size = std::mem::size_of::<RegExpHeader>() + crate::object::INLINE_SLOT_FLOOR * 8;
         let receiver = crate::arena::arena_alloc_gc_no_collect(size, 8, crate::gc::GC_TYPE_OBJECT)
@@ -253,10 +255,26 @@ pub(crate) unsafe fn builtin_reset_last_index(receiver: *mut RegExpHeader) {
     *slot(receiver, 1) = 0.0f64.to_bits();
 }
 
+/// `Set(R, "lastIndex", n, true)` on a receiver [`birth_layout`] admitted:
+/// the birth layout's `lastIndex` is an own writable data property in an
+/// `Any` slot (an own data property is set without consulting the
+/// prototype), so the Set is this store, and a Number needs no write barrier.
+///
+/// # Safety
+/// `receiver` was admitted by [`birth_layout`] with no collection since.
+#[inline(always)]
+pub(crate) unsafe fn birth_set_last_index(receiver: *mut RegExpHeader, n: f64) {
+    // GC_STORE_AUDIT(POINTER_FREE): a Number into an Any lane; no barrier.
+    *slot(receiver, 1) = n.to_bits();
+}
+
 // Read the realm intrinsic through the same private slot machinery as matcher
 // data. Neither this read nor BIRTH_SHAPE retains a managed pointer.
+// Inlined into its one caller (`prepare_shape`), as it always was.
+#[inline(always)]
 pub(crate) fn intrinsic_prototype() -> f64 {
-    let global = crate::object::js_get_global_this();
+    // `RegExp` is a phase-A family: the realm's core holds its private slot.
+    let global = crate::object::realm_core();
     PROTOTYPE_READ
         .read(global)
         .expect("realm has installed the RegExp intrinsic")

@@ -47,7 +47,10 @@ fn generator_member_spread_calls_the_member_entry_and_drains_it() {
         .position(|l| l.contains("call i64 @js_array_spread_append_iterator("))
         .unwrap_or_else(|| panic!("no iterator drain at the spread site:\n{ir}"));
     let lines: Vec<&str> = ir.lines().collect();
-    let entry = lines[..site].iter().rev().find(|l| l.contains("__eclo(i64"));
+    let entry = lines[..site]
+        .iter()
+        .rev()
+        .find(|l| l.contains("__eclo(i64"));
     assert!(
         entry.is_some_and(|l| l.contains("call double @") && l.contains("Vec3")),
         "the drain's iterator is not the member entry's result:\n{ir}"

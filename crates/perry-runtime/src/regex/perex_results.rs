@@ -2,7 +2,7 @@
 //! have null prototypes and indices.groups aliases the numbered pair objects.
 use super::perex_api::{OUTPUT_BYTES, QUANTUM};
 use super::perex_owner::{GcProgram, HeapSubject};
-use super::perex_runtime::{self as host, EngineError, Match};
+use super::perex_runtime::{self as host, EngineError};
 use super::perex_strings::{copy_name, copy_span_value_near};
 use crate::array::ArrayHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
@@ -20,13 +20,14 @@ pub(super) fn materialize(
     input: &RuntimeHandle<'_>,
     subject: &BoundSubject<HeapSubject<'_>>,
     program: &BoundProgram<GcProgram<'_>>,
-    found: &Match<'_>,
+    full: perex::span::Span,
+    captures: Option<&[Option<perex::span::Span>]>,
     near: Option<perex::input::Position>,
     has_indices: bool,
     budget: &mut Budget,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<(*mut ArrayHeader, *mut ObjectHeader), EngineError> {
-    let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
+    let captures = captures.ok_or(EngineError::InvalidSpan)?;
     let scope = RuntimeHandleScope::new();
     // Born with the named-property reserve: `index`/`input`/`groups` (and
     // `indices`) are installed below without moving an element.
@@ -150,7 +151,7 @@ pub(super) fn materialize(
         .with_const_ptr::<StringHeader, _>(|input| crate::value::js_nanbox_string(input as i64));
     crate::string::js_string_addref_if_heap_string(input_value);
     let mut values = [
-        found.full.start() as f64,
+        full.start() as f64,
         input_value,
         groups_value,
         f64::from_bits(crate::value::TAG_UNDEFINED),
@@ -185,13 +186,13 @@ pub(super) fn materialize(
 /// to use the ordinary array prototype chain.
 pub(super) fn materialize_capture(
     subject: &BoundSubject<HeapSubject<'_>>,
-    found: &Match<'_>,
+    captures: Option<&[Option<perex::span::Span>]>,
     near: Option<perex::input::Position>,
     index: usize,
     budget: &mut Budget,
     poll: &mut impl FnMut() -> Result<(), EngineError>,
 ) -> Result<*mut ArrayHeader, EngineError> {
-    let captures = found.captures.as_ref().ok_or(EngineError::InvalidSpan)?;
+    let captures = captures.ok_or(EngineError::InvalidSpan)?;
     let scope = RuntimeHandleScope::new();
     #[cfg(test)]
     super::perex_api::before_result_alloc();
@@ -355,8 +356,8 @@ mod projection_tests {
                 crate::value::TAG_UNDEFINED
             );
         });
-        // The mandatory capture poll remains; no per-inline-string poll.
-        assert!(polls <= 2);
-        assert!(polls >= 1);
+        // The automaton answers this one-start program, and its answer does
+        // not poll (the pre-search poll is strided); no per-inline-string poll.
+        assert!(polls <= 1);
     }
 }

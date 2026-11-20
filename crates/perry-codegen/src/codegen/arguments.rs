@@ -68,7 +68,7 @@ pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
         .iter()
         .any(|p| p.is_rest && p.arguments_object.is_none())
         || arguments_elision(params, body).is_some()
-        || !arguments_observed_on_every_path(body, param.id)
+        || !arguments_observed_on_every_path(body, param.id, meta.mapped_parameter_ids.is_empty())
     {
         return 0;
     }
@@ -89,9 +89,16 @@ pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
         }
 }
 
-fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
-    fn observes(expr: &Expr, id: u32) -> bool {
+fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -> bool {
+    fn observes(expr: &Expr, id: u32, defer_apply: bool) -> bool {
+        let observes = |e: &Expr, id: u32| observes(e, id, defer_apply);
         match expr {
+            // G8: a forwarding apply reads the binding at the site itself,
+            // where an unborn object is answered by its bundle
+            // ([`deferred_forward_apply_binding`]).
+            Expr::Call { callee, args, .. } if defer_apply && is_forward_apply_of(expr, id) => {
+                observes(callee, id) || observes(&args[0], id)
+            }
             Expr::LocalGet(local) => *local == id,
             Expr::PropertyGet { object, .. } => observes(object, id),
             Expr::IndexGet { object, index, .. } => observes(object, id) || observes(index, id),
@@ -134,7 +141,9 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
     // need no further analysis. Unknown control flow fails closed.
     const FALLTHROUGH: u8 = 1;
     const EXIT: u8 = 2;
-    fn unobserved_paths(body: &[Stmt], id: u32) -> u8 {
+    fn unobserved_paths(body: &[Stmt], id: u32, defer_apply: bool) -> u8 {
+        let observes = |e: &Expr, id: u32| observes(e, id, defer_apply);
+        let unobserved_paths = |b: &[Stmt], id: u32| unobserved_paths(b, id, defer_apply);
         let mut paths = FALLTHROUGH;
         for stmt in body {
             if paths & FALLTHROUGH == 0 {
@@ -190,7 +199,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
         }
         paths
     }
-    unobserved_paths(body, id) == 0
+    unobserved_paths(body, id, defer_apply) == 0
 }
 
 /// A mapped parameter is boxed so the sloppy-mode object and the parameter
@@ -309,7 +318,9 @@ pub(crate) fn materialize_arguments_object(
         );
         return;
     }
-    if body.is_some_and(|body| arguments_observed_on_every_path(body, synth_param.id)) {
+    if body.is_some_and(|body| {
+        arguments_observed_on_every_path(body, synth_param.id, meta.mapped_parameter_ids.is_empty())
+    }) {
         // The same proof selects direct object birth in JsFunctionInfo.
         // No readiness state or collecting LocalGet is needed once entry
         // materialization has established the binding's final identity.
@@ -381,6 +392,51 @@ pub(crate) fn ensure_arguments_object(ctx: &mut FnCtx<'_>, id: u32) {
     ctx.block().store(I8, "1", &deferred.ready);
     ctx.block().br(&ready_label);
     ctx.current_block = ready_idx;
+}
+
+/// G8: `X.apply(y, arguments)` with exactly these two arguments, the second
+/// the local `id`.
+pub(crate) fn is_forward_apply_of(expr: &Expr, id: u32) -> bool {
+    matches!(expr, Expr::Call { callee, args, .. }
+        if args.len() == 2
+            && matches!(&args[1], Expr::LocalGet(l) if *l == id)
+            && matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "apply"))
+}
+
+/// G8: the deferred binding `operand` names when a forwarding apply may hand
+/// an unborn object's bundle to the intrinsic `Function.prototype.apply`: the
+/// binding is deferred (its slot holds the caller's bundle until the birth)
+/// and maps no parameter, so until the birth the bundle holds exactly the
+/// object's elements, nothing writes it and nothing has observed the object.
+/// CreateListFromArrayLike of the bundle is then the object's list. The site
+/// births the object only when `apply` is not the intrinsic
+/// ([`ensure_arguments_object`]); a born object is passed as itself.
+pub(crate) fn deferred_forward_apply_binding(ctx: &FnCtx<'_>, operand: &Expr) -> Option<u32> {
+    let Expr::LocalGet(id) = operand else {
+        return None;
+    };
+    let deferred = ctx.elided_arguments.get(id)?.deferred.as_ref()?;
+    let synth = deferred
+        .params
+        .iter()
+        .find(|p| p.arguments_object.is_some())?;
+    synth
+        .arguments_object
+        .as_ref()?
+        .mapped_parameter_ids
+        .is_empty()
+        .then_some(*id)
+}
+
+/// The deferred binding's slot as it stands: the bundle while the object is
+/// unborn, the object after its birth.
+pub(crate) fn emit_deferred_binding_value(ctx: &mut FnCtx<'_>, id: u32) -> String {
+    let slot = ctx
+        .locals
+        .get(&id)
+        .cloned()
+        .expect("a deferred arguments binding has its slot");
+    ctx.block().load(DOUBLE, &slot)
 }
 
 /// Assignment replaces the binding without needing its previous value.
@@ -478,10 +534,12 @@ fn emit_arguments_object(ctx: &mut FnCtx<'_>, params: &[Param], callee: Argument
 pub(crate) enum ArgumentsElision {
     /// Every use is an exact `arguments.length` read (#8807).
     LengthOnly,
-    /// Every use is an `arguments.length` read or an `arguments[k]` value read
-    /// (#10509), no closure captures the binding, and no parameter a sloppy
-    /// mapped object would alias can change. Reads lower through
-    /// [`try_lower_elided_arguments_index_get`].
+    /// Every use is an `arguments.length` read, an `arguments[k]` value read
+    /// (#10509) or a `...arguments` operand of a call (G8), no closure
+    /// captures the binding, and no parameter a sloppy mapped object would
+    /// alias can change. Reads lower through
+    /// [`try_lower_elided_arguments_index_get`], spreads through
+    /// [`emit_elided_arguments_spread_append`] and the stack form's admission.
     Reads,
 }
 
@@ -540,7 +598,7 @@ pub(crate) fn arguments_elision(params: &[Param], body: &[Stmt]) -> Option<Argum
     if !uses.only_value_reads() {
         return None;
     }
-    if uses.index_reads == 0 {
+    if uses.index_reads == 0 && uses.spread_reads == 0 {
         return Some(ArgumentsElision::LengthOnly);
     }
     if uses.captured {
@@ -570,6 +628,10 @@ struct LocalUses {
     length_reads: usize,
     /// `id[k]` reads.
     index_reads: usize,
+    /// `...id` operands directly in an `Expr::CallSpread`'s argument list.
+    /// Every other spread form (`[...id]`, `new F(...id)`, `super(...id)`,
+    /// `Math.max(...id)`, `a.push(...id)`) is an unclassified use.
+    spread_reads: usize,
     /// `delete id[k]` / `delete id.p`, or a call whose callee is `id[k]` /
     /// `id.p` (the object becomes `this`).
     reference_uses: usize,
@@ -598,6 +660,12 @@ impl LocalUses {
 
     fn note(&mut self, expr: &Expr, id: u32) {
         let is_local = |e: &Expr| matches!(e, Expr::LocalGet(l) if *l == id);
+        if let Expr::CallSpread { args, .. } = expr {
+            self.spread_reads += args
+                .iter()
+                .filter(|a| matches!(a, perry_hir::CallArg::Spread(e) if is_local(e)))
+                .count();
+        }
         let is_member = |e: &Expr| {
             matches!(
                 e,
@@ -628,7 +696,7 @@ impl LocalUses {
     }
 
     fn only_value_reads(&self) -> bool {
-        let reads = self.length_reads + self.index_reads;
+        let reads = self.length_reads + self.index_reads + self.spread_reads;
         reads > 0
             && self.refs == self.local_gets
             && self.local_gets == reads
@@ -638,7 +706,7 @@ impl LocalUses {
 
 fn arguments_used_only_for_length(body: &[Stmt], arguments_id: u32) -> bool {
     let uses = LocalUses::scan(body, &[], arguments_id);
-    uses.only_value_reads() && uses.index_reads == 0
+    uses.only_value_reads() && uses.index_reads == 0 && uses.spread_reads == 0
 }
 
 /// `arguments.length` on an elided binding: the bundle length the prologue
@@ -745,6 +813,94 @@ pub(crate) fn try_lower_elided_arguments_index_get(
     })
 }
 
+/// G8: `...arguments` where the binding is elided ([`ArgumentsElision::Reads`]):
+/// the operand lowers to the caller's private argument bundle, which holds
+/// exactly the values the Arguments object would have held (no mapped
+/// parameter changes, nothing can write the bundle).
+pub(crate) fn is_elided_arguments_spread(ctx: &FnCtx<'_>, operand: &Expr) -> bool {
+    matches!(operand, Expr::LocalGet(id)
+        if ctx.elided_arguments.get(id).is_some_and(|binding| binding.deferred.is_none()))
+}
+
+/// Spreading an Arguments object runs its own `@@iterator`, which is
+/// %Array.prototype.values% from birth (nothing can replace it on an elided
+/// object), so only `%ArrayIteratorPrototype%.next` can make the walk
+/// observable. `None`: the program never names that prototype (array
+/// iteration facts bit 1), so the walk is the element copy unconditionally.
+/// Otherwise an `i1` that is true when the copy is exact: the bundle passes
+/// the complete array-spread proof (`js_array_destructure_needs_iterator`),
+/// which includes `next` being the builtin (and conservatively also
+/// `%Array.prototype%`'s iterator member, which an Arguments object never
+/// reads; a refusal only takes the generic walk).
+pub(crate) fn emit_elided_spread_admitted(ctx: &mut FnCtx<'_>, bundle: &str) -> Option<String> {
+    if crate::expr::array_iteration_facts(&ctx.wpfacts) & 2 == 0 {
+        return None;
+    }
+    let needs = ctx.block().call(
+        I32,
+        "js_array_destructure_needs_iterator",
+        &[(DOUBLE, bundle)],
+    );
+    Some(ctx.block().icmp_eq(I32, &needs, "0"))
+}
+
+/// The generic walk's operand for an elided `...arguments`: the Arguments
+/// object the prologue would have built, from the bundle. It is never kept
+/// and its identity, `callee` and mapping are unobservable to the walk (an
+/// iterator's [[IteratedObject]] is internal; mapped parameters are unchanged
+/// by the elision proof), so an unmapped object with an undefined `callee`
+/// iterates identically.
+pub(crate) fn emit_elided_arguments_object(ctx: &mut FnCtx<'_>, bundle: &str) -> String {
+    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let obj = ctx.block().call(
+        I64,
+        "js_arguments_object_alloc",
+        &[(DOUBLE, bundle), (DOUBLE, &undefined), (I32, "0")],
+    );
+    nanbox_pointer_inline(ctx.block(), &obj)
+}
+
+/// G8: append an elided `...arguments` (its bundle `bundle`) to the rooted
+/// argument accumulator: the bundle's elements when the walk is the element
+/// copy ([`emit_elided_spread_admitted`]), else the complete drain over the
+/// rebuilt object. The bundle itself never reaches the generic drain, which
+/// would iterate it as an Array (through `%Array.prototype%[@@iterator]`).
+pub(crate) fn emit_elided_arguments_spread_append(
+    ctx: &mut FnCtx<'_>,
+    acc: &mut crate::rooting::RootedAcc,
+    bundle: &str,
+) {
+    use crate::rooting::Arg;
+    let Some(admitted) = emit_elided_spread_admitted(ctx, bundle) else {
+        let handle = crate::expr::unbox_to_i64(ctx.block(), bundle);
+        acc.advance(ctx, "js_array_concat", &[Arg::Plain(I64, &handle)]);
+        return;
+    };
+    if !acc.is_rooted() {
+        // An un-rooted accumulator cannot be advanced on two arms; the
+        // complete drain is exact on its own.
+        let obj = emit_elided_arguments_object(ctx, bundle);
+        acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, &obj)]);
+        return;
+    }
+    let fast = ctx.new_block("argspread.copy");
+    let slow = ctx.new_block("argspread.walk");
+    let merge = ctx.new_block("argspread.merge");
+    let fast_l = ctx.block_label(fast);
+    let slow_l = ctx.block_label(slow);
+    let merge_l = ctx.block_label(merge);
+    ctx.block().cond_br(&admitted, &fast_l, &slow_l);
+    ctx.current_block = fast;
+    let handle = crate::expr::unbox_to_i64(ctx.block(), bundle);
+    acc.advance(ctx, "js_array_concat", &[Arg::Plain(I64, &handle)]);
+    ctx.block().br(&merge_l);
+    ctx.current_block = slow;
+    let obj = emit_elided_arguments_object(ctx, bundle);
+    acc.advance(ctx, "js_array_spread_append", &[Arg::Plain(DOUBLE, &obj)]);
+    ctx.block().br(&merge_l);
+    ctx.current_block = merge;
+}
+
 /// Whether a method may expose the scalar-count direct-call clone.
 ///
 /// This is deliberately stricter than the materialization elision above. A
@@ -820,6 +976,7 @@ mod length_only_tests {
         ));
         assert!(!arguments_used_only_for_length(
             &[Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(ARGUMENTS)),
@@ -887,6 +1044,7 @@ mod elision_tests {
 
     fn index(i: i64) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: args(),
@@ -907,6 +1065,7 @@ mod elision_tests {
         vec![
             Stmt::Expr(length()),
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: args(),
@@ -1009,6 +1168,81 @@ mod elision_tests {
         let mut body = reads();
         body.push(Stmt::Expr(Expr::LocalGet(ARGUMENTS)));
         assert_eq!(arguments_elision(&params(false), &body), None);
+    }
+
+    /// `f(...arguments)` and `f(x, ...arguments, y)`.
+    fn forward(regular: bool) -> Expr {
+        let mut call_args = vec![perry_hir::CallArg::Spread(*args())];
+        if regular {
+            call_args.insert(0, perry_hir::CallArg::Expr(Expr::Integer(1)));
+            call_args.push(perry_hir::CallArg::Expr(Expr::Integer(2)));
+        }
+        Expr::CallSpread {
+            callee: Box::new(Expr::LocalGet(A)),
+            args: call_args,
+            type_args: Vec::new(),
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+
+    #[test]
+    fn call_spread_forwarding_elides_as_reads() {
+        // G8: a `...arguments` call operand is a read of every element, so it
+        // needs the Reads proof (uncaptured, mapped parameters unchanged),
+        // never the length-only one.
+        for regular in [false, true] {
+            let body = vec![Stmt::Return(Some(forward(regular)))];
+            assert_eq!(
+                arguments_elision(&params(false), &body),
+                Some(ArgumentsElision::Reads)
+            );
+            let mut mixed = reads();
+            mixed.insert(0, Stmt::Expr(forward(regular)));
+            assert_eq!(
+                arguments_elision(&params(false), &mixed),
+                Some(ArgumentsElision::Reads)
+            );
+        }
+        assert!(!super::arguments_used_only_for_length(
+            &[Stmt::Expr(length()), Stmt::Return(Some(forward(false)))],
+            ARGUMENTS
+        ));
+        // A written mapped parameter is visible through the object.
+        let written = vec![
+            Stmt::Expr(Expr::LocalSet(A, Box::new(Expr::Integer(9)))),
+            Stmt::Return(Some(forward(false))),
+        ];
+        assert_eq!(arguments_elision(&params(true), &written), None);
+        assert_eq!(
+            arguments_elision(&params(true), &written[1..]),
+            Some(ArgumentsElision::Reads)
+        );
+    }
+
+    #[test]
+    fn other_spread_forms_keep_the_object() {
+        // `[...arguments]`, `new F(...arguments)`, `super(...arguments)` and
+        // a spread nested in an argument are not call-spread operands.
+        let spread = perry_hir::CallArg::Spread(*args());
+        for body in [
+            vec![Stmt::Return(Some(Expr::NewDynamicSpread {
+                callee: Box::new(Expr::LocalGet(A)),
+                args: vec![spread.clone()],
+                byte_offset: 0,
+                byte_end: 0,
+            }))],
+            vec![Stmt::Expr(Expr::SuperCallSpread(vec![spread.clone()]))],
+            vec![Stmt::Return(Some(Expr::CallSpread {
+                callee: Box::new(Expr::LocalGet(A)),
+                args: vec![perry_hir::CallArg::Expr(*args())],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                byte_end: 0,
+            }))],
+        ] {
+            assert_eq!(arguments_elision(&params(false), &body), None);
+        }
     }
 
     #[test]

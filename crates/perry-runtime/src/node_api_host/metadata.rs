@@ -416,10 +416,6 @@ pub(crate) fn test_owned_metadata(owner: usize) -> Option<(usize, u64, u64)> {
     })
     .flatten()
 }
-#[cfg(test)]
-pub(crate) fn test_erase_owned_metadata(owner: usize) {
-    owned::erase(owner);
-}
 
 pub(super) fn install_finalizer_storage() {
     crate::native_finalizer_hook::set_finalizer_storage(finalizer_storage::resolve);

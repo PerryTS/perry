@@ -40,6 +40,7 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         op,
         prefix,
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     };
@@ -67,6 +68,7 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module
 }

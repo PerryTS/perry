@@ -398,6 +398,7 @@ pub(crate) fn drop_number_local_root_slots(
 }
 
 pub(super) fn enable_module_init_shadow_frame(
+    memo: &crate::collectors::ClosureWrites,
     func: &mut crate::function::LlFunction,
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &std::collections::HashSet<u32>,
@@ -407,8 +408,7 @@ pub(super) fn enable_module_init_shadow_frame(
         return (HashMap::new(), HashMap::new());
     }
 
-    let shadow_slot_map =
-        crate::collectors::collect_pointer_typed_locals(&[], stmts, flat_const_ids);
+    let shadow_slot_map = memo.pointer_locals(&[], stmts, flat_const_ids);
     // #8583: the module-entry body is the minified-bundle IIFE — the function
     // that fans out catastrophically under RS4GC. Decide its root lowering
     // before the frame is built.
@@ -797,6 +797,7 @@ pub(super) fn collect_return_class(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_return_class(body, produced, disqualified, func_returns_class);
                 if let Some(cc) = catch {
@@ -883,8 +884,8 @@ pub(crate) fn default_target_triple() -> String {
 ///  * `watchos-simulator`              → arm64-apple-watchos10.0-simulator
 ///  * `tvos`, `tvos-simulator`         → aarch64-apple-tvos
 ///  * `android`                        → aarch64-unknown-linux-android
-///  * `linux` (x86_64 alias)           → x86_64-unknown-linux-gnu
-///  * `linux-aarch64`                  → aarch64-unknown-linux-gnu
+///  * `linux` / `linux-x86_64`         → x86_64-unknown-linux-gnu
+///  * `linux-aarch64` / `linux-arm64`  → aarch64-unknown-linux-gnu
 ///  * `linux-musl` (x86_64 alias)      → x86_64-unknown-linux-musl (fully static)
 ///  * `linux-aarch64-musl`             → aarch64-unknown-linux-musl (fully static)
 ///  * `macos` (aarch64 alias)          → arm64-apple-macosx15.0.0
@@ -915,18 +916,24 @@ pub fn resolve_target_triple(name: &str) -> Option<String> {
         "tvos-simulator" => Some("arm64-apple-tvos17.0-simulator".to_string()),
         "harmonyos" => Some("aarch64-unknown-linux-ohos".to_string()),
         "harmonyos-simulator" => Some("x86_64-unknown-linux-ohos".to_string()),
-        "android" => Some("aarch64-unknown-linux-android".to_string()),
+        "android" => {
+            Some(concat!("aarch64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
         // #5742: Android x86_64 (emulator / x86_64 devices). Without this arm
         // `resolve_target_triple` returned None for `--target android-x86_64`,
         // so codegen fell back to the host triple (e.g. x86_64-pc-windows-msvc)
         // and emitted COFF objects, which the Android linker rejects with
         // `unknown file type`. Mirrors the `-unknown-` LLVM-triple form of the
         // arm64 `android` arm above (cf. harmonyos / harmonyos-simulator).
-        "android-x86_64" => Some("x86_64-unknown-linux-android".to_string()),
+        "android-x86_64" => {
+            Some(concat!("x86_64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
         // Wear OS is Android-on-a-watch: same arm64 Android object format.
-        "wearos" => Some("aarch64-unknown-linux-android".to_string()),
-        "linux" => Some("x86_64-unknown-linux-gnu".to_string()),
-        "linux-aarch64" => Some("aarch64-unknown-linux-gnu".to_string()),
+        "wearos" => {
+            Some(concat!("aarch64-unknown-linux-android", crate::android_api_level!()).to_string())
+        }
+        "linux" | "linux-x86_64" => Some("x86_64-unknown-linux-gnu".to_string()),
+        "linux-aarch64" | "linux-arm64" => Some("aarch64-unknown-linux-gnu".to_string()),
         // musl targets — fully static binaries that run on Lambda
         // provided.al2023, scratch/distroless containers, Cloud Run, etc.
         // (no glibc loader dependency). See link/platform_cmd.rs for the
@@ -964,7 +971,9 @@ pub const TARGET_NAMES: &[&str] = &[
     "android-x86_64",
     "wearos",
     "linux",
+    "linux-x86_64",
     "linux-aarch64",
+    "linux-arm64",
     "linux-musl",
     "linux-x86_64-musl",
     "linux-aarch64-musl",
@@ -990,7 +999,9 @@ pub fn target_os_of(triple: &str) -> Option<&'static str> {
     if components.contains(&"ohos") || components.contains(&"harmonyos") {
         return Some("ohos");
     }
-    if components.contains(&"android")
+    if components
+        .iter()
+        .any(|c| *c == "android" || has_numeric_version_suffix(c, "android"))
         || components.contains(&"androideabi")
         || components.contains(&"wearos")
     {
@@ -1066,8 +1077,8 @@ mod target_os_tests {
                 "tvos" | "tvos-simulator" => "tvos",
                 "harmonyos" | "harmonyos-simulator" => "ohos",
                 "android" | "android-x86_64" | "wearos" => "android",
-                "linux" | "linux-aarch64" | "linux-musl" | "linux-x86_64-musl"
-                | "linux-aarch64-musl" => "linux",
+                "linux" | "linux-x86_64" | "linux-aarch64" | "linux-arm64" | "linux-musl"
+                | "linux-x86_64-musl" | "linux-aarch64-musl" => "linux",
                 "macos" | "macos-x86_64" => "macos",
                 "windows" | "windows-winui" | "windows-x86_64" | "windows-aarch64"
                 | "windows-arm64" => "windows",
@@ -1082,6 +1093,18 @@ mod target_os_tests {
             };
             assert_eq!(target_os_of(&triple), Some(expected), "{name}: {triple}");
         }
+    }
+
+    #[test]
+    fn linux_architecture_aliases_resolve_to_matching_triples() {
+        assert_eq!(
+            resolve_target_triple("linux-x86_64").as_deref(),
+            Some("x86_64-unknown-linux-gnu")
+        );
+        assert_eq!(
+            resolve_target_triple("linux-arm64").as_deref(),
+            Some("aarch64-unknown-linux-gnu")
+        );
     }
 
     #[test]
@@ -1100,6 +1123,7 @@ mod target_os_tests {
             ("arm64-apple-xros1.0-simulator", "visionos"),
             ("aarch64-apple-visionos", "visionos"),
             ("aarch64-unknown-linux-android", "android"),
+            ("aarch64-unknown-linux-android29", "android"),
             ("armv7-linux-androideabi", "android"),
             ("aarch64-unknown-linux-ohos", "ohos"),
             ("macos", "macos"),
@@ -1376,6 +1400,8 @@ pub(super) fn emit_namespace_populator(
                     let handle = blk.call(I64, "js_closure_alloc_singleton", &[(PTR, &info)]);
                     crate::expr::nanbox_pointer_inline(blk, &handle)
                 }
+                NamespaceEntryKind::DeferredNamespace { source_prefix } => ctx.block().call(
+                    DOUBLE, &format!("{source_prefix}__deferred_namespace"), &[]),
                 NamespaceEntryKind::NestedNamespace { source_prefix } => ctx
                     .block()
                     .load(DOUBLE, &format!("@__perry_ns_{}", source_prefix)),
@@ -1538,11 +1564,11 @@ mod resolve_target_triple_tests {
         // LLVM form so the emitted objects are ELF for the right arch.
         assert_eq!(
             resolve_target_triple("android").as_deref(),
-            Some("aarch64-unknown-linux-android")
+            Some("aarch64-unknown-linux-android29")
         );
         assert_eq!(
             resolve_target_triple("android-x86_64").as_deref(),
-            Some("x86_64-unknown-linux-android")
+            Some("x86_64-unknown-linux-android29")
         );
         // Unknown targets still fall through to None.
         assert_eq!(resolve_target_triple("android-mips"), None);
@@ -1762,7 +1788,7 @@ pub(super) fn emit_callee_binding_resolutions(
 pub(crate) fn generator_method_owner_name(body: &str) -> String {
     format!("{body}$generator_owner")
 }
-pub(crate) fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
+pub fn body_has_fixed_generator_state(body: &[perry_hir::Stmt]) -> bool {
     function_body_is_fixed_state_generator(body)
 }
 

@@ -69,11 +69,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -125,6 +128,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),
@@ -142,6 +146,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
@@ -160,6 +165,26 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
 
 fn ir_for(module: Module) -> String {
     String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap()
+}
+
+/// The quiet-site facts the whole-program solve gives a loop
+/// `for (let i = 0; i < arr.length; i++) arr[i] = …` over a local Array
+/// literal (`perry compile`, `PERRY_FACTS_DUMP`: `arr.length` a quiet read
+/// with a primitive value, `arr[i]` a quiet element site). The length hoist
+/// keeps `arr.length` only on that word (#14537, `perry_codegen` `quiet`),
+/// and a unit test runs no solve. The HIR has offset 0 at both sites.
+fn quiet_site_opts() -> CompileOptions {
+    let mut elision = perry_codegen::ElisionFacts::default();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..Default::default()
+        },
+        ..empty_opts()
+    }
 }
 
 fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
@@ -240,6 +265,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
@@ -547,9 +573,9 @@ fn c262_addition_assignment_operands_use_dynamic_add_helper() {
     );
 }
 
-#[test]
-fn bounded_integer_array_store_omits_layout_note_and_barrier() {
-    let module = base_module(
+/// `probe() { let arr: number[] = [0, 0, 0]; for (let i = 0; i < arr.length; i++) arr[i] = i + 1; return arr }`
+fn bounded_integer_array_store_module() -> Module {
+    base_module(
         "bounded_integer_array_store.ts",
         vec![
             Stmt::Let {
@@ -593,24 +619,26 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                 // `js_array_fill_f64_iota_len_extend` — covered by
                 // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
                 // below.
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::Binary {
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
         Vec::new(),
-    );
+    )
+}
 
-    let ir = ir_for(module);
+#[test]
+fn bounded_integer_array_store_omits_layout_note_and_barrier() {
+    let module = bounded_integer_array_store_module();
+    let ir = String::from_utf8(compile_module(&module, quiet_site_opts()).unwrap()).unwrap();
 
     assert!(
         ir.contains("idxset.bounded_numeric_fast") && ir.contains("store double"),
@@ -635,6 +663,23 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     assert!(
         !ir.contains("call void @js_write_barrier_slot"),
         "integer store into a numeric array should not emit a slot barrier"
+    );
+}
+
+/// The twin: without the quiet-site facts the loop's sites may run program
+/// code (no solve, or an `arr` the solve does not prove a plain Array), the
+/// length hoist is refused (#14537) and no store takes the bounded arm; the
+/// loop reads `arr.length` live in its condition.
+#[test]
+fn bounded_integer_array_store_without_quiet_facts_takes_no_bounded_arm() {
+    let ir = ir_for(bounded_integer_array_store_module());
+    assert!(
+        !ir.contains("idxset.bounded"),
+        "without the facts' word on the loop's sites no store may take the bounded arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_value_length_property_f64("),
+        "premise: the refused loop reads its length at every step:\n{ir}"
     );
 }
 
@@ -681,13 +726,11 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::LocalGet(2)),
-                    byte_offset: 0,
-                    byte_end: 0,
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::LocalGet(2)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
@@ -831,13 +874,11 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(0.0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::Integer(0)),
-                value: Box::new(Expr::LocalGet(1)),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::Integer(0)),
+                Box::new(Expr::LocalGet(1)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],
         Vec::new(),

@@ -406,10 +406,7 @@ pub(crate) fn lower_class_from_ast(
                     // `TypeError: value is not iterable`.
                     ast::PropName::Computed(_) => {
                         match lower_well_known_computed_method(ctx, method, name)? {
-                            Some(
-                                WellKnownComputedMethod::Unsupported,
-                            )
-                            | None => continue,
+                            Some(WellKnownComputedMethod::Unsupported) | None => continue,
                         }
                     }
                     _ => continue,
@@ -604,6 +601,7 @@ pub(crate) fn lower_class_from_ast(
                     is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                     is_exported: false,
                     captures: Vec::new(),
                     decorators: Vec::new(),
@@ -708,6 +706,17 @@ pub(crate) fn lower_class_from_ast(
         ),
     );
 
+    // Loop-invariant `this.F` array reads in instance methods
+    // (`property_array_hoist::hoist_this_array_fields`).
+    crate::lower::property_array_hoist::hoist_this_array_fields(
+        ctx,
+        name,
+        &fields,
+        &getters,
+        &setters,
+        !computed_members.is_empty(),
+        &mut methods,
+    );
     Ok(Class {
         id: class_id,
         name: name.to_string(),
@@ -733,6 +742,7 @@ pub(crate) fn lower_class_from_ast(
         // Declared inside a function body / non-module block → its static-field
         // initializers must run on class evaluation, not at module init.
         is_nested: ctx.scope_depth > 0 || ctx.inside_block_scope > 0,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     })

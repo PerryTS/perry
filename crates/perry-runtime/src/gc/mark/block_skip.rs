@@ -321,7 +321,7 @@ pub(crate) unsafe fn census_header_flag_facts(header: *const GcHeader) -> (bool,
     let exceptional_flags = (flags ^ GC_FLAG_ARENA)
         & (GC_FLAG_ARENA | GC_FLAG_MARKED | GC_FLAG_PINNED | GC_FLAG_FORWARDED)
         != 0;
-    let raw_f64_array = (*header).obj_type == GC_TYPE_ARRAY
+    let raw_f64_array = crate::gc_type_is_array!((*header).obj_type)
         && (*header)._reserved & (GC_ARRAY_RAW_F64_LAYOUT | GC_ARRAY_RAW_F64_HOLES) != 0;
     (
         exceptional_flags | raw_f64_array,

@@ -1,0 +1,11 @@
+import { fn } from './spread_call_imported_receiver_7191_helper.ts';
+console.log('call', fn.call(...([null, 1, 2] as [any, any, any])));
+console.log('apply', fn.apply(...([null, [3, 4]] as [any, any])));
+const bound = fn.bind(...([null, 5] as [any, any]));
+console.log('bind', bound(6));
+console.log('mixed', fn.call(null, ...[7], 8));
+console.log('computed', fn['call'](...([null, 9, 10] as [any, any, any])));
+console.log('array call', JSON.stringify(Array.call(...([null, 1, 2] as [any, any, any]))));
+console.log('array apply', JSON.stringify(Array.apply(...([null, [3, 4]] as [any, any]))));
+const boundArray = Array.bind(...([null, 5] as [any, any]));
+console.log('array bind', JSON.stringify(boundArray(6)));

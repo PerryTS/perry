@@ -654,6 +654,24 @@ impl<'s, 'm> Reader<'s, 'm> {
         if let Some(stack) = stack {
             let text = heap_string(stack);
             crate::error::error_set_stack(self.ptr(slot), text);
+        } else {
+            // A missing serialized stack must shadow the receiver's freshly
+            // captured native stack, not expose a new diagnostic.
+            let descriptor = self
+                .scope
+                .root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
+            let value_key = heap_string(b"value");
+            crate::object::js_object_set_field_by_name(
+                descriptor.get_raw_mut_ptr(),
+                value_key,
+                undefined,
+            );
+            let stack_key = string_bits(b"stack");
+            crate::object::js_object_define_property(
+                f64::from_bits(self.get(slot)),
+                f64::from_bits(stack_key),
+                f64::from_bits(JSValue::pointer(descriptor.get_raw_mut_ptr::<u8>()).bits()),
+            );
         }
         if let Some(cause) = cause {
             let cause = self.value(cause);

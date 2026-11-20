@@ -1,7 +1,7 @@
 # `node:http2` conformance fixtures
 
-Fourteen gap fixtures under `test-parity/node-suite/http2/test_gap_http2_*.ts`, plus the shared
-wire codec `test-files/_helpers/h2_wire.ts`, that pin what Perry's `node:http2`
+Fourteen gap fixtures under `tests/parity/node-suite/http2/test_gap_http2_*.ts`, plus the shared
+wire codec `tests/fixtures/programs/_helpers/h2_wire.ts`, that pin what Perry's `node:http2`
 has to do — measured against **Node 26.5.1**, the `.node-version` pin, never
 against Perry's current output.
 
@@ -21,7 +21,7 @@ iter_handle_ids_of::<Http2SessionHandle, _>(|peer_id| {
 
 `session.settings()`, `session.ping()` and `session.goaway()` never encode a
 frame. They walk the process's own handle table for a session of the opposite
-kind and push a synthetic event at it. `test-parity/node-suite/http2/` passes
+kind and push a synthetic event at it. `tests/parity/node-suite/http2/` passes
 because both ends of every one of its fixtures are Perry, in one process, so
 the simulation is always able to find its "peer".
 
@@ -39,7 +39,7 @@ browser, a load balancer — none of those three methods does anything at all.
 ## How the fixtures defeat the simulation
 
 Every fixture whose name contains `_wire_` puts a **raw TCP socket** on one end
-and hand-encodes/decodes HTTP/2 frames (`test-files/_helpers/h2_wire.ts`). The
+and hand-encodes/decodes HTTP/2 frames (`tests/fixtures/programs/_helpers/h2_wire.ts`). The
 loopback path cannot satisfy them: the peer is a socket, so there is no second
 `Http2SessionHandle` in the process to find, and a session that never writes a
 frame prints `(none)`.
@@ -305,7 +305,7 @@ End to end: `status=200 scheme="https" body="secure-ok"`, session socket
 request reaches the `'request'` handler with `httpVersion=1.1`.
 
 The certificate and key are the repo's existing
-`test-parity/node-suite/tls/fixtures/localhost-{cert,key}.pem` (CN=localhost,
+`tests/parity/node-suite/tls/fixtures/localhost-{cert,key}.pem` (CN=localhost,
 SAN `DNS:localhost` + `IP:127.0.0.1`, valid to 2036), inlined so the fixture is
 self-contained.
 
@@ -435,7 +435,7 @@ and once on macOS, byte-identical every time.
 set was written to fail and to flip when the transport lands. The per-fixture
 divergence, and what it says about the current implementation, is in
 `docs/turnloop/h2c-report.md`. Their statuses are recorded in
-`test-parity/snapshots/linux-fast/test-files.json`, so a fixture that starts
+`tests/parity/snapshots/linux-fast/test-files.json`, so a fixture that starts
 passing fails the gap gate until the snapshot diff is committed; the fixture set therefore cannot
 silently stop being the acceptance criterion.
 

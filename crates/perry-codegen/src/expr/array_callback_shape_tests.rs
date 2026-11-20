@@ -44,6 +44,7 @@ fn row_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -88,6 +89,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -192,6 +194,7 @@ fn module_with_some_callback(captures_this: bool) -> Module {
         mutable_captures: Vec::new(),
         captures_this,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

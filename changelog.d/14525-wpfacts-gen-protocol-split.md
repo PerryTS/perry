@@ -1,0 +1,1 @@
+- **wpfacts**: the promise and iteration protocol helpers of constraint generation (`awaited`, `resolver_fn`, `async_body`, `promise_of`, `iterate`, `iterator_of`) move from `gen_expr.rs` into the new module `gen_protocol.rs`. A pure move with no behaviour change: `gen_expr.rs` was over the file size cap (2011 code lines, now 1932), so `scripts/check_file_size.sh` failed on main.

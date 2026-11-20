@@ -1,12 +1,21 @@
 //! Own fields under a shaped computed key (`model/key_shape.rs`): a read
 //! sees only the fields whose name the shape admits, plus every write under
-//! a computed key; a store writes only those fields, and computed-key
+//! a computed key whose shape may spell the same string (`shapes_meet`); a store writes only those fields, and computed-key
 //! reads. Named fields made later join through `field_shaped`, as numeric
 //! fields join `num_fields`.
 //!
-//! Only a program object of the plain kind is split this way: a marker's
-//! fields are its reach markers, an array-like's elements and named keys
-//! have their own nodes, and other values keep `all_fields`. Per unit
+//! Only an ordinary object is split this way: a program object of the
+//! plain kind, or one a builtin makes (`builtins::ordinary_box`: a
+//! `JSON.parse` object, a descriptor, an `Object.fromEntries` result, all
+//! `OrdinaryObjectCreate`, ECMA-262 25.5.1, 10.1.13). It has no element
+//! storage and no symbol-keyed property of its own, so a String-keyed
+//! [[Set]] (10.1.9) creates or updates a String-keyed property only.
+//! An Array of the program or of `JSON.parse` (`TmplKind::Arr`) is split
+//! too: its String-keyed [[DefineOwnProperty]] (10.4.2.1) writes an
+//! element (the key may be an index: `numeric_field`, its elements),
+//! `length`, or another String-keyed property, never a symbol-keyed one. A
+//! marker's fields are its reach markers, an array-like's elements and
+//! named keys have their own nodes, and other values keep `all_fields`. Per unit
 //! (`unit_mode`) nothing is split: a literal leaving its unit key by key
 //! (`fields_leave`) sinks its named fields and `field_any`, which a shaped
 //! store under a name no field has yet would not reach.
@@ -14,14 +23,67 @@
 use super::*;
 
 impl Model {
-    fn shape_splits(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
+    pub(crate) fn shape_splits(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
         match key {
             Key::Any(s)
                 if s != 0
                     && !self.unit_mode
-                    && matches!(self.toks[t as usize], TokKind::Obj(..))
+                    && (matches!(self.toks[t as usize], TokKind::Obj(..))
+                        || builtins::builtin_function(self, t))
                     && !self.is_marker(t)
-                    && !self.is_array_like(t) =>
+                    && (!self.is_array_like(t)
+                        || builtins::ordinary_box(self, t)
+                        || builtins::declared_box(self, t)
+                        || self.is_arr(t)) =>
+            {
+                Some(s)
+            }
+            // A class prototype is an ordinary object (ECMA-262 15.7.14
+            // ClassDefinitionEvaluation: OrdinaryObjectCreate) whose own
+            // properties are String-keyed data members and accessors: a key
+            // reads only the names it admits (10.1.8.1 [[Get]], 7.3.2).
+            // A key that may be `__proto__` keeps every member.
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && matches!(self.toks[t as usize], TokKind::Proto(_))
+                    && !self.key_may_name_str(key, "__proto__") =>
+            {
+                Some(s)
+            }
+            // A class prototype is an ordinary object (ECMA-262 15.7.14
+            // ClassDefinitionEvaluation: OrdinaryObjectCreate) whose own
+            // properties are String-keyed data members and accessors: a key
+            // reads only the names it admits (10.1.8.1 [[Get]], 7.3.2).
+            // A key that may be `__proto__` keeps every member.
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && matches!(self.toks[t as usize], TokKind::Proto(_))
+                    && !self.key_may_name_str(key, "__proto__") =>
+            {
+                Some(s)
+            }
+            _ => None,
+        }
+    }
+
+    /// GLOBS3: a read of the global object under a key of known shape. The
+    /// global object is ordinary (ECMA-262 9.3, 19): `O[P]` is
+    /// ToPropertyKey, then OrdinaryGet (13.3.2.1, 7.3.2, 10.1.8.1), so it
+    /// yields the own property P names and the chain only. The key's shape
+    /// picks every own field it can spell; the declared globals, the stores
+    /// under unknown String keys, `Object.prototype` and `undefined` are the
+    /// builtin read's (`builtins::loads` `global_shaped_read`). A shape that
+    /// may spell `__proto__` keeps every field. Stores keep their own path
+    /// (`store.rs`: the global's any-key field).
+    fn global_read_split(&self, t: Tok, key: Key) -> Option<KeyShapeId> {
+        match key {
+            Key::Any(s)
+                if s != 0
+                    && !self.unit_mode
+                    && builtins::global_object(self, t)
+                    && !self.key_may_name_str(key, "__proto__") =>
             {
                 Some(s)
             }
@@ -31,9 +93,12 @@ impl Model {
 
     /// The own-field values a computed-key read of `t` sees.
     pub fn key_fields(&mut self, t: Tok, key: Key) -> NodeId {
-        let Some(s) = self.shape_splits(t, key) else {
+        let split = self
+            .shape_splits(t, key)
+            .or_else(|| self.global_read_split(t, key));
+        let Some(s) = split else {
             return match key {
-                Key::Named(a) => self.field(t, a),
+                Key::Named(a) => self.field_r(t, a),
                 Key::Any(_) => self.all_fields(t),
             };
         };
@@ -46,15 +111,21 @@ impl Model {
         self.shaped_reads.insert((t, s), n);
         let any = self.field_any(t);
         self.edge(any, n);
+        // A shape that may spell a Number key reads what a Number key
+        // stored (`numeric_field`; `key_store_node` writes it the same way).
+        if self.key_shapes[s as usize].may_be_numeric() {
+            let numeric = self.numeric_field(t);
+            self.edge(numeric, n);
+        }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.key_may_name(key, a) {
-                let f = self.field(t, a);
+                let f = self.field_r(t, a);
                 self.edge(f, n);
             }
         }
         // Another shaped store may write a name this shape admits.
-        for (_, w, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
-            if store {
+        for (s2, w, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
+            if store && self.shapes_meet(s, s2) {
                 self.edge(w, n);
             }
         }
@@ -76,18 +147,32 @@ impl Model {
         self.shaped_stores.insert((t, s), n);
         let all = self.all_fields(t);
         self.edge(n, all);
+        // Any String may be an index string: it writes the numeric
+        // properties a Number key reads.
+        if self.key_shapes[s as usize].may_be_numeric() {
+            let numeric = self.numeric_field(t);
+            self.edge(n, numeric);
+        }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             if self.key_may_name(key, a) {
                 let f = self.field(t, a);
                 self.edge(n, f);
             }
         }
-        for (_, r, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
-            if !store {
+        for (s2, r, store) in self.shaped_of.get(&t).cloned().unwrap_or_default() {
+            if !store && self.shapes_meet(s, s2) {
                 self.edge(n, r);
             }
         }
         self.shaped_of.entry(t).or_default().push((s, n, true));
+        // ENUM3: a computed key a for-in over `t` may enumerate.
+        if let Some(&w) = self.enum_key_watch.get(&t) {
+            self.edge(n, w);
+        }
+        // Every copy of `t`'s own keys (`spread_into`) stores this one too.
+        for (d, site) in self.spread_to.get(&t).cloned().unwrap_or_default() {
+            self.store_into(d, Key::Any(s), n, site);
+        }
         n
     }
 

@@ -402,6 +402,7 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
             body,
             catch,
             finally,
+            ..
         } => {
             walk_stmts(body, in_loop, scan);
             if let Some(c) = catch {
@@ -676,6 +677,7 @@ fn count_alloc_sites_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 count_alloc_sites_in_stmts(body, closure_id, sites);
                 if let Some(catch) = catch {
@@ -868,6 +870,7 @@ mod recursion_participant_tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -939,6 +942,7 @@ mod recursion_participant_tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }

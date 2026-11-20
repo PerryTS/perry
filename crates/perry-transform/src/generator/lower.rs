@@ -246,6 +246,7 @@ fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_iter_result_returns_in_async_step_done(body);
                 if let Some(c) = catch {
@@ -849,7 +850,8 @@ pub fn transform_generator_function_with_extra_captures(
         .filter(|id| tdz_hoisted_ids.contains(id))
         .collect();
     prealloc_ids.retain(|id| !tdz_hoisted_ids.contains(id));
-    let mut preallocated: std::collections::HashSet<LocalId> = prealloc_ids.iter().copied().collect();
+    let mut preallocated: std::collections::HashSet<LocalId> =
+        prealloc_ids.iter().copied().collect();
     preallocated.extend(tdz_hoisted.iter().copied());
     new_body.push(Stmt::PreallocateBoxes(prealloc_ids));
     if !tdz_hoisted.is_empty() {
@@ -1230,7 +1232,12 @@ pub fn transform_generator_function_with_extra_captures(
             done_id,
             Box::new(Expr::Bool(true)),
         ))];
-        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.extend(build_finally_run_stmts(
+            &finallys,
+            state_id,
+            true,
+            &hoisted_ids,
+        ));
         return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
@@ -1330,6 +1337,7 @@ pub fn transform_generator_function_with_extra_captures(
             mutable_captures: mutable_captures.clone(),
             captures_this,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: enclosing_class.clone(),
             is_arrow: false,
             is_strict: func.is_strict,
@@ -1477,6 +1485,7 @@ pub fn transform_generator_function_with_extra_captures(
                 mutable_captures: mutable_captures.clone(),
                 captures_this,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: enclosing_class.clone(),
                 is_arrow: false,
                 is_strict: func.is_strict,
@@ -1518,6 +1527,7 @@ pub fn transform_generator_function_with_extra_captures(
                 mutable_captures: mutable_captures.clone(),
                 captures_this,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: enclosing_class.clone(),
                 is_arrow: false,
                 is_strict: func.is_strict,
@@ -1560,6 +1570,7 @@ pub fn transform_generator_function_with_extra_captures(
                 mutable_captures: mutable_captures.clone(),
                 captures_this,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: enclosing_class.clone(),
                 is_arrow: false,
                 is_strict: func.is_strict,
@@ -1660,6 +1671,17 @@ pub fn transform_generator_function_with_extra_captures(
                 }]
             };
             fixed_state::record_step_kinds(&mut body, step_id.expect("fixed-state record"));
+            // 27.5.3.3 GeneratorResume: an abrupt completion of the body
+            // completes the generator. The record body carries that itself,
+            // as the source-level `try` lowering does any catch, so a caller
+            // that enters it directly needs no trap of its own.
+            let completion_catch_id = alloc_local(next_local_id);
+            let body = resume::wrap_fixed_state_completion(
+                body,
+                executing_id,
+                done_id,
+                completion_catch_id,
+            );
             Expr::Closure {
                 func_id: next_func_id_val,
                 params,
@@ -1669,6 +1691,7 @@ pub fn transform_generator_function_with_extra_captures(
                 mutable_captures: Vec::new(),
                 captures_this,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: enclosing_class.clone(),
                 is_arrow: false,
                 is_strict: func.is_strict,

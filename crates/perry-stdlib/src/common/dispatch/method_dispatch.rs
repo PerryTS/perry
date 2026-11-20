@@ -274,14 +274,32 @@ unsafe fn arm_streams(handle: i64, method_name: &str, args: &[f64]) -> Option<f6
     // subsystem's handle. Routes method calls on receivers whose static stream
     // type the codegen lost (`src.pipeThrough(ts).getReader()`, `ts.readable
     // .getReader()`, `const r = rs.getReader(); r.read()`, …).
-    if let Some(v) = crate::streams::dispatch_stream_method(
-        crate::streams::stream_value(handle as usize),
-        method_name,
-        &args,
-    ) {
+    let stream = crate::streams::stream_value(handle as usize);
+    if let Some(v) = crate::streams::dispatch_stream_method(stream, method_name, &args) {
         return Some(v);
     }
-    None
+    if crate::streams::js_stream_handle_kind(handle as usize) == 0 {
+        return None;
+    }
+    // A stream handle owns its calls: a member the native arms do not answer
+    // is what a read of it finds (an expando, its family prototype's member),
+    // called with the stream as `this`; a member on no prototype is Node's
+    // `TypeError: s.enqueue is not a function`.
+    let member = crate::streams::dispatch_stream_property(stream, method_name);
+    if member.to_bits() == TAG_UNDEFINED_F64.to_bits() {
+        perry_runtime::error::js_throw_type_error_not_a_function(
+            std::ptr::null(),
+            0,
+            method_name.as_ptr(),
+            method_name.len(),
+        );
+    }
+    Some(perry_runtime::closure::js_native_call_value(
+        member,
+        perry_runtime::closure::JsThis::from_f64(stream),
+        args.as_ptr(),
+        args.len(),
+    ))
 }
 
 #[cfg(feature = "database-sqlite")]
@@ -301,13 +319,13 @@ unsafe fn arm_node_sqlite(handle: i64, method_name: &str, args: &[f64]) -> Optio
 
 #[cfg(feature = "crypto")]
 unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64> {
-    if matches!(method_name, "update" | "sign")
+    if matches!(method_name, "update" | "write" | "end" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign(handle, method_name, &args));
     }
 
-    if matches!(method_name, "update" | "verify")
+    if matches!(method_name, "update" | "write" | "end" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_verify(handle, method_name, &args));
@@ -379,7 +397,7 @@ unsafe fn arm_crypto(handle: i64, method_name: &str, args: &[f64]) -> Option<f64
     // .update(...).sign(key) / .verify(key, sig) — issue #1364. Method-gated
     // like the Hash/Cipher handles. `sign`/`verify` are distinctive enough to
     // disambiguate from other registries sharing a handle id.
-    if matches!(method_name, "update" | "sign" | "verify")
+    if matches!(method_name, "update" | "write" | "end" | "sign" | "verify")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign(handle, method_name, &args));

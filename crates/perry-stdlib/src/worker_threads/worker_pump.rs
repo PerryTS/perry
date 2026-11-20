@@ -124,7 +124,7 @@ pub extern "C" fn js_worker_threads_process_pending() -> i32 {
                 // Like an EventEmitter 'error' with no listener: the worker's
                 // error becomes an uncaught exception of the parent.
                 if !dispatch_worker_event(worker_id, "error", Some(error)) {
-                    perry_runtime::exception::js_throw(error);
+                    perry_runtime::exception::throw_open(error);
                 }
                 processed += 1;
             }

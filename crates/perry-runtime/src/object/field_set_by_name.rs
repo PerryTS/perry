@@ -48,6 +48,15 @@ pub extern "C" fn js_object_set_field_by_name(
     key: *const crate::StringHeader,
     value: f64,
 ) {
+    // Census builds: a store on the realm global names its key (§2.10.13).
+    #[cfg(perry_gc_instruments)]
+    let _gkey =
+        crate::snap_census::global_key((obj as u64 & crate::value::POINTER_MASK) as usize, || {
+            (!key.is_null()).then(|| crate::regex::string_as_bytes(key))
+        });
+
+    #[cfg(debug_assertions)]
+    crate::object::field_get_set::field_ops::debug_assert_one_number_encoding(value.to_bits());
     #[cfg(perry_contract_checks)]
     crate::contracts::generic_store(obj, key, value);
     // Case 2c: a family object's late key and a key outside its layout
@@ -99,6 +108,11 @@ pub extern "C" fn js_object_set_field_by_name(
             return;
         }
     }
+    // A plain object's index key lives in its elements store (or takes one):
+    // no index key becomes a layout property beside a store.
+    if unsafe { crate::array::plain_elements::set_by_name(obj, key, value) } {
+        return;
+    }
     let obj_bits = obj as u64;
     let normalized_obj = if (obj_bits >> 48) == 0x7FFD {
         (obj_bits & crate::value::POINTER_MASK) as *mut ObjectHeader
@@ -128,6 +142,9 @@ pub extern "C" fn js_object_set_field_by_name(
     // Aliased `process.env` writes must update the OS environment, not only the
     // materialized object's field bag. The helper declines internal cache
     // mirror writes so those can proceed through the ordinary setter below.
+    if crate::web_storage::storage_set_field(obj, key, value) {
+        return;
+    }
     if crate::process::process_env_set_field(obj, key, value) {
         return;
     }
@@ -412,11 +429,12 @@ pub extern "C" fn js_object_set_field_by_name(
         // cell as an `ObjectHeader` and corrupt its boxed payload (which segfaults
         // on the next deref). The cell's `temporal_rs` slots are immutable, but a
         // user-defined *expando* property is legal and lives in the exotic side
-        // table (like Date/RegExp). `obj` still carries its NaN-box tag here
-        // (`0x7FFD…` for a real cell), so route through `exotic_expando_kind_of_value`,
-        // which checks the tag before masking to the cleaned heap address.
+        // table (like Date/RegExp). `obj` is this entry's typed receiver pointer,
+        // with its POINTER_TAG (`0x7FFD…`) or stripped of it by a native caller:
+        // the receiver-word classifier takes both; the value classifier takes
+        // only values.
         if let Some((addr, kind @ super::exotic_expando::ExoticKind::Temporal)) =
-            super::exotic_expando::exotic_expando_kind_of_value(f64::from_bits(obj as u64))
+            super::exotic_expando::exotic_expando_kind_of_receiver_word(obj as u64)
         {
             if !key.is_null() {
                 unsafe {
@@ -470,17 +488,7 @@ pub extern "C" fn js_object_set_field_by_name(
                     let name = name_storage.as_slice();
                     let name_str = std::str::from_utf8(name).ok();
                     let recv = crate::object::class_value::boxed_class_word(bits);
-                    let is_prototype_ref = super::class_prototype_ref_id(recv).is_some();
-                    if is_prototype_ref {
-                        super::class_registry::class_prototype_set_bytes(
-                            class_id,
-                            name,
-                            value.to_bits(),
-                        );
-                        return;
-                    }
-                    if !is_prototype_ref
-                        && name_str == Some("name")
+                    if name_str == Some("name")
                         && !super::class_registry::class_static_key_deleted_bytes(class_id, name)
                         && super::class_registry::lookup_static_method_in_chain_bytes(
                             class_id, name,
@@ -503,11 +511,8 @@ pub extern "C" fn js_object_set_field_by_name(
                     }
                     // Writing `.caller` / `.arguments` on a class constructor
                     // hits the poison-pill %ThrowTypeError% accessor inherited
-                    // from Function.prototype. Prototype refs are plain objects.
-                    if !is_prototype_ref
-                        && !has_own_data
-                        && matches!(name_str, Some("caller" | "arguments"))
-                    {
+                    // from Function.prototype.
+                    if !has_own_data && matches!(name_str, Some("caller" | "arguments")) {
                         crate::fs::validate::throw_type_error_with_code(
                             "Restricted function property access",
                             "ERR_INVALID_ARG_TYPE",
@@ -685,7 +690,7 @@ pub extern "C" fn js_object_set_field_by_name(
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 && string_key_eq(key, b"length") {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 // Assignment (`arr.length = v`) is a strict `Set` with
                 // `Throw = true`: throw on a frozen array's non-writable length.
                 crate::array::js_array_set_length_strict(

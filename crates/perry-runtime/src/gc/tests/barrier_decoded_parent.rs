@@ -342,6 +342,7 @@ fn runtime_write_barrier_slot_malloc_parent_remembers_its_young_edge() {
     clear_marks();
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn runtime_barrier_entry_points_reject_implausible_parents_without_dereferencing() {
     let _guard = GcTestIsolationGuard::new();
@@ -508,7 +509,11 @@ fn slot_store_obligations_remember_old_parents_and_demote_heap_strings() {
             (young_parent + 8) as u64,
             string_bits(s as usize),
         );
-        assert_eq!((*s).refcount, 0, "a heap string aliased into a slot is shared");
+        assert_eq!(
+            (*s).refcount,
+            0,
+            "a heap string aliased into a slot is shared"
+        );
     }
     reset_remembered_set();
 }

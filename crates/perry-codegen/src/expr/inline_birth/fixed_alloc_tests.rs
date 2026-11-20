@@ -13,6 +13,7 @@ fn literal(captures: u32) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -48,6 +49,7 @@ fn compile(captures: u32, target: &str) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let options = crate::CompileOptions {
         emit_ir_only: true,
@@ -101,7 +103,9 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
 fn fixed_births_decline_ilp32_and_large_cells() {
     use super::fixed_alloc::eligible;
     assert!(!eligible("armv7-unknown-linux-gnueabihf", 40));
-    assert!(!eligible("wasm32-wasi", 40));
+    // wasm32 WASI writes its own header image (fixed_alloc::eligible).
+    assert_eq!(eligible("wasm32-wasip2", 40), cfg!(feature = "target-wasi"));
+    assert!(!eligible("arm64_32-apple-watchos", 40));
     assert!(!eligible("aarch64_be-unknown-linux-gnu", 40));
     assert!(!eligible("powerpc64-unknown-linux-gnu", 40));
     assert!(!eligible("x86_64-unknown-linux-gnux32", 40));

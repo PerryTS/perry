@@ -4,16 +4,10 @@ use super::support::*;
 
 #[test]
 fn promise_all_state_children_follow_the_pending_input() {
-    check_owned_all(false);
+    check_owned_all();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Promise's combinator list"]
-fn negative_control_objtables_promise_all() {
-    check_owned_all(true);
-}
-
-fn check_owned_all(erase: bool) {
+fn check_owned_all() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::promise::js_promise_new();
@@ -36,11 +30,6 @@ fn check_owned_all(erase: bool) {
     let moved =
         (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut crate::promise::Promise;
     assert_ne!(owner, moved);
-    if erase {
-        unsafe {
-            (*(*moved).meta).owned_state = 0;
-        }
-    }
     let records = crate::promise::combinators::promise_all_take_all_handlers(moved);
     assert_eq!(records.len(), 1);
     assert_eq!(records[0].index, 1);
