@@ -160,18 +160,20 @@ pub fn life_measure_requested() -> bool {
 /// body into a silent SIGTRAP (#15042).
 pub fn dce_enabled() -> bool {
     #[cfg(test)]
-    if DCE_FOR_TESTS.load(std::sync::atomic::Ordering::Relaxed) {
+    if DCE_FOR_TESTS.with(Cell::get) {
         return true;
     }
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| dce_switch(std::env::var("PERRY_FACTS_DCE").ok().as_deref()))
 }
 
-/// Turns removal on for a test process: the first compile caches the
-/// environment's switch, and a test's worker threads must see it too.
 #[cfg(test)]
-pub(crate) static DCE_FOR_TESTS: std::sync::atomic::AtomicBool =
-    std::sync::atomic::AtomicBool::new(false);
+thread_local! {
+    /// Turns removal on for one test's compile: the first compile caches the
+    /// environment's switch, and a process-wide override would change the IR
+    /// of tests running beside it. `CallableState` carries it to workers.
+    pub(crate) static DCE_FOR_TESTS: Cell<bool> = const { Cell::new(false) };
+}
 
 /// The value of `PERRY_FACTS_DCE` decides removal: on only when it is `1`.
 pub fn dce_switch(value: Option<&str>) -> bool {
@@ -583,7 +585,7 @@ pub(crate) fn bodies(view: &crate::codegen::ProgramFactsView) {
 /// build lowers serially (its ordinals and records are per module), so the
 /// copy is read-only.
 #[derive(Clone)]
-pub(crate) struct CallableState(Option<Bodies>, Option<Module>);
+pub(crate) struct CallableState(Option<Bodies>, Option<Module>, #[cfg(test)] bool);
 
 pub(crate) fn callable_state() -> CallableState {
     let module = if witnesses() && !enabled() {
@@ -591,13 +593,20 @@ pub(crate) fn callable_state() -> CallableState {
     } else {
         None
     };
-    CallableState(BODIES.with(|b| b.borrow().clone()), module)
+    CallableState(
+        BODIES.with(|b| b.borrow().clone()),
+        module,
+        #[cfg(test)]
+        DCE_FOR_TESTS.with(Cell::get),
+    )
 }
 
 impl CallableState {
     pub(crate) fn install(&self) {
         BODIES.with(|b| *b.borrow_mut() = self.0.clone());
         MODULE.with(|m| *m.borrow_mut() = self.1.clone());
+        #[cfg(test)]
+        DCE_FOR_TESTS.with(|d| d.set(self.2));
     }
 }
 
@@ -622,7 +631,7 @@ mod callable_state_tests {
         SITE.with(|s| s.set(Some((13, "call"))));
         let serial = here();
         assert_eq!(serial, "m.ts:2:3 call");
-        let state = CallableState(None, MODULE.with(|m| m.borrow().clone()));
+        let state = CallableState(None, MODULE.with(|m| m.borrow().clone()), false);
         let worker = std::thread::spawn(move || {
             state.install();
             SITE.with(|s| s.set(Some((13, "call"))));
