@@ -2240,6 +2240,9 @@ mod static_method;
 #[path = "class_value_tests.rs"]
 mod class_value;
 
+#[path = "get_prototype_of_tests.rs"]
+mod get_prototype_of;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(

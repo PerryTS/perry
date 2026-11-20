@@ -59,6 +59,16 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, proto);
                 self.emit_memcall(func, "object_set_prototype_of", 2);
             }
+            Expr::ObjectGetPrototypeOf(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "object_get_prototype_of", 1);
+            }
+            Expr::ReflectGetPrototypeOf(obj) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_memcall(func, "reflect_get_prototype_of", 1);
+            }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "object_new", 0);
