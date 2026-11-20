@@ -924,6 +924,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -944,6 +945,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -1014,6 +1016,7 @@ fn lower_module(
                     is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                     is_exported: false,
                     captures: Vec::new(),
                     decorators: Vec::new(),
@@ -1115,6 +1118,7 @@ fn lower_module(
                         is_strict: true,
                         was_plain_async: false,
                         was_unrolled: false,
+                        construct_only: false,
                         is_exported: false,
                         captures: Vec::new(),
                         decorators: Vec::new(),
@@ -4275,6 +4279,7 @@ fn lower_module(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         };
         let mut finish_names = func_names.clone();
         finish_names.insert(id, format!("{module_prefix}__async_finish"));

@@ -1065,6 +1065,7 @@ mod tests {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             }],
             getters: Vec::new(),
             setters: Vec::new(),
@@ -1234,6 +1235,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         module.classes.push(class.clone());
 

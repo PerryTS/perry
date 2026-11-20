@@ -43,6 +43,7 @@ fn function(id: FuncId, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         was_plain_async: false,
         was_unrolled: false,
         is_strict: false,
+        construct_only: false,
     }
 }
 
@@ -454,6 +455,7 @@ fn a_read_inside_a_closure_is_not_scanned_as_early() {
         is_async: false,
         is_generator: false,
         is_strict: false,
+        construct_only: false,
     };
     let body = vec![Stmt::Return(Some(closure))];
     assert!(!crate::arg_read_order::reads_precede_effects(
