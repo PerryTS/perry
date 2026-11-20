@@ -33,4 +33,4 @@ runs:
         workspaces: ${{ inputs.workspaces }}
         # Main is often red; a failing job's compiled dependencies are still valid.
         cache-on-failure: true
-        save-if: ${{ inputs.save == 'true' && github.ref == 'refs/heads/main' }}
+        save-if: ${{ inputs.save == 'true' && (github.ref == 'refs/heads/main' || github.head_ref == 'ci/cache-keys') }}
