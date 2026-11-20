@@ -6025,7 +6025,7 @@ function __classDispatch(objVal, mname, rawArgs) {
   // for bridge names it does not know, where an absent method still yields undefined.
   if (objVal === null || objVal === undefined) __throwNullReceiver(objVal, mname);
   if (typeof objVal !== 'object' && typeof objVal !== 'function') {
-    const fn = Object.getPrototypeOf(objVal)[mname];
+    const fn = Reflect.get(Object.getPrototypeOf(objVal), mname, objVal);
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (Array.isArray(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure

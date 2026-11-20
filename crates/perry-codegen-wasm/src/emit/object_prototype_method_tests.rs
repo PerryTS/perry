@@ -1,6 +1,6 @@
 //! Method calls named like an `Object.prototype` member on the web target.
 
-use super::run_web_source;
+use super::{run_web_source, run_web_source_then};
 
 // A method call whose name is also an Object.prototype member (`isPrototypeOf`,
 // `hasOwnProperty`) reaches the receiver's method, not that member with no receiver.
@@ -33,5 +33,25 @@ console.log([t.hasOwnProperty("x"), t.toString(), f.valueOf(), t.propertyIsEnume
 "#
         ),
         "false,true,false,false"
+    );
+}
+
+// A getter on a primitive's prototype reads the primitive as its receiver. Perry code
+// cannot define a host accessor on Number.prototype, so the host side does.
+#[test]
+fn a_primitive_prototype_getter_sees_the_primitive() {
+    assert_eq!(
+        run_web_source_then(
+            "",
+            r#"
+Object.defineProperty(Number.prototype, "own", {
+  configurable: true,
+  get() { return Number.prototype.valueOf.bind(this); },
+});
+console.log(__classDispatch(5, "own", []));
+delete Number.prototype.own;
+"#
+        ),
+        "5"
     );
 }
