@@ -37,66 +37,24 @@ static OUTPUT_FILENAME: Mutex<String> = Mutex::new(String::new());
 const RECORD_SAMPLE_RATE: u32 = 48_000;
 
 // =============================================================================
-// A-weighting (48kHz coefficients, shared with macOS/iOS)
+// Sound level metering — shared A-weighting + Fast time weighting
+// (see perry_ui::sound_level). One meter per capture session; reset on
+// start/stop so a restart re-primes instead of decaying from stale energy.
 // =============================================================================
 
-struct AWeightState {
-    sections: [[f64; 4]; 3],
+static METER: Mutex<Option<perry_ui::sound_level::SoundLevelMeter>> = Mutex::new(None);
+
+fn reset_meter() {
+    *METER.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-impl AWeightState {
-    fn new() -> Self {
-        AWeightState {
-            sections: [[0.0; 4]; 3],
-        }
-    }
-}
-
-const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.9746716508129498,
-        0.97504628855498883,
-    ],
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.1440825051498020,
-        0.20482985688498268,
-    ],
-    [
-        0.24649652853975498,
-        -0.49299305707950996,
-        0.24649652853975498,
-        1.0,
-        -0.48689808685150487,
-        0.0,
-    ],
-];
-const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
-
-fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
-    let mut x = sample * A_WEIGHT_GAIN;
-    for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0];
-        let b1 = sos[1];
-        let b2 = sos[2];
-        let a1 = sos[4];
-        let a2 = sos[5];
-        let s = &mut state.sections[i];
-        let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0];
-        s[0] = x;
-        s[3] = s[2];
-        s[2] = y;
-        x = y;
-    }
-    x
+/// Feed one buffer through the shared meter. Returns `(level_db, peak)`.
+fn meter_process(samples: &[f32], sample_rate: f64) -> (f64, f32) {
+    let mut guard = METER.lock().unwrap_or_else(|e| e.into_inner());
+    let meter =
+        guard.get_or_insert_with(|| perry_ui::sound_level::SoundLevelMeter::new(sample_rate));
+    meter.ensure_sample_rate(sample_rate);
+    meter.process(samples)
 }
 
 // =============================================================================
@@ -226,8 +184,7 @@ pub fn start() -> i64 {
                 .new_float_array(buffer_size_frames as usize)
                 .expect("Failed to create float array");
 
-            let mut filter_state = AWeightState::new();
-            let mut ema_db: f64 = 0.0;
+            reset_meter();
 
             // Read loop
             while RUNNING.load(Ordering::Relaxed) {
@@ -263,31 +220,8 @@ pub fn start() -> i64 {
                 }
 
                 // Process: A-weight + RMS + dB
-                let mut sum_sq = 0.0f64;
-                let mut peak = 0.0f32;
-
-                for i in 0..n {
-                    let s = samples[i];
-                    let abs_s = s.abs();
-                    if abs_s > peak {
-                        peak = abs_s;
-                    }
-                    let weighted = a_weight_filter(s as f64, &mut filter_state);
-                    sum_sq += weighted * weighted;
-                }
-
-                let rms = (sum_sq / n as f64).sqrt();
-                let db_raw = if rms > 1.0e-10 {
-                    20.0 * rms.log10() + 110.0
-                } else {
-                    0.0
-                };
-                let db_clamped = db_raw.max(0.0).min(140.0);
-
-                let dt = n as f64 / sample_rate as f64;
-                let tau = 0.125;
-                let alpha = 1.0 - (-dt / tau).exp();
-                ema_db += alpha * (db_clamped - ema_db);
+                // A-weighted, Fast (125 ms) energy-domain level.
+                let (ema_db, peak) = meter_process(&samples, sample_rate as f64);
 
                 CURRENT_DB.store(ema_db.to_bits(), Ordering::Relaxed);
                 CURRENT_PEAK.store((peak as f64).to_bits(), Ordering::Relaxed);
