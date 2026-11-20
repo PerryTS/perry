@@ -1704,8 +1704,29 @@ function __classRef(className, ctorIdx) {
     ctor = __classCtor(className, ctorIdx, undefined);
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
+    for (const key of Reflect.ownKeys(classStaticTable[className] || {})) __classExposeStatic(className, key);
   }
   return ctor;
+}
+
+// A static field lives in `classStaticTable`. The class value has it as an own
+// enumerable property that reads and writes the table entry, so `Object.keys`, `in`
+// and `hasOwnProperty` see it. A field replaces a configurable, non-enumerable own
+// property (`name`, `length`, a static method or accessor), as a class definition
+// does; an enumerable one is already the field's accessor. A computed
+// member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
+// shares the table and stays hidden.
+function __classExposeStatic(className, key) {
+  const ctor = __classRefs.get(className);
+  if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
+  const own = Object.getOwnPropertyDescriptor(ctor, key);
+  if (own && (own.enumerable || !own.configurable)) return;
+  Object.defineProperty(ctor, key, {
+    get() { return classStaticTable[className][key]; },
+    set(value) { classStaticTable[className][key] = value; },
+    enumerable: true,
+    configurable: true,
+  });
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
@@ -2506,7 +2527,9 @@ const __memDispatch = {
     if (evaluation) {
       Object.defineProperty(evaluation, key, { value, writable: true, configurable: true, enumerable: true });
     } else {
-      (classStaticTable[cls] ||= {})[typeof key === 'symbol' ? key : String(key)] = value;
+      const k = typeof key === 'symbol' ? key : String(key);
+      (classStaticTable[cls] ||= {})[k] = value;
+      __classExposeStatic(cls, k);
     }
   },
   class_static_this: (className, ctorIdx) => {
@@ -2706,8 +2729,10 @@ const __memDispatch = {
       const fname = String(name);
       const cls = obj[__classRefName];
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
-      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) statics[fname] = value;
-      else obj[fname] = value;
+      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) {
+        statics[fname] = value;
+        __classExposeStatic(cls, fname);
+      } else obj[fname] = value;
       return;
     }
     if (!__holdsProperties(obj)) return;
@@ -2730,6 +2755,7 @@ const __memDispatch = {
     const cls = String(classId);
     if (!classStaticTable[cls]) classStaticTable[cls] = {};
     classStaticTable[cls][String(name)] = value;
+    __classExposeStatic(cls, String(name));
     return value;
   },
   class_get_static: (classId, name) => {
