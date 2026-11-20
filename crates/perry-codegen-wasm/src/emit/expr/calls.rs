@@ -195,9 +195,15 @@ impl<'a> FuncEmitCtx<'a> {
                     }
                 }
 
-                // Evaluate arguments first
-                for arg in args {
-                    self.emit_expr(func, arg);
+                // A direct call takes its arguments on the operand stack. The dynamic arm
+                // below evaluates them once, into its bridge frame.
+                if matches!(
+                    callee.as_ref(),
+                    Expr::FuncRef(_) | Expr::ExternFuncRef { .. }
+                ) {
+                    for arg in args {
+                        self.emit_expr(func, arg);
+                    }
                 }
                 // Call the function — resolve target and pad missing optional args with undefined
                 match callee.as_ref() {
@@ -274,14 +280,8 @@ impl<'a> FuncEmitCtx<'a> {
                         }
                     }
                     _ => {
-                        // Dynamic call via closure bridge
-                        // Stack has: [arg0, arg1, ..., argN] but callee not yet pushed
-                        // We need callee first for closure_call. Restructure:
-                        // Drop the args we already pushed, re-emit callee first, then args
-                        for _ in args {
-                            func.instruction(&Instruction::Drop);
-                        }
-                        // Now emit: callee, args... via mem_call for Firefox NaN safety
+                        // Dynamic call via closure bridge: callee, then args, via mem_call
+                        // for Firefox NaN safety.
                         self.emit_frame_begin(func, (args.len() + 1) as u32);
                         self.emit_store_arg(func, 0, callee);
                         for (i, arg) in args.iter().enumerate() {
@@ -300,8 +300,8 @@ impl<'a> FuncEmitCtx<'a> {
                             3 => {
                                 self.emit_memcall(func, "closure_call_3", 4);
                             }
-                            _ => {
-                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                            n => {
+                                self.emit_memcall(func, "closure_call_n", n as u32 + 1);
                             }
                         }
                     }

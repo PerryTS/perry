@@ -2452,6 +2452,8 @@ const __memDispatch = {
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __callClosureMethod(fn, thisArg, argArr);
   },
+  // Four or more arguments: `closure_call_n(closure, a0, a1, ...)`.
+  closure_call_n: (closure, ...args) => __memDispatch.closure_call_spread(closure, args),
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (typeof closure === 'function') return __callHostFunction(closure, argArr);
