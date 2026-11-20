@@ -91,19 +91,16 @@ fn move_to(row: u16, col: u16, out: &mut Vec<u8>) {
 pub fn diff(grid: &Grid) -> Vec<u8> {
     let mut out: Vec<u8> = Vec::with_capacity(grid.front.len());
     let mut sgr = SgrState::default();
-    let mut last_pos: Option<(u16, u16)> = None;
+    let mut next_pos: Option<(u16, u32)> = None;
     for row in 0..grid.height {
         for col in 0..grid.width {
             let idx = (row as usize) * (grid.width as usize) + (col as usize);
-            let f = grid.front[idx];
-            let b = grid.back[idx];
-            if f == b {
+            let f = &grid.front[idx];
+            let b = &grid.back[idx];
+            if f == b || b.width == 0 {
                 continue;
             }
-            let need_move = match last_pos {
-                Some((r, c)) if r == row && c + 1 == col => false,
-                _ => true,
-            };
+            let need_move = next_pos != Some((row, u32::from(col)));
             if need_move {
                 move_to(row, col, &mut out);
             }
@@ -114,10 +111,13 @@ pub fn diff(grid: &Grid) -> Vec<u8> {
             };
             sgr_transition(sgr, next_sgr, &mut out);
             sgr = next_sgr;
-            let mut buf = [0u8; 4];
-            let s = b.ch.encode_utf8(&mut buf);
-            out.extend_from_slice(s.as_bytes());
-            last_pos = Some((row, col));
+            if let Some(grapheme) = &b.grapheme {
+                out.extend_from_slice(grapheme.as_bytes());
+            } else {
+                let mut buffer = [0u8; 4];
+                out.extend_from_slice(b.ch.encode_utf8(&mut buffer).as_bytes());
+            }
+            next_pos = Some((row, u32::from(col) + u32::from(b.width)));
         }
     }
     if !out.is_empty() {
@@ -136,7 +136,7 @@ pub fn flush(grid: &mut Grid) {
         let _ = h.write_all(&bytes);
         let _ = h.flush();
     }
-    grid.front.copy_from_slice(&grid.back);
+    grid.front.clone_from_slice(&grid.back);
 }
 
 /// Emit the ANSI to clear the screen and home the cursor. Used at the
@@ -160,6 +160,114 @@ mod tests {
             fg: Color::Default,
             bg: Color::Default,
             style: Style::default(),
+            ..Cell::default()
+        }
+    }
+
+    fn painted(text: &str, width: u16) -> Grid {
+        let mut grid = Grid::new(width, 1);
+        grid.paint_text(0, 0, text, Color::Default, Color::Default, Style::default());
+        grid
+    }
+
+    #[test]
+    fn unicode_graphemes_emit_without_extra_columns() {
+        for text in ["你好x", "e\u{301}x", "👩‍💻x", "🇨🇳x", "❤️x", "👍🏽x"] {
+            assert_eq!(
+                diff(&painted(text, 12)),
+                format!("\x1b[1;1H{text}\x1b[0m").as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn wide_to_narrow_replacement_erases_the_old_tail() {
+        let mut grid = painted("你x", 4);
+        grid.front.clone_from_slice(&grid.back);
+        grid.clear_back();
+        grid.paint_text(0, 0, "ax", Color::Default, Color::Default, Style::default());
+        assert_eq!(diff(&grid), b"\x1b[1;1Hax \x1b[0m");
+    }
+
+    #[test]
+    fn combining_mark_changes_are_not_lost() {
+        let mut grid = painted("e\u{301}", 3);
+        grid.front.clone_from_slice(&grid.back);
+        grid.clear_back();
+        grid.paint_text(
+            0,
+            0,
+            "e\u{300}",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        assert_eq!(diff(&grid), "\x1b[1;1He\u{300}\x1b[0m".as_bytes());
+    }
+
+    #[test]
+    fn unchanged_unicode_frames_emit_nothing() {
+        let mut grid = painted("你e\u{301}👩‍💻", 10);
+        grid.front.clone_from_slice(&grid.back);
+        grid.clear_back();
+        grid.paint_text(
+            0,
+            0,
+            "你e\u{301}👩‍💻",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        assert!(diff(&grid).is_empty());
+    }
+
+    #[test]
+    fn resizing_clears_unicode_cells_in_both_buffers() {
+        let mut grid = painted("你e\u{301}👩‍💻", 10);
+        grid.front.clone_from_slice(&grid.back);
+        grid.resize(12, 1);
+        assert!(grid
+            .front
+            .iter()
+            .chain(&grid.back)
+            .all(|entry| *entry == Cell::default()));
+    }
+
+    #[test]
+    fn changing_a_wide_grapheme_emits_its_lead_only() {
+        let mut grid = painted("你x", 5);
+        grid.front.clone_from_slice(&grid.back);
+        grid.clear_back();
+        grid.paint_text(
+            0,
+            0,
+            "好x",
+            Color::Default,
+            Color::Default,
+            Style::default(),
+        );
+        assert_eq!(diff(&grid), "\x1b[1;1H好\x1b[0m".as_bytes());
+    }
+
+    #[test]
+    fn shifting_a_wide_grapheme_erases_its_previous_extent() {
+        for (before, after, expected) in [
+            ("你", " 你", "\x1b[1;1H 你\x1b[0m"),
+            (" 你", "你", "\x1b[1;1H你 \x1b[0m"),
+            ("abx", "你x", "\x1b[1;1H你\x1b[0m"),
+        ] {
+            let mut grid = painted(before, 5);
+            grid.front.clone_from_slice(&grid.back);
+            grid.clear_back();
+            grid.paint_text(
+                0,
+                0,
+                after,
+                Color::Default,
+                Color::Default,
+                Style::default(),
+            );
+            assert_eq!(diff(&grid), expected.as_bytes(), "{before} -> {after}");
         }
     }
 
@@ -240,6 +348,7 @@ mod tests {
             fg: Color::Red,
             bg: Color::Default,
             style: Style::default(),
+            ..Cell::default()
         };
         let bytes = diff(&g);
         let s = String::from_utf8_lossy(&bytes);
@@ -254,6 +363,7 @@ mod tests {
             fg: Color::Rgb(255, 136, 0),
             bg: Color::Default,
             style: Style::default(),
+            ..Cell::default()
         };
         let bytes = diff(&g);
         let s = String::from_utf8_lossy(&bytes);

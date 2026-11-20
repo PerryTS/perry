@@ -168,12 +168,12 @@ macro_rules! field_failure {
 }
 
 macro_rules! check_field {
-    ($obj:expr, $value:expr, $key:expr, $cids01:expr, $cids23:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
+    ($obj:expr, $value:expr, $key:expr, $cids:expr, $ncids:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
         let obj = $obj;
         let value = $value;
         let key = $key;
-        let cids01 = $cids01;
-        let cids23 = $cids23;
+        let cids = $cids;
+        let ncids = $ncids;
         let slot = $slot;
         let off = $off;
         let kind_mask = $kind_mask;
@@ -230,19 +230,19 @@ macro_rules! check_field {
         (*(addr as *const ObjectHeader)).class_id
     };
     let word = unsafe { (*(addr as *const ObjectHeader)).parent_class_id };
-    let ids = [
-        cids01 as u64 as u32,
-        (cids01 as u64 >> 32) as u32,
-        cids23 as u64 as u32,
-        (cids23 as u64 >> 32) as u32,
-    ];
+    // The site's whole proven receiver set: a private `[ncids x i32]`
+    // constant the check build emits next to the site (never truncated).
+    let ids: &[u32] = if ncids <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(cids as usize as *const u32, ncids as usize) }
+    };
     // The receiver is a proven class by its class id, or by its layout word:
     // a literal family keeps its late keys and names class 0, so its objects
     // carry the family descriptor word of the proven class instead.
-    let admitted = ids.iter().any(|&c| {
-        c != u32::MAX
-            && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
-    });
+    let admitted = ids
+        .iter()
+        .any(|&c| c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c));
     if !admitted {
         field_failure!(site, key, key_name,
             "F4 receiver set",
@@ -260,7 +260,14 @@ macro_rules! check_field {
             ),
         );
     }
-    let at = unsafe { keys.get(slot) }.bits();
+    // Slot k is the storage of the key whose position maps to k: family
+    // layouts (`layout_families::assign_slots`) permute slots against key
+    // positions, so the key at position k need not live in slot k.
+    let at = unsafe {
+        (0..keys.count())
+            .find(|&p| keys.storage_slot(p) == slot)
+            .map_or(crate::value::TAG_HOLE, |p| keys.get(p).bits())
+    };
     let key_matches = if site.is_legacy() {
         key_value_bytes(at).as_deref() == Some(key)
     } else {
@@ -325,8 +332,8 @@ macro_rules! check_field {
     }};
 }
 
-/// One elided field access. `cids01`/`cids23` carry up to four class ids
-/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
+/// One elided field access. `cids` points at the site's `ncids` proven
+/// receiver class ids (a private `[ncids x i32]` constant); `slot` names the key, `off` is the
 /// byte offset from the object the access used. Returns 0.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -334,8 +341,8 @@ pub extern "C" fn perry_wpfacts_check_field(
     obj: f64,
     value: f64,
     key: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -347,8 +354,8 @@ pub extern "C" fn perry_wpfacts_check_field(
         obj,
         value,
         &key,
-        cids01,
-        cids23,
+        cids,
+        ncids,
         slot,
         off,
         kind_mask,
@@ -488,8 +495,8 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     value: f64,
     key: i64,
     key_len: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -498,7 +505,7 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     site_len: i64,
 ) -> i32 {
     zzz_perry_verify_facts_field(
-        obj, value, key, key_len, cids01, cids23, slot, off, kind_mask, flags, site, site_len,
+        obj, value, key, key_len, cids, ncids, slot, off, kind_mask, flags, site, site_len,
     )
 }
 
@@ -510,8 +517,8 @@ pub unsafe extern "C" fn zzz_perry_verify_facts_field(
     value: f64,
     key: i64,
     key_len: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -523,8 +530,8 @@ pub unsafe extern "C" fn zzz_perry_verify_facts_field(
         obj,
         value,
         std::slice::from_raw_parts(key as usize as *const u8, key_len as usize),
-        cids01,
-        cids23,
+        cids,
+        ncids,
         slot,
         off,
         kind_mask,

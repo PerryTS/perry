@@ -857,20 +857,34 @@ pub(crate) fn lower_split_method_call(
             ctx.current_block = call_idx;
             (undef_idx, merge_idx)
         });
+        // G8: `f.apply(x, arguments)` on a deferred binding reads its slot
+        // at the site: the bundle while the object is unborn.
+        let apply_bundle = (property == "apply" && args.len() == 2)
+            .then(|| crate::codegen::arguments::deferred_forward_apply_binding(ctx, &args[1]))
+            .flatten();
         let mut arg_idx = Vec::with_capacity(args.len());
         for (i, a) in args.iter().enumerate() {
+            if i == 1 && apply_bundle.is_some() {
+                continue;
+            }
             let collects = arg_collects[i + 1..].iter().any(|&c| c);
             arg_idx.push(group.lower(ctx, a, collects)?);
         }
         let recv_box = group.reread(ctx, recv_i)?;
         let value = group.reread_emitted(ctx, value_root);
         let mut lowered_args = Vec::with_capacity(args.len());
-        for i in arg_idx {
+        for &i in &arg_idx {
             lowered_args.push(group.reread(ctx, i)?);
         }
-        let forward = property == "apply"
-            && args.len() == 2
-            && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
+        if let Some(id) = apply_bundle {
+            lowered_args.push(crate::codegen::arguments::emit_deferred_binding_value(
+                ctx, id,
+            ));
+        }
+        let forward = apply_bundle.is_some()
+            || property == "apply"
+                && args.len() == 2
+                && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
                 Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object");
         let r = if forward {
             let result = ctx.block().call(
@@ -894,6 +908,25 @@ pub(crate) fn lower_split_method_call(
             let merge_label = ctx.block_label(merge);
             ctx.block().cond_br(&miss, &cold_label, &merge_label);
             ctx.current_block = cold;
+            // An unborn binding's object is born here, for the ordinary call
+            // (the bundle was only ever passed to the intrinsic apply); the
+            // birth collects, so every operand is read again below it.
+            let (recv_box, value, lowered_args) = match apply_bundle {
+                Some(id) => {
+                    crate::codegen::arguments::ensure_arguments_object(ctx, id);
+                    let recv_box = group.reread(ctx, recv_i)?;
+                    let value = group.reread_emitted(ctx, value_root);
+                    let mut lowered = Vec::with_capacity(2);
+                    for &i in &arg_idx {
+                        lowered.push(group.reread(ctx, i)?);
+                    }
+                    lowered.push(crate::codegen::arguments::emit_deferred_binding_value(
+                        ctx, id,
+                    ));
+                    (recv_box, value, lowered)
+                }
+                None => (recv_box, value, lowered_args),
+            };
             let value = emit_split_call_half(
                 ctx,
                 &lookup,

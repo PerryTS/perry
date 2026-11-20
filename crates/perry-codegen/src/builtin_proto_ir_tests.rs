@@ -111,7 +111,12 @@ fn a_borrowed_prototype_call_proves_array_and_function_and_a_binding_does_not() 
     );
     for slot in ["i64 48", "i64 40", "i64 32"] {
         assert!(
-            proto.contains(&format!("getelementptr i8, ptr @PERRY_AGENT_PTRS, {slot}")),
+            proto.contains(&format!("getelementptr i8, ptr @PERRY_AGENT_PTRS, {slot}"))
+                // The activation's one read of the block address (`agent_ptr.rs`).
+                || (proto.contains("@llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)")
+                    && proto.lines().any(|l| {
+                        l.contains("= getelementptr i8, ptr %") && l.ends_with(&format!(", {slot}"))
+                    })),
             "the Array, Function and Object intrinsics are all tested ({slot}):\n{proto}"
         );
     }

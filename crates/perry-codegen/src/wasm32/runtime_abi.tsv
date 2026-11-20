@@ -11,6 +11,7 @@ _Unwind_SetIP	void	ptr,usize
 clearImmediate	void	i64
 clearInterval	void	i64
 clearTimeout	void	i64
+function_prototype_apply_thunk	f64	ptr,i64,f64,f64
 gc_check_trigger_export	void	
 getenv	ptr	ptr
 gettimeofday	i32s	ptr,ptr
@@ -1722,6 +1723,7 @@ js_fs_write_sync_options_dispatch	f64	f64,f64,f64
 js_fs_writev_callback	f64	f64,f64,f64,f64
 js_fs_writev_sync	f64	f64,f64,f64
 js_function_apply_proxy	f64	f64,f64,f64
+js_function_apply_read	f64	f64,f64,f64
 js_function_bind	f64	f64,ptr,usize
 js_function_ctor_from_strings	f64	ptr,usize
 js_function_order_first_call	void	ptr
@@ -5107,6 +5109,7 @@ node_api_create_syntax_error	i32s	ptr,ptr,ptr,ptr
 node_api_get_module_file_name	i32s	ptr,ptr
 node_api_symbol_for	i32s	ptr,ptr,usize,ptr
 node_api_throw_syntax_error	i32s	ptr,ptr,ptr
+object_prototype_has_own_property_thunk	f64	ptr,i64,f64
 perry_alloc_class_family	ptr	ptr,i32u,i32u
 perry_alloc_layout	ptr	ptr
 perry_alloc_literal_layout	ptr	ptr
