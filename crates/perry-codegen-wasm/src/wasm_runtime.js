@@ -36,9 +36,6 @@ function __padBigintArgs(fn, prefix, bigintArgs) {
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
   }
-  return __padMissingArgs(fn, prefix, bigintArgs);
-}
-function __padMissingArgs(fn, prefix, bigintArgs) {
   const need = Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1854,8 +1851,7 @@ function __classCtor(className, ctorIdx, caps) {
       while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
       args.push(...envCaps);
     }
-    const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
-    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...args.map(__jsValueToBits)));
     // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
@@ -1966,13 +1962,13 @@ function __defineHidden(target, key, value) {
 function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   const fn = function (...args) {
     const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
-    const padded = __padBigintArgs(impl, 0, args.map(__jsValueToBits));
+    const bits = args.map(__jsValueToBits);
     const outerThis = __classStaticThis;
     const outerCall = __classEnvCall;
     if (this !== undefined) __classStaticThis = { template, method: name, value: this, outer: outerThis };
     if (evaluation) __classEnvCall = { receiver: undefined, evaluation };
     try {
-      return __bitsToJsValue(__invokeWasmCallback(impl, ...padded));
+      return __bitsToJsValue(__invokeWasmCallback(impl, ...bits));
     } finally {
       __classStaticThis = outerThis;
       __classEnvCall = outerCall;
@@ -1991,7 +1987,7 @@ function __arrayCallback(cb) {
   }
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
   const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-  return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...__padBigintArgs(fn, cb.captures.length, bits)));
+  return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
 }
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
@@ -2006,11 +2002,11 @@ function __classStaticMethodValue(cls, name) {
 // A compiled member called on `self`, in `evaluation`'s capture environment.
 function __classMemberCall(funcIdx, evaluation, self, args) {
   const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
-  const padded = __padBigintArgs(impl, 1, args.map(__jsValueToBits));
+  const bits = args.map(__jsValueToBits);
   const outer = __classEnvCall;
   if (evaluation) __classEnvCall = { receiver: self, evaluation };
   try {
-    return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...padded));
+    return __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...bits));
   } finally {
     __classEnvCall = outer;
   }
@@ -3692,9 +3688,8 @@ function uiAlloc(el) {
 }
 function uiGet(h) { return uiHandles.get(h); }
 
-// Its callers have already packed a rest parameter's arguments.
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...__padMissingArgs(fn, 0, bigintArgs));
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
   __memDispatch.propagate_exception(true);
   return result;
 }

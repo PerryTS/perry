@@ -20,7 +20,7 @@ impl<'a> FuncEmitCtx<'a> {
                         .copied(),
                     _ => None,
                 };
-                let packed = self.with_rest_packed(direct_idx, args);
+                let packed = self.emitter.with_rest_packed(direct_idx, args);
                 let args: &[Expr] = &packed;
                 // Check for method call patterns: obj.method(args)
                 if let Expr::PropertyGet {
@@ -41,7 +41,7 @@ impl<'a> FuncEmitCtx<'a> {
                         if let Some(&idx) =
                             self.emitter.imported_ns_funcs.get(&key).copied().as_ref()
                         {
-                            let packed = self.with_rest_packed(Some(idx), args);
+                            let packed = self.emitter.with_rest_packed(Some(idx), args);
                             let args: &[Expr] = &packed;
                             for arg in args {
                                 self.emit_expr(func, arg);
@@ -405,24 +405,5 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
-    }
-
-    /// The arguments a direct call of WASM function `idx` passes: a rest parameter
-    /// receives the source arguments from its slot on as one array.
-    pub(super) fn with_rest_packed<'e>(
-        &self,
-        idx: Option<u32>,
-        args: &'e [Expr],
-    ) -> std::borrow::Cow<'e, [Expr]> {
-        let Some(&slot) = idx.and_then(|idx| self.emitter.rest_params.get(&idx)) else {
-            return std::borrow::Cow::Borrowed(args);
-        };
-        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
-        packed.resize(slot, Expr::Undefined);
-        packed.push(Expr::Array(
-            args.get(slot..).unwrap_or_default().to_vec(),
-            None,
-        ));
-        std::borrow::Cow::Owned(packed)
     }
 }

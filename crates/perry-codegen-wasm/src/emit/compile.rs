@@ -899,6 +899,7 @@ impl WasmModuleEmitter {
                         user_func_idx,
                     );
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &member.function.params);
                     user_func_idx += 1;
                 }
             }
@@ -1774,6 +1775,25 @@ impl WasmModuleEmitter {
         if let Some(i) = params.iter().position(|p| p.is_rest) {
             self.rest_params.insert(idx, leading + i);
         }
+    }
+
+    /// The arguments a direct call of WASM function `idx` passes: a rest parameter
+    /// receives the source arguments from its slot on as one array.
+    pub(super) fn with_rest_packed<'e>(
+        &self,
+        idx: Option<u32>,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = idx.and_then(|idx| self.rest_params.get(&idx)) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
     }
 }
 
