@@ -1462,16 +1462,18 @@ async function sets(): Promise<string> {
   e.add("a");
   const d1 = s.delete(1);
   const d2 = s.delete(1);
-  return [s.size, s.has(2), s.has(1), e.size, d1, d2, outer.has(3), typeof s].join(" ");
+  e.add(await Promise.resolve("b"));
+  const copy = new Set(s);
+  return [s.size, s.has(2), s.has(1), e.size, d1, d2, outer.has(3), typeof s, copy.size, copy.has(3)].join(" ");
 }
 async function maps(): Promise<string> {
   const m = new Map<string, number>([["a", 1]]);
   const n = new Map<string, number>();
   m.set("b", 2).set("c", 3);
-  n.set("x", 1);
+  n.set("x", 1).set("y", await Promise.resolve(4));
   const d1 = m.delete("a");
   const d2 = m.delete("zz");
-  const before = [m.size, m.get("b"), m.get("a"), m.has("c"), m.has("a"), d1, d2, n.get("x")].join(" ");
+  const before = [m.size, m.get("b"), m.get("a"), m.has("c"), m.has("a"), d1, d2, n.get("x"), n.get("y")].join(" ");
   m.clear();
   return before + " " + m.size;
 }
@@ -1488,7 +1490,7 @@ maps().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 typed(new Map(), new Set([1])).then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 "#
         ),
-        "2 true false 1 true false true object\n2 2  true false true false 1 0\n5 true true false 1 0 0"
+        "5 true true false 1 0 0\n2 true false 2 true false true object 2 true\n2 2  true false true false 1 4 0"
     );
 }
 

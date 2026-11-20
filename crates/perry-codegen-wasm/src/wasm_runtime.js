@@ -2762,7 +2762,7 @@ const __memDispatch = {
 
   // Set — args are plain JS values (s is the Set object itself)
   set_new: () => new Set(),
-  set_new_from_array: (arr) => new Set(Array.isArray(arr) ? arr : []),
+  set_new_from_array: (iterable) => new Set(iterable),
   set_add: (s, value) => { if (s instanceof Set) s.add(value); },
   set_has: (s, value) => (s instanceof Set && s.has(value)) ? 1 : 0,
   set_delete: (s, value) => { if (s instanceof Set) s.delete(value); },

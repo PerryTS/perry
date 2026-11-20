@@ -859,8 +859,7 @@ impl WasmModuleEmitter {
             // Map and Set call the bridges their WASM arms in `emit/expr/map_set.rs` call.
             Expr::MapNew => "fromJsValue(__memDispatch.map_new())".to_string(),
             Expr::SetNew => "fromJsValue(__memDispatch.set_new())".to_string(),
-            Expr::MapNewFromArray(a)
-            | Expr::SetNewFromArray(a)
+            Expr::SetNewFromArray(a)
             | Expr::MapSize(a)
             | Expr::SetSize(a)
             | Expr::MapEntries(a)
@@ -868,7 +867,6 @@ impl WasmModuleEmitter {
             | Expr::MapValues(a)
             | Expr::SetValues(a) => {
                 let bridge = match expr {
-                    Expr::MapNewFromArray(_) => "map_new_from_array",
                     Expr::SetNewFromArray(_) => "set_new_from_array",
                     Expr::MapSize(_) => "map_size",
                     Expr::SetSize(_) => "set_size",
@@ -900,22 +898,19 @@ impl WasmModuleEmitter {
                 self.emit_js_expr(c, locals),
                 self.emit_js_expr(k, locals)
             ),
-            // `set` and `add` yield the collection.
+            // `set` and `add` yield the collection. The operands are the arrow's arguments,
+            // so each is evaluated once, in source order, and an `await` stays in the async body.
             Expr::MapSet { map, key, value } => format!(
-                "((m) => (__memDispatch.map_set(toJsValue(m), toJsValue({}), toJsValue({})), m))({})",
+                "((m, k, v) => (__memDispatch.map_set(toJsValue(m), toJsValue(k), toJsValue(v)), m))({}, {}, {})",
+                self.emit_js_expr(map, locals),
                 self.emit_js_expr(key, locals),
-                self.emit_js_expr(value, locals),
-                self.emit_js_expr(map, locals)
+                self.emit_js_expr(value, locals)
             ),
-            Expr::SetAdd { set_id, value } => {
-                let set = self.emit_js_expr(&Expr::LocalGet(*set_id), locals);
-                format!(
-                    "(__memDispatch.set_add(toJsValue({}), toJsValue({})), {})",
-                    set,
-                    self.emit_js_expr(value, locals),
-                    set
-                )
-            }
+            Expr::SetAdd { set_id, value } => format!(
+                "((s, v) => (__memDispatch.set_add(toJsValue(s), toJsValue(v)), s))({}, {})",
+                self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
+                self.emit_js_expr(value, locals)
+            ),
             Expr::MapClear(c) | Expr::SetClear(c) => format!(
                 "(__memDispatch.{}(toJsValue({})), u64ToF64(TAG_UNDEFINED))",
                 if matches!(expr, Expr::MapClear(_)) { "map_clear" } else { "set_clear" },
