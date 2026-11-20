@@ -68,7 +68,7 @@ pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
         .iter()
         .any(|p| p.is_rest && p.arguments_object.is_none())
         || arguments_elision(params, body).is_some()
-        || !arguments_observed_on_every_path(body, param.id)
+        || !arguments_observed_on_every_path(body, param.id, meta.mapped_parameter_ids.is_empty())
     {
         return 0;
     }
@@ -89,9 +89,16 @@ pub(crate) fn arguments_object_flags(params: &[Param], body: &[Stmt]) -> u32 {
         }
 }
 
-fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
-    fn observes(expr: &Expr, id: u32) -> bool {
+fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -> bool {
+    fn observes(expr: &Expr, id: u32, defer_apply: bool) -> bool {
+        let observes = |e: &Expr, id: u32| observes(e, id, defer_apply);
         match expr {
+            // G8: a forwarding apply reads the binding at the site itself,
+            // where an unborn object is answered by its bundle
+            // ([`deferred_forward_apply_binding`]).
+            Expr::Call { callee, args, .. } if defer_apply && is_forward_apply_of(expr, id) => {
+                observes(callee, id) || observes(&args[0], id)
+            }
             Expr::LocalGet(local) => *local == id,
             Expr::PropertyGet { object, .. } => observes(object, id),
             Expr::IndexGet { object, index, .. } => observes(object, id) || observes(index, id),
@@ -134,7 +141,9 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
     // need no further analysis. Unknown control flow fails closed.
     const FALLTHROUGH: u8 = 1;
     const EXIT: u8 = 2;
-    fn unobserved_paths(body: &[Stmt], id: u32) -> u8 {
+    fn unobserved_paths(body: &[Stmt], id: u32, defer_apply: bool) -> u8 {
+        let observes = |e: &Expr, id: u32| observes(e, id, defer_apply);
+        let unobserved_paths = |b: &[Stmt], id: u32| unobserved_paths(b, id, defer_apply);
         let mut paths = FALLTHROUGH;
         for stmt in body {
             if paths & FALLTHROUGH == 0 {
@@ -190,7 +199,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32) -> bool {
         }
         paths
     }
-    unobserved_paths(body, id) == 0
+    unobserved_paths(body, id, defer_apply) == 0
 }
 
 /// A mapped parameter is boxed so the sloppy-mode object and the parameter
@@ -309,7 +318,9 @@ pub(crate) fn materialize_arguments_object(
         );
         return;
     }
-    if body.is_some_and(|body| arguments_observed_on_every_path(body, synth_param.id)) {
+    if body.is_some_and(|body| {
+        arguments_observed_on_every_path(body, synth_param.id, meta.mapped_parameter_ids.is_empty())
+    }) {
         // The same proof selects direct object birth in JsFunctionInfo.
         // No readiness state or collecting LocalGet is needed once entry
         // materialization has established the binding's final identity.
@@ -381,6 +392,51 @@ pub(crate) fn ensure_arguments_object(ctx: &mut FnCtx<'_>, id: u32) {
     ctx.block().store(I8, "1", &deferred.ready);
     ctx.block().br(&ready_label);
     ctx.current_block = ready_idx;
+}
+
+/// G8: `X.apply(y, arguments)` with exactly these two arguments, the second
+/// the local `id`.
+pub(crate) fn is_forward_apply_of(expr: &Expr, id: u32) -> bool {
+    matches!(expr, Expr::Call { callee, args, .. }
+        if args.len() == 2
+            && matches!(&args[1], Expr::LocalGet(l) if *l == id)
+            && matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "apply"))
+}
+
+/// G8: the deferred binding `operand` names when a forwarding apply may hand
+/// an unborn object's bundle to the intrinsic `Function.prototype.apply`: the
+/// binding is deferred (its slot holds the caller's bundle until the birth)
+/// and maps no parameter, so until the birth the bundle holds exactly the
+/// object's elements, nothing writes it and nothing has observed the object.
+/// CreateListFromArrayLike of the bundle is then the object's list. The site
+/// births the object only when `apply` is not the intrinsic
+/// ([`ensure_arguments_object`]); a born object is passed as itself.
+pub(crate) fn deferred_forward_apply_binding(ctx: &FnCtx<'_>, operand: &Expr) -> Option<u32> {
+    let Expr::LocalGet(id) = operand else {
+        return None;
+    };
+    let deferred = ctx.elided_arguments.get(id)?.deferred.as_ref()?;
+    let synth = deferred
+        .params
+        .iter()
+        .find(|p| p.arguments_object.is_some())?;
+    synth
+        .arguments_object
+        .as_ref()?
+        .mapped_parameter_ids
+        .is_empty()
+        .then_some(*id)
+}
+
+/// The deferred binding's slot as it stands: the bundle while the object is
+/// unborn, the object after its birth.
+pub(crate) fn emit_deferred_binding_value(ctx: &mut FnCtx<'_>, id: u32) -> String {
+    let slot = ctx
+        .locals
+        .get(&id)
+        .cloned()
+        .expect("a deferred arguments binding has its slot");
+    ctx.block().load(DOUBLE, &slot)
 }
 
 /// Assignment replaces the binding without needing its previous value.

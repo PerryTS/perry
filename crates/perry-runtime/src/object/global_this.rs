@@ -147,7 +147,7 @@ pub(crate) use generator_state::{
 };
 pub(crate) use generator_state::{
     generator_observe_record_prototype, generator_original_prototype_key,
-    generator_record_prototype_word,
+    generator_record_prototype_word, sync_generator_next_owner,
 };
 pub use generator_state::{js_generator_create, js_generator_result, js_generator_set_slot};
 pub use install_static::js_promise_static_function_value;

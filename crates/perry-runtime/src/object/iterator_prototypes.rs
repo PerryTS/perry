@@ -1126,7 +1126,9 @@ unsafe fn iterator_family_owner(
 pub(crate) unsafe fn iterator_next_property_owner(
     obj: *const ObjectHeader,
 ) -> Option<*const ObjectHeader> {
-    iterator_family_owner(obj).map(|(owner, _)| owner)
+    iterator_family_owner(obj)
+        .map(|(owner, _)| owner)
+        .or_else(|| super::global_this::sync_generator_next_owner(obj))
 }
 
 /// Would a record opened on `obj` now step natively? Its `next` read, then

@@ -417,6 +417,22 @@ pub(crate) unsafe fn function_link_admits_add(link: u64, key: *const crate::Stri
     link_admits_add(super::super::ordinary_dir_addr(), link, key_bits, hash)
 }
 
+/// [`function_link_admits_add`] for a symbol key (`symbol_bits`, a symbol
+/// value) added to an object whose [[Prototype]] is `link`, keyed as
+/// [`super::symbol_store`] keys it. GC leaf.
+///
+/// # Safety
+/// `symbol_bits` is a live symbol value; `link` is `TAG_NULL` or live.
+pub(crate) unsafe fn symbol_link_admits_add(link: u64, symbol_bits: u64) -> bool {
+    let symbol = (symbol_bits & POINTER_MASK) as *const crate::symbol::SymbolHeader;
+    link_admits_add(
+        super::super::ordinary_dir_addr(),
+        link,
+        symbol_bits,
+        (*symbol).id,
+    )
+}
+
 #[cfg(test)]
 #[path = "../layout_probe_write_tests.rs"]
 mod tests;

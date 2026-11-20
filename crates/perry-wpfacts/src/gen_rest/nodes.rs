@@ -32,6 +32,7 @@ impl<'a> Gen<'a> {
             }
         }
         let owner = self.begin_indexed_owner(mi, t, e);
+        self.note_ta_birth_len(mi, t, e, args.first().copied());
         if let Some(&v) = args.first() {
             let vals = crate::builtins::typed_array_methods::source(&mut self.m, call, v);
             crate::builtins::string_methods::to_prim(
@@ -49,6 +50,43 @@ impl<'a> Gen<'a> {
         let fa = self.m.field_any(t);
         self.m.add_prim(fa, prim::NUM | prim::BIGINT);
         n
+    }
+
+    /// Rule TA-LEN (`Model::ta_fixed_len`): the length `new TA(k)` (an
+    /// immutable integer definition, `owner_extent`) or `new TA([e1, .., en])`
+    /// (an Array literal of `n` elements, iterated) is born with. Both
+    /// allocate a fresh buffer that is not resizable, and the view does not
+    /// track its length (ECMA-262 23.2.5.1.1, 23.2.5.1.4).
+    fn note_ta_birth_len(&mut self, mi: u32, t: Tok, e: &Expr, src: Option<NodeId>) {
+        if !self.arr_lengths {
+            return;
+        }
+        let arg = match e {
+            Expr::TypedArrayNew { arg: Some(a), .. } | Expr::Uint8ArrayNew(Some(a)) => a,
+            _ => return,
+        };
+        let TokKind::Obj(tm, _) = self.m.toks[t as usize] else {
+            return;
+        };
+        let (len, src) = match arg.as_ref() {
+            Expr::Array(elems, _) => match src {
+                Some(v) => (elems.len() as i64, Some(v)),
+                None => return,
+            },
+            a => match self.owner_extent(mi, a) {
+                Some(k) => (i64::from(k), None),
+                None => return,
+            },
+        };
+        let b = self
+            .m
+            .ta_birth_len
+            .entry(tm)
+            .or_insert_with(|| (len, Vec::new()));
+        if b.0 != len {
+            b.0 = -1;
+        }
+        b.1.extend(src);
     }
 
     /// The first HIR child is the receiver; the remaining children are

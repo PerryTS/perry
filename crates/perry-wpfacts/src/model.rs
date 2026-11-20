@@ -2519,6 +2519,14 @@ pub struct Model {
     pub ta_min_len: FxHashMap<TmplId, u32>,
     pub ta_exact_len: FxHashMap<TmplId, u32>,
     pub ta_birth_input: FxHashMap<TmplId, NodeId>,
+    /// Rule TA-LEN (`Model::ta_fixed_len`): the length a typed-array
+    /// template is born with (-1 when its births disagree) and the Array
+    /// literal nodes it was constructed from, whose iteration must stay the
+    /// intrinsic one.
+    pub ta_birth_len: FxHashMap<TmplId, (i64, Vec<NodeId>)>,
+    /// Typed-array tokens whose length node was born fixed under rule
+    /// TA-LEN; `settle_ta_len` widens one once the rule stops holding.
+    pub ta_len_watch: Vec<Tok>,
     pub resolvers: FxHashMap<NodeId, Tok>,
     /// The reject functions (`builtins::rejecter`) by the node they feed.
     pub rejecters: FxHashMap<NodeId, Tok>,

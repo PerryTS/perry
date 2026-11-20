@@ -182,6 +182,14 @@ class CategoryRoutingTests(unittest.TestCase):
         }.items():
             self.assertEqual(jobs[module]["name"], display_name)
 
+    def test_test262_runs_whenever_its_build_exists(self):
+        from pathlib import Path
+        import yaml
+        workflow = yaml.load(Path(".github/workflows/test.yml").read_text(), Loader=yaml.BaseLoader)
+        self.assertEqual(workflow["jobs"]["test262"]["if"],
+                         "${{ !cancelled() && needs.plan.result == 'success' && needs.gap-suite-build.result == 'success'"
+                         " && fromJSON(needs.plan.outputs.plan).jobs.test262 }}")
+
     def test_required_wasi_job_executes_all_command_suites(self):
         from pathlib import Path
         import yaml
