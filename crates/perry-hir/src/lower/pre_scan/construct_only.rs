@@ -16,11 +16,11 @@
 //! - any other occurrence of the binding disqualifies it: a call, `F.call`,
 //!   `F.prototype`, an export (`export function F`, `export { F }`,
 //!   `module.exports = F`), an assignment, an argument, `extends F`;
-//! - a module with a direct `eval`, an `arguments.callee` or a read of a
-//!   `.constructor` property (an instance's `constructor` is the function, and
-//!   a detached call of it has no receiver) claims nothing. Only the literal
-//!   spellings count: a key computed at run time that happens to be
-//!   `"constructor"` is not followed.
+//! - a module with a direct `eval`, an `arguments.callee`, a `.constructor`
+//!   property or a `"constructor"` string anywhere (an instance's
+//!   `constructor` is the function, and a detached call of it has no
+//!   receiver) claims nothing. Only literal spellings count: a key assembled at
+//!   run time that happens to be `"constructor"` is not followed.
 //!
 //! The result is the set of function spans `(lo, hi)`, the key lowering uses
 //! for run-once classes as well.
@@ -77,20 +77,23 @@ impl Visit for Gate {
         n.visit_children_with(self);
     }
     fn visit_member_expr(&mut self, n: &ast::MemberExpr) {
-        match &n.prop {
-            ast::MemberProp::Ident(p) if &*p.sym == "constructor" || &*p.sym == "callee" => {
-                self.poisoned = true
-            }
-            ast::MemberProp::Computed(c) => {
-                if matches!(&*c.expr, ast::Expr::Lit(ast::Lit::Str(s))
-                    if &*s.value == "constructor" || &*s.value == "callee")
-                {
-                    self.poisoned = true;
-                }
-            }
-            _ => {}
+        if matches!(&n.prop, ast::MemberProp::Ident(p) if &*p.sym == "constructor" || &*p.sym == "callee")
+        {
+            self.poisoned = true;
         }
         n.visit_children_with(self);
+    }
+    // A string key reaches the property from any position: `o["constructor"]`,
+    // `{ "constructor": f } = o`, `Reflect.get(o, "constructor")`, a const key.
+    fn visit_str(&mut self, s: &ast::Str) {
+        if &*s.value == "constructor" || &*s.value == "callee" {
+            self.poisoned = true;
+        }
+    }
+    fn visit_tpl_element(&mut self, t: &ast::TplElement) {
+        if &*t.raw == "constructor" || &*t.raw == "callee" {
+            self.poisoned = true;
+        }
     }
     // `{ constructor }` destructuring reads the property too.
     fn visit_key_value_pat_prop(&mut self, n: &ast::KeyValuePatProp) {
