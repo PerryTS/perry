@@ -2403,7 +2403,8 @@ const __memDispatch = {
     }
     return [value];
   },
-  array_push: (arr, value) => { if (Array.isArray(arr)) arr.push(value); return arr; },
+  // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
+  array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
   array_get: (arr, index) => {
     if (!Array.isArray(arr)) return undefined;
