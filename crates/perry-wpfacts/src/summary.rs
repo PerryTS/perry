@@ -439,11 +439,23 @@ impl Model {
         self.sum.templates.contains(&call)
     }
 
+    /// Is `call` a call of the program text: one the generator made
+    /// (`Gen::new_call`: its own site, placed in its function), not a copy
+    /// an instance or the solver made. The generator makes them before the
+    /// summaries (`n_prog`) and, in the activation pass, also after: a body
+    /// is walked once it is reached (`Gen::walk_activated`), so its calls
+    /// count past `n_prog` and are program sites all the same.
+    pub(crate) fn prog_call(&self, call: CallId) -> bool {
+        (call as usize) < self.sum.n_prog
+            || (self.calls.get(call as usize).is_some_and(|c| c.site == call)
+                && self.call_place.contains_key(&call))
+    }
+
     /// The program site behind `call`: itself for a call of the program,
     /// the template a call an instance made renames, or the site a call the
     /// solver made was made for.
     pub(crate) fn origin_of(&self, call: CallId) -> Option<CallId> {
-        if (call as usize) < self.sum.n_prog {
+        if self.prog_call(call) {
             return Some(call);
         }
         self.sum
@@ -659,7 +671,7 @@ impl Model {
                 module: u32::MAX,
                 site,
                 ..
-            } => site as usize == 0 || site as usize >= self.sum.n_prog,
+            } => site as usize == 0 || !self.prog_call(site),
             _ => false,
         }
     }

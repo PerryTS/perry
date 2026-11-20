@@ -246,6 +246,7 @@ mod proto_value;
 mod protocol_calls;
 mod protocol_keys;
 mod protocol_touch_births;
+mod proxy_late_site;
 mod px1;
 mod quiet_sites;
 mod quiet_strings;
