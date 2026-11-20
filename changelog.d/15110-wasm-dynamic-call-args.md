@@ -1,0 +1,1 @@
+`--target web`: a call through a closure or function value runs the callee with four or more arguments instead of evaluating to `undefined`, evaluates each argument once instead of twice, and evaluates to `undefined` instead of throwing when the callee returns nothing (#15098, #15102).

@@ -62,6 +62,7 @@ fn empty_fn(id: u32, name: &str, return_type: Type) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 

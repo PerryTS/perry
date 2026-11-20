@@ -43,6 +43,7 @@ fn compile_native_instance_call(
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     String::from_utf8(
         compile_module(

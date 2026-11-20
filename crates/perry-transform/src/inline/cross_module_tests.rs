@@ -19,6 +19,7 @@ fn graph_function(id: FuncId, dependencies: &[FuncId]) -> Function {
         was_plain_async: false,
         was_unrolled: false,
         is_strict: false,
+        construct_only: false,
     }
 }
 

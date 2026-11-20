@@ -528,7 +528,8 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                                 // Array instance methods called via NativeMethodCall
                                 "push" if !args.is_empty() => {
-                                    self.emit_frame_begin(func, 2);
+                                    let argc = 1 + args.len() as u32;
+                                    self.emit_frame_begin(func, argc);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -539,8 +540,10 @@ impl<'a> FuncEmitCtx<'a> {
                                             memory_index: 0,
                                         },
                                     ));
-                                    self.emit_store_arg(func, 1, &args[0]);
-                                    self.emit_memcall(func, "array_push", 2);
+                                    for (slot, arg) in (1..).zip(args) {
+                                        self.emit_store_arg(func, slot, arg);
+                                    }
+                                    self.emit_memcall(func, "array_push", argc);
                                     self.emit_frame_begin(func, 1);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);

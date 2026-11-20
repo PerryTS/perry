@@ -181,6 +181,7 @@ fn module_with_classes_and_params(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }],
         init_is_strict: false,
         init: Vec::new(),
@@ -398,6 +399,7 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         },
         is_static: false,
         kind: ClassComputedMemberKind::Method,
@@ -1229,6 +1231,7 @@ fn pod_layout_specialization_module() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -1277,6 +1280,7 @@ fn native_pod_view_specialization_module() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
         byte_end: 0,
@@ -7924,6 +7928,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
                     mutable_captures: vec![10],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: false,
                     is_async: false,
@@ -7964,6 +7969,7 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
                     mutable_captures: vec![10],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: false,
                     is_async: false,
@@ -8001,6 +8007,7 @@ fn abrupt_derived_classes() -> Vec<Class> {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     vec![derived]
 }
@@ -8141,6 +8148,7 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let module = module_with_classes_and_params(
         "abrupt_anonymous_object_constructor_arg.ts",
@@ -9149,6 +9157,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9171,6 +9180,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9335,6 +9345,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9357,6 +9368,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9437,6 +9449,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9459,6 +9472,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9561,6 +9575,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9583,6 +9598,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9648,6 +9664,7 @@ fn typed_i1_i32_predicate_module() -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9670,6 +9687,7 @@ fn typed_i1_i32_predicate_module() -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9784,6 +9802,7 @@ fn typed_i32_return_module(case: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
             Function {
                 id: 2,
@@ -9806,6 +9825,7 @@ fn typed_i32_return_module(case: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             },
         ],
         init_is_strict: false,
@@ -9927,6 +9947,7 @@ fn typed_f64_method_clone_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -9987,6 +10008,7 @@ fn typed_f64_i32_local_method_clone_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -10051,6 +10073,7 @@ fn typed_f64_method_negative_module(case: &str) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -10102,6 +10125,7 @@ fn typed_f64_receiver_method_function(id: u32, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -10234,6 +10258,7 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
                     decorators: Vec::new(),
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                 },
             ));
         }
@@ -10384,6 +10409,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                 mutable_captures,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -10525,6 +10551,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
                 mutable_captures,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -10598,6 +10625,7 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -10687,6 +10715,7 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let (arg2_ty, arg3_ty) = if case == "number_param" || case == "number_return" {
@@ -10780,6 +10809,7 @@ fn typed_string_method_clone_module(case: &str) -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -10839,6 +10869,7 @@ fn typed_i1_numeric_predicate_method_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -10980,6 +11011,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
                 mutable_captures,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -11076,6 +11108,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
                 mutable_captures,
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -11140,6 +11173,7 @@ fn scalar_method_summary_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     point.methods.push(Function {
         id: 101,
@@ -11170,6 +11204,7 @@ fn scalar_method_summary_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     module_with_classes_and_params(
@@ -11266,6 +11301,7 @@ fn scalar_method_field_write_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     counter.methods.push(Function {
         id: 111,
@@ -11305,6 +11341,7 @@ fn scalar_method_field_write_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let bump = || Expr::Call {
@@ -11431,6 +11468,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.functions[0].body = vec![
         Stmt::Let {
@@ -11524,6 +11562,7 @@ fn scalar_method_boolean_predicate_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module
 }
@@ -11651,6 +11690,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     flags.methods.push(Function {
         id: 111,
@@ -11689,6 +11729,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let arg_is_any = matches!(&arg_ty, Type::Any);
@@ -11846,6 +11887,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                 decorators: Vec::new(),
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             });
             module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare {
                 op: CompareOp::Gt,
@@ -11887,6 +11929,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                     decorators: Vec::new(),
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                 },
             ));
             module.classes[0].methods[method_idx].body =
@@ -11922,6 +11965,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         decorators: Vec::new(),
                         was_plain_async: false,
                         was_unrolled: false,
+                        construct_only: false,
                     },
                     is_static: false,
                     kind: ClassComputedMemberKind::Method,
@@ -15829,6 +15873,7 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     snapshot.methods.push(Function {
         id: 89551,
@@ -15845,6 +15890,7 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let module = module_with_classes_and_params(
         "issue_8955_this_method_snapshot.ts",
@@ -15888,6 +15934,7 @@ fn annotated_class_method_value_uses_generic_lookup() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let module = module_with_classes_and_params(
         "method_id_class_method_value.ts",

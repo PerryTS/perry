@@ -119,14 +119,26 @@ pub(crate) fn program_tls_is_local_exec(triple: &str, output_type: &str) -> bool
 /// process loads (`perry`'s `link/platform_cmd.rs` links it `-shared`)
 /// whatever the output kind, so its thread-locals have no fixed offset from
 /// the thread pointer, and local-exec relocations (`R_X86_64_TPOFF32`,
-/// `R_AARCH64_TLSLE_*`) cannot be linked `-shared`. Their runtime archives
-/// also use emulated TLS (`inprocess::optimize_emit::emulated_tls`), whose
-/// blocks only the runtime's accessors reach.
+/// `R_AARCH64_TLSLE_*`) cannot be linked `-shared`. OpenHarmony's runtime
+/// archives also use emulated TLS (`inprocess::optimize_emit::emulated_tls`),
+/// whose blocks only the runtime's accessors reach.
 fn elf_executable_target(triple: &str) -> bool {
     triple.contains("linux")
         && !triple.contains("android")
         && !triple.contains("ohos")
         && (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
+}
+
+/// Android (API 29, `android_api_level!`): the program is a `dlopen`ed shared
+/// object, so the block has no fixed offset from the thread pointer, but the
+/// runtime's thread-locals are native ELF ones (`tls-model=global-dynamic`), so
+/// the code names `PERRY_AGENT_PTRS` directly in the general-dynamic model
+/// (`runtime_decls::objects`): one TLS-descriptor resolve per activation
+/// ([`activation_slot_addr`]) instead of an accessor call (and, before API 29,
+/// an emulated-TLS lookup inside it) per site. The slots are never null for
+/// the same reason as on ELF executables (the block's static initializer).
+fn android_native_tls(triple: &str) -> bool {
+    triple.contains("android")
 }
 
 /// The image can address runtime TLS without a resolver call. Shared images
@@ -142,7 +154,9 @@ pub(crate) fn agent_ptr_access(ctx: &FnCtx<'_>) -> AgentPtrAccess {
         return AgentPtrAccess::Call;
     }
     let triple = ctx.target_triple;
-    if elf_executable_target(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get()) {
+    if (elf_executable_target(triple) && OUTPUT_IS_EXECUTABLE.with(|c| c.get()))
+        || android_native_tls(triple)
+    {
         return AgentPtrAccess::ExecutableTls;
     }
     if triple.starts_with("x86_64") && triple.contains("windows") {
@@ -589,7 +603,9 @@ console.log(any.size);
         let module = perry_hir::lower_module(&ast, "main.ts", "main.ts").unwrap();
         let mut opts = crate::expr::class_field_barrier_tests::ir_opts();
         // The accessor form: every slot read is one `perry_intrinsic_proto` call.
-        opts.target = Some("aarch64-linux-android".into());
+        // (OpenHarmony: a shared-object target that keeps the accessor; Android
+        // names the block directly in the general-dynamic TLS model.)
+        opts.target = Some("aarch64-unknown-linux-ohos".into());
         let ir = String::from_utf8(crate::compile_module(&module, opts).unwrap()).unwrap();
         // The lines of `body` that use register `reg` (not the one defining it).
         let uses = |body: &str, reg: &str| -> Vec<String> {

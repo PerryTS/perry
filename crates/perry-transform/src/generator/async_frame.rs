@@ -261,6 +261,7 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
         mutable_captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         ..
     } = closure
@@ -338,6 +339,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: true,
             was_unrolled: false,
+            construct_only: false,
         });
         m.init = vec![Stmt::Expr(Expr::Call {
             byte_end: 0,
@@ -491,6 +493,7 @@ mod tests {
                     mutable_captures: vec![],
                     captures_this: false,
                     captures_new_target: false,
+                    construct_only: false,
                     enclosing_class: None,
                     is_arrow: true,
                     is_async: false,

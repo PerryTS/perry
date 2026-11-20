@@ -49,6 +49,7 @@ fn probe_functions(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Vec<(Stri
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let ir = String::from_utf8(
         compile_module(

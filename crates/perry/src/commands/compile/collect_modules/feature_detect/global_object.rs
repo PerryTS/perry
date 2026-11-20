@@ -28,9 +28,11 @@ fn expression(expr: &Expr, sloppy: bool) -> bool {
             params,
             is_strict,
             is_arrow,
+            construct_only,
             ..
         } => {
-            let own_sloppy = !is_strict && (!is_arrow || sloppy);
+            // A function referenced only as a `new` callee gets a fresh `this`.
+            let own_sloppy = !is_strict && !construct_only && (!is_arrow || sloppy);
             return statements(body, own_sloppy)
                 || params.iter().any(|p| {
                     p.default
@@ -85,7 +87,10 @@ fn function(function: &Function, sloppy: bool) -> bool {
 }
 pub(super) fn may_escape(module: &Module) -> bool {
     statements(&module.init, false)
-        || module.functions.iter().any(|f| function(f, !f.is_strict))
+        || module
+            .functions
+            .iter()
+            .any(|f| function(f, !f.is_strict && !f.construct_only))
         || module.classes.iter().any(|class| {
             class
                 .extends_expr

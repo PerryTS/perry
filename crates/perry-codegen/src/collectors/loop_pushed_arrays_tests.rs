@@ -148,6 +148,7 @@ fn an_array_another_body_mentions_is_not_owned() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let mut got: Vec<u32> = loop_pushed_arrays(&m).owned.into_iter().collect();
     got.sort_unstable();

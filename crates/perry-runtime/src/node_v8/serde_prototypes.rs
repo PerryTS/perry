@@ -167,54 +167,88 @@ pub(super) unsafe fn attach(name: &str, constructor: f64) -> f64 {
 }
 
 #[cfg(test)]
-mod attach_reach_tests {
+mod tests {
     use super::*;
 
-    /// `attach` must install on the prototype that the constructor it is HANDED
-    /// exposes. If it does, then a receiver resolved from that same constructor
-    /// sees the methods, and the remaining question is only which object the
-    /// module namespace hands a TS program.
     #[test]
-    fn attach_installs_on_the_prototype_of_the_constructor_it_is_given() {
-        let _no_gc = crate::gc::GcSuppressScope::new();
-        unsafe {
-            let ctor = crate::object::bound_native_callable_export_value("v8", "Serializer");
-            let proto = crate::object::js_function_prototype_value_for_read(ctor);
-            let before = crate::object::method_call::spec_get_value(proto, b"writeHeader");
-            assert_eq!(
-                before.to_bits(),
-                crate::value::TAG_UNDEFINED,
-                "fixture: the method must not exist yet"
-            );
-            let returned = attach("Serializer", ctor);
-            assert_eq!(
-                returned.to_bits(),
-                ctor.to_bits(),
-                "attach returns its constructor"
-            );
-            let after = crate::object::method_call::spec_get_value(proto, b"writeHeader");
-            assert_ne!(
-                after.to_bits(),
-                crate::value::TAG_UNDEFINED,
-                "attach must install writeHeader on this constructor's prototype"
-            );
-            // The object a program sees as `v8.Serializer` is the one the
-            // module namespace resolves, which is NOT necessarily the value
-            // this helper mints.
-            let module = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
-                b"v8".as_ptr(),
-                2,
-            ) as i64);
-            let property = crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
-                b"Serializer".as_ptr(),
-                10,
-            ) as i64);
-            let from_namespace = crate::object::js_native_module_esm_export_value(module, property);
-            assert_eq!(
-                from_namespace.to_bits(),
-                ctor.to_bits(),
-                "the namespace value and bound_native_callable_export_value must be the same object,                  or attach writes a prototype no program reads"
-            );
+    fn serializer_instances_share_declared_methods_and_prototypes() {
+        crate::object::js_nm_install_v8();
+        let roots = crate::gc::RuntimeHandleScope::new();
+        let first = roots.root_nanbox_f64(js_v8_serializer_new(undefined()));
+        let second = roots.root_nanbox_f64(js_v8_serializer_new(undefined()));
+        let constructor = roots.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "v8",
+            "Serializer",
+        ));
+        let prototype = roots.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
+            constructor.get_nanbox_f64(),
+        ));
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(first.get_nanbox_f64()).to_bits(),
+            prototype.get_nanbox_u64()
+        );
+        for name in [
+            "writeHeader",
+            "writeValue",
+            "releaseBuffer",
+            "writeUint32",
+            "writeUint64",
+            "writeDouble",
+            "writeRawBytes",
+        ] {
+            let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let key = roots.root_string_ptr(key);
+            let read = |value| {
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_get_field_by_name(
+                        crate::value::js_nanbox_get_pointer(value) as *const ObjectHeader,
+                        key,
+                    )
+                })
+            };
+            let actual = read(first.get_nanbox_f64());
+            assert!(actual.is_pointer(), "{name} must be a real method value");
+            let method = roots.root_nanbox_f64(f64::from_bits(actual.bits()));
+            let other = read(second.get_nanbox_f64());
+            assert_eq!(method.get_nanbox_u64(), other.bits(), "{name}");
+            let declared = read(prototype.get_nanbox_f64());
+            assert_eq!(method.get_nanbox_u64(), declared.bits(), "{name}");
         }
+    }
+
+    #[test]
+    fn default_constructor_alias_uses_the_real_inheritance_chain() {
+        crate::object::js_nm_install_v8();
+        let roots = crate::gc::RuntimeHandleScope::new();
+        let value = unsafe {
+            super::super::serde_constructor("v8", "DefaultSerializer", std::ptr::null(), 0).unwrap()
+        };
+        let value = roots.root_nanbox_f64(value);
+        let child = roots.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "v8",
+            "DefaultSerializer",
+        ));
+        let parent = roots.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "v8",
+            "Serializer",
+        ));
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(child.get_nanbox_f64()).to_bits(),
+            parent.get_nanbox_u64()
+        );
+        let child_proto = roots.root_nanbox_f64(
+            crate::object::js_function_prototype_value_for_read(child.get_nanbox_f64()),
+        );
+        let parent_proto = roots.root_nanbox_f64(
+            crate::object::js_function_prototype_value_for_read(parent.get_nanbox_f64()),
+        );
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(value.get_nanbox_f64()).to_bits(),
+            child_proto.get_nanbox_u64()
+        );
+        assert_eq!(
+            crate::object::js_object_get_prototype_of(child_proto.get_nanbox_f64()).to_bits(),
+            parent_proto.get_nanbox_u64()
+        );
     }
 }

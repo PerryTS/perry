@@ -3,7 +3,9 @@
 
 use super::*;
 
+mod utf16_cursor;
 mod utf16_index;
+pub use utf16_cursor::js_string_utf16_unit_at_cursor;
 #[cfg(test)]
 pub(crate) use utf16_index::test_utf16_index_entries;
 pub(crate) use utf16_index::{prune_dead_utf16_indexes, scan_utf16_index_roots_mut};

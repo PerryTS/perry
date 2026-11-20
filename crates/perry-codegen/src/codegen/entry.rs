@@ -1251,6 +1251,7 @@ pub(super) fn compile_module_entry(
             fusible_uppercase_locals: main_native_facts.fusible_uppercase_locals().clone(),
             suffix_cursor_locals: main_native_facts.suffix_cursor_locals().clone(),
             suffix_cursors: std::collections::HashMap::new(),
+            utf16_cursors: std::collections::HashMap::new(),
             non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
             non_escaping_object_literal_used_fields: main_native_facts
                 .non_escaping_object_literal_used_fields()

@@ -795,6 +795,15 @@ impl LlFunction {
         slot
     }
 
+    /// An entry-block slot of `ty` initialized to `zeroinitializer`, so every
+    /// reachable use, however lazily it allocated the slot, reads zero first.
+    pub fn alloca_entry_zeroed(&mut self, ty: LlvmType) -> String {
+        let slot = self.alloca_entry(ty);
+        self.entry_allocas
+            .push(format!("  store {} zeroinitializer, ptr {}", ty, slot));
+        slot
+    }
+
     pub fn entry_init_call_ptr(&mut self, func_name: &str) -> String {
         let slot = self.alloca_entry(crate::types::PTR);
         let result_reg = format!("%r{}", self.reg_counter.next());

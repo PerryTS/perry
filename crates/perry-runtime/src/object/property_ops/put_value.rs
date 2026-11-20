@@ -720,7 +720,11 @@ unsafe fn table_first_append(
     let key = scope.root_nanbox_u64(atom);
     let t =
         crate::object::overflow::start_empty(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), live);
-    crate::object::overflow::install(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), t);
+    // Direct to the inner install: the out-of-line wrapper (overflow::install)
+    // would put a call on this hot first append.
+    let o = owner.get_raw_mut_ptr::<crate::ObjectHeader>();
+    let meta = crate::meta_read!(crate::meta_obj_from_storage!(o as *mut _, t));
+    crate::object::overflow::home::install_in::<false>(o as usize, meta, t);
     if (*t).length < (*t).capacity {
         crate::object::overflow::append_plain(
             t,

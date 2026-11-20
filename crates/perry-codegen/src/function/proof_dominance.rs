@@ -10,17 +10,13 @@ use std::collections::{HashMap, HashSet};
 impl LlFunction {
     /// Whether the existing i1 definition dominates the end of `use_block`.
     /// Unknown definitions and unreachable continuations refuse reuse.
-    pub(crate) fn proof_dominates_block_end(&self, proof: &str, use_block: usize) -> bool {
-        self.proof_dominates_block_end_with(proof, use_block, None)
-    }
-
-    /// [`Self::proof_dominates_block_end`] with `pending`, an edge the
-    /// builder adds only after the body is lowered: an open block (`from`,
-    /// still unterminated) that will branch to `to`. A body's activation start
-    /// (`expr::agent_ptr::ActivationBlock`) is one: every later block is
-    /// reached through it, so without its edge nothing after it is reachable
-    /// and every proof is refused.
-    pub(crate) fn proof_dominates_block_end_with(
+    ///
+    /// `pending` is an edge the builder adds only after the body is lowered:
+    /// an open block (`from`, still unterminated) that will branch to `to`.
+    /// A body's activation start (`expr::agent_ptr::ActivationBlock`) is one:
+    /// every later block is reached through it, so without its edge nothing
+    /// after it is reachable and every proof is refused.
+    pub(crate) fn proof_dominates_block_end(
         &self,
         proof: &str,
         use_block: usize,
@@ -128,15 +124,15 @@ mod tests {
         let proof = f.block_mut(1).unwrap().icmp_eq(I1, "true", "true");
         f.block_mut(1).unwrap().br(&labels[3]);
         f.block_mut(2).unwrap().br(&labels[3]);
-        assert!(f.proof_dominates_block_end(&proof, 1));
-        assert!(!f.proof_dominates_block_end(&proof, 2));
-        assert!(!f.proof_dominates_block_end(&proof, 3));
+        assert!(f.proof_dominates_block_end(&proof, 1, None));
+        assert!(!f.proof_dominates_block_end(&proof, 2, None));
+        assert!(!f.proof_dominates_block_end(&proof, 3, None));
         let joined = f
             .block_mut(3)
             .unwrap()
             .phi(I1, &[(&proof, &labels[1]), ("false", &labels[2])]);
-        assert!(f.proof_dominates_block_end(&joined, 3));
-        assert!(!f.proof_dominates_block_end("%missing", 3));
+        assert!(f.proof_dominates_block_end(&joined, 3, None));
+        assert!(!f.proof_dominates_block_end("%missing", 3, None));
     }
 
     #[test]
@@ -151,8 +147,8 @@ mod tests {
         f.block_mut(1)
             .unwrap()
             .cond_br("true", &labels[1], &labels[2]);
-        assert!(f.proof_dominates_block_end(&proof, 1));
-        assert!(f.proof_dominates_block_end(&proof, 2));
+        assert!(f.proof_dominates_block_end(&proof, 1, None));
+        assert!(f.proof_dominates_block_end(&proof, 2, None));
         // The invoke's unwind bypasses the definition in its normal continuation.
         f.block_mut(2)
             .unwrap()
@@ -162,8 +158,8 @@ mod tests {
         f.create_block("caught");
         // Builder labels carry a suffix; use an inline label to model EH exactly.
         f.block_mut(3).unwrap().emit_raw("caught:");
-        assert!(!f.proof_dominates_block_end(&normal, 3));
-        assert!(f.proof_dominates_block_end(&proof, 3));
+        assert!(!f.proof_dominates_block_end(&normal, 3, None));
+        assert!(f.proof_dominates_block_end(&proof, 3, None));
     }
 
     #[test]
@@ -178,10 +174,10 @@ mod tests {
         f.block_mut(0).unwrap().br(&labels[1]);
         let proof = f.block_mut(2).unwrap().icmp_eq(I1, "true", "true");
         f.block_mut(2).unwrap().br(&labels[3]);
-        assert!(!f.proof_dominates_block_end(&proof, 3));
+        assert!(!f.proof_dominates_block_end(&proof, 3, None));
         let pending = Some((labels[1].as_str(), labels[2].as_str()));
-        assert!(f.proof_dominates_block_end_with(&proof, 3, pending));
-        assert!(f.proof_dominates_block_end_with(&proof, 2, pending));
+        assert!(f.proof_dominates_block_end(&proof, 3, pending));
+        assert!(f.proof_dominates_block_end(&proof, 2, pending));
     }
 
     #[cfg(feature = "llvm-inprocess")]
