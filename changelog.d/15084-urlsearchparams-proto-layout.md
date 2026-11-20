@@ -1,0 +1,1 @@
+`URLSearchParams.prototype` lists its own keys in node's order (`constructor`, `size`, the WebIDL operations from `append` to `toString`, then `Symbol.toStringTag` before `Symbol.iterator`), and its operations are enumerable as in node, so `for...in` over an instance lists them (#12725).
