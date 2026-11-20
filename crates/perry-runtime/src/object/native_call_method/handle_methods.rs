@@ -20,15 +20,10 @@ unsafe fn dispatch_handle_proto_method(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    // Only do the (locked) side-table walk when a prototype was actually
-    // recorded for this handle — the overwhelmingly common case (fastify /
-    // axios handles with no user setPrototypeOf) skips it cheaply.
     crate::object::prototype_chain::object_static_prototype(handle_id)?;
     let key = crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
-    let resolved = crate::object::prototype_chain::resolve_inherited_field(
-        handle_id,
-        key as *const crate::StringHeader,
-    )?;
+    let key = key as *const crate::StringHeader;
+    let resolved = crate::object::prototype_chain::resolve_inherited_field(handle_id, key)?;
     let resolved_bits = resolved.bits();
     if (resolved_bits >> 48) != 0x7FFD {
         return None;
@@ -50,6 +45,113 @@ unsafe fn dispatch_handle_proto_method(
         crate::closure::JsThis::from_f64(object),
         args_ptr,
         args_len,
+    ))
+}
+
+/// Call an own callable property of a native handle (`res.writeHead = hook;
+/// res.writeHead(200)`) with `this` bound to the handle. `None` when the
+/// handle's bag holds no own callable under `method_name`.
+unsafe fn dispatch_handle_own_method(
+    object: f64,
+    handle_id: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let own = crate::object::handle_expando::handle_own_property_get(
+        handle_id as i64,
+        method_name.as_ptr(),
+        method_name.len(),
+    )?;
+    let bits = own.to_bits();
+    if (bits >> 48) != 0x7FFD {
+        return None;
+    }
+    let closure_ptr = (bits & crate::value::POINTER_MASK) as usize;
+    if closure_ptr == 0 || !crate::closure::is_closure_ptr(closure_ptr) {
+        return None;
+    }
+    let bound = crate::closure::clone_closure_rebind_this(bits, object);
+    Some(crate::closure::native_call_value_this(
+        f64::from_bits(bound),
+        crate::closure::JsThis::from_f64(object),
+        args_ptr,
+        args_len,
+    ))
+}
+
+/// The native method `method_name` of the handle `raw_ptr` (the method its
+/// prototype supplies), never an own property of the handle.
+unsafe fn dispatch_handle_native_method(
+    raw_ptr: usize,
+    object: f64,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // This is a handle, not a real memory pointer - dispatch to stdlib
+    if let Some(dispatch) = handle_method_dispatch() {
+        let r = dispatch(
+            raw_ptr as i64,
+            method_name.as_ptr(),
+            method_name.len(),
+            args_ptr,
+            args_len,
+        );
+        // Wall 10 — when the native handle dispatch doesn't recognise the
+        // method (returns `undefined`), the call may target a method that
+        // a framework attached via `Object.setPrototypeOf(handle, proto)`
+        // (Express's `res.send` / `req.accepts`, …). Walk the recorded
+        // handle prototype; if it yields a callable, invoke it with
+        // `this` bound to the handle so the method's internal
+        // `this.end(...)` / `this.statusCode = …` route back to us.
+        if r.to_bits() == crate::value::TAG_UNDEFINED
+            && !crate::object::http_handle_prototype::is_http_handle(raw_ptr)
+        {
+            if let Some(v) =
+                dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+            {
+                return v;
+            }
+        }
+        return r;
+    }
+    // No dispatcher registered: still try a setPrototypeOf'd method.
+    if let Some(v) = dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+    {
+        return v;
+    }
+    // Return JS `undefined`. Must be TAG_UNDEFINED (0x7FFC_..._0001); the
+    // bit pattern 0x7FF8_..._0001 a prior copy used is a signaling NaN (a
+    // JS number), which leaks out as a non-object and trips
+    // `js_iterator_result_validate`.
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// Bound-method VALUE dispatch on a native handle (`const orig = res.writeHead;
+/// res.writeHead = hook; orig.apply(res, a)`): the value read names the
+/// handle's native method, so invoking it runs that method and never
+/// re-resolves the name against the handle's own properties (which would
+/// find `hook` again). `None` for a receiver that is not a handle.
+pub(crate) unsafe fn try_dispatch_handle_method_value(
+    receiver: f64,
+    method_name_ptr: *const i8,
+    method_name_len: usize,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Option<f64> {
+    let jsval = JSValue::from_bits(receiver.to_bits());
+    if method_name_ptr.is_null() || method_name_len == 0 || !jsval.is_handle() {
+        return None;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(
+        method_name_ptr as *const u8,
+        method_name_len,
+    ))
+    .ok()?;
+    let raw_ptr = (jsval.bits() & crate::value::POINTER_MASK) as usize;
+    Some(dispatch_handle_native_method(
+        raw_ptr, receiver, name, args_ptr, args_len,
     ))
 }
 
@@ -75,46 +177,37 @@ pub(super) unsafe fn dispatch_handle(
     if jsval.is_reference() {
         let raw_ptr = (jsval.bits() & crate::value::POINTER_MASK) as usize;
         if jsval.is_handle() {
-            // This is a handle, not a real memory pointer - dispatch to stdlib
-            if let Some(dispatch) = handle_method_dispatch() {
-                let r = dispatch(
-                    raw_ptr as i64,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                    args_ptr,
-                    args_len,
-                );
-                // Wall 10 — when the native handle dispatch doesn't recognise the
-                // method (returns `undefined`), the call may target a method that
-                // a framework attached via `Object.setPrototypeOf(handle, proto)`
-                // (Express's `res.send` / `req.accepts`, …). Walk the recorded
-                // handle prototype; if it yields a callable, invoke it with
-                // `this` bound to the handle so the method's internal
-                // `this.end(...)` / `this.statusCode = …` route back to us.
-                if r.to_bits() == crate::value::TAG_UNDEFINED {
-                    if let Some(v) = dispatch_handle_proto_method(
-                        raw_ptr,
-                        object,
-                        method_name,
-                        args_ptr,
-                        args_len,
-                    ) {
-                        return Some(v);
-                    }
-                }
-                return Some(r);
-            }
-            // No dispatcher registered: still try a setPrototypeOf'd method.
+            // `handle.name(args)` is [[Get]] then [[Call]]: an own callable in
+            // the handle's bag (`res.writeHead = hook`) shadows the native
+            // method, called with `this` = the handle.
             if let Some(v) =
-                dispatch_handle_proto_method(raw_ptr, object, method_name, args_ptr, args_len)
+                dispatch_handle_own_method(object, raw_ptr, method_name, args_ptr, args_len)
             {
                 return Some(v);
             }
-            // Return JS `undefined`. Must be TAG_UNDEFINED (0x7FFC_..._0001); the
-            // bit pattern 0x7FF8_..._0001 a prior copy used is a signaling NaN (a
-            // JS number), which leaks out as a non-object and trips
-            // `js_iterator_result_validate`.
-            return Some(f64::from_bits(crate::value::TAG_UNDEFINED));
+            if crate::object::http_handle_prototype::is_http_handle(raw_ptr) {
+                let key = crate::string::js_string_from_bytes(
+                    method_name.as_ptr(),
+                    method_name.len() as u32,
+                ) as *const crate::StringHeader;
+                let value = crate::object::http_handle_prototype::field(raw_ptr, key)
+                    .unwrap_or_else(JSValue::undefined);
+                let value = root_scope.root_nanbox_f64(f64::from_bits(value.bits()));
+                let args = refreshed_args();
+                return Some(crate::closure::native_call_value_this(
+                    value.get_nanbox_f64(),
+                    crate::closure::JsThis::from_f64(object),
+                    args.as_ptr(),
+                    args.len(),
+                ));
+            }
+            return Some(dispatch_handle_native_method(
+                raw_ptr,
+                object,
+                method_name,
+                args_ptr,
+                args_len,
+            ));
         }
 
         // Guard: null pointer (raw_ptr == 0) means null POINTER_TAG (0x7FFD_0000_0000_0000)
@@ -148,8 +241,8 @@ pub(super) unsafe fn dispatch_handle(
         // callback-bearing + immutable methods to the shared helper before the
         // GC_TYPE_ARRAY check below (which only matches plain arrays).
         // Issues #2797 / #2798 / #2799.
-        if crate::typedarray::lookup_typed_array_kind(raw_ptr).is_some() {
-            let ta = raw_ptr as *mut crate::typedarray::TypedArrayHeader;
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw_ptr).is_some() {
+            let ta = raw_ptr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
             if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                 return Some(r);
             }
@@ -197,7 +290,7 @@ pub(super) unsafe fn dispatch_handle(
             let arr_gc_hdr =
                 (raw_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
             let arr_obj_type = (*arr_gc_hdr).obj_type;
-            if arr_obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(arr_obj_type)
                 || arr_obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
                 // A user-stored callable own property on the array
@@ -805,8 +898,16 @@ pub(super) unsafe fn dispatch_handle(
         // Validate GcHeader to confirm this is actually an object before reading class_id
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
-            if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
+        if crate::gc_type_is_object!((*gc_header).obj_type) {
+            // The inherited property predicates run on the namespace object
+            // itself (`buffer.hasOwnProperty(k)`, #13963); its module's bucket
+            // has no arm for them.
+            if (*obj).class_id == NATIVE_MODULE_CLASS_ID
+                && !matches!(
+                    method_name,
+                    "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
+                )
+            {
                 // #853: the `is_valid_obj_ptr` guard that used to live after
                 // this return was dead — the early return claims the path
                 // unconditionally. Removed.
@@ -856,7 +957,7 @@ pub(super) unsafe fn dispatch_handle(
                 ));
             }
             if let Some(result) =
-                crate::node_test::dispatch_object_method((*obj).class_id, method_name)
+                crate::node_test_hook_slots::dispatch_object_method((*obj).class_id, method_name)
             {
                 return Some(result);
             }
@@ -893,10 +994,7 @@ pub(super) unsafe fn dispatch_handle(
             if (*obj).class_id == crate::regex::REGEXP_STRING_ITERATOR_CLASS_ID
                 && crate::collection_iter_object::is_intrinsic_iterator_method(method_name)
             {
-                return Some(crate::regex::dispatch_regexp_string_iterator_method(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                ));
+                return crate::regex::hooked_iterator_method(obj as *mut ObjectHeader, method_name);
             }
             // #2874: lazy iterator-helper objects (`Iterator.from(x)` and the
             // chain it produces: `.map`/`.filter`/`.take`/`.drop`/`.flatMap`/
@@ -910,33 +1008,17 @@ pub(super) unsafe fn dispatch_handle(
                 ));
             }
 
-            // #2874: an iterator-helper method (`map`/`filter`/`take`/…) on a
-            // RAW iterator object — a generator, the runtime array/Map/Set
-            // iterators, or any `{ next() }`. Node resolves these on
-            // `Iterator.prototype`; wrap the iterator in an identity helper and
-            // dispatch there. Skipped when the object defines the name as an own
-            // callable field (the user's own method wins). Runs before the
-            // own-field scan so the cheap has-own check below stays in sync.
-            if crate::iterator_helpers::is_iterator_helper_method(method_name) {
-                let has_own = {
-                    let mk = crate::string::js_string_from_bytes(
-                        method_name.as_ptr(),
-                        method_name.len() as u32,
-                    );
-                    let fv = js_object_get_field_by_name(obj as *const _, mk);
-                    let fp =
-                        crate::value::js_nanbox_get_pointer(f64::from_bits(fv.bits())) as usize;
-                    !fv.is_undefined() && crate::closure::is_closure_ptr(fp)
-                };
-                if let Some(result) = crate::iterator_helpers::maybe_dispatch_helper_on_iterator(
-                    obj as *mut ObjectHeader,
-                    method_name,
-                    args_ptr,
-                    args_len,
-                    has_own,
-                ) {
-                    return Some(result);
-                }
+            // #2874: an iterator-helper method (`map`/`filter`/`take`/…) on an
+            // ordinary object. The builtin runs directly only when the name
+            // resolves to it; an override falls through to the scans below.
+            if let Some(result) = crate::iterator_helpers::maybe_dispatch_helper_on_iterator(
+                obj as *mut ObjectHeader,
+                method_name,
+                args_ptr,
+                args_len,
+                false,
+            ) {
+                return Some(result);
             }
 
             // Scan object fields for a callable property (closure stored via IndexSet)
@@ -948,7 +1030,7 @@ pub(super) unsafe fn dispatch_handle(
                     let key_count = keys_view.count() as usize;
                     if key_count <= 65536 {
                         if let Some(slot) = super::own_slot::find_method_slot(
-                            keys,
+                            keys_view,
                             key_count as u32,
                             method_name.as_bytes(),
                         ) {

@@ -56,7 +56,7 @@ use super::{
 pub(crate) fn run_timers_phase() -> i32 {
     // First turn of the codegen event loop — `nodeTiming.loopStart` stops being
     // the "not started" sentinel here.
-    crate::perf_hooks::note_event_loop_start();
+    crate::perf_hook_slots::note_event_loop_start();
     if in_timer_callback_dispatch() {
         return 0;
     }
@@ -125,6 +125,12 @@ pub(crate) fn run_timers_phase() -> i32 {
 /// round trip has (`store::insert_pending`). The phase runs BEFORE the check
 /// phase, so an immediate queued by one of these callbacks runs in the same
 /// iteration — measured on Node 26.5.1, stable 5/5, delta exactly one turn.
+///
+/// Out of line: it is called from three timer-tick entries that are inlined
+/// into further settle helpers. Inlined, its body is copied into each of
+/// them, and whether LLVM does that depends on the visiting order inside the
+/// timer/callback call cycle, not on the code.
+#[inline(never)]
 pub(crate) fn run_poll_callbacks() -> i32 {
     if in_timer_callback_dispatch() {
         return 0;
@@ -151,6 +157,10 @@ pub(crate) fn run_check_phase() -> i32 {
     if in_timer_callback_dispatch() {
         return 0;
     }
+    // An EOF read behind data waits for the end of the next check phase to
+    // begin, after the immediates its data handler queued (`defer_eof`).
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::check_phase_begin();
     let horizon = store::with_current(|timers| timers.seq_horizon());
     let mut fired = 0;
     loop {
@@ -163,7 +173,9 @@ pub(crate) fn run_check_phase() -> i32 {
     // #input: dispatch buffered keyboard input on `process.stdin` at the same
     // safe event-loop point the callback phase always used. The reader thread
     // notifies on each keypress; this is a cheap empty-buffer check otherwise.
-    crate::os::pump_process_stdin();
+    crate::os_hook_slots::pump_process_stdin();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::check_phase_end();
     if fired != 0 && crate::promise::mt_profile_enabled() {
         use std::sync::atomic::Ordering;
         PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);
@@ -208,7 +220,7 @@ fn run_callback_entry(entry: Entry) {
     let scope = crate::gc::RuntimeHandleScope::new();
     // The popped entry no longer owns the timer's state (an interval's re-armed
     // copy may): this scope does for the whole dispatch.
-    if let Some(state) = crate::async_hooks::resource_state::get(async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(async_id) {
         scope.root_raw_mut_ptr(state);
     }
     let js_handle = scope.root_nanbox_f64(js_handle);
@@ -217,7 +229,11 @@ fn run_callback_entry(entry: Entry) {
     let previous = crate::async_context::enter_context(&context);
     let mut previous = previous;
     let previous_roots = crate::async_context::root_snapshot(&scope, &previous);
-    crate::async_hooks::before_scheduled(async_id, trigger_async_id, js_handle.get_nanbox_f64());
+    crate::async_hook_slots::before_scheduled(
+        async_id,
+        trigger_async_id,
+        js_handle.get_nanbox_f64(),
+    );
 
     enter_timer_callback_dispatch();
     call_timer_callback_entry(&scope, id, callback, &args, &js_handle);
@@ -227,11 +243,11 @@ fn run_callback_entry(entry: Entry) {
     crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
     leave_timer_callback_dispatch();
 
-    crate::async_hooks::after(async_id);
+    crate::async_hook_slots::after(async_id);
     // An interval keeps its resource alive across ticks; a one-shot timer's is
     // destroyed once it has run.
     if class != Class::Interval {
-        crate::async_hooks::destroy_scheduled(async_id);
+        crate::async_hook_slots::destroy_scheduled(async_id);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut previous, &previous_roots);
     crate::async_context::restore_context(previous);

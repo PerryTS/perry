@@ -1,0 +1,1 @@
+The collect_modules glob tests run program-wide optional-feature selection after collecting, as the compile pipeline does since closed CommonJS feature selection moved it out of per-module collection; the aliased fs/promises glob test passes again and the unrelated-glob test checks a selection that actually ran.

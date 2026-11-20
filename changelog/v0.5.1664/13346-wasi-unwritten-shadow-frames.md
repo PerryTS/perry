@@ -1,0 +1,1 @@
+On WASI, a function whose shadow-stack frame no slot write reaches no longer pushes or pops that frame. Specialized integer entries (for example recursive `fib`) were paying two runtime calls per invocation for a frame that rooted nothing: 05_fibonacci runs 4.8x fewer instructions (45.1 G to 9.5 G). Native IR is unchanged.

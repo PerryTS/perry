@@ -20,7 +20,30 @@ pub extern "C" fn js_parse_int(str_ptr: *const StringHeader, radix: f64) -> f64 
         let len = (*str_ptr).byte_len as usize;
         let data = (str_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
         let bytes = std::slice::from_raw_parts(data, len);
+        parse_int_bytes(bytes, radix)
+    }
+}
 
+/// `parseInt(value, radix)` from the argument VALUE: ToString(value), then
+/// the same parse. A short (inline) string is parsed from its own bytes; the
+/// heap copy `js_string_coerce` makes of one is the same bytes, so the answer
+/// is identical and the copy (allocation + intern lookup) is not made. Every
+/// other value takes `js_string_coerce` exactly as before.
+#[no_mangle]
+pub extern "C" fn js_parse_int_value(value: f64, radix: f64) -> f64 {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if jsval.is_short_string() {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let n = jsval.short_string_to_buf(&mut buf);
+        return parse_int_bytes(&buf[..n], radix);
+    }
+    js_parse_int(js_string_coerce(value), radix)
+}
+
+/// The parse of `parseInt` over a string's WTF-8 bytes (ECMA-262 19.2.5
+/// steps 2-16; step 1, ToString, is the caller's).
+fn parse_int_bytes(bytes: &[u8], radix: f64) -> f64 {
+    {
         // Perry stores lone UTF-16 surrogates as WTF-8. `parseInt` only
         // inspects the leading digit run, so an invalid UTF-8 sequence after
         // that run is a terminator, not a reason to reject the whole string.
@@ -446,6 +469,14 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
     if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
         return value;
     }
+    number_coerce_non_plain(value)
+}
+
+// Keep the primitive identity path free of the coercion body's callee-saved
+// registers and stack frame. The boxed path keeps the same ToPrimitive order
+// and rooting; its recursive coercions re-enter the public classifier.
+#[inline(never)]
+extern "C" fn number_coerce_non_plain(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
 
     if jsval.is_undefined() {
@@ -523,20 +554,10 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         } else {
             f64::NAN
         }
-    } else if jsval.is_int32() {
-        // A constructor ClassRef uses the INT32 tag but is a Function object:
-        // ToNumber must run ToPrimitive(number), not expose its class-id
-        // payload as a numeric value (#9101).
-        if crate::object::class_ref_id(value).is_some() {
-            let primitive = unsafe { crate::value::to_string::class_ref_to_primitive(value, 1) };
-            return js_number_coerce(primitive);
-        }
-        // Plain INT32 NaN-boxed value → convert to f64.
-        jsval.as_int32() as f64
     } else if jsval.is_bigint() {
         // BigInt → number conversion
         let ptr = jsval.as_bigint_ptr();
-        crate::bigint::js_bigint_to_f64(ptr)
+        crate::bigint_hooks::js_bigint_to_f64(ptr)
     } else if jsval.is_handle() {
         // HANDLE_TAG carries a native registry id, not a heap pointer. It is
         // still a JavaScript object and follows ToPrimitive/ToNumber, but
@@ -609,7 +630,7 @@ pub extern "C" fn js_number_coerce(value: f64) -> f64 {
         // first, with `this` = the typed array and abrupt completions
         // propagating (test262 ctors/object-arg/throws-setting-obj-*). With
         // no patch, fall through to the generic path (join + ToNumber).
-        if crate::typedarray::lookup_typed_array_kind(id as usize).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(id as usize).is_some() {
             if let Some(p) = unsafe {
                 crate::typedarray_props::typed_array_own_to_primitive_number(id as usize, value)
             } {
@@ -708,21 +729,13 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
         if ptr.is_null() {
             "0".to_string()
         } else {
-            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
             return str_ptr as *mut StringHeader;
         }
     } else if jsval.is_reference() {
         // An object reference (heap object or native handle, #12540).
         // Delegate to js_jsvalue_to_string which handles arrays via join(",") and objects.
         return crate::value::js_jsvalue_to_string(value);
-    } else if jsval.is_int32() {
-        // Constructor ClassRefs share the INT32 tag but are Function objects.
-        // Delegate so String(C) performs ToPrimitive(string) instead of
-        // exposing the numeric class-id payload (#9101).
-        if crate::object::class_ref_id(value).is_some() {
-            return crate::value::js_jsvalue_to_string(value);
-        }
-        jsval.as_int32().to_string()
     } else {
         // Regular number — delegate to `js_number_to_string`: its small-int
         // cache answers `String(i)` for 0..255 with an interned longlived
@@ -741,7 +754,7 @@ pub extern "C" fn js_string_coerce(value: f64) -> *mut StringHeader {
 #[no_mangle]
 pub extern "C" fn js_template_string_coerce(value: f64) -> *mut StringHeader {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_reference() || (jsval.is_int32() && crate::object::class_ref_id(value).is_some()) {
+    if jsval.is_reference() {
         return crate::value::to_string::js_jsvalue_to_string_impl(value, true);
     }
     js_string_coerce(value)
@@ -977,5 +990,56 @@ pub extern "C" fn js_number_is_safe_integer(value: f64) -> f64 {
         f64::from_bits(NB_TAG_TRUE)
     } else {
         f64::from_bits(NB_TAG_FALSE)
+    }
+}
+
+#[cfg(test)]
+mod parse_int_value_tests {
+    use super::*;
+
+    fn short(text: &str) -> f64 {
+        let value = JSValue::try_short_string(text.as_bytes()).expect("fits inline");
+        f64::from_bits(value.bits())
+    }
+
+    fn heap(text: &str) -> f64 {
+        let ptr = crate::string::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        crate::value::js_nanbox_string(ptr as i64)
+    }
+
+    fn same(a: f64, b: f64) -> bool {
+        (a.is_nan() && b.is_nan()) || a.to_bits() == b.to_bits()
+    }
+
+    /// The value entry answers exactly what ToString + the pointer entry
+    /// answer, for inline strings, heap strings and non-strings.
+    #[test]
+    fn parse_int_value_equals_coerce_then_parse() {
+        let texts = [
+            "", "7", "42", "-12", "+9", "  31", "0x1f", "0X1F", "12px", "z", "1e3", "-0", "\u{a0}5",
+        ];
+        let radices = [0.0, 10.0, 16.0, 2.0, 36.0, 1.0, 37.0, f64::NAN];
+        for text in texts {
+            for radix in radices {
+                let expected = js_parse_int(js_string_coerce(heap(text)), radix);
+                assert!(
+                    same(js_parse_int_value(heap(text), radix), expected),
+                    "heap {text:?} {radix}"
+                );
+                if JSValue::try_short_string(text.as_bytes()).is_some() {
+                    assert!(
+                        same(js_parse_int_value(short(text), radix), expected),
+                        "short {text:?} {radix}"
+                    );
+                }
+            }
+        }
+        for value in [12.75, -3.5, f64::NAN, 1e21] {
+            let expected = js_parse_int(js_string_coerce(value), 10.0);
+            assert!(
+                same(js_parse_int_value(value, 10.0), expected),
+                "number {value}"
+            );
+        }
     }
 }

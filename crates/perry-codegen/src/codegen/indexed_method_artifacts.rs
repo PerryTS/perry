@@ -30,7 +30,7 @@ pub(super) struct IndexedMethodArtifactsCtx<'a> {
     pub func_synthetic_arguments: &'a HashSet<u32>,
     pub module_boxed_vars: &'a HashSet<u32>,
     pub closure_rest_params: &'a HashMap<u32, usize>,
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }
 
 pub(super) fn compile_indexed_method_clones(
@@ -85,6 +85,7 @@ pub(super) fn compile_indexed_method_clones(
         false,
         false,
         false,
+        None,
     )
     .with_context(|| {
         format!(
@@ -125,6 +126,7 @@ pub(super) fn compile_indexed_method_clones(
             true,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -170,6 +172,7 @@ pub(super) fn compile_indexed_method_clones(
             false,
             false,
             false,
+            None,
         )
         .with_context(|| {
             format!(
@@ -212,6 +215,7 @@ pub(super) fn compile_indexed_method_clones(
         false,
         false,
         false,
+        None,
     )
     .with_context(|| {
         format!(

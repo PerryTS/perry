@@ -488,5 +488,5 @@ pub extern "C" fn js_ads_request_consent() -> *mut perry_ffi::Promise {
 // `cargo test -p perry-ext-ads` (no stdlib in the link graph)
 // would fail to link, matching every other promise-based
 // `perry-ext-*` wrapper (bcrypt, argon2, fetch, google-auth, …).
-// The smoke test under `test-files/test_ads_compile_smoke.ts`
+// The smoke test under `tests/fixtures/programs/test_ads_compile_smoke.ts`
 // exercises the surface end-to-end against the linked binary.

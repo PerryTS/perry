@@ -6,12 +6,10 @@
 //! the frames it abandons; the catching landing pad pops their entries, so the
 //! counter cannot leak one level per caught throw (#5591).
 
-use std::cell::RefCell;
-
-crate::perry_thread_local! {
-    static CALL_METHOD_DEPTH: RefCell<crate::exception::CatchStack<()>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static CALL_METHOD_DEPTH: crate::exception::marks::CatchStackKey<()> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.call_method);
 const MAX_CALL_METHOD_DEPTH: usize = 512;
 
 pub(super) struct CallMethodDepthGuard {
@@ -60,6 +58,13 @@ impl Drop for CallMethodDepthGuard {
 pub(crate) fn call_method_depth_unwind_to(sp: usize) {
     CALL_METHOD_DEPTH.with(|d| {
         d.borrow_mut().unwind_to(sp);
+    });
+}
+
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn call_method_depth_restore_depth(depth: usize) {
+    CALL_METHOD_DEPTH.with(|d| {
+        d.borrow_mut().restore_depth(depth);
     });
 }
 

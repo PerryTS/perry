@@ -1,0 +1,1560 @@
+//! Escaping tokens: what an escape publishes (classes, function instances, properties) and the hard markers it raises.
+
+use super::*;
+
+impl Model {
+    /// Escapes `t`, and whether that took effect: a stand-in published
+    /// onward does not escape (`escape`), so only an escape that took
+    /// effect is a change of a unit's contract check (DECISIONS 180).
+    pub fn escape_changed(&mut self, t: Tok, reason: u32) -> bool {
+        if self.is_escaped(t) {
+            // The ledger's root set: this root escapes `t` again.
+            if let Some(l) = self.ledger.as_mut() {
+                l.again(t, reason, std::panic::Location::caller());
+            }
+            return false;
+        }
+        self.escape(t, reason);
+        self.is_escaped(t)
+    }
+
+    #[track_caller]
+    pub fn escape(&mut self, t: Tok, reason: u32) {
+        if self.ledger.is_none() {
+            return self.escape_at(t, reason);
+        }
+        let again = self.is_escaped(t);
+        let Some(l) = self.ledger.as_mut() else {
+            return self.escape_at(t, reason);
+        };
+        if l.dropped(std::panic::Location::caller(), t, true) {
+            return;
+        }
+        let saved = l.enter_escape(t, reason, std::panic::Location::caller());
+        if again {
+            // The ledger's root set: another root escapes `t` again.
+            let r = l.cur;
+            l.again_root(t, r);
+        }
+        self.escape_at(t, reason);
+        if let Some(l) = self.ledger.as_mut() {
+            l.leave(saved);
+        }
+    }
+
+    fn escape_at(&mut self, t: Tok, reason: u32) {
+        if let Some(c) = self.cur_native_call {
+            let region = self.calls[c as usize].region;
+            let ret = self.calls[c as usize].ret;
+            self.raise_top(
+                region,
+                ret,
+                "a native hands a value to unknown code, which may throw",
+            );
+        }
+        #[cfg(test)]
+        if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
+            return;
+        }
+        // DECISIONS 225: unknown code may call an escaped function.
+        if self.act.is_some() {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                self.activate(f, "escape");
+            }
+        }
+        if self.diagnostic.is_none() {
+            return self.escape_body(t, reason);
+        }
+        let first = self.diagnostic_escape_begin(t, reason);
+        self.escape_body(t, reason);
+        self.diagnostic_escape_end(t, first);
+    }
+
+    fn escape_body(&mut self, t: Tok, reason: u32) {
+        if t == TOP {
+            return;
+        }
+        // A value reaches unknown code: unknown code exists and holds the
+        // realm (`hold_realm`).
+        if crate::unksrc::on() {
+            let why = format!(
+                "{} [tok {t} {:?}]",
+                self.reasons[reason as usize], self.toks[t as usize]
+            );
+            crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
+            if !self.realm_held {
+                crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
+            }
+        }
+        if !self.realm_held && self.prov.is_some() {
+            self.why_hold_r("escape", u32::MAX, Some(t), reason);
+        }
+        if self.keysnap.is_some() && !self.realm_held {
+            self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
+            self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));
+        }
+        if !self.realm_held {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            self.hold_realm(r);
+        }
+        // Unknown code given the Function constructor may call it, and ⊤
+        // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
+        // the program is closed, and no native returns the constructor; the
+        // token enters a value only as the global `Function`, a function's
+        // `constructor` (a computed key that may be it included), or here.
+        // Whole program under the closed world (owner 2026-11-14: no eval or
+        // dynamic code), the unknown code that holds it is program code, whose
+        // calls of it are the program's own call sites (E14), or the runtime,
+        // which never calls it: holding it runs nothing. Per unit, another
+        // unit's code may call it; an unseen module is outside the closed
+        // world. (R-GLOBAL, owner 2026-11-18: only program stores write a
+        // global; interpreted code that runs writes any.)
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+            && (self.unit_mode || self.unseen_module_runs)
+        {
+            crate::builtins::interpreted_code_runs(self);
+        }
+        // Another unit's function the census broke, forwarded where no
+        // contract describes it: its owner already lets unknown code call it
+        // (any receiver, any arguments, DECISIONS 209), so its leaving tells
+        // nothing more, and no class it is a member of leaves with it
+        // (DECISIONS 212).
+        if let TokKind::Func(f, _) = self.toks[t as usize] {
+            let fi = &self.funcs[f as usize];
+            if fi.func_id == u32::MAX
+                && !self.broken_fns.is_empty()
+                && self.broken_fns.contains(&format!("fn:{}", fi.name))
+                && self.reasons[reason as usize] == crate::gen::UNDESCRIBED
+            {
+                return;
+            }
+        }
+        if let Some(&old) = self.escaped.get(&t) {
+            let contract = |m: &Self, r: u32| {
+                m.pub_reason == Some(r)
+                    || m.field_fn_reason == Some(r)
+                    || m.closed_pub_reason == Some(r)
+            };
+            if contract(self, old) && !contract(self, reason) {
+                if let TokKind::Func(f, _) = self.toks[t as usize] {
+                    // DECISIONS 212: a contract function that left through
+                    // its contract only and now also through no contract (a
+                    // value no contract describes, DECISIONS 203; unknown
+                    // code) is called by that code with any receiver and
+                    // any arguments, which no unit publishes: its `this` and
+                    // parameters take ⊤ beside what the contract gave them.
+                    if self.contract_fns.contains(&f) && self.funcs[f as usize].func_id != u32::MAX
+                    {
+                        self.escaped.insert(t, reason);
+                        if !self.funcs[f as usize].lexical_this {
+                            self.escape_this(t, reason);
+                        }
+                        self.escape_fn_params(t, reason);
+                    }
+                    // DECISIONS 210: one that left with its properties
+                    // (`escape_props`): that code may construct it, which no
+                    // unit publishes (`ctor_runs`).
+                    if self.props_escaped.contains_key(&t) {
+                        self.construct_unknown(t, f, reason);
+                    }
+                }
+            }
+            return;
+        }
+        // Another unit's class, instance, prototype or function (a
+        // stand-in) published onward leaves with its owner's contract, as a
+        // result forwards it (DECISIONS 79/104; DECISIONS 120: every
+        // publication): the next unit reads it through that contract,
+        // nothing of this unit leaves with it, and it is no census report
+        // of this unit. What this unit stores into it is (`Gen::reports`).
+        // A closed contract's users are known to its owner: it escapes.
+        // Interpreted code would hold it beyond any contract (decision 150).
+        if self.interp_free
+            && self.dyn_eval.is_none()
+            && (self.pub_reason == Some(reason) || self.closed_pub_reason == Some(reason))
+            && !self.is_cell_arr(t)
+            && self.stand_in(t)
+        {
+            return;
+        }
+        // DECISIONS 174: another unit's value read through cell `thrown`
+        // reaches interpreted code as that unit threw it. The first unit to
+        // throw it escaped it (each thrower sinks what it throws), and that
+        // is its write; the others re-escaped it, each publishing ⊤ for
+        // what it reaches (opencode: every unit ⊤ for the ~210 arrays the
+        // program throws, 27M cell writes in round 3).
+        if self.thrown_reason == Some(reason) && self.thrown_in.contains(&t) && self.stand_in(t) {
+            return;
+        }
+        if self.closed_pub_reason == Some(reason) {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                if self.closed_params.contains_key(&f) {
+                    if self.closed_pub.insert(t) {
+                        self.escape_fn_params(t, reason);
+                    }
+                    return;
+                }
+            }
+        }
+        // DECISIONS 210: a function of this unit published through its
+        // contract (`contract_fns`; an export, a published literal's field,
+        // a contract result): its code is the contract (markers on its
+        // parameters, any receiver), and its own properties leave with it
+        // (`escape_props`), all but `prototype`: a reader reaches that only
+        // as the owner's published `new <f>` layout's (`foreign_ctor`), a
+        // store into it or a read of it before the layout exists is its
+        // census report (`fn_touched`). So the instances this unit
+        // constructs keep their chain, as a published class's do.
+        if self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason) {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                if self.contract_fns.contains(&f) && self.funcs[f as usize].func_id != u32::MAX {
+                    self.mark_use(t, crate::model::MARK_ESCAPE);
+                    self.mark_escaped(t, reason);
+                    self.rel(|| format!("escaped {t}"));
+                    // Its own properties are read by code no contract
+                    // describes (DECISIONS 212).
+                    let rp = self.beyond_contract(reason);
+                    self.escape_props(t, rp);
+                    if !self.funcs[f as usize].lexical_this {
+                        self.escape_this(t, reason);
+                    }
+                    self.escape_fn_params(t, reason);
+                    return;
+                }
+            }
+        }
+        // A builtin prototype as the operand of a compiled construct the
+        // model does not follow (`Gen::fail_closed`) may get any key written
+        // (`fnproto_write` fails closed). The runtime's own operations and
+        // callbacks are not that: they never write the intrinsics, and a
+        // compiled function called from unknown code sees ⊤ parameters, whose
+        // writes `store_into` records.
+        if self.array_member_write.is_none()
+            && t != TOP
+            && self.tok_on_array_chain(t)
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_array_member_write(t, None, None, &what);
+        }
+        if (self.fnproto_write.is_none() || self.fnproto_borrow_write.is_none())
+            && matches!(self.toks[t as usize], TokKind::ObjectProto)
+            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            self.note_fnproto_write(t, None, &what);
+        }
+        if matches!(
+            self.toks[t as usize],
+            TokKind::ObjectProto | TokKind::NativeProto(..)
+        ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
+        {
+            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
+            crate::builtins::note_native_write(self, t, None, &what);
+            if let Some(s) = self.shared_of(t) {
+                self.note_shared(SharedWrite::Unmodeled(s));
+            }
+        }
+        // The global object given to unknown code puts ⊤ in reach of the
+        // program's stores into ⊤ (`global_in_top`): each is recorded with
+        // its own key, a computed one under every key (`written_by`). It is
+        // no write of the global object under any key: whole program, the
+        // unknown code that holds it is program code, whose stores into ⊤
+        // those are, or the runtime's own operations, which write no global
+        // by an arbitrary name. Dynamic code records its own any-key write
+        // (`interpreted_code_runs`), as does an unseen module.
+        // Owner decision 2026-11-18 (R-GLOBAL, under the 2026-11-14 closed
+        // world: no eval or dynamic code): no built-in or native operation
+        // writes an arbitrary global name.
+        if builtins::global_object(self, t) {
+            crate::builtins::note_global_in_top(self);
+            self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
+                BuiltinNs::GlobalThis,
+            )));
+        }
+        // Per unit, unknown code includes the other units' code: a
+        // runtime-owned object escaping reaches code that holds it as ⊤, and
+        // that code's stores into ⊤ may land in it (`units::shared_closure`).
+        // A value contract names one instead (`ValueContract::shared`): its
+        // readers hold it, nothing escapes. The runtime's own code never
+        // writes one (above). One reached along an escaped value's prototype
+        // chain is not given: a store into ⊤ is no store into a builtin
+        // prototype, as whole-program facts hold of ⊤ from unknown code. The
+        // global object takes no part: escaped, it already puts ⊤ in reach
+        // of stores into ⊤ (`global_in_top`).
+        if self.chain_escape && builtins::builtin_function(self, t) {
+            return;
+        }
+        if !self.chain_escape {
+            if let Some(s) = self
+                .shared_of(t)
+                .filter(|_| !builtins::global_object(self, t))
+            {
+                if self.explain && !self.shared_out.contains(&SharedWrite::Handed(s.clone())) {
+                    eprintln!(
+                        "perry: wpfacts explain: handed {} by {}",
+                        self.tok_name(t),
+                        self.reasons[reason as usize]
+                    );
+                }
+                self.note_shared(SharedWrite::Handed(s));
+            }
+        }
+        // Runtime-owned objects do not "escape": unknown code already holds
+        // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
+        // operations) or E14 (interpreted code), never a side effect of some
+        // value reaching unknown code; its user-stored members escape where
+        // they are stored (`builtins::tok_store`).
+        if !builtins::builtin_function(self, t)
+            && matches!(
+                self.toks[t as usize],
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(..)
+            )
+        {
+            // Handed to unknown code (not reached along a chain): the
+            // program fields rule R1 gave it may be read there.
+            if !self.chain_escape {
+                self.builtin_fields_sink(t, Some(reason));
+            }
+            // Unknown code given `process` (or the global object) may write
+            // the arrays `process.argv` and `process.execArgv` hold.
+            if builtins::global_object(self, t)
+                || matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
+            {
+                for i in 0..self.process_arrays.len() {
+                    let a = self.process_arrays[i].2;
+                    self.escape(a, reason);
+                }
+            }
+            return;
+        }
+        if self.rel_phase != b'S' {
+            self.rel(|| format!("escapeseed {t} {reason}"));
+        }
+        self.with_s(|m| m.escape_inner(t, reason));
+        for s in self.wide_sites(t) {
+            self.escape(s, reason);
+        }
+    }
+
+    /// Another unit's class, instance, prototype, function or array this
+    /// unit holds through a contract (a stand-in).
+    fn stand_in(&self, t: Tok) -> bool {
+        let fwd = |f: Option<FnIdx>| f.is_some_and(|f| self.funcs[f as usize].forwarded);
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) if self.is_cell_arr(t) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Arr { site: u32::MAX, .. } | TmplKind::BObj { site: u32::MAX, .. }
+            ),
+            TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => {
+                self.foreign.contains_key(&tm) && fwd(self.tmpls[tm as usize].ctor)
+            }
+            TokKind::Func(f, _) => fwd(Some(f)),
+            _ => false,
+        }
+    }
+
+    /// DECISIONS 212: the reason what a value escaping with `reason`
+    /// reaches escapes with: a publication (`pub_reason`, a published
+    /// literal's field function) describes the value itself, not what
+    /// unknown code then reads from it (DECISIONS 203, `UNDESCRIBED`).
+    pub(crate) fn beyond_contract(&mut self, reason: u32) -> u32 {
+        match self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason) {
+            true => self.reason(crate::gen::UNDESCRIBED),
+            false => reason,
+        }
+    }
+
+    pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
+        // A few hard/contract paths mark directly rather than entering escape.
+        // Retain those actual events too; this data never feeds the solver.
+        if let Some(d) = &mut self.diagnostic {
+            if let Some(c) = &mut d.census {
+                c.escapes.insert((
+                    t,
+                    d.cause_node.unwrap_or(NO_NODE),
+                    d.cur_call.unwrap_or(u32::MAX),
+                    d.escaping.last().copied().unwrap_or(u32::MAX),
+                    reason,
+                    c.active_gate,
+                ));
+            }
+        }
+        if let Some(l) = self.ledger.as_mut() {
+            l.mark_escaped(t, reason);
+        }
+        self.escaped.insert(t, reason);
+        if self.objtag_watch.contains_key(&t) {
+            self.objtag_widen(t);
+        }
+        self.ta_len_open(t);
+        if self.is_rest_arr(t) {
+            self.rest_front_widen(t);
+        }
+        self.index_slots_merge(t);
+        self.arr_len_top(t);
+        self.map_open(t);
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
+        let w = (t >> 6) as usize;
+        if self.esc_bits.len() <= w {
+            self.esc_bits.resize(w + 1, 0);
+        }
+        let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
+        self.esc_bits[w] |= 1 << (t & 63);
+        if fresh {
+            self.late_esc.push(t);
+            self.enum_escaped(t);
+        }
+    }
+
+    /// Unknown code holding `t` runs every accessor on its chain: a setter
+    /// with `w` (the unknown value), a getter whose result escapes. It also
+    /// holds the accessor functions themselves (`Object.getOwnPropertyDescriptor`,
+    /// `__lookupGetter__` on `t` or its chain): they escape, so unknown code
+    /// may call them with any receiver and catch what they throw
+    /// (`escape_fn_params`: their throw region feeds ESCRAISE).
+    fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        let r = self.node_l("escaped-load");
+        self.sink_node(r, reason);
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        let fns = self.esc_accessors;
+        for setter in [false, true] {
+            self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
+        }
+    }
+
+    /// Escaped `f` (`reason`) has callers in unknown code, which retain its
+    /// result and may catch what it throws: true unless it is a contract
+    /// function published through its contract (an export or a published
+    /// literal's field, DECISIONS 210) or with known closed callers
+    /// (DECISIONS 19), whose callers are the units' modeled calls.
+    pub(crate) fn unknown_caller(&self, f: FnIdx, reason: u32) -> bool {
+        !self.contract_fns.contains(&f)
+            || (self.pub_reason != Some(reason)
+                && self.field_fn_reason != Some(reason)
+                && !(self.closed_pub_reason == Some(reason) && self.closed_params.contains_key(&f)))
+    }
+
+    /// Unknown code calls `f`: unknown arguments, the result escapes.
+    pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
+        self.diagnostic_entry_begin(ft, reason);
+        self.escape_fn_params_run(ft, reason);
+        self.diagnostic_entry_end();
+    }
+    fn escape_fn_params_run(&mut self, ft: Tok, reason: u32) {
+        if !self.sum.ready {
+            self.sum
+                .deferred
+                .push(crate::summary::Deferred::Escape(ft, reason));
+            return;
+        }
+        let f = self.tok_fn(ft);
+        // What a call returns or throws goes to its caller. Where unknown
+        // code calls it (its result escapes: no contract publication, no
+        // known closed callers), it may catch what it throws: the throw
+        // region feeds ESCRAISE, the escape sink of escape-made calls
+        // (DESIGN SEEDE section 8).
+        if self.unknown_caller(f, reason) {
+            let raise = self.raise_of(f);
+            let esc = self.esc_raise;
+            if let Some(d) = &mut self.diagnostic {
+                d.raise_by.entry(raise).or_insert(ft);
+            }
+            self.edge(raise, esc);
+        }
+        if self.summarized(f) {
+            self.escape_summarized(ft, reason);
+            return;
+        }
+        let fi = self.funcs[f as usize].clone();
+        let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
+        // A closed function's callers are known: what they pass. Only
+        // through its publication (decision 19); any other escape lets
+        // unknown code call it.
+        let closed = if self.closed_pub_reason == Some(reason) {
+            self.closed_params.get(&f).cloned()
+        } else {
+            None
+        };
+        // DECISIONS 119: published through its contract only, a parameter
+        // is its marker, the whole argument: no ⊤, no primitive kinds.
+        let contract_only = self.contract_fns.contains(&f) && self.pub_reason == Some(reason);
+        for (i, &p) in fi.params.iter().enumerate() {
+            // A hidden capture parameter holds its class environment slot
+            // whoever calls (DECISIONS 117).
+            if let Some(env) = self.capture_param(f, i) {
+                self.edge(env, p);
+                continue;
+            }
+            match closed.as_ref().and_then(|c| c.get(i).copied()) {
+                Some(a) => self.edge(a, p),
+                None => {
+                    if !contract_only {
+                        self.add_top(p, why);
+                        self.add_prim(p, prim::ALL);
+                    }
+                }
+            }
+        }
+        // The rest parameter is the fresh array the call makes, whoever
+        // calls: unknown arguments are its elements, never the array itself
+        // (a store into its elements is no store into ⊤).
+        if let Some(rest) = fi.rest {
+            let r = self.field_any_node_of_node(rest);
+            self.add_top(r, why);
+            self.add_prim(r, prim::ALL);
+        }
+        if self.contract_fns.contains(&f) {
+            // Design §11.2: other units call it through its contract.
+            for (i, &p) in fi.params.iter().enumerate() {
+                if self.capture_param(f, i).is_some() {
+                    continue;
+                }
+                let mk = self.param_marker_tok(f, i as u32);
+                self.add_tok(p, mk);
+                // DECISIONS 148: what the running units pass, beside it.
+                if contract_only {
+                    if let Some(&a) = self.method_params.get(&f).and_then(|v| v.get(i)) {
+                        if a != NO_NODE {
+                            self.edge(a, p);
+                        }
+                    }
+                }
+            }
+            self.add_top(fi.args_all, why);
+            self.contract_rets.push((f, fi.ret));
+            if self.unknown_caller(f, reason) {
+                self.sink_node(fi.ret, reason);
+            }
+            return;
+        }
+        self.add_top(fi.args_all, why);
+        // A constructor's `this` is the instance it makes, whoever calls:
+        // its result escapes as before. The activation pass (DECISIONS 225)
+        // is the coarser analysis whose escapes cover the final solve's:
+        // there no function has a summary, so the final solve's summarized
+        // escapes (`escape_summarized`) have no counterpart, and an escaped
+        // function's whole shared result escapes: what the final solve
+        // treats as escaped was walked.
+        if fi.ctor_of.is_some() || self.act.as_ref().is_some_and(|a| !a.fixed) {
+            self.sink_node(fi.ret, reason);
+        } else {
+            self.sink_own_return(f, reason);
+        }
+    }
+
+    /// Unknown code calls `f` (no summary instance): it gets its own call's
+    /// result (ECMA-262 10.2.1). A source of `f`'s shared return node that
+    /// is the caller's own `this` or argument (`callers_own`) hands that
+    /// caller back what it passed; what known calls passed went back to
+    /// them. Every other source (a field, a closure or module variable, a
+    /// birth, a callee's result) escapes. An edge into the return made later
+    /// is judged as it is made (`edge_impl`).
+    pub(crate) fn sink_own_return(&mut self, f: FnIdx, reason: u32) {
+        let ret = self.funcs[f as usize].ret;
+        if self.sunk_nodes.contains(&ret) || self.open_rets.contains_key(&ret) {
+            return;
+        }
+        self.index_term_preds();
+        self.open_rets.insert(ret, (f, reason));
+        let srcs = self.term_preds_of(ret);
+        for a in srcs {
+            if !self.callers_own(f, a) {
+                self.sink_node(a, reason);
+            }
+        }
+    }
+
+    /// `a` is the receiver of non-arrow `f` or one of its parameters, and
+    /// `f`'s body (or a function nested in it) never writes it: it holds
+    /// what each call passes and nothing else.
+    /// DECISIONS 225, checked at the end of the final solve: the escaped
+    /// functions whose body was not walked (unknown code may call them, so
+    /// each must be active). 0 when the activation pass covers the solve.
+    pub(crate) fn escaped_inactive(&self) -> usize {
+        if !self.act.as_ref().is_some_and(|a| a.fixed) {
+            return 0;
+        }
+        self.escaped
+            .keys()
+            .filter(|&&t| match self.toks[t as usize] {
+                TokKind::Func(f, _) => !self.body_active(f),
+                _ => false,
+            })
+            .count()
+    }
+
+    pub(crate) fn callers_own(&self, f: FnIdx, a: NodeId) -> bool {
+        let fi = &self.funcs[f as usize];
+        let term = (a == fi.this && !fi.lexical_this)
+            || fi
+                .params
+                .iter()
+                .enumerate()
+                .any(|(i, &p)| p == a && self.capture_param(f, i).is_none());
+        if !term {
+            return false;
+        }
+        let Some(tp) = self.term_preds.as_ref() else {
+            return false;
+        };
+        !tp.get(&a)
+            .is_some_and(|v| v.iter().any(|&x| self.body_owned(f, x)))
+    }
+
+    /// Node `x` belongs to `f`'s body or to a function nested in it.
+    fn body_owned(&self, f: FnIdx, x: NodeId) -> bool {
+        let mut g = self.node_fn[x as usize];
+        while g != NO_FN {
+            if g == f {
+                return true;
+            }
+            g = self.funcs[g as usize].parent;
+        }
+        false
+    }
+
+    fn term_preds_of(&self, n: NodeId) -> Vec<NodeId> {
+        self.term_preds
+            .as_ref()
+            .and_then(|tp| tp.get(&n).cloned())
+            .unwrap_or_default()
+    }
+
+    /// The copy predecessors of every function's return, `this` and
+    /// parameter nodes, once; `edge_impl` keeps it from then on.
+    fn index_term_preds(&mut self) {
+        if self.term_preds.is_some() {
+            return;
+        }
+        let mut tp: crate::pts::FxHashMap<NodeId, Vec<NodeId>> = Default::default();
+        for fi in &self.funcs {
+            for &n in [fi.ret, fi.this].iter().chain(fi.params.iter()) {
+                if n != NO_NODE {
+                    tp.entry(n).or_default();
+                }
+            }
+        }
+        for (a, node) in self.nodes.iter().enumerate() {
+            for b in node.succ.iter() {
+                if let Some(v) = tp.get_mut(b) {
+                    v.push(a as NodeId);
+                }
+            }
+        }
+        self.term_preds = Some(tp);
+    }
+
+    /// A class published to other units as a contract (design §11.2), not
+    /// an escape: they may construct it with unknown arguments, read every
+    /// field of what they construct (getters run, contents leave), call its
+    /// methods and accessors on those instances, and use its static members
+    /// as unknown code does. Its methods run with `this` = ⊤ (any receiver)
+    /// and that instance. Everything else they do to it (stores, opening
+    /// operations, the prototype or a method used as a value, passing it to
+    /// code outside the program) is their census report; a broken class is
+    /// published as an escape instead.
+    ///
+    /// A method called by another unit runs on one of those instances: its
+    /// `this` holds the class's receiver token. Reading through it gives ⊤
+    /// (as reading through ⊤ does: the method sees whatever other units did),
+    /// and storing into it, an opening operation on it or its escape happen
+    /// to the constructed instance (`contract_recv`). Reading the instance's
+    /// own contents there would run every method over every value other
+    /// units can put in it (commander's Command: 217 receiver layouts per
+    /// method).
+    ///
+    /// When a class of another unit extends it (`extended`), its
+    /// constructor is a function contract as well, run on any receiver (a
+    /// subclass instance's `super()`): `this` is ⊤ there, so its sites are
+    /// proven behind the entry guard only (DECISIONS 57). A class with no
+    /// constructor code publishes an empty constructor contract.
+    ///
+    /// A `sealed` class (DECISIONS 116) is one no other unit names: it is
+    /// published because this unit gives its instances out. No other unit
+    /// constructs or extends it, so its methods run on those instances
+    /// only (`Model::escape_this`), never on an unknown receiver.
+    pub(crate) fn publish_class(
+        &mut self,
+        tm: TmplId,
+        reason: u32,
+        extended: bool,
+        no_code: bool,
+        sealed: bool,
+    ) -> Vec<(Atom, NodeId)> {
+        if sealed {
+            self.sealed.insert(tm);
+        }
+        let cobj = self.tok(TokKind::ClassObj(tm));
+        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+        let rt = self.tmpls.len() as TmplId;
+        let display = format!("{}:receiver", self.tmpls[tm as usize].display);
+        self.tmpls.push(Template {
+            kind: TmplKind::BObj {
+                module: 0,
+                site: 0,
+                what: "contract receiver",
+            },
+            display,
+            birth_keys: Vec::new(),
+            definite: Vec::new(),
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
+            parent: None,
+            ctor: None,
+            native_parent: None,
+            accessor_keys: Vec::new(),
+            has_computed_members: false,
+            field_init: None,
+            proto_members: Vec::new(),
+            parent_value: None,
+            parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
+        });
+        let recv = self.tok(TokKind::Obj(rt, NO_CTX));
+        let any = self.field_any(recv);
+        self.add_top(any, |m| {
+            format!(
+                "receiver of a method another unit calls: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(any, prim::ALL);
+        // The instance other units construct has the class's prototype.
+        self.proto_node(inst);
+        // A sealed class's receiver stands for the instances given out
+        // only: no other unit constructs one.
+        self.contract_recv
+            .insert(recv, if sealed { Vec::new() } else { vec![inst] });
+        self.contract_recv_of.insert(tm, recv);
+        self.recv_class.insert(recv, tm);
+        // `this.m()` through the receiver finds the class's `m` (DECISIONS 59).
+        self.register_virt(recv, &[tm]);
+        // Static members and the class object's own fields. A static
+        // private field (`#x`, `Model::private_atom`) is named by the
+        // class body only: it is no member of the published class.
+        let pa = self.atom("prototype");
+        let mut named: Vec<(Atom, NodeId)> = self
+            .fields
+            .iter()
+            .filter(|(&(h, a), _)| h == cobj && a != pa && !self.is_private_atom(a))
+            .map(|(&(_, a), &n)| (a, n))
+            .collect();
+        named.sort_unstable();
+        let mut statics: Vec<NodeId> = named.iter().map(|&(_, n)| n).collect();
+        statics.extend(self.field_any.get(&cobj).copied());
+        statics.sort_unstable();
+        // Other units call a static method on the class object, through
+        // its function contract (§11.2: a static member is part of the
+        // class contract; its result is checked like any contract result).
+        for &n in &statics {
+            for t in self.nodes[n as usize].pts.to_sorted() {
+                if let TokKind::Func(f, _) = self.toks[t as usize] {
+                    let broken = self
+                        .broken_fns
+                        .contains(&format!("fn:{}", self.funcs[f as usize].name));
+                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX && !broken
+                    {
+                        self.contract_fns.insert(f);
+                        // A static function leaves through its contract
+                        // (markers on its parameters), whatever else the
+                        // static holds (DECISIONS 173).
+                        self.escape(t, reason);
+                    }
+                    // Its receiver is the class object, whatever call
+                    // runs it: every instance of a summarized body sees it.
+                    if !self.funcs[f as usize].lexical_this {
+                        let this = self.this_any(t);
+                        self.add_tok(this, cobj);
+                    }
+                }
+            }
+        }
+        // A named static leaves as a published value binding does (DECISIONS
+        // 173): the caller checks it after the solve (`Gen::contract_check`),
+        // so an instance of this class it holds is given out, not escaped
+        // with its prototype chain. What a computed key holds is unknown.
+        if let Some(&any) = self.field_any.get(&cobj) {
+            self.sink_node(any, reason);
+        }
+        // Methods along the chain inside the unit: they run on `inst` and on
+        // unknown receivers.
+        let ca = self.atom("constructor");
+        let mut cur = Some(tm);
+        let mut members: Vec<NodeId> = Vec::new();
+        while let Some(c) = cur {
+            // Another unit's class (a stand-in parent): its methods are that
+            // unit's, called through its contract (DECISIONS 57).
+            if self.foreign.contains_key(&c) {
+                break;
+            }
+            let proto = self.tok(TokKind::Proto(c));
+            members.extend(
+                self.fields
+                    .iter()
+                    .filter(|(&(h, a), _)| h == proto && a != ca)
+                    .map(|(_, &n)| n),
+            );
+            members.extend(self.field_any.get(&proto).copied());
+            cur = self.tmpls[c as usize].parent;
+        }
+        members.sort_unstable();
+        // Each method (and the constructor) is also a function contract
+        // (DECISIONS 57): other units pass its arguments by their marks,
+        // and its receiver marker publishes what it does to `this`, so a
+        // subclass instance of another unit can run it.
+        for &n in &members {
+            for t in self.nodes[n as usize].pts.to_sorted() {
+                if let TokKind::Func(f, _) = self.toks[t as usize] {
+                    let rs = self.published_this.entry(f).or_default();
+                    if !rs.contains(&recv) {
+                        rs.push(recv);
+                    }
+                    let broken = self
+                        .broken_fns
+                        .contains(&format!("fn:{}", self.funcs[f as usize].name));
+                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX && !broken
+                    {
+                        self.contract_fns.insert(f);
+                    }
+                }
+            }
+        }
+        let t = &self.tmpls[tm as usize];
+        match t.ctor {
+            Some(ctor) if extended => {
+                let ft = self.funcs[ctor as usize].token;
+                let broken = self
+                    .broken_fns
+                    .contains(&format!("fn:{}", self.funcs[ctor as usize].name));
+                if !self.is_escaped(ft) && self.funcs[ctor as usize].func_id != u32::MAX && !broken
+                {
+                    self.published_this.entry(ctor).or_default().push(recv);
+                    self.contract_fns.insert(ctor);
+                    self.escape_fn_params(ft, reason);
+                    self.escape_this(ft, reason);
+                    self.ctor_published.insert(tm);
+                }
+            }
+            // No constructor code: what construction does to the receiver
+            // is the class's own shape (its field initializers), whoever
+            // extends it; an extension through a value (a CommonJS
+            // `require`) names no import the census could match
+            // (DECISIONS 99).
+            None if no_code => {
+                self.ctor_published.insert(tm);
+            }
+            _ => {}
+        }
+        for n in members {
+            self.sink_node(n, reason);
+        }
+        if sealed {
+            return named;
+        }
+        // Other units construct it with unknown arguments.
+        let ret = self.node_l("contract-new");
+        let args_n = self.node_l("contract-args");
+        self.add_top(args_n, |m| {
+            format!(
+                "constructor args from another unit: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(args_n, prim::ALL);
+        // A closed class (design §18.13): what the constructing units pass.
+        let ctor = self.tmpls[tm as usize].ctor;
+        let mut args = match ctor.and_then(|f| self.closed_params.get(&f)) {
+            Some(nodes) => nodes.clone(),
+            None => vec![args_n; 8],
+        };
+        // Its hidden capture parameters take the class's environment, not
+        // what the constructing unit passes (DECISIONS 117).
+        if let Some(f) = ctor {
+            for i in 0..self.funcs[f as usize].params.len() {
+                if let Some(env) = self.capture_param(f, i) {
+                    if args.len() <= i {
+                        args.resize(i + 1, args_n);
+                    }
+                    args[i] = env;
+                }
+            }
+        }
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Undef,
+            args,
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.esc_raise,
+        });
+        self.contract_new.insert(call);
+        self.why_mint(call, None, u32::MAX);
+        self.construct(call, cobj);
+        // ... and read its fields: they leave key by key, described by the
+        // class contract (`Gen::fields_leave`, DECISIONS 88).
+        named
+    }
+
+    /// DECISIONS 210/211: unknown code constructs a function of this unit
+    /// that escaped, with unknown arguments, and its instance escapes, as
+    /// for an escaped class (`escape_inner`). The one path for "unknown code
+    /// constructs an escaped function", in both modes: whole program, code
+    /// nothing models holds it (an escaped `F` nothing here constructs
+    /// still has instances of its layout); per unit, other units' code holds
+    /// it too and may construct it (the whole program sees that `new`;
+    /// fastify `new Reply`, escaped through `Module._cache`: the units
+    /// constructing it hold it as an unknown value, so only the units
+    /// writing `Reply.prototype` hold the layout, with no instance of their
+    /// own). Callers: an escape (`escape_inner`), a template made after the
+    /// escape (`fn_inst_template`), and a contract-only escape that later
+    /// leaves through no contract (`escape`). Only a function with a construction layout: one
+    /// whose body stores into `this` (`fn_birth`) or whose `new <f>`
+    /// template exists (`fn_inst_template` constructs it when made later);
+    /// any other one's instances would hold nothing a layout claims. Never
+    /// an arrow, a generator step, a class constructor (its class escapes)
+    /// or another unit's stand-in (its owner constructs it on the census
+    /// report, `Gen::published_ctors`).
+    pub(crate) fn construct_unknown(&mut self, t: Tok, f: FnIdx, reason: u32) {
+        let fi = &self.funcs[f as usize];
+        let np = fi.params.len().max(1);
+        // Published through its contract, the units constructing it pass
+        // their arguments (`ctor_runs`): constructed by `Gen::published_ctors`.
+        let published = self.pub_reason == Some(reason) || self.field_fn_reason == Some(reason);
+        if published
+            || fi.lexical_this
+            || fi.gen_step()
+            || fi.ctor_of.is_some()
+            || fi.func_id == u32::MAX
+            || !(self.fn_birth.contains_key(&f) || self.fn_inst.contains_key(&f))
+            || !self.unknown_new.insert(f)
+        {
+            return;
+        }
+        let ret = self.node_l("top-new");
+        let args_n = self.node_l("top-args");
+        self.add_top(args_n, |m| {
+            format!(
+                "constructor args from unknown code: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(args_n, prim::ALL);
+        let call = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Undef,
+            args: vec![args_n; np],
+            spread: vec![],
+            ret,
+            site: 0,
+            region: self.esc_raise,
+        });
+        self.why_mint(call, Some(t), reason);
+        self.construct(call, t);
+        self.sink_node(ret, reason);
+    }
+
+    /// DECISIONS 210: unknown code holds function `t` (published through
+    /// its contract): it reads and writes any own property but `prototype`
+    /// (that one is the published layout's chain, `escape`). Each named
+    /// property leaves; what a computed key stores leaves; a read under an
+    /// unknown key reads what unknown code wrote; its accessors run as for
+    /// any escaped object.
+    pub(crate) fn escape_props(&mut self, t: Tok, reason: u32) {
+        if self.props_escaped.insert(t, reason).is_some() {
+            return;
+        }
+        let published = self.unit_mode && self.reasons[reason as usize] == crate::gen::UNDESCRIBED;
+        let pa = self.atom("prototype");
+        let keys: Vec<Atom> = self.field_keys.get(&t).cloned().unwrap_or_default();
+        for a in keys {
+            if a != pa {
+                let n = self.fields[&(t, a)];
+                match published {
+                    true => self.cons(n, Cons::TopSink { reason }),
+                    false => self.escape_prop(t, n, reason),
+                }
+            }
+        }
+        let any = self.field_any(t);
+        self.cons(any, Cons::TopSink { reason });
+        // DECISIONS 241: published to another unit (`UNDESCRIBED`), its own
+        // properties hold what the units store there, each publishing its
+        // stores (`fn_stored`): every holder reads their join. Only unknown
+        // code makes them unknown (`fn_props_top`).
+        if !published {
+            self.fn_props_top.insert(t);
+            let all = self.all_fields(t);
+            self.add_top_held(all, t, |m| {
+                format!(
+                    "property of an escaped function: {}",
+                    m.reasons[reason as usize]
+                )
+            });
+            self.add_prim(all, prim::ALL);
+        }
+        let w = self.node_l("escaped-store");
+        self.add_top_held(w, t, |m| {
+            format!(
+                "stored into an escaped function: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(w, prim::ALL);
+        self.escaped_accessor_runs(t, w, reason);
+    }
+
+    /// A named property `n` of function `t` whose properties left
+    /// (`escape_props`): unknown code writes it and reads what it holds.
+    pub(crate) fn escape_prop(&mut self, t: Tok, n: NodeId, reason: u32) {
+        self.add_top_held(n, t, |m| {
+            format!(
+                "property of an escaped function {t}: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(n, prim::ALL);
+        self.cons(n, Cons::TopSink { reason });
+    }
+
+    /// DECISIONS 210: the instances of this unit's constructor function
+    /// `f` (template `tm`), constructed here for the units that construct
+    /// it, are a layout those units hold (`contracts::fn_inst_contract`).
+    /// The functions on its prototype (`Proto(tm)`, what `f.prototype`
+    /// holds) run on `inst` and on unknown receivers, each a contract
+    /// function, as a published class's methods do (`publish_class`); any
+    /// other value there leaves.
+    pub(crate) fn publish_fn_inst(&mut self, f: FnIdx, tm: TmplId, inst: Tok, reason: u32) {
+        let ca = self.atom("constructor");
+        let proto = self.tok(TokKind::Proto(tm));
+        let mut members: Vec<NodeId> = self
+            .field_keys
+            .get(&proto)
+            .into_iter()
+            .flatten()
+            .filter(|&&a| a != ca)
+            .map(|&a| self.fields[&(proto, a)])
+            .collect();
+        members.extend(self.field_any.get(&proto).copied());
+        members.sort_unstable();
+        members.dedup();
+        for &n in &members {
+            for t in self.nodes[n as usize].pts.to_sorted() {
+                if let TokKind::Func(g, _) = self.toks[t as usize] {
+                    let broken = self
+                        .broken_fns
+                        .contains(&format!("fn:{}", self.funcs[g as usize].name));
+                    if !self.is_escaped(t) && self.funcs[g as usize].func_id != u32::MAX && !broken
+                    {
+                        self.contract_fns.insert(g);
+                    }
+                    if !self.funcs[g as usize].lexical_this {
+                        for this in self.this_nodes(t) {
+                            self.add_tok(this, inst);
+                        }
+                    }
+                }
+            }
+        }
+        for n in members {
+            self.sink_node(n, reason);
+        }
+        let _ = f;
+    }
+
+    /// This unit gives `t`, an instance of its published class `tm`, to
+    /// other units (a contract result or value): they call its methods, so
+    /// what those do to their receiver happens to `t` as well, replayed
+    /// from the receiver's log and forwarded from now on. True when `t` is
+    /// new here.
+    pub(crate) fn give_out(&mut self, tm: TmplId, t: Tok) -> bool {
+        let Some(&recv) = self.contract_recv_of.get(&tm) else {
+            return false;
+        };
+        let given = self.contract_recv.entry(recv).or_default();
+        if given.contains(&t) {
+            return false;
+        }
+        given.push(t);
+        // A sealed class's methods (DECISIONS 116) and the methods run on
+        // published receivers (DECISIONS 125) run on `t` from now on.
+        let sealed = self.sealed.contains(&tm);
+        let ds: Vec<NodeId> = self
+            .given_this
+            .iter()
+            .filter(|(f, _)| {
+                self.published_this
+                    .get(f)
+                    .is_some_and(|rs| rs.contains(&recv))
+            })
+            .filter(|(&f, _)| sealed || self.join_holds(f, t))
+            .flat_map(|(_, ds)| ds.iter().copied())
+            .collect();
+        for d in ds {
+            self.add_tok(d, t);
+        }
+        for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
+            match e {
+                crate::model::RecvEffect::Store(key, src, site) => {
+                    self.store_into(t, key, src, site)
+                }
+                crate::model::RecvEffect::Hard(kind, reason) => self.mark_hard(t, kind, reason),
+                crate::model::RecvEffect::Escape(reason) => self.escape(t, reason),
+            }
+        }
+        true
+    }
+
+    pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
+        // DECISIONS 212: a value that escapes beyond any contract under the
+        // publication reason (no stand-in forwarded, no contract function)
+        // is held by code no contract describes: what it reaches leaves
+        // beyond any contract too (DECISIONS 203), its contract functions
+        // included (`escape`).
+        let reason = self.beyond_contract(reason);
+        self.mark_escape_why(t, &|m: &Self| match m
+            .diagnostic
+            .as_ref()
+            .and_then(|d| d.esc_ctx.last())
+        {
+            Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+            None => format!("escape: {}", m.reasons[reason as usize]),
+        });
+        self.virt_escape(t);
+        self.note_inst(t, false);
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Escape(reason));
+            for i in is {
+                self.escape(i, reason);
+            }
+        }
+        // A marker: unknown code gets what it stands for, and what that
+        // reaches (its fields are its reach markers). The values sit beside
+        // it and escape there (DECISIONS 111).
+        if self.is_marker(t) {
+            let r = self.reach_of(t);
+            self.mark_escape_why(r, &|m: &Self| match m
+                .diagnostic
+                .as_ref()
+                .and_then(|d| d.esc_ctx.last())
+            {
+                Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
+                None => format!("escape: {}", m.reasons[reason as usize]),
+            });
+            self.mark_escaped(t, reason);
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::Proto(_)) {
+            self.mark_escaped(t, reason);
+            self.resume_stopped(t);
+        }
+        self.mark_escaped(t, reason);
+        self.rel(|| format!("escaped {t}"));
+        // DECISIONS 241: unknown code may store any key of a function.
+        if matches!(self.toks[t as usize], TokKind::Func(..)) {
+            self.fn_props_top.insert(t);
+        }
+        // Overlapping abstract native tokens contribute read values, never
+        // writes into each other's storage: the overlap is not transitive.
+        if builtins::builtin_function(self, t) {
+            let read = self.node_l("escaped-native-fields");
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            if !self.unit_mode {
+                self.proto_value(t, read);
+            }
+            self.sink_node(read, reason);
+        }
+        // Unknown code reads every field and can write any key.
+        let all = self.all_fields(t);
+        self.cons(all, Cons::TopSink { reason });
+        // An internal slot is no property (`Model::field`): no key reads it,
+        // but the built-in operations unknown code may run on `t` do (the
+        // settled value of a promise reaches its reactions, 27.2.5.4
+        // PerformPromiseThen, 27.2.1.4 FulfillPromise): its values leave.
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if builtins::is_internal_key(&self.atoms[a as usize]) {
+                let n = self.fields[&(t, a)];
+                self.cons(n, Cons::TopSink { reason });
+            }
+        }
+        // A rejected promise's reason is its [[PromiseResult]] too (27.2.1.7
+        // RejectPromise), handed to the reactions unknown code registers;
+        // the model keeps every rejection reason in `thrown` (a reject
+        // function's parameter, an async body's throw): those leave.
+        if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+            if matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::BObj {
+                    what: "Promise",
+                    ..
+                }
+            ) {
+                let thrown = self.thrown;
+                self.sink_node(thrown, reason);
+            }
+        }
+        // A module namespace object is not writable: [[Set]] and
+        // [[DefineOwnProperty]] fail, [[Delete]] of an export fails (ES
+        // 10.4.6); its keys hold what its module's bindings hold.
+        if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
+            return;
+        }
+        let any = self.any_key_node(t);
+        self.add_top_held(any, t, |m| {
+            format!(
+                "field of escaped {}: {}",
+                m.tok_kind_word(t),
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(any, prim::ALL);
+        // Its buffer is what unknown code reads as `.buffer` (`VIEWED_BUFFER`).
+        if self.array_buffer_view(t) {
+            let a = self.atom(VIEWED_BUFFER);
+            let v = self.field(t, a);
+            self.add_top_held(v, t, |m| {
+                format!("buffer of an escaped view: {}", m.reasons[reason as usize])
+            });
+            self.cons(v, Cons::TopSink { reason });
+        }
+        if let Some(tm) = self.tmpl_of(t) {
+            *self.adds_keys.entry(tm).or_default() += 1;
+        }
+        // Its prototypes are reachable (`Object.getPrototypeOf`).
+        let pn = self.proto_node(t);
+        self.chain_sinks.insert(pn);
+        self.cons(pn, Cons::TopSink { reason });
+        // Unknown code calls the functions it reaches through `t` (its
+        // fields and prototype sink above, so each escapes): they run in
+        // their unknown-code instance with `this` = ⊤, never in the
+        // instance of `t`'s layout (an escaped value binds no layout).
+        // Unknown code can also write any key of it: every setter on its
+        // chain (its own accessors included) runs with `this` = it and an
+        // unknown value (a direct eval writes the caller's locals exactly so,
+        // through the setters of its bindings object); and read any key:
+        // every getter runs and its result reaches unknown code.
+        let w = self.node_l("escaped-store");
+        self.add_top_held(w, t, |m| {
+            format!(
+                "stored into an escaped {}: {}",
+                m.tok_kind_word(t),
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(w, prim::ALL);
+        self.escaped_accessor_runs(t, w, reason);
+        match self.toks[t as usize].clone() {
+            TokKind::Func(f, _) => {
+                let fi = self.funcs[f as usize].clone();
+                if !fi.lexical_this {
+                    self.escape_this(t, reason);
+                }
+                self.escape_fn_params(t, reason);
+                self.construct_unknown(t, f, reason);
+            }
+            TokKind::ClassObj(tm) => {
+                let p = self.tok(TokKind::Proto(tm));
+                self.escape(p, reason);
+                if !self.unknown_constructible(t) {
+                    return;
+                }
+                // Unknown code may construct it with unknown arguments.
+                let ret = self.node_l("top-new");
+                let args_n = self.node_l("top-args");
+                self.add_top(args_n, |m| {
+                    format!(
+                        "constructor args from unknown code: {}",
+                        m.reasons[reason as usize]
+                    )
+                });
+                self.add_prim(args_n, prim::ALL);
+                let call = self.calls.len() as CallId;
+                self.calls.push(CallSite {
+                    first_arg_fixed: false,
+                    this: ThisArg::Undef,
+                    args: vec![args_n; 8],
+                    spread: vec![],
+                    ret,
+                    site: 0,
+                    region: self.esc_raise,
+                });
+                self.why_mint(call, Some(t), reason);
+                self.construct(call, t);
+                let esc = self.escaped_classes;
+                self.add_tok(esc, t);
+                self.sink_node(ret, reason);
+                // DEC221: only what unknown construction returns escapes.
+                // NO_CTX is a template-wide mark, which would also expose
+                // every existing private birth of this layout.
+            }
+            TokKind::Obj(tm, _) => {
+                // `.constructor` reaches the class value.
+                if let TmplKind::Class { .. } = self.tmpls[tm as usize].kind {
+                    let c = self.tok(TokKind::ClassObj(tm));
+                    self.escape(c, reason);
+                }
+                if let TmplKind::FnInst { func } = self.tmpls[tm as usize].kind {
+                    let ft = self.funcs[func as usize].token;
+                    self.escape(ft, reason);
+                }
+            }
+            TokKind::Proto(tm) => {
+                let c = self.tok(TokKind::ClassObj(tm));
+                // `.constructor` on the prototype.
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
+                    self.escape(c, reason);
+                }
+            }
+            // PROXY2: unknown code may run any operation on a Proxy.
+            TokKind::Proxy(p) => self.proxy_degrade(p, "escape"),
+            TokKind::Bound(b) => {
+                let (target, bthis, bargs) = self.bound[b as usize].clone();
+                for n in [target, bthis].into_iter().chain(bargs) {
+                    self.sink_node(n, reason);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// DECISIONS 242(1): `Object.prototype` holds an accessor under any key
+    /// (`STAR_KEY` in its `accessor_keys`): a key read there may run unknown
+    /// code and yield anything.
+    pub(crate) fn objproto_any_accessor(&mut self) {
+        let op = self.tok(TokKind::ObjectProto);
+        let star = self.atom(crate::STAR_KEY);
+        let ks = self.accessor_keys.entry(op).or_default();
+        if ks.contains(&star) {
+            return;
+        }
+        ks.push(star);
+        let fa = self.any_key_node(op);
+        self.add_top(fa, |_| "accessor under a computed key".into());
+        self.add_prim(fa, prim::ALL);
+    }
+
+    pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.mark_hard_as(t, kind, reason, true)
+    }
+
+    /// `mark_hard`; `seed` false for a definition of a NAMED key by a data
+    /// descriptor (rule D1, ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3): it
+    /// creates or changes that key alone, to the descriptor's value (stored
+    /// by `define_by_data`), and installs no accessor, so no field of the
+    /// object is written by unknown code. The object is HARD all the same
+    /// (layout, escape and the runtime lock unchanged).
+    pub fn mark_hard_as(&mut self, t: Tok, kind: Hard, reason: u32, seed: bool) {
+        // DEC 250: a delete that reaches the runtime's prototypes (the
+        // collapsed `ObjectProto`) removes only a key the lock admits: the
+        // runtime refuses (TypeError) to delete a member the image gives a
+        // locked family, except `constructor` (`builtin_proto::
+        // locked_violation`), and a family it leaves open may lose any key.
+        // That is a native write of every key (below), which a final read
+        // never sees (`members::locked_read`, the same decision). It removes
+        // no key of a program object and installs no setter: no layout on a
+        // chain through it changes, no own key stops shadowing it.
+        self.arr_len_top(t);
+        self.map_open(t);
+        let lock_delete =
+            kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
+        self.virt_revoke(t, None);
+        // DECISIONS 234: under a computed key, a defineProperty on a
+        // prototype of the runtime, or through ⊤ (which may be one), may
+        // redefine any key there (`reshape`); a delete or `with` through ⊤
+        // may remove any key of an escaped object (`top_reshape`). Every
+        // unit sees it: the other units' objects escape into ⊤ too. On an
+        // object it may remove its own keys; on a receiver marker, those of
+        // the other units' instances of its class, which are ⊤ here.
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if t == TOP {
+                if kind == Hard::E5DefineProperty {
+                    self.reshape(None);
+                    self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+                }
+                self.top_reshape(None);
+                self.note_shared(SharedWrite::Removed(None));
+            } else if self.is_chain_proto(t) {
+                if !lock_delete {
+                    self.reshape(None);
+                }
+            } else {
+                self.note_inst(t, true);
+            }
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            if let Some(tm) = self.tmpl_of(t) {
+                if self.keys_unsure.insert(tm) {
+                    self.flush_present_reads(tm);
+                }
+            }
+        }
+        if kind == Hard::E6SetPrototypeOf {
+            self.super_relink.insert(t);
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E15With
+        ) {
+            self.note_array_member_write(t, None, None, kind.code());
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
+        ) {
+            self.note_fnproto_write(t, None, kind.code());
+        }
+        if matches!(
+            kind,
+            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
+        ) {
+            let what = match self.explain {
+                true => format!("{} ({})", kind.code(), self.reasons[reason as usize]),
+                false => kind.code().to_string(),
+            };
+            // `setPrototypeOf` writes no own key: the runtime object's new
+            // chain is noted by the prototype it is given (`ProtoFrom`,
+            // `settle_native_given`). Another unit's gives one unknown here.
+            // A delete stores no value (ECMA-262 13.5.1.2, OrdinaryDelete
+            // 10.1.10): under an unknown key it may make any own key of
+            // `t` absent, never present, as the named delete records
+            // (`Cons::DeleteKey`). A lookup the write may reach finds the
+            // key missing there: `undefined` beside what the chain holds.
+            if kind == Hard::E7Delete {
+                crate::builtins::note_native_data_write(
+                    self,
+                    t,
+                    None,
+                    &what,
+                    crate::builtins::WriteValue::Absent,
+                );
+            } else if kind != Hard::E6SetPrototypeOf || self.shared_replay {
+                crate::builtins::note_native_write(self, t, None, &what);
+            }
+        }
+        if t == TOP {
+            // Another unit passes the same runtime objects: an E6 on ⊤ is
+            // its E6 too (`replay_shared`); before, it reached no other unit.
+            if kind == Hard::E6SetPrototypeOf {
+                self.note_shared(SharedWrite::Hard(Shared::Top, kind));
+            }
+            return;
+        }
+        if let Some(is) = self.contract_recv.get(&t).cloned() {
+            self.recv_log
+                .entry(t)
+                .or_default()
+                .push(crate::model::RecvEffect::Hard(kind, reason));
+            for i in is {
+                self.mark_hard(i, kind, reason);
+            }
+        }
+        self.mark_escape_why(t, &|_| "hard: reflective operation".into());
+        // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
+        // null (its [[Prototype]] already): nothing changes (immutable
+        // prototype exotic object). A ⊤ target that may be it is no E6 on it.
+        if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            return;
+        }
+        // DECISIONS 217: another unit's lookups see a HARD shared object.
+        if let Some(s) = self.shared_of(t) {
+            self.note_shared(SharedWrite::Hard(s, kind));
+        }
+        // DECISIONS 242(1): a defineProperty under a computed key on
+        // `Object.prototype` is an accessor under any key there, in every
+        // mode (another unit's arrives as `Hard(ObjectProto, E5)` and runs
+        // here too): it reaches an object only through a key the object does
+        // not own (derive), never as a HARD chain.
+        if kind == Hard::E5DefineProperty && matches!(self.toks[t as usize], TokKind::ObjectProto) {
+            self.objproto_any_accessor();
+            return;
+        }
+        if lock_delete {
+            return;
+        }
+        // Rule B1E: an exposed buffer (B1: a `.buffer` read, a view over a
+        // buffer another holder has) lets others write the view's BYTES
+        // only, read back through an integer index as Numbers (BigInts,
+        // 10.4.5.15 TypedArrayGetElement); no buffer write reaches a named
+        // key (10.4.5.2-5), so its named keys keep the program's stores.
+        let b1e = seed && kind == Hard::B1Exposed && self.typed_array_elements(t);
+        if b1e {
+            let e = self.field_any(t);
+            self.add_prim(e, prim::NUM | prim::BIGINT);
+        }
+        let seed = seed && !b1e;
+        if let Some(&(was, _)) = self.hard.get(&t) {
+            // R9BIRTH8: a B1 mark (bytes only, rule B1E) is the one kind a
+            // typed array's named keys survive (`derive::native_own_free`):
+            // a later mark of any other kind replaces it, so the entry
+            // names a kind that may reach a named key whenever one did.
+            if was == Hard::B1Exposed && kind != Hard::B1Exposed {
+                self.hard.insert(t, (kind, reason));
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, seed);
+                }
+            }
+            // HARD so far only through named data definitions: this mark is
+            // the first that may write any field (rule D1).
+            if seed && self.hard_unseeded.remove(&t) {
+                self.seed_hard_fields(t);
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, true);
+                }
+            }
+            return;
+        }
+        if self.rel_phase != b'S' {
+            self.rel(|| format!("hardseed {t} {} {reason}", kind.code()));
+        }
+        if matches!(self.toks[t as usize], TokKind::Proto(_)) {
+            self.hard.insert(t, (kind, reason));
+            self.with_s(|m| m.resume_stopped(t));
+        }
+        self.hard.insert(t, (kind, reason));
+        self.ta_len_open(t);
+        if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
+            self.flush_shadowed(Some(t));
+        }
+        self.rel(|| format!("hardmark {t} {}", kind.code()));
+        if seed {
+            self.seed_hard_fields(t);
+        } else {
+            self.hard_unseeded.insert(t);
+        }
+        if let Some(tm) = self.tmpl_of(t) {
+            *self.adds_keys.entry(tm).or_default() += 1;
+        }
+        for s in self.wide_sites(t) {
+            self.mark_hard_as(s, kind, reason, seed);
+        }
+    }
+
+    /// Deleting / redefining can move values or install accessors: the
+    /// fields of HARD `t` are written by unknown code as well.
+    fn seed_hard_fields(&mut self, t: Tok) {
+        let any = self.any_key_node(t);
+        self.add_prim(any, prim::ALL);
+    }
+}

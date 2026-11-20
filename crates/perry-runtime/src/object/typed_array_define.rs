@@ -49,13 +49,13 @@ fn typed_array_view_info(value: f64) -> Option<(usize, bool, u32)> {
     if addr < 0x1000 {
         return None;
     }
-    if crate::buffer::is_uint8array_buffer(addr) {
+    if crate::buffer::is_uint8_view_buffer(addr) {
         let len = crate::buffer::js_buffer_length(addr as *const crate::buffer::BufferHeader);
         return Some((addr, true, len.max(0) as u32));
     }
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        let len = crate::typedarray::js_typed_array_length(
-            addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        let len = crate::typedarray_hook_slots::js_typed_array_length(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
         );
         return Some((addr, false, len.max(0) as u32));
     }
@@ -169,8 +169,8 @@ pub(crate) unsafe fn typed_array_own_index(obj_value: f64, key_value: f64) -> Ty
     let value = if is_buf {
         crate::buffer::js_buffer_get(addr as *const crate::buffer::BufferHeader, idx) as f64
     } else {
-        crate::typedarray::js_typed_array_get(
-            addr as *const crate::typedarray::TypedArrayHeader,
+        crate::typedarray_hook_slots::js_typed_array_get(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             idx,
         )
     };
@@ -245,15 +245,15 @@ pub(crate) unsafe fn typed_array_define_own_property(
         let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
         let idx = numeric_index as u32;
         if is_buf {
-            let n = crate::value::JSValue::from_bits(primitive.to_bits()).to_number();
-            crate::buffer::js_buffer_set(
+            // `primitive` is already a primitive: its ToNumber runs no code.
+            crate::buffer::js_buffer_set_value(
                 addr as *mut crate::buffer::BufferHeader,
                 idx as i32,
-                n as i32,
+                primitive,
             );
         } else {
-            crate::typedarray::js_typed_array_set(
-                addr as *mut crate::typedarray::TypedArrayHeader,
+            crate::typedarray_hook_slots::js_typed_array_set(
+                addr as *mut crate::typedarray_hook_slots::TypedArrayHeader,
                 idx as i32,
                 primitive,
             );

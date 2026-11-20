@@ -47,7 +47,7 @@ fn cached_constfn_key_add_uses_current_factory_captures() {
         });
         let target = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
         assert_eq!(
-            shapes::shape_descriptor_by_id(target)
+            shapes::shape_descriptor_for_word(target)
                 .unwrap()
                 .special_constfn_mask,
             1
@@ -155,7 +155,7 @@ fn cached_constfn_key_add_refuses_wrong_body_unsafe_this_and_deprecation() {
                 value::TAG_UNDEFINED
             );
         }
-        assert!(shapes::shape_record_by_id(hit.2)
+        assert!(shapes::shape_record_for_word(hit.2)
             .unwrap()
             .deprecate_special_to_any(hit.1));
         assert!(receiver
@@ -345,7 +345,7 @@ fn cached_constfn_key_add_preserves_preceding_f64_lane() {
         });
         let target = first.with_mut_ptr(|first_ptr| shapes::object_shape_stamp(first_ptr));
         assert_eq!(
-            shapes::shape_descriptor_by_id(target)
+            shapes::shape_descriptor_for_word(target)
                 .unwrap()
                 .special_constfn_mask,
             2
@@ -453,7 +453,7 @@ fn slow_key_add_with_collections(method_key: &str, collections: u32) {
             "{method_key}: the receiver must move inside the publish"
         );
         let stamp = obj.with_mut_ptr(|o| shapes::object_shape_stamp(o));
-        let record = shapes::shape_descriptor_by_id(stamp).expect("stamped record");
+        let record = shapes::shape_descriptor_for_word(stamp).expect("stamped record");
         assert_eq!(
             record.special_constfn_mask, 1,
             "{method_key}: the moved receiver must carry the ConstFn shape"

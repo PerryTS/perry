@@ -1,6 +1,7 @@
 //! Bulk capture births must refresh raw boxes and tagged pointers when the
 //! allocation itself moves them, and retain their shared identities afterwards.
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::*;
 
 extern "C" fn captured_body(
@@ -24,14 +25,14 @@ fn small_birth_preserves_body_shape_flags_and_fresh_identity() {
     let expected_shape = crate::closure::shape::birth_shape_for_body(&BODY);
     let first = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
     );
     let second = crate::closure::js_closure_alloc_small(
         &BODY,
-        (u64::from(expected_shape) << 32) | u64::from(count),
+        (u64::from(expected_shape.0) << 32) | u64::from(count),
         captures[0],
         captures[1],
         0,
@@ -104,8 +105,8 @@ fn old_arena_bulk_capture_install_remembers_young_box() {
     ) as *mut crate::closure::ClosureHeader;
     unsafe {
         (*closure).capture_count = 1;
-        (*closure).shape_id = 0;
-        (*closure).info = std::ptr::null();
+        (*closure).shape_id = LayoutWord(0);
+        (*closure).info = super::support::test_closure_info();
         // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
         (*closure).props = std::ptr::null_mut();
         layout_init_pointer_free(closure as *mut u8);
@@ -139,7 +140,7 @@ fn small_birth_shades_captures_during_incremental_marking() {
     let captures = [ptr_bits(cell as usize)];
     let closure = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         captures[0],
         0,
         0,
@@ -182,7 +183,8 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     super::runtime_roots::force_next_general_arena_alloc_slow();
     triggers.make_arena_trigger_due();
 
-    let header = (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | u64::from(flags | count);
+    let header =
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | u64::from(flags | count);
     let closure = if small {
         crate::closure::js_closure_alloc_small(
             std::ptr::null(),
@@ -233,7 +235,7 @@ fn birth_survives_collection_inside_allocation(small: bool) {
     let second_captures = [ptr_bits(moved_cell as usize)];
     let second = crate::closure::js_closure_alloc_small(
         std::ptr::null(),
-        (u64::from(crate::codegen_abi::FUNCTION_SHAPE) << 32) | 1,
+        (u64::from(crate::codegen_abi::FUNCTION_LAYOUT_WORD) << 32) | 1,
         second_captures[0],
         0,
         0,
@@ -279,5 +281,90 @@ fn plain_bulk_birth_refreshes_tagged_captures_inside_allocation() {
     assert_eq!(
         crate::closure::js_closure_get_capture_bits(closure, 1),
         captures[1]
+    );
+}
+
+static OWN2_BODY: crate::closure::JsFunctionInfo = {
+    let mut info = crate::closure::JsFunctionInfo::of(
+        captured_body as crate::codegen_abi::JsBody0<crate::closure::ClosureHeader>,
+    );
+    info.own_slots = 2;
+    info
+};
+
+/// A body's own slots follow its captures and are traced with them: a moving
+/// minor rewrites a young value held in an own slot exactly as one held in a
+/// capture.
+#[test]
+fn own_slots_after_captures_are_traced_and_rewritten_by_a_moving_minor() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let cap = crate::r#box::js_box_alloc_bits(5.0f64.to_bits() as i64);
+    let own_a = crate::r#box::js_box_alloc_bits(17.0f64.to_bits() as i64);
+    let own_b = crate::r#box::js_box_alloc_bits(29.0f64.to_bits() as i64);
+    let closure = crate::arena::arena_alloc_gc_old_born_tenured(
+        crate::closure::closure_payload_size(1 + 2),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as *mut crate::closure::ClosureHeader;
+    let boxes = [cap, own_a, own_b];
+    unsafe {
+        (*closure).capture_count = 1;
+        (*closure).shape_id = LayoutWord(0);
+        (*closure).info = &OWN2_BODY;
+        // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
+        (*closure).props = std::ptr::null_mut();
+        layout_init_pointer_free(closure as *mut u8);
+        let slots = crate::closure::closure_capture_slots_mut(closure);
+        for (i, cell) in boxes.iter().enumerate() {
+            // GC_STORE_AUDIT(INIT): fresh test closure slot, then barriers below.
+            std::ptr::write(slots.add(i), ptr_bits(*cell as usize));
+        }
+        crate::closure::rebuild_closure_layout_and_barriers(closure, 3);
+    }
+    js_shadow_slot_set(0, ptr_bits(closure as usize));
+    let trace = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(trace.copying_nursery.copied_objects >= 3);
+    let slots = unsafe { crate::closure::closure_capture_slots_mut(closure) };
+    for (i, (cell, want)) in boxes.iter().zip([5.0, 17.0, 29.0]).enumerate() {
+        let current = unsafe { (*slots.add(i) & POINTER_MASK) as *mut crate::r#box::Box };
+        assert_ne!(*cell, current, "slot {i} was rewritten by the moving minor");
+        assert_eq!(crate::r#box::js_box_get(current), want, "slot {i}");
+    }
+}
+
+/// The child-slot enumeration that a full collection marks through lists a
+/// function's own slots after its captures: a value held only in an own slot
+/// is a child edge of the function. Function prototypes are born old, so a
+/// moving minor never relocates one and only this enumeration keeps a
+/// prototype held in its function's `prototype` slot alive (k-fix
+/// kp_f28_gc_proto_major; sabotage `+ 0 * own_slots` drops the count to 1).
+#[test]
+fn own_slots_after_captures_are_child_edges_of_the_full_mark() {
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let boxes = [5.0f64, 17.0, 29.0].map(|v| crate::r#box::js_box_alloc_bits(v.to_bits() as i64));
+    let closure = crate::arena::arena_alloc_gc_old_born_tenured(
+        crate::closure::closure_payload_size(1 + 2),
+        std::mem::align_of::<crate::closure::ClosureHeader>(),
+        GC_TYPE_CLOSURE,
+    ) as *mut crate::closure::ClosureHeader;
+    unsafe {
+        (*closure).capture_count = 1;
+        (*closure).shape_id = LayoutWord(0);
+        (*closure).info = &OWN2_BODY;
+        // GC_STORE_AUDIT(INIT): fresh test closure, null props edge.
+        (*closure).props = std::ptr::null_mut();
+        layout_init_pointer_free(closure as *mut u8);
+        let slots = crate::closure::closure_capture_slots_mut(closure);
+        for (i, cell) in boxes.iter().enumerate() {
+            // GC_STORE_AUDIT(INIT): fresh test closure slot, then barriers below.
+            std::ptr::write(slots.add(i), ptr_bits(*cell as usize));
+        }
+        crate::closure::rebuild_closure_layout_and_barriers(closure, 3);
+    }
+    assert_eq!(
+        test_heap_child_slot_count(closure as *mut u8),
+        3,
+        "the capture and both own slots are child edges"
     );
 }

@@ -65,14 +65,9 @@ pub(crate) fn register_native_fetch_and_streams(
     // read) threw `ReferenceError: node_process is not defined`.
     if !mutable {
         if let Some(init_expr) = &decl.init {
-            // #8342: inside a CJS-wrapped module the wrap's synthetic
-            // `function require(...)` (with a `createRequire`-backed built-in arm)
-            // shadows the bare global `require`. Don't steal `let x =
-            // require("process")` into a native-module namespace binding here — the
-            // native namespace isn't initialized in a CJS-wrapped module, so `x`
-            // would be undefined at runtime (`ReferenceError: node_process is not
-            // defined`). Let the call flow through to the synthetic require, which
-            // resolves builtins via `createRequire` (see `cjs_wrap::wrap`).
+            // Preserve ordinary lexical shadowing, including the wrapper's
+            // synthetic require. Its call returns the hoisted import value;
+            // declaration lowering must retain this runtime local.
             if !require_is_shadowed_by_local(ctx) {
                 if let Some(module_name) = require_resolvable_native_specifier(init_expr) {
                     register_require_namespace_binding(ctx, name, &module_name);

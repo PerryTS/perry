@@ -4,6 +4,8 @@
 use super::layout_desc::{family_desc_of, is_family_object};
 use super::layout_desc::{family_of_class, perry_alloc_layout, PerryLayoutDesc};
 use super::ObjectHeader;
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 
 /// Allocate on the compiler's proposed family only while the class declaration
 /// and its runtime parent agree. A miss uses ordinary class allocation.
@@ -52,12 +54,15 @@ mod tests {
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
+        shape_id: 0,
+        gc_plan: 0,
         family: 0x41574201,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: crate::object::runtime_layouts::test_layout_word(11),
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -67,8 +72,9 @@ mod tests {
         class_id: CHILD,
         parent_class_id: PARENT,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
-    wasm_layout!(LAYOUT);
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
         instance_layout: std::ptr::addr_of!(LAYOUT),
@@ -120,16 +126,19 @@ mod evaluation_layout_tests {
     #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_layouts")]
     #[cfg_attr(target_os = "windows", link_section = ".perrylay$m")]
     #[cfg_attr(
-        not(any(target_vendor = "apple", target_os = "windows")),
+        not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
         link_section = "perry_layouts"
     )]
     static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+        image_keys: std::ptr::null_mut(),
+        shape_id: 0,
+        gc_plan: 0,
         family: 0x41574202,
         variant: 0,
         kind: 0,
         integrity: 0,
         slot_count: 0,
-        layout_id: crate::object::layout_desc::LAYOUT_ID_CARRIED,
+        layout_id: 0x8000008b,
         rep: 0,
         proto: std::ptr::null(),
         keys: EMPTY_KEYS.as_ptr(),
@@ -139,6 +148,8 @@ mod evaluation_layout_tests {
         class_id: CLASS,
         parent_class_id: 0,
         methods: std::ptr::null(),
+        gc_header_word: crate::object::layout_desc::layout_gc_header_word(0),
+        _tail_pad: [0; 32],
     };
 
     static DECLARATION: ClassDeclaration = ClassDeclaration {
@@ -182,17 +193,17 @@ mod evaluation_layout_tests {
                 );
                 assert!(shapes::shape_word_may_be_linked(word));
                 assert!(shapes::proto_id_links_class_instance(
-                    shapes::object_shape_identity(obj),
+                    shapes::object_proto_identity(obj),
                     shapes::class_proto_id(CLASS),
                 ));
                 assert!(
-                    (*obj).meta.is_null(),
+                    crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
                     "the link is a shape fact, not a meta one"
                 );
                 assert_eq!(shapes::object_prototype_word(obj), bits);
                 assert!(shapes::shape_is_evaluation_layout_of(
-                    word,
-                    (*desc).layout_id
+                    LayoutWord(word),
+                    LayoutWord((*desc).layout_id)
                 ));
                 assert!(is_family_object(obj));
                 assert_eq!(
@@ -211,7 +222,10 @@ mod evaluation_layout_tests {
                 wide as usize,
                 a_bits,
             );
-            assert!(!shape_is_evaluation_layout_of_word(wide, (*desc).layout_id));
+            assert!(!shape_is_evaluation_layout_of_word(
+                wide,
+                LayoutWord((*desc).layout_id)
+            ));
             assert!(!is_family_object(wide));
         }
     }
@@ -239,11 +253,25 @@ mod evaluation_layout_tests {
             );
             shapes::stamp_evaluation_holder(obj, class_bits);
             let copy = shapes::object_shape_stamp(obj);
-            assert!((*obj).meta.is_null(), "the brand is a shape fact");
+            assert!(
+                crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null(),
+                "the brand is a shape fact"
+            );
             assert_eq!(shapes::object_evaluation_brand(obj), class_bits);
             assert_eq!(shapes::object_prototype_word(obj), proto_bits);
-            assert_eq!(shapes::evaluation_layout_family(copy), (*desc).layout_id);
+            assert_eq!(
+                crate::object::layout_desc::evaluation_layout_desc(
+                    shapes::evaluation_family_desc_index_plus_one(copy)
+                )
+                .map(|d| d.layout_id),
+                Some((*desc).layout_id)
+            );
             assert!(is_family_object(obj));
+            assert_eq!(
+                crate::object::layout_desc::family_own_key(obj, b"not_in_family"),
+                Some(None),
+                "the evaluation receiver consumes its checked family proof"
+            );
             assert_eq!(
                 shapes::evaluation_copy_birth_edges(copy, (*desc).layout_id),
                 Some((proto_bits, class_bits))
@@ -254,7 +282,7 @@ mod evaluation_layout_tests {
             );
             let born = crate::object::layout_desc::alloc_family_layout_copy(desc, copy);
             assert_eq!((*born).parent_class_id, (*obj).parent_class_id);
-            assert!((*born).meta.is_null());
+            assert!(crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null());
             assert_eq!(shapes::object_evaluation_brand(born), class_bits);
             assert_eq!(shapes::object_prototype_word(born), proto_bits);
             assert_eq!(
@@ -284,7 +312,10 @@ mod evaluation_layout_tests {
                 Some(class_bits)
             );
             heritage::pin_instance_constructing_class(born, f64::from_bits(class_bits));
-            assert!((*born).meta.is_null(), "the pin is the shape brand");
+            assert!(
+                crate::meta_read!(crate::meta_obj_runtime_born!(born as *mut _)).is_null(),
+                "the pin is the shape brand"
+            );
             assert_eq!(
                 heritage::instance_pinned_constructing_class(born).map(f64::to_bits),
                 Some(class_bits)
@@ -292,7 +323,10 @@ mod evaluation_layout_tests {
         }
     }
 
-    unsafe fn shape_is_evaluation_layout_of_word(obj: *const ObjectHeader, family: u32) -> bool {
-        shapes::shape_is_evaluation_layout_of((*obj).parent_class_id, family)
+    unsafe fn shape_is_evaluation_layout_of_word(
+        obj: *const ObjectHeader,
+        family: LayoutWord,
+    ) -> bool {
+        shapes::shape_is_evaluation_layout_of(LayoutWord((*obj).parent_class_id), family)
     }
 }

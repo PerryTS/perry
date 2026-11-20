@@ -17,7 +17,7 @@ and `entries/*.rs`, `method`/`property` rows), compound `Expr::*` HIR variants
 
 > **Behavioral status.** This list counts individual API *surface* gaps, not
 > behavioral pass rate. Measured against Node's own test suite
-> (`scripts/node_suite_run.py` vs `test-parity/node_suite_baseline.json`),
+> (`tests/parity/node-suite/`, run by `scripts/parity.py`),
 > Perry's runtime passes **~97%**; overall Node.js/TypeScript compatibility is
 > around **95%**. Heavily-used modules (`fs`, `http`/`https`/`http2`,
 > `net`/`tls`, `crypto`, `stream`, `events`, `child_process`,

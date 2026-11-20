@@ -1,15 +1,253 @@
 use super::*;
 
+/// This thread's realm global, as the two entries see it. One thread-local
+/// declaration (one slot), as before the realm had phases.
+struct RealmCells {
+    /// This thread's COMPLETE `globalThis`: every declared slot bound, or
+    /// being bound by the population that is running. What
+    /// [`js_get_global_this`] promises and reads. In a realm populated in one
+    /// pass it is set from the global's allocation, exactly as it always was.
+    ///
+    /// The realm global is allocated in a *per-thread* arena, but
+    /// `GLOBAL_THIS_PTR` (the GC-root slot) is a process-global static. A
+    /// pointer published there by another, now-finished thread (the unit-test
+    /// harness runs each test on its own thread; `perry/thread` workers have
+    /// their own arenas) points into freed/reused memory: reading
+    /// `globalThis.Array` through it returns `undefined`, or worse derefs an
+    /// invalid header. Caching the global per thread means we only ever hand
+    /// back a global this thread created, and never dereference another
+    /// thread's pointer to "validate" it.
+    whole: std::cell::Cell<u64>,
+    /// 0 while this thread has no realm global. [`CORE_ONE_PASS`] once a
+    /// realm populated in one pass exists (it has no core view: `whole` is
+    /// its only pointer cell, and its one registered root). The global's
+    /// tagged word from the allocation of a two-phase realm
+    /// (`perry_abi::realm_phase`): what [`js_get_global_core`] reads.
+    core: std::cell::Cell<u64>,
+    /// Phase A is running alone on this thread (a two-phase realm's first
+    /// touch through the core entry): its own readers of the global get the
+    /// realm being built, as the population's readers always did, and do not
+    /// start phase B from inside it.
+    core_running: std::cell::Cell<bool>,
+}
+
+/// [`RealmCells::core`] of a realm populated in one pass.
+const CORE_ONE_PASS: u64 = 1;
+
 crate::perry_thread_local! {
-    /// This thread's `globalThis`. The realm global is allocated in a *per-thread*
-    /// arena, but `GLOBAL_THIS_PTR` (the GC-root slot) is a process-global static.
-    /// A pointer published there by another, now-finished thread (the unit-test
-    /// harness runs each test on its own thread; `perry/thread` workers have their
-    /// own arenas) points into freed/reused memory — reading `globalThis.Array`
-    /// through it returns `undefined`, or worse derefs an invalid header. Caching
-    /// the global per thread means we only ever hand back a global this thread
-    /// created, and never dereference another thread's pointer to "validate" it.
-    static THREAD_GLOBAL_THIS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static THREAD_GLOBAL_THIS: RealmCells = const {
+        RealmCells {
+            whole: std::cell::Cell::new(0),
+            core: std::cell::Cell::new(0),
+            core_running: std::cell::Cell::new(false),
+        }
+    };
+}
+
+/// The program's realm mode, set by its compiled entry before anything can
+/// touch a realm ([`js_realm_two_phase`]): bit 0, the realm global is
+/// populated in two phases; bit 1, phase-B slots are born poisoned (check
+/// mode). 0, the default: one pass, at the first touch.
+static REALM_MODE: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
+const REALM_MODE_TWO_PHASE: u8 = 1;
+const REALM_MODE_POISON: u8 = 2;
+
+#[cfg(test)]
+crate::perry_thread_local! {
+    /// Tests: THIS thread runs as a thread of a two-phase program
+    /// ([`core_realm_for_test`]); the other test threads stay one-pass.
+    static TEST_TWO_PHASE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+// The two link-time hooks of the two-phase realm. The runtime defines both
+// WEAK; a program compiled for a two-phase realm (the default) defines both strong
+// in its entry module (`perry-codegen`, `codegen/entry.rs`), so which entry a
+// runtime reader of a phase-A intrinsic calls is decided by the LINK: no mode
+// is loaded and nothing is tested on any call, and a program that is not
+// compiled for two phases does not link the two-phase path at all (nothing
+// in it references `js_get_global_core` or the phase-B driver).
+
+/// The realm global for a runtime reader of a phase-A intrinsic
+/// (`%Function.prototype%`, `%RegExp.prototype%`, a lazy family's birth, a
+/// by-name read of a core name). The default, linked when the program is not
+/// compiled for two phases: the full entry, with its fast path here so that a
+/// call costs what a call of [`js_get_global_this`] costs. A two-phase
+/// program's definition is a jump to [`js_get_global_core`].
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_core_entry() -> f64 {
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
+    if mine != 0 {
+        return f64::from_bits(mine);
+    }
+    js_get_global_this()
+}
+
+/// The full entry found a core-only realm: complete it. The default is never
+/// reached (only a two-phase program makes a core-only realm, and it defines
+/// this as a jump to [`js_realm_complete`]); it exists so that the one-pass
+/// link does not hold the phase-B driver.
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_complete() -> f64 {
+    realm_complete_unlinked()
+}
+
+/// A reader asks for the intrinsic of builtin family `identity` (a
+/// `BuiltinConstructorIdentity`) of a realm that is not complete. The
+/// default does nothing (a realm populated in one pass is never incomplete);
+/// a two-phase program defines it as a jump to [`js_realm_family_phase`].
+#[no_mangle]
+#[linkage = "weak"]
+#[inline(never)]
+pub extern "C" fn perry_realm_family_phase(_identity: u32) {}
+
+/// Run phase B if it binds the family `identity`: the one point where the
+/// runtime's internal births of a phase-B family (a `WeakMap`'s inherited
+/// read, a typed array's prototype) complete the realm. Phase A's own asks
+/// get the realm as it is (`js_realm_complete`).
+// `.perry_tail.<name>` (Linux): the input sections, one per function, of the
+// two-phase population: the phased copy of the rows, the core entry's first
+// touch, the phase-B driver and their helpers. `.perry_tail_head.<name>`: the
+// two small functions EVERY two-phase program runs once (the mode call, the
+// core entry's slow half), placed first in the tail, in the window the end of
+// the program's own text already maps. Nothing a program compiled with
+// the two-phase realm off links may carry one (the link check asserts that
+// such a program has no tail section). The ELF link gathers it into one output section behind
+// the program's own text (`perry_codegen::function_order::JS_TEXT_LINK_RULE`),
+// so the runtime text and the program text of a program whose realm is
+// populated in one pass lie where they lie in a program compiled without
+// the two-phase realm. A
+// program compiled with the two-phase realm off references none of them and
+// the link drops the section. Other object formats keep them in the text.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.js_realm_family_phase"
+)]
+#[no_mangle]
+pub extern "C" fn js_realm_family_phase(identity: u32) {
+    if identity == REALM_TYPED_ARRAY_BUILT_LATE {
+        return super::typed_array::alias_to_string_late();
+    }
+    if crate::object::GLOBAL_THIS_BUILTIN_CONSTRUCTORS[identity as usize - 1].phase_b {
+        js_get_global_this();
+    }
+}
+
+/// Not a family (identities start at 1): `%TypedArray%` was built after the
+/// realm's `Array`, which only a two-phase realm does. Sent through the same
+/// hook as a family's phase, so a one-pass program links none of it.
+const REALM_TYPED_ARRAY_BUILT_LATE: u32 = 0;
+
+/// `%TypedArray%` was just built in a realm whose `Array` is already bound.
+#[inline(always)]
+pub(crate) fn realm_typed_array_built_late() {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_realm_family_phase(REALM_TYPED_ARRAY_BUILT_LATE);
+    }
+    perry_realm_family_phase(REALM_TYPED_ARRAY_BUILT_LATE)
+}
+
+/// [`perry_realm_family_phase`] for the runtime's one caller.
+#[inline(always)]
+pub(crate) fn realm_family_phase(identity: crate::object::BuiltinConstructorIdentity) {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_realm_family_phase(identity as u32);
+    }
+    perry_realm_family_phase(identity as u32)
+}
+
+#[cold]
+#[inline(never)]
+fn realm_complete_unlinked() -> ! {
+    eprintln!(
+        "perry: a core-only realm in a program whose entry was not compiled for a two-phase realm"
+    );
+    std::process::abort();
+}
+
+/// This thread's realm global for a runtime reader of a phase-A intrinsic:
+/// the core of a two-phase realm, the realm otherwise. One call, chosen at
+/// link time ([`perry_realm_core_entry`]).
+#[inline(always)]
+pub(crate) fn realm_core() -> f64 {
+    #[cfg(test)]
+    if TEST_TWO_PHASE.with(|c| c.get()) {
+        return js_get_global_core();
+    }
+    perry_realm_core_entry()
+}
+
+/// A program compiled for a two-phase realm (the default) calls this once from its
+/// entry, before its first module init: its compiled static reads of
+/// phase-A names use the core entry, so the runtime may leave phase B for
+/// later. `poison != 0` (check mode, `PERRY_VERIFY_FACTS=1`): a phase-B slot
+/// holds `REALM_UNBOUND_POISON` until phase B binds it.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail_head.js_realm_two_phase"
+)]
+#[no_mangle]
+pub extern "C" fn js_realm_two_phase(poison: i32) {
+    let mode = REALM_MODE_TWO_PHASE | if poison != 0 { REALM_MODE_POISON } else { 0 };
+    REALM_MODE.store(mode, Ordering::Release);
+}
+
+/// A check-mode program read `value` from the realm global through a compiled
+/// shape site whose receiver came from the core entry. The poison word there
+/// means the site read a slot phase B had not bound: the compiler chose the
+/// core entry for a name the runtime binds in phase B. Check-mode builds only;
+/// a release build emits no call.
+#[no_mangle]
+pub extern "C" fn js_realm_check_global_read(value: f64) {
+    if value.to_bits() == crate::codegen_abi::REALM_UNBOUND_POISON {
+        realm_poison_seen("a compiled global read");
+    }
+}
+
+/// Report a read of an unbound phase-B slot and exit with check mode's code.
+#[cold]
+#[inline(never)]
+fn realm_poison_seen(reader: &str) -> ! {
+    eprintln!("PERRY_FALSE_PROOF realm-phase: {reader} saw a phase-B slot of the realm global before phase B bound it");
+    std::process::exit(86);
+}
+
+/// Tests: this thread's first touch of the realm as a two-phase program's
+/// core entry makes it (phase A alone, phase-B slots poisoned), without the
+/// process-wide mode other test threads would see.
+#[cfg(test)]
+pub(crate) fn core_realm_for_test() -> f64 {
+    assert_eq!(THREAD_GLOBAL_THIS.with(|c| c.core.get()), 0);
+    TEST_TWO_PHASE.with(|c| c.set(true));
+    realm_setup(RealmPhases::Core, true)
+}
+
+/// Is THIS thread's realm complete: every declared slot of its global bound,
+/// or being bound by the phase B that is running? The predicate of the cold
+/// by-name readers; never materializes anything. In a realm populated in one
+/// pass it is true from the global's allocation, exactly as
+/// [`global_this_is_materialized`] is.
+#[inline]
+pub(crate) fn realm_is_complete() -> bool {
+    THREAD_GLOBAL_THIS.with(|c| c.whole.get()) != 0
+}
+
+/// This thread's realm global as a tagged word, complete or not; 0 before it
+/// exists. For identity questions only: never hand it to a reader of slots.
+#[inline(always)]
+fn thread_global_bits() -> u64 {
+    THREAD_GLOBAL_THIS.with(|c| match c.whole.get() {
+        0 => match c.core.get() {
+            CORE_ONE_PASS => 0,
+            core => core,
+        },
+        whole => whole,
+    })
 }
 
 #[cfg(test)]
@@ -24,7 +262,7 @@ crate::perry_thread_local! {
 #[cfg(test)]
 pub(crate) fn collect_before_global_this_alloc_for_test() {
     assert_eq!(
-        THREAD_GLOBAL_THIS.with(|c| c.get()),
+        THREAD_GLOBAL_THIS.with(|c| c.core.get()),
         0,
         "globalThis regression hook must be armed before first access"
     );
@@ -83,25 +321,200 @@ static KEEP_JS_MODULE_TOP_THIS: extern "C" fn() -> f64 = js_module_top_this;
 /// population (the descriptor bookkeeping does) behaves exactly as it did
 /// before this predicate existed.
 pub(crate) fn global_this_is_materialized() -> bool {
-    THREAD_GLOBAL_THIS.with(|c| c.get()) != 0
+    THREAD_GLOBAL_THIS.with(|c| c.core.get()) != 0
+}
+
+/// This thread's realm global's address, 0 before it exists: the census's
+/// key-granular container (design §2.10.13). Census builds only; the only
+/// reader is the linux-x86_64 census runner.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn thread_realm_global_addr() -> usize {
+    (thread_global_bits() & crate::value::POINTER_MASK) as usize
 }
 
 /// Whether `obj` is THIS thread's realm global, as opposed to the global of a
 /// `vm` context or an eval realm that `populate_global_this_builtins` also
 /// fills (each of those gets its own intrinsics).
 pub(crate) fn is_thread_realm_global(obj: *mut ObjectHeader) -> bool {
-    !obj.is_null()
-        && THREAD_GLOBAL_THIS.with(|c| c.get())
-            == crate::value::js_nanbox_pointer(obj as i64).to_bits()
+    !obj.is_null() && thread_global_bits() == crate::value::js_nanbox_pointer(obj as i64).to_bits()
+}
+
+/// The phase-B driver: run the second phase of the population on this
+/// thread's realm global (`populate::populate_realm_rest`), whose phase A has
+/// finished. Everything that can see a phase-B slot comes through here first
+/// (through [`js_get_global_this`]). Atomic for the program: no program code
+/// runs inside it and no collection moves anything (a no-move window, as for
+/// phase A), so no reference to a phase-B object exists before every one of
+/// them is born, linked and sealed.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.complete_realm")]
+#[cold]
+#[inline(never)]
+fn complete_realm() {
+    let global = THREAD_GLOBAL_THIS.with(|c| c.core.get());
+    debug_assert!(global > CORE_ONE_PASS && !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()));
+    // The same work whichever init asks first: the runtime's (SNAP §2.10.20).
+    let _realm = crate::snap_census::realm_build();
+    let window = crate::gc::GcSuppressScope::new();
+    // Complete from here on: phase B's own readers see the realm it is
+    // building, and none of them starts it again. The cell is a second copy
+    // of the tagged word, registered (marked and rewritten) like the first.
+    THREAD_GLOBAL_THIS.with(|c| c.whole.set(global));
+    let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.whole.as_ptr() as usize);
+    crate::gc::js_gc_register_global_root(cache_slot as i64);
+    populate_realm_rest(
+        crate::value::js_nanbox_get_pointer(f64::from_bits(global)) as *mut ObjectHeader
+    );
+    drop(window);
+}
+
+/// The full entry asked for a two-phase realm whose core exists: run phase B,
+/// unless the asker is phase A itself (the population reads the global it is
+/// filling: it gets the realm as it is). Reached only through
+/// [`perry_realm_complete`], which a two-phase program defines as a jump
+/// here.
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail.js_realm_complete")]
+#[no_mangle]
+pub extern "C" fn js_realm_complete() -> f64 {
+    if !THREAD_GLOBAL_THIS.with(|c| c.core_running.get()) {
+        complete_realm();
+        return f64::from_bits(THREAD_GLOBAL_THIS.with(|c| c.whole.get()));
+    }
+    f64::from_bits(THREAD_GLOBAL_THIS.with(|c| c.core.get()))
 }
 
 /// Issue #611: lazily allocate `globalThis` for computed global access.
+///
+/// The FULL entry: this thread's realm global with every declared slot
+/// bound. Everything that can observe the global object as a value, a name
+/// phase B binds, an undeclared name, or that stores to the global, gets it
+/// from here.
+// Never inlined into the runtime's own callers: one copy, as before (its body
+// used to be too large to inline; ~0.9 KB of copies otherwise).
 #[no_mangle]
+#[inline(never)]
 pub extern "C" fn js_get_global_this() -> f64 {
-    let mine = THREAD_GLOBAL_THIS.with(|c| c.get());
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
     if mine != 0 {
         return f64::from_bits(mine);
     }
+    global_this_first_touch()
+}
+
+/// [`js_get_global_this`] on a thread whose realm is not complete: its first
+/// touch (the complete realm in one pass, every row in its declared place),
+/// or a two-phase realm's core to complete. Out of line, so the entry itself
+/// is the one load and compare with a leaf's frame: a large program calls it
+/// 10^4 times while it starts. Listed in the default hot-text order.
+#[inline(never)]
+fn global_this_first_touch() -> f64 {
+    if THREAD_GLOBAL_THIS.with(|c| c.core.get()) != 0 {
+        #[cfg(test)]
+        if TEST_TWO_PHASE.with(|c| c.get()) {
+            return js_realm_complete();
+        }
+        return perry_realm_complete();
+    }
+    realm_setup(RealmPhases::Both, false)
+}
+
+/// The CORE entry: the same object as [`js_get_global_this`], with at least
+/// phase A's slots bound (`perry_abi::realm_phase`). Its only callers:
+/// a compiled static read of a `REALM_CORE_GLOBALS` name (the read's shape
+/// site loads that name's slot and nothing else), and, through
+/// [`realm_core`] and `array::realm_intrinsic_addr`,
+/// the runtime's readers of a phase-A intrinsic
+/// (`closure::shape::function_prototype_ptr_materialized`,
+/// `regex::instance::intrinsic_prototype`, a lazy family's birth). The value
+/// is never handed to program code as the global object.
+///
+/// Only a program compiled for a two-phase realm calls it; called in any
+/// other program, it is the full entry.
+#[no_mangle]
+pub extern "C" fn js_get_global_core() -> f64 {
+    let mine = THREAD_GLOBAL_THIS.with(|c| c.core.get());
+    if mine > CORE_ONE_PASS {
+        return f64::from_bits(mine);
+    }
+    realm_core_slow()
+}
+
+/// The slow half of the core entry: a realm that was populated in one pass
+/// because its first touch was the full entry serves both entries, and the
+/// core cell gets its own registered copy of the word here, once. Small, and in
+/// the head of the tail section: a program that starts one-pass runs it once.
+/// The other case, this thread's first touch of the realm, is
+/// [`realm_core_first_touch`].
+#[cfg_attr(target_os = "linux", link_section = ".perry_tail_head.realm_core_slow")]
+#[inline(never)]
+fn realm_core_slow() -> f64 {
+    let whole = THREAD_GLOBAL_THIS.with(|c| c.whole.get());
+    let mode = REALM_MODE.load(Ordering::Acquire);
+    #[cfg(test)]
+    let mode = if TEST_TWO_PHASE.with(|c| c.get()) {
+        mode | REALM_MODE_TWO_PHASE
+    } else {
+        mode
+    };
+    if mode & REALM_MODE_TWO_PHASE == 0 {
+        // Not a two-phase program (an object compiled for one, linked into
+        // one that is not): the full entry.
+        return js_get_global_this();
+    }
+    if whole != 0 {
+        // A second copy of the realm's word, and a root of its own: the
+        // global is promoted (moved once) at the first minor collection, and
+        // every registered copy is rewritten then. An unregistered copy would
+        // name the old address
+        // (`test_gap_realm_two_phase_global_first_gc.ts`).
+        THREAD_GLOBAL_THIS.with(|c| {
+            c.core.set(whole);
+            crate::gc::js_gc_register_global_root(c.core.as_ptr() as i64);
+        });
+        return f64::from_bits(whole);
+    }
+    realm_core_first_touch(mode & REALM_MODE_POISON != 0)
+}
+
+/// This thread's first touch of the realm through the core entry: phase A
+/// alone. Out of line and in the tail section (`.perry_tail`), so the
+/// allocation and the population's driver are not in the text a program that
+/// starts one-pass maps.
+#[cfg_attr(
+    target_os = "linux",
+    link_section = ".perry_tail.realm_core_first_touch"
+)]
+#[inline(never)]
+fn realm_core_first_touch(poison: bool) -> f64 {
+    realm_setup(RealmPhases::Core, poison)
+}
+
+/// Keepalive anchor: `js_get_global_core`, `js_realm_two_phase` and
+/// `js_realm_check_global_read` are referenced only from codegen-generated
+/// `.o` files (see `KEEP_JS_MODULE_TOP_THIS`).
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_GET_GLOBAL_CORE: extern "C" fn() -> f64 = js_get_global_core;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_TWO_PHASE: extern "C" fn(i32) = js_realm_two_phase;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_CHECK_GLOBAL_READ: extern "C" fn(f64) = js_realm_check_global_read;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_COMPLETE: extern "C" fn() -> f64 = js_realm_complete;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_REALM_FAMILY_PHASE: extern "C" fn(u32) = js_realm_family_phase;
+
+/// First access on this thread: allocate the realm global and populate it,
+/// `phases` = `Both` (one pass, every row in its declared place) or `Core`
+/// (phase A alone; [`complete_realm`] runs phase B on demand).
+/// `poison` (check mode): a slot phase B binds is born holding the poison word.
+/// Inlined into each entry: the one-pass instance is the body
+/// `js_get_global_this` always had.
+#[inline(always)]
+fn realm_setup(phases: RealmPhases, poison: bool) -> f64 {
     // Register this thread's GC root scanners before the global exists, so the
     // global (and the `Array`/`Object` intrinsics it holds) is born under a live
     // root and survives later collections on this thread. Worker threads and the
@@ -114,15 +527,63 @@ pub extern "C" fn js_get_global_this() -> f64 {
         let _ = crate::gc::gc_collect_minor();
     }
     // First access on this thread — allocate our own global.
-    let new_ptr = js_object_alloc(0, 0) as i64;
-    THREAD_GLOBAL_THIS.with(|c| c.set(crate::value::js_nanbox_pointer(new_ptr).to_bits()));
+    // The birth joins population's no-move window (`populate_global_this_builtins`):
+    // the static layout's record is one allocation that can cross an arena
+    // block, and no collection may run anywhere in the bootstrap.
+    // The realm global is the runtime's, whichever init first asks for it:
+    // its own birth as well as its population (SNAP census, design §2.10.20).
+    let _realm = crate::snap_census::realm_build();
+    let bootstrap_window = crate::gc::GcSuppressScope::new();
+    let new_ptr = unsafe {
+        crate::realm_decl! { birth crate::object::layout_desc::perry_alloc_layout(crate::object::runtime_layouts::GLOBAL_OBJECT::desc()); realm { "%Global%", kind = namespace, never_move = true, members = { globalThis = ref("%Global%"); global = ref("%Global%"), attrs = writable | enumerable | configurable; Array = ref(Array); Object = ref(Object); String = ref(String); Number = ref(Number); Boolean = ref(Boolean); Function = ref(Function); RegExp = ref(RegExp); Date = ref(Date); Error = ref(Error); TypeError = ref(TypeError); RangeError = ref(RangeError); SyntaxError = ref(SyntaxError); ReferenceError = ref(ReferenceError); EvalError = ref(EvalError); URIError = ref(URIError); AggregateError = ref(AggregateError); Symbol = ref(Symbol); Promise = ref(Promise); Map = ref(Map); Set = ref(Set); WeakMap = ref(WeakMap); WeakSet = ref(WeakSet); WeakRef = ref(WeakRef); Proxy = ref(Proxy); BigInt = ref(BigInt); Uint8Array = ref(Uint8Array); Int8Array = ref(Int8Array); Uint16Array = ref(Uint16Array); Int16Array = ref(Int16Array); Uint32Array = ref(Uint32Array); Int32Array = ref(Int32Array); Float16Array = ref(Float16Array); Float32Array = ref(Float32Array); Float64Array = ref(Float64Array); Uint8ClampedArray = ref(Uint8ClampedArray); BigInt64Array = ref(BigInt64Array); BigUint64Array = ref(BigUint64Array); ArrayBuffer = ref(ArrayBuffer); SharedArrayBuffer = ref(SharedArrayBuffer); DataView = ref(DataView); TextEncoder = ref(TextEncoder); TextDecoder = ref(TextDecoder); TextEncoderStream = ref(TextEncoderStream); TextDecoderStream = ref(TextDecoderStream); CompressionStream = ref(CompressionStream); DecompressionStream = ref(DecompressionStream); ReadableStream = ref(ReadableStream); ReadableStreamDefaultController = ref(ReadableStreamDefaultController); ReadableStreamDefaultReader = ref(ReadableStreamDefaultReader); ReadableByteStreamController = ref(ReadableByteStreamController); ReadableStreamBYOBReader = ref(ReadableStreamBYOBReader); ReadableStreamBYOBRequest = ref(ReadableStreamBYOBRequest); WritableStream = ref(WritableStream); TransformStream = ref(TransformStream); Navigator = ref(Navigator); URL = ref(URL); URLSearchParams = ref(URLSearchParams); URLPattern = ref(URLPattern); AbortController = ref(AbortController); AbortSignal = ref(AbortSignal); EventTarget = ref(EventTarget); Crypto = ref(Crypto); CryptoKey = ref(CryptoKey); SubtleCrypto = ref(SubtleCrypto); Event = ref(Event); CustomEvent = ref(CustomEvent); MessageEvent = ref(MessageEvent); DOMException = ref(DOMException); FormData = ref(FormData); Blob = ref(Blob); File = ref(File); Headers = ref(Headers); Request = ref(Request); Response = ref(Response); MessageChannel = ref(MessageChannel); MessagePort = ref(MessagePort); BroadcastChannel = ref(BroadcastChannel); Storage = ref(Storage); localStorage = accessor(get = "localStorage.<get>", set = "localStorage.<set>"), attrs = enumerable | configurable; sessionStorage = accessor(get = "sessionStorage.<get>", set = "sessionStorage.<set>"), attrs = enumerable | configurable; WebSocket = ref(WebSocket); FinalizationRegistry = ref(FinalizationRegistry); DisposableStack = ref(DisposableStack); AsyncDisposableStack = ref(AsyncDisposableStack); SuppressedError = ref(SuppressedError); Buffer = ref(Buffer); eval = ref(eval); fetch = ref(fetch), attrs = writable | enumerable | configurable; structuredClone = ref(structuredClone), attrs = writable | enumerable | configurable; atob = ref(atob), attrs = writable | enumerable | configurable; btoa = ref(btoa), attrs = writable | enumerable | configurable; setTimeout = ref(setTimeout), attrs = writable | enumerable | configurable; clearTimeout = ref(clearTimeout), attrs = writable | enumerable | configurable; setInterval = ref(setInterval), attrs = writable | enumerable | configurable; clearInterval = ref(clearInterval), attrs = writable | enumerable | configurable; setImmediate = ref(setImmediate), attrs = writable | enumerable | configurable; clearImmediate = ref(clearImmediate), attrs = writable | enumerable | configurable; queueMicrotask = ref(queueMicrotask), attrs = writable | enumerable | configurable; gc = ref(gc); parseInt = ref(parseInt); parseFloat = ref(parseFloat); isNaN = ref(isNaN); isFinite = ref(isFinite); encodeURI = ref(encodeURI); decodeURI = ref(decodeURI); encodeURIComponent = ref(encodeURIComponent); decodeURIComponent = ref(decodeURIComponent); escape = ref(escape); unescape = ref(unescape); console = ref(console); process = ref(process); Math = ref(Math); JSON = ref(JSON); Reflect = ref(Reflect); Atomics = ref(Atomics); Intl = ref(Intl); WebAssembly = ref(WebAssembly); Temporal = ref(Temporal); performance = ref(performance), attrs = writable | enumerable | configurable; Performance = ref(Performance), attrs = writable | enumerable | configurable; PerformanceEntry = ref(PerformanceEntry), attrs = writable | enumerable | configurable; PerformanceMark = ref(PerformanceMark), attrs = writable | enumerable | configurable; PerformanceMeasure = ref(PerformanceMeasure), attrs = writable | enumerable | configurable; PerformanceObserver = ref(PerformanceObserver), attrs = writable | enumerable | configurable; PerformanceObserverEntryList = ref(PerformanceObserverEntryList), attrs = writable | enumerable | configurable; PerformanceResourceTiming = ref(PerformanceResourceTiming), attrs = writable | enumerable | configurable; crypto = accessor(get = "crypto.<get>"), attrs = enumerable | configurable; navigator = accessor(get = "navigator.<get>"), attrs = enumerable | configurable; NaN = NaN; Infinity = Infinity; undefined = undefined; }; } }
+    } as i64;
+    // Born on its static layout: every builtin key is declared, and
+    // population fills the declared slots (each starts undefined).
+    // SAFETY: just born, not yet reachable; GLOBAL_OBJECT's slots are inline.
+    unsafe {
+        let fields =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+        for slot in 0..crate::object::runtime_layouts::GLOBAL_OBJECT::SLOT_COUNT {
+            // GC_STORE_AUDIT(INIT): unpublished record; undefined words have no managed edges.
+            *fields.add(slot) = crate::value::TAG_UNDEFINED;
+        }
+    }
+    if phases == RealmPhases::Core && poison {
+        // Check mode: a slot phase B binds is born holding the poison word,
+        // so a reader that skips phase B cannot take it for `undefined`.
+        // SAFETY: as above; a declared key's slot is its layout position.
+        unsafe {
+            let fields =
+                crate::meta_slots_of!(crate::meta_obj_runtime_born!(new_ptr as *mut ObjectHeader));
+            for name in crate::codegen_abi::REALM_REST_NAMES.split_terminator(' ') {
+                if let Some(slot) = crate::object::runtime_layouts::builtin_global_slot(name) {
+                    // GC_STORE_AUDIT(INIT): unpublished record; an internal word, no managed edge.
+                    *fields.add(slot) = crate::codegen_abi::REALM_UNBOUND_POISON;
+                }
+            }
+        }
+    }
+    // A realm populated in one pass is complete from its allocation: the one
+    // pointer cell, as always. Phase A alone publishes the core cell instead,
+    // and the phase-B driver sets (and registers) the complete one.
+    let cell: *const std::cell::Cell<u64> = THREAD_GLOBAL_THIS.with(|c| {
+        if phases == RealmPhases::Both {
+            c.core.set(CORE_ONE_PASS);
+            &c.whole as *const std::cell::Cell<u64>
+        } else {
+            &c.core as *const std::cell::Cell<u64>
+        }
+    });
+    // SAFETY: the thread-local's cell, live for the life of this thread.
+    let cell = unsafe { &*cell };
+    cell.set(crate::value::js_nanbox_pointer(new_ptr).to_bits());
     // The thread-local cache stores the tagged JSValue, independently of
     // GLOBAL_THIS_PTR's raw pointer field. Register its writable word so marking
     // uses that encoding and every copying collection rewrites the cache too.
     // Otherwise later js_get_global_this() calls could read the from-space
     // object after its overflow fields were rekeyed to the moved copy.
     crate::gc::runtime_write_barrier_root_raw_ptr(new_ptr as *const u8);
-    let cache_slot = THREAD_GLOBAL_THIS.with(|c| c.as_ptr() as usize);
+    let cache_slot = cell.as_ptr() as usize;
     crate::gc::js_gc_register_global_root(cache_slot as i64);
     // Publish to the process-global GC-root slot so this thread's collector marks
     // it (the unit-test harness runs tests sequentially, so the slot always holds
@@ -133,7 +594,14 @@ pub extern "C" fn js_get_global_this() -> f64 {
     crate::gc::runtime_store_root_atomic_raw_i64(&GLOBAL_THIS_PTR, new_ptr, Ordering::Release);
     // Populate constructor values for `globalThis.Array` / `context.Array` style
     // reads without changing bare `new Array`.
-    populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    if phases == RealmPhases::Both {
+        populate_global_this_builtins(new_ptr as *mut ObjectHeader);
+    } else {
+        THREAD_GLOBAL_THIS.with(|c| c.core_running.set(true));
+        populate_realm_core(new_ptr as *mut ObjectHeader);
+        THREAD_GLOBAL_THIS.with(|c| c.core_running.set(false));
+    }
+    drop(bootstrap_window);
     GLOBAL_THIS_READY.store(true, Ordering::Release);
     // #6982: population allocates heavily, so an evacuating minor may have moved
     // the singleton since `new_ptr` was taken. The registered root slot above is
@@ -141,7 +609,7 @@ pub extern "C" fn js_get_global_this() -> f64 {
     // than handing back the stale from-space pointer. (`GLOBAL_THIS_PTR` is
     // likewise rewritten by `scan_object_cache_roots_mut`.) Falling back to
     // `new_ptr` keeps the pre-existing behaviour if the cache was cleared.
-    let current = THREAD_GLOBAL_THIS.with(|c| c.get());
+    let current = cell.get();
     if current != 0 {
         f64::from_bits(current)
     } else {
@@ -211,7 +679,7 @@ pub(crate) extern "C" fn global_this_date_thunk(
     _this: crate::closure::JsThis,
     _arg: f64,
 ) -> f64 {
-    let string = crate::date::js_date_to_string(crate::date::js_date_new());
+    let string = crate::date_hook_slots::js_date_to_string(crate::date_hook_slots::js_date_new());
     crate::value::js_nanbox_string(string as i64)
 }
 
@@ -378,19 +846,17 @@ unsafe fn subclass_this_object_ptr(this_box: f64) -> Option<*mut ObjectHeader> {
 /// the NaN-boxed pointer-tagged value the Request/Response thunk returns) on a
 /// subclass instance's `this` under `__perry_fetch_handle__`. Stored as a
 /// pointer-tagged value so the collector traces its registry ownership.
-unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
+pub(crate) unsafe fn attach_fetch_handle_to_this(this_box: f64, handle_box: f64) {
     if subclass_this_object_ptr(this_box).is_some() {
         crate::object::field_get_set::FETCH_SUBCLASS_EVER
             .store(true, std::sync::atomic::Ordering::Relaxed);
         let scope = crate::gc::RuntimeHandleScope::new();
         let owner = scope.root_nanbox_f64(this_box);
         let _handle = scope.root_nanbox_f64(handle_box);
-        let key = crate::string::js_string_from_bytes(
-            FETCH_SUBCLASS_HANDLE_FIELD.as_ptr(),
-            FETCH_SUBCLASS_HANDLE_FIELD.len() as u32,
-        );
-        let obj = crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *mut ObjectHeader;
-        crate::object::js_object_set_field_by_name(obj, key, handle_box);
+        // A private element, not a property: reflection never sees it.
+        crate::object::field_get_set::fetch_subclass_handle_element(|e| {
+            e.set(owner.get_nanbox_f64(), _handle.get_nanbox_f64())
+        });
     }
 }
 
@@ -464,13 +930,7 @@ pub(crate) unsafe fn temporal_subclass_super(
 /// `undefined` (the super-call value).
 #[no_mangle]
 pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64) -> f64 {
-    let handle = global_this_request_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        input,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Request", this_box, input, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
@@ -478,14 +938,36 @@ pub extern "C" fn js_request_subclass_init(this_box: f64, input: f64, init: f64)
 /// `js_request_subclass_init` for the Response handle.
 #[no_mangle]
 pub extern "C" fn js_response_subclass_init(this_box: f64, body: f64, init: f64) -> f64 {
-    let handle = global_this_response_thunk(
-        std::ptr::null(),
-        crate::closure::JsThis::UNDEFINED,
-        body,
-        init,
-    );
-    unsafe { attach_fetch_handle_to_this(this_box, handle) };
+    unsafe { init_fetch_backed_receiver("Response", this_box, body, init) };
     f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// `super(a, b)` of a WHATWG Fetch base (`Request`, `Response`, `Headers`,
+/// `Blob`). Their values are registry handles, which carry neither a shape nor
+/// a [[Prototype]] of their own, so a handle can never BE a subclass instance.
+/// The receiver the derived `new` already allocated (its shape names the
+/// subclass prototype) stays `this`: the base builds its native storage and
+/// the receiver keeps it under the hidden backing field, which the inherited
+/// getters, methods and `instanceof` read. Returns whether `name` is such a
+/// base.
+pub(crate) unsafe fn init_fetch_backed_receiver(
+    name: &str,
+    this_box: f64,
+    arg0: f64,
+    arg1: f64,
+) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this_h = scope.root_nanbox_f64(this_box);
+    let this = crate::closure::JsThis::UNDEFINED;
+    let handle = match name {
+        "Request" => global_this_request_thunk(std::ptr::null(), this, arg0, arg1),
+        "Response" => global_this_response_thunk(std::ptr::null(), this, arg0, arg1),
+        "Headers" => global_this_headers_thunk(std::ptr::null(), this, arg0),
+        "Blob" => global_this_blob_thunk(std::ptr::null(), this, arg0, arg1),
+        _ => return false,
+    };
+    attach_fetch_handle_to_this(this_h.get_nanbox_f64(), handle);
+    true
 }
 
 // The two shims above are reached only from codegen-emitted IR (the
@@ -730,10 +1212,10 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             };
             match method.as_str() {
                 "EventEmitter" => {
-                    return crate::node_stream::js_event_emitter_subclass_init(this_box, options)
+                    return crate::stream_hooks::js_event_emitter_subclass_init(this_box, options)
                 }
                 "EventEmitterAsyncResource" => {
-                    return crate::node_stream::js_event_emitter_async_resource_subclass_init(
+                    return crate::stream_hooks::js_event_emitter_async_resource_subclass_init(
                         this_box, options,
                     )
                 }
@@ -753,7 +1235,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::wasi::js_wasi_init_subclass(this_box, arg0);
+        crate::wasi_hook_slots::js_wasi_init_subclass(this_box, arg0);
         return undef;
     }
     // #10453: `class X extends AsyncResource` threw "Class constructor
@@ -791,7 +1273,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         } else {
             undef
         };
-        crate::async_hooks::js_async_resource_subclass_init(this_box, type_value, options);
+        crate::async_hook_slots::js_async_resource_subclass_init(this_box, type_value, options);
         return undef;
     }
     // #10625: `class X extends AsyncLocalStorage` reached indirectly (local
@@ -823,6 +1305,61 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             let dispatch: crate::value::JsNativeAsyncLocalStorageSubclassInitFn =
                 std::mem::transmute(ptr);
             return dispatch(this_box);
+        }
+    }
+    // `class C extends Gzip` (any native module constructor whose state the
+    // instance carries): the state is attached to the receiver, the receiver
+    // is not replaced. The ordinary dispatch below constructed a FRESH native
+    // instance on the base prototype, which `super()` then bound as `this`, so
+    // the instance lost the subclass prototype and its overrides. Ask the
+    // native side for the constructor's in-place form first: the same
+    // `js_zlib_<codec>_init(owner, opts)` the static lowering emits when it can
+    // see the base, so an implicit constructor, an explicit `super(...args)`
+    // and a dynamic heritage all build the one instance. An export with no
+    // in-place form answers undefined and keeps the paths below.
+    if let Some((module, method)) = bound_native_parent.as_ref() {
+        if subclass_this_object_ptr(this_box).is_some() {
+            let module =
+                super::super::native_module::normalize_native_module_alias(module.as_str());
+            let options = if args_len >= 1 && !args_ptr.is_null() {
+                *args_ptr
+            } else {
+                undef
+            };
+            // Who owns the constructor answers the in-place init: the
+            // runtime's own natives run their init here (installed or not:
+            // the hook below is filled only by the zlib features and a
+            // runtime-only link never fills it); every other export asks the
+            // hook. A second runtime-owned native gets its own arm.
+            let initialized = match (module, method.as_str()) {
+                // `class X extends AssertionError`: node declares
+                // `class AssertionError extends Error`, so `super(options)`
+                // initializes the derived receiver.
+                ("assert" | "assert/strict", "AssertionError") => {
+                    super::super::assert::js_assert_assertion_error_init_receiver(this_box, options)
+                }
+                _ => {
+                    let ptr = crate::value::JS_NATIVE_SUBCLASS_INIT
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        undef
+                    } else {
+                        let init: crate::value::JsNativeSubclassInitFn = std::mem::transmute(ptr);
+                        init(
+                            module.as_ptr(),
+                            module.len(),
+                            method.as_ptr(),
+                            method.len(),
+                            this_box,
+                            args_ptr,
+                            args_len,
+                        )
+                    }
+                }
+            };
+            if !crate::value::JSValue::from_bits(initialized.to_bits()).is_undefined() {
+                return undef;
+            }
         }
     }
     // #10448: `class X extends Transform` (and Readable/Writable/Duplex)
@@ -1029,22 +1566,8 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // Request` — Next.js middleware's NextRequestHint lost the parent's
     // symbol-keyed internal state (`this[INTERNALS]`), so `request.nextUrl`
     // threw on every request.
-    let parent_is_user_ctor = {
-        let bits = parent_val.to_bits();
-        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-        const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        match bits & TAG_MASK {
-            INT32_TAG => true, // ClassRef
-            POINTER_TAG => {
-                let p = (bits & PTR_MASK) as usize;
-                crate::closure::is_closure_ptr(p)
-                    || super::super::class_registry::is_class_object_ptr(p as *const u8)
-            }
-            _ => false,
-        }
-    };
+    let parent_is_user_ctor = crate::closure::is_closure_bits(parent_val.to_bits())
+        || super::super::class_registry::is_class_object_value(parent_val);
     let kind = super::super::class_registry::identify_global_builtin_constructor(parent_val)
         .or_else(|| {
             if parent_is_user_ctor || !parent_missing {
@@ -1063,13 +1586,13 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
     // properties; replacing it would lose derived fields and prototype identity.
     match kind {
         Some("EventTarget") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 0)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 0)
         }
         Some("AbortController") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 1)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 1)
         }
         Some("AbortSignal") => {
-            return crate::event_target::js_event_target_subclass_init(this_box, 2)
+            return crate::event_target_hook_slots::js_event_target_subclass_init(this_box, 2)
         }
         Some("Event") | Some("CustomEvent") => {
             let arg0 = if args_len > 0 { *args_ptr } else { undef };
@@ -1078,7 +1601,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_event_subclass_init(
+            return crate::event_target_hook_slots::js_event_subclass_init(
                 this_box,
                 arg0,
                 arg1,
@@ -1093,7 +1616,9 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            return crate::event_target::js_dom_exception_subclass_init(this_box, arg0, arg1);
+            return crate::event_target_hook_slots::js_dom_exception_subclass_init(
+                this_box, arg0, arg1,
+            );
         }
         _ => {}
     }
@@ -1130,7 +1655,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
         }
     }
     match kind {
-        Some("Request") | Some("Response") => {
+        Some(name @ ("Request" | "Response" | "Headers" | "Blob")) => {
             let arg0 = if args_len >= 1 && !args_ptr.is_null() {
                 *args_ptr
             } else {
@@ -1141,22 +1666,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             } else {
                 undef
             };
-            let handle = if kind == Some("Request") {
-                global_this_request_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            } else {
-                global_this_response_thunk(
-                    std::ptr::null(),
-                    crate::closure::JsThis::UNDEFINED,
-                    arg0,
-                    arg1,
-                )
-            };
-            attach_fetch_handle_to_this(this_box, handle);
+            init_fetch_backed_receiver(name, this_box, arg0, arg1);
             undef
         }
         _ => {
@@ -1175,23 +1685,7 @@ pub unsafe extern "C-unwind" fn js_fetch_or_value_super(
             let mut callee = parent_val;
             let bits = parent_val.to_bits();
             const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-            const PTR_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-            let usable = if bits & TAG_MASK == POINTER_TAG {
-                let p = (bits & PTR_MASK) as usize;
-                // A real callability test for the remaining pointer values.
-                // The prior `class_id != 0` accepted any
-                // pointer-tagged object with a class id — including non-callable
-                // instances — so a stale captured slot holding one of those
-                // skipped the `parent_closure_in_chain` recovery below and
-                // dispatched `js_native_call_value` on a non-function.
-                crate::closure::is_closure_ptr(p)
-            } else {
-                // INT32-tagged ClassRefs route through the static super paths
-                // before reaching here; anything else (undefined / a stale
-                // numeric slot) is not a constructor.
-                bits & TAG_MASK == 0x7FFE_0000_0000_0000
-            };
+            let usable = crate::closure::is_closure_bits(bits);
             if !usable && parent_missing {
                 if let Some(obj) = subclass_this_object_ptr(this_box) {
                     let cid = crate::object::js_object_get_class_id(obj);

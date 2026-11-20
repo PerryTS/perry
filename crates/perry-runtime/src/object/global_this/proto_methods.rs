@@ -1,8 +1,4 @@
 use super::*;
-// Array.prototype thunks live in the sibling `array_error` module (split out of
-// `global_this`); pull them in directly so the prototype-install tables resolve
-// `array_proto_*_thunk` without routing through the trunk re-exports.
-use super::array_error::*;
 
 /// The prototype's Fetch getter delegates to the native storage of its
 /// receiver, including a source-compiled subclass's stashed native handle.
@@ -32,7 +28,7 @@ fn fetch_prototype_getter(this: crate::closure::JsThis, name: &'static str) -> f
     }
 }
 macro_rules! fetch_getter_bodies {
-    ($($body:ident => $name:literal),+ $(,)?) => {
+    ($($body:ident => $name:literal, $info:expr),+ $(,)?) => {
         $(extern "C" fn $body(
             _closure: *const crate::closure::ClosureHeader,
             this: crate::closure::JsThis,
@@ -42,7 +38,7 @@ macro_rules! fetch_getter_bodies {
 
         fn fetch_getter_info(name: &str) -> *const crate::closure::JsFunctionInfo {
             match name {
-                $($name => crate::fn_info!($body, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),)+
+                $($name => $info,)+
                 _ => unreachable!("unregistered Fetch prototype getter"),
             }
         }
@@ -52,27 +48,30 @@ macro_rules! fetch_getter_bodies {
 // A separate body also gives each getter its own reflective function name.
 // These zero-capture closures retain the original bootstrap allocation shape.
 fetch_getter_bodies! {
-    fetch_body => "body",
-    fetch_body_used => "bodyUsed",
-    fetch_headers => "headers",
-    fetch_ok => "ok",
-    fetch_redirected => "redirected",
-    fetch_status => "status",
-    fetch_status_text => "statusText",
-    fetch_type => "type",
-    fetch_url => "url",
-    fetch_cache => "cache",
-    fetch_credentials => "credentials",
-    fetch_destination => "destination",
-    fetch_duplex => "duplex",
-    fetch_integrity => "integrity",
-    fetch_keepalive => "keepalive",
-    fetch_method => "method",
-    fetch_mode => "mode",
-    fetch_redirect => "redirect",
-    fetch_referrer => "referrer",
-    fetch_referrer_policy => "referrerPolicy",
-    fetch_signal => "signal",
+    fetch_body => "body", crate::fn_info!(#[realm(realm_decl! { "Request.prototype.body.<get>", provider = intrinsic_closure, effects = { returns(fresh(ReadableStream.prototype) | prim(null)) }; "Response.prototype.body.<get>", provider = intrinsic_closure, effects = { returns(fresh(ReadableStream.prototype) | prim(null)) }; })] export crate::object::global_this::proto_methods::fetch_body, 0; with_name("get body"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_body_used => "bodyUsed", crate::fn_info!(#[realm(realm_decl! { "Request.prototype.bodyUsed.<get>", provider = intrinsic_closure; "Response.prototype.bodyUsed.<get>", provider = intrinsic_closure; })] export crate::object::global_this::proto_methods::fetch_body_used, 0; with_name("get bodyUsed"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_headers => "headers", crate::fn_info!(#[realm(realm_decl! { "Request.prototype.headers.<get>", provider = intrinsic_closure, effects = { returns(fresh(Headers.prototype)) }; "Response.prototype.headers.<get>", provider = intrinsic_closure, effects = { returns(fresh(Headers.prototype)) }; })] export crate::object::global_this::proto_methods::fetch_headers, 0; with_name("get headers"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_ok => "ok", crate::fn_info!(#[realm("Response.prototype.ok.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_ok, 0; with_name("get ok"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_redirected => "redirected", crate::fn_info!(#[realm("Response.prototype.redirected.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_redirected, 0; with_name("get redirected"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_status => "status", crate::fn_info!(#[realm("Response.prototype.status.<get>", provider = intrinsic_closure, effects = { returns(prim(num)) })] export crate::object::global_this::proto_methods::fetch_status, 0; with_name("get status"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_status_text => "statusText", crate::fn_info!(#[realm("Response.prototype.statusText.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) })] export crate::object::global_this::proto_methods::fetch_status_text, 0; with_name("get statusText"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_type => "type", crate::fn_info!(#[realm(realm_decl! { "Response.prototype.type.<get>", provider = intrinsic_closure; "Blob.prototype.type.<get>", provider = intrinsic_closure; })] export crate::object::global_this::proto_methods::fetch_type, 0; with_name("get type"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_url => "url", crate::fn_info!(#[realm(realm_decl! { "Request.prototype.url.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) }; "Response.prototype.url.<get>", provider = intrinsic_closure, effects = { returns(prim(str)) }; })] export crate::object::global_this::proto_methods::fetch_url, 0; with_name("get url"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_cache => "cache", crate::fn_info!(#[realm("Request.prototype.cache.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_cache, 0; with_name("get cache"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_credentials => "credentials", crate::fn_info!(#[realm("Request.prototype.credentials.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_credentials, 0; with_name("get credentials"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_destination => "destination", crate::fn_info!(#[realm("Request.prototype.destination.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_destination, 0; with_name("get destination"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_duplex => "duplex", crate::fn_info!(#[realm("Request.prototype.duplex.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_duplex, 0; with_name("get duplex"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_integrity => "integrity", crate::fn_info!(#[realm("Request.prototype.integrity.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_integrity, 0; with_name("get integrity"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_keepalive => "keepalive", crate::fn_info!(#[realm("Request.prototype.keepalive.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_keepalive, 0; with_name("get keepalive"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_method => "method", crate::fn_info!(#[realm("Request.prototype.method.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_method, 0; with_name("get method"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_mode => "mode", crate::fn_info!(#[realm("Request.prototype.mode.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_mode, 0; with_name("get mode"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_redirect => "redirect", crate::fn_info!(#[realm("Request.prototype.redirect.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_redirect, 0; with_name("get redirect"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_referrer => "referrer", crate::fn_info!(#[realm("Request.prototype.referrer.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_referrer, 0; with_name("get referrer"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_referrer_policy => "referrerPolicy", crate::fn_info!(#[realm("Request.prototype.referrerPolicy.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_referrer_policy, 0; with_name("get referrerPolicy"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_signal => "signal", crate::fn_info!(#[realm("Request.prototype.signal.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_signal, 0; with_name("get signal"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_size => "size", crate::fn_info!(#[realm("Blob.prototype.size.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_size, 0; with_name("get size"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_name => "name", crate::fn_info!(#[realm("File.prototype.name.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_name, 0; with_name("get name"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+    fetch_last_modified => "lastModified", crate::fn_info!(#[realm("File.prototype.lastModified.<get>", provider = intrinsic_closure)] export crate::object::global_this::proto_methods::fetch_last_modified, 0; with_name("get lastModified"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
 }
 unsafe fn install_fetch_prototype_getter(proto: *mut ObjectHeader, name: &str) {
     // Realm installation runs no user code. Keep the receiver and the new
@@ -95,15 +94,14 @@ fn web_method_receiver(this: crate::closure::JsThis, name: &str) -> *mut ObjectH
     }
     let message = format!("Value of this must be of type {name}");
     let text = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(text);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(text))
 }
 
 extern "C" fn url_prototype_href_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
 ) -> f64 {
-    crate::url::js_url_get_href(web_method_receiver(this, "URL"))
+    crate::url_hooks::url_get_href(web_method_receiver(this, "URL"))
 }
 
 fn web_method_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
@@ -153,36 +151,11 @@ unsafe fn install_web_builtin_to_string_tag(proto_obj: *mut ObjectHeader, tag: &
     );
 }
 
-/// Universal `Object.prototype` methods inherited by every receiver in
-/// JS. Installed on every built-in constructor's prototype since Perry's
-/// prototype chain on these built-ins doesn't walk back up to a shared
-/// `Object.prototype` — so `Number.prototype.hasOwnProperty` would
-/// otherwise be missing.
-const OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
-    ("hasOwnProperty", 1),
-    ("isPrototypeOf", 1),
-    ("propertyIsEnumerable", 1),
-    ("toLocaleString", 0),
-    ("valueOf", 0),
-    // Annex B §B.2.2 legacy accessor helpers.
-    ("__defineGetter__", 2),
-    ("__defineSetter__", 2),
-    ("__lookupGetter__", 1),
-    ("__lookupSetter__", 1),
-    // `toString` is installed separately on Object/typed arrays etc. with
-    // dedicated thunks; do not include it here to avoid clobbering those.
-];
-
-/// [`OBJECT_PROTO_METHODS`] minus the members only `%Object.prototype%` owns
-/// (`hasOwnProperty`, `isPrototypeOf`, `propertyIsEnumerable` and the Annex B
-/// accessor helpers; ECMA-262 20.1.3, B.2.2): the members a builtin prototype
-/// other than `Object.prototype` still installs. Every other builtin
-/// prototype INHERITS the Object-only ones (#11915) — a copy would hide a
-/// replacement on `Object.prototype` from arrays, Maps, functions and
-/// primitives alike.
-const SHARED_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[("toLocaleString", 0), ("valueOf", 0)];
-
-/// The Annex B §B.2.2 legacy accessor helpers of [`OBJECT_PROTO_METHODS`].
+/// The Annex B §B.2.2 legacy accessor helpers, own methods of
+/// `%Object.prototype%` only (ECMA-262 B.2.2). Every other builtin prototype
+/// inherits every `Object.prototype` member through its [[Prototype]] chain,
+/// as node does: a copy would be an own key node does not have and would
+/// hide `Object.prototype`'s method from the chain.
 const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("__defineGetter__", 2),
     ("__defineSetter__", 2),
@@ -190,39 +163,20 @@ const ANNEX_B_OBJECT_PROTO_METHODS: &[(&str, u32)] = &[
     ("__lookupSetter__", 1),
 ];
 
-/// [`OBJECT_PROTO_METHODS`] for `builtin_name`'s prototype: all of them on
-/// `Object.prototype`, and on any other prototype only the members that are
-/// not `Object.prototype`'s alone.
-fn install_object_proto_copies(builtin_name: &str, proto_obj: *mut ObjectHeader) {
-    if builtin_name == "Object" {
-        install_noop_proto_methods(proto_obj, OBJECT_PROTO_METHODS);
-    } else {
-        install_noop_proto_methods(proto_obj, SHARED_OBJECT_PROTO_METHODS);
+/// An accessor on a buffer kind's prototype (`ArrayBuffer.prototype.byteLength`
+/// and friends): a getter closure, no setter.
+fn install_buffer_proto_getter(
+    proto_obj: *mut ObjectHeader,
+    name: &str,
+    thunk: *const crate::closure::JsFunctionInfo,
+) {
+    unsafe {
+        let getter = crate::closure::js_closure_alloc(thunk, 0);
+        if !getter.is_null() {
+            let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
+            install_builtin_getter(proto_obj, name, getter_bits);
+        }
     }
-}
-
-#[cfg(test)]
-#[test]
-fn shared_object_proto_methods_are_the_complement_of_the_object_only_ones() {
-    const OBJECT_ONLY_METHODS: [&str; 7] = [
-        "hasOwnProperty",
-        "isPrototypeOf",
-        "propertyIsEnumerable",
-        "__defineGetter__",
-        "__defineSetter__",
-        "__lookupGetter__",
-        "__lookupSetter__",
-    ];
-    let shared: Vec<&str> = OBJECT_PROTO_METHODS
-        .iter()
-        .map(|(name, _)| *name)
-        .filter(|name| !OBJECT_ONLY_METHODS.contains(name))
-        .collect();
-    let listed: Vec<&str> = SHARED_OBJECT_PROTO_METHODS
-        .iter()
-        .map(|(n, _)| *n)
-        .collect();
-    assert_eq!(shared, listed);
 }
 
 /// Populate well-known method properties on a built-in constructor's
@@ -247,10 +201,20 @@ fn shared_object_proto_methods_are_the_complement_of_the_object_only_ones() {
 /// spec descriptor. Mirrors `collection_proto_thunks::install_collection_iterator_symbol`;
 /// kept here because `Array.prototype` is populated in this module.
 fn install_builtin_iterator_symbol(proto_obj: *mut ObjectHeader, value: f64) {
+    install_builtin_well_known_symbol_method(proto_obj, "iterator", value);
+}
+
+/// `proto[Symbol.<symbol_name>] = value` as a method alias (`{ writable,
+/// configurable }`): the same function object as the named member.
+pub(crate) fn install_builtin_well_known_symbol_method(
+    proto_obj: *mut ObjectHeader,
+    symbol_name: &str,
+    value: f64,
+) {
     if proto_obj.is_null() || value.to_bits() == crate::value::TAG_UNDEFINED {
         return;
     }
-    let iter = crate::symbol::well_known_symbol("iterator");
+    let iter = crate::symbol::well_known_symbol(symbol_name);
     if iter.is_null() {
         return;
     }
@@ -296,11 +260,11 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(object_prototype_dunder_proto_getter_thunk, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Object.prototype.__proto__.<get>")] export crate::object::global_this::proto_methods::object_prototype_dunder_proto_getter_thunk, 0; with_name("get __proto__"), with_declared(0)),
         0,
     );
     let setter = crate::closure::js_closure_alloc(
-        crate::fn_info!(object_prototype_dunder_proto_setter_thunk, 1; with_declared(1)),
+        crate::fn_info!(#[realm("Object.prototype.__proto__.<set>")] export crate::object::global_this::proto_methods::object_prototype_dunder_proto_setter_thunk, 1; with_name("set __proto__"), with_declared(1)),
         0,
     );
     if getter.is_null() || setter.is_null() {
@@ -431,7 +395,9 @@ fn make_proto_member_enumerable(proto_obj: *mut ObjectHeader, name: &str) {
     );
 }
 
-pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
+// Size optimization stops at installation; prototype method bodies stay hot.
+#[optimize(size)]
+#[rustfmt::skip] pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     if proto_obj.is_null() {
         return;
     }
@@ -439,25 +405,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
     // (own module, to keep this file under the 2000-line gate).
     if collection_proto_thunks::install_collection_proto_methods(builtin_name, proto_obj) {
         set_intrinsic_to_string_tag(proto_obj, builtin_name);
-        install_object_proto_copies(builtin_name, proto_obj);
-        // `Object.prototype.toLocaleString` is a real generic method: it calls
-        // the receiver's `toString`. A no-op-backed copy is re-dispatched by
-        // name and would incorrectly call `receiver.toLocaleString` again.
-        // Keep this override collection-only; Array has its own element-wise
-        // locale-string behavior.
-        install_proto_method(
-            proto_obj,
-            "toLocaleString",
-            crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-            0,
-        );
         return;
     }
     // #7947: WeakRef / FinalizationRegistry prototypes get brand-checking
     // thunks, so `WeakRef.prototype.deref.call(wr)`, `wr.deref.bind(wr)` and
     // `typeof wr.deref` resolve instead of answering `undefined`.
     if super::super::weakref_proto_thunks::install_weakref_proto_methods(builtin_name, proto_obj) {
-        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4795: TC39 explicit-resource-management stacks.
@@ -465,19 +418,16 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         builtin_name,
         proto_obj,
     ) {
-        install_object_proto_copies(builtin_name, proto_obj);
         return;
     }
     // #4100: primitive wrapper prototypes need real thunks for their own
     // methods so reflective calls brand-check `this` instead of hitting the
     // generic Object no-op/valueOf fallbacks.
     if primitive_proto_thunks::install_primitive_proto_methods(builtin_name, proto_obj) {
-        // #11915: `hasOwnProperty` / `isPrototypeOf` / `propertyIsEnumerable`
-        // are inherited from `%Object.prototype%`, never copied, so a
-        // replacement there is what every primitive reads.
-        if !matches!(builtin_name, "Number" | "BigInt") {
-            install_noop_proto_methods(proto_obj, &[("toLocaleString", 0)]);
-        }
+        // #11915: every `Object.prototype` member the wrapper prototype does
+        // not own in node (`toLocaleString` on Boolean/String/Symbol,
+        // `hasOwnProperty`, ...) is inherited from `%Object.prototype%`, never
+        // copied.
         return;
     }
     match builtin_name {
@@ -486,62 +436,71 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // its body then lives in the shape's existing ConstFn lanes.
             let scope = crate::gc::RuntimeHandleScope::new();
             let values = crate::closure::js_closure_alloc(
-                crate::fn_info!(array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | crate::codegen_abi::FN_PERMANENT_IMAGE)),
+                crate::fn_info!(#[realm(Array.prototype.values)] export crate::object::global_this::array_error::array_prototype_values_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | crate::codegen_abi::FN_PERMANENT_IMAGE)),
                 0,
             );
             super::super::native_module::set_bound_native_closure_name(values, "values");
             let values = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(values as i64));
+            crate::array::note_realm_array_values(
+                crate::value::js_nanbox_get_pointer(values.get_nanbox_f64()) as usize,
+            );
             install_builtin_iterator_symbol(proto_obj, values.get_nanbox_f64());
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(array_prototype_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.slice)] export crate::object::global_this::array_error::array_prototype_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.toString)] export crate::object::global_this::array_error::array_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_noop_proto_methods(
+            install_noop_proto_methods(proto_obj, &[("toLocaleString", realm_noop_tolocalestring_0_metadata!(length))]);
+            // A real thunk: the no-op one re-dispatched `toSpliced` by name on
+            // `this` and answered `{}` for every receiver that is no plain
+            // Array (an Array-subclass instance, an array-like, a Proxy).
+            install_proto_method(
                 proto_obj,
-                &[("toLocaleString", 0), ("toSpliced", 2)],
+                "toSpliced",
+                crate::fn_info!(#[realm(Array.prototype.toSpliced, spec = {length = 2}, emit = metadata(realm_array_prototype_to_spliced_metadata))] export native_args crate::object::global_this::array_error::array_prototype_to_spliced_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                realm_array_prototype_to_spliced_metadata!(length),
             );
             install_proto_method(
                 proto_obj,
                 "entries",
-                crate::fn_info!(array_prototype_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.entries)] export crate::object::global_this::array_error::array_prototype_entries_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "keys",
-                crate::fn_info!(array_prototype_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.keys)] export crate::object::global_this::array_error::array_prototype_keys_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "toReversed",
-                crate::fn_info!(array_prototype_to_reversed_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.toReversed)] export crate::object::global_this::array_error::array_prototype_to_reversed_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "toSorted",
-                crate::fn_info!(array_prototype_to_sorted_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.toSorted)] export crate::object::global_this::array_error::array_prototype_to_sorted_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "with",
-                crate::fn_info!(array_prototype_with_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.with)] export crate::object::global_this::array_error::array_prototype_with_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method(
                 proto_obj,
                 "flat",
-                crate::fn_info!(array_prototype_flat_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.flat)] export crate::object::global_this::array_error::array_prototype_flat_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // Generic mutators get REAL thunks (vs the noop above) so a borrowed
@@ -565,38 +524,38 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "pop",
-                crate::fn_info!(array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
+                crate::fn_info!(#[realm(Array.prototype.pop)] export crate::object::global_this::array_error::array_prototype_pop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "shift",
-                crate::fn_info!(array_prototype_shift_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.shift)] export crate::object::global_this::array_error::array_prototype_shift_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "reverse",
-                crate::fn_info!(array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.reverse, effects = { reads(this); stores(elems(this) -> elems(this)); returns(this) })] export crate::object::global_this::array_error::array_prototype_reverse_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "push",
-                crate::fn_info!(native_args array_prototype_push_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
+                crate::fn_info!(#[realm(Array.prototype.push, effects = { reads(this); stores(rest(0) -> elems(this)); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_prototype_push_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR | perry_abi::FN_RESOLVES_ARRAY_THIS)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "unshift",
-                crate::fn_info!(native_args array_prototype_unshift_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.unshift)] export native_args crate::object::global_this::array_error::array_prototype_unshift_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "splice",
-                crate::fn_info!(native_args array_prototype_splice_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                2,
+                crate::fn_info!(#[realm(Array.prototype.splice, spec = {length = 2}, emit = metadata(realm_array_prototype_splice_metadata))] export native_args crate::object::global_this::array_error::array_prototype_splice_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                realm_array_prototype_splice_metadata!(length),
             );
             // #6908: `fill` / `copyWithin` get real thunks too — a Proxy
             // receiver resolves them through `Get(proxy, name)` to the
@@ -605,14 +564,14 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method_rest_with_length(
                 proto_obj,
                 "fill",
-                crate::fn_info!(native_args array_prototype_fill_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.fill, effects = { reads(this); coerce(arg(1), ToPrimitive); coerce(arg(2), ToPrimitive); stores(arg(0) -> elems(this)); returns(this) })] export native_args crate::object::global_this::array_error::array_prototype_fill_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "copyWithin",
-                crate::fn_info!(native_args array_prototype_copy_within_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                2,
+                crate::fn_info!(#[realm(Array.prototype.copyWithin, spec = {length = 2}, emit = metadata(realm_array_prototype_copywithin_metadata))] export native_args crate::object::global_this::array_error::array_prototype_copy_within_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                realm_array_prototype_copywithin_metadata!(length),
             );
             // `sort` / `concat` get real thunks too: a borrowed
             // `obj.sort = Array.prototype.sort; obj.sort()` must run the
@@ -622,7 +581,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "sort",
-                crate::fn_info!(array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.sort, effects = { reads(this); coerce(elems(this), ToPrimitive); calls(arg(0), this = prim(undefined), args = [elems(this), elems(this)]); coerce(returned(0), ToPrimitive); stores(elems(this) -> elems(this)); returns(this) })] export crate::object::global_this::array_error::array_prototype_sort_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // Iteration / search methods: real generic-engine thunks (rest
@@ -630,77 +589,77 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             let arraylike_thunks: [(&str, *const crate::closure::JsFunctionInfo, u32); 15] = [
                 (
                     "forEach",
-                    crate::fn_info!(native_args array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.forEach, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num) | elems(this), this]); stores(fresh); returns(prim(undefined)) })] export native_args crate::object::global_this::array_error::array_proto_forEach_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "map",
-                    crate::fn_info!(native_args array_proto_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.map, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); returns(species(this, args = [prim(num)], elems = [returned(0)])) })] export native_args crate::object::global_this::array_error::array_proto_map_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "filter",
-                    crate::fn_info!(native_args array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.filter, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); returns(species(this, args = [prim(num)], elems = [elems(this)])) })] export native_args crate::object::global_this::array_error::array_proto_filter_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "flatMap",
-                    crate::fn_info!(native_args array_proto_flatMap_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.flatMap)] export native_args crate::object::global_this::array_error::array_proto_flatMap_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "some",
-                    crate::fn_info!(native_args array_proto_some_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.some, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_some_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "every",
-                    crate::fn_info!(native_args array_proto_every_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.every, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_every_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "find",
-                    crate::fn_info!(native_args array_proto_find_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.find, effects = { reads(this); calls(arg(0), this = arg(1), args = [elems(this), prim(num), this]); stores(fresh); returns(elems(this)); returns(prim(undefined)) })] export native_args crate::object::global_this::array_error::array_proto_find_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findIndex",
-                    crate::fn_info!(native_args array_proto_findIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.findIndex)] export native_args crate::object::global_this::array_error::array_proto_findIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLast",
-                    crate::fn_info!(native_args array_proto_findLast_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.findLast)] export native_args crate::object::global_this::array_error::array_proto_findLast_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "findLastIndex",
-                    crate::fn_info!(native_args array_proto_findLastIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.findLastIndex)] export native_args crate::object::global_this::array_error::array_proto_findLastIndex_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduce",
-                    crate::fn_info!(native_args array_proto_reduce_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.reduce)] export native_args crate::object::global_this::array_error::array_proto_reduce_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "reduceRight",
-                    crate::fn_info!(native_args array_proto_reduceRight_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.reduceRight)] export native_args crate::object::global_this::array_error::array_proto_reduceRight_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "indexOf",
-                    crate::fn_info!(native_args array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.indexOf, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(num)) })] export native_args crate::object::global_this::array_error::array_proto_indexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "lastIndexOf",
-                    crate::fn_info!(native_args array_proto_lastIndexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.lastIndexOf)] export native_args crate::object::global_this::array_error::array_proto_lastIndexOf_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
                 (
                     "includes",
-                    crate::fn_info!(native_args array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(Array.prototype.includes, effects = { reads(this); coerce(arg(1), ToPrimitive); identity(arg(0)); identity(elems(this)); stores(fresh); returns(prim(bool)) })] export native_args crate::object::global_this::array_error::array_proto_includes_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                     1,
                 ),
             ];
@@ -710,109 +669,86 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "at",
-                crate::fn_info!(array_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.at)] export crate::object::global_this::array_error::array_proto_at_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "join",
-                crate::fn_info!(array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.join, effects = { reads(this); coerce(elems(this), ToPrimitive); coerce(arg(0), ToPrimitive); stores(fresh); returns(prim(str)) })] export crate::object::global_this::array_error::array_proto_join_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest_with_length(
                 proto_obj,
                 "concat",
-                crate::fn_info!(native_args array_prototype_concat_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Array.prototype.concat)] export native_args crate::object::global_this::array_error::array_prototype_concat_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "ArrayBuffer" => {
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // resizable resize transfer transferToFixedLength detached
+            // @@toStringTag. `valueOf` / `toLocaleString` are Object.prototype's
+            // (the chain), not own copies.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(ArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("ArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "resizable", crate::fn_info!(#[realm("ArrayBuffer.prototype.resizable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_resizable_getter_thunk, 0; with_name("get resizable"), with_declared(0)));
             // ES2024 (#10873): `resize`, `transfer`, `transferToFixedLength`.
             install_proto_method(
                 proto_obj,
                 "resize",
-                crate::fn_info!(array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(ArrayBuffer.prototype.resize)] export crate::object::global_this::typed_array::array_buffer_resize_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
-            // The thunks take the optional `newLength` (call arity 1); the
-            // spec `.length` of both is 0.
+            // The transfer thunks take the optional `newLength` (call arity 1);
+            // the spec `.length` of both is 0.
             let transfers: [(&str, *const crate::closure::JsFunctionInfo); 2] = [
                 (
                     "transfer",
-                    crate::fn_info!(array_buffer_transfer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(ArrayBuffer.prototype.transfer, spec = {length = 0}, emit = metadata(realm_arraybuffer_transfer_public))] export crate::object::global_this::typed_array::array_buffer_transfer_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
                 (
                     "transferToFixedLength",
-                    crate::fn_info!(array_buffer_transfer_to_fixed_length_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    crate::fn_info!(#[realm(ArrayBuffer.prototype.transferToFixedLength, spec = {length = 0}, emit = metadata(realm_arraybuffer_transfer_public))] export crate::object::global_this::typed_array::array_buffer_transfer_to_fixed_length_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 ),
             ];
             for (name, thunk) in transfers {
                 let installed = install_proto_method(proto_obj, name, thunk, 1);
                 let closure = crate::value::js_nanbox_get_pointer(installed) as usize;
                 if closure != 0 {
-                    super::super::native_module::set_builtin_closure_length(closure, 0);
+                    super::super::native_module::set_builtin_closure_length(closure, realm_arraybuffer_transfer_public!(length));
                 }
             }
-            let getters: [(&str, *const crate::closure::JsFunctionInfo); 4] = [
-                (
-                    "byteLength",
-                    crate::fn_info!(array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "resizable",
-                    crate::fn_info!(array_buffer_resizable_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "maxByteLength",
-                    crate::fn_info!(array_buffer_max_byte_length_getter_thunk, 0; with_declared(0)),
-                ),
-                (
-                    "detached",
-                    crate::fn_info!(array_buffer_detached_getter_thunk, 0; with_declared(0)),
-                ),
-            ];
-            for (name, thunk) in getters {
-                unsafe {
-                    let getter = crate::closure::js_closure_alloc(thunk, 0);
-                    if !getter.is_null() {
-                        let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                        install_builtin_getter(proto_obj, name, getter_bits);
-                    }
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "detached", crate::fn_info!(#[realm("ArrayBuffer.prototype.detached.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::array_buffer_detached_getter_thunk, 0; with_name("get detached"), with_declared(0)));
             set_intrinsic_to_string_tag(proto_obj, "ArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SharedArrayBuffer" => {
-            // Mirror the ArrayBuffer.prototype shape: a brand-checking `slice`
-            // (instances dispatch through buffer_dispatch; `.call(notSab)`
-            // throws here), a `byteLength` accessor whose getter brand-checks
-            // the shared registry, and the `Symbol.toStringTag`.
+            // node's own-key order: constructor byteLength slice maxByteLength
+            // growable grow @@toStringTag. The brand-checking `slice` / `grow`
+            // and getters serve `.call(notSab)`; instances dispatch through
+            // buffer_dispatch.
+            install_buffer_proto_getter(proto_obj, "byteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0)));
             install_proto_method(
                 proto_obj,
                 "slice",
-                crate::fn_info!(shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.slice)] export crate::object::global_this::typed_array::shared_array_buffer_slice_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
-            unsafe {
-                let getter = crate::closure::js_closure_alloc(
-                    crate::fn_info!(shared_array_buffer_byte_length_getter_thunk, 0; with_declared(0)),
-                    0,
-                );
-                if !getter.is_null() {
-                    let getter_bits = crate::value::js_nanbox_pointer(getter as i64).to_bits();
-                    install_builtin_getter(proto_obj, "byteLength", getter_bits);
-                }
-            }
+            install_buffer_proto_getter(proto_obj, "maxByteLength", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.maxByteLength.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(num)) })] export crate::object::global_this::typed_array::shared_array_buffer_max_byte_length_getter_thunk, 0; with_name("get maxByteLength"), with_declared(0)));
+            install_buffer_proto_getter(proto_obj, "growable", crate::fn_info!(#[realm("SharedArrayBuffer.prototype.growable.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(prim(bool)) })] export crate::object::global_this::typed_array::shared_array_buffer_growable_getter_thunk, 0; with_name("get growable"), with_declared(0)));
+            install_proto_method(
+                proto_obj,
+                "grow",
+                crate::fn_info!(#[realm(SharedArrayBuffer.prototype.grow)] export crate::object::global_this::typed_array::shared_array_buffer_grow_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                1,
+            );
             set_intrinsic_to_string_tag(proto_obj, "SharedArrayBuffer");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "DataView" => {
             // Install the reflectable `byteLength`/`byteOffset`/`buffer`
@@ -822,43 +758,42 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // `DataView.prototype.getInt32.call(dv, …)` cascade.
             super::super::dataview_proto_thunks::install_dataview_proto_methods(proto_obj);
             set_intrinsic_to_string_tag(proto_obj, "DataView");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "Object" => {
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(object_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.toString)] export crate::object::global_this::array_error::object_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.isPrototypeOf)] export crate::object::global_this::array_error::object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.hasOwnProperty, effects = { coerce(arg(0), ToPrimitive); returns(prim(bool)) })] export crate::object::global_this::array_error::object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "propertyIsEnumerable",
-                crate::fn_info!(object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.propertyIsEnumerable)] export crate::object::global_this::array_error::object_prototype_property_is_enumerable_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "toLocaleString",
-                crate::fn_info!(object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.toLocaleString)] export crate::object::global_this::array_error::object_prototype_to_locale_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Object.prototype.valueOf, effects = { returns(this) })] export crate::object::global_this::array_error::object_prototype_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // Annex B §B.2.2: own methods of `%Object.prototype%`, as its
@@ -894,13 +829,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "apply",
-                crate::fn_info!(function_prototype_apply_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.apply)] export crate::object::global_this::array_error::function_prototype_apply_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_proto_method_rest(
                 proto_obj,
                 "bind",
-                crate::fn_info!(native_args function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.bind, effects = { reads(field(this, length), field(this, name)); stores(fresh); returns(bound) })] export native_args crate::object::global_this::array_error::function_prototype_bind_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // #4101: dedicated toString thunk (source reconstruction + brand
@@ -908,13 +843,13 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(function_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.toString)] export crate::object::global_this::array_error::function_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method_rest(
                 proto_obj,
                 "call",
-                crate::fn_info!(native_args function_prototype_call_thunk, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Function.prototype.call)] export native_args crate::object::global_this::array_error::js_function_prototype_call_body, 1; with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             // `valueOf` and `toLocaleString` are inherited from
@@ -929,21 +864,19 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             // `String.prototype.slice.call(receiver, …)` works on a boxed/object
             // receiver.
             string_proto_thunks::install_string_proto_methods("String", proto_obj);
-            // Install noop Object methods first (includes a noop `valueOf`), then
-            // override `toString` and `valueOf` with brand-checking thunks — they
+            // `toString` and `valueOf` are brand-checking thunks — they
             // must throw TypeError for non-String receivers (ECMA-262 §22.1.3.28
             // `thisStringValue`), unlike the generic coercing methods above.
-            install_object_proto_copies(builtin_name, proto_obj);
             install_proto_method(
                 proto_obj,
                 "toString",
-                crate::fn_info!(primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(String.prototype.toString, effects = { returns(prim(str)) })] export crate::object::primitive_proto_thunks::string_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_proto_method(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(String.prototype.valueOf, effects = { returns(prim(str)) })] export crate::object::primitive_proto_thunks::string_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
         }
@@ -957,10 +890,6 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("toString", 1),
                 ],
             );
-            // OBJECT_PROTO_METHODS installs noop `valueOf`/`toLocaleString`, so
-            // it must run BEFORE the brand thunks below — otherwise it clobbers
-            // them back to no-ops.
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: `valueOf`/`toLocaleString` brand-check `this` and throw a
             // `TypeError` on an incompatible reflective receiver instead of
             // falling back to `Object.prototype` (`"[object Object]"`).
@@ -978,9 +907,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "Boolean" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: brand-checking `toString`/`valueOf` (mirror `Number`).
-            // Installed after OBJECT_PROTO_METHODS so the brand `valueOf` wins.
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -995,14 +922,12 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "Symbol" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: Symbol.prototype previously had no own methods, so
             // reflective `Symbol.prototype.toString.call(sym)` resolved to
             // `Object.prototype.toString` (`"[object Symbol]"`) and an
             // incompatible receiver returned `"[object Object]"` instead of
             // throwing. Install brand-checking thunks that re-dispatch to the
-            // canonical symbol logic (`"Symbol(x)"`). After OBJECT_PROTO_METHODS
-            // so the brand `valueOf` wins.
+            // canonical symbol logic (`"Symbol(x)"`).
             install_proto_method(
                 proto_obj,
                 "toString",
@@ -1017,10 +942,9 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
         }
         "BigInt" => {
-            install_object_proto_copies(builtin_name, proto_obj);
             // #4100: mirror `Symbol` — brand-checking `toString`(radix)/`valueOf`
             // re-dispatched to the canonical BigInt logic (`(5n).toString(2)`
-            // → `"101"`). After OBJECT_PROTO_METHODS so the brand `valueOf` wins.
+            // → `"101"`).
             let to_string = install_proto_method(
                 proto_obj,
                 "toString",
@@ -1077,41 +1001,34 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
                     ("setUTCMonth", 2),
                     ("setUTCSeconds", 2),
                     ("setYear", 1),
-                    ("toDateString", 0),
+                    ("toDateString", realm_noop_todatestring_0_metadata!(length)),
                     ("toISOString", 0),
                     ("toJSON", 1),
                     ("toLocaleDateString", 0),
-                    ("toLocaleString", 0),
+                    ("toLocaleString", realm_noop_tolocalestring_0_metadata!(length)),
                     ("toLocaleTimeString", 0),
-                    ("toTimeString", 0),
+                    ("toTimeString", realm_noop_totimestring_0_metadata!(length)),
                     ("toUTCString", 0),
                     ("valueOf", 0),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             // Overwrite the no-op getter entries with brand-checking thunks so
             // `Date.prototype.getX.call(this)` performs `thisTimeValue(this)`
             // (TypeError on a non-Date receiver) and dispatches correctly.
-            // MUST run after the OBJECT_PROTO_METHODS block, which would
-            // otherwise re-clobber `valueOf` with the generic Object no-op.
+            // MUST run after the no-op list above, which installs a generic
+            // `valueOf` placeholder.
             date_proto_thunks::install_date_proto_getters(proto_obj);
             // Same treatment for the mutating setters: `Date.prototype.setX`
             // brand-checks `this`, reads `[[DateValue]]` before coercing args,
-            // then mutates the cell. Also after the OBJECT_PROTO_METHODS block.
+            // then mutates the cell. Also after the no-op list above.
             date_proto_thunks::install_date_proto_setters(proto_obj);
             // Overwrite the no-op toLocaleString with a real Intl-aware thunk
             // that forwards locale/options to temporal_locale_string.
             date_proto_thunks::install_date_proto_to_locale_string(proto_obj);
             install_proto_method(
                 proto_obj,
-                "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            install_proto_method(
-                proto_obj,
                 "toString",
-                crate::fn_info!(date_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Date.prototype.toString)] export crate::object::global_this::array_error::date_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             // `Date.prototype[Symbol.toPrimitive]` — a generic `OrdinaryToPrimitive`
@@ -1120,20 +1037,17 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             date_proto_thunks::install_date_proto_to_primitive(proto_obj);
         }
         "RegExp" => {
-            // Real accessor getters (`source`/`flags`/`global`/…) so reflection
-            // (`getOwnPropertyDescriptor(RegExp.prototype, "source").get`) and
-            // brand-checked `.call(this)` work, and instances inherit them.
-            super::super::regex_proto_thunks::install_regex_proto_accessors(proto_obj);
-            // Real brand-checking `exec`/`test`/`toString`/`compile` (Annex B).
-            super::super::regex_proto_thunks::install_regex_proto_methods(proto_obj);
+            // The regex installer owns the accessors and real methods,
+            // including the symbol methods; this always-live builder must
+            // not retain their function tables without that install.
+            crate::regex::hooked::install_proto(proto_obj);
             // `compile` is installed as a real brand-checking thunk by
             // `install_regex_proto_methods` when `regex-engine` is on; without an
             // engine it falls back to the Annex-B no-op here.
             #[cfg(not(feature = "regex-engine"))]
             install_noop_proto_methods(proto_obj, &[("compile", 2)]);
-            install_object_proto_copies(builtin_name, proto_obj);
         }
-        "URLPattern" => {
+        "URLPattern" | "URLSearchParams" => {
             super::web_hooks::proto_methods(
                 super::web_hooks::WebGroup::Url,
                 builtin_name,
@@ -1153,102 +1067,26 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         // `install_web_builtin_to_string_tag` keeps
         // `Object.getOwnPropertyDescriptor(URLSearchParams.prototype,
         // Symbol.toStringTag)` reflecting a real descriptor.
-        "URLSearchParams" => {
-            use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
-            use crate::url::search_params as usp;
-            for (name, info, arity) in [
-                (
-                    "append",
-                    crate::fn_info!(usp::usp_proto_append, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    2,
-                ),
-                (
-                    "delete",
-                    crate::fn_info!(usp::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "entries",
-                    crate::fn_info!(usp::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "forEach",
-                    crate::fn_info!(usp::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "get",
-                    crate::fn_info!(usp::usp_proto_get, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "getAll",
-                    crate::fn_info!(usp::usp_proto_get_all, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "has",
-                    crate::fn_info!(usp::usp_proto_has, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    1,
-                ),
-                (
-                    "keys",
-                    crate::fn_info!(usp::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "set",
-                    crate::fn_info!(usp::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    2,
-                ),
-                (
-                    "sort",
-                    crate::fn_info!(usp::usp_proto_sort, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "toString",
-                    crate::fn_info!(usp::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-                (
-                    "values",
-                    crate::fn_info!(usp::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
-                    0,
-                ),
-            ] {
-                install_proto_method(proto_obj, name, info, arity);
-            }
-            install_web_getter_accessor(
-                proto_obj,
-                "size",
-                crate::fn_info!(usp::usp_proto_size_getter, 0; with_declared(0)),
-            );
-            install_object_proto_copies(builtin_name, proto_obj);
-            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
-        }
         "Promise" => {
             install_proto_method(
                 proto_obj,
                 "catch",
-                crate::fn_info!(crate::promise::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.catch)] export crate::promise::then::promise_prototype_catch_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "finally",
-                crate::fn_info!(crate::promise::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.finally)] export crate::promise::then::promise_prototype_finally_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "then",
-                crate::fn_info!(crate::promise::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Promise.prototype.then)] export crate::promise::then::promise_prototype_then_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             set_intrinsic_to_string_tag(proto_obj, "Promise");
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         // #340/#341: these carried `install_noop_proto_methods` placeholders —
         // the prototype looked right to reflection while the real work went
@@ -1327,25 +1165,17 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
         }
         "Error" | "TypeError" | "RangeError" | "SyntaxError" | "ReferenceError"
         | "AggregateError" | "EvalError" | "URIError" => {
-            install_object_proto_copies(builtin_name, proto_obj);
-            install_proto_method(
-                proto_obj,
-                "toString",
-                crate::fn_info!(error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                0,
-            );
-            install_proto_method(
-                proto_obj,
-                "isPrototypeOf",
-                crate::fn_info!(object_prototype_is_prototype_of_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
-            install_proto_method(
-                proto_obj,
-                "hasOwnProperty",
-                crate::fn_info!(object_prototype_has_own_property_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                1,
-            );
+            // ECMA-262 20.5.3: `toString` is an own member of `Error.prototype`
+            // only; the NativeError prototypes inherit it (and every
+            // `Object.prototype` member) through their [[Prototype]] chain.
+            if builtin_name == "Error" {
+                install_proto_method(
+                    proto_obj,
+                    "toString",
+                    crate::fn_info!(#[realm(Error.prototype.toString, effects = { reads(field(this, name), field(this, message)); coerce(field(this, name), ToPrimitive); coerce(field(this, message), ToPrimitive); returns(prim(str)) })] export crate::object::global_this::array_error::error_prototype_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    0,
+                );
+            }
         }
         // Typed-array constructors: keep the reified per-kind prototype
         // method set (#2142) on each per-kind `.prototype` so direct
@@ -1414,7 +1244,7 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             install_proto_method(
                 proto(),
                 "toString",
-                crate::fn_info!(url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(realm_decl! { URL.prototype.toJSON; URL.prototype.toString; })] export crate::object::global_this::proto_methods::url_prototype_href_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             web_method_enumerable(proto(), "toString");
@@ -1430,10 +1260,24 @@ pub(crate) fn populate_builtin_prototype_methods(builtin_name: &str, proto_obj: 
             );
             web_method_enumerable(proto(), "toJSON");
         }
+        // Node's getters, installed only for a program that reaches navigator.
+        "Navigator" => crate::navigator::populate_prototype(proto_obj),
+        // External families (members from their provider), then the fixed tag.
+        "ReadableStream"
+        | "ReadableStreamDefaultController"
+        | "ReadableStreamDefaultReader"
+        | "ReadableByteStreamController"
+        | "ReadableStreamBYOBReader"
+        | "ReadableStreamBYOBRequest" => {
+            unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
+        }
         "AbortController" | "AbortSignal" | "EventTarget" | "Event" | "CustomEvent"
-        | "DOMException" => {
+        | "DOMException" | "MessageEvent" => {
             let _gc = crate::gc::GcSuppressScope::new();
-            crate::event_target::install_web_event_proto_methods(builtin_name, proto_obj);
+            crate::event_target_hook_slots::install_web_event_proto_methods(
+                builtin_name,
+                proto_obj,
+            );
             unsafe {
                 install_web_builtin_to_string_tag(proto_obj, builtin_name);
             }
@@ -1536,17 +1380,101 @@ fn install_webcrypto_proto_getter(
 /// The `global-url` prototype member tables, installed by `web_hooks`.
 pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHeader) {
     match builtin_name {
+        "URLSearchParams" => {
+            use crate::closure::{FN_BUILTIN, FN_NON_CONSTRUCTOR};
+
+            // Node's own-key order and descriptors: `size`, then the WebIDL
+            // operations in interface order, all enumerable; then the
+            // symbols, `Symbol.toStringTag` before `Symbol.iterator`.
+            install_web_getter_accessor(
+                proto_obj,
+                "size",
+                crate::fn_info!(#[realm("URLSearchParams.prototype.size.<get>")] export crate::url::search_params::usp_proto_size_getter, 0; with_name("get size"), with_declared(0)),
+            );
+            let mut entries = f64::from_bits(crate::value::TAG_UNDEFINED);
+            for (name, info, arity) in [
+                (
+                    "append",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.append)] export crate::url::search_params::usp_proto_append, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "delete",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.delete, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_delete_metadata))] export crate::url::search_params::usp_proto_delete, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    realm_urlsearchparams_prototype_delete_metadata!(length),
+                ),
+                (
+                    "get",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.get)] export crate::url::search_params::usp_proto_get, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "getAll",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.getAll)] export crate::url::search_params::usp_proto_get_all, 1; with_declared(1), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    1,
+                ),
+                (
+                    "has",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.has, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_has_metadata))] export crate::url::search_params::usp_proto_has, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    realm_urlsearchparams_prototype_has_metadata!(length),
+                ),
+                (
+                    "set",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.set)] export crate::url::search_params::usp_proto_set, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    2,
+                ),
+                (
+                    "sort",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.sort)] export crate::url::search_params::usp_proto_sort, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "entries",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.entries)] export crate::url::search_params::usp_proto_entries, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "forEach",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.forEach, spec = {length = 1}, emit = metadata(realm_urlsearchparams_prototype_foreach_metadata))] export crate::url::search_params::usp_proto_for_each, 2; with_declared(2), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    realm_urlsearchparams_prototype_foreach_metadata!(length),
+                ),
+                (
+                    "keys",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.keys)] export crate::url::search_params::usp_proto_keys, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "values",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.values)] export crate::url::search_params::usp_proto_values, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+                (
+                    "toString",
+                    crate::fn_info!(#[realm(URLSearchParams.prototype.toString)] export crate::url::search_params::usp_proto_to_string, 0; with_declared(0), with_flags(FN_BUILTIN | FN_NON_CONSTRUCTOR)),
+                    0,
+                ),
+            ] {
+                let value = install_proto_method(proto_obj, name, info, arity);
+                make_proto_member_enumerable(proto_obj, name);
+                if name == "entries" {
+                    entries = value;
+                }
+            }
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLSearchParams") };
+            // WHATWG: `@@iterator` is the same function as `entries`.
+            install_builtin_iterator_symbol(proto_obj, entries);
+        }
         "URLPattern" => {
             install_proto_method_rest(
                 proto_obj,
                 "exec",
-                crate::fn_info!(url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(URLPattern.prototype.exec)] export crate::object::global_this::install_static::url_pattern_exec_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method_rest(
                 proto_obj,
                 "test",
-                crate::fn_info!(url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(URLPattern.prototype.test)] export crate::object::global_this::install_static::url_pattern_test_thunk, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             for name in [
@@ -1581,50 +1509,48 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
             install_proto_method(
                 proto_obj,
                 "encode",
-                crate::fn_info!(crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(TextEncoder.prototype.encode)] export crate::text::text_encoder_encode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_proto_method(
                 proto_obj,
                 "encodeInto",
-                crate::fn_info!(crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(TextEncoder.prototype.encodeInto)] export crate::text::text_encoder_encode_into_thunk, 2; with_declared(2), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 2,
             );
             install_web_getter_accessor(
                 proto_obj,
                 "encoding",
-                crate::fn_info!(crate::text::text_encoder_encoding_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("TextEncoder.prototype.encoding.<get>")] export crate::text::text_encoder_encoding_getter, 0; with_name("get encoding"), with_declared(0)),
             );
             for name in ["encode", "encodeInto"] {
                 make_proto_member_enumerable(proto_obj, name);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextEncoder") };
         }
         "TextDecoder" => {
             install_proto_method(
                 proto_obj,
                 "decode",
-                crate::fn_info!(crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(TextDecoder.prototype.decode)] export crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_web_getter_accessor(
                 proto_obj,
                 "encoding",
-                crate::fn_info!(crate::text::text_decoder_encoding_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("TextDecoder.prototype.encoding.<get>")] export crate::text::text_decoder_encoding_getter, 0; with_name("get encoding"), with_declared(0)),
             );
             install_web_getter_accessor(
                 proto_obj,
                 "fatal",
-                crate::fn_info!(crate::text::text_decoder_fatal_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("TextDecoder.prototype.fatal.<get>")] export crate::text::text_decoder_fatal_getter, 0; with_name("get fatal"), with_declared(0)),
             );
             install_web_getter_accessor(
                 proto_obj,
                 "ignoreBOM",
-                crate::fn_info!(crate::text::text_decoder_ignore_bom_getter, 0; with_declared(0)),
+                crate::fn_info!(#[realm("TextDecoder.prototype.ignoreBOM.<get>")] export crate::text::text_decoder_ignore_bom_getter, 0; with_name("get ignoreBOM"), with_declared(0)),
             );
             make_proto_member_enumerable(proto_obj, "decode");
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "TextDecoder") };
         }
         _ => {}
@@ -1642,38 +1568,37 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
             let entries_value = install_proto_method(
                 proto_obj,
                 "entries",
-                crate::fn_info!(global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Headers.prototype.entries)] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
             install_builtin_iterator_symbol(proto_obj, entries_value);
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("append", 2),
+                    ("append", realm_noop_append_2_metadata!(length)),
                     ("delete", 1),
                     ("forEach", 1),
                     ("get", 1),
-                    ("getSetCookie", 0),
+                    ("getSetCookie", realm_noop_getsetcookie_0_metadata!(length)),
                     ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
+                    ("keys", realm_noop_keys_0_metadata!(length)),
+                    ("set", realm_noop_set_2_metadata!(length)),
+                    ("values", realm_noop_values_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, "Headers") };
         }
         "Request" | "Response" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("arrayBuffer", 0),
-                    ("blob", 0),
-                    ("bytes", 0),
-                    ("clone", 0),
-                    ("formData", 0),
-                    ("json", 0),
-                    ("text", 0),
+                    ("arrayBuffer", realm_noop_arraybuffer_0_metadata!(length)),
+                    ("blob", realm_noop_blob_0_metadata!(length)),
+                    ("bytes", realm_noop_bytes_0_metadata!(length)),
+                    ("clone", realm_noop_clone_0_metadata!(length)),
+                    ("formData", realm_noop_formdata_0_metadata!(length)),
+                    ("json", realm_noop_json_0_metadata!(length)),
+                    ("text", realm_noop_text_0_metadata!(length)),
                 ],
             );
             // Web Fetch accessors must be visible as accessor descriptors on
@@ -1721,40 +1646,59 @@ pub(super) fn web_webfetch_proto_methods(builtin_name: &str, proto_obj: *mut Obj
                     install_fetch_prototype_getter(proto_obj, name);
                 }
             }
-            install_object_proto_copies(builtin_name, proto_obj);
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "Blob" | "File" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("arrayBuffer", 0),
-                    ("bytes", 0),
-                    ("slice", 0),
-                    ("stream", 0),
-                    ("text", 0),
+                    ("arrayBuffer", realm_noop_arraybuffer_0_metadata!(length)),
+                    ("bytes", realm_noop_bytes_0_metadata!(length)),
+                    ("slice", realm_noop_slice_0_metadata!(length)),
+                    ("stream", realm_noop_stream_0_metadata!(length)),
+                    ("text", realm_noop_text_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
+            // A File inherits `size`/`type` from Blob.prototype. These getters
+            // are how an instance whose native handle sits in its backing
+            // (a subclass, or a custom new.target) reaches that state.
+            let accessors: &[&str] = if builtin_name == "Blob" {
+                &["type", "size"]
+            } else {
+                &["name", "lastModified"]
+            };
+            unsafe {
+                for name in accessors {
+                    install_fetch_prototype_getter(proto_obj, name);
+                }
+            }
             unsafe { install_web_builtin_to_string_tag(proto_obj, builtin_name) };
         }
         "FormData" => {
             install_noop_proto_methods(
                 proto_obj,
                 &[
-                    ("append", 2),
+                    ("append", realm_noop_append_2_metadata!(length)),
                     ("delete", 1),
-                    ("entries", 0),
+                    ("entries", realm_noop_entries_0_metadata!(length)),
                     ("forEach", 1),
                     ("get", 1),
                     ("getAll", 1),
                     ("has", 1),
-                    ("keys", 0),
-                    ("set", 2),
-                    ("values", 0),
+                    ("keys", realm_noop_keys_0_metadata!(length)),
+                    ("set", realm_noop_set_2_metadata!(length)),
+                    ("values", realm_noop_values_0_metadata!(length)),
                 ],
             );
-            install_object_proto_copies(builtin_name, proto_obj);
+            if let Some(entries) = unsafe {
+                crate::object::own_property_get_by_bytes(
+                    proto_obj,
+                    b"entries",
+                    crate::value::js_nanbox_pointer(proto_obj as i64),
+                )
+            } {
+                install_builtin_iterator_symbol(proto_obj, f64::from_bits(entries.bits()));
+            }
             unsafe { install_web_builtin_to_string_tag(proto_obj, "FormData") };
         }
         _ => {}
@@ -1766,7 +1710,6 @@ pub(super) fn web_websocket_proto_methods(builtin_name: &str, proto_obj: *mut Ob
     match builtin_name {
         "WebSocket" => {
             websocket_global::install_proto_methods(proto_obj);
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         _ => {}
     }
@@ -1779,71 +1722,68 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             install_webcrypto_proto_getter(
                 proto_obj,
                 "subtle",
-                crate::fn_info!(webcrypto_subtle_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("Crypto.prototype.subtle.<get>", constructible = true)] export crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk, 0; with_name("get subtle"), with_declared(0)),
             );
             install_webcrypto_proto_method(
                 proto_obj,
                 "getRandomValues",
-                crate::fn_info!(webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Crypto.prototype.getRandomValues)] export crate::object::global_this::ctor_thunks::webcrypto_get_random_values_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_webcrypto_proto_method(
                 proto_obj,
                 "randomUUID",
-                crate::fn_info!(webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(Crypto.prototype.randomUUID)] export crate::object::global_this::ctor_thunks::webcrypto_random_uuid_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 0,
             );
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "CryptoKey" => {
             for (name, func_ptr) in [
                 (
                     "algorithm",
-                    crate::fn_info!(cryptokey_algorithm_getter_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.algorithm.<get>", constructible = true)] export crate::object::global_this::ctor_thunks::cryptokey_algorithm_getter_thunk, 0; with_name("get algorithm"), with_declared(0)),
                 ),
                 (
                     "extractable",
-                    crate::fn_info!(cryptokey_extractable_getter_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.extractable.<get>", constructible = true)] export crate::object::global_this::ctor_thunks::cryptokey_extractable_getter_thunk, 0; with_name("get extractable"), with_declared(0)),
                 ),
                 (
                     "type",
-                    crate::fn_info!(cryptokey_type_getter_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.type.<get>", constructible = true)] export crate::object::global_this::ctor_thunks::cryptokey_type_getter_thunk, 0; with_name("get type"), with_declared(0)),
                 ),
                 (
                     "usages",
-                    crate::fn_info!(cryptokey_usages_getter_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("CryptoKey.prototype.usages.<get>", constructible = true)] export crate::object::global_this::ctor_thunks::cryptokey_usages_getter_thunk, 0; with_name("get usages"), with_declared(0)),
                 ),
             ] {
                 install_webcrypto_proto_getter(proto_obj, name, func_ptr);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         "SubtleCrypto" => {
             for (name, func_ptr, length) in [
                 (
                     "encapsulateBits",
-                    crate::fn_info!(subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    2,
+                    crate::fn_info!(#[realm(SubtleCrypto.prototype.encapsulateBits, spec = {length = 2}, emit = metadata(realm_subtlecrypto_prototype_encapsulatebits_metadata))] export crate::object::global_this::install_static::subtle_crypto_encapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    realm_subtlecrypto_prototype_encapsulatebits_metadata!(length),
                 ),
                 (
                     "decapsulateBits",
-                    crate::fn_info!(subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    3,
+                    crate::fn_info!(#[realm(SubtleCrypto.prototype.decapsulateBits, spec = {length = 3}, emit = metadata(realm_subtlecrypto_prototype_decapsulatebits_metadata))] export crate::object::global_this::install_static::subtle_crypto_decapsulate_bits_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    realm_subtlecrypto_prototype_decapsulatebits_metadata!(length),
                 ),
                 (
                     "encapsulateKey",
-                    crate::fn_info!(subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    5,
+                    crate::fn_info!(#[realm(SubtleCrypto.prototype.encapsulateKey, spec = {length = 5}, emit = metadata(realm_subtlecrypto_prototype_encapsulatekey_metadata))] export crate::object::global_this::install_static::subtle_crypto_encapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    realm_subtlecrypto_prototype_encapsulatekey_metadata!(length),
                 ),
                 (
                     "decapsulateKey",
-                    crate::fn_info!(subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
-                    6,
+                    crate::fn_info!(#[realm(SubtleCrypto.prototype.decapsulateKey, spec = {length = 6}, emit = metadata(realm_subtlecrypto_prototype_decapsulatekey_metadata))] export crate::object::global_this::install_static::subtle_crypto_decapsulate_key_thunk, 1; with_rest(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                    realm_subtlecrypto_prototype_decapsulatekey_metadata!(length),
                 ),
             ] {
                 install_webcrypto_proto_method_rest_with_length(proto_obj, name, func_ptr, length);
             }
-            install_object_proto_copies(builtin_name, proto_obj);
         }
         _ => {}
     }

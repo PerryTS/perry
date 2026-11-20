@@ -82,7 +82,7 @@ pub fn handle_expando_get(handle: i64, name: &str) -> Option<f64> {
 unsafe fn bag_data_get(bag: *mut super::ObjectHeader, name: &str) -> Option<f64> {
     let keys = crate::object::object_keys(bag);
     let slot =
-        crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name.as_bytes())?;
+        crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name.as_bytes())?;
     Some(crate::object::key_attrs::object_slot_data_f64(bag, slot))
 }
 
@@ -145,6 +145,26 @@ pub(crate) fn handle_expando_delete(handle: i64, name: &str) -> bool {
     }
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     crate::object::js_object_delete_field(bag, key) != 0
+}
+
+/// Ordinary [[Get]] order for a native handle: an own property in the
+/// handle's bag shadows every prototype member the typed handle dispatchers
+/// answer (`res.writeHead = hook` must read back `hook`, not the intrinsic).
+/// `None` when the bag has no such own property.
+///
+/// # Safety
+/// `name_ptr` must point at `name_len` readable bytes (or be null).
+pub unsafe fn handle_own_property_get(
+    handle: i64,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> Option<f64> {
+    if name_ptr.is_null() || name_len == 0 || !super::class_handles::native_property_bag_published()
+    {
+        return None;
+    }
+    let name = std::str::from_utf8(std::slice::from_raw_parts(name_ptr, name_len)).ok()?;
+    handle_expando_get(handle, name)
 }
 
 /// True when the handle has at least one user-assigned expando property.

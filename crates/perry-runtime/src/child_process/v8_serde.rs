@@ -99,7 +99,7 @@ impl Drop for GcSuppressGuard {
 /// ordering is Node's, NOT Perry's: Buffer is inserted at index 10, pushing the
 /// BigInt views to 11/12. Verified empirically against `v8.serialize`.
 fn v8_index_for_kind(kind: u8) -> u64 {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     match kind {
         KIND_INT8 => 0,
         KIND_UINT8 => 1,
@@ -120,7 +120,7 @@ fn v8_index_for_kind(kind: u8) -> u64 {
 /// Inverse of [`v8_index_for_kind`]; `None` for Buffer (10), DataView (9), or an
 /// unknown index — the caller builds those specially.
 fn kind_for_v8_index(idx: u64) -> Option<u8> {
-    use crate::typedarray::*;
+    use crate::typedarray_hook_slots::*;
     Some(match idx {
         0 => KIND_INT8,
         1 => KIND_UINT8,
@@ -215,11 +215,6 @@ impl Serializer {
                 .push(if jsval.as_bool() { TAG_TRUE } else { TAG_FALSE });
             return;
         }
-        if jsval.is_int32() {
-            self.out.push(TAG_INT32);
-            self.write_zigzag(jsval.as_int32() as i64);
-            return;
-        }
         if jsval.is_number() {
             self.write_number(value);
             return;
@@ -257,7 +252,7 @@ impl Serializer {
             }
             return true;
         }
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw) {
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw) {
             if self.write_reference_or_register(raw) {
                 return true;
             }
@@ -294,7 +289,17 @@ impl Serializer {
             if self.write_reference_or_register(raw) {
                 return true;
             }
-            let array = crate::array::js_array_from_value(value);
+            // A plain Array is written from itself: `js_array_from_value` is
+            // `Array.from`, whose copy turns every hole into `undefined` and
+            // reads a sparse Array's gap index by index. Anything else that
+            // IsArray (a Proxy over an Array) is still read through that copy.
+            let plain = crate::value::addr_class::pointer_value_header(value.to_bits())
+                .is_some_and(|header| crate::gc_type_is_array!(header.obj_type));
+            let array = if plain {
+                raw as *mut crate::array::ArrayHeader
+            } else {
+                crate::array::js_array_from_value(value)
+            };
             self.write_dense_array(array);
             return true;
         }
@@ -325,13 +330,13 @@ impl Serializer {
                 return true;
             }
             self.out.push(TAG_DATE);
-            self.write_double(crate::date::js_date_get_time(value));
+            self.write_double(crate::date_hook_slots::js_date_get_time(value));
             return true;
         }
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(raw) } {
             if matches!(
                 header.obj_type,
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
             ) {
                 if self.depth >= MAX_DEPTH {
                     self.out.push(TAG_UNDEFINED);
@@ -343,7 +348,7 @@ impl Serializer {
                 self.write_dense_array(raw as *mut crate::array::ArrayHeader);
                 return true;
             }
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_object!(header.obj_type) {
                 if self.depth >= MAX_DEPTH {
                     self.out.push(TAG_UNDEFINED);
                     return true;
@@ -397,18 +402,18 @@ impl Serializer {
 
     fn write_bigint(&mut self, value: f64) {
         let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-        let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
+        let negative = crate::bigint_hooks::js_bigint_is_negative(ptr) != 0;
         // Read the magnitude as big-endian bytes (negate first if needed), then
         // reverse to the little-endian order V8's bigint digits use.
         let mag_ptr = if negative {
             {
-                crate::bigint::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
+                crate::bigint_hooks::js_bigint_neg(ptr) as *const crate::bigint::BigIntHeader
             }
         } else {
             ptr
         };
         let nbytes = unsafe { (*mag_ptr).limb_count * 8 };
-        let be_buf = crate::bigint::js_bigint_to_buffer(mag_ptr, nbytes as i32);
+        let be_buf = crate::bigint_hooks::js_bigint_to_buffer(mag_ptr, nbytes as i32);
         let mut le: Vec<u8> = if be_buf.is_null() {
             Vec::new()
         } else {
@@ -475,6 +480,14 @@ impl Serializer {
             self.out.push(TAG_UNDEFINED);
             return;
         }
+        // A hole (`[1, , 3]`) or a sparse Array (`a[3000000] = 1`) is a sparse
+        // record, as V8 writes it: the dense form would turn every hole into
+        // an `undefined` element (`0 in clone` true) and spell out millions
+        // of them.
+        if let Some(holey) = unsafe { holey_plain_array(arr) } {
+            self.write_sparse_array(holey);
+            return;
+        }
         self.depth += 1;
         let len = unsafe { (*arr).length } as usize;
         self.out.push(TAG_BEGIN_DENSE_ARRAY);
@@ -486,6 +499,30 @@ impl Serializer {
         self.out.push(TAG_END_DENSE_ARRAY);
         self.write_varint(0); // no extra named properties
         self.write_varint(len as u64);
+        self.depth -= 1;
+    }
+
+    /// V8's sparse array record: the length, each own element as an
+    /// (index, value) pair in index order, then the pair count and the length
+    /// again. The elements are read with no slot past the store
+    /// (`array_for_each_own_element`).
+    fn write_sparse_array(&mut self, arr: *const crate::array::ArrayHeader) {
+        self.depth += 1;
+        let len = unsafe { (*arr).length };
+        self.out.push(TAG_BEGIN_SPARSE_ARRAY);
+        self.write_varint(u64::from(len));
+        let mut count = 0u64;
+        unsafe {
+            crate::array::array_for_each_own_element(arr, |index, value| {
+                self.write_value(f64::from(index));
+                self.write_value(value);
+                count += 1;
+                true
+            });
+        }
+        self.out.push(TAG_END_SPARSE_ARRAY);
+        self.write_varint(count);
+        self.write_varint(u64::from(len));
         self.depth -= 1;
     }
 
@@ -584,7 +621,7 @@ impl Serializer {
 
     /// Walk an object's own enumerable fields allocation-free, mirroring the
     /// JSON stringifier: names live in `keys_array`, values are positional
-    /// (inline slots up to `max(field_count, 8)`, the rest via overflow).
+    /// (inline slots up to the object's allocation, the rest via overflow).
     unsafe fn write_object_fields(&mut self, obj: *const ObjectHeader) -> u64 {
         let keys_arr_view = crate::object::object_keys(obj);
         let keys_arr = keys_arr_view.arr();
@@ -592,9 +629,10 @@ impl Serializer {
             return 0;
         }
         let keys_len = keys_arr_view.count();
-        let num_fields = crate::object::object_live_slot_count(obj);
-        let alloc_limit = std::cmp::max(num_fields, crate::object::INLINE_SLOT_FLOOR as u32);
-        let fields_ptr = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const f64;
+        let alloc_limit = crate::object::object_inline_capacity(obj);
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        let fields_ptr =
+            crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)) as *const f64;
         let mut count = 0u64;
         for f in 0..keys_len {
             let key = crate::array::js_array_get_f64(keys_arr, f);
@@ -695,7 +733,11 @@ impl<'a> Deserializer<'a> {
         let b = self.read_raw(8)?;
         let mut arr = [0u8; 8];
         arr.copy_from_slice(b);
-        Some(f64::from_bits(u64::from_le_bytes(arr)))
+        // External bytes become a JS Number here: every NaN read from them is
+        // just NaN, as in node, so no payload can spell a NaN-box tag.
+        Some(crate::array::canonical_raw_f64(f64::from_bits(
+            u64::from_le_bytes(arr),
+        )))
     }
 
     fn read_raw(&mut self, len: usize) -> Option<&'a [u8]> {
@@ -731,7 +773,7 @@ impl<'a> Deserializer<'a> {
                 TAG_TWO_BYTE_STRING => self.read_two_byte_string()?,
                 TAG_DATE => {
                     let ms = self.read_double()?;
-                    let d = crate::date::js_date_new_from_timestamp(ms);
+                    let d = crate::date_hook_slots::js_date_new_from_timestamp(ms);
                     self.id_table.push(d);
                     d
                 }
@@ -790,9 +832,9 @@ impl<'a> Deserializer<'a> {
             mag |= (b as u64) << (i * 8);
         }
         let ptr = if negative {
-            crate::bigint::js_bigint_from_i64((mag as i64).wrapping_neg())
+            crate::bigint_hooks::js_bigint_from_i64((mag as i64).wrapping_neg())
         } else {
-            crate::bigint::js_bigint_from_u64(mag)
+            crate::bigint_hooks::js_bigint_from_u64(mag)
         };
         Some(crate::value::js_nanbox_bigint(ptr as i64))
     }
@@ -838,22 +880,34 @@ impl<'a> Deserializer<'a> {
     }
 
     fn read_sparse_array(&mut self) -> Option<f64> {
-        let total = self.read_varint()? as usize;
-        let arr = crate::array::js_array_alloc(total as u32);
+        let total = self.read_varint()?;
+        // The record's length is a claim of the input, not a size to reserve:
+        // the elements arrive as pairs and the length is set at the end.
+        let arr = crate::array::js_array_alloc(total.min(1024) as u32);
         let boxed = cp_box_ptr(arr as *const u8);
         self.id_table.push(boxed);
         loop {
             if self.peek_byte() == Some(TAG_END_SPARSE_ARRAY) {
                 self.pos += 1;
                 self.read_varint()?; // property count
-                self.read_varint()?; // length
+                let length = self.read_varint()?;
+                if length <= u64::from(u32::MAX) {
+                    // Trailing holes: the length is the record's, not the
+                    // last element's index + 1.
+                    // The head after the stores (a growth leaves a forwarding stub).
+                    let live = crate::array::clean_arr_ptr_mut(arr);
+                    crate::array::js_array_set_length(live, length as f64);
+                }
                 break;
             }
             let key = self.read_value()?;
             let val = self.read_value()?;
-            // Only integer keys land as dense indices; ignore named props.
+            // Only integer keys land as indices; ignore named props. The store
+            // is the ordinary `arr[key] = val`: a far index goes to the sparse
+            // layout and the gap stays holes (the dense extend filled it with
+            // `undefined`, so `i in clone` was true for every i).
             if JSValue::from_bits(key.to_bits()).is_number() {
-                crate::array::js_array_set_f64_extend(arr, key as u32, val);
+                crate::value::js_dyn_index_set(boxed, key, val);
             }
         }
         Some(boxed)
@@ -908,7 +962,7 @@ impl<'a> Deserializer<'a> {
             crate::string::js_string_from_bytes(flag_bytes.as_ptr(), flag_bytes.len() as u32);
         #[cfg(feature = "regex-engine")]
         {
-            let re = crate::regex::js_regexp_new(source, flags);
+            let re = crate::regex::hooked::new(source, flags);
             let boxed = cp_box_ptr(re as *const u8);
             self.id_table.push(boxed);
             Some(boxed)
@@ -1254,13 +1308,13 @@ fn int_to_value(v: i64) -> f64 {
 
 /// Build a NaN-boxed typed array of `kind` from raw little-endian bytes.
 fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
-    let elem_size = crate::typedarray::elem_size_for_kind(kind);
+    let elem_size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
     let length = if elem_size == 0 {
         0
     } else {
         bytes.len() / elem_size
     };
-    let ta = crate::typedarray::js_typed_array_new_empty(kind as i32, length as i32);
+    let ta = crate::typedarray_hook_slots::js_typed_array_new_empty(kind as i32, length as i32);
     if ta.is_null() {
         return cp_undefined();
     }
@@ -1273,4 +1327,30 @@ fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
         }
     });
     cp_box_ptr(ta as *const u8)
+}
+
+#[cfg(test)]
+#[path = "v8_serde_canonical_tests.rs"]
+mod canonical_tests;
+
+/// The plain Array `arr` resolves to when it has a hole or is sparse
+/// (`length > capacity`): the arrays the serializer writes as a sparse record.
+unsafe fn holey_plain_array(
+    arr: *mut crate::array::ArrayHeader,
+) -> Option<*const crate::array::ArrayHeader> {
+    // Both callers hand an Array (`IsArray` or an Array GC header); the
+    // resolver answers null for anything that is no plain Array head. (A
+    // header probe here declined Arrays born outside the collected heap.)
+    let arr = crate::array::clean_arr_ptr(arr);
+    if arr.is_null() {
+        return None;
+    }
+    let len = (*arr).length;
+    if len > (*arr).capacity {
+        return Some(arr);
+    }
+    let slots = crate::array::array_elements_ptr(arr) as *const u64;
+    (0..len as usize)
+        .any(|i| *slots.add(i) == crate::value::TAG_HOLE)
+        .then_some(arr)
 }

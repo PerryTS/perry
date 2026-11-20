@@ -174,6 +174,7 @@ pub(super) fn verify_jsvalue_root_word(bits: u64, source: &str) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn verify_bare_address_root_word(addr: usize, source: &str) {
     let names_object = match crate::arena::classify_region_ownership(addr) {
@@ -196,6 +197,7 @@ fn verify_bare_address_root_word(addr: usize, source: &str) {
 /// is a producer bug: a mis-typed, stale or foreign word. Verification aborts
 /// before any header write; release leaves the header untouched.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn invalid_precise_root(addr: usize, why: &str) -> Option<*mut GcHeader> {
     if precise_root_verification() {
@@ -311,6 +313,7 @@ pub(super) fn mark_precise_root_in_scope(
 /// A `HANDLE_TAG` root names its provider's JSValue edges, not a GC
 /// allocation. Out of line: every inlined root marker shares one copy.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn observe_handle_root(bits: u64, valid_ptrs: &ValidPointerSet) {
     if super::full_trace::handle_trace_active() {

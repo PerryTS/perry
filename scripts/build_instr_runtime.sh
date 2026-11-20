@@ -5,7 +5,7 @@
 # The default archives carry no GC/diagnostic instruments (census, from-space
 # quarantine and scan, seeded schedule, verifiers, telemetry and typed-feedback
 # trace JSON, hot-path probes). A compile that sets an instrument knob
-# (PERRY_GC_SCHEDULE_SEED, PERRY_GC_VERIFY_MARK, PERRY_IC_DIAG, ...),
+# (PERRY_GC_SCHEDULE_SEED, PERRY_GC_VERIFY_MARK, PERRY_REGEX_DIAG, ...),
 # PERRY_GC_INSTRUMENTS=1, PERRY_GC_TRACE=1 or PERRY_CHECK_CONTRACTS=1 links
 # these `_instr` archives instead, chosen before codegen (perry compile:
 # optimized_libs::instrumented_variant_requested). The variant also carries the

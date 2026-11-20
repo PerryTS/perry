@@ -43,6 +43,7 @@
 //! Every answer here is GC-free: no allocation, no collection, no user code.
 
 use super::ObjectHeader;
+use crate::codegen_abi::LayoutWord;
 
 pub(crate) mod census;
 
@@ -110,9 +111,10 @@ pub(crate) unsafe fn positional_slot_answer(
     key_bits: u64,
 ) -> Option<f64> {
     let shape_id = (*obj).shape_word();
-    if let Some((keys, bound)) =
-        super::shapes::plain_positional_key_words(super::shapes::ordinary_dir_addr(), shape_id)
-    {
+    if let Some((keys, bound)) = super::shapes::plain_positional_key_words(
+        super::shapes::ordinary_dir_addr(),
+        LayoutWord(shape_id),
+    ) {
         if bound > 0 {
             let words = keys.words();
             for i in 0..bound {

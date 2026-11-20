@@ -17,6 +17,7 @@ unsafe fn closure_bits() -> u64 {
     crate::value::js_nanbox_pointer(c as i64).to_bits()
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn a_pair_round_trips_both_forms() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -58,7 +59,7 @@ fn an_ordinary_objects_accessor_lives_in_its_slot() {
             crate::object::AccessorDescriptor { get, set: 0 },
         );
         let keys = crate::object::object_keys(obj);
-        let pos = crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), b"acc")
+        let pos = crate::object::keys_find_slot_by_bytes(keys, keys.count(), b"acc")
             .expect("the accessor claimed its key");
         assert_eq!(
             slot_accessor(obj, pos).get,

@@ -1,0 +1,1 @@
+Fixed `util.inspect`/`console.log`/`console.table`/`util.format("%j")` and `child_process` argument lists reading a raw stale head when the array had grown past its capacity through a path the write-back does not reach: they now follow the array forwarding stub.

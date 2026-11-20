@@ -37,7 +37,7 @@ pub(super) fn scanner_profile_enabled() -> bool {
         if cached != 0 {
             return cached == 2;
         }
-        let on = crate::gc::gc_diag_enabled();
+        let on = crate::gc::diagnostic_hooks::enabled();
         cell.set(if on { 2 } else { 1 });
         on
     })

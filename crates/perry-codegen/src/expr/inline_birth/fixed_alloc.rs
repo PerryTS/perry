@@ -4,16 +4,20 @@
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8, PTR};
 
-/// Keep the existing allocator on ILP32 and for cells outside the nursery's
-/// small-object contract. The emitted fast path uses the LP64 header ABI.
+/// Keep the existing allocator on targets without a little-endian header
+/// image and for cells outside the nursery's small-object contract. The
+/// emitted fast path writes the target's header words (wasm32: 4-byte
+/// pointers, the arena cell's i32 words).
 pub(super) fn eligible(target: &str, size: u64) -> bool {
     let arch = target.split('-').next().unwrap_or_default();
-    // Packed header words use the shipped little-endian LP64 ABIs. Other
-    // targets keep the runtime's field-wise initialization.
-    matches!(
+    // Packed header words use the shipped little-endian LP64 ABIs and the
+    // wasm32 WASI lowering. Other targets keep the runtime's field-wise
+    // initialization.
+    (matches!(
         arch,
         "x86_64" | "x86_64h" | "amd64" | "aarch64" | "arm64" | "arm64e"
     ) && !crate::target_layout::target_is_ilp32(target)
+        || crate::target_layout::wasm32_lowering(target))
         && size <= 16 * 1024
 }
 
@@ -27,21 +31,19 @@ fn allocate(
     initialize: impl FnOnce(&mut FnCtx<'_>, &str) -> String,
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> (String, Option<String>) {
+    let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
     let state = crate::expr::load_inline_arena_state(ctx);
-    let flags = super::flags(ctx, &state);
     let blk = ctx.block();
-    let offset_ptr = blk.gep(I8, &state, &[(I64, "8")]);
-    let offset = blk.load(I64, &offset_ptr);
+    let (offset_ptr, offset) = super::arena_load(blk, &arena, &state, arena.offset);
     let next = blk.add(I64, &offset, &size.to_string());
-    let limit_ptr = blk.gep(I8, &state, &[(I64, "16")]);
-    let limit = blk.load(I64, &limit_ptr);
-    let idle = blk.icmp_eq(I64, &flags, "0");
-    let idle = if let Some(admitted) = admitted {
-        blk.and(I1, &idle, admitted)
+    let (_, limit) = super::arena_load(blk, &arena, &state, arena.limit);
+    // The runtime's canonical bump bound is zero during allocate-black.
+    // Only descriptor admission remains a separate condition.
+    let limit = if let Some(admitted) = admitted {
+        blk.select(I1, admitted, I64, &limit, "0")
     } else {
-        idle
+        limit
     };
-    let limit = blk.select(I1, &idle, I64, &limit, "0");
     let fits = blk.icmp_ule(I64, &next, &limit);
     let fast = ctx.new_block("fixed_birth.fast");
     let refused = ctx.new_block("fixed_birth.runtime");
@@ -52,8 +54,8 @@ fn allocate(
     ctx.block().cond_br(&fits, &fast_label, &refused_label);
     ctx.current_block = fast;
     let blk = ctx.block();
-    // GC_STORE_AUDIT(INIT): the existing nursery cursor, no new allocator state.
-    blk.store(I64, &next, &offset_ptr);
+    // The existing nursery cursor, no new allocator state.
+    super::arena_store(blk, &arena, &next, &offset_ptr);
     let data = blk.load(PTR, &state);
     let raw = blk.gep(I8, &data, &[(I64, &offset)]);
     let fast_value = initialize(ctx, &raw);
@@ -83,9 +85,13 @@ pub(crate) fn closure(
     info: &str,
     header: &str,
     words: &[String],
+    own_slots: usize,
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> String {
-    let size = 8 + crate::runtime_abi::CLOSURE_HEADER_SIZE as u64 + words.len() as u64 * 8;
+    let header_size = crate::target_layout::closure_header_size_bytes(ctx.target_triple);
+    let props_offset = crate::target_layout::closure_props_offset_bytes(ctx.target_triple);
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
+    let size = 8 + header_size + (words.len() + own_slots) as u64 * 8;
     if !eligible(ctx.target_triple, size) {
         return slow(ctx);
     }
@@ -105,30 +111,31 @@ pub(crate) fn closure(
             blk.store(I64, &packed.to_string(), raw);
             let user = blk.gep(I8, raw, &[(I64, "8")]);
             blk.store(I64, header, &user);
-            let body = blk.gep(
-                I8,
-                &user,
-                &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
-            );
+            let body = blk.gep(I8, &user, &[(I64, &info_offset.to_string())]);
             blk.store(PTR, info, &body);
-            let props = blk.gep(
-                I8,
-                &user,
-                &[(I64, &crate::runtime_abi::CLOSURE_PROPS_OFFSET.to_string())],
-            );
+            let props = blk.gep(I8, &user, &[(I64, &props_offset.to_string())]);
             // GC_STORE_AUDIT(INIT): fresh closure's null own-property edge.
             blk.store(PTR, "null", &props);
             for (slot, word) in words.iter().enumerate() {
                 let address = blk.gep(
                     I8,
                     &user,
-                    &[(
-                        I64,
-                        &(crate::runtime_abi::CLOSURE_HEADER_SIZE + slot * 8).to_string(),
-                    )],
+                    &[(I64, &(header_size + slot as u64 * 8).to_string())],
                 );
                 // GC_STORE_AUDIT(INIT): complete capture range of an idle nursery birth.
                 blk.store(I64, word, &address);
+            }
+            // The body's own slots (`JsFunctionInfo::own_slots`) are born holes.
+            for own in 0..own_slots {
+                let address = blk.gep(
+                    I8,
+                    &user,
+                    &[(
+                        I64,
+                        &(header_size + (words.len() + own) as u64 * 8).to_string(),
+                    )],
+                );
+                blk.store(I64, crate::nanbox::TAG_HOLE_I64, &address);
             }
             blk.ptrtoint(&user, I64)
         },
@@ -141,8 +148,14 @@ pub(crate) fn closure(
 /// prototype, and key attributes either default or OPTIONAL. Their birth
 /// record is exactly PLAIN_ORDINARY; slots (including optional keys) are holes.
 /// The descriptor, registered before generated code runs, supplies the ShapeId.
-pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) -> String {
-    layout_with(ctx, desc, slots, class, None).0
+pub(crate) fn layout(
+    ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
+    desc: &str,
+    slots: u32,
+    class: u32,
+) -> String {
+    layout_with(ctx, form, desc, slots, class, None).0
 }
 
 /// [`layout`], with a complete constructor prologue's values (`(slot, bits)`)
@@ -152,13 +165,14 @@ pub(crate) fn layout(ctx: &mut FnCtx<'_>, desc: &str, slots: u32, class: u32) ->
 /// runtime arm's object holds holes and runs the constructor.
 pub(crate) fn layout_with(
     ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
     desc: &str,
     slots: u32,
     class: u32,
     fields: Option<&[(u32, String)]>,
 ) -> (String, Option<String>) {
     let size = 8
-        + crate::target_layout::object_header_size_bytes(ctx.target_triple)
+        + crate::target_layout::object_slot_base_bytes(ctx.target_triple, form)
         + u64::from(slots) * 8;
     let slow = |ctx: &mut FnCtx<'_>| {
         let raw = ctx.block().call(PTR, "perry_alloc_layout", &[(PTR, desc)]);
@@ -172,22 +186,32 @@ pub(crate) fn layout_with(
             .and_then(|f| f.iter().find(|(s, _)| *s == slot))
             .map_or_else(|| crate::nanbox::TAG_HOLE.to_string(), |(_, v)| v.clone())
     };
-    // Registration gives a carried descriptor exactly three possible states:
-    // 0 (unsupported), -1 (not registered), or its registered ShapeId. Refuse
-    // the first two before committing the bump, preserving the runtime error.
-    let id_ptr = ctx.block().gep(
-        I8,
-        desc,
-        &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
-    );
-    let id = ctx.block().load(I32, &id_ptr);
-    let nonzero = ctx.block().icmp_ne(I32, &id, "0");
-    let registered = ctx.block().icmp_ne(I32, &id, "-1");
-    let registered = ctx.block().and(I1, &nonzero, &registered);
+    // Whole-image templates are immutable and the image plan is exactly
+    // what emitted desc.layout_id. Consume that proof instead of reloading
+    // and testing old registration sentinels for each object. An opaque or
+    // ambiguous descriptor keeps the original checked admission.
+    let template = desc
+        .strip_prefix('@')
+        .and_then(|symbol| crate::layout_ordinals::current_plan().descriptor_template_word(symbol));
+    let (id, registered) = if let Some(word) = template {
+        ((word as i32).to_string(), None)
+    } else {
+        let id_ptr = ctx.block().gep(
+            I8,
+            desc,
+            &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
+        );
+        let id = ctx.block().load(I32, &id_ptr);
+        let nonzero = ctx.block().icmp_ne(I32, &id, "0");
+        let registered = ctx.block().icmp_ne(I32, &id, "-1");
+        let registered = ctx.block().and(I1, &nonzero, &registered);
+        (id, Some(registered))
+    };
+    let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
     allocate(
         ctx,
         size,
-        Some(&registered),
+        registered.as_deref(),
         fields.is_some(),
         |ctx, raw| {
             let blk = ctx.block();
@@ -200,8 +224,15 @@ pub(crate) fn layout_with(
             let shape_ptr = blk.gep(I8, &user, &[(I64, "4")]);
             blk.store(I32, &id, &shape_ptr);
             let meta = blk.gep(I8, &user, &[(I64, "8")]);
-            // GC_STORE_AUDIT(INIT): unpublished layout object, no per-object meta.
-            blk.store(PTR, "null", &meta);
+            if ilp32 {
+                // GC_STORE_AUDIT(INIT): unpublished layout object: the ILP32
+                // slot-alignment padding word and the meta pointer at 12,
+                // both zero as the runtime's finish_layout_object writes them.
+                blk.store(I64, "0", &meta);
+            } else {
+                // GC_STORE_AUDIT(INIT): unpublished layout object, no per-object meta.
+                blk.store(PTR, "null", &meta);
+            }
             if slots <= 8 || fields.is_some() {
                 for slot in 0..slots {
                     let address = blk.gep(I8, &user, &[(I64, &(16 + slot * 8).to_string())]);

@@ -149,7 +149,7 @@ pub(super) unsafe fn dispatch_explicit_this_call(
     // indirect callees (e.g. `record.proxy()` off a `Proxy.revocable` result)
     // reach this generic value-call path with no static hint. Proxy ids encode
     // to small pointers, so real heap closures early-out of `js_proxy_is_proxy`.
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -158,7 +158,7 @@ pub(super) unsafe fn dispatch_explicit_this_call(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_apply(func_value, this.as_f64(), arr_box);
+        return crate::proxy_hooks::proxy_apply(func_value, this.as_f64(), arr_box);
     }
 
     // Dynamic `super()` for `class X extends <runtime value holding
@@ -403,32 +403,7 @@ unsafe fn call_array_this(
         return dispatch_body_args(closure, info, this, &vec![0.0; n]);
     }
     let args = std::slice::from_raw_parts(args_ptr, n);
-    // V8 supplies INT32-tagged numbers; compiled code supplies doubles. Keep
-    // conversion at this bridge, and leave class references (the same tag)
-    // intact. Only a slice containing a numeric INT32 needs scratch storage.
-    let is_int = |raw: f64| {
-        raw.to_bits() & 0xFFFF_0000_0000_0000 == crate::value::INT32_TAG
-            && crate::object::class_ref_id(raw).is_none()
-    };
-    if !args.iter().copied().any(is_int) {
-        return dispatch_body_args(closure, info, this, args);
-    }
-    let unbox = |raw: f64| {
-        if is_int(raw) {
-            (raw.to_bits() as u32 as i32) as f64
-        } else {
-            raw
-        }
-    };
-    if n <= 16 {
-        let mut converted = [0.0; 16];
-        for (slot, raw) in converted.iter_mut().zip(args) {
-            *slot = unbox(*raw);
-        }
-        return dispatch_body_args(closure, info, this, &converted[..n]);
-    }
-    let converted: Vec<f64> = args.iter().copied().map(unbox).collect();
-    dispatch_body_args(closure, info, this, &converted)
+    dispatch_body_args(closure, info, this, args)
 }
 
 /// Closure call with regular + spread args: `cb(reg0, reg1, ..., ...spread_arr)`.
@@ -556,10 +531,7 @@ mod slice_body_tests {
     fn array_bridge_keeps_legacy_int32_conversion() {
         let info = crate::fn_info!(probe, 2; plain());
         let closure = js_closure_alloc(info, 0);
-        let args = [
-            f64::from_bits(crate::value::JSValue::int32(3).bits()),
-            f64::from_bits(crate::value::JSValue::int32(5).bits()),
-        ];
+        let args = [f64::from(3), f64::from(5)];
         assert_eq!(
             unsafe {
                 js_closure_call_array(closure as i64, JsThis::from_f64(42.0), args.as_ptr(), 2)

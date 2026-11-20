@@ -56,6 +56,9 @@ fn counted_store_loop(target: u32, value: Expr) -> Stmt {
             value: Box::new(value),
             receiver: Box::new(Expr::LocalGet(target)),
             strict: false,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         })],
     }
 }

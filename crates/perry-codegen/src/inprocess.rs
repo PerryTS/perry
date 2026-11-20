@@ -15,13 +15,23 @@
 //! IR and flags this pipeline produces objects byte-identical to Homebrew
 //! clang 22's `clang -c`.
 
+mod assemble;
+pub(crate) use assemble::assemble_text;
+mod coff;
+mod cold_paths;
 #[cfg(test)]
 mod dead_statepoint_tests;
+mod equivalent_shape_bodies;
 mod function_layout;
+mod loop_alignment;
 mod loop_interrupt;
 mod nanbox_operands;
 mod native_homes;
 mod optimize_emit;
+#[cfg(test)]
+mod parse_ir_text_tests;
+pub(crate) mod stack_checks;
+mod verify_facts_copies;
 use optimize_emit::optimize_and_emit;
 
 use std::ffi::CString;
@@ -117,10 +127,7 @@ fn global_init(mllvm: &[String]) {
         // These options affect only the WebAssembly backend. Initialize
         // them even if a native unit happens to be compiled first.
         #[cfg(feature = "target-wasi")]
-        mllvm.extend([
-            "-wasm-enable-sjlj".into(),
-            "-wasm-use-legacy-eh=false".into(),
-        ]);
+        mllvm.extend(["-wasm-enable-eh".into(), "-wasm-use-legacy-eh=false".into()]);
         // Only the backends Perry can actually emit for. `initialize_all()`
         // references every LLVM target's init symbol, which makes the static
         // link pull in all ~20 backends — measured at **+86.9 MB** on the
@@ -295,6 +302,9 @@ fn interpret_plan_args(
             // `-g` is a measured no-op on Perry IR (no DI metadata; see the
             // TEMP_NONCE_COUNTER doc block in linker.rs), matching clang.
             "-c" | "-fno-math-errno" | "-g" => {}
+            // optimize_and_emit enables +exception-handling and the wasm EH
+            // exception model for wasm targets, matching this clang flag.
+            "-mexception-handling" => {}
             "-S" => emit_asm = true,
             "-o" | "-target" => {
                 it.next();
@@ -334,9 +344,40 @@ pub(crate) fn parse_ir_text<'ctx>(
     ir.extend_from_slice(ll_text.as_bytes());
     ir.push(0);
     let buf = MemoryBuffer::create_from_memory_range_copy(&ir, module_name);
-    context
-        .create_module_from_ir(buf)
-        .map_err(|e| anyhow!("LLVM IR parse error:\n{}", e.to_string()))
+    drop(ir);
+    // Parse with LLVMParseIRInContext2, which does NOT consume the buffer, and
+    // dispose the buffer here. Inkwell's `create_module_from_ir` calls the same
+    // non-consuming function under LLVM 22 but still `forget`s the buffer (it
+    // was written for the consuming LLVMParseIRInContext), leaking one full
+    // copy of the IR text per parse: ~42 MB per codegen unit on a large program, ~5 GiB over
+    // 128 units. The parsed module does not reference the text buffer.
+    let mut module = std::ptr::null_mut();
+    let mut message = std::ptr::null_mut();
+    // SAFETY: valid context and buffer; out-pointers are initialised by LLVM.
+    let failed = unsafe {
+        llvm_sys::ir_reader::LLVMParseIRInContext2(
+            context.raw(),
+            buf.as_mut_ptr(),
+            &mut module,
+            &mut message,
+        )
+    };
+    drop(buf);
+    if failed != 0 {
+        let text = if message.is_null() {
+            String::new()
+        } else {
+            // SAFETY: LLVM returns a NUL-terminated message we must dispose.
+            let text = unsafe { std::ffi::CStr::from_ptr(message) }
+                .to_string_lossy()
+                .into_owned();
+            unsafe { llvm_sys::core::LLVMDisposeMessage(message) };
+            text
+        };
+        return Err(anyhow!("LLVM IR parse error:\n{}", text));
+    }
+    // SAFETY: a successful parse returns an owned module in `context`.
+    Ok(unsafe { inkwell::module::Module::new(module) })
 }
 
 /// Interpret plan argv (same grammar as `compile_ll_to_object_inprocess`) and

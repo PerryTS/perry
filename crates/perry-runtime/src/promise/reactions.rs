@@ -70,7 +70,7 @@ fn enqueue_settle_listener_task(
         return;
     }
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Inline(
+        q.borrow_mut().enqueue_promise_job(Task::Inline(
             callback,
             value,
             ptr::null_mut(),
@@ -172,7 +172,7 @@ pub(super) fn enqueue_overflow_reactions(
         // A null `cb` with a non-null `next` is a pass-through (the
         // `Task::Inline` arm resolves/rejects `next` with `value`) — exactly the
         // `.then(onFulfilled)` rejected-side / `.catch` fulfilled-side behavior.
-        q.push_back(Task::Inline(cb, value, r.next, is_fulfilled, r.context));
+        q.enqueue_promise_job(Task::Inline(cb, value, r.next, is_fulfilled, r.context));
     }
 }
 

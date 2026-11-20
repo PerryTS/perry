@@ -42,13 +42,13 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
                     resource,
                     ..
                 } => {
-                    crate::async_hooks::resource_state::scan_token(async_id, visitor);
+                    crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
                     visitor.visit_nanbox_f64_slot(resource);
                     visitor.visit_raw_const_ptr_slot(callback);
                     scan_snapshot_roots_mut(context, visitor);
                 }
                 Task::AsyncStep(cb, value, next, _, context, _, id, _) => {
-                    crate::async_hooks::resource_state::scan_token(id, visitor);
+                    crate::async_hook_slots::resource_state::scan_token(id, visitor);
                     visitor.visit_raw_const_ptr_slot(cb);
                     visitor.visit_raw_mut_ptr_slot(next);
                     visitor.visit_nanbox_f64_slot(value);
@@ -100,7 +100,7 @@ pub fn scan_promise_roots_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     // Scan SCHEDULED_RESOLVES entries
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let mut q = q.borrow_mut();
-        for (promise_ptr, value) in q.iter_mut() {
+        for (promise_ptr, value, ..) in q.iter_mut() {
             visitor.visit_raw_mut_ptr_slot(promise_ptr);
             visitor.visit_nanbox_f64_slot(value);
         }
@@ -234,11 +234,11 @@ fn scan_task_step(
         Task::Microtask {
             async_id, resource, ..
         } => {
-            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+            crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
             visitor.visit_nanbox_f64_slot(resource);
         }
         Task::AsyncStep(_, _, _, _, _, _, async_id, _) => {
-            crate::async_hooks::resource_state::scan_token(async_id, visitor);
+            crate::async_hook_slots::resource_state::scan_token(async_id, visitor);
         }
         _ => {}
     }
@@ -505,7 +505,7 @@ fn scan_scheduled_resolves_step(
                 if !consume_root_work(remaining) {
                     return false;
                 }
-                let (promise_ptr, value) = &mut q[state.index];
+                let (promise_ptr, value, ..) = &mut q[state.index];
                 match state.slot {
                     0 => visitor.visit_raw_mut_ptr_slot(promise_ptr),
                     1 => visitor.visit_nanbox_f64_slot(value),
@@ -555,15 +555,15 @@ pub(crate) fn test_seed_promise_scanner_roots(
     TASK_QUEUE.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
-        q.push_back(Task::Promise(promise_ptr, value, true, context.clone()));
-        q.push_back(Task::Inline(
+        q.enqueue_promise_job(Task::Promise(promise_ptr, value, true, context.clone()));
+        q.enqueue_promise_job(Task::Inline(
             callback_ptr,
             value,
             next_ptr,
             true,
             context.clone(),
         ));
-        q.push_back(Task::AsyncStep(
+        q.enqueue_promise_job(Task::AsyncStep(
             callback_ptr,
             value,
             next_ptr,
@@ -593,7 +593,10 @@ pub(crate) fn test_seed_promise_scanner_roots(
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let mut q = q.borrow_mut();
         q.clear();
+        #[cfg(not(perry_gc_instruments))]
         q.push((promise_ptr, value));
+        #[cfg(perry_gc_instruments)]
+        q.push((promise_ptr, value, 0));
     });
 }
 
@@ -603,7 +606,7 @@ pub(crate) fn test_seed_many_promise_task_roots(values: &[f64]) {
         let mut q = q.borrow_mut();
         q.clear();
         for &value in values {
-            q.push_back(Task::Promise(
+            q.enqueue_promise_job(Task::Promise(
                 std::ptr::null_mut(),
                 value,
                 true,
@@ -672,7 +675,7 @@ pub(crate) fn test_promise_scanner_snapshot() -> TestPromiseScannerSnapshot {
     });
     super::combinators::SCHEDULED_RESOLVES.with(|q| {
         let q = q.borrow();
-        if let Some((promise_ptr, value)) = q.first() {
+        if let Some((promise_ptr, value, ..)) = q.first() {
             snapshot.scheduled_promise_ptr = *promise_ptr as usize;
             snapshot.scheduled_value_bits = value.to_bits();
         }

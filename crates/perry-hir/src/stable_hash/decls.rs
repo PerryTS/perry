@@ -33,6 +33,7 @@ impl SH for Class {
             is_exported,
             aliases,
             is_nested,
+            decl_stmt,
             alloc_width_hint,
             specialized_from,
         } = self;
@@ -58,6 +59,7 @@ impl SH for Class {
         is_exported.hash(h);
         aliases.hash(h);
         is_nested.hash(h);
+        decl_stmt.hash(h);
         alloc_width_hint.hash(h);
         // #7575: drives an extra module-init registration, so it is part of
         // what the object cache keys on.
@@ -97,7 +99,7 @@ impl SH for ClassField {
             is_readonly,
             decorators,
         } = self;
-        (*origin == crate::ClassFieldOrigin::ConstructorStore).hash(h);
+        (*origin as u8).hash(h);
         name.hash(h);
         key_expr.hash(h);
         ty.hash(h);

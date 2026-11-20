@@ -19,7 +19,7 @@ pub enum Kind {
 impl Kind {
     pub const fn header_type(self) -> u8 {
         match self {
-            Self::Arr => crate::gc::GC_TYPE_ARRAY,
+            Self::Arr => crate::gc_array_type_pat!(),
             Self::Str => crate::gc::GC_TYPE_STRING,
             Self::Map => crate::gc::GC_TYPE_MAP,
             Self::Set => crate::gc::GC_TYPE_SET,
@@ -86,6 +86,7 @@ impl Kind {
 
 #[cfg(perry_check_contracts)]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn contract_failure(kind: Kind, addr: usize, operation: &str) -> ! {
     contract_violated(operation, &format!("{kind:?}"), "raw-kind", addr as u64, "")
@@ -95,6 +96,7 @@ fn contract_failure(kind: Kind, addr: usize, operation: &str) -> ! {
 /// proof source that admitted the value, and its bits. Every contract witness
 /// (kind entries, pointer boxing, codegen's typed-element witness) ends here.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) fn contract_violated(
     operation: &str,
@@ -123,6 +125,7 @@ pub(crate) fn assert_heap_payload(addr: usize, operation: &str) {
 
 #[cfg(perry_check_contracts)]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn heap_payload_failure(addr: usize, operation: &str) -> ! {
     contract_violated(operation, "Heap", "pointer-box", addr as u64, "")

@@ -5,8 +5,8 @@
 //! header constants and their anti-drift tests stay there.
 
 use super::method_override::{
-    GC_OBJECT_METHOD_GUARD_MASK_I32, GC_TYPE_OBJECT, POINTER_TAG_HI16, SHAPE_ID_BASE_NEG_I32,
-    SHAPE_ID_RANGE_LEN,
+    GC_OBJECT_METHOD_GUARD_MASK_I32, LAYOUT_TAG_NEG_I32, ORDINARY_LAYOUT_RANGE_LEN,
+    POINTER_TAG_HI16,
 };
 use crate::expr::FnCtx;
 use crate::types::{I1, I32, I64, I8};
@@ -79,7 +79,7 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         let gc_header_ptr = blk.gep(I8, &obj_ptr, &[(I64, "-8")]);
         let gc_header = blk.load(I32, &gc_header_ptr);
         let guarded_gc_bits = blk.and(I32, &gc_header, GC_OBJECT_METHOD_GUARD_MASK_I32);
-        let gc_header_ok = blk.icmp_eq(I32, &guarded_gc_bits, GC_TYPE_OBJECT);
+        let gc_header_ok = crate::target_layout::emit_gc_type_is_object(blk, I32, &guarded_gc_bits);
 
         // ObjectHeader begins with adjacent `class_id: u32` and
         // `shape_id: u32`. Compare them as one packed word. The expected
@@ -102,8 +102,8 @@ pub(crate) fn emit_inline_direct_method_shape_guard(
         // `is_shape_id` is `[0x8000_0000, 0xC000_0000)`. Subtract the base
         // modulo i32 and compare with the range length, matching the runtime
         // helper. Equality above transfers this proof to the live header.
-        let shape_id_rel = blk.add(I32, expected_shape_id, SHAPE_ID_BASE_NEG_I32);
-        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, SHAPE_ID_RANGE_LEN);
+        let shape_id_rel = blk.add(I32, expected_shape_id, LAYOUT_TAG_NEG_I32);
+        let shape_valid = blk.icmp_ult(I32, &shape_id_rel, ORDINARY_LAYOUT_RANGE_LEN);
 
         let pass = blk.and(I1, &gc_header_ok, &class_shape_ok);
         let pass = blk.and(I1, &pass, &shape_valid);
@@ -141,6 +141,27 @@ pub(crate) fn family_method_word(
     property: &str,
     direct_fn: &str,
 ) -> Option<String> {
+    match family_method_word_holed(ctx, class_id, property, direct_fn, false)? {
+        (id, None) => Some(id),
+        (_, Some(_)) => None,
+    }
+}
+
+/// [`family_method_word`], and with `late_ok` also for a family whose LATE
+/// key spells `property` (a data method's own slot, `RawFamily::late_blocked`;
+/// owner decision 2026-11-16): then the second value is that slot, and the
+/// word proves "no own `property`" only together with the slot holding the
+/// hole ([`emit_late_slot_word`]). Under the exact family word the
+/// object has no overflow (its install sets the shadow bit), so the slot is
+/// the only place an own `property` can be. A constructor key spelling
+/// `property` gives `None`.
+pub(crate) fn family_method_word_holed(
+    ctx: &mut FnCtx<'_>,
+    class_id: u32,
+    property: &str,
+    direct_fn: &str,
+    late_ok: bool,
+) -> Option<(String, Option<u32>)> {
     if direct_fn.starts_with("perry_static_") {
         return None;
     }
@@ -151,14 +172,56 @@ pub(crate) fn family_method_word(
         return None;
     }
     let fam = ctx.program_layouts.families.get(&class_id)?;
-    if fam.keys.iter().any(|(k, _)| k == property) {
+    let hole = match fam.keys.iter().position(|(k, _)| k == property) {
+        None => None,
+        Some(pos) if late_ok && pos >= fam.own_count as usize => Some(fam.keys[pos].1),
+        Some(_) => return None,
+    };
+    Some((family_layout_id(ctx, class_id)?, hole))
+}
+
+/// `i64`: the word in family slot `slot` of the object `recv_box` (whose
+/// exact family word the caller has compared): the hole, or the own data
+/// value of the late key (ONCHG1: the own-value arm calls it).
+pub(crate) fn emit_late_slot_word(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form())
+            as i64;
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(recv_box);
+    let handle = blk.and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let obj = blk.inttoptr(I64, &handle);
+    let ptr = blk.gep(
+        I8,
+        &obj,
+        &[(I64, &(header + 8 * i64::from(slot)).to_string())],
+    );
+    blk.load(I64, &ptr)
+}
+
+/// The i32 layout id of class `class_id`'s family descriptor, loaded from the
+/// descriptor's `layout_id` word (written once at startup, before user code);
+/// `None` without layouts or a family. 0 when the runtime could not register
+/// the layout (then no birth uses it): compare it against 0 before use.
+pub(crate) fn family_layout_id(ctx: &mut FnCtx<'_>, class_id: u32) -> Option<String> {
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
         return None;
     }
+    ctx.program_layouts.families.get(&class_id)?;
     let desc = crate::layout_desc::note_family_desc_use(class_id);
     let offset = crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string();
     let blk = ctx.block();
     let id_ptr = blk.gep(I8, &desc, &[(I64, &offset)]);
     Some(blk.load(I32, &id_ptr))
+}
+
+/// Is every instance of class `class_id` at the layout its birth pair
+/// describes once it can be observed? A class with no family is born on the
+/// pair itself; one with a family is born on the family layout, which then
+/// has to hold the pair's instance ([`family_holds_birth_layout`]).
+pub(crate) fn births_match_clone_layout(ctx: &FnCtx<'_>, class_name: &str, class_id: u32) -> bool {
+    !ctx.program_layouts.families.contains_key(&class_id)
+        || family_holds_birth_layout(ctx, class_name, class_id)
 }
 
 /// Does class `class_name`'s family layout hold exactly the instance its
@@ -187,7 +250,8 @@ pub(crate) fn family_holds_birth_layout(ctx: &FnCtx<'_>, class_name: &str, class
                 return false;
             }
             match fam.keys.get(slot) {
-                Some((k, s)) if k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
+                Some((k, s))
+                    if k.plain() && k.name() == Some(f.name.as_str()) && *s as usize == slot => {}
                 _ => return false,
             }
             slot += 1;

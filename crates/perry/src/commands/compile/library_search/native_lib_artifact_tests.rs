@@ -139,3 +139,18 @@ fn returns_none_when_artifact_missing() {
     let found = locate_native_lib_artifact(&target_dir, None, "libfoo.a");
     assert!(found.is_none());
 }
+
+/// The host triple is the compiler's own build target: a compile with a
+/// native addon must not need `rustc` on `PATH` to name it.
+#[test]
+fn host_triple_does_not_need_rustc_on_path() {
+    let empty = tempfile::tempdir().expect("create tmpdir");
+    let saved = std::env::var_os("PATH");
+    std::env::set_var("PATH", empty.path());
+    let host = host_target_triple();
+    match saved {
+        Some(path) => std::env::set_var("PATH", path),
+        None => std::env::remove_var("PATH"),
+    }
+    assert_eq!(host, Some(env!("PERRY_HOST_TRIPLE")));
+}

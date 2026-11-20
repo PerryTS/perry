@@ -42,6 +42,7 @@ pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
+pub(crate) use expr_call::math_intrinsic;
 pub(crate) mod expr_function;
 pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;
@@ -62,8 +63,8 @@ pub(crate) use for_head::{
     map_set_delete_safe_for_of, predefine_for_head, resolve_for_of_iterable_type,
     rewrite_collection_view_for_of,
 };
-mod for_of_guard;
-pub(crate) use for_of_guard::lower_stmt_for_of;
+pub(crate) mod for_of_guard;
+pub(crate) use for_of_guard::{lower_body_literal_for_of, lower_stmt_for_of};
 mod stmt_loops;
 pub(crate) use stmt_loops::{
     async_iterator_close_driver, iterator_next_method_call, iterator_step_call,
@@ -84,7 +85,7 @@ pub(crate) mod fn_ctor_env;
 mod global_eval_hoist;
 mod run_once;
 pub use run_once::class_names as run_once_class_names;
-mod shared_mutable_capture;
+pub(crate) mod shared_mutable_capture;
 pub(crate) mod type_widening;
 pub(crate) mod unrebound_params;
 pub(crate) use closure_analysis::*;
@@ -121,16 +122,19 @@ pub(crate) use array_fold::{
 };
 
 mod lower_module_fn;
+mod module_assigned_bindings;
+mod module_strict;
 mod module_tdz;
 pub use lower_module_fn::{
     lower_module, lower_module_full, lower_module_full_with_platform_globals,
     lower_module_with_class_id, lower_module_with_class_id_and_types,
     lower_module_with_class_id_types_and_seed, lower_module_with_class_id_types_seed_and_entry,
 };
+pub(crate) use module_strict::{module_has_module_goal, module_has_strict_mode};
 
 mod lower_expr;
 pub(crate) use lower_expr::{
-    lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
+    class_binding_read, lower_expr, lower_expr_assignment, strict_global_assign_existing_or_throw,
     throw_reference_error_expr, try_desugar_reactive_text, unresolved_global_get_expr,
     with_implicit_unset_let, with_set_fallback_for_ident,
 };
@@ -143,6 +147,8 @@ pub(crate) use crate::lower_decl::*;
 pub(crate) use crate::lower_patterns::*;
 pub(crate) use crate::lower_types::*;
 
+#[cfg(test)]
+mod builtin_proto_alias_tests;
 #[cfg(test)]
 mod bun_sql_tests;
 #[cfg(test)]
@@ -157,8 +163,15 @@ mod for_of_counter_tests;
 mod proxy_binding_tests;
 #[cfg(test)]
 mod tests;
+mod this_field_loop_tests;
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod typed_for_of_admission_tests;
+
+#[cfg(test)]
+mod wtf8_key_tests;
 
 pub(crate) mod dynamic_eval;

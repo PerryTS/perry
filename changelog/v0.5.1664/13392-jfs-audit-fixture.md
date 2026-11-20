@@ -1,0 +1,1 @@
+Exercise the shape store audit body directly in the image birth-fact knockout fixture, including release tests where the optional mutator hook is disabled. Keep the missing-mark rejection assertion and all production audit settings unchanged.

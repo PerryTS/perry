@@ -5,11 +5,31 @@ use crate::closure::{js_closure_alloc, ClosureHeader};
 use crate::object::{AccessorDescriptor, ObjectHeader, PropertyAttrs};
 use crate::value::{js_nanbox_pointer, JSValue};
 
-crate::perry_thread_local! {
-    static INSTALLED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+mod installed_tls {
+    type Value = std::cell::Cell<bool>;
+    type Storage = crate::tls_hot::HotCell<Value, { std::mem::needs_drop::<Value>() as usize }>;
+    crate::__perry_thread_local_storage!(Storage, const { Value::new(false) });
+    pub(super) fn resolve(idx: u32) -> Result<*mut u8, crate::tls_hot::AccessError> {
+        STORAGE.try_with(|cell| {
+            cell.arm_guard(idx);
+            cell.value_addr()
+        })
+    }
+    pub(super) static KEY: crate::tls_hot::HotKey<Value> = crate::tls_hot::HotKey::new(
+        crate::tls_hot::SlotId::named(concat!(
+            module_path!(),
+            "::INSTALLED@",
+            line!(),
+            ":",
+            column!()
+        )),
+        crate::bun_hook_slots::resolve_self_guard,
+    );
 }
+use installed_tls::KEY as INSTALLED;
 
 pub(super) fn install_once() {
+    crate::bun_hook_slots::install_self_resolver(installed_tls::resolve);
     if INSTALLED.with(|installed| installed.replace(true)) {
         return;
     }

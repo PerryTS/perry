@@ -432,6 +432,7 @@ pub fn transform_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             transform_stmts(
                 body,
@@ -742,7 +743,7 @@ pub fn transform_expr(
         }
 
         // Property set - may be on JS objects
-        Expr::PropertySet { object, property, value } => {
+        Expr::PropertySet { object, property, value, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
 
@@ -822,18 +823,18 @@ pub fn transform_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
         Expr::PropertyUpdate { object, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet { object, index, value, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);

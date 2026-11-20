@@ -290,7 +290,7 @@ pub(crate) fn note_walk(table: &'static str, walk: YoungLogWalk) {
             rows.push((table, walk));
         }
     });
-    if !super::gc_diag_enabled() {
+    if !super::diagnostic_hooks::enabled() {
         return;
     }
     WALK_ROWS.with(|rows| {
@@ -322,7 +322,7 @@ pub(crate) fn last_walk(table: &'static str) -> Option<YoungLogWalk> {
 /// Print the rows accumulated since the last report and clear them. Called
 /// beside `scanner_profile::report_and_reset` so the two read together.
 pub(super) fn report_and_reset(cycle_label: &str) {
-    if !super::gc_diag_enabled() {
+    if !super::diagnostic_hooks::enabled() {
         return;
     }
     let rows = WALK_ROWS.with(|rows| std::mem::take(&mut *rows.borrow_mut()));

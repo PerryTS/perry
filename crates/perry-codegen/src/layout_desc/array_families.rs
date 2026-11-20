@@ -109,6 +109,7 @@ impl<'a> Flow<'a> {
                 object,
                 property,
                 value,
+                ..
             } => {
                 self.write(expr(object), property);
                 let field = self.field(scope, object, property);
@@ -119,6 +120,7 @@ impl<'a> Flow<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::String(key) = index.as_ref() {
                     self.write(expr(object), key);
@@ -145,7 +147,7 @@ impl<'a> Flow<'a> {
                 }
                 self.edge(expr(value), here);
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if let Expr::String(key) = index.as_ref() {
                     let field = self.field(scope, object, key);
                     self.edge(field, here);
@@ -279,6 +281,7 @@ impl<'a> Flow<'a> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.statements(scope, body);
                     if let Some(c) = catch {
@@ -686,6 +689,7 @@ fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_mut(body, f);
                 if let Some(c) = catch {

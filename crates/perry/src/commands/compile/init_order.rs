@@ -34,6 +34,8 @@ use super::CompilationContext;
 pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &Path) {
     let mut eager: HashSet<PathBuf> = HashSet::new();
     eager.insert(entry_path.to_path_buf());
+    eager.extend(deferred_async_dependencies(ctx, entry_path));
+    eager.extend(program_cjs_support(ctx));
     // Next.js wall 54 (part 2): the `.next/server/**` page/route/chunk modules
     // have no static importer (loaded by a runtime-computed path). They are left
     // Deferred — eager-initing turbopack chunks at startup runs React-SSR code
@@ -56,7 +58,11 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
                 .imports
                 .iter()
                 .filter(|i| {
-                    !i.is_dynamic && !i.type_only && !i.runtime_erased && !i.is_deferred_require
+                    !i.is_dynamic
+                        && !i.is_deferred
+                        && !i.type_only
+                        && !i.runtime_erased
+                        && !i.is_deferred_require
                 })
                 .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
                 .collect();
@@ -93,13 +99,82 @@ pub(super) fn classify_eager_modules(ctx: &mut CompilationContext, entry_path: &
             break;
         }
     }
+    // OnDemand: what the eager modules reach through require edges (and
+    // whatever those reach by any non-dynamic edge), minus the eager set. An
+    // ESM import of a CommonJS module keeps it Eager, as in Node.
+    let mut reached = eager.clone();
+    let mut work: Vec<PathBuf> = reached.iter().cloned().collect();
+    while let Some(path) = work.pop() {
+        let Some(module) = ctx.native_modules.get(&path) else {
+            continue;
+        };
+        // A require edge imports its target's record binding
+        // (`__perry_cjs_rec_N`). Other deferred requires (`_lazyreq_N`, a
+        // target that is not wrapped CommonJS) load through the path registry
+        // and stay Deferred.
+        let edge_sources: HashSet<&str> = module
+            .imports
+            .iter()
+            .filter(|i| {
+                i.specifiers.iter().any(|s| {
+                    matches!(s, perry_hir::ImportSpecifier::Named { local, .. }
+                        if local.starts_with("__perry_cjs_rec_"))
+                })
+            })
+            .map(|i| i.source.as_str())
+            .collect();
+        let mut next: Vec<PathBuf> = module
+            .imports
+            .iter()
+            .filter(|i| !i.is_dynamic && !i.is_deferred && !i.type_only && !i.runtime_erased)
+            .filter(|i| !i.is_deferred_require || edge_sources.contains(i.source.as_str()))
+            .filter_map(|i| i.resolved_path.as_ref().map(PathBuf::from))
+            .collect();
+        for e in &module.exports {
+            let source = match e {
+                perry_hir::Export::ExportAll { source }
+                | perry_hir::Export::ReExport { source, .. }
+                | perry_hir::Export::NamespaceReExport { source, .. } => source,
+                perry_hir::Export::Named { .. } => continue,
+            };
+            if let Some((resolved, _)) = resolve_import_with_context(source, &path, ctx) {
+                next.push(resolved);
+            }
+        }
+        for target in next {
+            if ctx.native_modules.contains_key(&target) && reached.insert(target.clone()) {
+                work.push(target);
+            }
+        }
+    }
     for (path, module) in ctx.native_modules.iter_mut() {
         module.init_kind = if eager.contains(path) {
             perry_hir::ModuleInitKind::Eager
+        } else if reached.contains(path) {
+            perry_hir::ModuleInitKind::OnDemand
         } else {
             perry_hir::ModuleInitKind::Deferred
         };
     }
+}
+
+/// The CommonJS support module (`perry:cjs`) of a program that is not
+/// closed. Its `cache` is the program's `require.cache`, and its
+/// `js_cjs_install` makes it `Module._cache`. In Node that object exists from
+/// process start, so every `createRequire` function's `require.cache` and
+/// `Module._cache` are one object. The module is therefore Eager and
+/// initializes before every other module: a `createRequire` that runs before
+/// the first CommonJS load (the support module would otherwise come in with
+/// the first deferred require) still holds the program's cache. A closed
+/// program reaches none of these (its census has no `createRequire`), so its
+/// support module keeps the init kind its importers give it.
+fn program_cjs_support(ctx: &CompilationContext) -> Option<PathBuf> {
+    if ctx.cjs_closed {
+        return None;
+    }
+    ctx.cjs_support_path
+        .clone()
+        .filter(|path| ctx.native_modules.contains_key(path))
 }
 
 /// Order a module's dependency edges the way ESM evaluation visits them:
@@ -164,6 +239,7 @@ pub(super) fn topo_sort_non_entry_modules(
             // and the generated per-module init wrappers both exclude these
             // edges; the global order must use the same graph.
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -264,9 +340,21 @@ pub(super) fn topo_sort_non_entry_modules(
     // Any module not reachable from the entry through the collected edges
     // (Deferred dynamic-import targets, etc.) is appended afterwards in
     // alphabetical order for determinism.
+    // The CommonJS support module initializes first (`program_cjs_support`).
+    if let Some(support) = program_cjs_support(ctx) {
+        dfs_visit(
+            &support,
+            &deps,
+            &path_to_name,
+            &mut visited,
+            &mut visiting,
+            &mut sorted,
+        );
+    }
     if let Some(entry_module) = ctx.native_modules.get(entry_path) {
         for import in &entry_module.imports {
             if import.is_dynamic
+                || import.is_deferred
                 || import.type_only
                 || import.runtime_erased
                 || import.is_deferred_require
@@ -346,4 +434,122 @@ mod esm_request_order_tests {
             ]
         );
     }
+}
+
+/// Async modules reachable over static edges must run before a deferred
+/// namespace is exposed, without evaluating intervening synchronous modules.
+pub(super) fn requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    fn visit(
+        ctx: &mut CompilationContext,
+        path: &Path,
+        seen: &mut HashSet<PathBuf>,
+        result: &mut Vec<PathBuf>,
+    ) {
+        if !seen.insert(path.to_path_buf()) {
+            return;
+        }
+        if !ctx.native_modules.contains_key(path) {
+            return;
+        }
+        let targets = direct_requested_module_dependencies(ctx, path);
+        for target in targets {
+            visit(ctx, &target, seen, result);
+        }
+        result.push(path.to_path_buf());
+    }
+    let mut result = Vec::new();
+    visit(ctx, root, &mut HashSet::new(), &mut result);
+    result
+}
+
+/// Project only modules with asynchronous bodies from the requested graph.
+pub(super) fn deferred_async_dependencies(
+    ctx: &mut CompilationContext,
+    root: &Path,
+) -> Vec<PathBuf> {
+    requested_module_dependencies(ctx, root)
+        .into_iter()
+        .filter(|path| {
+            ctx.native_modules
+                .get(path)
+                .is_some_and(|m| m.has_top_level_await)
+        })
+        .collect()
+}
+
+/// Requested edges include defer and cycle back-edges; readiness does not evaluate them.
+pub(super) fn direct_requested_module_dependencies(
+    ctx: &mut CompilationContext,
+    path: &Path,
+) -> Vec<PathBuf> {
+    static_requested_paths(ctx, path)
+}
+
+/// Runtime static edges in [[RequestedModules]] order, including SCC back-edges.
+pub(super) fn static_requested_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, true)
+}
+
+/// Evaluation edges only: a `defer` request keeps its target out of this
+/// module's evaluation list, so an asynchronous scheduler never runs a
+/// deferred provider before the importer's body. Readiness still walks it.
+pub(super) fn static_evaluation_paths(ctx: &CompilationContext, path: &Path) -> Vec<PathBuf> {
+    requested_paths(ctx, path, false)
+}
+
+fn requested_paths(ctx: &CompilationContext, path: &Path, include_deferred: bool) -> Vec<PathBuf> {
+    let Some(module) = ctx.native_modules.get(path) else {
+        return Vec::new();
+    };
+    let mut edges = Vec::new();
+    for import in &module.imports {
+        if import.is_dynamic
+            || import.type_only
+            || import.runtime_erased
+            || import.is_deferred_require
+        {
+            continue;
+        }
+        if import.is_deferred && !include_deferred {
+            continue;
+        }
+        if let Some(target) = &import.resolved_path {
+            edges.push((PathBuf::from(target), import.source.as_str()));
+        }
+    }
+    for export in &module.exports {
+        let source = match export {
+            perry_hir::Export::ExportAll { source }
+            | perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::NamespaceReExport { source, .. } => source,
+            perry_hir::Export::Named { .. } => continue,
+        };
+        if let Some((target, _)) = resolve_import_with_context(source, path, ctx) {
+            edges.push((target, source));
+        }
+    }
+    let mut ordered = esm_request_order(edges, &module.requested_modules);
+    let mut seen = HashSet::new();
+    ordered.retain(|p| ctx.native_modules.contains_key(p) && seen.insert(p.clone()));
+    ordered
+}
+
+/// Require rejects the graph by its executable static edges, never annotations.
+pub(super) fn graph_has_tla(ctx: &CompilationContext, path: &Path) -> bool {
+    fn visit(ctx: &CompilationContext, path: &Path, seen: &mut HashSet<PathBuf>) -> bool {
+        if !seen.insert(path.to_owned()) {
+            return false;
+        }
+        let Some(module) = ctx.native_modules.get(path) else {
+            return false;
+        };
+        module.has_top_level_await
+            || static_requested_paths(ctx, path)
+                .iter()
+                .any(|dep| visit(ctx, dep, seen))
+    }
+    visit(ctx, path, &mut HashSet::new())
 }

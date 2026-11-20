@@ -68,8 +68,22 @@ pub(crate) unsafe fn call_on_native_backing(
         return None;
     }
     let raw = crate::value::js_nanbox_get_pointer(object) as usize;
-    if crate::object::field_get_set::is_fetch_subclass_body_method(method_name.as_bytes()) {
-        if let Some(id) = crate::object::fetch_subclass_handle_id(raw) {
+    // A Request/Response backing answers only its body methods here (its other
+    // members are accessors); every method of a Headers/Blob/File backing is a
+    // method of the native value.
+    let body_method =
+        crate::object::field_get_set::is_fetch_subclass_body_method(method_name.as_bytes());
+    // The backing probe reads a field (and may collect): keep `object` current.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object_h = scope.root_nanbox_f64(object);
+    let backing = crate::object::fetch_subclass_handle_id(raw);
+    let object = object_h.get_nanbox_f64();
+    let raw = crate::value::js_nanbox_get_pointer(object) as usize;
+    if let Some(id) = backing {
+        let backing_owns_method = body_method
+            || crate::object::fetch_handle_kind_probe()
+                .is_some_and(|probe| matches!(probe(id as usize), 3..=5));
+        if backing_owns_method {
             if let Some(dispatch) = super::super::class_handles::handle_method_dispatch() {
                 return Some(dispatch(
                     id,
@@ -199,8 +213,7 @@ pub(super) fn throw_fn_proto_not_callable(method: &str) -> ! {
         format!("Function.prototype.{method} was called on a value that is not a function")
     };
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Dispatch `receiver.<method>(args)` straight through the class vtable,
@@ -235,7 +248,9 @@ pub(crate) unsafe fn try_dispatch_instance_method_value(
     // `js_object_get_class_id` returns 0 for anything that isn't a user class
     // instance (null/non-pointer, Set/Map/Regex headers, closures, namespaces).
     let class_id = crate::object::js_object_get_class_id(ptr);
-    if class_id == 0 {
+    if class_id == 0 || !crate::object::shapes::receiver_has_class_identity(ptr) {
+        // Literal/native-module methods follow ordinary value dispatch.
+        // The receiver's identity proves no class holder needs materializing.
         return None;
     }
     let name = std::str::from_utf8(std::slice::from_raw_parts(

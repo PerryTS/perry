@@ -10,22 +10,16 @@
     "perry-ext-argon2",
     "perry-ext-bcrypt",
     "perry-ext-better-sqlite3",
-    "perry-ext-cheerio",
-    "perry-ext-ethers",
     "perry-ext-http",
     "perry-ext-net",
-    "perry-ext-nodemailer",
     "perry-ext-parcel-watcher",
     "perry-ext-pdf",
     "perry-ext-sharp",
-    "perry-ext-typescript",
-    "perry-ext-undici",
+    "perry-ext-bun",
     "perry-ext-ws",
     "perry-ext-zlib"
   ],
-  "allowed_binding_runtime_dependencies": [
-    "perry-ext-undici"
-  ],
+  "allowed_binding_runtime_dependencies": [],
   "ci": {
     "linux_host_excluded_members": [
       "perry-ui-android",
@@ -48,7 +42,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -56,6 +49,7 @@
       "perry-codegen-swiftui",
       "perry-codegen-wasm",
       "perry-codegen-wear-tiles",
+      "perry-component-io",
       "perry-container-compose",
       "perry-diagnostics",
       "perry-dispatch",
@@ -63,16 +57,12 @@
       "perry-ext-argon2",
       "perry-ext-bcrypt",
       "perry-ext-better-sqlite3",
-      "perry-ext-cheerio",
-      "perry-ext-ethers",
+      "perry-ext-bun",
       "perry-ext-http",
       "perry-ext-net",
-      "perry-ext-nodemailer",
       "perry-ext-parcel-watcher",
       "perry-ext-pdf",
       "perry-ext-sharp",
-      "perry-ext-typescript",
-      "perry-ext-undici",
       "perry-ext-ws",
       "perry-ext-zlib",
       "perry-ffi",
@@ -84,6 +74,7 @@
       "perry-native-registration",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime",
       "perry-runtime-manifest",
       "perry-runtime-static",
@@ -94,7 +85,6 @@
       "perry-ui-model",
       "perry-update-manifest",
       "perry-updater",
-      "perry-uuid",
       "perry-wasm-host",
       "perry-wpfacts"
     ],
@@ -103,7 +93,6 @@
       "perry-abi",
       "perry-api-manifest",
       "perry-base64",
-      "perry-cli-support",
       "perry-codegen",
       "perry-codegen-arkts",
       "perry-codegen-glance",
@@ -119,6 +108,7 @@
       "perry-http-client",
       "perry-parser",
       "perry-perex",
+      "perry-realm-table",
       "perry-runtime-manifest",
       "perry-tls-session",
       "perry-transform",
@@ -148,10 +138,6 @@
       "category": "runtime-core",
       "decision": "keep"
     },
-    "perry-cli-support": {
-      "category": "tool",
-      "decision": "keep"
-    },
     "perry-codegen": {
       "category": "compiler-core",
       "decision": "keep"
@@ -162,7 +148,7 @@
     },
     "perry-codegen-glance": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-js": {
       "category": "codegen-adapter",
@@ -170,7 +156,7 @@
     },
     "perry-codegen-swiftui": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-codegen-wasm": {
       "category": "codegen-adapter",
@@ -178,9 +164,13 @@
     },
     "perry-codegen-wear-tiles": {
       "category": "codegen-adapter",
-      "decision": "review"
+      "decision": "keep"
     },
     "perry-component-host": {
+      "category": "runtime-core",
+      "decision": "keep"
+    },
+    "perry-component-io": {
       "category": "runtime-core",
       "decision": "keep"
     },
@@ -190,10 +180,6 @@
     },
     "perry-container-e2e": {
       "category": "test-support",
-      "decision": "keep"
-    },
-    "perry-db-turnloop": {
-      "category": "runtime-core",
       "decision": "keep"
     },
     "perry-diagnostics": {
@@ -232,15 +218,10 @@
       "decision": "externalize",
       "migration": "external-package"
     },
-    "perry-ext-cheerio": {
+    "perry-ext-bun": {
       "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-ethers": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
+      "decision": "keep",
+      "migration": "core-runtime"
     },
     "perry-ext-http": {
       "category": "binding",
@@ -251,11 +232,6 @@
       "category": "binding",
       "decision": "keep",
       "migration": "core-runtime"
-    },
-    "perry-ext-nodemailer": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-parcel-watcher": {
       "category": "binding",
@@ -271,16 +247,6 @@
       "category": "binding",
       "decision": "externalize",
       "migration": "external-package"
-    },
-    "perry-ext-typescript": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
-    },
-    "perry-ext-undici": {
-      "category": "binding",
-      "decision": "externalize",
-      "migration": "compile-source"
     },
     "perry-ext-ws": {
       "category": "binding",
@@ -328,6 +294,10 @@
       "category": "runtime-core",
       "decision": "keep"
     },
+    "perry-realm-table": {
+      "category": "compiler-core",
+      "decision": "keep"
+    },
     "perry-runtime": {
       "category": "runtime-core",
       "decision": "keep"
@@ -349,10 +319,6 @@
       "decision": "keep"
     },
     "perry-tls-session": {
-      "category": "runtime-core",
-      "decision": "keep"
-    },
-    "perry-tls-turnloop": {
       "category": "runtime-core",
       "decision": "keep"
     },
@@ -392,10 +358,6 @@
       "category": "test-support",
       "decision": "keep"
     },
-    "perry-ui-testkit": {
-      "category": "test-support",
-      "decision": "keep"
-    },
     "perry-ui-tvos": {
       "category": "platform-adapter",
       "decision": "keep"
@@ -414,7 +376,7 @@
     },
     "perry-ui-windows-winui": {
       "category": "platform-adapter",
-      "decision": "merge"
+      "decision": "keep"
     },
     "perry-update-manifest": {
       "category": "compiler-core",
@@ -424,7 +386,7 @@
       "category": "runtime-core",
       "decision": "keep"
     },
-    "perry-uuid": {
+    "perry-wasi": {
       "category": "runtime-core",
       "decision": "keep"
     },

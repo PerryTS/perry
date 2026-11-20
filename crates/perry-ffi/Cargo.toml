@@ -57,4 +57,4 @@ default = []
 # compiler driver links `libperry_runtime.a` into the final binary
 # at compile-time, so the runtime symbols are present at the final
 # link step without the Cargo-level dependency edge.
-runtime-link = ["dep:perry-runtime"]
+runtime-link = ["dep:perry-runtime", "perry-runtime/test-layout-descriptors"]

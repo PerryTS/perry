@@ -116,7 +116,7 @@ pub unsafe extern "C" fn js_webcrypto_sign(
                         return reject_with_dom_exception("OperationError", "The operation failed")
                     }
                 };
-                let mut rng = rand_core_06::OsRng;
+                let mut rng = rand::rng();
                 let sig: P521EcdsaSignature = signing_key.sign_with_rng(&mut rng, &data_bytes);
                 sig.to_bytes().as_slice().to_vec()
             }
@@ -141,6 +141,26 @@ pub unsafe extern "C" fn js_webcrypto_sign(
         let signing_key = ed25519_dalek::SigningKey::from_bytes(&secret);
         use ed25519_dalek::Signer as _;
         signing_key.sign(&data_bytes).to_bytes().to_vec()
+    } else if let Some(key_algo) = ml_dsa_key_algo_from_name(&algo_upper) {
+        if mat.algo != key_algo {
+            return reject_with_dom_exception("InvalidAccessError", "Key algorithm mismatch");
+        }
+        if mat.kind != KeyKind::Private {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to sign",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_SIGN, "Unable to use this key to sign")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let context = object_field_bytes(algo_bits.to_bits(), b"context").unwrap_or_default();
+        match ml_dsa_sign(key_algo, &key_bytes, &data_bytes, &context) {
+            Some(signature) => signature,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED448" {
         if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Private {
             return reject_with_dom_exception(
@@ -271,7 +291,43 @@ pub unsafe extern "C" fn js_webcrypto_verify(
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
         if output_length == 0 {
-            return resolve_with_bool_provider(false, "SIGNREQUEST");
+            // An explicitly empty KMAC result verifies only a valid empty byte
+            // source, never the generic bytes_from_jsvalue error sentinel.
+            let valid_empty_signature = perry_runtime::buffer::bytes::no_gc(|scope| {
+                let signature = JSValue::from_bits(sig_bits.to_bits());
+                if signature.is_pointer()
+                    && perry_runtime::buffer::buffer_brand(signature.as_pointer::<u8>() as usize)
+                        == Some(perry_runtime::buffer::BufferBrand::KeyMaterial)
+                {
+                    return false;
+                }
+                perry_runtime::buffer::bytes::bytes(sig_bits, scope)
+                    .is_ok_and(|signature| signature.is_empty())
+            });
+            if valid_empty_signature {
+                // The lossy data_bytes conversion above is not BufferSource
+                // admission. Prove data before the zero-output success exit.
+                let valid_data = perry_runtime::buffer::bytes::no_gc(|scope| {
+                    let data = JSValue::from_bits(data_bits.to_bits());
+                    if data.is_pointer()
+                        && perry_runtime::buffer::buffer_brand(data.as_pointer::<u8>() as usize)
+                            == Some(perry_runtime::buffer::BufferBrand::KeyMaterial)
+                    {
+                        return false;
+                    }
+                    perry_runtime::buffer::bytes::bytes(data_bits, scope).is_ok()
+                });
+                if !valid_data {
+                    let message = b"The \"data\" argument must be an instance of ArrayBuffer, Buffer, TypedArray, or DataView.";
+                    let message =
+                        perry_runtime::js_string_from_bytes(message.as_ptr(), message.len() as u32);
+                    let error = perry_runtime::error::js_typeerror_new(message);
+                    return perry_runtime::js_promise_rejected(f64::from_bits(
+                        JSValue::pointer(error as *const u8).bits(),
+                    ));
+                }
+            }
+            return resolve_with_bool_provider(valid_empty_signature, "SIGNREQUEST");
         }
         let customization =
             object_field_bytes(algo_bits.to_bits(), b"customization").unwrap_or_else(Vec::new);
@@ -366,6 +422,26 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         };
         use ed25519_dalek::Verifier as _;
         verifying_key.verify(&data_bytes, &signature).is_ok()
+    } else if let Some(key_algo) = ml_dsa_key_algo_from_name(&algo_upper) {
+        if mat.algo != key_algo {
+            return reject_with_dom_exception("InvalidAccessError", "Key algorithm mismatch");
+        }
+        if mat.kind != KeyKind::Public {
+            return reject_with_dom_exception(
+                "InvalidAccessError",
+                "Unable to use this key to verify",
+            );
+        }
+        if let Err((name, message)) =
+            require_usage(mat, USAGE_VERIFY, "Unable to use this key to verify")
+        {
+            return reject_with_dom_exception(name, message);
+        }
+        let context = object_field_bytes(algo_bits.to_bits(), b"context").unwrap_or_default();
+        match ml_dsa_verify(key_algo, &key_bytes, &data_bytes, &context, &provided_sig) {
+            Some(ok) => ok,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
+        }
     } else if algo_upper == "ED448" {
         if mat.algo != KeyAlgo::Ed448 || mat.kind != KeyKind::Public {
             return reject_with_dom_exception(
@@ -463,11 +539,6 @@ pub(super) fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 }
 
 pub(super) fn number_from_bits(bits: u64) -> Option<u32> {
-    let top16 = (bits >> 48) as u16;
-    if top16 == 0x7FFE {
-        let raw = (bits & 0xFFFF_FFFF) as i32;
-        return (raw >= 0).then_some(raw as u32);
-    }
     let f = f64::from_bits(bits);
     if f.is_finite() && f >= 0.0 && f <= u32::MAX as f64 {
         Some(f as u32)
@@ -480,6 +551,9 @@ unsafe fn kmac_output_length(algo_bits: u64) -> Result<u32, (&'static str, &'sta
     let Some(length) = object_field_number(algo_bits, b"outputLength") else {
         return Err(("TypeError", "KmacParams.outputLength is required"));
     };
+    if length % 8 != 0 {
+        return Err(("NotSupportedError", "Invalid KmacParams outputLength"));
+    }
     Ok(length)
 }
 

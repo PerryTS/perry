@@ -75,8 +75,10 @@ pub(crate) unsafe fn compiled_target_call(
     }
     // A packed ordinary Array (or `null` / `undefined`): its Gets run no
     // code, so the values are copied and the body entered with no
-    // collection between.
-    let mut packed = [f64::from_bits(crate::value::TAG_UNDEFINED); 6];
+    // collection between. Sixteen, the closure stack-call width: a
+    // forwarded `arguments` bundle (`js_arguments_bundle_call_spread`) of a
+    // WebGL call carries up to eleven.
+    let mut packed = [f64::from_bits(crate::value::TAG_UNDEFINED); 16];
     if let Some(n) = crate::closure::packed_apply_values(arg(1), &mut packed) {
         return Some(enter_compiled_body(closure, info, this, packed.as_ptr(), n));
     }
@@ -93,14 +95,14 @@ pub(crate) unsafe fn compiled_target_call(
             return None;
         }
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {
                 let arr = addr as *const crate::array::ArrayHeader;
                 let n = crate::array::js_array_length(arr);
                 (0..n)
                     .map(|i| crate::array::js_array_get_f64(arr, i))
                     .collect()
             }
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {
                 crate::object::arguments_object_to_vec(addr as *const crate::object::ObjectHeader)?
             }
             _ => return None,

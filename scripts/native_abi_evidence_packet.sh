@@ -292,6 +292,11 @@ snapshot_tool_artifacts() {
     local runtime_name
     runtime_name="$(basename "$runtime_archive")"
     cp "$runtime_archive" "$tools_dir/$runtime_name"
+    # perry reads <archive>.gc-effects beside the archive it links; an archive
+    # copied without its sidecar is rejected ("... .gc-effects does not exist").
+    if [[ -f "$runtime_archive.gc-effects" ]]; then
+      cp "$runtime_archive.gc-effects" "$tools_dir/$runtime_name.gc-effects"
+    fi
     RUNTIME_ARCHIVE_RESOLVED="$tools_dir/$runtime_name"
   fi
 }
@@ -392,11 +397,11 @@ run_logged "release" "runtime_symbols" "$OUT_ABS/logs/runtime-symbols.log" \
 
 run_logged "correctness" "native_abi_contract" "$OUT_ABS/correctness/native-abi-contract/command.log" \
   env "PERRY=$PERRY_BIN_RESOLVED" "PERRY_NATIVE_ABI_EVIDENCE_DIR=$OUT_ABS/correctness/native-abi-contract" \
-  bash tests/test_native_abi_contract.sh
+  bash tests/integration/test_native_abi_contract.sh
 
 run_logged "correctness" "c_layout_pod_records" "$OUT_ABS/correctness/c-layout-pod-records/command.log" \
   env "PERRY=$PERRY_BIN_RESOLVED" "PERRY_NATIVE_ABI_EVIDENCE_DIR=$OUT_ABS/correctness/c-layout-pod-records" \
-  bash tests/test_c_layout_pod_records.sh
+  bash tests/integration/test_c_layout_pod_records.sh
 
 if "$PYTHON_BIN" - <<'PY'
 import sys

@@ -1,0 +1,30 @@
+//! Ordinary object and Reflect operations, shared by optional exotic backends.
+use crate::codegen_abi::LayoutWord;
+use crate::proxy_hooks::*;
+pub(crate) mod common;
+pub(crate) use common::*;
+pub(crate) mod set;
+pub(crate) use set::*;
+pub(crate) mod put_value;
+pub(crate) mod set_interceptor;
+pub(crate) use set_interceptor::*;
+pub(crate) mod callable;
+pub(crate) use callable::*;
+pub(crate) mod delete;
+pub(crate) use delete::*;
+pub(crate) mod metadata;
+pub(crate) mod prototype;
+pub(crate) mod reflect;
+pub(crate) mod reflect_misc;
+pub(crate) const TAG_UNDEFINED: u64 = 0x7FFC_0000_0000_0001;
+pub(crate) const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
+pub(crate) const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
+pub(crate) const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
+pub(crate) const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+pub(crate) const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+pub use put_value::js_put_value_set;
+pub use reflect::js_reflect_get_own_property_descriptor;
+pub use reflect_misc::js_reflect_define_property;
+pub use set::js_super_put_value_set;
+
+pub(crate) use crate::proxy_hooks::proxy_address as lookup;

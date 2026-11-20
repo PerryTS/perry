@@ -70,6 +70,8 @@ use crate::types::{I1, I32, I64, PTR};
 pub const SHADOW_STATE_PTR_OFFSET: u64 = 0;
 /// Byte offset of `ShadowStackState::len`.
 pub const SHADOW_STATE_LEN_OFFSET: u64 = 8;
+/// Byte offset of `ShadowStackState::cap`.
+pub const SHADOW_STATE_CAP_OFFSET: u64 = 16;
 /// Byte offset of `ShadowStackState::frame_top`.
 pub const SHADOW_STATE_FRAME_TOP_OFFSET: u64 = 24;
 /// `size_of::<ShadowEntry>()`. A power of two, so indexing is a shift.

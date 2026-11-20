@@ -162,6 +162,7 @@ fn admitted_doubles_stay_outside_the_tag_band_under_sign_flips() {
 
 fn call0(callee: u32) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(callee)),
         args: vec![],
         type_args: vec![],

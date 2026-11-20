@@ -3,13 +3,13 @@
 use super::global_this::*;
 
 const NOOP_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(global_this_builtin_noop_thunk, 1);
+    crate::fn_info!(#[realm(realm_decl! { WebSocket.prototype.send; CompressionStream, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, TransformStream, Uint8Array]; AbortController, kind = constructor, provider = builtin_constructor, births = [AbortSignal, Event], spec = {length = 0}, effects = { stores(fresh); returns(fresh(AbortController.prototype, slots = {signal: fresh(AbortSignal.prototype)})) }, emit = metadata(realm_urlpattern_metadata); AsyncDisposableStack, kind = constructor, provider = builtin_constructor, births = [Promise, SuppressedError], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); DisposableStack, kind = constructor, provider = builtin_constructor, births = [SuppressedError], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); FormData, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array, Blob, File], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); Navigator, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextDecoder, kind = constructor, provider = builtin_constructor, births = [Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextDecoderStream, kind = constructor, provider = builtin_constructor, births = [TextDecoder, TransformStream, Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextEncoder, kind = constructor, provider = builtin_constructor, births = [Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TextEncoderStream, kind = constructor, provider = builtin_constructor, births = [TextEncoder, TransformStream, Uint8Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); URLSearchParams, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); Event, kind = constructor, provider = builtin_constructor, members = { NONE = 0.0, attrs = enumerable; CAPTURING_PHASE = 1.0, attrs = enumerable; AT_TARGET = 2.0, attrs = enumerable; BUBBLING_PHASE = 3.0, attrs = enumerable; }, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), bubbles), field(arg(1), cancelable), field(arg(1), composed)); returns(fresh(Event.prototype)) }; WebSocket, kind = constructor, provider = builtin_constructor, members = { CONNECTING = 0.0, attrs = enumerable; OPEN = 1.0, attrs = enumerable; CLOSING = 2.0, attrs = enumerable; CLOSED = 3.0, attrs = enumerable; }; URL, kind = constructor, provider = builtin_constructor, members = { canParse; parse; createObjectURL; prototype; }, births = [URLSearchParams]; CustomEvent, kind = constructor, provider = builtin_constructor, extends = Event, effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), bubbles), field(arg(1), cancelable), field(arg(1), composed)); stores(field(arg(1), detail) -> field(result, detail)); returns(fresh(CustomEvent.prototype)) }; MessageEvent, kind = constructor, provider = builtin_constructor, extends = Event, births = [Array, MessagePort]; SuppressedError, kind = constructor, provider = builtin_constructor, extends = Error, spec = {length = 3}, emit = metadata(realm_suppressederror_metadata); AbortSignal, kind = constructor, provider = builtin_constructor, extends = EventTarget, members = { abort; timeout; any; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [Array, DOMException, Event, Promise]; AggregateError, kind = constructor, provider = builtin_constructor, extends = Error, spec = {length = 2}, emit = metadata(realm_file_metadata), births = [Array]; DOMException, kind = constructor, provider = builtin_constructor, members = { INDEX_SIZE_ERR = 1.0, attrs = enumerable; DOMSTRING_SIZE_ERR = 2.0, attrs = enumerable; HIERARCHY_REQUEST_ERR = 3.0, attrs = enumerable; WRONG_DOCUMENT_ERR = 4.0, attrs = enumerable; INVALID_CHARACTER_ERR = 5.0, attrs = enumerable; NO_DATA_ALLOWED_ERR = 6.0, attrs = enumerable; NO_MODIFICATION_ALLOWED_ERR = 7.0, attrs = enumerable; NOT_FOUND_ERR = 8.0, attrs = enumerable; NOT_SUPPORTED_ERR = 9.0, attrs = enumerable; INUSE_ATTRIBUTE_ERR = 10.0, attrs = enumerable; INVALID_STATE_ERR = 11.0, attrs = enumerable; SYNTAX_ERR = 12.0, attrs = enumerable; INVALID_MODIFICATION_ERR = 13.0, attrs = enumerable; NAMESPACE_ERR = 14.0, attrs = enumerable; INVALID_ACCESS_ERR = 15.0, attrs = enumerable; VALIDATION_ERR = 16.0, attrs = enumerable; TYPE_MISMATCH_ERR = 17.0, attrs = enumerable; SECURITY_ERR = 18.0, attrs = enumerable; NETWORK_ERR = 19.0, attrs = enumerable; ABORT_ERR = 20.0, attrs = enumerable; URL_MISMATCH_ERR = 21.0, attrs = enumerable; QUOTA_EXCEEDED_ERR = 22.0, attrs = enumerable; TIMEOUT_ERR = 23.0, attrs = enumerable; INVALID_NODE_TYPE_ERR = 24.0, attrs = enumerable; DATA_CLONE_ERR = 25.0, attrs = enumerable; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); EventTarget, kind = constructor, provider = builtin_constructor, members = { ["@for:nodejs.event_target"] = true, attrs = writable | enumerable | configurable; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [Event]; Proxy, kind = constructor, provider = builtin_constructor, members = { revocable; prototype; }, spec = {length = 2}, emit = metadata(realm_file_metadata); DecompressionStream, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, TransformStream, Uint8Array]; FinalizationRegistry, kind = constructor, provider = builtin_constructor; ReadableStream, kind = constructor, provider = builtin_constructor, members = { from, attrs = writable | enumerable | configurable; }, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = ["%AsyncIteratorPrototype%", ArrayBuffer, Promise, Uint8Array], effects = { reads(field(arg(1), size), field(arg(1), highWaterMark), field(arg(0), type), field(arg(0), start), field(arg(0), pull), field(arg(0), cancel), field(arg(0), autoAllocateChunkSize)); coerce(field(arg(1), highWaterMark), ToPrimitive); coerce(field(arg(0), type), ToPrimitive); calls(field(arg(0), start), this = arg(0), args = [fresh(ReadableStreamDefaultController.prototype, slots = {stream: result}) | fresh(ReadableByteStreamController.prototype, slots = {stream: result, byobRequest: fresh(ReadableStreamBYOBRequest.prototype, slots = {stream: result})})]); calls(field(arg(0), pull), this = arg(0), args = [fresh(ReadableStreamDefaultController.prototype, slots = {stream: result}) | fresh(ReadableByteStreamController.prototype, slots = {stream: result, byobRequest: fresh(ReadableStreamBYOBRequest.prototype, slots = {stream: result})})]); calls(field(arg(0), cancel), this = arg(0), args = [islot(result, cancelReason)]); calls(field(arg(1), size), this = prim(undefined), args = [islot(result, queue)]); coerce(returned(3), ToPrimitive); stores(fresh); returns(fresh(ReadableStream.prototype, slots = {started: promise(returned(0)), pulled: promise(returned(1)), cancelled: promise(returned(2)), queue: fresh(Uint8Array.prototype)})) }; ReadableStreamDefaultController, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); ReadableStreamDefaultReader, kind = constructor, provider = builtin_constructor, births = [Promise]; ReadableByteStreamController, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); ReadableStreamBYOBReader, kind = constructor, provider = builtin_constructor, births = [Promise]; ReadableStreamBYOBRequest, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata); TransformStream, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = [ReadableStream, WritableStream]; WritableStream, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_stream_constructor_public), births = [ArrayBuffer, Promise, Uint8Array]; })] export crate::object::global_this::fetch_globals::global_this_builtin_noop_thunk, 1);
 const TYPED_ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
     crate::fn_info!(typed_array_constructor_call_thunk, 1; with_declared(0));
 const CONSTRUCT_ONLY_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(construct_only_builtin_call_thunk, 0);
+    crate::fn_info!(#[realm(realm_decl! { DataView, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer], spec = {length = 1}, emit = metadata(realm_function_metadata); ArrayBuffer, kind = constructor, provider = builtin_constructor, members = { isView; prototype; [Symbol.species] = accessor(get = "ArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); SharedArrayBuffer, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "SharedArrayBuffer[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata); })] export crate::object::global_this::ctor_thunks::construct_only_builtin_call_thunk, 0);
 const WEBCRYPTO_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo =
-    crate::fn_info!(webcrypto_illegal_constructor_thunk, 0);
+    crate::fn_info!(#[realm(realm_decl! { Crypto, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, CryptoKey, DOMException, Promise, SubtleCrypto, Uint8Array]; CryptoKey, kind = constructor, provider = builtin_constructor; SubtleCrypto, kind = constructor, provider = builtin_constructor, members = { supports, attrs = writable | enumerable | configurable; prototype; }, births = [ArrayBuffer, CryptoKey, DOMException, Promise, Uint8Array]; })] export crate::object::global_this::ctor_thunks::webcrypto_illegal_constructor_thunk, 0);
 
 /// A builtin's own declaration, including the CLASS identity of its instances
 /// when its prototype occupies a class identity word. As with a member's
@@ -39,16 +39,38 @@ pub(crate) struct BuiltinConstructorDeclaration {
     /// names.
     pub named_serial: Option<u64>,
     pub instance_identity: Option<BuiltinInstanceIdentity>,
+    /// The family is born on first observation, not at realm setup: setup
+    /// allocates only the constructor (the realm's [[Intrinsics]] entry holds
+    /// it, and `globalThis.<name>` binds it); `realm_intrinsic_addr`, the one
+    /// materialize point, births the rest (`global_this::populate::birth_family`)
+    /// the first time the intrinsic prototype is asked for. The constructor
+    /// has no own property bag until then: its `length`, `name` and
+    /// `prototype` are the ordinary not-yet-materialized intrinsic slots, and
+    /// whatever needs the bag or the prototype births the family first.
+    pub lazy: bool,
+    /// The family's members are provided outside the runtime: its birth
+    /// calls the registered provider hook (`external_family.rs`). Always `lazy`.
+    pub external: bool,
+    /// A `lazy` constructor's own static keys, in creation order after
+    /// `length`, `name` and `prototype` (its declared static slots): while
+    /// the family is unborn, presence and key listing answer them from here;
+    /// reading one's value births the family, which installs it. The realm
+    /// source's own-key order is the check (`lazy_family_tests`).
+    pub statics: &'static [&'static str],
+    /// Population flags derived at compile time; they do not change realm facts.
+    pub phase_b: bool,
+    pub realm_seals_prototype: bool,
+    pub realm_seals_namespace: bool,
 }
 
 macro_rules! builtin_constructors {
-    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)?),* $(,)?) => {
+    ($($name:ident => $info:expr $(; class $class:expr)? $(; serial $serial:expr)? $(; sealed $sealed:expr)? $(; instance $instance:expr)? $(; prototype_callable $callable:expr)? $(; named_serial $named:expr)? $(; lazy $lazy:expr)? $(; external $external:expr)? $(; statics [$($static:literal),* $(,)?])?),* $(,)?) => {
         /// Immutable [[Construct]] identity in bits 23..29 of the function header.
         /// Zero belongs to every ordinary, wrapper and bound function.
         #[repr(u8)]
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
         #[allow(dead_code)] // `None` is the zero encoding
-        pub(crate) enum BuiltinConstructorIdentity { None = 0, $($name,)* }
+        pub enum BuiltinConstructorIdentity { None = 0, $($name,)* }
         impl BuiltinConstructorIdentity {
             #[inline(always)]
             pub(crate) fn from_header(word: u32) -> Option<Self> {
@@ -59,10 +81,16 @@ macro_rules! builtin_constructors {
                 assert!(id <= GLOBAL_THIS_BUILTIN_CONSTRUCTORS.len() as u32);
                 Some(unsafe { std::mem::transmute::<u8, Self>(id as u8) })
             }
+            #[inline(always)]
             pub(crate) fn declaration(self) -> &'static BuiltinConstructorDeclaration {
                 &GLOBAL_THIS_BUILTIN_CONSTRUCTORS[self as usize - 1]
             }
             pub(crate) fn name(self) -> &'static str { self.declaration().name }
+            /// The declaration whose intrinsic is named `name` (the spec name
+            /// of the realm intrinsic, never the current `globalThis` binding).
+            pub(crate) fn for_name(name: &str) -> Option<Self> {
+                match name { $(stringify!($name) => Some(Self::$name),)* _ => None }
+            }
         }
         const _: () = assert!((BuiltinConstructorIdentity::Buffer as u32) < 128);
         /// Builtin declarations, in the order captured by shared constructor bodies.
@@ -70,6 +98,9 @@ macro_rules! builtin_constructors {
             $(BuiltinConstructorDeclaration {
                 identity: BuiltinConstructorIdentity::$name,
                 name: stringify!($name),
+                phase_b: super::global_this::phase_rows::in_rest(stringify!($name)),
+                realm_seals_prototype: super::global_this::phase_rows::realm_seals_prototype(stringify!($name)),
+                realm_seals_namespace: super::global_this::phase_rows::contains(crate::codegen_abi::BUILTIN_NAMESPACES.as_slice(), stringify!($name)),
                 // SAFETY: fn_info! returns its own static immutable record.
                 info: unsafe { &*$info },
                 prototype_class: builtin_constructors!(@optional $($class)?),
@@ -78,6 +109,9 @@ macro_rules! builtin_constructors {
                 sealed_serial: builtin_constructors!(@optional $($sealed)?),
                 named_serial: builtin_constructors!(@optional $($named)?),
                 instance_identity: builtin_constructors!(@optional $($instance)?),
+                lazy: builtin_constructors!(@callable $($lazy)?),
+                external: builtin_constructors!(@callable $($external)?),
+                statics: &[$($($static,)*)?],
             },)*
         ];
     };
@@ -96,52 +130,52 @@ macro_rules! builtin_constructors {
 // `globalThis.<Name>` should route through the singleton instead of the
 // legacy `0.0` no-value placeholder.
 builtin_constructors! {
-    Array => crate::fn_info!(global_this_array_thunk, 1; with_rest(0)); instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE,
-    Object => crate::fn_info!(global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050),
-    String => crate::fn_info!(global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1),
-    Number => crate::fn_info!(global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0),
-    Boolean => crate::fn_info!(global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
-    Function => crate::fn_info!(unwind_in_tests global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0); prototype_callable true,
-    RegExp => crate::fn_info!(regexp_constructor_call_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0021),
-    Date => crate::fn_info!(global_this_date_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0020),
-    Error => crate::fn_info!(error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR),
-    TypeError => crate::fn_info!(type_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_TYPE_ERROR),
-    RangeError => crate::fn_info!(range_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_RANGE_ERROR),
-    SyntaxError => crate::fn_info!(syntax_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_SYNTAX_ERROR),
-    ReferenceError => crate::fn_info!(reference_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR),
-    EvalError => crate::fn_info!(eval_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR),
-    URIError => crate::fn_info!(uri_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR),
+    Array => ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0024); named_serial crate::closure::shape::INTRINSIC_SERIAL_ARRAY_PROTOTYPE,
+    Object => crate::fn_info!(#[realm(Object, kind = constructor, provider = builtin_constructor, members = { keys; values; entries; freeze; create; seal; isSealed; isFrozen; isExtensible; preventExtensions; is; setPrototypeOf; getOwnPropertySymbols; getOwnPropertyDescriptors; defineProperties; groupBy; getPrototypeOf; getOwnPropertyNames; getOwnPropertyDescriptor; defineProperty; fromEntries; assign; hasOwn; prototype; })] export crate::object::global_this::builtin_thunks::global_this_object_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0050),
+    String => crate::fn_info!(#[realm(String, kind = constructor, provider = builtin_constructor, members = { fromCharCode; fromCodePoint; raw; prototype; }, births = ["%StringIteratorPrototype%", Array, RegExp])] export crate::object::global_this::builtin_thunks::global_this_string_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D1),
+    Number => crate::fn_info!(#[realm(Number, kind = constructor, provider = builtin_constructor, members = { isNaN; isFinite; isInteger; isSafeInteger; parseFloat = ref(parseFloat); parseInt = ref(parseInt); NaN = NaN; POSITIVE_INFINITY = Infinity; NEGATIVE_INFINITY = -Infinity; MAX_VALUE = 1.7976931348623157e+308; MIN_VALUE = 5e-324; EPSILON = 2.220446049250313e-16; MAX_SAFE_INTEGER = 9007199254740991.0; MIN_SAFE_INTEGER = -9007199254740991.0; prototype; })] export crate::object::global_this::builtin_thunks::global_this_number_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D0),
+    Boolean => crate::fn_info!(#[realm(Boolean, kind = constructor, provider = builtin_constructor)] export crate::object::global_this::builtin_thunks::global_this_boolean_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D2),
+    Function => crate::fn_info!(#[realm(Function, kind = constructor, provider = builtin_constructor, spec = {length = 1}, emit = metadata(realm_function_metadata))] export unwind_in_tests crate::object::global_this::builtin_thunks::global_this_function_call_thunk, 1; with_rest(0)); serial crate::closure::shape::INTRINSIC_SERIAL_FUNCTION; instance BuiltinInstanceIdentity::Class(0xFFFF00F0); prototype_callable true,
+    RegExp => crate::fn_info!(#[realm(RegExp, kind = constructor, provider = builtin_constructor, members = { escape; prototype; [Symbol.species] = accessor(get = "RegExp[\"@@species\"].<get>"); }, births = [Array, String])] export crate::object::global_this::ctor_thunks::regexp_constructor_call_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0021),
+    Date => crate::fn_info!(#[realm(Date, kind = constructor, provider = builtin_constructor, members = { now; parse; UTC; prototype; }, spec = {length = 7}, emit = metadata(realm_date_metadata))] export crate::object::global_this::fetch_globals::global_this_date_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF0020),
+    Error => crate::fn_info!(#[realm(Error, kind = constructor, provider = builtin_constructor, members = { captureStackTrace; isError; prepareStackTrace; stackTraceLimit = 10.0, attrs = writable | enumerable | configurable; })] export crate::object::global_this::ctor_thunks::error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_ERROR),
+    TypeError => crate::fn_info!(#[realm(TypeError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::type_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_TYPE_ERROR),
+    RangeError => crate::fn_info!(#[realm(RangeError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::range_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_RANGE_ERROR),
+    SyntaxError => crate::fn_info!(#[realm(SyntaxError, kind = constructor, provider = builtin_constructor, extends = Error, attrs = {prototype = writable})] export crate::object::global_this::ctor_thunks::syntax_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_SYNTAX_ERROR),
+    ReferenceError => crate::fn_info!(#[realm(ReferenceError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::reference_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_REFERENCE_ERROR),
+    EvalError => crate::fn_info!(#[realm(EvalError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::eval_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_EVAL_ERROR),
+    URIError => crate::fn_info!(#[realm(URIError, kind = constructor, provider = builtin_constructor, extends = Error)] export crate::object::global_this::ctor_thunks::uri_error_constructor_call_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_URI_ERROR),
     AggregateError => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::error::CLASS_ID_AGGREGATE_ERROR),
-    Symbol => crate::fn_info!(global_this_symbol_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D4),
-    Promise => crate::fn_info!(promise_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0027),
-    Map => crate::fn_info!(map_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0022),
-    Set => crate::fn_info!(set_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0023),
-    WeakMap => crate::fn_info!(weak_map_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKMAP; instance BuiltinInstanceIdentity::Class(0xFFFF002C),
-    WeakSet => crate::fn_info!(weak_set_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKSET; instance BuiltinInstanceIdentity::Class(0xFFFF002D),
-    WeakRef => crate::fn_info!(weak_ref_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKREF; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_WEAKREF),
+    Symbol => crate::fn_info!(#[realm(Symbol, kind = constructor, provider = builtin_constructor, members = { for; keyFor; iterator = Symbol.iterator; asyncIterator = Symbol.asyncIterator; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::builtin_thunks::global_this_symbol_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D4),
+    Promise => crate::fn_info!(#[realm(Promise, kind = constructor, provider = builtin_constructor, members = { resolve; reject; all; race; allSettled; any; withResolvers; try; prototype; [Symbol.species] = accessor(get = "Promise[\"@@species\"].<get>"); }, births = [Array])] export crate::object::global_this::ctor_thunks::promise_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0027),
+    Map => crate::fn_info!(#[realm(Map, kind = constructor, provider = builtin_constructor, members = { groupBy; prototype; [Symbol.species] = accessor(get = "Map[\"@@species\"].<get>"); }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = ["%MapIteratorPrototype%", Array])] export crate::object::global_this::ctor_thunks::map_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0022),
+    Set => crate::fn_info!(#[realm(Set, kind = constructor, provider = builtin_constructor, members = { [Symbol.species] = accessor(get = "Set[\"@@species\"].<get>"); }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = ["%SetIteratorPrototype%", Array])] export crate::object::global_this::ctor_thunks::set_constructor_call_thunk, 1); instance BuiltinInstanceIdentity::Class(0xFFFF0023),
+    WeakMap => crate::fn_info!(#[realm(WeakMap, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::ctor_thunks::weak_map_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKMAP; instance BuiltinInstanceIdentity::Class(0xFFFF002C),
+    WeakSet => crate::fn_info!(#[realm(WeakSet, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::ctor_thunks::weak_set_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKSET; instance BuiltinInstanceIdentity::Class(0xFFFF002D),
+    WeakRef => crate::fn_info!(#[realm(WeakRef, kind = constructor, provider = builtin_constructor)] export crate::object::global_this::ctor_thunks::weak_ref_constructor_call_thunk, 1); class crate::weakref::CLASS_ID_WEAKREF; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_WEAKREF),
     Proxy => NOOP_CONSTRUCTOR_INFO,
-    BigInt => crate::fn_info!(global_this_bigint_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D3),
-    Uint8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT8_ARRAY),
-    Int8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT8_ARRAY),
-    Uint16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT16_ARRAY),
-    Int16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT16_ARRAY),
-    Uint32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT32_ARRAY),
-    Int32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_INT32_ARRAY),
-    Float16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT16_ARRAY),
-    Float32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT32_ARRAY),
-    Float64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_FLOAT64_ARRAY),
-    Uint8ClampedArray => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_UINT8_CLAMPED_ARRAY),
-    BigInt64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_BIGINT64_ARRAY),
-    BigUint64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray::CLASS_ID_BIGUINT64_ARRAY),
+    BigInt => crate::fn_info!(#[realm(BigInt, kind = constructor, provider = builtin_constructor, members = { asIntN; asUintN; prototype; })] export crate::object::global_this::builtin_thunks::global_this_bigint_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF00D3),
+    Uint8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT8_ARRAY),
+    Int8Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_INT8_ARRAY),
+    Uint16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT16_ARRAY),
+    Int16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_INT16_ARRAY),
+    Uint32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT32_ARRAY),
+    Int32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_INT32_ARRAY),
+    Float16Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_FLOAT16_ARRAY),
+    Float32Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_FLOAT32_ARRAY),
+    Float64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_FLOAT64_ARRAY),
+    Uint8ClampedArray => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_UINT8_CLAMPED_ARRAY),
+    BigInt64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_BIGINT64_ARRAY),
+    BigUint64Array => TYPED_ARRAY_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::typedarray_hook_slots::CLASS_ID_BIGUINT64_ARRAY),
     ArrayBuffer => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0025),
     SharedArrayBuffer => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF002E),
-    DataView => CONSTRUCT_ONLY_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF002B),
-    TextEncoder => NOOP_CONSTRUCTOR_INFO,
-    TextDecoder => NOOP_CONSTRUCTOR_INFO,
-    TextEncoderStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_TEXT_ENCODER_STREAM),
-    TextDecoderStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_TEXT_DECODER_STREAM),
-    CompressionStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_COMPRESSION_STREAM),
-    DecompressionStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_DECOMPRESSION_STREAM),
+    DataView => CONSTRUCT_ONLY_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_DATA_VIEW_PROTOTYPE; instance BuiltinInstanceIdentity::Class(0xFFFF002B),
+    TextEncoder => NOOP_CONSTRUCTOR_INFO; lazy true,
+    TextDecoder => NOOP_CONSTRUCTOR_INFO; lazy true,
+    TextEncoderStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_TEXT_ENCODER_STREAM); lazy true,
+    TextDecoderStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_TEXT_DECODER_STREAM); lazy true,
+    CompressionStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_COMPRESSION_STREAM); lazy true,
+    DecompressionStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::object::CLASS_ID_DECOMPRESSION_STREAM); lazy true,
     // The three core Web Streams constructors. Perry implements them (codegen
     // lowers `new ReadableStream(…)` and `x instanceof ReadableStream`, and the
     // class has an id), but the NAMES were never registered here or in codegen's
@@ -150,41 +184,53 @@ builtin_constructors! {
     // globalThis` was false, whereas Node exposes all three as functions.
     // Libraries feature-detect precisely that (`typeof ReadableStream !==
     // "undefined" ? … : …`) when deciding how to consume a `fetch()` body.
-    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060),
-    WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061),
-    TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062),
-    Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID),
+    // RSTREAM: the three ReadableStream families are born on first
+    // observation; their members come from the program's streams install
+    // (an `external` family: `external_family.rs`).
+    ReadableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0060); lazy true; external true; statics ["from"],
+    ReadableStreamDefaultController => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    ReadableStreamDefaultReader => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    // The byte-stream families (`type: "bytes"`): same external lazy contract.
+    ReadableByteStreamController => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    ReadableStreamBYOBReader => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    ReadableStreamBYOBRequest => NOOP_CONSTRUCTOR_INFO; lazy true; external true,
+    WritableStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0061); lazy true,
+    TransformStream => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(0xFFFF0062); lazy true,
+    Navigator => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::navigator::NAVIGATOR_CLASS_ID); lazy true,
     URL => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL; instance BuiltinInstanceIdentity::Class(0xFFFF0063),
     URLSearchParams => NOOP_CONSTRUCTOR_INFO; sealed crate::closure::shape::INTRINSIC_SERIAL_URL_SEARCH_PARAMS,
-    URLPattern => crate::fn_info!(global_this_url_pattern_call_thunk, 2; with_declared(2)),
+    URLPattern => crate::fn_info!(#[realm(URLPattern, kind = constructor, provider = builtin_constructor, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::ctor_thunks::global_this_url_pattern_call_thunk, 2; with_declared(2)); lazy true,
     AbortController => NOOP_CONSTRUCTOR_INFO,
     AbortSignal => NOOP_CONSTRUCTOR_INFO,
     EventTarget => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT_TARGET),
-    Crypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Crypto,
-    CryptoKey => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::CryptoKey,
+    Crypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Crypto; lazy true,
+    CryptoKey => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::CryptoKey; lazy true,
     SubtleCrypto => WEBCRYPTO_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::SubtleCrypto,
     Event => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_EVENT),
-    CustomEvent => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_CUSTOM_EVENT),
+    MessageEvent => NOOP_CONSTRUCTOR_INFO; lazy true,
+    CustomEvent => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_CUSTOM_EVENT); lazy true,
     DOMException => NOOP_CONSTRUCTOR_INFO; instance BuiltinInstanceIdentity::Class(crate::event_target::CLASS_ID_DOM_EXCEPTION),
-    FormData => NOOP_CONSTRUCTOR_INFO,
-    Blob => crate::fn_info!(global_this_blob_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0026),
-    File => crate::fn_info!(global_this_file_thunk, 3; with_declared(3)); instance BuiltinInstanceIdentity::Class(0xFFFF002F),
-    Headers => crate::fn_info!(global_this_headers_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF002A),
-    Request => crate::fn_info!(global_this_request_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0029),
-    Response => crate::fn_info!(global_this_response_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0028),
-    MessageChannel => crate::fn_info!(crate::messaging::js_message_channel_constructor_call_error, 0; with_declared(0)),
-    MessagePort => crate::fn_info!(crate::messaging::js_message_port_constructor_call_error, 0; with_declared(0)),
-    BroadcastChannel => crate::fn_info!(crate::messaging::js_broadcast_channel_constructor_call_error, 1; with_declared(1)),
-    Storage => crate::fn_info!(crate::web_storage::storage_constructor_illegal, 0; with_declared(0)),
+    FormData => NOOP_CONSTRUCTOR_INFO; lazy true,
+    Blob => crate::fn_info!(#[realm(Blob, kind = constructor, provider = builtin_constructor, births = [ArrayBuffer, Promise, ReadableStream, Uint8Array], spec = {length = 0}, effects = { coerce(arg(0), Iterate); coerce(arg(0), ToPrimitive); coerce(elems(arg(0)), ToPrimitive); reads(arg(1)); coerce(field(arg(1), type), ToPrimitive); returns(fresh(Blob.prototype)) }, emit = metadata(realm_urlpattern_metadata))] export crate::object::global_this::fetch_globals::global_this_blob_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0026); lazy true,
+    File => crate::fn_info!(#[realm(File, kind = constructor, provider = builtin_constructor, extends = Blob, spec = {length = 2}, emit = metadata(realm_file_metadata))] export crate::object::global_this::fetch_globals::global_this_file_thunk, 3; with_declared(3)); instance BuiltinInstanceIdentity::Class(0xFFFF002F); lazy true,
+    Headers => crate::fn_info!(#[realm(Headers, kind = constructor, provider = builtin_constructor, births = ["%IteratorPrototype%", Array], spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), effects = { coerce(arg(0), OwnKeys); coerce(iterated(iterated(arg(0))), ToPrimitive); coerce(values(arg(0)), ToPrimitive); stores(fresh); returns(fresh(Headers.prototype)) })] export crate::object::global_this::fetch_globals::global_this_headers_thunk, 1; with_declared(1)); instance BuiltinInstanceIdentity::Class(0xFFFF002A); lazy true,
+    Request => crate::fn_info!(#[realm(Request, kind = constructor, provider = builtin_constructor, births = [AbortSignal, ArrayBuffer, Blob, FormData, Headers, Promise, ReadableStream, URL], spec = {length = 1}, emit = metadata(realm_function_metadata), effects = { coerce(arg(0), ToPrimitive); reads(field(arg(1), method), field(arg(1), headers), field(arg(1), body), field(arg(1), referrer), field(arg(1), referrerPolicy), field(arg(1), mode), field(arg(1), credentials), field(arg(1), cache), field(arg(1), redirect), field(arg(1), integrity), field(arg(1), keepalive), field(arg(1), signal), field(arg(1), duplex), field(arg(1), priority), field(arg(1), window), field(arg(1), dispatcher)); coerce(field(arg(1), method), ToPrimitive); coerce(field(arg(1), referrer), ToPrimitive); coerce(field(arg(1), referrerPolicy), ToPrimitive); coerce(field(arg(1), mode), ToPrimitive); coerce(field(arg(1), credentials), ToPrimitive); coerce(field(arg(1), cache), ToPrimitive); coerce(field(arg(1), redirect), ToPrimitive); coerce(field(arg(1), integrity), ToPrimitive); coerce(field(arg(1), duplex), ToPrimitive); coerce(field(arg(1), priority), ToPrimitive); coerce(field(arg(1), headers), OwnKeys); coerce(iterated(iterated(field(arg(1), headers))), ToPrimitive); coerce(values(field(arg(1), headers)), ToPrimitive); escapes(field(arg(1), body)); stores(fresh); returns(fresh(Request.prototype, slots = {signal: field(arg(1), signal) | islot(arg(0), signal)})) })] export crate::object::global_this::fetch_globals::global_this_request_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0029); lazy true,
+    Response => crate::fn_info!(#[realm(Response, kind = constructor, provider = builtin_constructor, members = { error; json; redirect; prototype; }, spec = {length = 0}, emit = metadata(realm_urlpattern_metadata), births = [ArrayBuffer, Blob, FormData, Headers, Promise, ReadableStream], effects = { reads(field(arg(1), status), field(arg(1), statusText), field(arg(1), headers)); coerce(field(arg(1), status), ToPrimitive); coerce(field(arg(1), statusText), ToPrimitive); coerce(field(arg(1), headers), OwnKeys); coerce(iterated(iterated(field(arg(1), headers))), ToPrimitive); coerce(values(field(arg(1), headers)), ToPrimitive); reads(field(arg(0), locked)); coerce(arg(0), ToPrimitive); coerce(arg(0), AsyncIterate); stores(fresh); returns(fresh(Response.prototype, slots = {bodyError: islot(arg(0), storedError)})) })] export crate::object::global_this::fetch_globals::global_this_response_thunk, 2; with_declared(2)); instance BuiltinInstanceIdentity::Class(0xFFFF0028),
+    MessageChannel => crate::fn_info!(#[realm(MessageChannel, kind = constructor, provider = builtin_constructor)] export crate::messaging_hook_slots::js_message_channel_constructor_call_error, 0; with_declared(0)); lazy true,
+    MessagePort => crate::fn_info!(#[realm(MessagePort, kind = constructor, provider = builtin_constructor)] export crate::messaging_hook_slots::js_message_port_constructor_call_error, 0; with_declared(0)); lazy true,
+    BroadcastChannel => crate::fn_info!(#[realm(BroadcastChannel, kind = constructor, provider = builtin_constructor, extends = EventTarget)] export crate::messaging_hook_slots::js_broadcast_channel_constructor_call_error, 1; with_declared(1)); lazy true,
+    Storage => crate::fn_info!(#[realm(Storage, kind = constructor, provider = builtin_constructor)] export crate::web_storage::storage_constructor_illegal, 0; with_declared(0)); lazy true,
     WebSocket => NOOP_CONSTRUCTOR_INFO,
     FinalizationRegistry => NOOP_CONSTRUCTOR_INFO; class crate::weakref::CLASS_ID_FINALIZATION_REGISTRY; instance BuiltinInstanceIdentity::Class(crate::weakref::CLASS_ID_FINALIZATION_REGISTRY),
     // #2875: TC39 explicit-resource-management globals. Backed by the
     // no-op constructor thunk so `typeof DisposableStack === "function"`;
     // real `new DisposableStack()` / `new SuppressedError(...)` flow through
     // codegen's `lower_builtin_new` to the dedicated runtime ctors.
-    DisposableStack => NOOP_CONSTRUCTOR_INFO,
-    AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO,
-    SuppressedError => NOOP_CONSTRUCTOR_INFO,
+    DisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
+    AsyncDisposableStack => NOOP_CONSTRUCTOR_INFO; lazy true,
+    SuppressedError => NOOP_CONSTRUCTOR_INFO; lazy true,
+    // Abstract: `prototype` is the realm's %IteratorPrototype% (`iterator_ctor`).
+    Iterator => CONSTRUCT_ONLY_INFO,
     Buffer => NOOP_CONSTRUCTOR_INFO,
 }
 
@@ -216,7 +262,7 @@ pub(crate) fn is_global_this_builtin_constructor_name(name: &str) -> bool {
 /// these are the runtime fallback for rebound / passed-as-value constructors.
 /// Values verified against `node --experimental-strip-types`. Unlisted names
 /// fall through to the closure arity registry (0).
-pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
+#[rustfmt::skip] pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
     let len = match name {
         "Symbol"
         | "Map"
@@ -241,9 +287,16 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "MessagePort"
         | "Storage"
         | "Navigator"
+        | "ReadableStreamDefaultController"
+        | "ReadableByteStreamController"
+        | "ReadableStreamBYOBRequest"
         | "DisposableStack"
-        | "AsyncDisposableStack" => 0,
-        "CompressionStream" | "DecompressionStream" => 1,
+        | "AsyncDisposableStack"
+        | "Iterator" => realm_urlpattern_metadata!(length),
+        "CompressionStream"
+        | "DecompressionStream"
+        | "ReadableStreamDefaultReader"
+        | "ReadableStreamBYOBReader" => 1,
         "Array"
         | "Object"
         | "String"
@@ -265,16 +318,17 @@ pub(crate) fn builtin_constructor_spec_length(name: &str) -> Option<u32> {
         | "URL"
         | "Event"
         | "CustomEvent"
+        | "MessageEvent"
         | "Request"
         | "WebSocket"
         | "BroadcastChannel"
         | "FinalizationRegistry"
-        | "Promise" => 1,
-        "RegExp" | "Proxy" | "AggregateError" | "File" => 2,
-        "Date" => 7,
+        | "Promise" => realm_function_metadata!(length),
+        "RegExp" | "Proxy" | "AggregateError" | "File" => realm_file_metadata!(length),
+        "Date" => realm_date_metadata!(length),
         "SuppressedError" | "Buffer" | "Uint8Array" | "Int8Array" | "Uint16Array"
         | "Int16Array" | "Uint32Array" | "Int32Array" | "Float16Array" | "Float32Array"
-        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => 3,
+        | "Float64Array" | "Uint8ClampedArray" | "BigInt64Array" | "BigUint64Array" => realm_suppressederror_metadata!(length),
         _ => return None,
     };
     Some(len)
@@ -368,6 +422,15 @@ pub(crate) fn constructor_identity(value: f64) -> Option<BuiltinConstructorIdent
     }
 }
 
+/// The call capture of a builtin constructor: its identity in the
+/// runtime-internal 0x7FFE word space (DESIGN-p3 §1.2, R4), the same word the
+/// realm image writes for `RealmValue::Int32` (`realm_image/atoms.rs`). It is
+/// never a JS value, and never a Number (P3 B4a: nothing builds an INT32
+/// Number).
+pub(crate) const fn builtin_constructor_identity_word(identity: u32) -> u64 {
+    crate::value::INTERNAL_WORD_TAG | identity as u64
+}
+
 /// Birth consumes one declaration, so code, header identity and call capture
 /// cannot disagree. The fact precedes publication and survives moving GC.
 pub(crate) fn alloc_builtin_constructor(
@@ -380,7 +443,7 @@ pub(crate) fn alloc_builtin_constructor(
         crate::closure::js_closure_set_capture_bits(
             closure,
             0,
-            crate::JSValue::int32(identity as i32).bits(),
+            builtin_constructor_identity_word(identity as u32),
         );
         // Scalar declaration fact, installed before publication. The ordinary
         // birth has already checked the capture bound and initialized all slots.
@@ -402,4 +465,54 @@ pub(crate) unsafe fn declaration_of_constructor(
     let declaration = identity.declaration();
     debug_assert_eq!(declaration.info.code, info.code);
     Some(declaration)
+}
+
+#[cfg(test)]
+mod realm_info_export_tests {
+    include!(concat!(env!("OUT_DIR"), "/realm_info_exports_test.rs"));
+    use super::*;
+
+    unsafe extern "C" fn compound_flags_body(
+        _callee: *const crate::closure::ClosureHeader,
+        _this: crate::codegen_abi::JsThis,
+    ) -> f64 {
+        f64::from_bits(crate::value::TAG_UNDEFINED)
+    }
+
+    #[test]
+    fn image_export_spells_compound_builders_as_tokens() {
+        let info = crate::fn_info!(export crate::object::global_this_tables::realm_info_export_tests::compound_flags_body, 0;
+            with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR),
+            with_length({ let length = 3; length }), plain()
+        );
+        unsafe extern "C" {
+            #[link_name = "perry_fn_info_perry-runtime::crate::object::global_this_tables::realm_info_export_tests::compound_flags_body::0::with_flags(crate :: closure :: FN_BUILTIN | crate :: closure :: FN_NON_CONSTRUCTOR );with_length({ let length = 3 ; length } );plain();"]
+            static COMPOUND_INFO: crate::closure::JsFunctionInfo;
+        }
+        assert_eq!(std::ptr::addr_of!(COMPOUND_INFO), info);
+        let info = unsafe { &*info };
+        assert_eq!(info.length, 3);
+        assert_eq!(info.plain_params(), 0);
+        assert_eq!(
+            info.flags,
+            crate::closure::FN_BUILTIN
+                | crate::closure::FN_NON_CONSTRUCTOR
+                | crate::closure::FN_HAS_LENGTH
+                // A runtime record owns its metadata entry (NativeFunctionInfo).
+                | crate::codegen_abi::FN_HAS_METADATA
+        );
+    }
+
+    #[test]
+    fn image_names_the_same_info_as_the_constructor_birth() {
+        unsafe extern "C" {
+            #[link_name = "perry_fn_info_perry-runtime::crate::object::global_this::builtin_thunks::global_this_array_thunk::1::with_rest(0 );"]
+            static ARRAY_INFO: crate::closure::JsFunctionInfo;
+        }
+        let born = BuiltinConstructorIdentity::Array.declaration().info;
+        assert_eq!(std::ptr::addr_of!(ARRAY_INFO), born as *const _);
+        assert_eq!(born.code, global_this_array_thunk as *const u8);
+        assert_eq!(born.params, 1);
+        assert_eq!(born.rest_fixed, 0);
+    }
 }

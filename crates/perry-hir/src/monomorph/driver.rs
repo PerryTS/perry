@@ -28,6 +28,13 @@ pub fn monomorphize_modules<'a>(modules: impl IntoIterator<Item = &'a mut Module
 }
 
 fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationContext) {
+    for c in &mut module.classes {
+        if c.is_literal_shape() {
+            if let Some(f) = &mut c.constructor {
+                crate::lexical_frames::literal_constructor(f, &mut ctx.frame_ids);
+            }
+        }
+    }
     let idx = ModuleIndex::new(module);
 
     // First pass: collect all generic instantiations from the code
@@ -65,7 +72,14 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                     }
                     // Continue with specialization even on constraint errors (for now)
                 }
-                let specialized = specialize_function(original, &request.type_args, request.new_id);
+                let mut specialized =
+                    specialize_function(original, &request.type_args, request.new_id);
+                crate::lexical_frames::function(
+                    &mut specialized,
+                    request.original_id,
+                    &mut ctx.frame_ids,
+                )
+                .metadata(module);
                 new_functions.push(specialized);
             }
         }
@@ -122,7 +136,8 @@ fn monomorphize_with_context(module: &mut Module, ctx: &mut MonomorphizationCont
                 if let Some(src) = module.class_source_text.get(&original.id).cloned() {
                     new_source_texts.push((new_id, src));
                 }
-                let specialized = specialize_class(original, &request.type_args, new_id);
+                let mut specialized = specialize_class(original, &request.type_args, new_id);
+                crate::lexical_frames::class(&mut specialized, &mut ctx.frame_ids).metadata(module);
                 new_classes.push(specialized);
             }
         }
@@ -240,6 +255,7 @@ fn collect_instantiations_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_instantiations_in_stmts(body, ctx, module, idx);
             if let Some(c) = catch {
@@ -382,7 +398,7 @@ fn collect_instantiations_in_expr(
         Expr::PropertyUpdate { object, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
         }
@@ -390,6 +406,7 @@ fn collect_instantiations_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
@@ -401,8 +418,20 @@ fn collect_instantiations_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, v) in parts {
+            for v in parts.iter().flatten() {
                 collect_instantiations_in_expr(v, ctx, module, idx);
+            }
+        }
+        // A native method call's receiver and arguments are ordinary
+        // expressions (`update_call_sites` rewrites them): a generic call in
+        // them, e.g. a native-host realm member call's argument array,
+        // needs its instantiation too.
+        Expr::NativeMethodCall { object, args, .. } => {
+            if let Some(object) = object {
+                collect_instantiations_in_expr(object, ctx, module, idx);
+            }
+            for arg in args {
+                collect_instantiations_in_expr(arg, ctx, module, idx);
             }
         }
         Expr::Array(elems, _) => {

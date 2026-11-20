@@ -118,6 +118,7 @@ fn collect_used_object_fields_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_used_object_fields_in_stmts(body, non_escaping_object_literals, used);
                 if let Some(catch) = catch {
@@ -279,6 +280,7 @@ pub fn find_object_literal_candidates(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 find_object_literal_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
@@ -383,6 +385,7 @@ pub fn check_object_literal_escapes_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 check_object_literal_escapes_in_stmts(body, candidates, escaped);
                 if let Some(c) = catch {
@@ -429,7 +432,7 @@ pub fn check_object_literal_escapes_in_expr(
         }
 
         // Safe: `o.known_field = v` (value must not reference id).
-        Expr::PropertySet { object, property, value } => {
+        Expr::PropertySet { object, property, value, .. } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(keys) = candidates.get(id) {
                     let key_known = keys.iter().any(|k| k == property);
@@ -616,11 +619,11 @@ pub fn check_object_literal_escapes_in_expr(
                 check_object_literal_escapes_in_expr(a, candidates, escaped);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(index, candidates, escaped);
         }
-        Expr::IndexSet { object, index, value } => {
+        Expr::IndexSet { object, index, value, .. } => {
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(index, candidates, escaped);
             check_object_literal_escapes_in_expr(value, candidates, escaped);
@@ -646,7 +649,7 @@ pub fn check_object_literal_escapes_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 check_object_literal_escapes_in_expr(e, candidates, escaped);
             }
         }

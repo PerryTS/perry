@@ -4,7 +4,126 @@
 
 use super::*;
 
-pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut ObjectMeta> {
+/// Why a meta record is being created: one variant per row of the A1 design's
+/// reason table. A new call site needs a reason, and a new reason needs its
+/// excluding fact in [`MetaReason::excluded_by`] (matched without a wildcard),
+/// or it is `RuntimeBornOnly`, which debug builds check at the funnel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MetaReason {
+    /// An `arguments` object's birth word and exotic state.
+    Arguments,
+    Spill,
+    SpillReserve,
+    Overflow,
+    PrototypeOnReceiver,
+    PrototypeHolder,
+    BecomesPrototype,
+    EvalBrand,
+    AdoptFamilyLayout,
+    ClassEvaluationPrivateStorage,
+    CtorFnPrototype,
+    BuiltinSeal,
+    RuntimePrototypeName,
+    HttpPrototypes,
+    ReflectMetadata,
+    BoxedPrimitive,
+    SetKeyIdentity,
+    WeakStorage,
+    OwnedState,
+    NativePayload,
+    NativeThisAlias,
+    WasmWrapper,
+    RuntimeHandle,
+    ArraySubclassElements,
+    /// A plain object's index store (`array::plain_elements`).
+    PlainElements,
+    ArrayIteratorBrand,
+    ClosureProps,
+    CellExpando,
+}
+
+/// The whole-program fact (design section 2.1) that keeps a meta-less family
+/// away from a reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ExcludingFact {
+    /// No token of the family reaches top (escape, unmodeled builtins, vm, N-API).
+    P1,
+    /// No hard mark (defineProperty, setPrototypeOf, delete, freeze, Proxy, ...).
+    P2,
+    /// Fixed layout: every key ever stored is a slotted birth key.
+    P3,
+    /// No native parent and no `extends`.
+    P4,
+    /// The family is never used as a prototype.
+    P5,
+    /// The family is never a collection element.
+    P6,
+    /// The family is never a constructor-return override.
+    // No reason is excluded by P7 today; the numbering is the design's.
+    #[allow(dead_code)]
+    P7,
+    /// The family's class has no evaluation brand.
+    P8,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Exclusion {
+    /// Only objects the runtime allocated itself reach this reason.
+    RuntimeBornOnly,
+    Fact(ExcludingFact),
+}
+
+impl MetaReason {
+    pub(crate) const fn excluded_by(self) -> Exclusion {
+        use ExcludingFact::*;
+        use Exclusion::{Fact, RuntimeBornOnly};
+        match self {
+            MetaReason::Spill => Fact(P3),
+            MetaReason::SpillReserve => RuntimeBornOnly,
+            MetaReason::Overflow => Fact(P3),
+            MetaReason::PrototypeOnReceiver => Fact(P2),
+            MetaReason::PrototypeHolder => RuntimeBornOnly,
+            MetaReason::BecomesPrototype => Fact(P5),
+            MetaReason::EvalBrand => Fact(P8),
+            MetaReason::AdoptFamilyLayout => RuntimeBornOnly,
+            MetaReason::ClassEvaluationPrivateStorage => RuntimeBornOnly,
+            MetaReason::CtorFnPrototype => RuntimeBornOnly,
+            MetaReason::BuiltinSeal => RuntimeBornOnly,
+            MetaReason::RuntimePrototypeName => RuntimeBornOnly,
+            MetaReason::HttpPrototypes => RuntimeBornOnly,
+            MetaReason::ReflectMetadata => Fact(P1),
+            MetaReason::BoxedPrimitive => RuntimeBornOnly,
+            MetaReason::SetKeyIdentity => Fact(P6),
+            MetaReason::WeakStorage => RuntimeBornOnly,
+            MetaReason::OwnedState => Fact(P1),
+            MetaReason::NativePayload => Fact(P4),
+            MetaReason::NativeThisAlias => Fact(P4),
+            MetaReason::WasmWrapper => Fact(P1),
+            MetaReason::RuntimeHandle => RuntimeBornOnly,
+            MetaReason::ArraySubclassElements => Fact(P4),
+            MetaReason::PlainElements => Fact(P3),
+            MetaReason::ArrayIteratorBrand => RuntimeBornOnly,
+            MetaReason::ClosureProps => RuntimeBornOnly,
+            MetaReason::CellExpando => RuntimeBornOnly,
+            MetaReason::Arguments => RuntimeBornOnly,
+        }
+    }
+}
+
+/// `reason` documents the caller and, in debug builds, checks that a
+/// `RuntimeBornOnly` reason really got a runtime-born (meta-form) object.
+#[inline(always)]
+fn debug_check_reason(obj_type: impl FnOnce() -> u8, reason: MetaReason) {
+    if cfg!(debug_assertions) && reason.excluded_by() == Exclusion::RuntimeBornOnly {
+        assert_eq!(obj_type(), crate::gc::GC_TYPE_OBJECT, "{reason:?}");
+    }
+}
+
+pub(crate) unsafe fn object_meta_ensure_for_cell(
+    user_ptr: usize,
+    reason: MetaReason,
+) -> Option<*mut ObjectMeta> {
+    let _ = reason;
     let slot = cell_meta_slot(user_ptr)?;
     if !(*slot).is_null() {
         return Some(*slot);
@@ -32,7 +151,7 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).private_evaluation_brand = 0;
     (*meta).proto_serial = 0;
     (*meta).native_state = 0;
-    (*meta).reserved_48 = 0;
+    (*meta).function_layout_birth = 0;
     #[cfg(feature = "shape-mint-diag")]
     crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;
@@ -44,16 +163,23 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(user_ptr: usize) -> Option<*mut
     (*meta).overflow = 0;
     (*meta).arguments = 0;
     (*meta).instance_birth = 0;
+    (*meta).arguments_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): header-slot store followed by an object-slot
     // barrier, exactly as `object_meta_ensure` does for an `ObjectHeader`.
     // The reloaded cell is live; consume its current generation proof.
     // Young arena holders need only the active incremental-mark barrier.
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::meta_install(slot as usize);
     *slot = meta;
     crate::gc::runtime_write_barrier_resolved_slot(user_ptr, slot as usize, meta as u64);
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::meta_installed(slot as usize, meta as usize);
     Some(meta)
 }
 
-pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMeta {
+pub(crate) unsafe fn object_meta_ensure(obj: MetaObj, reason: MetaReason) -> *mut ObjectMeta {
+    debug_check_reason(|| object_type(obj.as_ptr()), reason);
+    let obj = obj.as_ptr();
     if !(*obj).meta.is_null() {
         return (*obj).meta;
     }
@@ -85,7 +211,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).private_evaluation_brand = 0;
     (*meta).proto_serial = 0;
     (*meta).native_state = 0;
-    (*meta).reserved_48 = 0;
+    (*meta).function_layout_birth = 0;
     #[cfg(feature = "shape-mint-diag")]
     crate::object::shape_mint_census::note_event("ObjectMeta record born");
     (*meta).array_tail_object_hot = 0;
@@ -97,16 +223,21 @@ pub(crate) unsafe fn object_meta_ensure(obj: *mut ObjectHeader) -> *mut ObjectMe
     (*meta).overflow = 0;
     (*meta).arguments = 0;
     (*meta).instance_birth = 0;
+    (*meta).arguments_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     // Reloaded after the allocation: promotion, if any, is reflected in the
     // live header. No safepoint intervenes before the resolved-slot barrier.
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::meta_install(&(*obj).meta as *const _ as usize);
     (*obj).meta = meta;
     crate::gc::runtime_write_barrier_resolved_slot(
         obj as usize,
         &(*obj).meta as *const _ as usize,
         meta as u64,
     );
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::meta_installed(&(*obj).meta as *const _ as usize, meta as usize);
     meta
 }
 
@@ -122,4 +253,23 @@ pub(crate) unsafe fn gc_object_meta_slot(user_ptr: usize) -> Option<*mut u64> {
         return None;
     }
     Some(&mut (*obj).meta as *mut _ as *mut u64)
+}
+
+/// The fail-closed abort for a meta-less family object that reached a meta
+/// reason (A1 design 2.4). It sits on the cold side of a caller's existing
+/// type dispatch; the first callers arrive with the meta-less births.
+///
+/// # Safety
+/// `obj` is the user pointer of a live ordinary object.
+#[cold]
+#[optimize(size)]
+#[inline(never)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) unsafe fn a1_internal_error(obj: *const ObjectHeader, reason: MetaReason) -> ! {
+    let family = layout_desc::family_desc_of(obj).map_or(0, |desc| desc.family);
+    eprintln!(
+        "perry internal error A1: meta-less family {family:#x} (class {}) reached {reason:?}",
+        (*obj).class_id
+    );
+    std::process::abort();
 }

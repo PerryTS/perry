@@ -1,0 +1,50 @@
+(component
+  (type (;0;)
+    (instance
+      (type (;0;) (func))
+      (export (;0;) "do-something" (func (type 0)))
+    )
+  )
+  (import "test:test/iface" (instance (;0;) (type 0)))
+  (type (;1;)
+    (component
+      (type (;0;)
+        (instance
+          (type (;0;) (func))
+          (export (;0;) "do-something" (func (type 0)))
+        )
+      )
+      (import "test:test/iface" (instance (;0;) (type 0)))
+      (export (;1;) "test:test/iface" (instance (type 0)))
+    )
+  )
+  (import "unlocked-dep=<test:producer>" (component (;0;) (type 1)))
+  (instance (;1;) (instantiate 0
+      (with "test:test/iface" (instance 0))
+    )
+  )
+  (instance (;2;) (instantiate 0
+      (with "test:test/iface" (instance 0))
+    )
+  )
+  (alias export 1 "test:test/iface" (instance (;3;)))
+  (alias export 2 "test:test/iface" (instance (;4;)))
+  (type (;2;)
+    (component
+      (type (;0;)
+        (instance
+          (type (;0;) (func))
+          (export (;0;) "do-something" (func (type 0)))
+        )
+      )
+      (import "primary" (implements "test:test/iface") (instance (;0;) (type 0)))
+      (import "backup" (implements "test:test/iface") (instance (;1;) (type 0)))
+    )
+  )
+  (import "unlocked-dep=<test:consumer>" (component (;1;) (type 2)))
+  (instance (;5;) (instantiate 1
+      (with "backup" (instance 4))
+      (with "primary" (instance 3))
+    )
+  )
+)

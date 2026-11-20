@@ -1,0 +1,1 @@
+Optimize indexed scans over private small numeric literal arrays by folding proven immutable lengths and own-element reads. Carry numeric selection and integer-index proofs through constant bindings while retaining ordinary lookup for mutation, escapes, unknown keys, and inherited getters. No runtime caches or side tables are added.

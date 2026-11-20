@@ -437,11 +437,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.pow (special variant — separate from Binary::Pow) --------
         Expr::MathPow(base, exp) => {
-            let b = lower_math_operand(ctx, base)?;
-            let e = lower_math_operand(ctx, exp)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
+            super::dispatch::with_math_operands(ctx, &[base, exp], |ctx, v| {
+                Ok(super::binary::lower_number_pow(ctx, &v[0], exp, &v[1]))
+            })
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
@@ -497,7 +495,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            Ok(blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &arr_handle)]))
+            Ok(super::array_proto_guard::emit_array_pop_call(
+                blk,
+                &arr_box,
+                &arr_handle,
+            ))
         }
 
         // -------- arr.map(callback) (special variant) --------
@@ -540,6 +542,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- map.set(key, value) / .get / .has --------
         Expr::MapSet { map, key, value } => {
+            let fusion_region = crate::expr::map_entry_fusion::open_set(ctx, expr);
             let has_string_key_map =
                 is_static_string_key_map(ctx, map) && string_value_is_runtime_guaranteed(ctx, key);
             let use_number_key_map = !has_string_key_map
@@ -595,7 +598,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // original register back, so this is the same eager unbox it was:
                 // a Map receiver is never `Expr::String`, the only expression
                 // `operand_is_reloadable` would re-lower here.
-                let m_handle_unrooted = if group.is_rooted() {
+                // A fused `set` checks its receiver only on the arm that calls
+                // the runtime: the `get` of its region already did, on the same
+                // never-reassigned binding.
+                let fused_set_cells = crate::expr::map_entry_fusion::set_cells(ctx, expr);
+                let m_handle_unrooted = if group.is_rooted() || fused_set_cells.is_some() {
                     None
                 } else {
                     let m_box = group.reread(ctx, 0)?;
@@ -867,15 +874,24 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     guarded_map_number_key_set(ctx, &m_handle, &k_box, &v_box)
                 } else {
                     let v_box = lower_expr(ctx, value)?;
-                    let (m_handle, k_box) =
-                        reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
-                    let new_handle = {
-                        let blk = ctx.block();
-                        blk.call(
-                            I64,
-                            "js_map_set",
-                            &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
-                        )
+                    let (new_handle, k_box) = if let Some(cells) = &fused_set_cells {
+                        let values = group.reread_all(ctx)?;
+                        let handle = crate::expr::map_entry_fusion::emit_set(
+                            ctx, cells, &values[0], &values[1], &v_box,
+                        );
+                        (handle, values[1].clone())
+                    } else {
+                        let (m_handle, k_box) =
+                            reread_map_set_receiver_and_key(ctx, group, &m_handle_unrooted)?;
+                        let handle = {
+                            let blk = ctx.block();
+                            blk.call(
+                                I64,
+                                "js_map_set",
+                                &[(I64, &m_handle), (DOUBLE, &k_box), (DOUBLE, &v_box)],
+                            )
+                        };
+                        (handle, k_box)
                     };
                     record_collection_string_key_fallback(
                         ctx,
@@ -897,6 +913,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // and return. The caller may need to write this back to a
             // local; that's the caller's problem if Map is held in a
             // mutable variable that grows.
+            crate::expr::map_entry_fusion::close_set(ctx, fusion_region);
             let blk = ctx.block();
             Ok(nanbox_pointer_inline(blk, &new_handle))
         }
@@ -949,9 +966,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     } else {
                         "js_map_get"
                     };
-                    let value = {
-                        let blk = ctx.block();
-                        blk.call(DOUBLE, entry, &[(I64, &m_handle), (DOUBLE, &k_box)])
+                    let fused = crate::expr::map_entry_fusion::lower_get(
+                        ctx,
+                        expr,
+                        &m_handle,
+                        &k_box,
+                        map_constructed,
+                    );
+                    let value = match fused {
+                        Some(value) => value,
+                        None => {
+                            let blk = ctx.block();
+                            blk.call(DOUBLE, entry, &[(I64, &m_handle), (DOUBLE, &k_box)])
+                        }
                     };
                     record_collection_string_key_fallback(
                         ctx,

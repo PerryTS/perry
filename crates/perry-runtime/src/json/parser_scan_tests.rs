@@ -1,4 +1,5 @@
 use super::nesting_depth_exceeds;
+use crate::codegen_abi::LayoutWord;
 
 // An intentionally scalar state machine serves as an independent oracle for
 // malformed as well as valid input. The preflight does not validate JSON.
@@ -265,7 +266,7 @@ fn wide_object_index_resolves_exact_bytes_inside_a_hash_collision() {
             })
             .collect();
         let mut index = super::ParsedObjectIndex {
-            hash_state: ahash::RandomState::new(),
+            hash_state: crate::fast_hash::AHashState::default(),
             primary: crate::fast_hash::new_ptr_hash_map(),
             collisions: Vec::new(),
         };
@@ -336,7 +337,7 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
             .collect();
         let keys_array = parse_shape_keys_array(&keys);
         let shape_id = PARSE_SHAPE_CACHE.with(|cache| cache.borrow().last().unwrap().shape_id);
-        assert_ne!(shape_id, 0);
+        assert_ne!(shape_id, LayoutWord(0));
 
         let mut parser = super::DirectParser::new_batched(input);
         assert!(parser.warm_record_shape_pending);
@@ -346,7 +347,7 @@ fn bounded_root_record_reuses_the_warm_shape_during_one_pass_parse() {
         assert!(parser.finish());
         let object = value.as_pointer::<crate::ObjectHeader>();
         assert_eq!(crate::object::object_keys(object).arr(), keys_array);
-        assert_eq!((*object).parent_class_id, shape_id);
+        assert_eq!(LayoutWord((*object).parent_class_id), shape_id);
 
         PARSE_SHAPE_CACHE.with(|cache| cache.borrow_mut().clear());
         crate::gc::gc_unsuppress();
@@ -435,4 +436,31 @@ fn depth_preflight_byte_bound_keeps_the_first_excess_opening() {
     }
     assert!(!nesting_depth_exceeds(b"\"[[[[\"", 1));
     assert!(nesting_depth_exceeds(b"[\"[\",[]]", 1));
+}
+
+#[test]
+fn matched_shape_prefix_stops_proving_uniqueness_on_first_mismatch() {
+    use crate::json::{js_json_parse, js_json_stringify, str_from_header, TYPE_UNKNOWN};
+    let cases = [
+        (
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":5,"a":6,"b":7}]"#,
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":6,"b":7}]"#,
+        ),
+        (
+            r#"[{"a":1,"b":2},{"\u0061":3,"b":4},{"a":5,"b":6,"\u0061":7}]"#,
+            r#"[{"a":1,"b":2},{"a":3,"b":4},{"a":7,"b":6}]"#,
+        ),
+        (
+            r#"[{"a":1,"nested":{"x":1},"b":2},{"a":3,"nested":{"z":4},"a":5,"b":6}]"#,
+            r#"[{"a":1,"nested":{"x":1},"b":2},{"a":5,"nested":{"z":4},"b":6}]"#,
+        ),
+    ];
+    for (input, expected) in cases {
+        let text = crate::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        unsafe {
+            let value = js_json_parse(text);
+            let output = js_json_stringify(f64::from_bits(value.bits()), TYPE_UNKNOWN);
+            assert_eq!(str_from_header(output).unwrap(), expected);
+        }
+    }
 }

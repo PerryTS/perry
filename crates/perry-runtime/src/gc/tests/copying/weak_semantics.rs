@@ -206,6 +206,73 @@ fn test_pump_drain_delivers_automatic_finreg_jobs_once() {
     );
 }
 
+/// A recorded cleanup job is not yet delivered, so its cell is still
+/// registered: `unregister(token)` before the next pump drain removes it,
+/// returns true, and the drain then delivers nothing (spec: the cleanup job
+/// only visits cells still in [[Cells]]; node: `gc(); fr.unregister(t)` is
+/// true and the callback never runs).
+#[test]
+fn test_finreg_unregister_before_delivery_cancels_the_callback() {
+    let _guard = CopyingNurseryTestGuard::new(2);
+    make_rooted_finreg();
+    let token = crate::object::js_object_alloc(0, 0);
+    js_shadow_slot_set(1, object_bits(token));
+
+    {
+        let target = crate::object::js_object_alloc(0, 0);
+        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+        let _ = crate::weakref::js_finreg_register(
+            reg_v,
+            f64::from_bits(object_bits(target)),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(js_shadow_slot_get(1)),
+        );
+    }
+    let _ = gc_collect_minor();
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 1);
+
+    let removed = crate::weakref::js_finreg_unregister(
+        f64::from_bits(js_shadow_slot_get(0)),
+        f64::from_bits(js_shadow_slot_get(1)),
+    );
+    assert_eq!(
+        removed.to_bits(),
+        crate::value::TAG_TRUE,
+        "the collected-but-undelivered cell is still registered"
+    );
+    assert_eq!(
+        crate::weakref::drain_pending_finalization_jobs(),
+        0,
+        "an unregistered cell must not be delivered"
+    );
+    assert_eq!(crate::weakref::pending_finalization_jobs_count(), 0);
+}
+
+/// An explicit `gc()` records cleanup jobs but does not deliver them: the
+/// callback is its own later job, delivered by the pump.
+#[test]
+fn test_manual_gc_leaves_finreg_jobs_for_the_pump() {
+    let _guard = CopyingNurseryTestGuard::new(1);
+    make_rooted_finreg();
+    {
+        let target = crate::object::js_object_alloc(0, 0);
+        let reg_v = f64::from_bits(js_shadow_slot_get(0));
+        let _ = crate::weakref::js_finreg_register(
+            reg_v,
+            f64::from_bits(object_bits(target)),
+            f64::from_bits(crate::value::TAG_TRUE),
+            f64::from_bits(crate::value::TAG_UNDEFINED),
+        );
+    }
+    crate::gc::js_gc_collect();
+    assert_eq!(
+        crate::weakref::pending_finalization_jobs_count(),
+        1,
+        "gc() must leave the cleanup job pending for the pump"
+    );
+    assert_eq!(crate::weakref::drain_pending_finalization_jobs(), 1);
+}
+
 /// The unregister token slot is WEAK (spec [[UnregisterToken]]): the canonical
 /// `registry.register(obj, held, obj)` must not pin `obj` immortal. Before the
 /// fix, record field 1 (the token) was traced strongly, so the target survived

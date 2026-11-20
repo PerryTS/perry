@@ -33,11 +33,7 @@ fn json_lazy_growth_resolves_each_cached_array_consumer() {
                         crate::array::js_array_push(grown, crate::JSValue::number(index as f64));
                 }
                 assert_ne!(grown, original, "exercise a real growth forwarding chain");
-                assert_eq!(
-                    (*lazy).materialized,
-                    original,
-                    "keep the stale owner edge until the consumer reads it"
-                );
+                assert_eq!(lazy.cast(), original, "materialization is in place");
                 match consumer {
                     0 => assert_eq!(crate::array::js_array_length(lazy.cast()), 70),
                     1 => assert_eq!(crate::json_tape::lazy_get(lazy, 69).as_number(), 69.0),
@@ -57,8 +53,8 @@ fn json_lazy_growth_resolves_each_cached_array_consumer() {
                         );
                     }
                 }
-                assert_eq!((*lazy).materialized, grown);
-                assert_eq!((*lazy).cached_length, 70);
+                assert_eq!(crate::array::clean_arr_ptr_mut(lazy.cast()), grown);
+                assert_eq!(crate::array::js_array_length(lazy.cast()), 70);
             }
         }
     }
@@ -122,7 +118,7 @@ fn json_lazy_growth_owner_alone_retains_forwarded_array_and_children_across_mino
                 }
                 assert_ne!(original, grown);
                 let old_child = crate::array::js_array_get(grown, 0).bits();
-                assert_eq!((*lazy).materialized, original);
+                assert_eq!(lazy.cast(), original, "materialization is in place");
                 (grown, old_child)
             });
         let before = gc_collection_count();
@@ -177,9 +173,7 @@ fn json_owned_tape_transfers_exact_storage_and_releases_after_materialization() 
         crate::array::js_array_get(array, 99_999).bits(),
         crate::JSValue::number(7.0).bits()
     );
-    assert!(unsafe { (*lazy).tape.is_null() });
-    assert_eq!(crate::json_tape_store::registered_bytes(), before);
-    unsafe { crate::json_tape::release_tape_after_materialize(lazy) };
+    assert!(unsafe { !crate::json_tape::is_lazy_array(lazy) });
     assert_eq!(crate::json_tape_store::registered_bytes(), before);
 }
 
@@ -326,7 +320,9 @@ fn json_lazy_numeric_assignment_materializes_and_stores() {
     let _guard = GcTestIsolationGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     for strict in [0, 1] {
+        let tape_bytes_before = crate::json_tape_store::registered_bytes();
         let lazy = unsafe { owned_small(b"[1,2,3]") };
+        assert!(crate::json_tape_store::registered_bytes() > tape_bytes_before);
         let result = crate::value::js_dyn_index_set_strict(
             f64::from_bits(ptr_bits(lazy as usize)),
             1.0,
@@ -334,13 +330,21 @@ fn json_lazy_numeric_assignment_materializes_and_stores() {
             strict,
         );
         assert_eq!(result, 42.0);
-        let array = unsafe { (*lazy).materialized };
+        let array = crate::array::clean_arr_ptr_mut(lazy.cast());
         assert!(!array.is_null());
         assert_eq!(
             crate::array::js_array_get(array, 1).bits(),
             crate::JSValue::number(42.0).bits()
         );
-        assert!(unsafe { (*lazy).tape.is_null() });
+        // The store materialized the lazy array in place (no growth for an
+        // in-range index) and released its tape at the flip.
+        assert_eq!(array as usize, lazy as usize, "materialization is in place");
+        assert!(unsafe { !crate::json_tape::is_lazy_array(lazy) });
+        assert_eq!(
+            crate::json_tape_store::registered_bytes(),
+            tape_bytes_before,
+            "the flip releases the tape"
+        );
     }
 }
 
@@ -351,8 +355,15 @@ fn json_lazy_assignment_updates_length_through_the_original_alias() {
     let lazy = unsafe { owned_small(b"[1,2,3]") };
     let receiver = f64::from_bits(ptr_bits(lazy as usize));
     crate::value::js_dyn_index_set_strict(receiver, 5.0, 42.0, 1);
+    // The out-of-range store materialized the lazy array in place and then
+    // grew it; the original address is the array's growth alias, which every
+    // array reader follows (its own length word is no longer the length).
+    assert!(unsafe { !crate::json_tape::is_lazy_array(lazy) });
     assert_eq!(crate::array::js_array_length(lazy.cast()), 6);
-    assert_eq!(unsafe { (*lazy).cached_length }, 6);
+    assert_eq!(
+        unsafe { (*crate::array::clean_arr_ptr_mut(lazy.cast())).length },
+        6
+    );
     let length = crate::js_string_from_bytes(b"length".as_ptr(), 6);
     crate::value::js_dyn_index_set_strict(
         receiver,
@@ -361,7 +372,7 @@ fn json_lazy_assignment_updates_length_through_the_original_alias() {
         1,
     );
     assert_eq!(crate::array::js_array_length(lazy.cast()), 2);
-    assert_eq!(unsafe { (*(*lazy).materialized).length }, 2);
+    assert!(unsafe { !crate::json_tape::is_lazy_array(lazy) });
 }
 
 #[test]
@@ -374,7 +385,7 @@ fn json_lazy_assignment_roots_heap_key_and_value_during_materialization() {
     register_runtime_handle_root_scanner_for_tests();
     let lazy = unsafe { owned_small(b"[1,2,3]") };
     // The header is movable now, and this test forces an evacuation through
-    // `js_dyn_index_set_strict`. Root it: reading `(*lazy).materialized` off
+    // `js_dyn_index_set_strict`. Root it: reading the materialized array off
     // the pre-collection address afterwards reads poisoned from-space and
     // faults on the `0xDEADBEEFBAADF0DE` fill.
     let lazy_scope = RuntimeHandleScope::new();
@@ -401,8 +412,8 @@ fn json_lazy_assignment_roots_heap_key_and_value_during_materialization() {
     // The header may have moved during the collection above, so read the
     // materialized backing through the handle's scope rather than pinning a
     // raw pointer across it (#7341).
-    let array = lazy_handle.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
-        (*lazy).materialized
+    let array = lazy_handle.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| {
+        crate::array::clean_arr_ptr_mut(lazy.cast())
     });
     assert!(!array.is_null());
     let actual = crate::array::js_array_get(array, 1);

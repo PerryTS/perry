@@ -21,6 +21,7 @@
 //! census walk, uses Rust-owned buffers only, and is never compiled into a
 //! path the collector takes without `PERRY_GC_CENSUS`.
 
+use crate::codegen_abi::LayoutWord;
 use std::collections::{HashMap, HashSet};
 
 /// The representation a design-level rep word covers.
@@ -40,7 +41,8 @@ const C_NUMBER: u8 = C_INT32 | C_DOUBLE | C_NAN_INF;
 pub(super) fn value_class(bits: u64) -> u8 {
     use crate::value::*;
     match bits & TAG_MASK {
-        INT32_TAG => C_INT32,
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => C_INT32,
+        INTERNAL_WORD_TAG => C_OTHER,
         POINTER_TAG | STRING_TAG | SHORT_STRING_TAG | BIGINT_TAG | JS_HANDLE_TAG | TAG_MARKER => {
             C_OTHER
         }
@@ -77,13 +79,13 @@ impl FieldReprCensus {
     /// `slots` addresses at least `live` readable words.
     pub(super) unsafe fn note_object(
         &mut self,
-        stamp: u32,
+        stamp: LayoutWord,
         slots: *const u64,
         live: usize,
         _user: usize,
     ) {
         let n = live.min(REP_SLOTS);
-        let acc = self.shapes.entry(stamp).or_insert_with(|| ShapeAcc {
+        let acc = self.shapes.entry(stamp.0).or_insert_with(|| ShapeAcc {
             objects: 0,
             slots: n,
             classes: [0; REP_SLOTS],
@@ -107,7 +109,7 @@ impl FieldReprCensus {
                 number_mask |= 1 << i;
             }
         }
-        self.forks.insert((stamp, number_mask));
+        self.forks.insert((stamp.0, number_mask));
     }
 
     /// The census section. Counts are over live objects of this collection.
@@ -176,7 +178,7 @@ mod tests {
     use crate::value::*;
 
     fn int32(v: i32) -> u64 {
-        INT32_TAG | u64::from(v as u32)
+        INTERNAL_WORD_TAG | u64::from(v as u32)
     }
     const STRING: u64 = STRING_TAG | 0x1234_5678;
 
@@ -184,7 +186,7 @@ mod tests {
         let mut c = FieldReprCensus::default();
         for (stamp, slots) in objects {
             // SAFETY: `slots` is a live slice of `len` words.
-            unsafe { c.note_object(*stamp, slots.as_ptr(), slots.len(), 0) };
+            unsafe { c.note_object(LayoutWord(*stamp), slots.as_ptr(), slots.len(), 0) };
         }
         c.summary()
     }
@@ -232,5 +234,11 @@ mod tests {
         let s = census(&[(9, &slots)]);
         assert_eq!(s["f64_slots"], REP_SLOTS as u64);
         assert_eq!(s["f64_nan_inf"], 0);
+    }
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_c_int32() {
+        assert_eq!(value_class(0x7FFE_0001_0000_0005), C_OTHER);
+        assert_eq!(value_class(0x7FFE_00FF_0000_0001), C_OTHER);
     }
 }

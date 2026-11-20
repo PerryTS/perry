@@ -1,0 +1,41 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wit"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "test:foo/i"
+        },
+        {
+            "type": "alias",
+            "source": 1,
+            "export": "test:foo/i"
+        }
+    ],
+    "arguments": [
+        {
+            "source": 2,
+            "target": 1,
+            "name": "test:foo/i"
+        }
+    ],
+    "exports": [
+        {
+            "node": 3,
+            "name": "test:foo/i"
+        }
+    ]
+}

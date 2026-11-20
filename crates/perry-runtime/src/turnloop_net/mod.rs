@@ -63,6 +63,7 @@ use turnloop::{
 
 pub mod abi;
 pub mod census;
+mod defer_eof;
 pub(crate) mod errors;
 mod sink;
 pub mod transport;
@@ -74,6 +75,7 @@ mod write_queue;
 #[path = "tests.rs"]
 mod tests;
 
+pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
 pub use errors::{map_error, NodeError};
 pub use sink::{
     register_link_sink, register_sink, sink_installed, NetCompletion, SinkFn, MAX_LINK_ROUTES,
@@ -88,6 +90,13 @@ pub use sink::{
     NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_EOF, NET_ERROR, NET_FLAG_HANDLE_PARTS,
     NET_FLAG_LINK, NET_FLAG_PLAINTEXT, NET_FLAG_STALE, NET_SHUTDOWN, NET_TIMER, NET_WROTE,
 };
+
+/// Install this service in the common pump before a binding submits work.
+/// Called by the existing net installer and the C-ABI sink installers.
+pub fn install() {
+    crate::feature_hooks::js_runtime_install_turnloop();
+    crate::event_pump::service_hooks::install_net();
+}
 
 // ── Operation classes, carried in the top 8 bits of every submission token ──
 const OP_ACCEPT: u64 = 1;
@@ -158,6 +167,18 @@ struct PendingWrite {
     /// Zero means "no callback"; it is never used for routing.
     user: u64,
     len: usize,
+    /// Bytes of this write the kernel took at submission (libuv's
+    /// `uv_try_write`, [`write_queue::submit_bytes_eager`]); only `len - sent`
+    /// went to the driver and counts in [`Entry::queued`].
+    sent: usize,
+    /// The kernel took the whole write when the caller wrote it (`sent ==
+    /// len` on the direct path, never a backlog flush): Node's
+    /// `req.async === false`, reported as [`sink::NET_FLAG_SYNC_WRITE`].
+    sync: bool,
+    /// The kernel took this write whole and no driver write carries it: its
+    /// `Wrote` comes from the socket's posted completion
+    /// ([`Entry::posted`]), or from the next retire that finds it in front.
+    posted: bool,
     /// The final caller write covered by one driver operation. A backlog
     /// flush hands the driver many caller writes as ONE buffer, so a single
     /// `Wrote` completion retires every entry up to and including this one.
@@ -211,6 +232,9 @@ impl Backlog {
         self.writes.push(PendingWrite {
             user,
             len,
+            sent: 0,
+            sync: false,
+            posted: false,
             last: false,
         });
     }
@@ -239,6 +263,9 @@ struct Entry {
     queued: usize,
     /// Driver write operations outstanding, bounded by [`MAX_INFLIGHT_WRITES`].
     inflight: usize,
+    /// A completion is posted on the loop for writes the kernel took whole
+    /// (one per socket at a time; it retires every such write in front).
+    posted: bool,
     /// A client connect has not completed yet. Writes wait in the backlog
     /// until `Connected`, so a failed attempt cannot take them with it.
     connecting: bool,
@@ -266,6 +293,7 @@ impl Entry {
             writes: VecDeque::new(),
             queued: 0,
             inflight: 0,
+            posted: false,
             connecting: false,
             closing: false,
             referenced: true,
@@ -341,6 +369,7 @@ struct NetState {
 crate::perry_thread_local! {
     /// Per agent, like the loop itself. A socket belongs to the thread that
     /// created it; there is no cross-thread map to race on.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_tlnet")]
     static NET: RefCell<NetState> = RefCell::new(NetState::default());
 }
 
@@ -1120,6 +1149,9 @@ pub(crate) fn dispatch(completion: Completion) {
             });
             let bytes = lease.as_ref().map(|l| l.as_slice()).unwrap_or(&[]);
             debug_assert!(bytes.len() == n || lease.is_none());
+            if n != 0 {
+                defer_eof::note_data(defer_eof::Key::Id(id));
+            }
             sink::emit(subsystem, NetCompletion::data(id, bytes));
             // The lease returns to turnloop's pool here, after the sink has
             // copied what it needs. Holding it would throttle reads.
@@ -1134,12 +1166,15 @@ pub(crate) fn dispatch(completion: Completion) {
                     }
                 })
             });
-            NET.with(|net| {
-                if let Some(entry) = net.borrow_mut().entries.get_mut(&id) {
-                    entry.read_op = None;
-                }
+            let handle = NET.with(|net| {
+                let mut net = net.borrow_mut();
+                let entry = net.entries.get_mut(&id)?;
+                entry.read_op = None;
+                Some(entry.handle)
             });
-            sink::emit(subsystem, NetCompletion::eof(id));
+            if !defer_eof::park(defer_eof::Key::Id(id), subsystem, handle) {
+                sink::emit(subsystem, NetCompletion::eof(id));
+            }
         }
         OpResult::Wrote(n) => {
             // One driver write may cover many caller writes (a flushed
@@ -1166,6 +1201,7 @@ pub(crate) fn dispatch(completion: Completion) {
         }
         OpResult::Closed => {
             NET.with(|net| net.borrow_mut().entries.remove(&id));
+            defer_eof::purge(defer_eof::Key::Id(id), None);
             let retrying = NET.with(|net| {
                 let mut net = net.borrow_mut();
                 let retrying = match net.plans.get_mut(&id) {
@@ -1368,6 +1404,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 /// test that is about to drop the loop itself.
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
+    defer_eof::take_all();
     transport::reset_for_test();
     NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
@@ -1389,6 +1426,10 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
+    for cell in defer_eof::take_all() {
+        // SAFETY: each parked link EOF holds the ref that pins its cell.
+        unsafe { transport::release_parked_eof(cell) };
+    }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
     for id in ids {
         let _ = close(id);

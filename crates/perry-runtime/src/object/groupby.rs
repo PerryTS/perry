@@ -205,7 +205,7 @@ unsafe fn group_by_value_is_symbol(value: f64) -> bool {
 /// Move-stable coalescing identity for a Symbol key, or `None` if `value` is
 /// not a Symbol.
 ///
-/// `SymbolHeader::id` is a monotonic `u64` that an evacuation copies verbatim,
+/// `SymbolHeader::id` is a unique mixed `u64` that an evacuation copies verbatim,
 /// so it stays a valid `HashMap` key across a collection. The symbol's
 /// *address* does not: a fresh `Symbol(desc)` is a GC allocation, and keying on
 /// its address would start a second group for the same symbol the first time a
@@ -333,8 +333,7 @@ unsafe fn group_by_make_array(
 
 fn throw_group_by_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// Returns true if `value` is a callable closure.

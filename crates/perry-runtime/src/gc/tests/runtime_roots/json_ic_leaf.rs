@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 use crate::value::{TAG_HOLE, TAG_UNDEFINED};
 
@@ -54,7 +55,10 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
         let before = gc_collection_count();
         let raw = lazy.get_raw_mut_ptr::<crate::json_tape::LazyArrayHeader>();
         unsafe {
-            assert_eq!(crate::object::shapes::object_shape_stamp(raw.cast()), 0);
+            assert_eq!(
+                crate::object::shapes::object_shape_stamp(raw.cast()),
+                LayoutWord(0)
+            );
             // The emitted read's probe is a GC leaf: it answers or declines
             // without materializing the lazy array.
             let atom = atom.get_raw_mut_ptr::<crate::StringHeader>();
@@ -65,7 +69,7 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
                 crate::string::property_atom_hash(atom),
             );
             assert!(matches!(probed.to_bits(), TAG_HOLE | TAG_UNDEFINED));
-            assert!((*raw).materialized.is_null());
+            assert!(crate::json_tape::is_lazy_array(raw));
         }
         assert_eq!(
             gc_collection_count(),
@@ -91,6 +95,6 @@ fn lazy_json_ic_leaf_declines_without_materializing_under_moving_minors() {
     assert!(gc_collection_count() > before);
     assert_ne!(original, witness.get_raw_mut_ptr::<ObjectHeader>());
     lazy.with_const_ptr::<crate::json_tape::LazyArrayHeader, _>(|p| unsafe {
-        assert!(!(*p).materialized.is_null());
+        assert!(!crate::json_tape::is_lazy_array(p));
     });
 }

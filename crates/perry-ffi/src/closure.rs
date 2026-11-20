@@ -147,7 +147,7 @@ pub use perry_abi::{JsFunctionInfo, FN_ARROW, FN_BUILTIN, FN_NON_CONSTRUCTOR, FN
 /// body is allocated from several places.
 #[macro_export]
 macro_rules! js_function_info {
-    (@ty 0) => { $crate::JsBody0 };
+    (#[realm($path:literal, spec = { length = $length:literal }, emit = metadata)] $body:path, $n:tt; $($m:ident($($a:expr),*)),*; bind $binding:ident, $metadata:ident) => { macro_rules! $metadata { (length) => { $length }; } let $binding = $crate::js_function_info!($body, $n; $($m($($a),*)),*); }; (#[realm($($facts:tt)*)] $($info:tt)*) => { $crate::js_function_info!($($info)*) };     (@ty 0) => { $crate::JsBody0 };
     (@ty 1) => { $crate::JsBody1 };
     (@ty 2) => { $crate::JsBody2 };
     (@ty 3) => { $crate::JsBody3 };
@@ -339,4 +339,17 @@ mod tests {
         unsafe { set_closure_capture_f64(closure, 0, 42.0) };
         assert_eq!(unsafe { closure_capture_f64(closure, 0) }, 42.0);
     }
+}
+
+/// Own the source declaration of a native body-info expression.
+/// The build producer consumes the realm facts; runtime code receives the
+/// original initializer, preserving its static identity and ABI.
+#[macro_export]
+macro_rules! realm_decl {
+    (info_expr $expression:expr; realm { $($facts:tt)* }) => {
+        $expression
+    };
+    (info $info:item realm { $($facts:tt)* }) => {
+        $info
+    };
 }

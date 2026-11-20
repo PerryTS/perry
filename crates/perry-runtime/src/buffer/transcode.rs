@@ -84,8 +84,7 @@ fn throw_transcode_error() -> ! {
     let message = b"Unable to transcode Buffer [U_ILLEGAL_ARGUMENT_ERROR]";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "U_ILLEGAL_ARGUMENT_ERROR");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 fn source_bytes(value: f64) -> Vec<u8> {
@@ -93,8 +92,8 @@ fn source_bytes(value: f64) -> Vec<u8> {
     let accepted = addr != 0
         && (is_uint8array_buffer(addr)
             || (is_registered_buffer(addr) && !is_any_array_buffer(addr) && !is_data_view(addr))
-            || crate::typedarray::lookup_typed_array_kind(addr)
-                == Some(crate::typedarray::KIND_UINT8));
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                == Some(crate::typedarray_hook_slots::KIND_UINT8));
     if !accepted {
         throw_invalid_source(value);
     }

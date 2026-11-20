@@ -4,7 +4,7 @@
 //! (#10750); pure relocation.
 
 // #3677: `Object.keys(zlib.constants)` enumeration. Node exposes the full
-// Z_*/BROTLI_*/ZSTD_* table as enumerable own keys (170 keys). Every key here
+// Z_*/BROTLI_*/ZSTD_* table as enumerable own keys (171 keys). Every key here
 // is backed by a value in `zlib_const` (the value-read dispatch), so
 // enumeration and direct reads agree. Order matches Node's insertion order.
 pub(super) const ZLIB_CONSTANTS_KEYS: &[&[u8]] = &[
@@ -108,6 +108,7 @@ pub(super) const ZLIB_CONSTANTS_KEYS: &[&[u8]] = &[
     b"BROTLI_DECODER_ERROR_FORMAT_PADDING_1",
     b"BROTLI_DECODER_ERROR_FORMAT_PADDING_2",
     b"BROTLI_DECODER_ERROR_FORMAT_DISTANCE",
+    b"BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH",
     b"BROTLI_DECODER_ERROR_DICTIONARY_NOT_SET",
     b"BROTLI_DECODER_ERROR_INVALID_ARGUMENTS",
     b"BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES",

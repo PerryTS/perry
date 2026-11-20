@@ -60,8 +60,9 @@ pub(crate) use pump::{
     try_recv_pending_h2_nonblocking,
 };
 pub(crate) use session::{
-    local_client_connect_ready, local_server_handle_for_client, local_server_session_event_ready,
-    mark_server_sessions_closed, parse_headers_object, start_client_request,
+    client_request_ends_stream, local_client_connect_ready, local_server_handle_for_client,
+    local_server_session_event_ready, mark_server_sessions_closed, parse_headers_object,
+    start_client_request,
 };
 pub(crate) use turnloop_glue::{
     bind_turnloop_client_port, bind_turnloop_session, bind_turnloop_stream_id,
@@ -208,6 +209,13 @@ pub struct Http2SessionHandle {
     pub listeners: HashMap<String, Vec<i64>>,
     pub close_callbacks: Vec<i64>,
     pub pending_callbacks: Vec<i64>,
+    /// When each PING still awaiting its acknowledgement was sent, oldest
+    /// first; the ack measures the round trip from it.
+    pub ping_sent: std::collections::VecDeque<std::time::Instant>,
+    /// The SETTINGS frames still awaiting acknowledgement, oldest first: when
+    /// each was sent and what it asks for. `local_settings` takes the values
+    /// only when the peer acknowledges them.
+    pub settings_sent: std::collections::VecDeque<(std::time::Instant, Http2SettingsState)>,
     pub timeout_callback: i64,
     /// The turnloop connection carrying this session, or zero when the
     /// session has no transport at all. Every control surface routes on this:
@@ -236,6 +244,9 @@ pub struct Http2StreamHandle {
     pub turnloop_conn: i64,
     /// Whether `respond()` / `end()` already produced a response.
     pub turnloop_responded: bool,
+    /// The client request went to the transport; a later `end()` must not open
+    /// a second stream.
+    pub request_started: bool,
 }
 
 pub(crate) enum Http2PendingEvent {
@@ -270,11 +281,13 @@ pub(crate) enum Http2PendingEvent {
         session_handle: i64,
         callback: i64,
         settings: Http2SettingsState,
+        duration: f64,
     },
     SessionPingCallback {
         session_handle: i64,
         callback: i64,
         payload: Vec<u8>,
+        duration: f64,
     },
     SessionGoaway {
         session_handle: i64,
@@ -411,19 +424,6 @@ pub(crate) fn call1(callback: i64, arg: f64) {
         let closure = JsClosure::from_raw(raw);
         if !closure.is_null() {
             let _ = closure.call1(perry_ffi::JsThis::UNDEFINED, arg);
-        }
-    }
-}
-
-pub(crate) fn call2(callback: i64, arg0: f64, arg1: f64) {
-    if callback == 0 {
-        return;
-    }
-    unsafe {
-        let raw = callback as *const RawClosureHeader;
-        let closure = JsClosure::from_raw(raw);
-        if !closure.is_null() {
-            let _ = closure.call2(perry_ffi::JsThis::UNDEFINED, arg0, arg1);
         }
     }
 }

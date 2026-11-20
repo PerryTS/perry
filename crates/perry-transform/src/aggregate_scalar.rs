@@ -360,6 +360,7 @@ fn scalarize_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scalarize_stmts(
                     body,
@@ -586,6 +587,7 @@ fn collect_return_record_assignments(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_return_record_assignments(body, record_id, assigned_shapes);
                 if let Some(catch) = catch {
@@ -662,6 +664,7 @@ fn merge_body_ends_with_record_assignment(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
                     || catch.as_ref().is_some_and(|catch| {
@@ -724,6 +727,7 @@ fn merge_nested_breaks_follow_assignment(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !merge_nested_breaks_follow_assignment(body, record_id, admitted_shapes)
                     || catch.as_ref().is_some_and(|catch| {
@@ -904,6 +908,7 @@ fn return_record_stmts_are_safe(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if !return_record_stmts_are_safe(
                     body,
@@ -1094,6 +1099,7 @@ fn rewrite_return_record_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_return_record_stmts(
                     body,
@@ -1334,7 +1340,7 @@ fn collect_aliases(
         if let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::IndexGet { object, index }),
+            init: Some(Expr::IndexGet { object, index, .. }),
             ..
         } = stmt
         {
@@ -1362,6 +1368,7 @@ fn collect_aliases(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_aliases(body, array_id, len, aliases);
                 if let Some(catch) = catch {
@@ -1390,7 +1397,7 @@ fn candidate_field(
 ) -> Option<usize> {
     let index = match object {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1428,6 +1435,20 @@ fn expr_is_safe(
         }
         Expr::LocalGet(id) if *id == array_id || aliases.contains_key(id) => return false,
         Expr::LocalSet(id, _) | Expr::Update { id, .. }
+            if *id == array_id || aliases.contains_key(id) =>
+        {
+            return false;
+        }
+        // The in-place array mutators name their receiver by id, not through a
+        // `LocalGet` child, so the arm above never sees them (#12742).
+        Expr::ArrayPush { array_id: id, .. }
+        | Expr::ArrayPushSpread { array_id: id, .. }
+        | Expr::ArrayUnshift { array_id: id, .. }
+        | Expr::ArraySplice { array_id: id, .. }
+        | Expr::ArrayCopyWithin { array_id: id, .. }
+        | Expr::ArrayPop(id)
+        | Expr::ArrayShift(id)
+        | Expr::SetAdd { set_id: id, .. }
             if *id == array_id || aliases.contains_key(id) =>
         {
             return false;
@@ -1493,7 +1514,7 @@ fn stmts_are_safe(
             Stmt::Let { id, init, .. } if *id == array_id => true,
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, index }),
+                init: Some(Expr::IndexGet { object, index, .. }),
                 ..
             } if aliases.contains_key(id)
                 && matches!(object.as_ref(), Expr::LocalGet(candidate) if *candidate == array_id)
@@ -1543,6 +1564,7 @@ fn stmts_are_safe(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_are_safe(body, array_id, aliases, fields)
                     && catch
@@ -1601,7 +1623,7 @@ fn replacement_for_expr(
     }
     let index = match object.as_ref() {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1685,6 +1707,7 @@ fn rewrite_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_stmts(body, array_id, aliases, fields);
                 if let Some(catch) = catch {
@@ -1730,6 +1753,7 @@ mod tests {
 
     fn property(object: Expr, name: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: name.to_string(),
             byte_offset: 0,
@@ -1752,6 +1776,9 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::Integer(0)),
                 }),
@@ -1821,9 +1848,12 @@ mod tests {
                 object: Box::new(Expr::LocalGet(2)),
                 property: "component".to_string(),
                 value: Box::new(Expr::Integer(30)),
+                byte_offset: 0,
+                byte_end: 0,
             },
             Expr::ObjectKeys(Box::new(Expr::LocalGet(2))),
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(99)),
                 args: vec![Expr::LocalGet(2)],
                 type_args: Vec::new(),
@@ -1849,8 +1879,41 @@ mod tests {
         }
     }
 
+    /// #12742: `const s = [{ v: 1 }]; s.push({ v: 2 })` names `s` only through
+    /// the mutator's `array_id`; scalarizing it left the push without a local.
+    #[test]
+    fn in_place_array_mutators_keep_materialized_aggregate() {
+        let mutators = vec![
+            Expr::ArrayPush {
+                array_id: 1,
+                value: Box::new(object(30)),
+                field_writeback: None,
+            },
+            Expr::ArrayPop(1),
+            Expr::ArrayShift(1),
+        ];
+
+        for mutator in mutators {
+            let mut module = aggregate_fixture(false);
+            module.init.push(Stmt::Expr(mutator));
+            run(&mut module);
+
+            assert!(module.init.iter().any(|stmt| {
+                matches!(
+                    stmt,
+                    Stmt::Let {
+                        id: 1,
+                        init: Some(Expr::Array(_, _)),
+                        ..
+                    }
+                )
+            }));
+        }
+    }
+
     fn shape_new(name: &str, args: Vec<Expr>) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: name.to_string(),
             args,
             type_args: Vec::new(),

@@ -313,6 +313,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                     value,
                     receiver,
                     strict,
+                    ..
                 }) if matches!(value.as_ref(), Expr::New { .. } | Expr::Object(_)) => {
                     let tmp_id = ctx.define_local("__nx_member_init".to_string(), Type::Any);
                     result.push(Stmt::Let {
@@ -328,6 +329,9 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         value: Box::new(Expr::LocalGet(tmp_id)),
                         receiver,
                         strict,
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
                     }));
                     result.push(Stmt::Let {
                         id,

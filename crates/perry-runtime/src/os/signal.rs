@@ -2,68 +2,20 @@ use crate::fs::validate::{describe_received, is_numeric, throw_type_error_with_c
 use crate::string::{js_string_from_bytes, StringHeader};
 use crate::value::{JSValue, TAG_TRUE};
 use std::collections::HashMap;
+#[cfg(any(unix, windows))]
+use std::sync::atomic::AtomicBool;
 #[cfg(unix)]
 use std::sync::atomic::AtomicI32;
 #[cfg(unix)]
 use std::sync::atomic::AtomicU64;
-#[cfg(any(unix, windows))]
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+#[cfg(any(unix, windows, all(target_os = "wasi", target_env = "p1")))]
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 per_test_global! {
     static SIGNAL_ASYNC_IDS: LazyLock<Mutex<HashMap<String, u64>>> =
         LazyLock::new(|| Mutex::new(HashMap::new()));
 }
-
-/// Ignore `SIGPIPE` for the life of the process (#9402).
-///
-/// A Perry program has its own C `main`, emitted by codegen — it never runs
-/// Rust's `std::rt` startup, which is where an ordinary Rust binary gets
-/// `SIGPIPE` set to `SIG_IGN`. A compiled program therefore inherited the
-/// signal's DEFAULT disposition, so **any** truncating consumer killed it
-/// mid-write: `| head`, `| grep -q`, `| less` followed by `q`, a client that
-/// closed its socket. `claude auto-mode defaults | head -2` exited 141 under
-/// Perry and 0 under Node.
-///
-/// Node (through libuv) does exactly this: the signal is ignored and the
-/// failing `write(2)` returns `EPIPE` to the writer, which is a value the
-/// program can see and act on rather than a death it cannot.
-///
-/// Idempotent and safe from any thread — `js_gc_init` calls it once per image
-/// entry, and a second entry on another thread re-applies the same
-/// disposition. A `SIGPIPE` disposition an embedder installed BEFORE loading
-/// the runtime is left alone: only `SIG_DFL` (the state that kills us) is
-/// replaced. `process.on('SIGPIPE', …)` still installs its own handler
-/// afterwards through [`install_process_signal_handler`], exactly as it did.
-///
-/// Not inherited by children: Rust's `Command` restores `SIGPIPE` to
-/// `SIG_DFL` in the forked child before `exec`, matching Node.
-#[cfg(unix)]
-pub(crate) fn ignore_sigpipe_at_startup() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        // SAFETY: a query (`act` = NULL) followed by a plain disposition
-        // install. `sigaction` is async-signal-safe and touches no Perry state.
-        let mut current: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(libc::SIGPIPE, std::ptr::null(), &mut current) != 0 {
-            return;
-        }
-        if current.sa_sigaction != libc::SIG_DFL {
-            return;
-        }
-        let mut sa: libc::sigaction = std::mem::zeroed();
-        sa.sa_sigaction = libc::SIG_IGN;
-        sa.sa_flags = 0;
-        libc::sigemptyset(&mut sa.sa_mask);
-        libc::sigaction(libc::SIGPIPE, &sa, std::ptr::null_mut());
-    });
-}
-
-/// Windows has no `SIGPIPE`: a write to a closed pipe already fails with
-/// `ERROR_BROKEN_PIPE` instead of raising a signal.
-#[cfg(not(unix))]
-pub(crate) fn ignore_sigpipe_at_startup() {}
 
 fn signal_number_by_name(name: &str) -> Option<i32> {
     #[cfg(unix)]
@@ -842,7 +794,11 @@ pub(crate) fn is_process_signal_name(name: &str) -> bool {
     {
         win_slot_by_name(name).is_some()
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        wasi_slot(name).is_some()
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         matches!(name, "SIGINT" | "SIGTERM")
     }
@@ -876,7 +832,19 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
             ensure_win_console_ctrl_handler();
         }
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        if let Some(slot) = wasi_slot(name) {
+            WASI_LISTENERS[slot].store(count, Ordering::Release);
+            if count > 0 {
+                crate::turnloop_net::register_pump();
+            }
+            if count == 0 {
+                WASI_PENDING[slot].store(0, Ordering::Release);
+            }
+        }
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         let _ = (name, count);
     }
@@ -888,7 +856,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
                 release_signal_resources_in_freed_ranges,
             );
             let async_id = unsafe {
-                crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+                crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
             };
             SIGNAL_ASYNC_IDS
                 .lock()
@@ -899,7 +867,7 @@ pub(crate) fn set_process_signal_listener_count(name: &str, count: usize) {
     } else {
         let async_id = SIGNAL_ASYNC_IDS.lock().unwrap().remove(name);
         if let Some(async_id) = async_id {
-            crate::async_hooks::destroy(async_id);
+            crate::async_hook_slots::destroy(async_id);
         }
     }
 }
@@ -935,7 +903,14 @@ pub(crate) fn has_active_process_signal_listeners() -> bool {
             slot.pending.load(Ordering::Acquire) > 0 && slot.listeners.load(Ordering::Acquire) > 0
         })
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        (0..WASI_SIGNALS.len()).any(|slot| {
+            WASI_PENDING[slot].load(Ordering::Acquire) > 0
+                && WASI_LISTENERS[slot].load(Ordering::Acquire) > 0
+        })
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         false
     }
@@ -966,9 +941,59 @@ pub(crate) fn take_pending_process_signals() -> Vec<&'static str> {
         }
         signals
     }
-    #[cfg(not(any(unix, windows)))]
+    #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    {
+        crate::turnloop_net::drain_signals();
+        let mut signals = Vec::new();
+        for (slot, (_, name)) in WASI_SIGNALS.iter().enumerate() {
+            let count = WASI_PENDING[slot].swap(0, Ordering::AcqRel);
+            if count == 0 || WASI_LISTENERS[slot].load(Ordering::Acquire) == 0 {
+                continue;
+            }
+            signals.extend(std::iter::repeat_n(*name, count));
+        }
+        signals
+    }
+    #[cfg(not(any(unix, windows, all(target_os = "wasi", target_env = "p1"))))]
     {
         Vec::new()
+    }
+}
+
+/// The signals a `wasm32-wasip1` guest can receive. The host writes one byte per
+/// signal to the stream named by `PERRY_SIGNAL_FD`; the byte is Perry's own code
+/// for the signal, the same on every host (`docs/WASI_P1_OUTPUT.md`).
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+const WASI_SIGNALS: [(u8, &str); 5] = [
+    (1, "SIGHUP"),
+    (2, "SIGINT"),
+    (10, "SIGUSR1"),
+    (12, "SIGUSR2"),
+    (15, "SIGTERM"),
+];
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+static WASI_PENDING: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+static WASI_LISTENERS: [AtomicUsize; 5] = [const { AtomicUsize::new(0) }; 5];
+
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+fn wasi_slot(name: &str) -> Option<usize> {
+    WASI_SIGNALS.iter().position(|(_, n)| *n == name)
+}
+
+/// A signal arrived from the host. A listener gets it on the next drain; with
+/// none, SIGHUP, SIGINT, SIGUSR2 and SIGTERM end the process with
+/// `128 + code`, as Node's default action does. SIGUSR1 is ignored and an
+/// unknown code is dropped.
+#[cfg(all(target_os = "wasi", target_env = "p1"))]
+pub(crate) fn wasi_deliver(code: u8) {
+    let Some(slot) = WASI_SIGNALS.iter().position(|(n, _)| *n == code) else {
+        return;
+    };
+    if WASI_LISTENERS[slot].load(Ordering::Acquire) > 0 {
+        WASI_PENDING[slot].fetch_add(1, Ordering::AcqRel);
+    } else if code != 10 {
+        std::process::exit(128 + code as i32);
     }
 }
 
@@ -1021,9 +1046,7 @@ fn read_js_string(value: f64) -> Option<String> {
 }
 
 fn numeric_value(jv: JSValue) -> Option<f64> {
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() {
+    if jv.is_number() {
         Some(jv.as_number())
     } else {
         None
@@ -1039,7 +1062,7 @@ fn is_array_value(jv: JSValue) -> bool {
         return false;
     }
     let header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
 }
 
 fn display_value(value: f64) -> String {
@@ -1145,8 +1168,7 @@ fn throw_kill_error_code(code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, "kill");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 #[cfg(unix)]
@@ -1278,11 +1300,7 @@ pub extern "C" fn js_process_kill(pid: f64, signal: f64) -> f64 {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let pid_i = if pid_jv.is_int32() {
-        pid_jv.as_int32()
-    } else {
-        pid_jv.as_number() as i32
-    };
+    let pid_i = pid_jv.as_number() as i32;
     let sig_i = normalize_process_signal(signal);
     #[cfg(unix)]
     unsafe {
@@ -1461,18 +1479,14 @@ fn release_signal_resources_in_freed_ranges(freed: &crate::arena::thread_exit::F
 mod resource_teardown_tests {
     #[test]
     fn native_signal_tokens_clear_with_their_retiring_allocation_range() {
-        check(false);
+        check();
     }
-    #[test]
-    #[ignore = "negative control: omit the native signal allocation-range invalidation"]
-    fn negative_control_objtables_signal_resource_teardown() {
-        check(true);
-    }
-    fn check(omit: bool) {
+    fn check() {
         let _guard = crate::gc::global_side_table_test_lock();
-        let token =
-            unsafe { crate::async_hooks::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10) };
-        assert!(crate::async_hooks::resource_state::get(token).is_some());
+        let token = unsafe {
+            crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
+        };
+        assert!(crate::async_hook_slots::resource_state::get(token).is_some());
         const NAME: &str = "objtables-native-signal-range";
         super::SIGNAL_ASYNC_IDS
             .lock()
@@ -1480,13 +1494,12 @@ mod resource_teardown_tests {
             .insert(NAME.into(), token);
         let ranges =
             crate::arena::thread_exit::FreedRanges::new(&[(token as usize, token as usize + 1)]);
-        if !omit {
-            super::release_signal_resources_in_freed_ranges(&ranges);
-        }
+        super::release_signal_resources_in_freed_ranges(&ranges);
+
         assert!(
             !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
             "retired signal state must not remain in native routing"
         );
-        crate::async_hooks::destroy(token);
+        crate::async_hook_slots::destroy(token);
     }
 }

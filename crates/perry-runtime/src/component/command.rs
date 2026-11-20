@@ -11,7 +11,7 @@ pub extern "C" fn js_component_run_command(bytes: f64, options: f64) -> f64 {
     let mut options_value = Value::Null;
     let mut options = Vec::new();
     let mut output = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = host::ops();
         options_value =
             if JSValue::from_bits(options_input.get_nanbox_f64().to_bits()).is_undefined() {

@@ -25,6 +25,7 @@ pub fn stmt_contains_return(s: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_return)
                 || catch
@@ -97,6 +98,7 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 convert_returns_in_stmts(body, let_id);
                 if let Some(c) = catch {
@@ -151,6 +153,7 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if !inspect(body, saw_return)
                         || catch
@@ -275,6 +278,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 loop_has_prototype_surgery(body)
                     || catch
@@ -349,6 +353,7 @@ pub fn inline_calls_in_stmts(
     local_types: &mut HashMap<LocalId, String>,
     exact_receiver_facts: &mut ExactReceiverFacts,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
@@ -399,6 +404,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     exact_receiver_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -414,6 +420,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         exact_receiver_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -502,6 +509,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         exact_receiver_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -567,6 +575,7 @@ pub fn inline_calls_in_stmts(
                             local_types,
                             exact_receiver_facts,
                             next_local_id,
+                            census,
                             enclosing_class,
                             class_field_types,
                             preserve_loop_closures,
@@ -593,6 +602,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     exact_receiver_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -622,6 +632,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut condition_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -641,6 +652,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut then_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -655,6 +667,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         &mut else_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -673,6 +686,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut empty_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -692,6 +706,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut body_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     loop_preserve_closures,
@@ -712,6 +727,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut body_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     loop_preserve_closures,
@@ -725,6 +741,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut empty_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     preserve_loop_closures,
@@ -752,6 +769,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         &mut init_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -770,6 +788,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         &mut empty_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -787,6 +806,7 @@ pub fn inline_calls_in_stmts(
                         local_types,
                         &mut empty_facts,
                         next_local_id,
+                        census,
                         enclosing_class,
                         class_field_types,
                         preserve_loop_closures,
@@ -825,6 +845,7 @@ pub fn inline_calls_in_stmts(
                     local_types,
                     &mut body_facts,
                     next_local_id,
+                    census,
                     enclosing_class,
                     class_field_types,
                     loop_preserve_closures,
@@ -860,6 +881,7 @@ pub fn inline_calls_in_stmts(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -888,6 +910,7 @@ pub fn inline_calls_in_expr(
     local_types: &HashMap<LocalId, String>,
     exact_receiver_facts: &mut ExactReceiverFacts,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
@@ -910,6 +933,7 @@ pub fn inline_calls_in_expr(
         local_types,
         exact_receiver_facts,
         next_local_id,
+        census,
         enclosing_class,
         class_field_types,
         preserve_loop_closures,
@@ -922,6 +946,7 @@ pub fn inline_calls_in_expr(
             local_types,
             exact_receiver_facts,
             next_local_id,
+            census,
             enclosing_class,
             class_field_types,
             preserve_loop_closures,
@@ -946,6 +971,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -968,6 +994,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -983,6 +1010,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 &mut right_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1004,6 +1032,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1021,6 +1050,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1037,6 +1067,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 &mut then_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1057,6 +1088,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 &mut else_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1080,6 +1112,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1105,13 +1138,27 @@ pub fn inline_calls_in_expr(
         }
         Expr::ObjectSpread { parts } => {
             let mut earlier = EarlierOperands::default();
-            for (key, v) in parts {
-                hoisted.extend(ordered!(v, &mut earlier));
-                if key.is_none() {
-                    // Spreading copies own properties, which runs getters.
-                    earlier.note_effect();
+            for part in parts {
+                match &mut *part {
+                    perry_hir::ObjectPart::Spread(v) => {
+                        hoisted.extend(ordered!(v, &mut earlier));
+                        // Spreading copies own properties, which runs getters.
+                        earlier.note_effect();
+                    }
+                    perry_hir::ObjectPart::Define(_, v) => {
+                        hoisted.extend(ordered!(v, &mut earlier));
+                    }
+                    perry_hir::ObjectPart::Computed { key, value } => {
+                        hoisted.extend(ordered!(key, &mut earlier));
+                        // ToPropertyKey may run a user `toString` /
+                        // `Symbol.toPrimitive` before the value.
+                        earlier.note_effect();
+                        hoisted.extend(ordered!(value, &mut earlier));
+                    }
                 }
-                kill_referenced_exact_receivers(v, exact_receiver_facts);
+                for e in &mut *part {
+                    kill_referenced_exact_receivers(e, exact_receiver_facts);
+                }
             }
         }
         Expr::ArraySpread(elements) => {
@@ -1141,6 +1188,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1158,7 +1206,7 @@ pub fn inline_calls_in_expr(
             }
             exact_receiver_facts.clear();
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));
             hoisted.extend(ordered!(index, &mut earlier));
@@ -1167,6 +1215,7 @@ pub fn inline_calls_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));
@@ -1199,6 +1248,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1218,6 +1268,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1263,6 +1314,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1276,6 +1328,7 @@ pub fn inline_calls_in_expr(
                 local_types,
                 exact_receiver_facts,
                 next_local_id,
+                census,
                 enclosing_class,
                 class_field_types,
                 preserve_loop_closures,
@@ -1336,6 +1389,7 @@ pub fn inline_calls_in_expr(
                 &mut closure_local_types,
                 &mut closure_exact_receiver_facts,
                 next_local_id,
+                census,
                 closure_enclosing.as_deref(),
                 class_field_types,
                 preserve_loop_closures,
@@ -1461,6 +1515,7 @@ fn inline_calls_in_ordered_operand(
     local_types: &HashMap<LocalId, String>,
     exact_receiver_facts: &mut ExactReceiverFacts,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
     enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
@@ -1476,6 +1531,7 @@ fn inline_calls_in_ordered_operand(
             local_types,
             exact_receiver_facts,
             next_local_id,
+            census,
             enclosing_class,
             class_field_types,
             preserve_loop_closures,
@@ -1491,6 +1547,7 @@ fn inline_calls_in_ordered_operand(
             local_types,
             &mut candidate_facts,
             next_local_id,
+            census,
             enclosing_class,
             class_field_types,
             preserve_loop_closures,
@@ -1511,10 +1568,12 @@ fn inline_calls_in_ordered_operand(
 
 pub fn build_inline_arg_bindings(
     params: &[Param],
+    body: &[Stmt],
     args: &[Expr],
     closure_captures: &HashSet<LocalId>,
     mutated_params: &HashSet<LocalId>,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
 ) -> Option<(Vec<Stmt>, HashMap<LocalId, Expr>)> {
     if params.iter().any(|param| param.is_rest) {
         return None;
@@ -1525,17 +1584,22 @@ pub fn build_inline_arg_bindings(
 
     for (index, param) in params.iter().enumerate() {
         if let Some(arg) = args.get(index) {
-            let trivial_in_closure = is_trivial_expr(arg)
-                && !matches!(arg, Expr::LocalGet(_))
-                && closure_captures.contains(&param.id);
+            // An argument is substituted for the parameter only when nothing
+            // the body or a later argument does can change what it reads
+            // (`WriteCensus::substitutes_arg`). Any other argument is
+            // evaluated here, in argument order, before the body runs, as JS
+            // evaluates it: substituting `m` into `bump() * 0 + a` would read
+            // `m` after `bump()` wrote it.
+            let stable = census.substitutes_arg(params, args, index, body);
+            let literal_in_closure =
+                stable && !matches!(arg, Expr::LocalGet(_)) && closure_captures.contains(&param.id);
             // A param the body WRITES must get its own copy: substituting
             // the caller's LocalGet would alias the write onto the caller's
             // local (`function f(a){a++}; f(x)` mutated x — S13.2.1_A6),
             // and substituting a literal would produce `5++`.
             let force_let = mutated_params.contains(&param.id);
             let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
-            if is_trivial_expr(arg) && !trivial_in_closure && !force_let && !preserve_value_boundary
-            {
+            if stable && !literal_in_closure && !force_let && !preserve_value_boundary {
                 param_map.insert(param.id, arg.clone());
             } else {
                 let fresh = *next_local_id;
@@ -1600,6 +1664,7 @@ pub fn try_inline_simple_call(
     _local_types: &HashMap<LocalId, String>,
     exact_receiver_facts: &ExactReceiverFacts,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
     _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
@@ -1639,10 +1704,12 @@ pub fn try_inline_simple_call(
                         collect_mutated_local_ids(&func.body, &mut mutated);
                         let (setup_stmts, param_map) = build_inline_arg_bindings(
                             &func.params,
+                            &func.body,
                             args,
                             &closure_capt,
                             &mutated,
                             next_local_id,
+                            census,
                         )?;
                         let mut result = return_expr.clone();
                         substitute_locals(&mut result, &param_map, next_local_id);
@@ -1683,10 +1750,12 @@ pub fn try_inline_simple_call(
                             collect_mutated_local_ids(&func.body, &mut mutated);
                             let (mut setup, mut param_map) = build_inline_arg_bindings(
                                 &func.params,
+                                &func.body,
                                 args,
                                 &closure_capt,
                                 &mutated,
                                 next_local_id,
+                                census,
                             )?;
 
                             // Remap body-local IDs
@@ -1797,10 +1866,12 @@ pub fn try_inline_simple_call(
                             collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                             let (setup_stmts, mut param_map) = build_inline_arg_bindings(
                                 &method_candidate.func.params,
+                                &method_candidate.func.body,
                                 args,
                                 &closure_capt,
                                 &mutated,
                                 next_local_id,
+                                census,
                             )?;
 
                             // Map 'this' parameter to the receiver object (only
@@ -1853,10 +1924,12 @@ pub fn try_inline_simple_call(
                         collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
                         let (setup_for_params, mut shared_param_map) = build_inline_arg_bindings(
                             &method_candidate.func.params,
+                            &method_candidate.func.body,
                             args,
                             &closure_capt,
                             &mutated,
                             next_local_id,
+                            census,
                         )?;
                         if let (Some(this_id), Some(obj_id)) =
                             (method_candidate.this_param_id, obj_id_opt)
@@ -2010,6 +2083,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 fold_scalar_aggregate_param_length(body, param_id, len);
                 if let Some(catch) = catch {
@@ -2055,6 +2129,7 @@ pub fn try_inline_call(
     _local_types: &HashMap<LocalId, String>,
     exact_receiver_facts: &ExactReceiverFacts,
     next_local_id: &mut LocalId,
+    census: &WriteCensus,
     _enclosing_class: Option<&str>,
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
@@ -2079,70 +2154,21 @@ pub fn try_inline_call(
                     return None;
                 }
 
-                let mut setup_stmts: Vec<Stmt> = Vec::new();
-                let mut param_map: HashMap<LocalId, Expr> = HashMap::new();
-
-                // Issue #858: see fn-call branch in try_inline_simple_call.
-                // Params closure-captured by the inlined body must be
-                // materialized as a Let even when the arg is a literal,
-                // otherwise the in-place substitution silently rewrites the
-                // closure body's `LocalGet` -> literal at the call site only,
-                // while codegen still compiles the original `func_id` body
-                // expecting capture slot 0 to hold the param.
-                let mut closure_capt: std::collections::HashSet<LocalId> =
-                    std::collections::HashSet::new();
+                // Closure-captured params (#858) and body-written params
+                // (S13.2.1_A6) get a `let`; see build_inline_arg_bindings.
+                let mut closure_capt = HashSet::new();
                 collect_closure_captured_local_ids(&func.body, &mut closure_capt);
-
-                let mut mutated: std::collections::HashSet<LocalId> =
-                    std::collections::HashSet::new();
+                let mut mutated = HashSet::new();
                 collect_mutated_local_ids(&func.body, &mut mutated);
-
-                for (param, arg) in func.params.iter().zip(args.iter()) {
-                    let trivial_in_closure = is_trivial_expr(arg)
-                        && !matches!(arg, Expr::LocalGet(_))
-                        && closure_capt.contains(&param.id);
-                    // Body-written params get a copy — see
-                    // build_inline_arg_bindings (S13.2.1_A6).
-                    let force_let = mutated.contains(&param.id);
-                    let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
-                    if is_trivial_expr(arg)
-                        && !trivial_in_closure
-                        && !force_let
-                        && !preserve_value_boundary
-                    {
-                        param_map.insert(param.id, arg.clone());
-                    } else {
-                        let local_id = *next_local_id;
-                        *next_local_id += 1;
-
-                        setup_stmts.push(Stmt::Let {
-                            id: local_id,
-                            name: param.name.clone(),
-                            ty: param.ty.clone(),
-                            mutable: force_let,
-                            init: Some(arg.clone()),
-                        });
-
-                        param_map.insert(param.id, Expr::LocalGet(local_id));
-                    }
-                }
-
-                // Trailing optional/default params with no matching arg —
-                // see the matching block in the method-call branch below for
-                // the rationale. Without this, references to the unmatched
-                // param's source-side LocalId leak into the destination.
-                for param in func.params.iter().skip(args.len()) {
-                    let local_id = *next_local_id;
-                    *next_local_id += 1;
-                    setup_stmts.push(Stmt::Let {
-                        id: local_id,
-                        name: param.name.clone(),
-                        ty: param.ty.clone(),
-                        mutable: true,
-                        init: Some(Expr::Undefined),
-                    });
-                    param_map.insert(param.id, Expr::LocalGet(local_id));
-                }
+                let (mut setup_stmts, mut param_map) = build_inline_arg_bindings(
+                    &func.params,
+                    &func.body,
+                    args,
+                    &closure_capt,
+                    &mutated,
+                    next_local_id,
+                    census,
+                )?;
 
                 let mut inlined_body = func.body.clone();
 
@@ -2234,62 +2260,26 @@ pub fn try_inline_call(
                         param_map.insert(this_id, Expr::LocalGet(obj_id));
                     }
 
-                    // Issue #858: closure-captured params from the inlined
-                    // method body must be materialized as Lets even for
-                    // literal args. See try_inline_simple_call.
-                    let mut closure_capt: std::collections::HashSet<LocalId> =
-                        std::collections::HashSet::new();
+                    // The same argument rule as for functions: closure-captured
+                    // params (#858) and body-written params get a `let`.
+                    let mut closure_capt = HashSet::new();
                     collect_closure_captured_local_ids(
                         &method_candidate.func.body,
                         &mut closure_capt,
                     );
-
-                    // Map parameters to arguments
-                    // Note: Method params don't include 'this' - they use Expr::This instead
-                    for (param, arg) in method_candidate.func.params.iter().zip(args.iter()) {
-                        let trivial_in_closure = is_trivial_expr(arg)
-                            && !matches!(arg, Expr::LocalGet(_))
-                            && closure_capt.contains(&param.id);
-                        let preserve_value_boundary = inline_arg_needs_value_boundary(param, arg);
-                        if is_trivial_expr(arg) && !trivial_in_closure && !preserve_value_boundary {
-                            param_map.insert(param.id, arg.clone());
-                        } else {
-                            let local_id = *next_local_id;
-                            *next_local_id += 1;
-
-                            setup_stmts.push(Stmt::Let {
-                                id: local_id,
-                                name: param.name.clone(),
-                                ty: param.ty.clone(),
-                                mutable: false,
-                                init: Some(arg.clone()),
-                            });
-
-                            param_map.insert(param.id, Expr::LocalGet(local_id));
-                        }
-                    }
-
-                    // Trailing optional/default params with no matching arg:
-                    // allocate a fresh local for each so the param's source-
-                    // class LocalId doesn't leak into the destination scope
-                    // (where it can collide with an unrelated local — e.g.
-                    // `World.createQuery(componentTypes, filter = {})` called
-                    // with one arg leaves `filter`'s body refs unsubstituted,
-                    // and the `if (filter === undefined) filter = {}`
-                    // prologue then writes to whatever destination local
-                    // happens to share that id).
-                    for param in method_candidate.func.params.iter().skip(args.len()) {
-                        let local_id = *next_local_id;
-                        *next_local_id += 1;
-                        setup_stmts.push(Stmt::Let {
-                            id: local_id,
-                            name: param.name.clone(),
-                            ty: param.ty.clone(),
-                            mutable: true,
-                            init: Some(Expr::Undefined),
-                        });
-                        param_map.insert(param.id, Expr::LocalGet(local_id));
-                    }
+                    let mut mutated = HashSet::new();
+                    collect_mutated_local_ids(&method_candidate.func.body, &mut mutated);
+                    let (arg_setup, arg_map) = build_inline_arg_bindings(
+                        &method_candidate.func.params,
+                        &method_candidate.func.body,
+                        args,
+                        &closure_capt,
+                        &mutated,
+                        next_local_id,
+                        census,
+                    )?;
+                    setup_stmts.extend(arg_setup);
+                    param_map.extend(arg_map);
 
                     // Clone and substitute the method body
                     let mut inlined_body = method_candidate.func.body.clone();
@@ -2317,22 +2307,6 @@ pub fn try_inline_call(
         }
     }
     None
-}
-
-/// Check if an expression is trivial (safe to duplicate)
-pub fn is_trivial_expr(expr: &Expr) -> bool {
-    matches!(
-        expr,
-        Expr::Integer(_)
-            | Expr::Number(_)
-            | Expr::Bool(_)
-            | Expr::String(_)
-            | Expr::WtfString(_)
-            | Expr::Null
-            | Expr::Undefined
-            | Expr::LocalGet(_)
-            | Expr::GlobalGet(_)
-    )
 }
 
 #[cfg(test)]
@@ -2377,6 +2351,7 @@ mod tests {
                     &HashMap::new(),
                     &mut exact_receiver_facts,
                     &mut next_local_id,
+                    &WriteCensus::unwritten(),
                     None,
                     &HashMap::new(),
                     false,
@@ -2447,6 +2422,7 @@ mod tests {
 
     fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args,
             type_args: Vec::new(),
@@ -2463,6 +2439,7 @@ mod tests {
             &HashMap::new(),
             &mut ExactReceiverFacts::new(),
             &mut next_local_id,
+            &WriteCensus::unwritten(),
             None,
             &HashMap::new(),
             false,
@@ -2577,6 +2554,7 @@ mod tests {
                     &mut local_types,
                     &mut exact_receiver_facts,
                     &mut next_local_id,
+                    &WriteCensus::unwritten(),
                     None,
                     &HashMap::new(),
                     false,

@@ -9,6 +9,19 @@ impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_calls(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, args, .. } => {
+                // A direct callee's rest parameter receives its arguments as one array.
+                let direct_idx = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.emitter.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self
+                        .emitter
+                        .imported_func_indices
+                        .get(&(self.emitter.current_mod_idx, name.clone()))
+                        .or_else(|| self.emitter.func_name_map.get(name))
+                        .copied(),
+                    _ => None,
+                };
+                let packed = self.emitter.with_rest_packed(direct_idx, args);
+                let args: &[Expr] = &packed;
                 // Check for method call patterns: obj.method(args)
                 if let Expr::PropertyGet {
                     object, property, ..
@@ -28,6 +41,8 @@ impl<'a> FuncEmitCtx<'a> {
                         if let Some(&idx) =
                             self.emitter.imported_ns_funcs.get(&key).copied().as_ref()
                         {
+                            let packed = self.emitter.with_rest_packed(Some(idx), args);
+                            let args: &[Expr] = &packed;
                             for arg in args {
                                 self.emit_expr(func, arg);
                             }
@@ -41,6 +56,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             if self.emitter.void_funcs.contains(&idx) {
                                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                             }
@@ -51,30 +67,38 @@ impl<'a> FuncEmitCtx<'a> {
                     if let Expr::GlobalGet(_) = object.as_ref() {
                         match property.as_str() {
                             "log" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_log", 1);
-                                }
+                                self.emit_console_call(func, "console_log", args);
                                 return true;
                             }
                             "warn" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_warn", 1);
-                                }
+                                self.emit_console_call(func, "console_warn", args);
                                 return true;
                             }
                             "error" => {
-                                for arg in args {
-                                    self.emit_frame_begin(func, 1);
-                                    self.emit_store_arg(func, 0, arg);
-                                    self.emit_memcall_void(func, "console_error", 1);
-                                }
+                                self.emit_console_call(func, "console_error", args);
                                 return true;
                             }
                             _ => {}
+                        }
+                    }
+                    // `C.m(args)` names a static method directly, as `StaticMethodCall`
+                    // does; a tagged template (`` C.m`x` ``) reaches here in this shape.
+                    if let Expr::ClassRef(class_name) = object.as_ref() {
+                        let is_static = self
+                            .emitter
+                            .class_static_map
+                            .get(class_name.as_str())
+                            .is_some_and(|statics| statics.contains_key(property.as_str()));
+                        if is_static {
+                            self.emit_expr(
+                                func,
+                                &Expr::StaticMethodCall {
+                                    class_name: class_name.clone(),
+                                    method_name: property.clone(),
+                                    args: args.to_vec(),
+                                },
+                            );
+                            return true;
                         }
                     }
                     // String/Array method calls: expr.method(args)
@@ -85,9 +109,26 @@ impl<'a> FuncEmitCtx<'a> {
                     // Fallback: class/UI method dispatch via mem_call with stack-based buffer.
                     {
                         let method_name = property.as_str();
-                        // Slot 0 = object, slots 1..N = args
+                        let global_receiver = matches!(object.as_ref(), Expr::GlobalGet(id)
+                            if !self.emitter.global_map.contains_key(id));
+                        if global_receiver {
+                            // The host global is independent of its mutable globalThis property.
+                            self.emit_frame_begin(func, 0);
+                            self.emit_memcall(func, "global_receiver", 0);
+                            func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                        }
                         self.emit_frame_begin(func, (args.len() + 1) as u32);
-                        self.emit_store_arg(func, 0, object);
+                        if global_receiver {
+                            self.emit_slot_addr(func, 0);
+                            func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                                offset: 0,
+                                align: 3,
+                                memory_index: 0,
+                            }));
+                        } else {
+                            self.emit_store_arg(func, 0, object);
+                        }
                         for (i, arg) in args.iter().enumerate() {
                             self.emit_store_arg(func, (i + 1) as u32, arg);
                         }
@@ -112,6 +153,13 @@ impl<'a> FuncEmitCtx<'a> {
                 // the plain check and the throw fall through to the unknown-
                 // extern arm (args dropped, `undefined`).
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
+                    // ToPropertyKey of a computed member name.
+                    if name == "js_to_property_key" && args.len() == 1 {
+                        self.emit_frame_begin(func, 1);
+                        self.emit_store_arg(func, 0, &args[0]);
+                        self.emit_memcall(func, "to_property_key", 1);
+                        return true;
+                    }
                     if name == perry_hir::tdz_check::TDZ_CHECK_THEN {
                         if let Some(value) = args.get(2) {
                             self.emit_expr(func, value);
@@ -127,6 +175,22 @@ impl<'a> FuncEmitCtx<'a> {
                         "setInterval" => Some(("set_interval", 2u32)),
                         "clearTimeout" => Some(("clear_timeout", 1u32)),
                         "clearInterval" => Some(("clear_interval", 1u32)),
+                        // A literal that needs its own builder (`__proto__`, a method
+                        // using `super`) defines its keys and prototype through these.
+                        "js_object_literal_define" => Some(("object_literal_define", 3u32)),
+                        "js_object_literal_set_prototype" => {
+                            Some(("object_literal_set_prototype", 2u32))
+                        }
+                        // The Set/Map `for...of` fast path's cursor (`map_set_delete_safe_for_of`
+                        // in perry-hir).
+                        "js_set_cursor_next" | "js_map_cursor_next" => {
+                            Some(("collection_cursor_next", 3u32))
+                        }
+                        "js_set_compaction_epoch" | "js_map_compaction_epoch" => {
+                            Some(("collection_cursor_epoch", 1u32))
+                        }
+                        // Emitted around that loop by `stmt::collection_cursor_release`.
+                        "js_collection_cursor_release" => Some(("collection_cursor_release", 3u32)),
                         _ => None,
                     };
                     if let Some((bridge, arity)) = timer {
@@ -156,9 +220,15 @@ impl<'a> FuncEmitCtx<'a> {
                     }
                 }
 
-                // Evaluate arguments first
-                for arg in args {
-                    self.emit_expr(func, arg);
+                // A direct call takes its arguments on the operand stack. The dynamic arm
+                // below evaluates them once, into its bridge frame.
+                if matches!(
+                    callee.as_ref(),
+                    Expr::FuncRef(_) | Expr::ExternFuncRef { .. }
+                ) {
+                    for arg in args {
+                        self.emit_expr(func, arg);
+                    }
                 }
                 // Call the function — resolve target and pad missing optional args with undefined
                 match callee.as_ref() {
@@ -180,6 +250,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             // Void functions don't push a return value; push undefined
                             // so the caller always has a value on the stack.
                             if self.emitter.void_funcs.contains(&idx) {
@@ -218,6 +289,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                             }
                             func.instruction(&Instruction::Call(idx));
+                            self.emit_exception_guard(func);
                             // Void functions don't push a return value, but call
                             // expressions always need a value on the stack. Push undefined.
                             if matches!(return_type, perry_hir::types::Type::Void)
@@ -233,14 +305,8 @@ impl<'a> FuncEmitCtx<'a> {
                         }
                     }
                     _ => {
-                        // Dynamic call via closure bridge
-                        // Stack has: [arg0, arg1, ..., argN] but callee not yet pushed
-                        // We need callee first for closure_call. Restructure:
-                        // Drop the args we already pushed, re-emit callee first, then args
-                        for _ in args {
-                            func.instruction(&Instruction::Drop);
-                        }
-                        // Now emit: callee, args... via mem_call for Firefox NaN safety
+                        // Dynamic call via closure bridge: callee, then args, via mem_call
+                        // for Firefox NaN safety.
                         self.emit_frame_begin(func, (args.len() + 1) as u32);
                         self.emit_store_arg(func, 0, callee);
                         for (i, arg) in args.iter().enumerate() {
@@ -259,11 +325,80 @@ impl<'a> FuncEmitCtx<'a> {
                             3 => {
                                 self.emit_memcall(func, "closure_call_3", 4);
                             }
-                            _ => {
-                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                            n => {
+                                self.emit_memcall(func, "closure_call_n", n as u32 + 1);
                             }
                         }
                     }
+                }
+            }
+
+            // `f(a, ...xs)` / `o.m(a, ...xs)`: the argument list is built as the array
+            // literal `[a, ...xs]` would be, then applied by the host.
+            Expr::CallSpread { callee, args, .. } => {
+                let list = Expr::ArraySpread(
+                    args.iter()
+                        .map(|arg| match arg {
+                            CallArg::Expr(e) => ArrayElement::Expr(e.clone()),
+                            CallArg::Spread(e) => ArrayElement::Spread(e.clone()),
+                        })
+                        .collect(),
+                );
+                // A namespace import's function is called as the value `W.f` reads.
+                let ns_func = |object: &Expr, property: &str| {
+                    matches!(object, Expr::ExternFuncRef { name, .. }
+                        if self.emitter.imported_ns_funcs.contains_key(
+                            &(self.emitter.current_mod_idx, format!("{name}.{property}"))))
+                };
+                let member = match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if !ns_func(object, property) => Some((
+                        object,
+                        Expr::String(property.clone()),
+                        Some(property.as_str()),
+                    )),
+                    Expr::IndexGet { object, index, .. } => Some((object, (**index).clone(), None)),
+                    _ => None,
+                };
+                if let Some((object, name, property)) = member {
+                    // HIR keeps `console.<m>` collapsed onto the unresolved global.
+                    let unresolved_global = matches!(object.as_ref(), Expr::GlobalGet(id)
+                        if !self.emitter.global_map.contains_key(id));
+                    if unresolved_global
+                        && matches!(property, Some("log" | "info" | "warn" | "error" | "debug"))
+                    {
+                        self.emit_frame_begin(func, 2);
+                        self.emit_store_arg(func, 0, &name);
+                        self.emit_store_arg(func, 1, &list);
+                        self.emit_memcall(func, "console_call_spread", 2);
+                        return true;
+                    }
+                    if unresolved_global {
+                        self.emit_frame_begin(func, 0);
+                        self.emit_memcall(func, "global_receiver", 0);
+                        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+                    }
+                    self.emit_frame_begin(func, 3);
+                    if unresolved_global {
+                        self.emit_slot_addr(func, 0);
+                        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                    } else {
+                        self.emit_store_arg(func, 0, object);
+                    }
+                    self.emit_store_arg(func, 1, &name);
+                    self.emit_store_arg(func, 2, &list);
+                    self.emit_memcall(func, "method_call_spread", 3);
+                } else {
+                    self.emit_frame_begin(func, 2);
+                    self.emit_store_arg(func, 0, callee);
+                    self.emit_store_arg(func, 1, &list);
+                    self.emit_memcall(func, "closure_call_spread", 2);
                 }
             }
 

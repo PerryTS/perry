@@ -89,8 +89,7 @@ pub(crate) fn mint_scope_object(ctx: &mut FnCtx<'_>, members: &[u32], tdz: bool)
     // high half; their typed loads and stores touch only the low bytes.
     for &id in members {
         let (seed, note) = if crate::expr::is_compiler_private_async_i32_control_local(ctx, id) {
-            // 0x7FFE_0000_0000_0000 (INT32_TAG)
-            ("9222809086901354496", "primitive_i32_control_cell")
+            (crate::nanbox::INT32_TAG_I64, "primitive_i32_control_cell")
         } else if crate::expr::is_compiler_private_async_i1_control_local(ctx, id) {
             // 0x7FFC_0000_0000_0000
             ("9222246136947933184", "primitive_i1_control_cell")

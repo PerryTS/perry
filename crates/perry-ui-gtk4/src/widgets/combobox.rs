@@ -1,13 +1,9 @@
-//! GTK4 Combobox widget — `gtk4::Entry` + `gtk4::EntryCompletion`
-//! against a `gtk4::ListStore` for as-you-type filtering (issue #475
-//! / Linux parity work).
+//! Combobox: `gtk4::Entry` + `EntryCompletion` over a `ListStore` for as-you-type filtering.
 //!
-//! GTK4 has `GtkDropDown` for non-editable selection, but #475 needs
-//! free-text editing + dropdown suggestions. `EntryCompletion` is the
-//! native primitive for that — even though GTK 4.10 marked it as a
-//! transitional API, gtk4-rs 0.9's `v4_6` feature gate (which this
-//! crate already uses) keeps the type usable. The fallback once the
-//! API is removed is a custom `GtkEntry` + `GtkPopover` composition.
+//! `GtkDropDown` cannot edit free text, so this keeps `EntryCompletion` despite its GTK 4.10
+//! deprecation. Once it is removed, replace it with a `GtkEntry` + `GtkPopover` composition.
+
+#![allow(deprecated)]
 
 use gtk4::glib::Type as GType;
 use gtk4::prelude::*;
@@ -52,8 +48,6 @@ pub fn create(initial_ptr: *const u8, on_change: f64) -> i64 {
     let completion = gtk4::EntryCompletion::new();
     completion.set_model(Some(&model));
     completion.set_text_column(0);
-    // Inline + popup matching — typing prefix highlights the rest of
-    // the match in the entry, plus the popdown lists every match.
     completion.set_inline_completion(true);
     completion.set_popup_completion(true);
     completion.set_minimum_key_length(0);

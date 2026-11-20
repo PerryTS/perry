@@ -1,0 +1,7 @@
+middle finally
+rethrowing bottom
+TypeError wrapped
+outer finally
+ok0,done0,caught1,done1,ok2,done2
+continued
+exit 0

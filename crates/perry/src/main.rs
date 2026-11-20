@@ -3,6 +3,7 @@
 //! CLI driver for compiling TypeScript to native executables.
 
 mod apple_jwt;
+mod cli;
 mod commands;
 mod compat_reports;
 mod install_channel;
@@ -16,7 +17,7 @@ mod test_env_lock;
 mod update_checker;
 mod update_policy;
 
-use perry_cli_support::{dotenv, logger, terminal_progress, utc};
+use crate::cli::{dotenv, logger, terminal_progress, utc};
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -114,9 +115,8 @@ enum Commands {
     /// Wraps `bun install --ignore-scripts` (or `npm install --ignore-scripts`
     /// as fallback) so no package code executes during install. After
     /// extraction, scans `node_modules/` with bundled offline rules and
-    /// only then runs lifecycle scripts — and only for packages on a
-    /// curated trust allowlist. Works on any standard npm project; no
-    /// Perry-specific config required.
+    /// only then runs lifecycle scripts explicitly approved through
+    /// `perry.allowScripts`, `--run-scripts`, or `--run-scripts-all`.
     Install(commands::install::InstallArgs),
 
     /// Check environment and dependencies
@@ -166,6 +166,9 @@ enum Commands {
 
     /// Manage Perry's on-disk cache (default `node_modules/.cache/perry`)
     Cache(commands::cache::CacheArgs),
+
+    /// Install, list or remove cross-target libraries (`perry target add android`)
+    Target(commands::target::TargetArgs),
 
     /// Sign-side tooling for `@perry/updater` (closes #229).
     ///
@@ -545,6 +548,7 @@ fn main_inner() -> Result<()> {
         Commands::Appstore(args) => commands::appstore::run(args),
         Commands::Types(args) => commands::types::run(args, cli.format, use_color),
         Commands::Cache(args) => commands::cache::run(args, cli.format),
+        Commands::Target(args) => commands::target::run(args),
         #[cfg(feature = "updater-cli")]
         Commands::Updater(args) => commands::updater::run(args),
         #[cfg(feature = "native-cli")]
@@ -645,21 +649,20 @@ mod tests {
     /// warnings.
     #[test]
     fn extract_panic_message_handles_string_panic() {
-        let handle = std::thread::spawn(|| {
-            panic!("synthetic panic from String");
-        });
-        let err = handle.join().expect_err("thread should panic");
+        // Under the workspace's `panic = "abort"` a panicking thread aborts the
+        // process, so the join-error payload is built the way `panic!` with
+        // format args boxes it: a `String`.
+        let err: Box<dyn std::any::Any + Send> =
+            Box::new(String::from("synthetic panic from String"));
         let msg = extract_panic_message(&err);
         assert_eq!(msg, "synthetic panic from String");
     }
 
     #[test]
     fn extract_panic_message_handles_static_str_panic() {
-        let handle = std::thread::spawn(|| {
-            // panic_any with a &'static str payload — the no-format-args path.
-            std::panic::panic_any("a static str");
-        });
-        let err = handle.join().expect_err("thread should panic");
+        // The payload of `panic_any("a static str")` and of a format-args-free
+        // `panic!`: a `&'static str`.
+        let err: Box<dyn std::any::Any + Send> = Box::new("a static str");
         let msg = extract_panic_message(&err);
         assert_eq!(msg, "a static str");
     }
@@ -670,10 +673,7 @@ mod tests {
         // box something weird in here. Confirm we don't crash and emit the
         // documented fallback so the user at least sees `Error: …` instead
         // of a silent abort.
-        let handle = std::thread::spawn(|| {
-            std::panic::panic_any(42_i32);
-        });
-        let err = handle.join().expect_err("thread should panic");
+        let err: Box<dyn std::any::Any + Send> = Box::new(42_i32);
         let msg = extract_panic_message(&err);
         assert!(msg.contains("no message"), "got {:?}", msg);
     }

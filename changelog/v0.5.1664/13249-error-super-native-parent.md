@@ -1,0 +1,1 @@
+Fixed `super(message, options)` into a native Error when the derived class's heritage is read at run time (e.g. the class value escapes): the preallocated derived instance is now initialised in place, so own properties and polymorphic methods are kept, and the refreshed receiver is returned if the init ran a collection.

@@ -202,6 +202,17 @@ fn imported_instanceof_rhs_is_static(ctx: &FnCtx<'_>, ty: &str, ty_expr: &Expr) 
     if name != ty {
         return false;
     }
+    // A renamed node-submodule import (`import { ReadableStream as RN }`):
+    // the reserved-id table below is keyed by the built-in name, and `ty` is
+    // only the local one. The binding's value is the constructor itself, so
+    // the runtime answers by its constructor identity, as `new RN(...)` does.
+    if ctx
+        .import_function_node_submodule
+        .get(name)
+        .is_some_and(|(_, exported)| exported != name)
+    {
+        return false;
+    }
     let imported_class = ctx.class_ids.contains_key(name)
         && !ctx.imported_vars.contains(name)
         && !ctx.namespace_imports.contains(name);
@@ -483,9 +494,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // user classes (local `hir.classes` + cross-module imported
             // user classes); plain built-in names never appear in it, so
             // unshadowed built-ins keep their reserved ids.
-            let user_cid = ctx.class_ids.get(ty).copied();
+            if let Some(cid) = ctx.class_ids.get(ty).copied() {
+                // The declaration's function object owns computed static
+                // members, including @@hasInstance. A class id alone loses that
+                // observable GetMethod (even for a primitive LHS).
+                // `js_class_value` is non-collecting and returns a pinned value.
+                let rhs = super::emit_class_value(ctx.block(), cid);
+                return Ok(ctx.block().call(
+                    DOUBLE,
+                    "js_instanceof_dynamic",
+                    &[(DOUBLE, &v), (DOUBLE, &rhs)],
+                ));
+            }
             let cid = match ty.as_str() {
-                _ if user_cid.is_some() => user_cid.unwrap(),
                 "Error" => 0xFFFF0001u32,
                 "TypeError" => 0xFFFF0010u32,
                 "RangeError" => 0xFFFF0011u32,
@@ -830,7 +851,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     );
                     Ok(blk.call(DOUBLE, "js_delete_result", &[(I32, &i32_v), (I32, strict)]))
                 }
-                Expr::IndexGet { object, index } if is_string_expr(ctx, index) => {
+                Expr::IndexGet { object, index, .. } if is_string_expr(ctx, index) => {
                     // #7615 slice 2: the receiver is live across the key's
                     // lowering, and the key is unboxed to a raw `StringHeader*`
                     // below it — slice 1b's `BufferSlice` shape.
@@ -863,7 +884,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 // string-valued locals (for example `delete fn[name]`) still
                 // use the ordinary property-delete path instead of being
                 // misread as numeric array indexes.
-                Expr::IndexGet { object, index } => {
+                Expr::IndexGet { object, index, .. } => {
                     rooting::with_operands_rooted(ctx, &[object, index], |ctx, vals| {
                         let (obj_box, idx_box) = (vals[0].clone(), vals[1].clone());
                         ctx.block().call(
@@ -926,12 +947,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             Ok(nanbox_pointer_inline(blk, &result))
         }
 
-        // `Iterator.from(x)` (#2874) — wrap any iterable/iterator in a TC39
-        // iterator-helper object so the lazy helper methods (map/filter/take/
-        // drop/flatMap/reduce/toArray/...) dispatch at runtime against
-        // `ITERATOR_HELPER_CLASS_ID`. `js_iterator_from` takes and returns a
-        // NaN-boxed f64, so pass the boxed value straight through and return
-        // the boxed result directly.
+        // `Iterator.from(x)` (#2874): `js_iterator_from` is the same runtime
+        // entry as the `Iterator.from` function object. It takes and returns a
+        // NaN-boxed f64, so pass the boxed value straight through.
         Expr::IteratorFrom(iter) => {
             let iter_box = lower_expr(ctx, iter)?;
             let blk = ctx.block();
@@ -1652,7 +1670,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).
                 let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
-                let r_handle = unbox_to_i64(blk, &vals[1]);
+                // By the tag alone: a Number reviver is no function.
+                let r_handle = crate::expr::unbox_pointer_or_null(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,
                     "js_json_parse_with_reviver",
@@ -1666,7 +1685,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).
                 let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
-                let r_handle = unbox_to_i64(blk, &vals[1]);
+                // By the tag alone: a Number reviver is no function.
+                let r_handle = crate::expr::unbox_pointer_or_null(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,
                     "js_json_parse_with_reviver",

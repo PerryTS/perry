@@ -1,0 +1,1 @@
+Fix a whole-program-facts soundness gap: TypedArray methods and constructors, Date toJSON and the TextDecoder label now run the conversions their algorithms perform (argument and element ToNumber, map and sort result coercion, the species constructor, the join that toString looks up, the toISOString that toJSON invokes), so the objects they reach are no longer proven.

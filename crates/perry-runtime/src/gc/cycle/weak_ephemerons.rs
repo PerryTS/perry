@@ -2,7 +2,11 @@
 use super::*;
 
 impl GcCycleState {
-    pub(super) fn step_weak_ephemerons(&mut self, budget: usize, clearing: bool) {
+    pub(super) fn step_weak_ephemerons<const DIAGNOSTICS: bool>(
+        &mut self,
+        budget: usize,
+        clearing: bool,
+    ) {
         if budget == 0 {
             return;
         }
@@ -31,16 +35,22 @@ impl GcCycleState {
                 // The existing adversarial-registry fallback must also close
                 // conditional edges. Mutator writes cannot prevent its capped
                 // restart counter from advancing while closure is suspended.
-                let start = trace_phase_start(&self.trace);
-                while !closure.step(
+                let start = if DIAGNOSTICS {
+                    trace_phase_start(&self.trace)
+                } else {
+                    None
+                };
+                while !closure.step::<DIAGNOSTICS>(
                     valid,
                     usize::MAX,
                     self.live_old_to_young_sticky.as_mut(),
                     &mut self.ephemerons,
                 ) {}
-                trace_phase_record(&mut self.trace, "weak_registry_closure_atomic", start);
+                if DIAGNOSTICS {
+                    trace_phase_record(&mut self.trace, "weak_registry_closure_atomic", start)
+                };
             } else {
-                if !closure.step(
+                if !closure.step::<DIAGNOSTICS>(
                     valid,
                     budget,
                     self.live_old_to_young_sticky.as_mut(),

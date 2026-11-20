@@ -9,9 +9,7 @@ use crate::value::JSValue;
 /// int32-boxed and double representations). Returns `None` for non-numbers.
 pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(jsval.as_number())
     } else {
         None
@@ -267,6 +265,7 @@ pub(super) fn init_readable_state(
             (Slot::ReadableFlowing, f64::from_bits(TAG_NULL)),
             (Slot::Readable, bool_value(true)),
             (Slot::ReadableEnded, bool_value(false)),
+            (Slot::EndEmitted, bool_value(false)),
             (Slot::Disturbed, bool_value(false)),
             (Slot::ReadableEncoding, encoding.get_nanbox_f64()),
             (Slot::EmitClose, bool_value(emit_close)),
@@ -420,6 +419,12 @@ pub(super) fn init_abort_signal_state(stream: &RuntimeHandle<'_>, opts: &Runtime
 pub(super) mod birth;
 #[path = "node_stream_constructors/birth_memo.rs"]
 pub(super) mod birth_memo;
+
+/// Re-note every stream birth memo word after a full trace.
+pub(crate) fn note_birth_carriers() {
+    birth::note_write_site_carriers();
+    birth_memo::note_birth_carriers();
+}
 use birth::stream_birth_field;
 
 #[path = "node_stream_constructors/builders.rs"]
@@ -438,7 +443,7 @@ mod web_adapter;
 
 pub(crate) use builders::ensure_lazy_stream;
 pub use builders::{
-    init_transform_in_place, init_writable_payload_in_place, js_array_subclass_init,
+    init_transform_in_place, init_writable_payload_in_place,
     js_event_emitter_async_resource_subclass_init, js_event_emitter_subclass_init,
     js_node_stream_duplex_new, js_node_stream_duplex_subclass_init,
     js_node_stream_legacy_subclass_init, js_node_stream_passthrough_new,
@@ -471,13 +476,15 @@ pub use pipeline::{
     js_node_stream_duplex_pair, js_node_stream_finished, js_node_stream_pipeline,
 };
 
+pub(crate) use web_adapter::{
+    construct_web_stream, js_node_stream_duplex_to_web_method_value,
+    js_node_stream_readable_to_web_method_value, js_node_stream_writable_to_web_method_value,
+};
 pub use web_adapter::{
     js_node_stream_duplex_from_web, js_node_stream_duplex_to_web, js_node_stream_from_web,
     js_node_stream_readable_from_web, js_node_stream_readable_to_web, js_node_stream_to_web,
     js_node_stream_writable_from_web, js_node_stream_writable_to_web,
-    js_register_node_stream_web_adapter_callbacks,
+    js_register_node_stream_web_adapter_callbacks, js_register_web_stream_constructors,
 };
-pub(crate) use web_adapter::{
-    js_node_stream_duplex_to_web_method_value, js_node_stream_readable_to_web_method_value,
-    js_node_stream_writable_to_web_method_value,
-};
+
+pub use crate::array::subclass_init::js_array_subclass_init;

@@ -1,5 +1,6 @@
 use super::*;
 use perry_hir::types::Type;
+use perry_hir::Param;
 
 fn function(body: Vec<Stmt>, is_async: bool) -> Function {
     Function {
@@ -34,7 +35,9 @@ fn crypto() -> Expr {
 
 fn call(recv: Expr, method: &str, args: Vec<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: method.into(),
             byte_offset: 0,
@@ -260,6 +263,7 @@ fn hash_passed_to_a_function_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(1)),
             args: vec![h(2)],
             type_args: vec![],
@@ -408,6 +412,7 @@ fn module_init_const_in_a_loop_body_is_rewritten() {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(call(h(2), "digest", vec![s("hex")])),
                     property: "length".into(),
                     byte_offset: 0,
@@ -520,6 +525,7 @@ fn cjs_module(factory_name: &str, extra: Vec<Stmt>) -> Vec<Stmt> {
             "crypto",
             true,
             Expr::Call {
+                byte_end: 0,
                 callee: Box::new(h(8)),
                 args: vec![s("crypto")],
                 type_args: vec![],

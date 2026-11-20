@@ -70,7 +70,7 @@ pub(crate) unsafe fn bun_sqlite_database_open(db_handle: Handle) {
     let opened = match open_node_sqlite_connection(db) {
         Ok(opened) => opened,
         Err(err) => {
-            perry_runtime::exception::js_throw(sqlite_error_value(sqlite_error_from_rusqlite(err)))
+            perry_runtime::exception::throw_core(sqlite_core_error(sqlite_error_from_rusqlite(err)))
         }
     };
     if let Err(err) =
@@ -222,8 +222,8 @@ pub(crate) unsafe fn sqlite_serialize_to_buffer(
 /// The bytes of a `deserialize()` image argument (a Uint8Array or Buffer).
 pub(crate) unsafe fn sqlite_image_bytes(image_value: f64) -> Vec<u8> {
     let raw = raw_addr_from_value(image_value);
-    let bytes = if perry_runtime::typedarray::lookup_typed_array_kind(raw)
-        == Some(perry_runtime::typedarray::KIND_UINT8)
+    let bytes = if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw)
+        == Some(perry_runtime::typedarray_hook_slots::KIND_UINT8)
         || (raw >= 0x1000
             && is_registered_buffer(raw)
             && !is_any_array_buffer(raw)

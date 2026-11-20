@@ -54,7 +54,10 @@ const KIND_PROXY_ENTRIES: i32 = 7;
 
 /// The iterator kinds whose backing is read through `[[Get]]`.
 fn reads_generic_backing(kind: i32) -> bool {
-    matches!(kind, KIND_PROXY_VALUES | KIND_PROXY_KEYS | KIND_PROXY_ENTRIES)
+    matches!(
+        kind,
+        KIND_PROXY_VALUES | KIND_PROXY_KEYS | KIND_PROXY_ENTRIES
+    )
 }
 
 /// Clean a NaN-boxed array pointer to a raw `*mut ArrayHeader`, or null.
@@ -170,7 +173,7 @@ unsafe fn receiver_obj_type(arr: *const ArrayHeader) -> u8 {
 }
 
 unsafe fn fs_dir_entries_iter_obj(arr: *const ArrayHeader, kind: i32) -> Option<i64> {
-    if kind != KIND_ENTRIES || receiver_obj_type(arr) != crate::gc::GC_TYPE_OBJECT {
+    if kind != KIND_ENTRIES || crate::gc_type_is_not_object!(receiver_obj_type(arr)) {
         return None;
     }
     let obj = arr as *const crate::object::ObjectHeader;
@@ -256,13 +259,13 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
 /// unconditionally. The registries remain the layout proof for everything else.
 #[inline]
 fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(crate::array::array_receiver_gc_tag(arr).0) {
         return arr;
     }
     let addr = arr as usize;
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return crate::typedarray::typed_array_to_array(
-            arr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        return crate::typedarray_hook_slots::typed_array_to_array(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
         ) as *const ArrayHeader;
     }
     if crate::buffer::is_registered_buffer(addr)
@@ -294,10 +297,7 @@ unsafe fn throw_non_coercible_this(method: &str) -> ! {
     let _ = method;
     let msg = "Cannot convert undefined or null to object";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ));
+    crate::exception::throw_core(crate::error::CoreError::type_error(s));
 }
 
 #[inline]
@@ -312,10 +312,7 @@ unsafe fn throw_if_typed_array_proto(arr: *const ArrayHeader, method: &str) {
     if crate::object::is_typed_array_prototype(arr as usize) {
         let msg = format!("Method %TypedArray%.prototype.{method} called on incompatible receiver");
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(f64::from_bits(
-            crate::value::JSValue::pointer(err as *const u8).bits(),
-        ));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
 }
 
@@ -399,11 +396,11 @@ unsafe fn collection_iter_obj_for_receiver(arr: *const ArrayHeader, kind: u8) ->
     // array and drive it with the standard array iterator object.
     {
         let obj = raw as *mut crate::object::ObjectHeader;
-        if crate::url::search_params::shape_is_url_search_params(obj) {
+        if crate::url_hooks::shape_is_url_search_params(obj) {
             let boxed = match kind {
-                1 => crate::url::js_url_search_params_keys_arr(obj),
-                2 => crate::url::js_url_search_params_entries_arr(obj),
-                _ => crate::url::js_url_search_params_values_arr(obj),
+                1 => crate::url_hooks::url_search_params_keys_arr(obj),
+                2 => crate::url_hooks::url_search_params_entries_arr(obj),
+                _ => crate::url_hooks::url_search_params_values_arr(obj),
             };
             let ptr = (boxed.to_bits() & 0x0000_FFFF_FFFF_FFFF) as *const ArrayHeader;
             if !ptr.is_null() {
@@ -579,7 +576,7 @@ pub extern "C" fn js_array_entries_iter_obj(arr: *const ArrayHeader) -> i64 {
 
 // #7564: `build_iter_result` lived here, rooted by #7475 but still allocating
 // the two key strings and the keys array on EVERY call — and minting a fresh
-// shape id per call, because `shape_id_for_keys_ensure` keys the shape table on
+// shape id per call, because `layout_for_keys_ensure` keys the shape table on
 // the keys array's address. Both constructors now come from the single
 // `crate::iter_result` implementation, which shares one keys array (and so one
 // shape) per key order per thread and allocates only the result object.

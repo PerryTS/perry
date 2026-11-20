@@ -13,7 +13,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::sabotage;
+use crate::gc::mark::block_skip::sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {

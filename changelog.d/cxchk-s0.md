@@ -1,0 +1,1 @@
+Compiler diagnostic builds with `PERRY_VERIFY_FACTS=1` report failed claims as JSON and exit with status 86. Static metadata identifies emitted copies, inactive bodies trap before their statements, and a compile-time manifest makes remaining coverage visible.

@@ -179,16 +179,29 @@ fn note_ptr_shape_access(ctx: &FnCtx<'_>, r: Recv, site: &'static str) {
     }
 }
 
+/// The header form of the region receiver `r`: the slot base of its accesses.
+pub(super) fn receiver_form(ctx: &FnCtx<'_>, r: Recv) -> crate::target_layout::HeaderForm {
+    ctx.region_loop_facts
+        .last()
+        .and_then(|a| a.receivers.iter().find(|rv| rv.recv == r))
+        .map_or(crate::target_layout::HeaderForm::Meta, |rv| rv.form())
+}
+
 /// The address a bare READ loads. In an all-inline copy (and for every store,
 /// whose key the runtime publishes only when inline) it is the inline slot.
 /// In a spill copy the key's field says where the value lives: `< 32` is an
 /// inline slot, `32 + i` is spill index `i`, reached exactly as the S5 hit
 /// path reaches it — `ObjectHeader.meta`, `ObjectMeta.spill`, the element —
 /// on the ShapeId's word alone (every carrier of the shape has that storage).
-pub(super) fn bare_read_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> String {
+pub(super) fn bare_read_ptr(
+    ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
+    handle: &str,
+    slot: &str,
+) -> String {
     let spill = ctx.region_loop_facts.last().is_some_and(|a| a.spill);
     if !spill {
-        return slot_ptr(ctx, handle, slot);
+        return slot_ptr(ctx, form, handle, slot);
     }
     let is_spill = ctx.block().icmp_uge(I64, slot, "32");
     let in_b = ctx.new_block("rloop.slot.inline");
@@ -201,12 +214,15 @@ pub(super) fn bare_read_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> St
     );
     ctx.block().cond_br(&is_spill, &sp_l, &in_l);
     ctx.current_block = in_b;
-    let p_in = slot_ptr(ctx, handle, slot);
+    let p_in = slot_ptr(ctx, form, handle, slot);
     let in_end = ctx.block().label.clone();
     ctx.block().br(&jn_l);
     ctx.current_block = sp_b;
     let ilp32 = crate::target_layout::target_is_ilp32(ctx.target_triple);
-    let meta_off = crate::target_layout::object_meta_slot_offset_bytes(ctx.target_triple);
+    let meta_off = crate::target_layout::object_meta_slot_offset_bytes(
+        ctx.target_triple,
+        crate::target_layout::HeaderForm::Meta,
+    );
     let meta_addr = ctx.block().add(I64, handle, &meta_off.to_string());
     let meta_slot = ctx.block().inttoptr(I64, &meta_addr);
     let meta = if ilp32 {
@@ -248,8 +264,13 @@ pub(super) fn bare_read_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> St
     )
 }
 
-pub(super) fn slot_ptr(ctx: &mut FnCtx<'_>, handle: &str, slot: &str) -> String {
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+pub(super) fn slot_ptr(
+    ctx: &mut FnCtx<'_>,
+    form: crate::target_layout::HeaderForm,
+    handle: &str,
+    slot: &str,
+) -> String {
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, form) as i64;
     let base = ctx.block().inttoptr(I64, handle);
     let fields = ctx.block().gep(I8, &base, &[(I64, &header.to_string())]);
     ctx.block().gep(DOUBLE, &fields, &[(I64, slot)])
@@ -273,7 +294,8 @@ pub(crate) fn try_lower_bare_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option
         return Ok(None);
     };
     let h = region_handle(ctx, r)?;
-    let p = bare_read_ptr(ctx, &h, &slot);
+    let form = receiver_form(ctx, r);
+    let p = bare_read_ptr(ctx, form, &h, &slot);
     note_emitted(ctx);
     let v = ctx.block().load(DOUBLE, &p);
     note_ptr_shape_access(ctx, r, "ptr_shape_region_get");
@@ -309,7 +331,8 @@ pub(crate) fn try_lower_bare_put(
     let val_double = lower_expr(ctx, value)?;
     let val_bits = ctx.block().bitcast_double_to_i64(&val_double);
     let h = region_handle(ctx, r)?;
-    let p = slot_ptr(ctx, &h, &slot);
+    let form = receiver_form(ctx, r);
+    let p = slot_ptr(ctx, form, &h, &slot);
     note_emitted(ctx);
     if raw_double {
         // GC_STORE_AUDIT(POINTER_FREE): a proven canonical raw double carries no pointer.
@@ -389,7 +412,8 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
         let read = *l;
         if let Expr::PropertyGet { property, .. } = read {
             let slot = active_slot(ctx, read, r, property).expect("planned with its tree");
-            let p = bare_read_ptr(ctx, &h, &slot);
+            let form = receiver_form(ctx, r);
+            let p = bare_read_ptr(ctx, form, &h, &slot);
             note_emitted(ctx);
             values[i] = Some(ctx.block().load(DOUBLE, &p));
             note_ptr_shape_access(ctx, r, "ptr_shape_region_get");

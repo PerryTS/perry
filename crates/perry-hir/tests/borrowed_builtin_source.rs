@@ -13,28 +13,44 @@ fn hir_of(source: &str) -> String {
 }
 
 #[test]
-fn a_prototype_member_is_read_at_the_call() {
+fn borrowed_prototype_member_is_read_at_the_call() {
     let hir = hir_of("function f(o) { return Array.prototype.slice.call(o, 1); } f({});");
-    assert!(hir.contains("ArrayLikeMethod"), "{hir}");
-    assert!(hir.contains("source: Prototype"), "{hir}");
+    assert!(!hir.contains("ArrayLikeMethod"), "{hir}");
+    assert!(hir.contains("property: \"prototype\""), "{hir}");
+    assert!(hir.contains("property: \"slice\""), "{hir}");
+    assert!(hir.contains("property: \"call\""), "{hir}");
     let hir = hir_of("function f(o) { return [].slice.call(o); } f({});");
-    assert!(hir.contains("source: Prototype"), "{hir}");
+    assert!(!hir.contains("ArrayLikeMethod"), "{hir}");
+    assert!(hir.contains("property: \"slice\""), "{hir}");
+    assert!(hir.contains("property: \"call\""), "{hir}");
 }
 
 #[test]
-fn a_captured_binding_keeps_its_value() {
+fn borrowed_captured_binding_keeps_its_value() {
     let hir = hir_of(
         "const slice = Array.prototype.slice; function f(o) { return slice.call(o); } f({});",
     );
-    assert!(hir.contains("source: Binding"), "{hir}");
+    assert!(!hir.contains("ArrayLikeMethod"), "{hir}");
+    assert!(
+        hir.contains("callee: PropertyGet { object: LocalGet("),
+        "{hir}"
+    );
+    assert!(hir.contains("property: \"call\""), "{hir}");
 }
 
 #[test]
-fn object_prototype_borrowed_calls_go_through_the_checked_entries() {
+fn borrowed_object_prototype_calls_keep_the_reflective_source() {
     let hir = hir_of(
         "function f(o, k) { return Object.prototype.hasOwnProperty.call(o, k) \
          && Object.hasOwnProperty.call(o, k); } f({}, 'k');",
     );
-    assert!(hir.contains("js_borrowed_object_has_own"), "{hir}");
+    assert!(!hir.contains("js_borrowed_object_has_own"), "{hir}");
+    assert_eq!(hir.matches("property: \"call\"").count(), 2, "{hir}");
+    assert_eq!(
+        hir.matches("property: \"hasOwnProperty\"").count(),
+        2,
+        "{hir}"
+    );
+    assert!(hir.contains("GlobalThisExpr"), "{hir}");
     assert!(!hir.contains("\"js_object_has_own\""), "{hir}");
 }

@@ -137,6 +137,7 @@ fn is_incoming_message_member(name: &str) -> bool {
             | "setTimeout"
             | "pause"
             | "resume"
+            | "pipe"
             | "destroy"
             | "read"
             | "unref"
@@ -236,6 +237,7 @@ fn is_server_response_member(name: &str) -> bool {
         "statusCode"
             | "statusMessage"
             | "headersSent"
+            | "writable"
             | "writableEnded"
             | "writableFinished"
             | "finished"
@@ -533,4 +535,12 @@ unsafe extern "C" fn http_server_property_set_dispatch_ext(
         );
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn response_own_writable_reaches_native_property_dispatch() {
+        assert!(super::is_server_response_member("writable"));
+    }
 }

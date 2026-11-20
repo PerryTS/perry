@@ -424,34 +424,3 @@ fn linear_lowering_handles_a_wide_function_without_per_root_work() {
     assert!(!retyped.is_empty());
     eprintln!("wide function (2000 roots × ~44k lines) lowered in {elapsed:?}");
 }
-
-/// For the record, not for CI: the same wide function through the reference
-/// (per-root) form. Run with `--ignored --nocapture` to reproduce the number
-/// quoted in the PR that introduced the linear lowering.
-#[test]
-#[ignore]
-fn reference_timing_on_the_wide_function() {
-    let mut rng = Rng(0xABCD_EF01_2345_6789);
-    let g = generate(&mut rng, 2_000, 40_000, true);
-    let lines_vec: Vec<&str> = g.ir.lines().collect();
-    let started = std::time::Instant::now();
-    let reference = reference_lower_roots_for_rs4gc(
-        crate::gc_call_effects::test_effects(),
-        &lines_vec,
-        &g.root_ptrs,
-    );
-    let lowering = started.elapsed();
-    let started = std::time::Instant::now();
-    let retyped = reference_retype_landing_pads_for_statepoints(&g.ir);
-    let retype = started.elapsed();
-    assert_eq!(
-        reference,
-        super::lower_roots_for_rs4gc(
-            crate::gc_call_effects::test_effects(),
-            &lines_vec,
-            &g.root_ptrs
-        )
-    );
-    assert_eq!(retyped, super::retype_landing_pads_for_statepoints(&g.ir));
-    eprintln!("reference lowering {lowering:?}, reference retype {retype:?}");
-}

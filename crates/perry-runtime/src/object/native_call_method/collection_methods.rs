@@ -1,5 +1,8 @@
 use super::*;
 
+#[cfg(test)]
+mod declared_tests;
+
 /// Whether `method` is a backing-store collection method for a `class … extends
 /// Map/Set` instance whose backing is `backing`. Map-only vs Set-only methods
 /// are kept distinct (mirrors the codegen `is_collection_method_for_kind`). The
@@ -412,7 +415,7 @@ pub(super) unsafe fn dispatch_raw_pointer(
         // Validate GcHeader before accessing
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!((*gc_header).obj_type) {
             // Check for native module namespace
             if (*obj).class_id == NATIVE_MODULE_CLASS_ID {
                 // #853: same dead-after-return as the first arm above.

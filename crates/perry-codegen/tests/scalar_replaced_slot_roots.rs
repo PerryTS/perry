@@ -7,7 +7,7 @@
 //! `Stmt::Let` — cannot see them, and nothing bound them. A collection landing
 //! between the store and the read swept the value out from under the alloca.
 //!
-//! The end-to-end proof is `test-files/test_gap_repsel_scalar_replaced_locals.ts`
+//! The end-to-end proof is `tests/parity/language/object/test_gap_repsel_scalar_replaced_locals.ts`
 //! on the `cons_scan_off` arm of `scripts/gc_repsel_matrix.sh` — the only
 //! configuration where the bug is observable, because every automatic
 //! collection otherwise forces a conservative native-stack scan that pins the
@@ -60,7 +60,9 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn entry_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -70,6 +72,7 @@ fn entry_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -78,6 +81,7 @@ fn entry_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
@@ -87,8 +91,6 @@ fn entry_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -120,11 +122,14 @@ fn entry_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -155,10 +160,12 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -166,6 +173,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
@@ -193,6 +201,7 @@ fn heap_value() -> Expr {
 
 fn field_get(local: u32, field: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(local)),
         property: field.to_string(),
         byte_offset: 0,
@@ -201,7 +210,9 @@ fn field_get(local: u32, field: &str) -> Expr {
 
 fn console_log(args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "log".to_string(),
             byte_offset: 0,
@@ -217,6 +228,15 @@ fn console_log(args: Vec<Expr>) -> Stmt {
 /// Every assertion below is scoped to one function rather than to the module,
 /// so a bind emitted in an unrelated helper cannot satisfy or break a claim
 /// about this one.
+/// A statement that roots by construction and touches no scalar-replaced
+/// local: `console.log({k: 1}, {k: 1})` keeps its first argument in a pooled
+/// temp root while the second allocates. The numeric-only fixtures need it as
+/// their non-vacuity witness: since P3 their own `console.log(p.x, p.y)` passes
+/// two proven Numbers, which need no root, so that call binds nothing.
+fn rooting_anchor() -> Stmt {
+    console_log(vec![heap_value(), heap_value()])
+}
+
 fn main_ir(ir: &str) -> &str {
     perry_codegen::testing::root_slots::function_slice(ir, "main")
 }
@@ -309,6 +329,7 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
+            rooting_anchor(),
         ],
     );
 
@@ -319,15 +340,16 @@ fn numeric_only_scalar_replaced_object_emits_no_rooting() {
         "a scalar-replaced literal with only numeric fields must not pay for \
          GC rooting:\n{main}"
     );
-    // Non-vacuity, in the same test: this module DOES bind — three times, for
-    // the `console.log` argument accumulator. Before #7504 those three were
-    // counted as the literal's, which is what made `== 0` fail; before #7493
-    // the count was zero for every program under the native default, which is
-    // what made it pass for nothing. Assert the witness so neither can recur
-    // silently.
+    // Non-vacuity, in the same test: this module DOES bind, for the
+    // `rooting_anchor` argument accumulator (the literal's own `console.log`
+    // passes two proven Numbers and binds nothing since P3). Before #7504
+    // accumulator binds were counted as the literal's, which is what made
+    // `== 0` fail; before #7493 the count was zero for every program under the
+    // native default, which is what made it pass for nothing. Assert the
+    // witness so neither can recur silently.
     assert!(
         temp_root_slot_binds(main) > 0,
-        "this fixture's `console.log` must still bind its pooled argument \
+        "the rooting anchor's `console.log` must still bind its pooled argument \
          accumulator — with no bind anywhere in the module, `zero value-slot \
          binds` is a claim about an empty set (#7504):\n{main}"
     );
@@ -347,14 +369,8 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -378,10 +394,10 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
                 "a",
                 Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             ),
-            console_log(vec![Expr::IndexGet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-            }]),
+            console_log(vec![Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(0)),
+            )]),
         ],
     );
 
@@ -417,7 +433,9 @@ fn scalar_replaced_split_parts_are_bound() {
         init: Some(Expr::String("a,b,c".to_string())),
     };
     let split = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "split".to_string(),
             byte_offset: 0,
@@ -432,14 +450,8 @@ fn scalar_replaced_split_parts_are_bound() {
             source.clone(),
             let_stmt(2, "parts", split),
             console_log(vec![
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -475,6 +487,8 @@ fn later_store_into_a_scalar_replaced_field_is_bound() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "a".to_string(),
                 value: Box::new(heap_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             console_log(vec![field_get(1, "a")]),
         ],
@@ -523,11 +537,15 @@ fn repeated_stores_into_one_scalar_slot_bind_once() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "a".to_string(),
                 value: Box::new(heap_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "a".to_string(),
                 value: Box::new(heap_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             console_log(vec![field_get(1, "a")]),
         ],
@@ -563,11 +581,15 @@ fn every_store_into_a_hoisted_scalar_slot_uses_final_remark() {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "a".to_string(),
                 value: Box::new(heap_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(1)),
                 property: "a".to_string(),
                 value: Box::new(heap_value()),
+                byte_offset: 0,
+                byte_end: 0,
             }),
             console_log(vec![field_get(1, "a")]),
         ],
@@ -694,14 +716,8 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                },
-                Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(1)),
-                },
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
+                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
             ]),
         ],
     );
@@ -752,6 +768,7 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
                 ]),
             ),
             console_log(vec![field_get(1, "x"), field_get(1, "y")]),
+            rooting_anchor(),
         ],
     );
 
@@ -771,7 +788,7 @@ fn numeric_only_scalar_replaced_literal_emits_no_entry_rooting() {
     );
     assert!(
         temp_root_slot_binds(main) > 0,
-        "the `console.log` accumulator must still bind, so both zeroes above \
-         are claims about a module in which rooting exists (#7504):\n{main}"
+        "the rooting anchor's `console.log` accumulator must still bind, so both \
+         zeroes above are claims about a module in which rooting exists (#7504):\n{main}"
     );
 }

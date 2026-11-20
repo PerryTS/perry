@@ -15,7 +15,7 @@ human.
 **You do NOT bump versions, tag, or publish.** That's `/release`. This
 skill is the gate that runs *before* it.
 
-The deeper reference doc is `tests/release/RELEASE_READINESS.md` —
+The deeper reference doc is `tests/integration/release/RELEASE_READINESS.md` —
 identical scope but written for humans. Read it once if you want
 background; otherwise the steps below are self-sufficient.
 
@@ -25,8 +25,8 @@ background; otherwise the steps below are self-sufficient.
   canonical build commands, the recent-changes log, and per-platform
   conventions you'll need to interpret tier results.
 - Harness lives at `scripts/release_sweep.sh` + per-tier scripts in
-  `scripts/release_sweep_tiers/` + fixtures in `tests/release/`.
-  See `tests/release/README.md` for the tier registry.
+  `scripts/release_sweep_tiers/` + fixtures in `tests/integration/release/`.
+  See `tests/integration/release/README.md` for the tier registry.
 - 13 tiers cover: cargo build, cargo test, parity, real npm packages,
   GC stress, threading, doc-tests, UI host smoke, Apple sims (iOS /
   tvOS / visionOS), watchOS sim, Android emulator, Windows native, and
@@ -118,10 +118,10 @@ cat "$LATEST/<NN>/<name>.log"
 
 For tier 3 (real_packages), each fixture has its own logs:
 ```sh
-ls tests/release/packages/<fixture>/*.log
-cat tests/release/packages/<fixture>/perry-compile.log
-cat tests/release/packages/<fixture>/perry-run.log
-cat tests/release/packages/<fixture>/diff.log
+ls tests/integration/release/packages/<fixture>/*.log
+cat tests/integration/release/packages/<fixture>/perry-compile.log
+cat tests/integration/release/packages/<fixture>/perry-run.log
+cat tests/integration/release/packages/<fixture>/diff.log
 ```
 
 ### 4. Classify each FAIL

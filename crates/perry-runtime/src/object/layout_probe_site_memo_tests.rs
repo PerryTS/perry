@@ -1,10 +1,11 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 fn atom(name: &[u8]) -> *const crate::StringHeader {
     crate::string::js_string_pool_atom(
         name.as_ptr(),
         name.len() as u32,
-        unsafe { crate::object::key_bytes_hash(name.as_ptr(), name.len()) },
+        crate::object::key_bytes_hash(name.as_ptr(), name.len()),
         0,
     ) as *const _
 }
@@ -109,7 +110,7 @@ fn accessor_hits_reload_the_holder_pair() {
         );
         // Mutate the live pair through the holder's slot without touching
         // the memo. A memo of a callable would incorrectly retain first.
-        let record = record_of(dir, (*proto).parent_class_id);
+        let record = record_of(dir, LayoutWord((*proto).parent_class_id));
         let (pos, _) = own_entry(
             record,
             STRING_TAG | key as u64,
@@ -157,7 +158,6 @@ fn a_different_receiver_with_the_same_shape_reads_its_own_slot() {
             "data hits must not use an Accessor-sized return ABI"
         );
         assert_eq!(std::mem::size_of::<ReadSiteMemo>(), 40);
-        assert_eq!(std::mem::size_of::<KeyedSiteMemo>(), 192);
     }
 }
 
@@ -261,15 +261,15 @@ fn an_own_hole_reads_live_presence_before_using_its_tail() {
         let word = STRING_TAG | key as u64;
         let hash = crate::string::property_atom_hash(key);
         let proto = plain(b"error", 7.0);
-        let recv = crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::SPAWN_SYNC_RESULT
-        ));
+        let recv = crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::SPAWN_SYNC_RESULT::desc(),
+        );
         crate::object::prototype_chain::object_link_created_prototype(
             recv as usize,
             crate::value::js_nanbox_pointer(proto as i64).to_bits(),
         );
         let shape = (*recv).parent_class_id;
-        let record = record_of(dir, shape);
+        let record = record_of(dir, LayoutWord(shape));
         let (pos, _) = own_entry(record, word, hash).unwrap();
         let keys = (*record).keys as usize as *const crate::array::ArrayHeader;
         assert_ne!(
@@ -394,93 +394,6 @@ fn shared_site_words_remain_proofs_under_concurrent_agent_writes() {
 }
 
 #[test]
-fn keyed_ways_never_rebind_a_published_proofs_key() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let _no_move = crate::gc::GcSuppressScope::new();
-    unsafe {
-        let memo: KeyedSiteMemo = std::mem::zeroed();
-        let obj = crate::object::js_object_alloc(0, 8);
-        for (i, key) in [b"a", b"b", b"c", b"d", b"e"].iter().enumerate() {
-            crate::object::js_object_set_field_by_name(obj, atom(*key), i as f64);
-        }
-        let dir = crate::object::shapes::ordinary_dir_addr();
-        let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
-        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
-            assert_eq!(
-                data(keyed_answer(
-                    dir,
-                    bits,
-                    STRING_TAG | atom(*key) as u64,
-                    &memo
-                )),
-                (i as f64).to_bits()
-            );
-        }
-        assert!(keyed_answer(dir, bits, STRING_TAG | atom(b"e") as u64, &memo).is_none());
-        for (i, key) in [b"a", b"b", b"c", b"d"].iter().enumerate() {
-            assert_eq!(
-                data(keyed_answer(
-                    dir,
-                    bits,
-                    STRING_TAG | atom(*key) as u64,
-                    &memo
-                )),
-                (i as f64).to_bits()
-            );
-        }
-    }
-}
-
-#[test]
-fn shared_keyed_ways_do_not_mix_different_keys_proofs() {
-    let _lock = crate::gc::global_side_table_test_lock();
-    let memo = std::sync::Arc::new(unsafe { std::mem::zeroed::<KeyedSiteMemo>() });
-    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let threads: Vec<_> = (0..2)
-        .map(|agent| {
-            let memo = memo.clone();
-            let barrier = barrier.clone();
-            std::thread::spawn(move || {
-                let _no_move = crate::gc::GcSuppressScope::new();
-                barrier.wait();
-                unsafe {
-                    let obj = crate::object::js_object_alloc(0, 4);
-                    let a = atom(b"a");
-                    let b = atom(b"b");
-                    // Opposite insertion order makes an accidental key/proof
-                    // combination name the wrong value even within one shape.
-                    let keys = if agent == 0 { [a, b] } else { [b, a] };
-                    for (slot, key) in keys.into_iter().enumerate() {
-                        crate::object::js_object_set_field_by_name(
-                            obj,
-                            key,
-                            (100 * agent + slot) as f64,
-                        );
-                    }
-                    let dir = crate::object::shapes::ordinary_dir_addr();
-                    let bits = crate::value::js_nanbox_pointer(obj as i64).to_bits();
-                    for i in 0..20000 {
-                        let slot = i & 1;
-                        assert_eq!(
-                            data(keyed_answer(
-                                dir,
-                                bits,
-                                STRING_TAG | keys[slot] as u64,
-                                &memo
-                            )),
-                            ((100 * agent + slot) as f64).to_bits(),
-                        );
-                    }
-                }
-            })
-        })
-        .collect();
-    for thread in threads {
-        thread.join().unwrap();
-    }
-}
-
-#[test]
 fn four_argument_leaf_retains_stateless_data_and_live_shadowing() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _no_move = crate::gc::GcSuppressScope::new();
@@ -521,7 +434,7 @@ fn four_argument_leaf_uses_the_atoms_hash_for_indexed_keys() {
             assert_eq!(actual.to_bits(), expected.to_bits(), "{name}");
         }
         assert_ne!(
-            (*record_of(dir, (*obj).parent_class_id)).probe & !PROBE_FLAGS,
+            (*record_of(dir, LayoutWord((*obj).parent_class_id))).probe & !PROBE_FLAGS,
             0,
             "the fixture must exercise the indexed hash path"
         );
@@ -549,7 +462,7 @@ fn indexed_collisions_preserve_each_distinct_slots_value() {
         }
         assert_eq!(keys.len(), 16);
         let dir = crate::object::shapes::ordinary_dir_addr();
-        let r = record_of(dir, (*obj).parent_class_id);
+        let r = record_of(dir, LayoutWord((*obj).parent_class_id));
         let table = (probe_word(r) & !PROBE_FLAGS) as *const KeyIndex;
         assert!(!table.is_null());
         assert!((*table).mask <= 127, "all fixture keys must collide");

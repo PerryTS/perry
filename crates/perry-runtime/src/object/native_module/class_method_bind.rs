@@ -98,29 +98,18 @@ pub extern "C" fn js_class_method_bind(
             // whose bare invocation read `this.options` off an unconstructed
             // receiver. Fall through to `build_bound_method_closure`: its
             // call-time dispatch (`js_native_call_method`'s 0x7FFE arm)
-            // resolves statics-first for constructor refs. PROTOTYPE refs
-            // (`C.prototype.m`) keep the canonical path — the instance method
-            // is exactly what they name.
-            let receiver_class_ref = class_ref_id(instance);
-            let receiver_is_constructor_ref =
-                receiver_class_ref.is_some() && class_prototype_ref_id(instance).is_none();
-            if !receiver_is_constructor_ref && bound_native_method_length(name).is_none() {
-                if let Some(class_id) =
-                    class_id_from_method_receiver_known(instance, receiver_class_ref)
-                {
+            // resolves statics-first for constructor refs.
+            if class_ref_id(instance).is_none() && bound_native_method_length(name).is_none() {
+                if let Some(class_id) = class_id_from_method_receiver_known(instance, None) {
                     let private_owner = super::take_private_method_owner_hint(name);
                     if private_owner.is_none()
                         && !crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(name.as_bytes()) {
                         if let Some(own) = unsafe { own_property_shadow(instance, name.as_bytes()) } { return own; }
-                        if super::class_prototype_ref_id(instance).is_some() {
-                            if let Some(value) = crate::object::class_method_slot_value(class_id, name) { return f64::from_bits(value); }
-                        } else {
-                            let scope = crate::gc::RuntimeHandleScope::new();
-                            let recv = scope.root_nanbox_f64(instance);
-                            let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
-                            if let Some(value) = unsafe { crate::object::native_call_method::class_holder::class_instance_property_value(&recv, &key) } {
-                                return f64::from_bits(value);
-                            }
+                        let scope = crate::gc::RuntimeHandleScope::new();
+                        let recv = scope.root_nanbox_f64(instance);
+                        let key = crate::object::native_call_method::class_holder::MethodKey::bytes(name.as_bytes());
+                        if let Some(value) = unsafe { crate::object::native_call_method::class_holder::class_instance_property_value(&recv, &key) } {
+                            return f64::from_bits(value);
                         }
                     }
                     if let Some(owner) = private_owner
@@ -287,8 +276,8 @@ pub(super) fn build_bound_method_closure_with_private_brand(
     let instance_value = instance_handle.get_nanbox_f64();
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::closure::js_closure_set_capture_f64(closure, 0, instance_value);
-        crate::closure::js_closure_set_capture_ptr(closure, 1, method_name_ptr as i64);
-        crate::closure::js_closure_set_capture_ptr(closure, 2, method_name_len as i64);
+        crate::closure::closure_set_capture_word(closure, 1, method_name_ptr as i64);
+        crate::closure::closure_set_capture_word(closure, 2, method_name_len as i64);
         if let Some(brand) = &private_brand_handle {
             crate::closure::js_closure_set_capture_f64(closure, 3, brand.get_nanbox_f64());
         }

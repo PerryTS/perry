@@ -269,13 +269,13 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         }
     }
 
-    let proto = perry_runtime::object::js_object_alloc(0, 7);
+    let proto = perry_runtime::realm_decl! { birth perry_runtime::object::js_object_alloc(0, 7); realm { "node:string_decoder.StringDecoder.prototype", members = { constructor; write, attrs = writable | enumerable | configurable; end, attrs = writable | enumerable | configurable; text, attrs = writable | enumerable | configurable; lastChar = accessor(get = "node:string_decoder.StringDecoder.prototype.lastChar.<get>"), attrs = enumerable | configurable; lastNeed = accessor(get = "node:string_decoder.StringDecoder.prototype.lastNeed.<get>"), attrs = enumerable | configurable; lastTotal = accessor(get = "node:string_decoder.StringDecoder.prototype.lastTotal.<get>"), attrs = enumerable | configurable; }; } };
     define_data_property(proto, "constructor", constructor, true, false);
     define_data_property(
         proto,
         "write",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_write, 1; with_declared(1)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.write", constructible = true)] export crate::string_decoder::string_decoder_proto_write, 1; with_declared(1)),
             "write",
         ),
         true,
@@ -285,7 +285,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "end",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_end, 1; with_declared(1)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.end", constructible = true)] export crate::string_decoder::string_decoder_proto_end, 1; with_declared(1)),
             "end",
         ),
         true,
@@ -295,7 +295,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "text",
         function_value(
-            perry_runtime::fn_info!(string_decoder_proto_text, 2; with_declared(2)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.text", constructible = true)] export crate::string_decoder::string_decoder_proto_text, 2; with_declared(2)),
             "text",
         ),
         true,
@@ -305,7 +305,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastChar",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_char_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastChar.<get>", constructible = true)] export crate::string_decoder::string_decoder_last_char_getter, 0; with_declared(0)),
             "get lastChar",
         ),
         true,
@@ -314,7 +314,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastNeed",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_need_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastNeed.<get>", constructible = true)] export crate::string_decoder::string_decoder_last_need_getter, 0; with_declared(0)),
             "get lastNeed",
         ),
         true,
@@ -323,7 +323,7 @@ pub unsafe fn string_decoder_prototype_value() -> f64 {
         proto,
         "lastTotal",
         function_value(
-            perry_runtime::fn_info!(string_decoder_last_total_getter, 0; with_declared(0)),
+            perry_runtime::fn_info!(#[realm("node:string_decoder.StringDecoder.prototype.lastTotal.<get>", constructible = true)] export crate::string_decoder::string_decoder_last_total_getter, 0; with_declared(0)),
             "get lastTotal",
         ),
         true,
@@ -385,8 +385,7 @@ unsafe fn encoding_name_from_bits(bits: i64) -> Option<String> {
 fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, code);
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::type_error(msg))
 }
 
 fn describe_buf_received(value: f64) -> String {

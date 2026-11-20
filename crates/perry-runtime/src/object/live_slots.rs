@@ -12,8 +12,15 @@ use super::ObjectHeader;
 /// Physical inline capacity, including exact-width declared layout births.
 /// The GC allocation header already owns this fact; no floor or side record.
 #[inline]
+///
+/// An arguments object (kinds 13/14) holds its three named slots inline and
+/// its elements after them: its named inline capacity is 3, so a named key's
+/// slot at or past 3 lives in the overflow, never on an element.
 pub(crate) unsafe fn object_inline_capacity(obj: *const ObjectHeader) -> u32 {
     let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    if (*gc)._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0 && arguments_named_capacity(obj) {
+        return 3;
+    }
     ((*gc).size as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ObjectHeader>()) as u32
         / 8
 }
@@ -57,13 +64,14 @@ pub extern "C" fn perry_object_header_abi_revision() -> u32 {
 /// and a closure, which is most of what `state()` + a small `HashMap<u32, _>`
 /// probe costs. It was deleted rather than left in as an unmeasured
 /// configuration.
-#[inline]
+#[inline(always)]
 pub unsafe fn object_live_slot_count(obj: *const ObjectHeader) -> u32 {
     // Reads the one field through the table's record instead of lifting the
     // whole ~48-byte descriptor to discard all but four bytes of it. This is
     // the bound consulted on essentially every property read and write, and
-    // `shape_descriptor_by_id` was 10.1% of an isolated property-read loop.
-    shapes::shape_live_inline_slot_count_by_id(shapes::object_shape_stamp(obj)).unwrap_or(0)
+    // `shape_descriptor_for_word` was 10.1% of an isolated property-read loop.
+    shapes::shape_live_inline_slot_count_of_receiver((shapes::object_shape_stamp(obj)).0)
+        .unwrap_or(0)
 }
 
 /// C-ABI accessor for [`object_live_slot_count`], for out-of-runtime consumers
@@ -98,4 +106,24 @@ pub unsafe extern "C" fn js_object_live_slot_count(obj: *const ObjectHeader) -> 
 #[inline]
 pub(crate) unsafe fn set_object_live_slot_count(obj: *mut ObjectHeader, field_count: u32) {
     shapes::publish_object_live_slot_count(obj, field_count);
+}
+
+/// The words `obj`'s allocation holds after its header: P's capacity, which
+/// is [`object_inline_capacity`] for every object but an arguments layout.
+/// A caller that refused an arguments object at its entry reads this one.
+#[inline(always)]
+pub(crate) unsafe fn object_physical_capacity(obj: *const ObjectHeader) -> u32 {
+    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    ((*gc).size as usize - crate::gc::GC_HEADER_SIZE - std::mem::size_of::<ObjectHeader>()) as u32
+        / 8
+}
+
+/// [`object_inline_capacity`]'s arguments arm, out of line so the ordinary
+/// body stays P's: `true` when the flagged `obj` is on an arguments kind.
+#[cold]
+#[inline(never)]
+unsafe fn arguments_named_capacity(obj: *const ObjectHeader) -> bool {
+    let gc = crate::gc::header_from_trusted_user_ptr(obj.cast());
+    (*gc).obj_type == crate::gc::GC_TYPE_OBJECT
+        && crate::array::subclass_elements::arguments_inline_layout(obj)
 }

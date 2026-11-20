@@ -14,20 +14,17 @@ unsafe fn primitive(bits: u64) -> bool {
         && bits & crate::value::TAG_MASK != POINTER_TAG
         && bits & crate::value::TAG_MASK != crate::value::HANDLE_TAG
         && bits & crate::value::TAG_MASK != BIGINT_TAG
-        && !is_raw_pointer(bits)
 }
 
 unsafe fn array_pointer(bits: u64) -> Option<*const crate::ArrayHeader> {
     let ptr = if bits & crate::value::TAG_MASK == POINTER_TAG {
         (bits & POINTER_MASK) as *const crate::ArrayHeader
-    } else if is_raw_pointer(bits) {
-        bits as *const crate::ArrayHeader
     } else {
         return None;
     };
     let header = crate::value::addr_class::try_read_tracked_gc_header(ptr as usize)?;
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
@@ -55,19 +52,18 @@ unsafe fn inline_fields_with_live<'a>(
     let header = &*crate::gc::header_from_trusted_user_ptr(obj.cast());
     if count == 0
         || count > MAX_FIELDS
-        || header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || crate::gc_type_is_not_object!(header.obj_type)
         || header._reserved & crate::gc::OBJ_FLAG_HAS_DESCRIPTORS != 0
         || (header.size as usize)
-            < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ObjectHeader>() + count * 8
+            < crate::gc::GC_HEADER_SIZE + crate::object::header::meta_form_alloc_bytes(count)
         || !super::stringify_tojson_probe::object_is_plain_record(obj)
         || count > live_inline_slots as usize
     {
         return None;
     }
     Some(std::slice::from_raw_parts(
-        (obj as *const u8)
-            .add(std::mem::size_of::<crate::ObjectHeader>())
-            .cast(),
+        // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
+        crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _)).cast(),
         count,
     ))
 }
@@ -99,7 +95,7 @@ pub(super) unsafe fn template_candidate(obj: *const crate::ObjectHeader, count: 
 unsafe fn primitive_array(arr: *const crate::ArrayHeader) -> bool {
     // `array_pointer` has already validated this exact tracked header.
     let header = &*crate::gc::header_from_trusted_user_ptr(arr.cast());
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || (header.size as usize)
             < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
         || (*arr).length > (*arr).capacity
@@ -153,7 +149,7 @@ pub(super) unsafe fn try_emit_with_live(
         return false;
     };
     if !template.own_keys_exclude_to_json
-        || crate::object::prototype_chain::object_static_prototype(obj as usize).is_some()
+        || crate::object::prototype_chain::object_static_prototype_is_linked(obj as usize)
     {
         return false;
     }

@@ -1,0 +1,31 @@
+D.start 26|67108863|67108864|undefined|true 1
+D.value 27|67108863|67108864|undefined|true 1
+D.shadow3 own 1
+D.others 27|67108863|67108864|undefined|true 1
+D.deleted 27|undefined|67108864|undefined|true 11
+DEC 250: Cannot add member Object.prototype.missing: built-in objects are read-only in a compiled program
+D.objproto 27|undefined|67108864|undefined|true 11
+D.objproto.gone 27|undefined|67108864|undefined|true 11
+D.accessor 27|undefined|getter|undefined|true 11
+D.undef undefined|true 11
+chain.start A1|B1|undefined 1
+chain.shadowB B1-shadow|B1|undefined 1
+chain.unshadow A1|B1|undefined 1
+chain.setproto custom|custom|undefined 27
+absent.start undefined|undefined|undefined 1
+DEC 250: Cannot add member Object.prototype.$offset: built-in objects are read-only in a compiled program
+absent.objproto undefined|undefined|undefined 1
+absent.restored undefined|undefined|undefined 1
+absent.onproto undefined|undefined|onE 1
+absent.nullproto 1|undefined|undefined 1
+ctor.start true|function|undefined 1
+ctor.own true|false 40
+ctor.getproto true|true 1
+ctor.class false|true 40
+keys.odd sym|seven|seven 1
+wide.start 100|107|109|112|113|undefined 1
+wide.value 100|107|109|changed|113|undefined 1
+wide.undef 100|107|109|changed|undefined|undefined 1
+wide.deleted 100|107|undefined|changed|undefined|undefined 1
+wide.create 200|207|209|212|213|undefined 1
+wide.create.value 200|207|209|212|late|undefined 1

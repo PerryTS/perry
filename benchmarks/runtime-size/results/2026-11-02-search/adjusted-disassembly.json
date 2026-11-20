@@ -1,0 +1,17 @@
+{
+  "perry_runtime::array::append::grow": {
+    "instructions": 135,
+    "outlined_calls": 0,
+    "same_opcode_sequence_as_reference": true
+  },
+  "perry_runtime::array::indexing::read_cold::read_cold_entry": {
+    "instructions": 83,
+    "outlined_calls": 0,
+    "same_opcode_sequence_as_reference": true
+  },
+  "perry_runtime::array::indexing::read_cold::read_cold_dispatch": {
+    "instructions": 300,
+    "outlined_calls": 0,
+    "same_opcode_sequence_as_reference": true
+  }
+}

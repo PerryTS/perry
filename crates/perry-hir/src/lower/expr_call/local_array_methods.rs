@@ -7,7 +7,10 @@ use anyhow::Result;
 use swc_ecma_ast as ast;
 
 use super::url_search_params::build_url_search_params_method_call;
-use super::{is_typed_array_type, typed_array_lacks_array_method};
+use super::{
+    is_array_generic_base, is_qualified_type_name, is_typed_array_type,
+    typed_array_lacks_array_method,
+};
 use crate::ir::*;
 
 use super::super::{lower_expr, LoweringContext};
@@ -122,6 +125,7 @@ fn type_is_class_instance(
                 // instance's ObjectHeader as an ArrayHeader (silently
                 // corrupting it) and never ran the method.
                 || ctx.functions_index.contains_key(name.as_str())
+                || is_qualified_type_name(name)
         }
         // #11128: `InstanceType<typeof C>` is by definition whatever `C`
         // constructs — an instance whose own methods may share Array names
@@ -129,11 +133,10 @@ fn type_is_class_instance(
         // must not fold to the array fast path; the generic dispatch still
         // runs the Array method on a genuine array.
         Type::Generic { base, .. } if base == "InstanceType" => true,
+        // Only `Array`/`ReadonlyArray` generics are array receivers; `Pick<Svc, "join">`
+        // and other utility or user generics keep their own methods.
         Type::Generic { base, .. } => {
-            !builtin_generic_bases.contains(&base.as_str())
-                && (ctx.lookup_class(base).is_some()
-                    || ctx.is_interface_type(base)
-                    || is_imported_class_name(base))
+            !builtin_generic_bases.contains(&base.as_str()) && !is_array_generic_base(base)
         }
         Type::Union(variants) => variants
             .iter()
@@ -204,7 +207,17 @@ pub(super) fn try_local_array_methods(
                 // (push, pop, etc.), NOT for methods shared with strings (indexOf,
                 // includes, split) — those are handled by the general dispatch which
                 // checks is_string at codegen time.
-                let type_info = ctx.lookup_local_type(&arr_name);
+                //
+                // A receiver typed `Null`/`Void` is no evidence about the value
+                // the call sees: a method call on a real `null`/`undefined`
+                // throws, so the call only runs when the binding was reassigned
+                // (`let s = null; s = "<"; s.includes("<")`). The declared type
+                // is still the initializer's at this point — `type_widening`
+                // widens it only after lowering — so read it as unknown here
+                // rather than as "known not a string".
+                let type_info = ctx
+                    .lookup_local_type(&arr_name)
+                    .filter(|ty| !matches!(ty, Type::Null | Type::Void));
                 // #8138: these methods exist on Array.prototype but not on
                 // %TypedArray%.prototype. Preserve ordinary property lookup so
                 // a user-installed method wins and an absent one throws.
@@ -466,7 +479,9 @@ pub(super) fn try_local_array_methods(
                                 // N indexed Sets, and one final length Set.
                                 // Splitting it into N pushes changes Proxy traps.
                                 return Ok(Ok(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::PropertyGet {
+                                        byte_end: 0,
                                         object: Box::new(Expr::LocalGet(array_id)),
                                         property: "push".to_string(),
                                         byte_offset: call.span.lo.0,
@@ -1111,29 +1126,13 @@ pub(super) fn try_local_array_methods(
                             .lookup_local_type(&arr_name)
                             .map(|ty| matches!(ty, Type::Named(name) if name == "TextEncoder"))
                             .unwrap_or(false);
-                        if is_text_encoder {
-                            if method_name == "encode" {
-                                if !args.is_empty() {
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                } else {
-                                    // encode() with no args encodes empty string
-                                    return Ok(Ok(Expr::TextEncoderEncode(Box::new(
-                                        Expr::String(String::new()),
-                                    ))));
-                                }
-                            }
-                            if method_name == "encodeInto" {
-                                let mut args = args.into_iter();
-                                let source =
-                                    args.next().unwrap_or_else(|| Expr::String(String::new()));
-                                let dest = args.next().unwrap_or(Expr::Undefined);
-                                return Ok(Ok(Expr::TextEncoderEncodeInto {
-                                    source: Box::new(source),
-                                    dest: Box::new(dest),
-                                }));
-                            }
+                        if is_text_encoder && matches!(method_name, "encode" | "encodeInto") {
+                            return Ok(Ok(super::textencoder::encoder_call(
+                                Expr::LocalGet(array_id),
+                                method_name,
+                                args,
+                                call,
+                            )));
                         }
 
                         // TextDecoder methods

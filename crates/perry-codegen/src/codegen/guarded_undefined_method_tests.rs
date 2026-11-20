@@ -52,6 +52,7 @@ fn loop_filter_guard() -> Stmt {
                 op: LogicalOp::And,
                 left: Box::new(Expr::LocalGet(FILTER)),
                 right: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::LocalGet(FILTER)),
                     args: vec![Expr::Integer(1)],
                     type_args: Vec::new(),
@@ -109,6 +110,7 @@ fn class(method: Function) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

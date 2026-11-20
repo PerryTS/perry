@@ -1,5 +1,7 @@
 //! Perry's typed component boundary. Native engines and guest canonical
 //! adapters are optional; module code owns all JS roots and exceptions.
+mod async_value;
+mod asynchronous;
 mod callback;
 mod cleanup;
 mod command;
@@ -8,8 +10,15 @@ mod context;
 mod guest;
 mod host;
 mod host_resource;
+mod http;
+#[cfg(not(target_arch = "wasm32"))]
+mod io;
+mod persistent;
+mod producer;
+
 mod resource;
 mod value;
+mod writer;
 
 #[cfg(test)]
 mod cleanup_tests;
@@ -39,7 +48,7 @@ fn object_pointer(value: f64) -> Option<*mut crate::object::ObjectHeader> {
     }
     let pointer = value.as_pointer::<u8>() as usize;
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(pointer)? };
-    (unsafe { header.as_ref().obj_type } == crate::gc::GC_TYPE_OBJECT).then_some(pointer as *mut _)
+    (crate::gc_type_is_object!(unsafe { header.as_ref().obj_type })).then_some(pointer as *mut _)
 }
 fn array_pointer(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     let value = JSValue::from_bits(value.to_bits());
@@ -50,7 +59,7 @@ fn array_pointer(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(pointer)? };
     matches!(
         unsafe { header.as_ref().obj_type },
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     )
     .then_some(pointer as *mut _)
 }
@@ -93,8 +102,8 @@ unsafe fn take(buffer: Buffer) -> Vec<u8> {
 
 // JS throws abandon Rust frames. Keep all owned native scratch outside the
 // catching closure and destroy it before propagating the original exception.
-fn finish(result: Result<f64, f64>) -> f64 {
-    result.unwrap_or_else(|error| crate::exception::js_throw(error))
+fn finish(result: Result<f64, crate::exception::Caught>) -> f64 {
+    result.unwrap_or_else(|error| crate::exception::rethrow_caught(error))
 }
 
 #[no_mangle]
@@ -111,7 +120,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
     let mut options = Vec::new();
     let mut options_value = Value::Null;
     let mut error = None;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = host::ops();
         contract = string(contract_input.get_nanbox_f64());
         world =
@@ -153,6 +162,30 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
             crate::buffer::bytes::bytes(bytes.get_nanbox_f64(), no_gc).map(<[u8]>::to_vec)
         })
         .unwrap_or_else(|_| fail("Expected component bytes"));
+        let incoming_http = world["exports"].as_array().is_some_and(|items| {
+            items.iter().any(|item| {
+                item["name"].as_str().is_some_and(|name| {
+                    name.starts_with("wasi:http/incoming-handler@")
+                        || name.starts_with("wasi:http/handler@")
+                })
+            })
+        });
+        let p3_http_only = world["exports"].as_array().is_some_and(|items| {
+            items
+                .iter()
+                .any(|item| item["name"] == "wasi:http/handler@0.3.0")
+                && !items.iter().any(|item| {
+                    item["name"]
+                        .as_str()
+                        .is_some_and(|name| name.starts_with("wasi:http/incoming-handler@"))
+                })
+        });
+        let concurrent_http =
+            incoming_http && p3_http_only && persistent::http::profile(&wasm, contract.as_bytes());
+        if !incoming_http || concurrent_http {
+            persistent::construct(owner.get_nanbox_f64(), &wasm, contract.as_bytes(), &options);
+            return owner.get_nanbox_f64();
+        }
         let mut buffer = Buffer::default();
         unsafe {
             let pointer = (ops.perry_component_host_new)(
@@ -182,8 +215,8 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
     });
     let result = match result {
         Err(error) if !JSValue::from_bits(owner.get_nanbox_f64().to_bits()).is_undefined() => {
-            let original = scope.root_nanbox_f64(error);
-            let _ = crate::exception::catch_js_throw(|| {
+            let original = error.root(&scope);
+            let _ = crate::exception::catch_thrown(|| {
                 if unsafe { (*context::get(owner.get_nanbox_f64())).host.is_null() } {
                     context::finish_disposal(
                         owner.get_nanbox_f64(),
@@ -193,7 +226,7 @@ pub extern "C" fn js_component_load(bytes: f64, contract: f64, imports: f64, opt
                     js_component_dispose(owner.get_nanbox_f64());
                 }
             });
-            Err(original.get_nanbox_f64())
+            Err(original.caught())
         }
         result => result,
     };
@@ -214,16 +247,56 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
     let mut args = Vec::new();
     let mut output = Vec::new();
     let mut parsed = Value::Null;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         interface = string(interface_input.get_nanbox_f64());
         function = string(function_input.get_nanbox_f64());
         let context = context::get(owner.get_nanbox_f64());
         if unsafe { (*context).host.is_null() } {
             fail("Component is not initialized");
         }
-        args = serde_json::to_vec(&value::encode_for(
+        if persistent::enabled(owner.get_nanbox_f64()) {
+            let asynchronous = context::signature(
+                unsafe { &(*context).world },
+                "exports",
+                &interface,
+                &function,
+            )["async"]
+                == true;
+            return persistent::call(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+                asynchronous,
+            );
+        }
+        if context::signature(
+            unsafe { &(*context).world },
+            "exports",
+            &interface,
+            &function,
+        )["async"]
+            == true
+        {
+            return asynchronous::submit(
+                owner.get_nanbox_f64(),
+                &interface,
+                &function,
+                args_input.get_nanbox_f64(),
+            );
+        }
+        let retained = scope.root_nanbox_f64(value::retention::new_plan());
+        let world = unsafe { &(*context).world };
+        let signature = context::signature(world, "exports", &interface, &function);
+        let params = signature["params"]
+            .as_array()
+            .unwrap_or_else(|| fail("Invalid WIT parameter manifest"));
+        args = serde_json::to_vec(&value::typed::arguments(
             args_input.get_nanbox_f64(),
+            params,
+            world,
             owner.get_nanbox_f64(),
+            retained.get_nanbox_f64(),
         ))
         .unwrap();
         let mut buffer = Buffer::default();
@@ -266,10 +339,13 @@ pub extern "C" fn js_component_call(owner: f64, interface: f64, function: f64, a
 
 #[no_mangle]
 pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
+    if persistent::enabled(owner) {
+        return persistent::dispose(owner);
+    }
     let scope = RuntimeHandleScope::new();
     let frame = callback::Frame::new(&scope, owner);
     let mut error = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let context = context::get(frame.owner.get_nanbox_f64());
         let mut buffer = Buffer::default();
         let status = unsafe {
@@ -278,12 +354,12 @@ pub extern "C" fn js_component_dispose(owner: f64) -> f64 {
         error = unsafe { take(buffer) };
         // A destructor may have thrown in a JS import. Its exception is
         // rooted by frame, so sever imports before rethrowing that value.
-        let cleanup = crate::exception::catch_js_throw(|| {
+        let cleanup = crate::exception::catch_thrown(|| {
             context::finish_disposal(frame.owner.get_nanbox_f64(), status)
         });
         frame.rethrow();
         if let Err(error) = cleanup {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
         if status != perry_abi::component_host::OK {
             fail(&String::from_utf8_lossy(&error));

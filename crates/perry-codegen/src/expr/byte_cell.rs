@@ -301,11 +301,7 @@ pub(crate) fn resolve(ctx: &mut FnCtx<'_>, boxed: &str, brands: &[u8], miss: &st
     // or join is added, so the resolution keeps main's CFG and the owner arm
     // is untouched by views.
     let linked_type = ctx.block().and(I64, &linked_word, "255");
-    let bagged = ctx.block().icmp_eq(
-        I64,
-        &linked_type,
-        &crate::runtime_abi::GC_TYPE_OBJECT.to_string(),
-    );
+    let bagged = crate::target_layout::emit_object_has_meta_word(ctx.block(), I64, &linked_type);
     let bag_slot = ctx.block().add(
         I64,
         &linked,
@@ -463,6 +459,51 @@ pub(crate) fn kind_and_width(blk: &mut crate::block::LlBlock, h: &str) -> (Strin
     (kind, blk.shl(I64, "1", &shift))
 }
 
+/// `(raw, is_typed)`: is `boxed` a typed-array cell of any kind (owner or
+/// view, brand 0..=11, not an evacuated stub)? The same plausibility tests as
+/// [`owner_guard`] before the header word is read.
+pub(crate) fn any_typed_array_guard(ctx: &mut FnCtx<'_>, boxed: &str) -> (String, String) {
+    let inspect = ctx.new_block("bytes.any.guard");
+    let done = ctx.new_block("bytes.any.admission");
+    let inspect_l = ctx.block_label(inspect);
+    let done_l = ctx.block_label(done);
+    let bits = ctx.block().bitcast_double_to_i64(boxed);
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let tag = ctx.block().and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let tagged = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+    let floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let above = ctx.block().icmp_uge(I64, &raw, &floor);
+    let ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let below = ctx.block().icmp_ult(I64, &raw, &ceiling);
+    let low = ctx.block().and(I64, &raw, "7");
+    let aligned = ctx.block().icmp_eq(I64, &low, "0");
+    let g = ctx.block().and(I1, &tagged, &above);
+    let g = ctx.block().and(I1, &g, &below);
+    let g = ctx.block().and(I1, &g, &aligned);
+    let before = ctx.block().label.clone();
+    ctx.block().cond_br(&g, &inspect_l, &done_l);
+    ctx.current_block = inspect;
+    let h = header_word(ctx.block(), &raw);
+    // Type byte without the view bit, and the FORWARDED flag: 0x40..=0x4b.
+    let masked = ctx.block().and(I64, &h, "32991"); // 0x80DF
+    let brand = ctx.block().sub(I64, &masked, "64");
+    let guard = ctx.block().icmp_ule(I64, &brand, "11");
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    let guard = ctx
+        .block()
+        .phi(I1, &[("false", &before), (&guard, &inspect_l)]);
+    (raw, guard)
+}
+
 pub(crate) fn owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) -> (String, String) {
     let inspect = ctx.new_block("bytes.inline.guard");
     let done = ctx.new_block("bytes.inline.admission");
@@ -578,6 +619,9 @@ mod tests {
         body.insert(
             0,
             Stmt::Expr(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             }),
@@ -616,12 +660,16 @@ mod tests {
                             condition: Expr::Integer(1),
                             body: vec![
                                 Stmt::Expr(Expr::Call {
+                                    byte_end: 0,
                                     callee: Box::new(Expr::GlobalGet(100)),
                                     args: vec![],
                                     type_args: vec![],
                                     byte_offset: 0,
                                 }),
                                 Stmt::Expr(Expr::IndexGet {
+                                    element_offset: 0,
+                                    byte_offset: 0,
+                                    byte_end: 0,
                                     object: Box::new(Expr::LocalGet(if alias { 2 } else { 1 })),
                                     index: Box::new(Expr::Integer(0)),
                                 }),
@@ -678,13 +726,16 @@ mod tests {
                 return_type: Type::Number,
                 body: vec![
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::GlobalGet(100)),
                         args: vec![],
                         type_args: vec![],
                         byte_offset: 0,
                     }),
                     Stmt::Return(Some(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(1)),
                             property: "readInt32BE".into(),
                             byte_offset: 0,
@@ -725,11 +776,19 @@ mod tests {
                 !ir.contains("call ptr @js_native_buffer_data_ptr"),
                 "{mode}: legacy preheader"
             );
-            let marker = ir
+            // SSA names are function-local; wrapper registers may reuse them.
+            let body = ir
+                .split("define double @perry_fn_buffer_param_owner_ts__read(")
+                .nth(1)
+                .expect("buffer read body emitted")
+                .split("\n}")
+                .next()
+                .unwrap();
+            let marker = body
                 .lines()
                 .find(|line| line.contains("; bytes.hoist.roots "))
                 .unwrap();
-            let roots = crate::testing::root_slots::bound_slots(&ir);
+            let roots = crate::testing::root_slots::bound_slots(body);
             for field in ["receiver=", "owner="] {
                 let slot = format!(
                     "%{}",
@@ -743,7 +802,7 @@ mod tests {
                 );
                 assert!(
                     roots.contains_key(&slot)
-                        || ir.contains(&format!("{slot} = alloca ptr addrspace(1)")),
+                        || body.contains(&format!("{slot} = alloca ptr addrspace(1)")),
                     "{mode}: {field}{slot} must be a statepoint root"
                 );
             }
@@ -800,13 +859,16 @@ mod tests {
             return_type: Type::Number,
             body: vec![
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::GlobalGet(100)),
                     args: vec![],
                     type_args: vec![],
                     byte_offset: 0,
                 }),
                 Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "readInt32BE".into(),
                         byte_offset: 0,

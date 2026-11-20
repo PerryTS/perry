@@ -57,6 +57,7 @@ fn closure(func_id: FuncId, body: Vec<Stmt>) -> Expr {
 
 fn call(callee: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -88,6 +89,7 @@ fn empty_class(name: &str) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -112,6 +114,8 @@ fn run(module: &mut Module, exports_may_run_early: bool) {
 
 fn call_spread(callee: Expr, spread: Expr) -> Expr {
     Expr::CallSpread {
+        byte_offset: 0,
+        byte_end: 0,
         callee: Box::new(callee),
         args: vec![CallArg::Spread(spread)],
         type_args: Vec::new(),
@@ -149,6 +153,7 @@ fn a_read_in_the_binding_s_own_initializer_throws() {
         X,
         "x",
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(X)),
             property: "a".into(),
             byte_offset: 0,
@@ -261,6 +266,7 @@ fn an_exported_function_is_checked_only_when_an_importer_can_run_first() {
 fn a_checked_member_read_keeps_its_shape_under_the_check() {
     let mut module = Module::new("m.ts");
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(X)),
         property: "a".into(),
         byte_offset: 0,
@@ -286,6 +292,7 @@ fn a_checked_spread_call_keeps_its_member_callee_under_the_check() {
     // undefined`. Mirrors the non-spread case above.
     let mut module = Module::new("m.ts");
     let callee = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(X)),
         property: "push".into(),
         byte_offset: 0,
@@ -373,6 +380,55 @@ fn a_var_binding_is_never_touched() {
     assert_eq!(dbg(&module.init[0]), dbg(&Stmt::Expr(Expr::LocalGet(V))));
 }
 
+fn var_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
+    Stmt::Let {
+        id,
+        name: name.to_string(),
+        ty: Type::Any,
+        mutable: true,
+        init: Some(init),
+    }
+}
+
+/// A `var` holds `undefined` until its declarator runs; a read that can run
+/// earlier (here, a closure created before it) gets the hoisted
+/// `let v = undefined` a function body's `var` has, at the module's start.
+#[test]
+fn a_var_read_before_its_declarator_is_hoisted_with_undefined() {
+    let mut module = Module::new("m.ts");
+    const V: LocalId = 9;
+    module.init = vec![
+        Stmt::Expr(closure(10, vec![ret(Expr::LocalGet(V))])),
+        var_stmt(V, "v", Expr::Array(Vec::new(), None)),
+    ];
+    run(&mut module, false);
+    assert_eq!(module.init.len(), 3);
+    assert_eq!(
+        dbg(&module.init[0]),
+        dbg(&var_stmt(V, "v", Expr::Undefined))
+    );
+    assert!(
+        !dbg(&module.init).contains(tdz_check::TDZ_CHECK),
+        "a var has no dead zone"
+    );
+}
+
+/// A `var` every read of which runs after its declarator holds only what it
+/// is assigned: it is left exactly as it was.
+#[test]
+fn a_var_read_only_after_its_declarator_is_not_hoisted() {
+    let mut module = Module::new("m.ts");
+    const V: LocalId = 9;
+    module.functions = vec![function(1, "late", vec![ret(Expr::LocalGet(V))])];
+    module.init = vec![
+        var_stmt(V, "v", Expr::Array(Vec::new(), None)),
+        Stmt::Expr(call(Expr::FuncRef(1))),
+    ];
+    let before = dbg(&module.init);
+    run(&mut module, false);
+    assert_eq!(dbg(&module.init), before);
+}
+
 fn import(source: &str, imported: &str, local: &str) -> Import {
     Import {
         source: source.to_string(),
@@ -386,6 +442,7 @@ fn import(source: &str, imported: &str, local: &str) -> Import {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -432,6 +489,7 @@ fn a_commonjs_module_s_exports_are_never_seeded() {
             Y,
             "y",
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(X)),
                 property: "y".to_string(),
                 byte_offset: 0,
@@ -442,4 +500,27 @@ fn a_commonjs_module_s_exports_are_never_seeded() {
     module.exports = vec![export("_cjs"), export("y")];
     run(&mut module, true);
     assert_eq!(dbg(&module.init), dbg(&wrap));
+}
+
+#[test]
+fn a_checked_delete_keeps_its_member_operand_under_the_check() {
+    let mut module = Module::new("m.ts");
+    let target = Expr::PropertyGet {
+        byte_end: 0,
+        object: Box::new(Expr::LocalGet(X)),
+        property: "a".into(),
+        byte_offset: 0,
+    };
+    let del = Expr::Delete(Box::new(target));
+    module.functions = vec![function(1, "f", vec![ret(del.clone())])];
+    module.init = vec![
+        Stmt::Expr(call(Expr::FuncRef(1))),
+        let_stmt(X, "x", Expr::Integer(1)),
+    ];
+    run(&mut module, false);
+    // `delete (check, x.a)` would delete nothing: the check is lifted out.
+    assert_eq!(
+        dbg(&module.functions[0].body),
+        dbg(&vec![ret(guarded(X, "x", del))])
+    );
 }

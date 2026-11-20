@@ -7,6 +7,7 @@
 //! passes the memo instead of a hash: short own lists need neither; other
 //! paths load the atom's existing creation hash. Keyed leaves stay stateless.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 
 const PAIRS: usize = 5;
@@ -18,14 +19,24 @@ const ABSENT: u32 = u32::MAX - 1;
 const DECLINE: u32 = u32::MAX - 2;
 const ACCESSOR: u32 = 1 << 31;
 const SPILL: u32 = 1 << 30;
+/// The low bits of an answer: an inline slot's byte offset from the object
+/// (stored at fill, [`crate::object::header::meta_form_slot_off`]), or with [`SPILL`] the
+/// spill position.
 const SLOT_MASK: u32 = SPILL - 1;
 
-/// Exactly five (ShapeId, slot) pairs. Zero shape means an empty answer.
-/// Shared integer storage, never indexed through a registry. ShapeIds are
-/// process-global and never reused. Each atomic word is a complete proof for
-/// this fixed key; a racing writer can cause a shape mismatch, never a torn
-/// (shape, slot). Every continuation revalidates the live link and next shape.
-/// There is no whole-memo validity bit, epoch, or cached heap address.
+/// Exactly five (LayoutWord, slot) pairs. Zero shape means an empty answer.
+/// Shared integer storage, never indexed through a registry. A LayoutWord is
+/// agent-local storage of a row, but within one image it names one shape in
+/// every agent: static rows are the image's compile-time ordinals, dynamic
+/// rows come from process-unique chunks. A compiled site's memo lives in its
+/// image's data; a runtime-crate memo is shared by every image of the process,
+/// whose static rows N..S-1 differ, so it serves only the primary image
+/// (`class_image::process_shared_memo`). A hit also needs a live receiver
+/// carrying the word, so the row it reads is published in this agent. Each
+/// atomic word is a complete proof for this fixed key; a racing writer can
+/// cause a shape mismatch, never a torn (shape, slot). Every continuation
+/// revalidates the live link and next shape. There is no whole-memo validity
+/// bit, epoch, or cached heap address.
 #[repr(C)]
 pub struct ReadSiteMemo {
     pairs: [AtomicU64; PAIRS],
@@ -41,6 +52,7 @@ impl ReadSiteMemo {
         }
     }
 
+    #[cfg(test)]
     fn snapshot(&self) -> [u64; PAIRS] {
         std::array::from_fn(|i| self.pairs[i].load(Relaxed))
     }
@@ -58,13 +70,13 @@ pub(crate) enum Answer {
 #[inline(always)]
 unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*h)._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
     {
         return None;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, (*h).obj_type));
     if !meta.is_null()
         && (*meta).flags
             & (crate::object::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER
@@ -75,7 +87,7 @@ unsafe fn ordinary_word(obj: *const ObjectHeader) -> Option<u32> {
     }
     let word = (*obj).parent_class_id;
     // An overflow's SHADOW_BIT deliberately prevents a site comparison.
-    crate::object::shapes::is_site_matchable_shape_id(word).then_some(word)
+    crate::object::shapes::is_site_matchable_layout_word(word).then_some(word)
 }
 
 #[inline(always)]
@@ -83,12 +95,11 @@ unsafe fn slot_answer(obj: *const ObjectHeader, slot: u32) -> Option<Answer> {
     if slot == ABSENT {
         return Some(Answer::Data(crate::value::TAG_UNDEFINED));
     }
-    let index = slot & SLOT_MASK;
+    let at = slot & SLOT_MASK;
     let bits = if slot & SPILL != 0 {
-        crate::object::spill::spill_get_present(obj as usize, index as usize)?
+        crate::object::spill::spill_get_present(obj as usize, at as usize)?
     } else {
-        *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>() + index as usize * 8)
-            as *const u64)
+        *crate::object::header::object_slot_at(obj as *mut ObjectHeader, at)
     };
     if bits == TAG_HOLE {
         return None;
@@ -129,7 +140,7 @@ pub(crate) unsafe fn lookup(
                 return None;
             }
         }
-        let r = record_of(dir, shape);
+        let r = record_of(dir, LayoutWord(shape));
         if r.is_null() {
             return None;
         }
@@ -158,7 +169,7 @@ unsafe fn declined(obj: *const ObjectHeader, memo: &ReadSiteMemo) -> bool {
 unsafe fn decline(obj: *const ObjectHeader, memo: &ReadSiteMemo) {
     let word = (*obj).parent_class_id;
     let held = memo.pairs[0].load(Relaxed);
-    if crate::object::shapes::is_site_matchable_shape_id(word)
+    if crate::object::shapes::is_site_matchable_layout_word(word)
         && (held == 0 || held as u32 == DECLINE)
     {
         // A decline uses only word zero. Do not clear a racing positive
@@ -210,7 +221,7 @@ pub(crate) unsafe fn prime(
     let mut learned = [0u64; PAIRS];
     for i in 0..PAIRS {
         let shape = ordinary_word(obj)?;
-        let r = record_of(dir, shape);
+        let r = record_of(dir, LayoutWord(shape));
         if r.is_null()
             || !(*r).present()
             || !positional_layout(&*r)
@@ -232,15 +243,27 @@ pub(crate) unsafe fn prime(
                     return None;
                 }
                 let slot = crate::object::key_attrs::key_storage_slot(keys, pos);
-                if slot >= SLOT_MASK - 1 {
+                // A memo stores a raw-load location, not a representation accessor.
+                if slot >= SLOT_MASK - 1
+                    || (slot < crate::object::field_rep::REP_SLOTS
+                        && (*r).i32_lanes() & (1 << slot) != 0)
+                {
                     return None;
                 }
-                let slot =
-                    slot | if slot < (*r).live_inline_slot_count {
-                        0
-                    } else {
-                        SPILL
-                    } | if attrs & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
+                // `ordinary_word` proved the meta form: an inline answer
+                // keeps the slot's byte offset, a spilled one its position.
+                let inline = slot < (*r).live_inline_slot_count;
+                let at = if inline {
+                    crate::object::header::meta_form_slot_off(slot)
+                } else {
+                    slot
+                };
+                if at >= SLOT_MASK - 1 {
+                    return None;
+                }
+                let slot = at
+                    | if inline { 0 } else { SPILL }
+                    | if attrs & crate::object::key_attrs::ENTRY_ACCESSOR_MASK != 0 {
                         ACCESSOR
                     } else {
                         0
@@ -376,7 +399,14 @@ pub(super) unsafe fn miss_underived<const ABSENT_OK: bool, const LAZY_HASH: bool
     }
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
     let word = (*obj).parent_class_id;
-    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+    probe_get_underived::<ABSENT_OK>(
+        dir,
+        obj,
+        LayoutWord(word),
+        record_of(dir, LayoutWord(word)),
+        key_bits,
+        hash,
+    )
 }
 
 #[inline(never)]
@@ -392,7 +422,14 @@ unsafe fn miss_underived_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     }
     let hash = site_key_hash::<LAZY_HASH>(key_bits, hash);
     let word = (*obj).parent_class_id;
-    probe_get_underived::<ABSENT_OK>(dir, obj, word, record_of(dir, word), key_bits, hash)
+    probe_get_underived::<ABSENT_OK>(
+        dir,
+        obj,
+        LayoutWord(word),
+        record_of(dir, LayoutWord(word)),
+        key_bits,
+        hash,
+    )
 }
 
 /// The own slot at position `pos` read a hole.
@@ -413,7 +450,7 @@ pub(super) unsafe fn miss_hole<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     own_hole::<ABSENT_OK>(
         dir,
         obj,
-        record_of(dir, (*obj).parent_class_id),
+        record_of(dir, LayoutWord((*obj).parent_class_id)),
         pos,
         key_bits,
         hash,
@@ -436,7 +473,7 @@ unsafe fn miss_hole_matched<const ABSENT_OK: bool, const LAZY_HASH: bool>(
     own_hole::<ABSENT_OK>(
         dir,
         obj,
-        record_of(dir, (*obj).parent_class_id),
+        record_of(dir, LayoutWord((*obj).parent_class_id)),
         pos,
         key_bits,
         hash,
@@ -523,89 +560,6 @@ pub unsafe extern "C" fn perry_probe_get_value_site(
         hash,
         memo,
     )
-}
-
-#[repr(C)]
-struct KeyedWay {
-    // Set once from zero to SSO content, never reassigned. Thus every pair
-    // in this way proves the same key even while another agent publishes it.
-    key: AtomicU64,
-    memo: ReadSiteMemo,
-}
-
-/// Four shape answers for short string keys, each way bound once on use.
-/// The key is CONTENT bits, never a GC address or a cached program value.
-#[repr(C)]
-pub struct KeyedSiteMemo {
-    ways: [KeyedWay; 4],
-}
-
-#[inline]
-unsafe fn short_key(bits: u64) -> Option<u64> {
-    if bits & TAG_MASK == crate::value::SHORT_STRING_TAG {
-        return Some(bits);
-    }
-    if bits & TAG_MASK == STRING_TAG {
-        return crate::string::short_ascii_sso_bits(
-            (bits & POINTER_MASK) as *const crate::StringHeader,
-        );
-    }
-    None
-}
-
-pub(crate) unsafe fn keyed_answer(
-    dir: *const u8,
-    obj_bits: u64,
-    key_bits: u64,
-    memo: &KeyedSiteMemo,
-) -> Option<Answer> {
-    if obj_bits & TAG_MASK != POINTER_TAG {
-        return None;
-    }
-    let addr = (obj_bits & POINTER_MASK) as usize;
-    if addr < perry_abi::RECEIVER_HANDLE_FLOOR {
-        return None;
-    }
-    let key = short_key(key_bits)?;
-    let obj = addr as *const ObjectHeader;
-    if let Some(way) = memo.ways.iter().find(|way| way.key.load(Relaxed) == key) {
-        if let Some(answer) = lookup(dir, obj, &way.memo) {
-            return Some(answer);
-        }
-        if declined(obj, &way.memo) {
-            return None;
-        }
-        let (canonical, hash) = computed_key(key_bits)?;
-        return collect(dir, obj, canonical, hash, &way.memo);
-    }
-    if memo.ways.iter().all(|way| way.key.load(Relaxed) != 0) {
-        return None;
-    }
-    let (canonical, hash) = computed_key(key_bits)?;
-    let learned = ReadSiteMemo::EMPTY;
-    let answer = collect(dir, obj, canonical, hash, &learned);
-    let pairs = learned.snapshot();
-    // An absent key has no holder slot to derive its content from. Serve
-    // that fresh proof without retaining its key, as the stateless path does.
-    if pairs.iter().any(|&pair| pair != 0 && pair as u32 == ABSENT) {
-        return answer;
-    }
-    if pairs[0] == 0 {
-        return answer;
-    }
-    // Claim only an empty way: replacing a key would let another reader
-    // observe a proof for a different key. A full site uses the complete read.
-    if let Some(way) =
-        memo.ways.iter().find(
-            |way| match way.key.compare_exchange(0, key, Relaxed, Relaxed) {
-                Ok(_) => true,
-                Err(found) => found == key,
-            },
-        )
-    {
-        way.memo.publish(&pairs);
-    }
-    answer
 }
 
 #[cfg(test)]

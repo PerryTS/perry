@@ -64,24 +64,36 @@ pub(crate) unsafe fn test_json_parse_direct(text_ptr: *const StringHeader) -> JS
     result
 }
 
-fn syntax_error_value(message: &str) -> f64 {
+fn range_error(message: &str) -> crate::error::CoreError {
     let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_syntaxerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
-}
-
-fn range_error_value(message: &str) -> f64 {
-    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg_ptr);
-    f64::from_bits(JSValue::pointer(err as *const u8).bits())
+    crate::error::CoreError::range_error(msg_ptr)
 }
 
 fn throw_syntax_error(message: &str) -> ! {
-    crate::exception::js_throw(syntax_error_value(message))
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::syntax_error(msg_ptr))
+}
+
+/// A SyntaxError whose message is WTF-8 (V8 quotes the source, which may hold
+/// lone surrogates).
+fn syntax_error_bytes(message: &[u8]) -> crate::error::CoreError {
+    let msg_ptr = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::error::CoreError::syntax_error(msg_ptr)
+}
+
+fn throw_syntax_error_bytes(message: &[u8]) -> ! {
+    crate::exception::throw_core(syntax_error_bytes(message))
+}
+
+/// The message of a failed `JSON.parse`: V8's (`parse_error`), or the
+/// located fallback should the fast parser reject a source V8's grammar takes.
+fn parse_failure_message(bytes: &[u8], byte_offset: usize) -> Vec<u8> {
+    super::parse_error::v8_parse_error_message(bytes)
+        .unwrap_or_else(|| malformed_json_message(bytes, byte_offset).into_bytes())
 }
 
 fn throw_range_error(message: &str) -> ! {
-    crate::exception::js_throw(range_error_value(message))
+    crate::exception::throw_core(range_error(message))
 }
 
 /// JSON.parse positions use JavaScript UTF-16 code units, while the direct
@@ -332,14 +344,20 @@ unsafe fn try_parse_deep_iterative(text_ptr: *const StringHeader, len: usize) ->
 /// # Safety
 ///
 /// `text_ptr` must be null or a Perry-runtime `StringHeader`.
-pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSValue, f64> {
+pub unsafe fn js_json_parse_core_result(
+    text_ptr: *const StringHeader,
+) -> Result<JSValue, crate::error::CoreError> {
     if text_ptr.is_null() {
-        return Err(syntax_error_value("Unexpected end of JSON input"));
+        return Err(crate::builtin_value_support::syntax_error(
+            "Unexpected end of JSON input",
+        ));
     }
     let len = (*text_ptr).byte_len as usize;
     let data_ptr = crate::string::string_data(text_ptr);
     if len == 0 {
-        return Err(syntax_error_value("Unexpected end of JSON input"));
+        return Err(crate::builtin_value_support::syntax_error(
+            "Unexpected end of JSON input",
+        ));
     }
     if len == 2 && *data_ptr == b'{' && *data_ptr.add(1) == b'}' {
         return Ok(super::parse_empty::allocate_empty_object());
@@ -354,7 +372,7 @@ pub unsafe fn js_json_parse_result(text_ptr: *const StringHeader) -> Result<JSVa
 unsafe fn parse_result_noncontainer(
     text_ptr: *const StringHeader,
     len: usize,
-) -> Result<JSValue, f64> {
+) -> Result<JSValue, crate::error::CoreError> {
     let bytes = std::slice::from_raw_parts(crate::string::string_data(text_ptr), len);
     if let Some(value) = super::parse_scalar::try_parse_scalar(bytes) {
         // Decoding has finished. Neither the result nor any remaining local
@@ -370,7 +388,10 @@ unsafe fn parse_result_noncontainer(
 
 // Keep the rooted/allocating parser's stack frame out of scalar calls.
 #[inline(never)]
-unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result<JSValue, f64> {
+unsafe fn parse_result_slow(
+    text_ptr: *const StringHeader,
+    len: usize,
+) -> Result<JSValue, crate::error::CoreError> {
     // Derive the borrow here, rather than passing a shared-reference argument
     // whose function-wide protection would cross the collection points below.
     let data_ptr = (text_ptr as *const u8).add(std::mem::size_of::<StringHeader>());
@@ -446,7 +467,7 @@ unsafe fn parse_result_slow(text_ptr: *const StringHeader, len: usize) -> Result
             return parse_deep_or_error(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        return Err(syntax_error_value(&malformed_json_message(
+        return Err(syntax_error_bytes(&parse_failure_message(
             bytes,
             error_offset,
         )));
@@ -705,7 +726,7 @@ unsafe fn parse_slow(text_ptr: *const StringHeader, len: usize) -> JSValue {
             return parse_deep_or_throw(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        throw_syntax_error(&malformed_json_message(bytes, error_offset));
+        throw_syntax_error_bytes(&parse_failure_message(bytes, error_offset));
     }
 
     result
@@ -723,7 +744,7 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     let message = if result.is_none() {
         let moved = parse_root_get(text_root).as_string_ptr();
         let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
+        Some(parse_failure_message(
             bytes,
             crate::json_tape::malformed_offset(bytes),
         ))
@@ -733,22 +754,25 @@ unsafe fn parse_deep_or_throw(text: *const StringHeader, len: usize) -> JSValue 
     parse_root_restore(text_root);
     match result {
         Some(value) => value,
-        None => throw_syntax_error(&message.unwrap()),
+        None => throw_syntax_error_bytes(&message.unwrap()),
     }
 }
 
 /// The `Result` form of `parse_deep_or_throw`, for `js_json_parse_result`.
-unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<JSValue, f64> {
+unsafe fn parse_deep_or_error(
+    text: *const StringHeader,
+    len: usize,
+) -> Result<JSValue, crate::error::CoreError> {
     let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
     if exceeds_iterative_budget(bytes) {
-        return Err(range_error_value(&iterative_budget_message()));
+        return Err(range_error(&iterative_budget_message()));
     }
     let text_root = parse_root_push(JSValue::string_ptr(text as *mut StringHeader));
     let result = try_parse_deep_iterative(text, len);
     let message = if result.is_none() {
         let moved = parse_root_get(text_root).as_string_ptr();
         let bytes = std::slice::from_raw_parts(crate::string::string_data(moved), len);
-        Some(malformed_json_message(
+        Some(parse_failure_message(
             bytes,
             crate::json_tape::malformed_offset(bytes),
         ))
@@ -756,7 +780,7 @@ unsafe fn parse_deep_or_error(text: *const StringHeader, len: usize) -> Result<J
         None
     };
     parse_root_restore(text_root);
-    result.ok_or_else(|| syntax_error_value(&message.unwrap()))
+    result.ok_or_else(|| syntax_error_bytes(&message.unwrap()))
 }
 
 /// A failed direct parse goes to the heap-stack parser when the descent
@@ -989,7 +1013,7 @@ pub unsafe extern "C" fn js_json_parse_typed_array(
             return parse_deep_or_throw(text, len);
         }
         let bytes = std::slice::from_raw_parts(crate::string::string_data(text), len);
-        throw_syntax_error(&malformed_json_message(bytes, error_offset));
+        throw_syntax_error_bytes(&parse_failure_message(bytes, error_offset));
     }
 
     result
@@ -1071,3 +1095,8 @@ pub(crate) fn shape_hash(bytes: &[u8]) -> u64 {
 #[cfg(test)]
 #[path = "parse_tape_depth_tests.rs"]
 mod tape_depth_tests;
+
+/// NaN-boxed facade for promise rejection and callback consumers.
+pub unsafe fn js_json_parse_result(text: *const StringHeader) -> Result<JSValue, f64> {
+    js_json_parse_core_result(text).map_err(|error| error.value())
+}

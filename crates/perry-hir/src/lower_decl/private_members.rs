@@ -72,6 +72,17 @@ pub fn lower_private_method(
     ctx: &mut LoweringContext,
     method: &ast::PrivateMethod,
 ) -> Result<Function> {
+    // A deferred member body never resolves a pending forward class binding
+    // (see `with_pending_forward_class_bindings_hidden`).
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_private_method_in_scope(ctx, method)
+    })
+}
+
+fn lower_private_method_in_scope(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
     let name = format!("#{}", method.key.name);
 
     // Extract method-level type parameters (e.g., #helper<U>(x: U): T)
@@ -243,6 +254,15 @@ pub fn lower_private_getter(
     ctx: &mut LoweringContext,
     method: &ast::PrivateMethod,
 ) -> Result<Function> {
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_private_getter_in_scope(ctx, method)
+    })
+}
+
+fn lower_private_getter_in_scope(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
     let name = format!("get_#{}", method.key.name);
     let scope_mark = ctx.enter_scope();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -287,6 +307,15 @@ pub fn lower_private_getter(
 
 /// Lower a private setter method (e.g. `set #value(v: number) { ... }`).
 pub fn lower_private_setter(
+    ctx: &mut LoweringContext,
+    method: &ast::PrivateMethod,
+) -> Result<Function> {
+    with_pending_forward_class_bindings_hidden(ctx, |ctx| {
+        lower_private_setter_in_scope(ctx, method)
+    })
+}
+
+fn lower_private_setter_in_scope(
     ctx: &mut LoweringContext,
     method: &ast::PrivateMethod,
 ) -> Result<Function> {
@@ -397,17 +426,26 @@ pub fn lower_private_prop(
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_class_field_init = true;
     ctx.in_nonarrow_fn = true;
+    // An instance initializer is a deferred member body; a static one runs
+    // when the class is defined (see `lower_class_prop`).
     let init = prop
         .value
         .as_ref()
         .map(|e| {
-            if crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
-                let old = ctx.assignment_inferred_name.replace(name.clone());
-                let result = lower_expr(ctx, e);
-                ctx.assignment_inferred_name = old;
-                result
+            let lower_init = |ctx: &mut LoweringContext| {
+                if crate::lower::expr_assign::rhs_accepts_assignment_name(e) {
+                    let old = ctx.assignment_inferred_name.replace(name.clone());
+                    let result = lower_expr(ctx, e);
+                    ctx.assignment_inferred_name = old;
+                    result
+                } else {
+                    lower_expr(ctx, e)
+                }
+            };
+            if prop.is_static {
+                lower_init(ctx)
             } else {
-                lower_expr(ctx, e)
+                with_pending_forward_class_bindings_hidden(ctx, lower_init)
             }
         })
         .transpose();

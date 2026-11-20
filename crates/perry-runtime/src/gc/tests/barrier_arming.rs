@@ -335,7 +335,7 @@ fn test_11549_arming_walk_that_skips_old_blocks_loses_the_edge() {
     let _window = UnarmedWindowGuard::open();
 
     let (slot_page, _young) = arming_walk_fixture();
-    let _sabotage = crate::gc::verify::arming_walk_sabotage::Guard::arm();
+    let _sabotage = crate::gc::remembered::arming_walk_sabotage::Guard::arm();
     let valid_ptrs = build_valid_pointer_set();
     let _ = mark_remembered_set_roots(&valid_ptrs);
 

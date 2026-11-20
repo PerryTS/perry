@@ -1,4 +1,4 @@
-use perry_hir::{ArrayElement, Expr, Stmt};
+use perry_hir::{ArrayElement, Expr, ObjectPart, Stmt};
 use std::collections::{HashMap, HashSet};
 
 /// Native specialization facts collected once per lowered HIR region.
@@ -64,6 +64,12 @@ pub(crate) struct RepresentationFacts {
     /// — it never widens the parallel-shadow `needs_i32_slot` gate. See
     /// `collectors/loop_bounded_i32.rs`.
     pub loop_bounded_i32_locals: HashSet<u32>,
+    /// `for` counters in `integer_locals` only through the overflow-exit rule
+    /// (`collectors/exact_i32_range.rs::overflow_exit_counter`): their init or
+    /// step is lowered with overflow checks that leave the loop
+    /// (`stmt/loops.rs::lower_overflow_exit_for`). Lowering them any other way
+    /// would store a wrapped value.
+    pub overflow_exit_counters: HashSet<u32>,
     /// #9363: accumulators whose `acc = acc + <byte read>` chain provably
     /// stays below 2^53, so the update's `fadd` may carry `reassoc` and the
     /// reduction can be split into parallel partial sums. Same trip-count
@@ -77,15 +83,6 @@ pub(crate) struct RepresentationFacts {
     /// canonical-i32 gate for the same reason as
     /// `reassociable_f64_accumulators`: it is not a storage decision.
     pub loop_induction: super::loop_bounded_i32::LoopInductionFacts,
-    /// Locals whose canonical-i32 promotion is PROVABLE but not PROFITABLE
-    /// (#7128): written after declaration, no i32-consuming read anywhere in
-    /// the body, and at least one double-consuming read inside a loop — so the
-    /// i32 slot only ever converts back, emitting strictly more work than the
-    /// boxed representation. A refusal set, subtracted from the canonical-i32
-    /// eligibility conjunction and from nothing else. See
-    /// `collectors/repsel_benefit.rs` for the +14.87% `15_mandelbrot`
-    /// measurement that motivates it.
-    pub unprofitable_canonical_i32_locals: HashSet<u32>,
     /// #8105: locals whose value is a JS **Number by construction** — every
     /// write (the `let` initialiser and every later assignment) is an
     /// expression the spec guarantees evaluates to a Number.
@@ -192,6 +189,8 @@ pub(crate) struct EscapeFacts {
     /// in-progress shape as `PurityFacts` / `ShapeStabilityFacts` above.
     #[allow(dead_code)]
     pub segment_for_of_sites: Vec<super::segview::SegmentForOfSite>,
+    /// LIFE G1: the body's lifetime claims (check builds only, else empty).
+    pub life_claims: std::sync::Arc<super::life_claims::LifeClaims>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -274,16 +273,16 @@ impl TypeFacts {
         &self.representation.loop_bounded_i32_locals
     }
 
+    pub(crate) fn overflow_exit_counters(&self) -> &HashSet<u32> {
+        &self.representation.overflow_exit_counters
+    }
+
     pub(crate) fn reassociable_f64_accumulators(&self) -> &HashSet<u32> {
         &self.representation.reassociable_f64_accumulators
     }
 
     pub(crate) fn loop_induction(&self) -> &super::loop_bounded_i32::LoopInductionFacts {
         &self.representation.loop_induction
-    }
-
-    pub(crate) fn unprofitable_canonical_i32_locals(&self) -> &HashSet<u32> {
-        &self.representation.unprofitable_canonical_i32_locals
     }
 
     pub(crate) fn not_bigint_locals(&self) -> &HashSet<u32> {
@@ -408,6 +407,10 @@ impl TypeFacts {
 
     pub(crate) fn compile_time_constants(&self) -> &HashMap<u32, f64> {
         &self.platform_constants.constants
+    }
+
+    pub(crate) fn life_claims(&self) -> std::sync::Arc<super::life_claims::LifeClaims> {
+        self.escape.life_claims.clone()
     }
 
     pub(crate) fn non_escaping_news(&self) -> &HashMap<u32, String> {
@@ -545,10 +548,12 @@ pub(crate) fn collect_type_facts(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_ta_params: &HashSet<u32>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> TypeFacts {
     // #7700: which locals hold a NUMBER, so a `u8[k]` keyed on one is a byte
     // read rather than a property read. Computed once here because
@@ -560,15 +565,16 @@ pub(crate) fn collect_type_facts(
     // bitwise result as an int32 only when it cannot be a BigInt.
     let not_bigint =
         super::not_bigint_locals::NotBigIntFacts::collect(stmts, params, binding_types);
-    let mut integer_locals = super::integer_locals::collect_integer_locals_with_seeds(
-        stmts,
-        flat_const_ids,
-        clamp_fn_ids,
-        arg_dependent_clamp_fn_ids,
-        &numeric_locals,
-        spec_i32_params,
-        &not_bigint,
-    );
+    let (mut integer_locals, overflow_exit_counters) =
+        super::integer_locals::collect_integer_locals_and_exits(
+            stmts,
+            flat_const_ids,
+            clamp_fn_ids,
+            arg_dependent_clamp_fn_ids,
+            &numeric_locals,
+            spec_i32_params,
+            &not_bigint,
+        );
     // Native-i32 residency for integer-valued locals whose init/writes include a
     // possibly-out-of-bounds INT typed-array element read or a numeric-array
     // read backed by a specialized entry guard (bcryptjs `_encipher` Feistel
@@ -647,6 +653,10 @@ pub(crate) fn collect_type_facts(
     // feed the stronger fact into its downstream consumers explicitly. This
     // is a consequence of the range proof, not an additional assumption.
     integer_locals.extend(loop_bounded_i32_locals.iter().copied());
+    // The whole-program interval proof (`codegen/facts_int32_locals.rs`):
+    // every value the local holds is an int32, so it is integer-valued and
+    // i32-bounded by that proof alone (beside the loop-bounded one above).
+    integer_locals.extend(proven_int32.iter().copied());
     let not_bigint_locals = not_bigint.into_locals();
     let (mut array_facts, effect_facts, materialization_hazards) =
         collect_array_facts(stmts, params, module_globals, binding_types);
@@ -668,7 +678,7 @@ pub(crate) fn collect_type_facts(
     } else {
         HashMap::new()
     };
-    let strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
+    let mut strictly_i32_bounded_locals = super::i32_locals::collect_strictly_i32_bounded_locals(
         stmts,
         &integer_locals,
         flat_const_ids,
@@ -676,26 +686,7 @@ pub(crate) fn collect_type_facts(
         strict_int_ta_views,
         &numeric_locals,
     );
-    // #7128: the profitability half of canonical-i32 selection. Every term
-    // above answers "may we?"; this one answers "should we?", and it is
-    // computed here — after the storage facts it consults — rather than folded
-    // into any of them, so a future widening of a range proof cannot silently
-    // move the benefit verdict (and vice versa). Skipped entirely when
-    // canonical selection is off: that arm selects nothing, so a refusal set
-    // for it would be dead work.
-    let unprofitable_canonical_i32_locals = if crate::expr::canonical_i32_locals_enabled() {
-        super::repsel_benefit::collect_unprofitable_canonical_i32_locals(
-            stmts,
-            &super::repsel_benefit::I32StorageFacts {
-                index_used: &index_used_locals,
-                strictly_bounded: &strictly_i32_bounded_locals,
-                unsigned: &unsigned_i32_locals,
-                int_valued_ta: &int_valued_ta_locals,
-            },
-        )
-    } else {
-        HashSet::new()
-    };
+    strictly_i32_bounded_locals.extend(proven_int32.iter().copied());
     let non_escaping_news = super::escape_news::collect_non_escaping_news(
         stmts,
         boxed_vars,
@@ -731,6 +722,16 @@ pub(crate) fn collect_type_facts(
             stmts,
             &non_escaping_object_literals,
         );
+    let life_claims = super::life_census::observe(
+        stmts,
+        boxed_vars,
+        module_globals,
+        &super::life_census::Scalar {
+            news: &non_escaping_news,
+            objects: &non_escaping_object_literals,
+            arrays: &non_escaping_arrays,
+        },
+    );
     // #9843: the segment-record member of the escape family. Cheap by
     // construction — `collect_segment_for_of_sites` walks the region only
     // when it holds a `for…of` whose subject is an `X.segment(q)` call.
@@ -814,6 +815,7 @@ pub(crate) fn collect_type_facts(
         module_globals,
         binding_types,
         spec_ta_lens,
+        spec_ta_params,
         spec_numeric_params,
         &not_bigint_locals,
         module_global_proven_types,
@@ -935,9 +937,9 @@ pub(crate) fn collect_type_facts(
             not_bigint_locals,
             int_valued_ta_locals,
             loop_bounded_i32_locals,
+            overflow_exit_counters,
             reassociable_f64_accumulators,
             loop_induction,
-            unprofitable_canonical_i32_locals,
             number_by_construction_locals,
         },
         arrays: array_facts,
@@ -967,6 +969,7 @@ pub(crate) fn collect_type_facts(
             non_escaping_object_literals,
             non_escaping_object_literal_used_fields,
             segment_for_of_sites,
+            life_claims: std::sync::Arc::new(life_claims),
         },
         purity: PurityFacts {
             pure_helper_function_ids: clamp_fn_ids.clone(),
@@ -1008,6 +1011,7 @@ pub(crate) fn collect_native_region_fact_graph(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_native_region_fact_graph_with_spec_params(
         stmts,
@@ -1025,7 +1029,9 @@ pub(crate) fn collect_native_region_fact_graph(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
         module_global_proven_types,
+        proven_int32,
     )
 }
 
@@ -1046,10 +1052,12 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
     compile_time_constants: &HashMap<u32, f64>,
     module_dispatch: &super::ModuleDispatchFacts,
     spec_ta_lens: &HashMap<u32, i64>,
+    spec_ta_params: &HashSet<u32>,
     spec_i32_params: &HashSet<u32>,
     spec_numeric_params: &HashSet<u32>,
     spec_number_array_params: &HashSet<u32>,
     module_global_proven_types: &HashMap<u32, perry_hir::types::Type>,
+    proven_int32: &HashSet<u32>,
 ) -> NativeRegionFactGraph {
     collect_type_facts(
         stmts,
@@ -1064,10 +1072,12 @@ pub(crate) fn collect_native_region_fact_graph_with_spec_params(
         compile_time_constants,
         module_dispatch,
         spec_ta_lens,
+        spec_ta_params,
         spec_i32_params,
         spec_numeric_params,
         spec_number_array_params,
         module_global_proven_types,
+        proven_int32,
     )
 }
 
@@ -1097,7 +1107,9 @@ pub(crate) fn collect_hir_facts(
         &HashSet::new(),
         &HashSet::new(),
         &HashSet::new(),
+        &HashSet::new(),
         &HashMap::new(),
+        &HashSet::new(),
     )
 }
 
@@ -1240,6 +1252,7 @@ fn collect_owned_buffer_lets(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_owned_buffer_lets_child_scope(body, out, known_length_locals, lengths);
                 if let Some(catch) = catch {
@@ -1498,6 +1511,7 @@ impl ArrayFactCollector {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_stmts(body);
                 if let Some(catch) = catch {
@@ -1599,11 +1613,19 @@ impl ArrayFactCollector {
                 }
             }
             Expr::ObjectSpread { parts } => {
-                for (key, value) in parts {
-                    if key.is_some() {
-                        self.mark_array_identity_exposure(value);
+                for part in parts {
+                    match part {
+                        ObjectPart::Spread(value) => self.collect_expr(value),
+                        ObjectPart::Define(_, value) => {
+                            self.mark_array_identity_exposure(value);
+                            self.collect_expr(value);
+                        }
+                        ObjectPart::Computed { key, value } => {
+                            self.collect_expr(key);
+                            self.mark_array_identity_exposure(value);
+                            self.collect_expr(value);
+                        }
                     }
-                    self.collect_expr(value);
                 }
             }
             Expr::ArrayCopyWithin {
@@ -1624,6 +1646,7 @@ impl ArrayFactCollector {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     let value_kind = if expr_is_i32_shaped(value) {
@@ -1658,6 +1681,7 @@ impl ArrayFactCollector {
                 object,
                 property,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if property == "length" {
@@ -2351,6 +2375,7 @@ mod tests {
 
     fn dynamic_call() -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::LocalGet(99)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -2446,6 +2471,7 @@ mod tests {
         // result is never an Object, so each is the LENGTH form. The bare
         // property read and the bare unknown local stay unowned.
         let rows_length = || Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(99)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -2521,9 +2547,11 @@ mod tests {
             &sealed_dispatch(stmts),
             &HashMap::new(),
             &HashSet::new(),
+            &HashSet::new(),
             &[1].into_iter().collect(),
             &HashSet::new(),
             &HashMap::new(),
+            &HashSet::new(),
         )
     }
 
@@ -2691,6 +2719,7 @@ mod tests {
                 Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(8)))),
             )]),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.known_noalias_buffer_locals().contains(&1));
@@ -2757,10 +2786,10 @@ mod tests {
     fn native_fact_graph_collects_range_and_shape_escape_facts() {
         let stmts = vec![
             mutable_number_let(1, Expr::Integer(0)),
-            Stmt::Expr(Expr::IndexGet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::LocalGet(1)),
-            }),
+            Stmt::Expr(Expr::synthetic_index_get(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::LocalGet(1)),
+            )),
             Stmt::Let {
                 id: 3,
                 name: "o".to_string(),
@@ -2783,6 +2812,7 @@ mod tests {
             &HashMap::new(),
             &crate::collectors::ModuleDispatchFacts::default(),
             &HashMap::new(),
+            &HashSet::new(),
         );
 
         assert!(graph.integer_locals().contains(&1));
@@ -2858,11 +2888,11 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 alias_let(2, 1),
-                Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(2)),
-                    index: Box::new(Expr::Integer(0)),
-                    value: Box::new(Expr::Integer(9)),
-                }),
+                Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::Integer(0)),
+                    Box::new(Expr::Integer(9)),
+                )),
             ],
             &HashSet::new(),
             &HashSet::new(),
@@ -2880,11 +2910,11 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                    value: Box::new(Expr::Integer(9)),
-                }),
+                Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::Integer(0)),
+                    Box::new(Expr::Integer(9)),
+                )),
             ],
             &HashSet::new(),
             &HashSet::new(),
@@ -2971,6 +3001,7 @@ mod tests {
                 else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(99)),
                         property: "value".to_string(),
@@ -3051,6 +3082,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3091,6 +3123,7 @@ mod tests {
     #[test]
     fn clamp_admitted_local_is_pruned_when_arg_source_is_disqualified() {
         let clamp_call = |arg: Expr| Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![arg, Expr::Integer(0), Expr::Integer(100)],
             type_args: vec![],
@@ -3104,6 +3137,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3177,6 +3211,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),
@@ -3209,6 +3244,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(99)),
                     property: "value".to_string(),

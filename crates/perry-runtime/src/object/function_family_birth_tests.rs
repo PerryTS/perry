@@ -1,4 +1,5 @@
 use super::*;
+use crate::codegen_abi::LayoutWord;
 use crate::gc::RuntimeHandleScope;
 use crate::object::layout_desc::{PerryLayoutKey, StaticAtom};
 
@@ -13,16 +14,20 @@ static KEYS: [PerryLayoutKey; 1] = [PerryLayoutKey {
     atom: &ATOM,
     slot: 0,
     attrs: crate::codegen_abi::LAYOUT_KEY_OPTIONAL,
-    _pad: [0; 3],
+    _pad: 0,
+    off: crate::object::layout_desc::layout_key_off(0 as u32),
 }];
 static mut SYMBOL: u64 = crate::value::TAG_UNDEFINED;
 static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
+    image_keys: std::ptr::null_mut(),
+    shape_id: 0,
+    gc_plan: 0,
     family: 0x464e4201,
     variant: crate::codegen_abi::LAYOUT_VARIANT_FUNCTION_CONSTRUCTOR,
     kind: 0,
     integrity: 0,
     slot_count: 1,
-    layout_id: layout_desc::LAYOUT_ID_CARRIED,
+    layout_id: 0,
     rep: 0,
     proto: std::ptr::without_provenance(2),
     keys: KEYS.as_ptr(),
@@ -32,6 +37,8 @@ static mut LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     class_id: 0,
     parent_class_id: 0,
     methods: std::ptr::null(),
+    gc_header_word: crate::object::layout_desc::layout_gc_header_word(1),
+    _tail_pad: [0; 32],
 };
 unsafe impl Sync for ConstructorOperand {}
 static OPERANDS: [ConstructorOperand; 1] = [ConstructorOperand {
@@ -143,13 +150,14 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         )));
         SYMBOL = sym.get_nanbox_u64();
         let obj = scope.root_raw_mut_ptr(allocate(&f, &p).expect("family path must be live"));
+        let first_word = obj.with_const_ptr::<ObjectHeader, _>(|o| (*o).parent_class_id);
         obj.with_const_ptr::<ObjectHeader, _>(|o| {
+            // The shared descriptor stays immutable (no per-evaluation word);
+            // the object's own header names its layout.
+            assert_eq!((*std::ptr::addr_of!(LAYOUT)).layout_id, 0);
+            assert!(super::super::shapes::is_layout_word((*o).parent_class_id));
             assert_eq!(
-                (*o).parent_class_id,
-                (*std::ptr::addr_of!(LAYOUT)).layout_id
-            );
-            assert_eq!(
-                super::super::shapes::shape_object_kind_by_id((*o).parent_class_id),
+                super::super::shapes::shape_object_kind_for_word(LayoutWord((*o).parent_class_id)),
                 Some(super::super::shapes::ShapeObjectKind::Ordinary)
             );
             assert!(
@@ -182,10 +190,7 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         });
         assert!(stored, "the checked fixed-position store must be live");
         obj.with_const_ptr::<ObjectHeader, _>(|o| {
-            assert_eq!(
-                (*o).parent_class_id,
-                (*std::ptr::addr_of!(LAYOUT)).layout_id
-            );
+            assert!(super::super::shapes::is_layout_word((*o).parent_class_id));
             assert_eq!(
                 *o.cast::<u8>()
                     .add(std::mem::size_of::<ObjectHeader>())
@@ -200,10 +205,18 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
             (q.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
         )
         .unwrap();
-        assert!(
-            allocate(&f, &q).is_none(),
-            "a different current prototype takes ordinary construction"
+        // The shared descriptor binds nothing: a different prototype is bound
+        // at its own birth, to its own layout.
+        let other = scope.root_raw_mut_ptr(
+            allocate(&f, &q).expect("a different prototype binds its own layout"),
         );
+        other.with_const_ptr::<ObjectHeader, _>(|o| {
+            assert_ne!((*o).parent_class_id, first_word);
+            assert_eq!(
+                super::super::shapes::object_prototype_word(o),
+                q.get_nanbox_u64()
+            );
+        });
         let extra = b"later";
         let key = crate::string::js_string_from_bytes(extra.as_ptr(), extra.len() as u32);
         obj.with_mut_ptr::<ObjectHeader, _>(|o| {
@@ -253,16 +266,121 @@ fn family_birth_keeps_holes_and_live_prototype_and_checks_symbol_identity() {
         );
         let changed = crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED));
         crate::r#box::scope::js_scope_set(cells, 1, changed.to_bits() as i64);
-        assert!(
-            allocate(&scoped, &p).is_none(),
+        let rebound = allocate(&scoped, &p).expect("another binding binds its own layout");
+        assert_ne!(
+            (*rebound).parent_class_id,
+            first_word,
             "another binding cannot reuse this layout"
         );
         SYMBOL =
             crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED)).to_bits();
-        assert!(
-            allocate(&f, &p).is_none(),
+        let rebound = allocate(&f, &p).expect("a different symbol binds its own layout");
+        assert_ne!(
+            (*rebound).parent_class_id,
+            first_word,
             "a different symbol cannot use the first binding's layout"
         );
         SYMBOL = crate::value::TAG_UNDEFINED;
+    }
+}
+
+/// The add at a family hole asks the receiver's [[Prototype]] link: a
+/// prototype that holds the symbol read-only intercepts the add, so the
+/// checked store declines (the complete `[[Set]]` then refuses it).
+#[test]
+fn family_symbol_add_declines_under_a_read_only_inherited_symbol() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = RuntimeHandleScope::new();
+    let c = crate::closure::js_closure_alloc(&INFO.base, 0);
+    let f = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(c as i64));
+    let p = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_plain(0) as i64,
+    ));
+    unsafe {
+        super::super::proto_validity::mark_object_as_prototype(
+            (p.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        )
+        .unwrap();
+        let sym = scope.root_nanbox_f64(crate::symbol::js_symbol_new(f64::from_bits(
+            crate::value::TAG_UNDEFINED,
+        )));
+        SYMBOL = sym.get_nanbox_u64();
+        let obj = scope.root_raw_mut_ptr(allocate(&f, &p).expect("family path must be live"));
+        let bag = crate::object::js_object_alloc(0, 2);
+        let value = b"value";
+        let value = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
+        super::super::js_object_set_field_by_name(bag, value, 1.0);
+        crate::object::js_object_define_property(
+            p.get_nanbox_f64(),
+            sym.get_nanbox_f64(),
+            crate::value::js_nanbox_pointer(bag as i64),
+        );
+        let stored = obj.with_mut_ptr::<ObjectHeader, _>(|o| {
+            try_symbol_store(
+                std::ptr::addr_of!(LAYOUT),
+                0,
+                crate::value::js_nanbox_pointer(o as i64),
+                sym.get_nanbox_f64(),
+                11.0,
+            )
+        });
+        assert!(!stored, "a read-only inherited symbol intercepts the add");
+        obj.with_const_ptr::<ObjectHeader, _>(|o| {
+            assert_eq!(
+                *o.cast::<u8>()
+                    .add(std::mem::size_of::<ObjectHeader>())
+                    .cast::<u64>(),
+                crate::value::TAG_HOLE,
+                "the declined add leaves the hole"
+            );
+        });
+        SYMBOL = crate::value::TAG_UNDEFINED;
+    }
+}
+
+/// #5 (DPA review): per-evaluation function-constructor records are carried by
+/// their objects only. A loop of evaluations keeps the record count bounded
+/// across full GCs, and the worker seed holds none of the dead ones.
+#[test]
+fn per_evaluation_records_retire_and_are_not_seeded() {
+    crate::gc::initialize_runtime_fixture();
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _no_move = crate::gc::GcSuppressScope::new();
+    let scope = RuntimeHandleScope::new();
+    let c = crate::closure::js_closure_alloc(&INFO.base, 0);
+    let f = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(c as i64));
+    let p = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::object::js_object_alloc_plain(0) as i64,
+    ));
+    let collect = crate::gc::test_collect_synchronous_full_trace;
+    unsafe {
+        super::super::proto_validity::mark_object_as_prototype(
+            (p.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+        )
+        .unwrap();
+        let seed_before = super::super::shapes::test_worker_seed_len();
+        let mut counts = Vec::new();
+        for round in 0..4 {
+            for _ in 0..100 {
+                SYMBOL = crate::symbol::js_symbol_new(f64::from_bits(crate::value::TAG_UNDEFINED))
+                    .to_bits();
+                assert!(allocate(&f, &p).is_some());
+            }
+            SYMBOL = crate::value::TAG_UNDEFINED;
+            collect();
+            collect();
+            counts.push(super::super::shapes::test_record_count());
+            assert!(
+                round == 0 || counts[round] <= counts[0] + 8,
+                "records grew: {counts:?}"
+            );
+        }
+        assert_eq!(
+            super::super::shapes::test_worker_seed_len(),
+            seed_before,
+            "a dead per-evaluation record was seeded"
+        );
     }
 }

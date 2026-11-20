@@ -139,7 +139,7 @@
 //! ```
 
 use std::ptr;
-use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 #[cfg(test)]
 use crate::bigint::BIGINT_LIMBS;
@@ -154,12 +154,11 @@ const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
 const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
 const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
 const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 
 // ============================================================================
 // Truthiness check (mirrors js_is_truthy in value.rs)
@@ -175,9 +174,9 @@ fn is_truthy_bits(bits: u64) -> bool {
     if bits == TAG_TRUE {
         return true;
     }
-    // INT32_TAG: check if value is 0
-    if (bits & TAG_MASK) == INT32_TAG {
-        return (bits & INT32_MASK) != 0;
+    // An internal word is no JS value; a slot scan that meets one keeps it.
+    if (bits & TAG_MASK) == INTERNAL_WORD_TAG {
+        return true;
     }
     // String: empty string is falsy (check length == 0)
     if (bits & TAG_MASK) == STRING_TAG {
@@ -226,6 +225,7 @@ fn is_truthy_bits(bits: u64) -> bool {
 /// Message-owned layout and value storage. No source shape or heap address crosses.
 #[derive(Debug, Default)]
 pub struct CloneMessage {
+    pub ports: Vec<std::sync::Arc<crate::messaging::port_transport::Ticket>>,
     pub shapes: Vec<CloneShape>,
     pub strings: Vec<Vec<u8>>,
     pub slots: Vec<CloneSlot>,
@@ -277,6 +277,7 @@ impl CloneSlot {
 
 #[derive(Debug, Clone)]
 pub enum SerializedValue {
+    MessagePort(u32),
     RawArray(Vec<u64>),
     Message {
         root: Box<SerializedValue>,
@@ -293,7 +294,7 @@ pub enum SerializedValue {
     },
     StringRef(u32),
     /// A raw 64-bit value that needs no pointer fixup.
-    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INT32_TAG.
+    /// Covers: f64 numbers, TAG_UNDEFINED, TAG_NULL, TAG_TRUE, TAG_FALSE, INTERNAL_WORD_TAG.
     Inline(u64),
 
     /// A UTF-8 string (copied from StringHeader + trailing bytes).
@@ -455,50 +456,16 @@ mod clone_read;
 #[cfg(perry_gc_instruments)]
 mod clone_timing;
 mod clone_write;
-pub use clone_read::deserialize_nanbox_on_current_thread;
+mod transfer_list;
+pub use clone_read::{deserialize_message, deserialize_nanbox_on_current_thread};
 use clone_write::serialize_capture_for_thread;
-pub use clone_write::{serialize_message, serialize_nanbox_for_thread};
+pub use clone_write::{
+    serialize_message, serialize_message_with_ports, serialize_nanbox_for_thread,
+    validate_message_buffer,
+};
+pub use transfer_list::js_worker_transfer_sequence;
 
-/// Cross-thread codec hook for `fs.promises` FileHandle values (binary
-/// size). The serializer's FileHandle probe and the deserializer's
-/// detached-handle builder live in `crate::fs`; referencing them statically
-/// from this always-linked codec pinned the whole fs surface into every
-/// binary (the microtask pump drains diagnostics publishes through the
-/// codec, so it is reachable from `main` unconditionally). `crate::fs` arms
-/// the hook at the top of `build_filehandle_object` — before the first
-/// FileHandle object can exist — so a program that never creates one links
-/// none of it and can never observe the difference: with no FileHandle in
-/// the process, the probe cannot match and the variant is never produced.
-pub(crate) struct FsThreadCodec {
-    /// `is_fs_filehandle_value(v) || filehandle_object_fd(v).is_some()`.
-    pub is_filehandle: fn(f64) -> bool,
-    /// `build_detached_filehandle_object` (FileHandle shape, `fd === -1`).
-    pub build_detached: fn() -> f64,
-}
-
-static FS_THREAD_CODEC: AtomicPtr<FsThreadCodec> = AtomicPtr::new(ptr::null_mut());
-
-pub(crate) fn arm_fs_thread_codec(codec: &'static FsThreadCodec) {
-    // `black_box` for the same reason as `NM_INSTALL_ALL_HOOK`: a
-    // single-store AtomicPtr gets speculatively devirtualized by
-    // whole-program optimization (only one value is ever stored, so the
-    // compiler proves it and re-materializes the direct reference —
-    // re-pinning everything this hook exists to unpin).
-    FS_THREAD_CODEC.store(
-        std::hint::black_box(codec as *const FsThreadCodec as *mut FsThreadCodec),
-        Ordering::Release,
-    );
-}
-
-fn fs_thread_codec() -> Option<&'static FsThreadCodec> {
-    let p = FS_THREAD_CODEC.load(Ordering::Acquire);
-    if p.is_null() {
-        None
-    } else {
-        // SAFETY: only ever stores `&'static FsThreadCodec`.
-        Some(unsafe { &*p })
-    }
-}
+pub(crate) use crate::thread_hook_slots::fs_thread_codec;
 
 /// Human-readable name for a GC object type that cannot cross a thread
 /// boundary. Used only to build the TypeError message (#6185).
@@ -522,6 +489,10 @@ fn unsupported_transfer_type_name(obj_type: u8) -> &'static str {
         | gc::GC_TYPE_NATIVE_HANDLE
         | gc::GC_TYPE_NATIVE_POD_VIEW => "native handle",
         gc::GC_TYPE_TEMPORAL => "Temporal value",
+        // Value records (design §6.3 part 3): a clone that walks an owner's
+        // fields can meet a record array only if the compiler's facts were
+        // wrong. Reported as a false proof, in every build mode.
+        gc::GC_TYPE_RECORD_ARRAY => crate::record_array::false_proof(),
         _ => "value of an unsupported type",
     }
 }
@@ -574,11 +545,15 @@ pub(crate) fn first_unsupported_transfer_type(sv: &SerializedValue) -> Option<&'
 /// Must run on the thread whose arena should own the error object (the main
 /// thread, at the drain boundary).
 unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
+    unsupported_transfer_error(type_name).value()
+}
+
+unsafe fn unsupported_transfer_error(type_name: &str) -> crate::error::CoreError {
     let msg =
         format!("Cannot transfer a {type_name} across a perry/thread boundary (unsupported type)");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::value::js_nanbox_pointer(err as i64)
+    let err = crate::error::CoreError::type_error(s);
+    err
 }
 
 /// Throw a catchable `TypeError` naming an unsupported cross-thread transfer.
@@ -590,7 +565,7 @@ unsafe fn make_unsupported_transfer_error(type_name: &str) -> f64 {
 /// there would be undefined behavior — worker-side failures are surfaced by
 /// rejecting the returned promise on the main thread instead.
 unsafe fn throw_unsupported_transfer(type_name: &str) -> ! {
-    crate::exception::js_throw(make_unsupported_transfer_error(type_name));
+    crate::exception::throw_core(unsupported_transfer_error(type_name));
 }
 
 /// Main-thread guard: if any value in `values` is non-transferable, throw a
@@ -1429,30 +1404,18 @@ unsafe fn spawn_impl(closure_val: f64, literal_prepare: i64) -> *mut crate::prom
             ))
         };
 
-        // Call the function — catch panics to avoid aborting across FFI boundary
-        let call_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Call the function. Every perry build is `panic = "abort"`: a panic in
+        // the body ends the process, so there is no unwind to catch here.
+        let result = {
             let code = unsafe { (*(info_usize as *const crate::closure::JsFunctionInfo)).code };
             let call_fn: ClosureCall0Fn = unsafe { crate::closure::body_call::js_body_fn!(code;) };
             let local_closure =
                 closure_handle.get_raw_mut_ptr::<ClosureHeader>() as *const ClosureHeader;
             call_fn(local_closure, crate::closure::plain_call_receiver())
-        }));
-
-        match call_result {
-            Ok(result) => {
-                // Serialize result for transfer back to the spawning agent.
-                let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
-                queue_thread_result(owner_agent, promise_usize, serialized_result);
-            }
-            Err(_) => {
-                // Thread panicked — resolve with undefined to avoid hanging promise
-                queue_thread_result(
-                    owner_agent,
-                    promise_usize,
-                    SerializedValue::Inline(TAG_UNDEFINED),
-                );
-            }
-        }
+        };
+        // Serialize result for transfer back to the spawning agent.
+        let serialized_result = unsafe { serialize_nanbox_for_thread(result.to_bits()) };
+        queue_thread_result(owner_agent, promise_usize, serialized_result);
 
         // #6185: this worker's arena is about to be unmapped. Drop the shadow
         // scope first (the result is already serialized into owner-independent
@@ -1502,3 +1465,11 @@ mod literal_launch_tests;
 #[cfg(test)]
 #[path = "thread/shape_clone_tests.rs"]
 mod shape_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_stack_clone_tests.rs"]
+mod error_stack_clone_tests;
+
+#[cfg(test)]
+#[path = "thread/error_cause_clone_tests.rs"]
+mod error_cause_clone_tests;

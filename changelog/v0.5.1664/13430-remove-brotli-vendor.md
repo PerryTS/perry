@@ -1,0 +1,1 @@
+- Remove the vendored Brotli backend patch and restore the published Brotli 9 dependency. Keep the independent synchronous option and decoder integration; short custom dictionaries at quality 11 remain a known parity failure.

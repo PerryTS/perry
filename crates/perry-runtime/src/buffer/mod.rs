@@ -23,6 +23,8 @@ mod copy_write;
 mod dataview;
 mod detach;
 mod encode;
+#[cfg(test)]
+mod error_object_tests;
 mod exotic_view;
 /// #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` are registered
 /// buffers with no integer-indexed own properties.
@@ -65,7 +67,9 @@ pub use header::{BufferHeader, BUFFER_TYPE_ID, NODE_BUFFER_CLASS_ID, SMALL_BUF_T
 // ---- Re-exports: allocation / registry helpers ----
 pub(crate) use header::is_small_buf_slab_addr;
 // #9342: primed by `typedarray::js_u8_buffer_read_f64` (codegen slow arm).
-pub(crate) use access::{admitted_u8_read, admitted_u8_write, is_admitted_u8_cell};
+pub(crate) use access::{
+    admitted_u8_read, admitted_u8_write, is_admitted_u8_cell, js_buffer_set_value,
+};
 // #10694: the brand is the cell's GC type byte; see `header`'s module note.
 pub use header::{
     asymmetric_key_meta, buffer_alloc, buffer_backing_array_buffer, buffer_byte_offset,
@@ -90,14 +94,20 @@ pub use detach::is_detached_buffer;
 pub(crate) use detach::{array_buffer_transfer, detach_array_buffer};
 pub use own_props::{
     buffer_define_own_data_prop, buffer_delete_own_prop, buffer_get_own_prop, buffer_has_own_prop,
-    buffer_own_prop_names, buffer_read_own_prop, buffer_set_own_prop,
+    buffer_inherited_get, buffer_inherited_has, buffer_own_prop_names, buffer_read_own_prop,
+    buffer_set_own_prop,
 };
 // ---- Re-exports: resizable ArrayBuffer (#10873) ----
 pub use header::resizable_max_byte_length;
 pub(crate) use header::{resizable_info, set_resizable, ResizableInfo};
-pub(crate) use resizable::array_buffer_resize;
+#[cfg(test)]
+pub(crate) use resizable::alloc_resizable_array_buffer;
+pub(crate) use resizable::{
+    array_buffer_resize, buffer_new_with_options, shared_array_buffer_grow,
+};
 pub use resizable::{
     is_out_of_bounds_data_view, is_resizable_buffer, js_array_buffer_new_with_options,
+    js_shared_array_buffer_new_with_options,
 };
 
 // ---- Re-exports: #8149 integer-indexed-exotic discrimination ----
@@ -163,7 +173,7 @@ pub use cmp::{
 };
 
 // ---- Re-exports: random / swap mutators ----
-pub use mutate::{js_buffer_fill_random, js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
+pub use mutate::{js_buffer_swap16, js_buffer_swap32, js_buffer_swap64};
 
 // ---- Re-exports: numeric read/write (typed-array view ops) ----
 pub use numeric::{
@@ -376,6 +386,26 @@ mod tests {
     }
 
     #[test]
+    fn a_byte_store_of_a_js_value_is_tonumber_then_modulo_256() {
+        let buf = buffer_alloc(6);
+        unsafe {
+            super::store::set_length(buf as usize, 6);
+        }
+        // Past int32 a saturating `as i32` gave 255; ToUint8 is modular.
+        let values = [1e10, 2f64.powi(31) + 5.0, -1.0, 300.7, f64::NAN, -0.5];
+        for (i, value) in values.iter().enumerate() {
+            js_buffer_set_value(buf, i as i32, *value);
+        }
+        let bytes: Vec<i32> = (0..6).map(|i| js_buffer_get(buf, i)).collect();
+        assert_eq!(bytes, [0, 5, 255, 44, 0, 0]);
+        // A Boolean and null convert; an index past the end stores nothing.
+        js_buffer_set_value(buf, 0, f64::from_bits(crate::value::TAG_TRUE));
+        js_buffer_set_value(buf, 1, f64::from_bits(crate::value::TAG_NULL));
+        js_buffer_set_value(buf, 6, 9.0);
+        assert_eq!((js_buffer_get(buf, 0), js_buffer_get(buf, 1)), (1, 0));
+    }
+
+    #[test]
     fn test_buffer_symbol_iterator_respects_own_symbol_property() {
         let buf = buffer_alloc(1);
         unsafe {
@@ -580,20 +610,24 @@ mod tests {
     fn data_view_reads_multi_byte_typed_array_writes() {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         for (kind, elem_size) in [
-            (crate::typedarray::KIND_UINT16, 2usize),
-            (crate::typedarray::KIND_UINT32, 4),
-            (crate::typedarray::KIND_FLOAT64, 8),
+            (crate::typedarray_hook_slots::KIND_UINT16, 2usize),
+            (crate::typedarray_hook_slots::KIND_UINT32, 4),
+            (crate::typedarray_hook_slots::KIND_FLOAT64, 8),
         ] {
             let ab = js_array_buffer_new(elem_size as i32);
             let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-            let ta =
-                crate::typedarray_view::js_typed_array_view(kind as i32, ab_value, undef, undef);
+            let ta = crate::typedarray_hook_slots::js_typed_array_view(
+                kind as i32,
+                ab_value,
+                undef,
+                undef,
+            );
             assert!(!ta.is_null(), "kind={kind}: typed-array view");
             // Constructed BEFORE the write, so its snapshot is all zeroes and a
             // stale read is unambiguous.
             let dv = js_data_view_new(ab_value, undef, undef);
 
-            crate::typedarray::js_typed_array_set(ta, 0, 258.0);
+            crate::typedarray_hook_slots::js_typed_array_set(ta, 0, 258.0);
 
             // Subject-liveness: without a store that actually reaches the
             // ArrayBuffer, every byte comparison below would pass vacuously
@@ -624,8 +658,8 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let ab = js_array_buffer_new(16);
         let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-        let ta = crate::typedarray_view::js_typed_array_view(
-            crate::typedarray::KIND_UINT32 as i32,
+        let ta = crate::typedarray_hook_slots::js_typed_array_view(
+            crate::typedarray_hook_slots::KIND_UINT32 as i32,
             ab_value,
             undef,
             undef,
@@ -643,13 +677,13 @@ mod tests {
             "windowed DataView write must land at byteOffset 4 of the backing"
         );
         assert_eq!(
-            crate::typedarray::js_typed_array_get(ta, 1),
+            crate::typedarray_hook_slots::js_typed_array_get(ta, 1),
             u32::from_ne_bytes([0x01, 0x02, 0x03, 0x04]) as f64,
             "typed array must read the DataView's bytes"
         );
 
         // typed array -> windowed DataView, at the window's far end.
-        crate::typedarray::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(ta, 2, 0xDEAD_BEEFu32 as f64);
         let backing = backing_bytes(ab, 16);
         for i in 0..8usize {
             assert_eq!(
@@ -684,3 +718,19 @@ pub(crate) use header::{enqueue_all_foreign_finalizers, set_foreign_finalizer};
 
 #[cfg(test)]
 mod adopted_backing_tests;
+
+/// The out-of-range arm of a PROVEN native buffer or typed-array read
+/// (`perry-codegen`, `expr/buffer_access.rs::OutOfBoundsArm::Abort`). The
+/// compiler proved this index inside the receiver, and the lowered index
+/// failed the bounds check anyway, so the proof is wrong: a compiler bug.
+/// Name the access and stop rather than read outside the backing store or
+/// fabricate an element value.
+#[no_mangle]
+pub extern "C" fn js_native_access_bounds_failed(index: i32, length: i32) -> ! {
+    eprintln!(
+        "Perry internal error: a proven native typed-array/buffer read at index {} \
+         failed its bounds check against length {}",
+        index, length as u32
+    );
+    std::process::abort()
+}

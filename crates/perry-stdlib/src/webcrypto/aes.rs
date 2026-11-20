@@ -1203,15 +1203,6 @@ pub(super) unsafe fn object_field_number(obj_bits: u64, name: &[u8]) -> Option<u
     let key_ptr = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let val = perry_runtime::js_object_get_field_by_name(obj_ptr, key_ptr);
     let bits = val.bits();
-    let top16 = (bits >> 48) as u16;
-    if top16 == 0x7FFE {
-        // INT32_TAG — lower 32 bits as a signed int.
-        let raw = (bits & 0xFFFF_FFFF) as i32;
-        if raw >= 0 {
-            return Some(raw as u32);
-        }
-        return None;
-    }
     // Treat as f64. NaN-boxed primitives (undef, null) have non-finite
     // bits — reject them explicitly so callers fall back to the default.
     let f = f64::from_bits(bits);

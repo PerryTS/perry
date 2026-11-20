@@ -4,6 +4,28 @@ Reference for the public `perry compile` flags plus Perry's global flags. The
 installed binary remains authoritative for feature-gated commands; use
 `perry --help` and `perry <command> --help` to inspect that exact build.
 
+## Build-location independent paths
+
+`--source-root <DIR>` (or `PERRY_SOURCE_ROOT=<DIR>`) bakes module source paths
+relative to `<DIR>` instead of the directory the program was built in. A module
+at `<DIR>/a/b.js` sees `/a/b.js` in `__dirname`, `__filename` and
+`import.meta.{url,dirname,filename,resolve}`, as the base of `require` /
+`createRequire`, in `require.cache` keys, `require.resolve` results, stack-frame
+labels and the text of runtime error messages. `--source-root-target <PATH>`
+(or `PERRY_SOURCE_ROOT_TARGET`) replaces the default `/` with another absolute
+path, so `--source-root /build/app --source-root-target /srv/app` bakes
+`/srv/app/a/b.js`.
+
+```sh
+perry compile src/index.js --source-root "$PWD" -o app
+```
+
+Compile-time file access, diagnostics and `--debug-symbols` are unchanged;
+only values the program can observe are rebased. A module outside `<DIR>`
+(a linked package, say) keeps its real path and the compiler warns once per
+such module. Without the option the output is byte-identical to before. Both
+build and object caches include the effective root and target.
+
 ## Build-time defines
 
 `--define NAME=EXPR` is repeatable. It replaces unbound identifier reads and
@@ -191,6 +213,7 @@ executable so it runs with no external files on disk (#5731).
 | Flag | Description |
 |------|-------------|
 | `--embed <pattern>` | Embed a file, directory, or `*`/`**` glob (relative to the project root). Repeatable. Merged with `perry.embed` (package.json) and `[compile] embed` (perry.toml). |
+| `--sea` | Opt into Perry's Node SEA asset profile. Enables the supported `node:sea` asset APIs for files added with `--embed`; ordinary embedded assets alone do not make `isSea()` true. CLI only; package and TOML profile settings are not supported. |
 | `--bunfs-root <dir>` | Map an extracted Bun standalone root to `/$bunfs/root/`; mapped module paths resolve natively and literal file paths remain readable from the relocated executable. |
 | `--asset-module <specifier=dir>` | Generate a virtual module whose default export maps every file below `dir` to a stable `$perryfs` handle. Repeatable; source maps are excluded. |
 
@@ -199,6 +222,25 @@ vite build
 perry compile server.ts --embed "./dist/**" -o myapp
 ./myapp   # serves dist/ from memory — no dist/ folder needed
 ```
+
+To expose the same registered files through `node:sea`, opt in explicitly:
+
+```bash
+perry compile server.ts --sea --embed "./dist/**" -o myapp
+```
+
+In this profile, `isSea()` is true, `getAssetKeys()` lists the embedded file
+names, and `getAsset(key)` returns an `ArrayBuffer`; passing a
+`TextDecoder`-supported encoding returns a string. `getAssetAsBlob()` returns a
+`Blob` and accepts an optional `type`. `getRawAsset()` currently reports
+unsupported because Perry cannot safely expose the executable's read-only
+bytes as a mutable JavaScript ArrayBuffer.
+Assets still live in the executable's read-only data; no Node executable or
+temporary extraction is used. The profile is selected only with the `--sea`
+CLI flag. Existing `perry.embed` and `[compile] embed` patterns remain ordinary
+Perry assets unless `--sea` is also passed. This provides the `node:sea` asset
+APIs only; it does not implement Node SEA's `useVfs` behavior for virtual-path
+`node:fs` reads, directory reads, or module resolution.
 
 Embedded files are reachable at runtime three ways:
 
@@ -218,6 +260,26 @@ const html = readFileSync("$perryfs/dist/index.html", "utf8");
 `embeddedFiles()` is a function (not a bare value like Bun's `embeddedFiles`) so
 that array methods dispatch on its result. `readEmbedded(path)` and `node:fs`
 accept either the `$perryfs/<path>` virtual path or the embed-relative key.
+
+C addons can read the same registry through `perry_vfs_read_file_v1`, declared
+in `crates/perry-runtime/include/perry_vfs.h`:
+
+```c
+const uint8_t path[] = "$perryfs/message.txt";
+const uint8_t *data = NULL;
+size_t size = 0;
+perry_vfs_status status =
+    perry_vfs_read_file_v1(path, sizeof(path) - 1, &data, &size);
+```
+
+Compile the host with `--embed message.txt`. On `PERRY_VFS_OK`, `data` points to
+immutable bytes that remain valid until process exit, including after the
+executable moves. Do not free or modify them. Raw assets are not copied;
+compressed assets may be decoded once on first access. Missing paths return
+`PERRY_VFS_NOT_FOUND`; invalid arguments or UTF-8 return their corresponding
+status and clear the non-null outputs. The API does not extract files or
+intercept ordinary OS file reads, and is separate from Node-API. Perry exports
+it whenever the host links an approved native addon.
 
 Bun-compatible file-loader imports embed the referenced binary automatically
 and bind the default import to its `$perryfs` path:
@@ -400,7 +462,7 @@ auto-optimize):
 |----------|-------------|
 | `PERRY_SIZE_OPT=z` (or `s`) | Rebuild the runtime/stdlib at `-C opt-level=z`/`s` instead of `3`. Roughly halves a small program's binary at some runtime-speed cost (compute-heavy inner loops can run ~2-3× slower). Size-optimized and normal archives are cached independently. |
 | `PERRY_SIZE_LTO=fat` | Additionally run whole-archive fat LTO over the rebuilt archives (slower rebuild, smaller binary). Only meaningful together with `PERRY_SIZE_OPT`. |
-| `PERRY_SIZE_PANIC=abort-immediate` | Additionally rebuild the Rust standard library with the `immediate-abort` panic strategy when auto-optimize proves that no UI/thread/plugin callback needs unwinding, removing the backtrace symbolizer and unwind tables (~314 KB measured). Requires a nightly toolchain (`-Zbuild-std`); only meaningful together with `PERRY_SIZE_OPT`. A Rust-level internal panic then aborts without a symbolized backtrace — JS `throw`/`catch`, `finally`, error stacks and `uncaughtException` are unaffected. |
+| `PERRY_SIZE_PANIC=abort-immediate` | Additionally rebuild the Rust standard library with the `immediate-abort` panic strategy when auto-optimize proves that no UI/thread/plugin callback needs unwinding, removing the unwind tables. (std's backtrace symbolizer is absent from every build: the workspace builds std without its `backtrace` feature.) Requires a nightly toolchain (`-Zbuild-std`); only meaningful together with `PERRY_SIZE_OPT`. A Rust-level internal panic then aborts without a symbolized backtrace — JS `throw`/`catch`, `finally`, error stacks and `uncaughtException` are unaffected. |
 
 A `console.log` hello world on macOS arm64: 4.03 MB default → 2.17 MB with
 `PERRY_SIZE_OPT=z PERRY_SIZE_LTO=fat` → 1.87 MB adding
@@ -421,8 +483,8 @@ shrink less, proportionally.
 | `--enable-js-runtime` | Enable V8 JavaScript runtime for unsupported npm packages |
 | `--enable-wasm-runtime` | Force-link the wasmi WebAssembly host runtime (auto-detected when `WebAssembly.*` is referenced; needed only when loading via dlopen / FFI without a static reference) |
 | `--type-check` | Enable type checking via tsgo IPC |
-| `--strict-eval` | Fail the build if any runtime-unknown `eval(...)` / `new Function(<dynamic body>)` site is reachable. By default such a site is compiled to a deferred runtime error (throws only if reached) and a compile-time notice is printed. Also settable via `perry.eval = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
-| `--strict-dynamic-import` | Fail the build if a dynamic `import(...)` has a runtime-computed (non-resolvable) specifier. By default such a site is compiled to a rejected `Promise` that throws a descriptive `Error` only if reached, and is listed in the same end-of-build notice as deferred eval sites. Also settable via `perry.dynamicImport = "error"` / `perry.strict = true` (package.json or perry.toml). `PERRY_ALLOW_EVAL=1` forces it off. Resolvable forms (string literals, ternaries of resolvable arms, template literals over const locals, finite union-typed params, glob) are unaffected. See [Limitations](../language/limitations.md#no-eval-or-dynamic-code). |
+| `--strict-eval` | Legacy compatibility option; current dynamic-code lowering does not enforce a general rejection gate. See [dynamic code limits](../language/limitations.md#dynamic-code-and-module-loading). |
+| `--strict-dynamic-import` | Reject unresolved asynchronous import specifiers during module collection. Supported resolvable forms and synchronous `require()` are unaffected. `PERRY_ALLOW_EVAL=1` disables this check. |
 | `--strict-unimplemented` | Fail at compile time when a recognized but unimplemented Node/stdlib API is referenced instead of emitting a deferred runtime error. |
 | `--emit-attest` | Emit `<binary>.attest.json`; see [Binary attestation](emit-attest.md). |
 | `--emit-sandbox` | Emit the platform sandbox sidecar; see [Sandbox profiles](emit-sandbox.md). |

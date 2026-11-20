@@ -912,8 +912,7 @@ fn x509_handle_value(handle: Handle) -> f64 {
 
 fn throw_x509_parse_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = perry_runtime::error::js_error_new_with_message(msg);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    perry_runtime::exception::throw_core(perry_runtime::error::CoreError::error(msg))
 }
 
 fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
@@ -1032,12 +1031,12 @@ pub unsafe fn dispatch_x509_property(handle: i64, property: &str) -> f64 {
         "issuer" => x509_string_f64(&x509_format_name(tbs.issuer())),
         "validFrom" => x509_string_f64(&x509_format_time(&tbs.validity().not_before)),
         "validTo" => x509_string_f64(&x509_format_time(&tbs.validity().not_after)),
-        "validFromDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity().not_before,
-        )),
-        "validToDate" => perry_runtime::date::js_date_new_from_timestamp(x509_time_millis(
-            &tbs.validity().not_after,
-        )),
+        "validFromDate" => perry_runtime::date_hook_slots::js_date_new_from_timestamp(
+            x509_time_millis(&tbs.validity().not_before),
+        ),
+        "validToDate" => perry_runtime::date_hook_slots::js_date_new_from_timestamp(
+            x509_time_millis(&tbs.validity().not_after),
+        ),
         "serialNumber" => x509_string_f64(&x509_serial_number_hex(&h.cert)),
         "signatureAlgorithm" => match x509_signature_algorithm_name(&h.cert) {
             Some(value) => x509_string_f64(value),
@@ -1388,7 +1387,7 @@ pub(super) fn p256_public_bytes(private_key: &P256SecretKey, format: &str) -> Ve
     let compressed = format.eq_ignore_ascii_case("compressed");
     private_key
         .public_key()
-        .to_encoded_point(compressed)
+        .to_sec1_point(compressed)
         .as_bytes()
         .to_vec()
 }

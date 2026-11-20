@@ -22,11 +22,19 @@ const COUNTER2_ID: u32 = 44;
 const CURSOR_ID: u32 = 45;
 const ALIAS_ID: u32 = 46;
 const OTHER_ID: u32 = 47;
+// The loop bound is `count | 0`: an int32, so the counter's `i++` under
+// `i < limit` provably stays inside i32 (an unproven Number bound could pass
+// 2^31, where an i32 counter would wrap).
+const LIMIT2_ID: u32 = 48;
 
 /// `rows[<index>].<prop>`
 fn rows_field(index: Expr, prop: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ROWS2_ID)),
             index: Box::new(index),
         }),
@@ -142,6 +150,17 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             },
+            Stmt::Let {
+                id: LIMIT2_ID,
+                name: "limit".to_string(),
+                ty: Type::Number,
+                mutable: false,
+                init: Some(Expr::Binary {
+                    op: BinaryOp::BitOr,
+                    left: Box::new(Expr::LocalGet(COUNT2_ID)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+            },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
                     id: COUNTER2_ID,
@@ -153,7 +172,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 condition: Some(Expr::Compare {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER2_ID)),
-                    right: Box::new(Expr::LocalGet(COUNT2_ID)),
+                    right: Box::new(Expr::LocalGet(LIMIT2_ID)),
                 }),
                 update: Some(Expr::Update {
                     id: COUNTER2_ID,
@@ -195,6 +214,7 @@ fn fields_body() -> Vec<Stmt> {
         modulo_index(),
         add_to_sum(rows_field(Expr::LocalGet(ALIAS_ID), "id")),
         add_to_sum(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "name")),
             property: "length".to_string(),
             byte_offset: 0,
@@ -668,6 +688,7 @@ fn a_class_typed_array_declines_the_string_length_read() {
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(elem_field(ARRAY_ID, Expr::LocalGet(COUNTER_ID))),
                     property: "length".to_string(),
                     byte_offset: 0,

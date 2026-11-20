@@ -1,14 +1,17 @@
 //! Per-instance WASI Preview 2 capabilities. Nothing inherits ambient authority.
 #[cfg(test)]
+#[path = "wasi_http_tests.rs"]
+mod http_execution_tests;
+#[cfg(test)]
 #[path = "wasi_network_tests.rs"]
 mod network_execution_tests;
 
 use anyhow::{Context, Result};
+use perry_wasi::{filesystem::FsPerms, WasiCtx, WasiCtxView, WasiView};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::net::{IpAddr, SocketAddr};
 use wasmtime::component::ResourceTable;
-use wasmtime_wasi::{FsPerms, WasiCtx, WasiCtxBuilder, WasiCtxView, WasiView};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields, rename_all = "camelCase")]
@@ -54,7 +57,7 @@ pub struct Address {
 }
 
 impl Address {
-    fn allows(&self, address: SocketAddr) -> bool {
+    pub(crate) fn allows(&self, address: SocketAddr) -> bool {
         self.address == address.ip() && self.port.is_none_or(|port| port == address.port())
     }
 }
@@ -75,45 +78,58 @@ impl State {
 
 impl WasiOptions {
     pub(crate) fn build(&self) -> Result<State> {
-        let mut builder = WasiCtxBuilder::new();
-        builder.args(&self.args);
-        for (key, value) in &self.env {
-            builder.env(key, value);
-        }
+        // Bound native work and persistent transports independently per
+        // component. No process-global runtime or inherited network authority.
+        let mut ctx = WasiCtx::new(64).map_err(anyhow::Error::from)?;
+        ctx.cli.arguments = self.args.clone();
+        ctx.cli.environment = self
+            .env
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
         if self.inherit_stdin {
-            builder.inherit_stdin();
+            ctx.cli.inherit_stdin();
         }
         if self.inherit_stdout {
-            builder.inherit_stdout();
+            ctx.cli.inherit_stdout();
         }
         if self.inherit_stderr {
-            builder.inherit_stderr();
+            ctx.cli.inherit_stderr();
         }
         for preopen in &self.preopens {
-            builder
-                .preopened_dir(
-                    &preopen.host_path,
-                    &preopen.guest_path,
-                    if preopen.read_only {
-                        FsPerms::ReadOnly
-                    } else {
-                        FsPerms::ReadWrite
-                    },
-                )
-                .map_err(anyhow::Error::from)
-                .with_context(|| format!("opening WASI preopen {}", preopen.guest_path))?;
+            ctx.preopened_dir(
+                &preopen.host_path,
+                &preopen.guest_path,
+                if preopen.read_only {
+                    FsPerms::ReadOnly
+                } else {
+                    FsPerms::ReadWrite
+                },
+            )
+            .map_err(anyhow::Error::from)
+            .with_context(|| format!("opening WASI preopen {}", preopen.guest_path))?;
         }
-        builder
+        ctx.sockets
             .allow_tcp(self.network.tcp)
             .allow_udp(self.network.udp)
             .allow_ip_name_lookup(self.network.dns);
+        ctx.http.policy = perry_wasi::http::transport::DestinationPolicy {
+            tcp: self.network.tcp,
+            dns: self.network.dns,
+            addresses: self
+                .network
+                .addresses
+                .iter()
+                .map(|entry| (entry.address, entry.port))
+                .collect(),
+        };
         let addresses = self.network.addresses.clone();
-        builder.socket_addr_check(move |address, _use| {
+        ctx.sockets.socket_addr_check(move |address, _use| {
             let allowed = addresses.iter().any(|entry| entry.allows(address));
             Box::pin(async move { allowed })
         });
         Ok(State {
-            ctx: builder.build(),
+            ctx,
             table: ResourceTable::new(),
         })
     }
@@ -132,7 +148,7 @@ impl WasiView for super::StoreData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasmtime_wasi::p2::bindings::cli::environment::Host;
+    use perry_wasi::p2::bindings::cli::environment::Host;
 
     #[test]
     fn defaults_are_closed_and_preopens_are_read_only() {
@@ -178,8 +194,8 @@ mod tests {
         };
         for options in [&a, &b, &a, &WasiOptions::default()] {
             let mut state = options.build().unwrap();
-            let mut view = wasmtime_wasi::cli::WasiCliCtxView {
-                ctx: state.ctx.cli(),
+            let mut view = perry_wasi::cli::WasiCliCtxView {
+                ctx: &mut state.ctx.cli,
                 table: &mut state.table,
             };
             assert_eq!(view.get_arguments().unwrap(), options.args);
@@ -199,8 +215,8 @@ mod tests {
 mod provider_execution_tests {
     use super::*;
     use crate::{Host, Imports, Options};
-    use wasmtime_wasi::p2::bindings::sockets::{instance_network, network, tcp, tcp_create_socket};
-    use wasmtime_wasi::sockets::WasiSocketsCtxView;
+    use perry_wasi::p2::bindings::sockets::{instance_network, network, tcp, tcp_create_socket};
+    use perry_wasi::sockets::WasiSocketsCtxView;
 
     #[test]
     fn declared_wasi_imports_are_linked_only_with_explicit_opt_in() {
@@ -251,10 +267,10 @@ mod provider_execution_tests {
     }
 
     fn bind(options: &WasiOptions, address: SocketAddr) -> Result<(), network::ErrorCode> {
-        wasmtime_wasi::runtime::in_tokio(async {
+        futures_lite::future::block_on(async {
             let mut state = options.build().unwrap();
             let mut view = WasiSocketsCtxView {
-                ctx: state.ctx.sockets(),
+                ctx: &mut state.ctx.sockets,
                 table: &mut state.table,
             };
             let net = instance_network::Host::instance_network(&mut view).unwrap();
@@ -303,3 +319,7 @@ mod provider_execution_tests {
 #[cfg(test)]
 #[path = "wasi_contract_tests.rs"]
 mod contract_tests;
+
+#[cfg(test)]
+#[path = "wasi_network_legacy_tests.rs"]
+mod legacy_network_execution_tests;

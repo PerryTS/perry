@@ -1,0 +1,1 @@
+Expose BROTLI_DECODER_ERROR_FORMAT_BLOCK_SWITCH (-17) through zlib.constants reads and enumeration, matching pinned Node 26.12.1. Keep all 171 keys in Node insertion order and check the new value and enumerable property in the constants-tail parity fixture.

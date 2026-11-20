@@ -22,9 +22,7 @@ pub(super) fn throw_invalid_index(index: f64) -> ! {
     };
     let message = format!("Invalid index : {}", body);
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_rangeerror_new(msg);
-    let bits = crate::value::JSValue::pointer(error as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// `arr.toReversed()` — return a new reversed copy (immutable)
@@ -38,7 +36,7 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
     // `GC_TYPE_TYPED_ARRAY` one. Reached that way the helper answered an EMPTY
     // plain array, not the receiver's reversed elements.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -47,15 +45,31 @@ pub extern "C" fn js_array_to_reversed(arr: *const ArrayHeader) -> *mut ArrayHea
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_reversed(ta) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            // A sparse store, an index accessor or an inherited index: the
+            // elements are read by `Get`, then reversed where they stand.
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            let len = (*copy).length as usize;
+            let slots = crate::array::array_elements_ptr(copy as *const ArrayHeader) as *mut f64;
+            for i in 0..len / 2 {
+                // GC_STORE_AUDIT(BARRIERED): in-place swap of an unpublished copy, rebuilt below.
+                std::ptr::swap(slots.add(i), slots.add(len - 1 - i));
+            }
+            rebuild_array_layout(copy);
+            return copy;
+        }
         let len = (*arr).length as usize;
-        let new_arr = js_array_alloc(len as u32);
+        // The copy allocation can move the source before its slots are read.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -83,7 +97,8 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
     // ToString. Falling through to the plain-array body would be the string
     // order even if the slots were readable (#8096).
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_default(ta)
+            as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -92,16 +107,23 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_default(ta) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_default(ta)
+            as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            return js_array_sort_default(super::exotic_snapshot::exotic_snapshot(arr, false));
+        }
         let len = (*arr).length as usize;
-        // Clone the array
-        let new_arr = js_array_alloc(len as u32);
+        // The clone allocation can move the source before its slots are
+        // read, so root it across the allocation.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -117,9 +139,9 @@ pub extern "C" fn js_array_to_sorted_default(arr: *const ArrayHeader) -> *mut Ar
             };
         }
         rebuild_array_layout(new_arr);
-        // Sort the copy in-place using default sort
-        js_array_sort_default(new_arr);
-        new_arr
+        // The sort itself can collect, so hand back the helper's live pointer
+        // rather than the one captured before it.
+        js_array_sort_default(new_arr)
     }
 }
 
@@ -141,8 +163,9 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     // tracked non-`GC_TYPE_ARRAY` object and every typed array is a tracked
     // `GC_TYPE_TYPED_ARRAY` one.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator(
+            ta, comparator,
+        ) as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -151,17 +174,28 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_to_sorted_with_comparator(ta, comparator)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_to_sorted_with_comparator(
+            ta, comparator,
+        ) as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
         return js_array_alloc(0);
     }
     unsafe {
+        if crate::array::array_iteration_is_exotic(arr) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let comparator = scope.root_raw_const_ptr(comparator);
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            return comparator
+                .with_const_ptr(|comparator| js_array_sort_with_comparator(copy, comparator));
+        }
         let len = (*arr).length as usize;
-        // Clone the array
-        let new_arr = js_array_alloc(len as u32);
+        // Root both inputs before the clone allocation can move them.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let source = scope.root_raw_const_ptr(arr);
+        let comparator = scope.root_raw_const_ptr(comparator);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         (*new_arr).length = len as u32;
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
@@ -177,9 +211,9 @@ pub extern "C" fn js_array_to_sorted_with_comparator(
             };
         }
         rebuild_array_layout(new_arr);
-        // Sort the copy in-place
-        js_array_sort_with_comparator(new_arr, comparator);
-        new_arr
+        // The sort calls back into JS, which can move both the copy and the
+        // comparator: re-read the comparator and return the live result.
+        comparator.with_const_ptr(|comparator| js_array_sort_with_comparator(new_arr, comparator))
     }
 }
 
@@ -197,8 +231,29 @@ pub extern "C" fn js_array_to_spliced(
         return js_array_alloc(0);
     }
     unsafe {
+        // The receiver and the items are rooted across the two allocations
+        // below; a sparse store, an index accessor or an inherited index is
+        // first read by `Get` into a dense copy.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let item_handles = if items.is_null() || items_count == 0 {
+            Vec::new()
+        } else {
+            scope.root_nanbox_f64_slice(std::slice::from_raw_parts(items, items_count as usize))
+        };
+        let source = scope.root_raw_const_ptr(arr);
+        if crate::array::array_iteration_is_exotic(arr) {
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            source.set_raw_const_ptr(copy as *const ArrayHeader);
+        }
+        // 23.1.3.35 steps 5-8: ToIntegerOrInfinity( start ), then of
+        // `skipCount`, in that order; an object operand's `valueOf` runs here
+        // with the receiver and the items rooted.
+        let (start, _) =
+            source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(start));
+        let (delete_count, _) = source
+            .across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(delete_count));
+        let arr = source.get_raw_const_ptr::<ArrayHeader>();
         let len = (*arr).length as isize;
-        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
 
         // Normalize start index (ECMA ToIntegerOrInfinity). NaN -> 0,
         // +Infinity -> len, -Infinity -> 0. Avoid `f as isize` on non-finite.
@@ -247,8 +302,13 @@ pub extern "C" fn js_array_to_spliced(
         }
 
         let new_len = (len - dc + items_count as isize) as usize;
-        let new_arr = js_array_alloc(new_len as u32);
+        if new_len > u32::MAX as usize {
+            crate::array::array_length_range_error();
+        }
+        let (new_arr, arr) =
+            source.across_const::<ArrayHeader, _>(|| js_array_alloc(new_len as u32));
         (*new_arr).length = new_len as u32;
+        let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
 
         // Copy elements before start
@@ -258,8 +318,8 @@ pub extern "C" fn js_array_to_spliced(
         }
         // Copy inserted items
         // GC_STORE_AUDIT(BARRIERED): inserted toSpliced items are included in the rebuild below.
-        for i in 0..items_count as usize {
-            *dst.add(s as usize + i) = *items.add(i);
+        for (i, item) in item_handles.iter().enumerate() {
+            *dst.add(s as usize + i) = item.get_nanbox_f64();
         }
         // Copy elements after deleted range
         let after_start = (s + dc) as usize;
@@ -285,6 +345,9 @@ pub extern "C" fn js_array_with(
     // source local can't corrupt it. No-op for SSO / non-string. The cloned
     // elements come from `arr` and are already shared. (Mirrors #5548.)
     crate::string::js_string_addref_if_heap_string(value);
+    // 23.1.3.39 step 4 / 23.2.3.36: ToIntegerOrInfinity( index ) before the
+    // receiver is read (an object operand's `valueOf` runs here).
+    let (index, arr) = super::splice_slice::index_operand_across(arr, index);
     // #3148/#2879/#8096: %TypedArray% receiver — replace one element over
     // element-typed storage. Asked BEFORE `clean_arr_ptr` for the reason
     // `typed_array_receiver` documents: written after the clean this branch is
@@ -294,7 +357,8 @@ pub extern "C" fn js_array_with(
     // The typed twin also owns the per-kind coercion of `value` (a `300` into
     // a `Uint8Array` must read back `44`) and the typed RangeError text.
     if let Some(ta) = typed_array_receiver(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_with(ta, index, value)
+            as *mut ArrayHeader;
     }
     // #8096: the Buffer-backed `Uint8Array` shape — the SAME symptom from a
     // different receiver. `new Uint8Array([…])` is a registered BufferHeader,
@@ -303,7 +367,8 @@ pub extern "C" fn js_array_with(
     // `buffer_receiver_as_uint8_typed_array` for why this arm is sound only
     // for the immutable methods.
     if let Some(ta) = buffer_receiver_as_uint8_typed_array(arr as *mut ArrayHeader) {
-        return crate::typedarray::js_typed_array_with(ta, index, value) as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_with(ta, index, value)
+            as *mut ArrayHeader;
     }
     let arr = clean_arr_ptr(arr);
     if arr.is_null() {
@@ -324,13 +389,24 @@ pub extern "C" fn js_array_with(
             throw_invalid_index(index);
         }
         let idx = resolved as isize;
+        // The value and the receiver are rooted across the copy's allocation.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let value = scope.root_nanbox_f64(value);
+        if crate::array::array_iteration_is_exotic(arr) {
+            // A sparse store, an index accessor or an inherited index: the
+            // elements are read by `Get`.
+            let copy = super::exotic_snapshot::exotic_snapshot(arr, false);
+            note_array_slot(copy, idx as usize, value.get_nanbox_f64().to_bits());
+            return copy;
+        }
+        let source = scope.root_raw_const_ptr(arr);
+        let (new_arr, arr) = source.across_const::<ArrayHeader, _>(|| js_array_alloc(len as u32));
         let src = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const f64;
-        let new_arr = js_array_alloc(len as u32);
         (*new_arr).length = len as u32;
         let dst = crate::array::array_elements_ptr(new_arr as *const ArrayHeader) as *mut f64;
         // GC_STORE_AUDIT(BARRIERED): with() clone and replacement are followed by layout/barrier rebuild.
         std::ptr::copy_nonoverlapping(src, dst, len as usize);
-        *dst.add(idx as usize) = value;
+        *dst.add(idx as usize) = value.get_nanbox_f64();
         rebuild_array_layout(new_arr);
         new_arr
     }
@@ -359,8 +435,9 @@ pub extern "C" fn js_array_copy_within(
         } else {
             f64::from_bits(crate::value::TAG_UNDEFINED)
         };
-        return crate::typedarray::js_typed_array_copy_within(ta, target, start, end_value)
-            as *mut ArrayHeader;
+        return crate::typedarray_hook_slots::js_typed_array_copy_within(
+            ta, target, start, end_value,
+        ) as *mut ArrayHeader;
     }
     // #2879: the Buffer/`Uint8Array` shape lands here too — its elements are
     // single bytes in a `BufferHeader`, so the buffer dispatcher owns the copy
@@ -410,7 +487,12 @@ pub extern "C" fn js_array_copy_within(
         // would then copy stale storage; run the per-index spec loop
         // (HasProperty / Get / Set / Delete against the CURRENT state, with
         // the ORIGINAL captured len driving the bounds) instead.
-        if (*arr).length as i64 != len_i64 {
+        //
+        // A pre-sized `new Array(n)` above the dense limit has a logical length
+        // over its small backing store, so a memmove over `[s, e)` would read
+        // and write past the allocation; the per-index loop reads the slots
+        // beyond the store as holes and grows the store for a write.
+        if (*arr).length as i64 != len_i64 || (*arr).length > (*arr).capacity {
             copy_within_spec_dense(arr, len_i64, t, s, e);
             return arr;
         }
@@ -479,8 +561,7 @@ unsafe fn copy_within_spec_dense(arr: *mut ArrayHeader, len: i64, t: i64, s: i64
 #[cold]
 fn throw_copy_within_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn copy_within_to_integer_or_infinity(value: f64) -> f64 {
@@ -529,10 +610,10 @@ fn copy_within_length_of_array_like(receiver: f64) -> i64 {
     // to the target when untrapped) — the raw dynamic read doesn't route
     // proxies (test262 copyWithin/return-abrupt-from-has-start needs the
     // subsequent HasProperty trap to fire, which requires a real `len` here).
-    let length = if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
+    let length = if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
         let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
         let key_v = f64::from_bits(crate::value::JSValue::string_ptr(key).bits());
-        crate::proxy::js_proxy_get(receiver, key_v)
+        crate::proxy_hooks::proxy_get(receiver, key_v)
     } else {
         unsafe {
             crate::value::js_dynamic_object_get_property(
@@ -554,8 +635,8 @@ fn copy_within_index_key(index: i64) -> f64 {
 fn copy_within_has_property(receiver: f64, index: i64) -> bool {
     // `HasProperty(O, fromKey)` fires a Proxy `has` trap, propagating its
     // throw (test262 copyWithin/return-abrupt-from-has-start).
-    if crate::proxy::js_proxy_is_proxy(receiver) != 0 {
-        let v = crate::proxy::js_proxy_has(receiver, copy_within_index_key(index));
+    if crate::proxy_hooks::proxy_is_proxy(receiver) != 0 {
+        let v = crate::proxy_hooks::proxy_has(receiver, copy_within_index_key(index));
         return crate::value::js_is_truthy(v) != 0;
     }
     crate::value::js_is_truthy(crate::object::js_object_has_own(receiver, index as f64)) != 0
@@ -608,23 +689,23 @@ pub extern "C" fn js_array_copy_within_value(
     };
 
     let receiver_bits = receiver.to_bits() as i64;
-    let is_proxy = crate::proxy::js_proxy_is_proxy(receiver) != 0;
+    let is_proxy = crate::proxy_hooks::proxy_is_proxy(receiver) != 0;
     for _ in 0..count {
         if copy_within_has_property(receiver, from_idx) {
             let value = if is_proxy {
-                crate::proxy::js_proxy_get(receiver, copy_within_index_key(from_idx))
+                crate::proxy_hooks::proxy_get(receiver, copy_within_index_key(from_idx))
             } else {
                 crate::object::js_object_get_index_polymorphic(receiver_bits, from_idx as f64)
             };
             if is_proxy {
-                crate::proxy::js_proxy_set(receiver, copy_within_index_key(to_idx), value);
+                crate::proxy_hooks::proxy_set(receiver, copy_within_index_key(to_idx), value);
             } else {
                 crate::object::js_object_set_index_polymorphic(receiver_bits, to_idx as f64, value);
             }
         } else if is_proxy {
             // `DeletePropertyOrThrow` through the Proxy `deleteProperty` trap
             // (test262 copyWithin/return-abrupt-from-delete-proxy-target).
-            let ok = crate::proxy::js_proxy_delete(receiver, copy_within_index_key(to_idx));
+            let ok = crate::proxy_hooks::proxy_delete(receiver, copy_within_index_key(to_idx));
             if crate::value::js_is_truthy(ok) == 0 {
                 throw_copy_within_type_error(b"Cannot delete property");
             }

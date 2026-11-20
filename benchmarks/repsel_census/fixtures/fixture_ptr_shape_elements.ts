@@ -65,6 +65,11 @@ function build(n: number): number {
   // Read form A: explicit indexed binding under an `i < rows.length` loop.
   for (let i = 0; i < rows.length; i++) {
     const s = rows[i];
+    // `s` may be undefined to the whole-program facts (an element read), and
+    // they refuse an update through a nullable receiver, so this update is
+    // the access Ptr<Shape> lowers for `s`. Every other access to `s` is a
+    // facts access: without this line `s` is selected and never consumed.
+    s.score++;
     s.score = s.score + s.weight;
     total = total + s.score + s.id;
   }

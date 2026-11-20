@@ -539,7 +539,7 @@ pub(super) fn pinned_young_move_report(
             },
         ));
     }
-    let valid = super::trace::build_valid_pointer_set();
+    let valid = super::mark::build_valid_pointer_set();
     match valid.enclosing_object(target_user) {
         Some(enclosing) if enclosing != target_user => {
             let eh = (enclosing - super::types::GC_HEADER_SIZE) as *const super::types::GcHeader;
@@ -658,6 +658,7 @@ mod report_tests {
         GC_TYPE_MAP, GC_TYPE_STRING,
     };
 
+    #[cfg(target_pointer_width = "64")]
     /// The exact header #7990 reported, byte for byte:
     /// `obj_type=8 size=731 flags=0x37`. The old message called this "a pinned
     /// young Map" and sent the reader to `gc_pin_sites.py`, which answers OK.

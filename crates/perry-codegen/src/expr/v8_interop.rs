@@ -302,25 +302,14 @@ pub(crate) fn try_static_class_name<'a>(callee: &'a Expr, ctx: &FnCtx<'_>) -> Op
             object, property, ..
         } => {
             if is_global_object_expr(object.as_ref()) {
-                // Map construction observes the current global value. Unlike
-                // the intrinsic-only builtin routes below, this property can
-                // be an accessor that returns another constructor.
-                if property == "Map" {
-                    return None;
-                }
-                // #10359: `lower_new` resolves the name against the module's
-                // classes, class aliases and imports before (or instead of)
-                // the builtin, but a module binding is never a property of
-                // the global object. With `import { Event } from "./ev"` in
-                // scope, folding `new globalThis.Event()` built the imported
-                // class; read the property and construct it at runtime.
-                if ctx.classes.contains_key(property)
-                    || ctx.local_class_aliases.contains_key(property)
-                    || ctx.import_function_prefixes.contains_key(property)
-                {
-                    return None;
-                }
-                return Some(Cow::Borrowed(property.as_str()));
+                // A global-object property is never a module class: the
+                // caller builds a builtin intrinsic through the builtin
+                // table (`lower_global_intrinsic_new`) and constructs any
+                // other name's runtime value, which throws when the global
+                // does not exist. Folded by name, `lower_new` resolved it
+                // against the module's bindings first (#10359) and built an
+                // empty placeholder for a name nothing owns.
+                return None;
             }
             // Namespace import: `import * as ns from 'm'; new ns.Foo()`.
             // The namespace object surfaces either as `LocalGet(id)` (mapped to

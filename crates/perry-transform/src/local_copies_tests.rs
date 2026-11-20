@@ -104,6 +104,7 @@ fn source_or_alias_writes_keep_the_copy() {
 #[test]
 fn discarded_assignments_keep_effectful_rhs_and_storage() {
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::GlobalGet(99)),
         args: vec![],
         type_args: vec![],
@@ -207,6 +208,7 @@ fn loops_and_local_id_intrinsics_are_excluded() {
 #[test]
 fn effectful_use_keeps_evaluation_order_but_loses_the_alias() {
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::LocalGet(1)),
         args: vec![Expr::LocalGet(2)],
         type_args: vec![],

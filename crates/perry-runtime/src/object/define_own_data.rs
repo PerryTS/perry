@@ -54,15 +54,15 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // Declared class fields commonly CREATE; retain their key-add-first
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
-        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < super::shapes::EXOTIC_SHAPE_ID_BASE - super::shapes::SHAPE_ID_BASE
+        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE) < crate::codegen_abi::LAYOUT_RECORD_SPAN
     {
-        super::shapes::shape_record_by_id(id)
+        // `obj`'s own header word: the receiver carries its row.
+        super::shapes::shape_record_of_receiver(id)
     } else {
         None
     };
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -87,9 +87,17 @@ unsafe fn define_other(
     record: Option<super::shapes::ShapeRecordRef>,
 ) -> Option<f64> {
     let addr = (obj_value.to_bits() & crate::value::POINTER_MASK) as usize;
+    // A function object: its own keys are its bag's layout, which its keyed
+    // Function shape names (`function_own_put`).
+    if record.is_none()
+        && crate::value::addr_class::try_read_gc_header(addr)
+            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_CLOSURE)
+    {
+        return super::function_own_put::function_own_put(obj_value, key_value, value, true);
+    }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -121,7 +129,7 @@ unsafe fn define_other(
             | crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
             | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & BLOCKING != 0
         {
@@ -199,9 +207,10 @@ unsafe fn define_listed_key_by_content(
 ///
 /// `false`, having changed nothing, for anything else: the key is present,
 /// the receiver is not a plain ordinary extensible object (exotic, typed
-/// array, arguments, prototype, family, dictionary, native module), or the
-/// key is not an interned ordinary name. The caller then runs the general
-/// definition.
+/// array, arguments, prototype, native module), or the key is not an interned
+/// ordinary name. An authoritative absent overflow entry, or an absent family
+/// key before its first overflow, uses the same final-data insertion. Accessors
+/// in those cases retain the general definition.
 ///
 /// # Safety
 /// `receiver`, `key` and `descriptor` are live rooted values.
@@ -214,6 +223,9 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
     use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
     let key_ptr = match definition_admitted(receiver.get_nanbox_u64(), key.get_nanbox_f64()) {
         Some(Admitted::Fresh(key_ptr)) => key_ptr,
+        Some(Admitted::Overflow(key_ptr)) => {
+            return define_fresh_overflow_data(receiver, key_ptr, descriptor)
+        }
         Some(Admitted::Own(pos)) => {
             return redefine_unchanged_own_data(receiver.get_nanbox_u64(), pos, descriptor)
         }
@@ -237,7 +249,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
             configurable,
         );
         let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
-        super::builtin_proto::note_write_addr(addr, "descriptor");
+        super::builtin_proto::note_write_addr(
+            addr,
+            super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+            "descriptor",
+        );
         crate::typedarray_named::note_named_mutation(addr, key_bytes());
         super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
         // Claims the absent key with its entry and marks the receiver.
@@ -269,7 +285,11 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
     let set = scope.root_nanbox_u64(half(has_set, DESC_SET));
     let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
     let name = String::from_utf8_lossy(key_bytes()).into_owned();
-    super::builtin_proto::note_write_addr(addr, "descriptor");
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key_ptr)),
+        "descriptor",
+    );
     crate::typedarray_named::note_named_mutation(addr, name.as_bytes());
     // A new accessor keeps its internal writable bit (as the general
     // definition's `writable = has_accessor` does).
@@ -289,6 +309,8 @@ pub(crate) unsafe fn define_fresh_own_from_shape(
 enum Admitted {
     /// The receiver does not have the key (its interned string).
     Fresh(*const crate::StringHeader),
+    /// An absent key defined through the owned overflow, installed if needed.
+    Overflow(*const crate::StringHeader),
     /// The receiver lists the key at this position.
     Own(u32),
 }
@@ -376,7 +398,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO
         | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
         | crate::gc::OBJ_FLAG_ARGUMENTS;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
     {
@@ -384,15 +406,12 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let obj = addr as *const ObjectHeader;
     let record = super::shapes::object_shape_record(obj)?;
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
+    if !record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
-        || (*obj).parent_class_id & super::overflow::SHADOW_BIT != 0
-        || super::overflow::has_overflow(obj)
-        || super::layout_desc::is_family_object(obj)
     {
         return None;
     }
-    let meta = (*obj).meta;
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(obj as *mut _, header.obj_type));
     if !meta.is_null()
         && ((*meta).elements != 0
             || (*meta).flags
@@ -417,12 +436,75 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     if bytes == b"__proto__" {
         return None;
     }
+    // A reserved hole is absent from the authoritative overflow too. Its
+    // static spelling and slot do not make it a present property.
+    let table = super::overflow::table(obj);
+    if !table.is_null() {
+        let present = crate::string::existing_property_atom(key).is_some_and(|atom| {
+            super::overflow::find(table, crate::JSValue::string_ptr(atom.cast_mut()).bits())
+                .is_some()
+        });
+        return (!present).then_some(Admitted::Overflow(key));
+    }
+    if super::overflow::shadowed(obj) {
+        return None;
+    }
+    if super::layout_desc::is_family_object(obj) {
+        // Before its first overflow, the checked family descriptor proves
+        // an unlisted name absent. An optional listed slot must be a hole.
+        let absent = matches!(super::layout_desc::family_own_key(obj, bytes), Some(None))
+            || super::key_view::own_key_is_hole(
+                obj,
+                crate::JSValue::from_bits(key_value.to_bits()),
+            );
+        return absent.then_some(Admitted::Overflow(key));
+    }
     let keys = super::object_keys(obj);
     if !keys.is_null() {
-        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), bytes)
-        {
+        if let Some(pos) = super::keys_find_property_slot_by_bytes(keys, keys.count(), bytes) {
             return Some(Admitted::Own(pos as u32));
         }
     }
     Some(Admitted::Fresh(key))
+}
+
+/// An absent owned key is defined once with its final data attributes.
+/// A checked family absence may establish its overflow for the first time.
+/// The fixed optional slot stays a hole; the new entry owns value and order.
+/// Present properties and accessor definitions keep the complete operation.
+unsafe fn define_fresh_overflow_data(
+    receiver: &crate::gc::RuntimeHandle<'_>,
+    key: *const crate::StringHeader,
+    descriptor: &crate::object::object_ops::DescView<'_>,
+) -> bool {
+    use crate::object::object_ops::{DESC_GET, DESC_SET, DESC_VALUE};
+    if descriptor.has(DESC_GET) || descriptor.has(DESC_SET) {
+        return false;
+    }
+    let addr = (receiver.get_nanbox_u64() & crate::value::POINTER_MASK) as usize;
+    let bytes =
+        std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+    let attrs = super::PropertyAttrs::new(
+        descriptor.flag(b"writable").unwrap_or(false),
+        descriptor.flag(b"enumerable").unwrap_or(false),
+        descriptor.flag(b"configurable").unwrap_or(false),
+    );
+    super::builtin_proto::note_write_addr(
+        addr,
+        super::builtin_proto::Mutation::Redefine(super::builtin_proto::Key::Str(key)),
+        "descriptor",
+    );
+    crate::typedarray_named::note_named_mutation(addr, bytes);
+    super::prop_plan::prop_plan_epoch_bump_for_owner(addr);
+    super::descriptor_state::note_attrs_born_with_keys(addr);
+    let entry = super::key_attrs::AttrsEdit::Data(bytes, attrs.bits).apply(0);
+    // insert roots owner/value before canonicalizing an interned spelling
+    // to its property atom, then uses the existing insertion and barriers.
+    super::overflow::insert(
+        addr as *mut ObjectHeader,
+        key,
+        descriptor.read(DESC_VALUE).bits(),
+        entry,
+    );
+    true
 }

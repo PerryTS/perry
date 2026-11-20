@@ -52,88 +52,18 @@ fn lower_rooted_dynamic_binary(
     })
 }
 
-/// Emit JS numeric remainder with an inline fast path for i32-valued operands.
-///
-/// LLVM lowers `frem double` to a libm `fmod` call. Most application
-/// remainders use small whole numbers (loop indices, lengths, parsed integer
-/// configuration), so prove that common case at runtime and use integer
-/// remainder instead. The ordered range checks are deliberately in a separate
-/// predecessor from `fptosi`: converting NaN, infinity, or an out-of-range
-/// double is poison in LLVM even when a later select would discard it.
-///
-/// Everything the inline i32 check refuses goes to ONE shared out-of-line
-/// helper, `js_number_mod`, in place of the `frem` that used to be emitted
-/// here. That `frem` was already a libm call, so the site does not grow. The
-/// helper adds an exact-integer path for operands within ±2^53 (a 64-bit
-/// LCG step such as `(seed * 48271) % 2147483647` overflows i32 but not
-/// i53) and falls back to `fmod` for everything else.
+/// Use the same checked raw-Number operation as typed function/method entries.
+/// Its frozen i32 conversions plus exact ordered roundtrips reject fractions,
+/// overflow, NaN and infinities without a separate range-check predecessor.
+/// It also restores the dividend's sign with copysign, including negative zero.
+/// The compiler-owned body is inlined before statepoint rewriting, so constant
+/// divisors and proven operand ranges remain visible to LLVM. Non-Numbers
+/// have already taken the ordinary ToNumeric/ToNumber paths at the caller.
 fn lower_checked_i32_modulo(ctx: &mut FnCtx<'_>, left: &str, right: &str) -> String {
-    let convert_idx = ctx.new_block("mod.i32.convert");
-    let integer_idx = ctx.new_block("mod.i32.integer");
-    let fallback_idx = ctx.new_block("mod.f64.fallback");
-    let merge_idx = ctx.new_block("mod.merge");
-    let convert_label = ctx.block_label(convert_idx);
-    let integer_label = ctx.block_label(integer_idx);
-    let fallback_label = ctx.block_label(fallback_idx);
-    let merge_label = ctx.block_label(merge_idx);
-
-    let min = crate::nanbox::double_literal(f64::from(i32::MIN));
-    let max = crate::nanbox::double_literal(f64::from(i32::MAX));
-    let l_ge_min = ctx.block().fcmp("oge", left, &min);
-    let l_le_max = ctx.block().fcmp("ole", left, &max);
-    let r_ge_min = ctx.block().fcmp("oge", right, &min);
-    let r_le_max = ctx.block().fcmp("ole", right, &max);
-    let l_in_range = ctx.block().and(I1, &l_ge_min, &l_le_max);
-    let r_in_range = ctx.block().and(I1, &r_ge_min, &r_le_max);
-    let both_in_range = ctx.block().and(I1, &l_in_range, &r_in_range);
-    ctx.block()
-        .cond_br(&both_in_range, &convert_label, &fallback_label);
-
-    ctx.current_block = convert_idx;
-    let li = ctx.block().fptosi(DOUBLE, left, I32);
-    let ri = ctx.block().fptosi(DOUBLE, right, I32);
-    let l_roundtrip = ctx.block().sitofp(I32, &li, DOUBLE);
-    let r_roundtrip = ctx.block().sitofp(I32, &ri, DOUBLE);
-    let l_is_integer = ctx.block().fcmp("oeq", &l_roundtrip, left);
-    let r_is_integer = ctx.block().fcmp("oeq", &r_roundtrip, right);
-    let r_is_nonzero = ctx.block().icmp_ne(I32, &ri, "0");
-    let both_integer = ctx.block().and(I1, &l_is_integer, &r_is_integer);
-    let can_use_integer = ctx.block().and(I1, &both_integer, &r_is_nonzero);
-    ctx.block()
-        .cond_br(&can_use_integer, &integer_label, &fallback_label);
-
-    ctx.current_block = integer_idx;
-    let remainder = ctx.block().srem(I32, &li, &ri);
-    let result = ctx.block().sitofp(I32, &remainder, DOUBLE);
-
-    // Integer remainder loses the sign of a zero result. Test the dividend's
-    // IEEE-754 sign bit rather than `left < 0`, because -0 must also produce
-    // -0. Nonzero results already have the dividend's sign via signed `srem`.
-    let remainder_is_zero = ctx.block().icmp_eq(I32, &remainder, "0");
-    let left_bits = ctx.block().bitcast_double_to_i64(left);
-    let dividend_has_sign = ctx.block().icmp_slt(I64, &left_bits, "0");
-    let needs_negative_zero = ctx.block().and(I1, &remainder_is_zero, &dividend_has_sign);
-    let negative_result = ctx.block().fneg(&result);
-    let integer_value =
-        ctx.block()
-            .select(I1, &needs_negative_zero, DOUBLE, &negative_result, &result);
-    let integer_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = fallback_idx;
-    let fallback_value =
-        ctx.block()
-            .call(DOUBLE, "js_number_mod", &[(DOUBLE, left), (DOUBLE, right)]);
-    let fallback_end = ctx.block().label.clone();
-    ctx.block().br(&merge_label);
-
-    ctx.current_block = merge_idx;
-    ctx.block().phi(
+    ctx.block().call_gc_leaf(
         DOUBLE,
-        &[
-            (&integer_value, &integer_end),
-            (&fallback_value, &fallback_end),
-        ],
+        crate::codegen::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+        &[(DOUBLE, left), (DOUBLE, right)],
     )
 }
 
@@ -219,12 +149,18 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     }
     let mut leaves = Vec::new();
     add_tree_leaves(expr, &mut leaves);
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             if !is_tested {
@@ -256,10 +192,17 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // A receiver run in flight goes on past the add: the numeric arm
+        // emits no call, and the dynamic arm re-proves the run's receiver
+        // after its conversions (`layout_read::ColdSpan`).
+        let mut span = crate::expr::layout_read::cold_span(ctx);
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
         let fast_val = rebuild_numeric_add_tree(ctx, expr, values, &mut 0);
+        if let Some(span) = span.as_mut() {
+            crate::expr::layout_read::cold_hot_end(ctx, span);
+        }
         let fast_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
@@ -280,14 +223,52 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
             let result = rebuild_rooted_dynamic_add_tree(ctx, expr, group, &leaves, &mut 0, false);
             Ok(group.reread_emitted(ctx, result))
         })?;
+        let reproof = match span.as_ref() {
+            Some(span) => crate::expr::layout_read::cold_reprove(ctx, span)?,
+            None => None,
+        };
         let slow_end = ctx.block().label.clone();
         ctx.block().br(&merge_label);
 
         ctx.current_block = merge_idx;
-        Ok(ctx
+        let value = ctx
             .block()
-            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]))
+            .phi(DOUBLE, &[(&fast_val, &fast_end), (&slow_val, &slow_end)]);
+        if let Some(span) = span {
+            crate::expr::layout_read::cold_merge(ctx, span, &fast_end, reproof);
+        }
+        Ok(value)
     })
+}
+
+/// P3 B1, C2 (`facts_canonical`): a guarded arithmetic leaf the facts prove a
+/// plain Number needs no "is a Number" test.
+fn facts_number_leaf(ctx: &FnCtx<'_>, leaf: &Expr) -> bool {
+    let proven = crate::expr::facts_canonical::of(ctx, leaf)
+        == Some(crate::expr::facts_canonical::Num::Number);
+    if proven {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::CanonicalNumber,
+            || serde_json::json!({ "arith": "leaf" }),
+        );
+        crate::facts_consumed::used();
+    }
+    proven
+}
+
+/// Check mode: each fact-trusted leaf is a plain double.
+fn witness_facts_leaves(ctx: &mut FnCtx<'_>, values: &[String], facts: &[bool]) -> Result<()> {
+    for (value, f) in values.iter().zip(facts) {
+        if *f {
+            crate::expr::facts_canonical::witness(
+                ctx,
+                value,
+                crate::expr::facts_canonical::Num::Number,
+                "arithmetic leaf",
+            )?;
+        }
+    }
+    Ok(())
 }
 
 /// The `+`-shaped guard for the arithmetic operators that cannot concatenate.
@@ -317,13 +298,19 @@ fn lower_guarded_numeric_arith(
     fname: &str,
 ) -> Result<String> {
     let leaves = [left, right];
+    let facts: Vec<bool> = leaves
+        .iter()
+        .map(|leaf| facts_number_leaf(ctx, leaf))
+        .collect();
     let needs_test: Vec<bool> = leaves
         .iter()
-        .map(|leaf| !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
+        .zip(&facts)
+        .map(|(leaf, f)| !f && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, leaf))
         .collect();
     let range_guard = is_bitwise_op(op) && needs_test.contains(&true);
 
     with_operands_rooted(ctx, &leaves, |ctx, values| {
+        witness_facts_leaves(ctx, values, &facts)?;
         let mut cond: Option<String> = None;
         for (value, is_tested) in values.iter().zip(needs_test.iter()) {
             let is_num = if range_guard {
@@ -390,6 +377,13 @@ fn lower_guarded_numeric_arith(
         let fast_label = ctx.block_label(fast_idx);
         let slow_label = ctx.block_label(slow_idx);
         let merge_label = ctx.block_label(merge_idx);
+        // The helper is the arm for a BigInt or a value that needs ToNumeric.
+        let all_num = if crate::module::cold_paths_enabled() {
+            ctx.block()
+                .call(I1, "llvm.expect.i1", &[(I1, &all_num), (I1, "true")])
+        } else {
+            all_num
+        };
         ctx.block().cond_br(&all_num, &fast_label, &slow_label);
 
         ctx.current_block = fast_idx;
@@ -468,6 +462,32 @@ fn is_null_defaulted_local_plus_numeric_literal(left: &Expr, right: &Expr) -> bo
 
 fn is_numeric_literal(expr: &Expr) -> bool {
     matches!(expr, Expr::Integer(_) | Expr::Number(_))
+}
+
+/// Number::exponentiate (ECMA-262 6.1.6.1.3) of a Number `base` and the
+/// exponent `exponent` (lowered as `exp`). The literal exponent 2 is the
+/// square: IEEE 754 multiplication is correctly rounded, so `base * base` is
+/// the correctly rounded square, which is what V8 returns for `x ** 2` and
+/// `Math.pow(x, 2)` (NaN, signed zeros, infinities and overflow included).
+/// libm `pow` is not correctly rounded and differs from it. Any other
+/// exponent calls `js_math_pow`.
+pub(crate) fn lower_number_pow(
+    ctx: &mut FnCtx<'_>,
+    base: &str,
+    exponent: &Expr,
+    exp: &str,
+) -> String {
+    let squares = match exponent {
+        Expr::Number(n) => *n == 2.0,
+        Expr::Integer(n) => *n == 2,
+        _ => false,
+    };
+    if squares {
+        ctx.block().fmul(base, base)
+    } else {
+        ctx.block()
+            .call(DOUBLE, "js_math_pow", &[(DOUBLE, base), (DOUBLE, exp)])
+    }
 }
 
 fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
@@ -599,13 +619,20 @@ fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     else {
         return true;
     };
+    // A left `+` converts SILENTLY when every leaf of it is a Number, a
+    // primitive-kind read, or the result of `-` `*` `/` `%` `**` over such
+    // operands (`facts_number::add_tree_converts_silently`): ToPrimitive of a
+    // primitive returns it (7.1.1) and ToNumeric of Number, Boolean, null and
+    // undefined is a Number (7.1.3), so its conversions run no user code and
+    // cannot throw (no String, no BigInt, no Symbol, no object). Reading a
+    // late leaf before them is then invisible, whatever that leaf is.
     let left_converts = matches!(
         left.as_ref(),
         Expr::Binary {
             op: BinaryOp::Add,
             ..
         }
-    );
+    ) && !super::facts_number::add_tree_converts_silently(ctx, left);
     if left_converts {
         let mut late = Vec::new();
         add_tree_leaves(right, &mut late);
@@ -876,7 +903,12 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((canonical, true));
         }
     }
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
+        if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
+            let number = super::rest_elems::Want::Number;
+            let value = super::rest_elems::lower_read(ctx, expr, floor, number)?;
+            return Ok((value, true));
+        }
         if let Some(value) = super::ta_element_read::try_lower(ctx, object, index, true)? {
             return Ok((value, true));
         }
@@ -947,6 +979,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // no boxed fallback at all (the residual per-element check proves the slot
     // is a raw double before the load), so claiming one here would be a lie
     // that other consumers of that predicate would read.
+    // I32 at rest (PR C): an I32 lane's read is its i32 as a double.
+    if let Some(value) = super::rest_fields::try_lower_number(ctx, expr)? {
+        return Ok((value, true));
+    }
     let in_element_shape_clone = matches!(expr, Expr::PropertyGet { object, property, .. }
         if crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some());
     if in_element_shape_clone || expr_may_return_boxed_value_from_raw_f64_fallback(ctx, expr) {
@@ -996,6 +1032,13 @@ fn operand_needs_residual_coerce(ctx: &FnCtx<'_>, expr: &Expr, fallback_coerced:
             // `lower_guarded_numeric_add`. Proven raw-f64 tiers answer
             // false here, so asking about every expression keeps them exempt.
             || numeric_proof_is_declared_only(ctx, expr))
+        // A value the facts prove a Number (`facts_number::operand`) is
+        // lowered to a canonical double already: an element or field read
+        // proven a plain double, or a `+` / `-` `*` `/` over such operands
+        // whose lowering converts each one (`try_lower_add`,
+        // `try_lower_arith`). Coercing it again is a call that returns its
+        // argument.
+        && super::facts_number::operand(ctx, expr) != Some(super::facts_number::Operand::Number)
 }
 
 /// Lower an operand in number context: route through
@@ -1035,6 +1078,34 @@ fn lower_numeric_logical_for_number_context(
     right: &Expr,
 ) -> Result<String> {
     if matches!(op, LogicalOp::Coalesce) {
+        // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
+        if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
+            return Ok(ctx.block().sitofp(I32, &v, DOUBLE));
+        }
+        // A canonical raw f64 is a Number, never `null`/`undefined`: `l ?? r`
+        // is `l` and `r` is never evaluated. (An in-window read under a
+        // packed-loop index fact, a proven raw-f64 field, a numeric local.)
+        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, left)
+            && !matches!(
+                std::env::var("PERRY_UNBOXED_CLASS_FIELDS").as_deref(),
+                Ok("0") | Ok("off") | Ok("false")
+            )
+        {
+            return lower_expr(ctx, left);
+        }
+        // An element read below a dense floor that is a proven Number
+        // (`proven_array`, PR-C2): never nullish, and its number-context
+        // lowering is the double.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_operand_as_number(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
+        // `a[k] ?? <literal>` over an Array of Numbers: the nullish test
+        // is on the read's miss arm only (`index_get::rep_default`).
+        if let Some(v) = crate::expr::index_get::rep_default::try_lower(ctx, left, right, true)? {
+            return Ok(v);
+        }
         let l_boxed = lower_expr(ctx, left)?;
         let is_nullish = {
             let blk = ctx.block();
@@ -1291,7 +1362,17 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Some(value) = super::bitset_test::try_lower_u32_bitset_test(ctx, expr)? {
                 return Ok(value);
             }
+            // Operands the facts hold as int32 words (an I32 lane, an at-rest
+            // or int32 element) stay i32 through the operator.
+            if let Some(value) = super::int32_operand::try_lower_bitwise(ctx, *op, left, right)? {
+                return Ok(value);
+            }
             if matches!(op, BinaryOp::Add) {
+                // CLS D2: Numbers and primitive-kind reads the facts prove:
+                // an fadd of the two ToNumber values, no dynamic helper.
+                if let Some(value) = super::facts_number::try_lower_add(ctx, left, right)? {
+                    return Ok(value);
+                }
                 // Use the stricter `is_definitely_string_expr` check for
                 // the string-concat fast path. A union type `string|number`
                 // that happens to contain a number at runtime would get
@@ -1336,6 +1417,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     && crate::type_analysis::is_declared_string_expr(ctx, right)
                 {
                     return lower_string_concat(ctx, left, right);
+                }
+                // The same pairwise concat for operands the whole-program
+                // facts call strings (a call's result kinds).
+                if super::facts_string::both_strings(ctx, left, right) {
+                    return super::facts_string::lower_concat(ctx, left, right);
                 }
                 if l_is_str || r_is_str {
                     let other_known_primitive = if l_is_str {
@@ -1506,6 +1592,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let r_prim =
                     crate::type_analysis::is_numeric_expr(ctx, right) || is_bool_expr(ctx, right);
                 if !(l_prim && r_prim) {
+                    // CLS D2: Numbers and primitive-kind reads the facts
+                    // prove: converted inline, no dynamic helper.
+                    if let Some(value) =
+                        super::facts_number::try_lower_arith(ctx, *op, left, right)?
+                    {
+                        return Ok(value);
+                    }
                     // Non-BigInt inline fast path (the bcryptjs `_encipher`
                     // Feistel lever): for the six BITWISE ops, when BOTH
                     // operands are provably-not-BigInt we skip the dynamic
@@ -1602,14 +1695,30 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let l_needs_coerce = operand_needs_residual_coerce(ctx, left, l_fallback_coerced);
             let r_needs_coerce = operand_needs_residual_coerce(ctx, right, r_fallback_coerced);
             let l = if l_needs_coerce {
-                ctx.block()
-                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
+                if let Some(
+                    k @ (super::facts_number::Operand::Prim
+                    | super::facts_number::Operand::NumOrUndef),
+                ) = super::facts_number::operand(ctx, left)
+                {
+                    super::facts_number::arith_to_number(ctx, left, k, &l_raw)?
+                } else {
+                    ctx.block()
+                        .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &l_raw)])
+                }
             } else {
                 l_raw
             };
             let r = if r_needs_coerce {
-                ctx.block()
-                    .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+                if let Some(
+                    k @ (super::facts_number::Operand::Prim
+                    | super::facts_number::Operand::NumOrUndef),
+                ) = super::facts_number::operand(ctx, right)
+                {
+                    super::facts_number::arith_to_number(ctx, right, k, &r_raw)?
+                } else {
+                    ctx.block()
+                        .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &r_raw)])
+                }
             } else {
                 r_raw
             };
@@ -1641,10 +1750,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     blk.fdiv(&l, &r)
                 }
                 BinaryOp::Mod => lower_checked_i32_modulo(ctx, &l, &r),
-                BinaryOp::Pow => {
-                    ctx.block()
-                        .call(DOUBLE, "js_math_pow", &[(DOUBLE, &l), (DOUBLE, &r)])
-                }
+                BinaryOp::Pow => lower_number_pow(ctx, &l, right, &r),
                 // Bitwise ops: use toint32_fast (skip NaN/Inf guard) when
                 // operands are known-finite from integer analysis.
                 //
@@ -1683,8 +1789,14 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         BinaryOp::BitAnd => blk.and(I32, &li, &ri),
                         BinaryOp::BitOr => blk.or(I32, &li, &ri),
                         BinaryOp::BitXor => blk.xor(I32, &li, &ri),
-                        BinaryOp::Shl => blk.shl(I32, &li, &ri),
-                        BinaryOp::Shr => blk.ashr(I32, &li, &ri),
+                        BinaryOp::Shl => {
+                            let shift = blk.js_shift_count(&ri);
+                            blk.shl(I32, &li, &shift)
+                        }
+                        BinaryOp::Shr => {
+                            let shift = blk.js_shift_count(&ri);
+                            blk.ashr(I32, &li, &shift)
+                        }
                         _ => unreachable!(),
                     };
                     blk.sitofp(I32, &v, DOUBLE)
@@ -1711,7 +1823,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         ctx.toint32_wrap(&r)
                     };
                     let blk = ctx.block();
-                    let v = blk.lshr(I32, &li, &ri);
+                    let shift = blk.js_shift_count(&ri);
+                    let v = blk.lshr(I32, &li, &shift);
                     blk.uitofp(I32, &v, DOUBLE)
                 }
             };

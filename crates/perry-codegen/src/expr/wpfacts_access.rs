@@ -13,7 +13,8 @@
 //! which throws), no ShapeId compare, no miss call.
 //!
 //! The receiver facts come from the whole-program solve (`locals`,
-//! `this_of`).
+//! `this_of`, and, for a receiver that is itself a field read, the field's
+//! holder facts `FactsField::classes`).
 //! The GC write barrier stays for stores that can carry a pointer (F2 decides
 //! which can); the raw-f64 lane discipline stays for stores into an F64 lane.
 //!
@@ -32,10 +33,11 @@
 //! (`class_field_global_index`): a disagreement means no elision.
 //!
 //! Every elision records its proof: with `PERRY_FACTS_DUMP` set, one line per
-//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1`
-//! build each elided site calls `perry_wpfacts_check_field` (perry-runtime
-//! `wpfacts_check.rs`), which re-derives class, slot and kind from the
-//! object and aborts on a mismatch.
+//! elided site goes to `<dump>.elisions`; in a `PERRY_CHECK_CONTRACTS=1` or
+//! `PERRY_VERIFY_FACTS=1` build (`verify_facts`) each elided site calls
+//! `perry_wpfacts_check_field` (perry-runtime `wpfacts_check.rs`), which
+//! re-derives class, slot and kind from the object and aborts, naming the
+//! site, on a mismatch.
 
 use anyhow::Result;
 use perry_hir::Expr;
@@ -50,6 +52,9 @@ use super::{lower_expr, FnCtx};
 pub(crate) const WPF_STORE: u32 = 1;
 pub(crate) const WPF_NULLABLE: u32 = 2;
 pub(crate) const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (`FieldProof::maybe_absent`): the read's hole
+/// compare is part of the claim, so a hole at the slot is no false slot.
+pub(crate) const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Kind-mask bits (`perry_wpfacts::KindFact::mask`).
 const K_NUM: u16 = 1;
@@ -86,6 +91,11 @@ pub(crate) struct FieldProof {
     /// Every class's birth lane at the slot is `F64` and the field only ever
     /// holds Numbers: the slot always holds a canonical double.
     pub raw_f64: bool,
+    /// The field only ever holds Numbers (F2 is exactly Number), the read is
+    /// guard-free and the receiver is a heap object: the read is a Number,
+    /// and the slot's word is that Number's raw double (a Number has one
+    /// encoding), on a boxed slot as on an `F64` lane.
+    pub number: bool,
     /// Some class's birth lane at the slot is `F64`: a store keeps the
     /// raw-slot discipline.
     pub any_f64_lane: bool,
@@ -97,6 +107,37 @@ pub(crate) struct FieldProof {
     /// Interpreted code can run: the site tests
     /// `PERRY_INTERP_PROTO_WRITTEN` (decision 150).
     pub interp_guard: bool,
+    /// The key is declared or reserved in some receiver class: present only
+    /// once stored, so the load is followed by the hole compare, whose miss
+    /// is the site's complete generic operation.
+    pub maybe_absent: bool,
+    /// The read is a value of representation `Arr` (DESIGN-p4l1 §3.2): the
+    /// join, over the class set, of what the field holds
+    /// (`FactsField::rep`). `None` when some class's field may hold
+    /// anything but plain program Arrays, and for a guarded or possibly
+    /// absent read, whose value may come from elsewhere.
+    pub array: Option<crate::codegen::FactsArrRep>,
+    /// The field's Number representation over the class set (I32 at rest,
+    /// PR A: wpfacts `FieldFacts::rep` F64 or I32, joined): `None` when
+    /// some class's field may hold anything but Numbers, and for a guarded
+    /// or possibly absent read. PR A consumes it only in check mode.
+    pub num_rep: Option<crate::codegen::FactsRep>,
+    /// −0 tolerance (PR D): some class's field may hold a `-0` no use
+    /// observes (`ElisionFacts::zero_tolerant_fields`); the field-rep
+    /// witness admits it.
+    pub num_zero_ok: bool,
+    /// Every class's field holds, as Strings, only program string
+    /// literals' values (`ElisionFacts::literal_string_fields`): what an
+    /// unguarded store writes there is one (`expr::literal_strings`).
+    pub literal_strings: bool,
+    /// Every class's field holds only Booleans
+    /// (`ElisionFacts::boolean_fields`): an unguarded read is `true` or
+    /// `false` (`expr::booleans`).
+    pub booleans: bool,
+    /// Every class's field holds only `true`, `false`, `undefined` or `null`
+    /// (`ElisionFacts::nullish_boolean_fields`): the truthiness of an
+    /// unguarded read is `word == TAG_TRUE` (`expr::booleans`).
+    pub nullish_booleans: bool,
 }
 
 impl FieldProof {
@@ -107,7 +148,7 @@ impl FieldProof {
 
     /// The site tests the proof at run time and has a generic miss arm.
     pub(crate) fn guarded(&self) -> bool {
-        self.checked || self.interp_guard
+        self.checked || self.interp_guard || self.maybe_absent
     }
 
     pub(crate) fn may_hold_string(&self) -> bool {
@@ -146,10 +187,14 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             if ctx.scalar_replaced.contains_key(id) || ctx.pod_records.contains_key(id) {
                 return None;
             }
-            ctx.wpfacts
-                .locals
-                .get(id)
-                .map(|r| (r.clone(), format!("local {id}")))
+            ctx.wpfacts.locals.get(id).map(|r| {
+                crate::facts_consumed::used();
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::Receiver,
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+                );
+                (r.clone(), format!("local {id}"))
+            })
         }
         Expr::This => {
             if ctx.is_static_class_this(object) {
@@ -157,13 +202,214 @@ fn receiver(ctx: &FnCtx<'_>, object: &Expr) -> Option<(crate::codegen::FactsRecv
             }
             let top = ctx.this_stack.last()?;
             let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
-            ctx.wpfacts
-                .this_of
-                .get(fid)
-                .map(|r| (r.clone(), format!("this of fn {fid}")))
+            ctx.wpfacts.this_of.get(fid).map(|r| {
+                crate::facts_consumed::used();
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::Receiver,
+                    || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+                );
+                (r.clone(), format!("this of fn {fid}"))
+            })
+        }
+        // Holder facts: a read of a field of an unchecked proven receiver
+        // holds, in every class of that receiver, only instances of the
+        // field's classes (or null/undefined): their union is this value's
+        // receiver fact. No guard: an unchecked receiver needs none, and a
+        // field with ⊤ or interpreted writers has no classes.
+        Expr::PropertyGet {
+            object: inner,
+            property,
+            ..
+        } => {
+            if property.starts_with('#') || ctx.wpfacts.interp_guard {
+                return None;
+            }
+            let (r, binding) = receiver(ctx, inner)?;
+            if r.checked || r.class_ids.is_empty() {
+                return None;
+            }
+            let mut class_ids: Vec<u32> = Vec::new();
+            let mut nullable = false;
+            for &cid in &r.class_ids {
+                let f = ctx.wpfacts.field(cid, property)?;
+                crate::verify_facts::consumed(
+                    crate::verify_facts::Fact::HolderClasses,
+                    || serde_json::json!({"holder":cid,"key":property,"classes":f.classes,"nullable":f.nullable}),
+                );
+                if f.reserved || f.classes.is_empty() {
+                    return None;
+                }
+                class_ids.extend_from_slice(&f.classes);
+                nullable |= f.nullable;
+            }
+            class_ids.sort_unstable();
+            class_ids.dedup();
+            Some((
+                crate::codegen::FactsRecv {
+                    class_ids,
+                    nullable,
+                    checked: false,
+                },
+                format!("field {property} of {binding}"),
+            ))
         }
         _ => None,
     }
+}
+
+/// The join of the field `property`'s representation over the classes
+/// `class_ids`, when it is `Arr` in each (`FieldProof::array`).
+fn class_set_array(
+    ctx: &FnCtx<'_>,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<crate::codegen::FactsArrRep> {
+    use crate::codegen::{FactsArrRep, FactsRep};
+    let mut out: Option<FactsArrRep> = None;
+    for &cid in class_ids {
+        let f = ctx.wpfacts.field(cid, property)?;
+        let FactsRep::Arr(r) = f.rep else {
+            return None;
+        };
+        if f.declared || f.reserved {
+            return None;
+        }
+        out = Some(out.map_or(r, |o| FactsArrRep::join(o, r)));
+    }
+    out
+}
+
+/// The join of the field `property`'s Number representation (F64 or I32)
+/// over the classes `class_ids`, when it is one in each (I32 at rest).
+fn class_set_number(
+    ctx: &FnCtx<'_>,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<crate::codegen::FactsRep> {
+    use crate::codegen::FactsRep;
+    let mut out: Option<FactsRep> = None;
+    for &cid in class_ids {
+        let f = ctx.wpfacts.field(cid, property)?;
+        if f.declared || f.reserved || !matches!(f.rep, FactsRep::F64 | FactsRep::I32) {
+            return None;
+        }
+        out = Some(match (out, f.rep) {
+            (Some(FactsRep::I32), FactsRep::I32) | (None, FactsRep::I32) => FactsRep::I32,
+            _ => FactsRep::F64,
+        });
+    }
+    out
+}
+
+/// The representation of the value `object.property` reads, when the facts
+/// give it `Arr` (DESIGN-p4l1 §3.2, §4.2): `object` is an unchecked proven
+/// receiver, no interpreted code can run, and in every class it may be the
+/// field holds only plain program Arrays for the object's whole life. It
+/// is `FieldProof::array` without the proof's slot: the field's value is
+/// the same whichever way the read is lowered.
+pub(crate) fn field_array(
+    ctx: &FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+) -> Option<crate::codegen::FactsArrRep> {
+    if property.starts_with('#') || ctx.wpfacts.interp_guard {
+        return None;
+    }
+    let (r, _) = receiver(ctx, object)?;
+    if r.checked {
+        return None;
+    }
+    class_set_array(ctx, &r.class_ids, property)
+}
+
+/// FVA: the class ids the facts prove a call's receiver to be one of (an
+/// unchecked binding, no interpreted code), and whether it may also be
+/// null or undefined (then the site keeps that receiver test, as a read
+/// does). A virtual call over them is the T0set read shape.
+pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<(Vec<u32>, bool)> {
+    let (r, _) = receiver(ctx, object)?;
+    (!r.checked && !ctx.wpfacts.interp_guard && !r.class_ids.is_empty())
+        .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
+}
+
+pub(crate) fn receiver_checked(ctx: &FnCtx<'_>, object: &Expr) {
+    if crate::verify_facts::enabled() {
+        if let Some((r, _)) = receiver(ctx, object) {
+            crate::verify_facts::covered(
+                crate::verify_facts::Fact::Receiver,
+                || serde_json::json!({"classes":r.class_ids,"nullable":r.nullable,"guarded":r.checked || ctx.wpfacts.interp_guard}),
+            );
+        }
+    }
+}
+
+/// FVA 3.4: the facts prove class `cid`'s own static `key` holds its
+/// definition for the program's life (no write, no escape of the class
+/// object, no interpreted code).
+pub(crate) fn proves_static(ctx: &FnCtx<'_>, cid: u32, key: &str) -> bool {
+    let proved = !ctx.wpfacts_off && facts_static(&ctx.wpfacts, cid, key);
+    if proved {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Static,
+            || serde_json::json!({"class":cid,"key":key}),
+        );
+        crate::facts_consumed::used();
+    }
+    proved
+}
+
+/// The whole-program half of [`proves_static`], from the facts alone (the
+/// LIFE census resolves a static call by it): no interpreted code, and the
+/// facts list `key` among class `cid`'s own statics that hold their
+/// definition.
+pub(crate) fn facts_static(facts: &crate::codegen::ElisionFacts, cid: u32, key: &str) -> bool {
+    !facts.interp_guard
+        && facts
+            .class_statics
+            .get(&cid)
+            .is_some_and(|ks| ks.iter().any(|k| k == key))
+}
+
+/// The class id of a receiver the facts prove one of their classes: one
+/// load of its header word (the read shape's `select_by_class` load). A
+/// `nullable` receiver tests its tag first and gives 0 when it is nullish
+/// (no class id is 0).
+pub(crate) fn emit_class_id(ctx: &mut FnCtx<'_>, recv_box: &str, nullable: bool) -> String {
+    let load = |ctx: &mut FnCtx<'_>| {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+        );
+        let hdr = super::receiver_range::emit_field_ptr(blk, &biased, 0);
+        blk.load(I32, &hdr)
+    };
+    if !nullable {
+        return load(ctx);
+    }
+    let is_obj = {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(recv_box);
+        let top16 = blk.lshr(I64, &bits, "48");
+        blk.icmp_eq(I64, &top16, crate::nanbox::POINTER_TAG_TOP16_I64)
+    };
+    let from = ctx.block().label.clone();
+    let load_idx = ctx.new_block("proven_recv.class_id");
+    let join_idx = ctx.new_block("proven_recv.join");
+    let load_label = ctx.block_label(load_idx);
+    let join_label = ctx.block_label(join_idx);
+    ctx.block().cond_br(&is_obj, &load_label, &join_label);
+    ctx.current_block = load_idx;
+    let cid = load(ctx);
+    let loaded = ctx.block().label.clone();
+    ctx.block().br(&join_label);
+    ctx.current_block = join_idx;
+    ctx.block().phi(
+        I32,
+        &[(cid.as_str(), loaded.as_str()), ("0", from.as_str())],
+    )
 }
 
 /// A local that is never reassigned in this function holds one value for
@@ -183,6 +429,15 @@ fn stable_binding(ctx: &FnCtx<'_>, object: &Expr) -> Option<i64> {
     }
 }
 
+/// After a receiver test passed in the current block: later accesses of the
+/// same stable binding in this block see an object.
+pub(crate) fn note_tested(ctx: &mut FnCtx<'_>, object: &Expr) {
+    if let Some(b) = stable_binding(ctx, object) {
+        let blk = ctx.current_block;
+        ctx.wpfacts_tested.push((b, blk));
+    }
+}
+
 fn tested_in_block(ctx: &FnCtx<'_>, object: &Expr) -> bool {
     stable_binding(ctx, object).is_some_and(|b| {
         ctx.wpfacts_tested
@@ -192,24 +447,152 @@ fn tested_in_block(ctx: &FnCtx<'_>, object: &Expr) -> bool {
 }
 
 /// A number-context read (`lower_raw_f64_class_field_get_for_number_context`,
-/// `expr_produces_canonical_raw_f64`): the facts prove the slot always holds
-/// a canonical double.
-pub(crate) fn proves_raw_f64(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
+/// `expr_produces_canonical_raw_f64`, `is_numeric_expr`): the facts prove the
+/// field only ever holds Numbers, so [`try_lower_get`] yields the slot's
+/// word, which is the Number's canonical double.
+pub(crate) fn proves_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::PropertyGet {
         object, property, ..
     } = expr
     else {
         return false;
     };
-    prove(ctx, object, property, Access::Get).is_some_and(|p| p.raw_f64)
+    prove(ctx, object, property, Access::Get).is_some_and(|p| p.number)
+}
+
+/// The receiver is not a heap object: a scalar-replaced local, or `this` of
+/// a constructor inlined into one. Its reads take the scalar slot route in
+/// `property_get`, not [`try_lower_get`], so the proof does not select them.
+fn scalar_receiver(ctx: &FnCtx<'_>, object: &Expr) -> bool {
+    match object {
+        Expr::LocalGet(id) => ctx.scalar_replaced.contains_key(id),
+        Expr::This => !ctx.scalar_ctor_target.is_empty(),
+        _ => false,
+    }
 }
 
 /// The local class of class id `cid` (its own name, not an alias).
-fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
+pub(crate) fn class_name_of(ctx: &FnCtx<'_>, cid: u32) -> Option<String> {
     ctx.classes
         .iter()
         .find(|(name, c)| c.id == cid && c.name == **name)
         .map(|(name, _)| name.clone())
+}
+
+/// The whole-program half of a field read's proof, from the facts alone:
+/// the receiver binding's class set is known and small, and in every class
+/// the key is a birth data field. `prove` gates on it before it consults
+/// codegen's own layout; the parameter fate (`life_fate`) asks it alone, so
+/// a read the fate calls code-free is a read `prove` admits on the same
+/// predicate. `Ok(true)`: the read is a bare load with no run-time test and
+/// no miss arm (unchecked binding, no interpreted code, every class's field
+/// definite); `Ok(false)`: proven only behind a guard or a hole compare,
+/// whose miss arm is the generic operation (it may run code). `Err`: not
+/// proven, with `prove`'s refusal reason.
+pub(crate) fn facts_read(
+    facts: &crate::codegen::ElisionFacts,
+    recv: &crate::codegen::FactsRecv,
+    property: &str,
+) -> Result<bool, &'static str> {
+    if property.starts_with('#') {
+        return Err("private key requires private-element semantics");
+    }
+    if recv.class_ids.is_empty() {
+        return Err("receiver class set is empty or exceeds four classes");
+    }
+    // Past four classes the site would emit code per class (the class-id
+    // compares of a guarded receiver, the select of disagreeing slots).
+    // An unguarded receiver whose classes all hold the key at one slot
+    // emits none of it, whatever the class count: the read is the one
+    // fixed-offset load (PVN-08: a base-class method of eight subclasses).
+    let unguarded = !recv.checked && !facts.interp_guard;
+    let mut one_slot: Option<Option<u32>> = None;
+    let mut bare = unguarded;
+    for &cid in &recv.class_ids {
+        let f = facts
+            .field(cid, property)
+            .ok_or("key is not a definite data birth field of every receiver class")?;
+        bare &= !f.declared && !f.reserved;
+        match one_slot {
+            None => one_slot = Some(Some(f.slot)),
+            Some(Some(s)) if s != f.slot => one_slot = Some(None),
+            _ => {}
+        }
+    }
+    if recv.class_ids.len() > 4 && !(unguarded && matches!(one_slot, Some(Some(_)))) {
+        return Err("receiver class set is empty or exceeds four classes");
+    }
+    Ok(bare)
+}
+
+/// The whole-program half of a field store's (or update's) proof: the read
+/// rule ([`facts_read`]), and the receiver is not guarded and no
+/// interpreted code runs (a guarded proof is read-only: decision 150). The
+/// one predicate `prove` gates stores on, and the LIFE fate's store question
+/// (`life_census::CodegenProof::store`). An accessor key is never a birth
+/// data field of the facts, so a setter is refused by the read rule.
+pub(crate) fn facts_store(
+    facts: &crate::codegen::ElisionFacts,
+    recv: &crate::codegen::FactsRecv,
+    property: &str,
+) -> Result<(), &'static str> {
+    facts_read(facts, recv, property)?;
+    if recv.checked || facts.interp_guard {
+        return Err("guarded field proof is read-only; store/update needs checked semantics");
+    }
+    Ok(())
+}
+
+/// Quiet sites (`crate::quiet`): the store `object.property = v` runs no
+/// program code. The facts' store rule ([`facts_store`]) on the receiver
+/// binding: every class it may hold has `property` as a definite data
+/// birth field (an accessor key is never one), unguarded, no interpreted
+/// code. A scalar-replaced local is no object at all: its store writes a
+/// slot of the frame. Asks only; consumes no fact.
+pub(crate) fn quiet_store(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    if let Expr::LocalGet(id) = object {
+        if ctx.scalar_replaced.contains_key(id) {
+            return true;
+        }
+    }
+    if ctx.wpfacts.is_empty() || ctx.wpfacts_off {
+        return false;
+    }
+    let recv = match object {
+        Expr::LocalGet(id) if !ctx.pod_records.contains_key(id) => ctx.wpfacts.locals.get(id),
+        Expr::This if !ctx.is_static_class_this(object) => ctx.this_stack.last().and_then(|top| {
+            let (_, fid) = ctx.wpfacts_this.iter().rev().find(|(s, _)| s == top)?;
+            ctx.wpfacts.this_of.get(fid)
+        }),
+        _ => None,
+    };
+    recv.is_some_and(|r| facts_store(&ctx.wpfacts, r, property).is_ok())
+}
+
+/// The slot of `property` on every instance of class `cid`, when the class
+/// is a static family born on its family layout (D-CG1: one layout per
+/// family class, fixed at compile time; `new_alloc::class_born_on_family`).
+/// `Ok(None)`: not a family. `Err`: a family that does not hold the key, or
+/// a constructor-argument variant of it that holds it at another slot.
+pub(crate) fn family_slot(
+    ctx: &FnCtx<'_>,
+    cid: u32,
+    property: &str,
+) -> Result<Option<u32>, &'static str> {
+    let Some(fam) = ctx.program_layouts.families.get(&cid) else {
+        return Ok(None);
+    };
+    if !crate::layout_desc::layouts_enabled("executable", ctx.target_triple) {
+        return Ok(None);
+    }
+    let at = |keys: &[(crate::layout_families::FamilyKey, u32)]| {
+        keys.iter().find(|(k, _)| *k == property).map(|(_, s)| *s)
+    };
+    let idx = at(&fam.keys).ok_or("the family layout does not hold the key")?;
+    if fam.variants.iter().any(|v| at(&v.keys) != Some(idx)) {
+        return Err("a family variant holds the key at another slot");
+    }
+    Ok(Some(idx))
 }
 
 /// The zero-guard proof for `object.property`, if the facts give one.
@@ -235,28 +618,27 @@ pub(crate) fn prove(
         crate::fallback_diag::refuse("receiver has no prefix-stable binding proof");
         None
     })?;
-    if recv.class_ids.is_empty() || recv.class_ids.len() > 4 {
-        crate::fallback_diag::refuse("receiver class set is empty or exceeds four classes");
+    let admitted = match access {
+        Access::Get => facts_read(&ctx.wpfacts, &recv, property).map(|_| ()),
+        Access::Set | Access::Update => facts_store(&ctx.wpfacts, &recv, property),
+    };
+    if let Err(why) = admitted {
+        crate::fallback_diag::refuse(why);
         return None;
     }
     let checked = recv.checked;
     let interp_guard = ctx.wpfacts.interp_guard;
-    if (checked || interp_guard) && access != Access::Get {
-        crate::fallback_diag::refuse(
-            "guarded field proof is read-only; store/update needs checked semantics",
-        );
-        return None;
-    }
     if recv.nullable && tested_in_block(ctx, object) {
         recv.nullable = false;
     }
-    if recv.nullable && access != Access::Get {
-        crate::fallback_diag::refuse(
-            "nullable store/update receiver requires generic nullish semantics",
-        );
+    // CLS D3: a plain store keeps the receiver test (nullish throws in the
+    // complete `[[Set]]`, which is the test's miss arm); an update does not.
+    if recv.nullable && access == Access::Update {
+        crate::fallback_diag::refuse("nullable update receiver requires generic nullish semantics");
         return None;
     }
     let mut slot: Option<u32> = None;
+    let mut maybe_absent = false;
     let mut kind_mask = 0u16;
     let mut ta_stable = true;
     let mut ta_kind: Option<Option<u8>> = None;
@@ -265,27 +647,130 @@ pub(crate) fn prove(
     let mut names = Vec::new();
     let mut slots = Vec::new();
     for &cid in &recv.class_ids {
-        let name = class_name_of(ctx, cid).or_else(|| {
-            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
-            None
-        })?;
         let f = ctx.wpfacts.field(cid, property).or_else(|| {
             crate::fallback_diag::refuse(
                 "key is not a definite data birth field of every receiver class",
             );
             None
         })?;
+        if f.declared {
+            // A declared key lives at its family slot: the object is born on
+            // the family layout and keeps it for life, so the program-wide
+            // layout is the authority (the class may be another module's).
+            // Stores add the key on the checked route.
+            let fam_slot = match family_slot(ctx, cid, property) {
+                Ok(s) => s,
+                Err(why) => {
+                    crate::fallback_diag::refuse(why);
+                    return None;
+                }
+            };
+            let Some(idx) = fam_slot.filter(|_| access == Access::Get) else {
+                crate::fallback_diag::refuse(
+                    "declared key: stores add it on the checked route; reads need the family",
+                );
+                return None;
+            };
+            maybe_absent = true;
+            slot.get_or_insert(idx);
+            slots.push(idx);
+            kind_mask |= f.kind_mask;
+            ta_stable = false;
+            ta_kind = Some(None);
+            all_f64 = false;
+            names.push(format!("class#{cid}"));
+            continue;
+        }
+        // D-CG1: a family class has one layout, its family layout, on which
+        // every instance is born and which it keeps for life, so a read of a
+        // birth field loads the family's slot: the class may be another
+        // module's, the key a define key, or one the colouring moved, and a
+        // subclass family keeps every inherited key at its parent's slot
+        // (`layout_families::assign_slots`). A store to a birth field the
+        // facts prove present (not reserved: no hole to fill, so the store
+        // adds no key) writes the same family slot: the key is an own data
+        // property there (OrdinarySet, ECMA-262 10.1.9.2 steps 2-3: an own
+        // writable data property is set in place, no chain walk), unless a
+        // completed shape holds a constant function at that slot (the
+        // constant-function lane needs the checked store).
+        if access == Access::Get || !f.reserved {
+            match family_slot(ctx, cid, property) {
+                Err(why) => {
+                    crate::fallback_diag::refuse(why);
+                    return None;
+                }
+                Ok(Some(idx)) => {
+                    let name = class_name_of(ctx, cid);
+                    if let Some(name) = name.as_deref() {
+                        if super::property_get::class_has_evaluated_accessor(ctx, name)
+                            || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, name)
+                        {
+                            crate::fallback_diag::refuse(
+                                "computed/private class layout refuses fixed-offset field access",
+                            );
+                            return None;
+                        }
+                    }
+                    if access != Access::Get && crate::codegen::key_may_be_constfn_at(property, idx)
+                    {
+                        crate::fallback_diag::refuse(
+                            "constant-function lane requires checked store",
+                        );
+                        return None;
+                    }
+                    // Every family slot is a boxed word (the hole until a
+                    // store adds the key): no raw-f64 lane.
+                    maybe_absent |= f.reserved;
+                    slot.get_or_insert(idx);
+                    slots.push(idx);
+                    kind_mask |= f.kind_mask;
+                    if f.reserved {
+                        ta_stable = false;
+                        ta_kind = Some(None);
+                    } else {
+                        ta_stable &= f.ta_stable;
+                        ta_kind = match ta_kind {
+                            None => Some(f.ta_kind),
+                            Some(k) if k == f.ta_kind => Some(k),
+                            Some(_) => Some(None),
+                        };
+                    }
+                    all_f64 = false;
+                    names.push(name.unwrap_or_else(|| format!("class#{cid}")));
+                    continue;
+                }
+                Ok(None) => {}
+            }
+        }
+        let Some(name) = class_name_of(ctx, cid) else {
+            crate::fallback_diag::refuse("receiver class is absent from codegen class metadata");
+            if crate::fallback_diag::enabled() {
+                let family = ctx.program_layouts.families.contains_key(&cid);
+                crate::fallback_diag::refuse(&format!(
+                    "receiver class is absent from codegen class metadata: class#{cid}{}",
+                    if family { " (has a family layout)" } else { "" }
+                ));
+            }
+            return None;
+        };
         // Codegen's own layout must agree with the facts' birth slot.
-        let idx =
-            crate::type_analysis::class_field_global_index(ctx, &name, property).or_else(|| {
+        let idx = match crate::type_analysis::class_field_slot(ctx, &name, property) {
+            Ok(idx) => idx,
+            Err(why) => {
                 crate::fallback_diag::refuse("class field has no codegen slot");
-                None
-            })?;
+                if crate::fallback_diag::enabled() {
+                    crate::fallback_diag::refuse(&format!(
+                        "class field has no codegen slot: {why}; class {name}"
+                    ));
+                }
+                return None;
+            }
+        };
         if idx != f.slot {
             crate::fallback_diag::refuse("facts slot disagrees with codegen layout");
             return None;
         }
-        if super::property_set::class_has_computed_runtime_members(ctx, &name)
+        if super::property_get::class_has_evaluated_accessor(ctx, &name)
             || super::class_field_inline_guard::class_instances_carry_private_elements(ctx, &name)
             || super::class_field_inline_guard::class_instances_grow_past_layout(ctx, &name)
         {
@@ -294,8 +779,37 @@ pub(crate) fn prove(
             );
             return None;
         }
+        if f.reserved {
+            // The slot holds the hole until the constructor stores the key
+            // (object model §3.2: presence is the slot word). A read pairs
+            // the load with the hole compare; a store fills the hole, which
+            // adds the key, on the checked route. A raw-f64 lane has no
+            // hole word.
+            if access != Access::Get
+                || super::class_field_inline_guard::class_birth_slot_is_f64(ctx, &name, idx)
+            {
+                crate::fallback_diag::refuse(
+                    "reserved key: stores add it on the checked route; reads need a boxed slot",
+                );
+                return None;
+            }
+            maybe_absent = true;
+            slot.get_or_insert(idx);
+            slots.push(idx);
+            kind_mask |= f.kind_mask;
+            ta_stable = false;
+            ta_kind = Some(None);
+            all_f64 = false;
+            names.push(name);
+            continue;
+        }
         if access != Access::Get {
-            let keys_global = ctx.class_keys_globals.get(&name)?;
+            let Some(keys_global) = ctx.class_keys_globals.get(&name) else {
+                crate::fallback_diag::refuse(
+                    "receiver class has no keys global for the constant-function lane",
+                );
+                return None;
+            };
             if crate::codegen::slot_may_be_constfn(keys_global, idx) {
                 crate::fallback_diag::refuse("constant-function lane requires checked store");
                 return None;
@@ -315,11 +829,31 @@ pub(crate) fn prove(
         any_f64 |= lane;
         names.push(name);
     }
+    if maybe_absent {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::Presence,
+            || serde_json::json!({"classes":recv.class_ids,"key":property}),
+        );
+    }
+    if ta_stable {
+        crate::verify_facts::consumed(
+            crate::verify_facts::Fact::TypedOwner,
+            || serde_json::json!({"classes":recv.class_ids,"key":property,"kind":ta_kind.flatten()}),
+        );
+    }
+    if interp_guard {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::InterpreterGuard, || {
+            serde_json::json!({})
+        });
+    }
     let guarded = checked || interp_guard;
-    Some(FieldProof {
+    let proof = FieldProof {
         class_ids: recv.class_ids.clone(),
         class_names: names,
-        slot: slot?,
+        slot: slot.or_else(|| {
+            crate::fallback_diag::refuse("receiver has no class");
+            None
+        })?,
         slots,
         nullable: recv.nullable,
         kind_mask,
@@ -327,11 +861,56 @@ pub(crate) fn prove(
         ta_stable: ta_stable && !guarded,
         ta_kind: if guarded { None } else { ta_kind.flatten() },
         raw_f64: all_f64 && kind_mask == K_NUM && !guarded,
+        number: kind_mask == K_NUM
+            && !guarded
+            && !maybe_absent
+            && (all_f64 || !scalar_receiver(ctx, object)),
         any_f64_lane: any_f64,
         binding,
         checked,
         interp_guard,
-    })
+        maybe_absent,
+        array: if guarded || maybe_absent {
+            None
+        } else {
+            class_set_array(ctx, &recv.class_ids, property)
+        },
+        num_rep: if guarded || maybe_absent {
+            None
+        } else {
+            class_set_number(ctx, &recv.class_ids, property)
+        },
+        num_zero_ok: recv.class_ids.iter().any(|&c| {
+            ctx.wpfacts
+                .zero_tolerant_fields
+                .contains(&(c, property.to_string()))
+        }),
+        literal_strings: !guarded
+            && !maybe_absent
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .literal_string_fields
+                    .contains(&(c, property.to_string()))
+            }),
+        booleans: !guarded
+            && !maybe_absent
+            && !ctx.wpfacts.boolean_fields.is_empty()
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .boolean_fields
+                    .contains(&(c, property.to_string()))
+            }),
+        nullish_booleans: !guarded
+            && !maybe_absent
+            && !ctx.wpfacts.nullish_boolean_fields.is_empty()
+            && recv.class_ids.iter().all(|&c| {
+                ctx.wpfacts
+                    .nullish_boolean_fields
+                    .contains(&(c, property.to_string()))
+            }),
+    };
+    crate::verify_facts::field_consumed(&proof, property);
+    Some(proof)
 }
 
 /// A stable id for one elided site (printed by the witness on a violation,
@@ -356,7 +935,7 @@ fn site_id(ctx: &mut FnCtx<'_>, property: &str) -> u64 {
 /// Record the elision (design 6.1): `<PERRY_FACTS_DUMP>.elisions`.
 fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof) {
     let line = format!(
-        "E {site:#018x} {what} fn={} .{property} recv={} classes={:?} slot={} nullable={} kind_mask={:#x} raw_f64={} proof={} facts={}\n",
+        "E {site:#018x} {what} fn={} .{property} recv={} classes={:?} slot={} nullable={} kind_mask={:#x} raw_f64={} number={} proof={} facts={}\n",
         ctx.func.name,
         p.binding,
         p.class_names,
@@ -368,6 +947,7 @@ fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof
         p.nullable as u8,
         p.kind_mask,
         p.raw_f64 as u8,
+        p.number as u8,
         match (p.checked, p.interp_guard) {
             (true, _) => "checked",
             (false, true) => "guarded",
@@ -392,11 +972,30 @@ fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof
     }
 }
 
-fn pack_cids(ids: &[u32]) -> (String, String) {
-    let at = |i: usize| ids.get(i).copied().unwrap_or(u32::MAX) as u64;
-    let a = (at(0) | (at(1) << 32)) as i64;
-    let b = (at(2) | (at(3) << 32)) as i64;
-    (a.to_string(), b.to_string())
+/// The witness's receiver set: every proven class id of the site, as one
+/// private `[N x i32]` constant next to it (check builds only; the witness
+/// admits a receiver by membership in the whole set, however many classes
+/// the proof admits). Returns the address and count operands.
+fn class_ids_operand(ctx: &mut FnCtx<'_>, ids: &[u32]) -> (String, String) {
+    if ids.is_empty() {
+        return ("0".to_string(), "0".to_string());
+    }
+    let ordinal = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let global = format!(
+        "perry_wpfacts_cids_{}__{ordinal}",
+        ctx.strings.module_prefix()
+    );
+    let words: Vec<_> = ids.iter().map(|&c| format!("i32 {}", c as i32)).collect();
+    ctx.typed_parse_rodata.push(format!(
+        "@{global} = private constant [{} x i32] [{}], align 4",
+        ids.len(),
+        words.join(", ")
+    ));
+    (
+        format!("ptrtoint (ptr @{global} to i64)"),
+        ids.len().to_string(),
+    )
 }
 
 /// The contract witness of one elided access (contract builds only).
@@ -409,14 +1008,86 @@ pub(crate) fn emit_witness(
     flags: u32,
     site: u64,
 ) {
-    if !crate::codegen::helpers::check_contracts() {
+    if !crate::verify_facts::witnesses() {
         return;
     }
+    crate::verify_facts::field_checked(p, property);
+    let what = format!(
+        "{site:#018x} {} .{property} classes={:?} class_ids={:?} slots={:?}",
+        if flags & WPF_STORE != 0 {
+            "store"
+        } else {
+            "read"
+        },
+        p.class_names,
+        p.class_ids,
+        p.slots
+    );
+    if crate::verify_facts::enabled() {
+        let site_arg =
+            crate::verify_facts::raw_site(ctx, "field", Some(property), &p.class_ids, &what);
+        let (key, key_len) =
+            crate::verify_facts::raw_bytes(ctx.strings.module_prefix(), property.as_bytes());
+        let (cids, ncids) = class_ids_operand(ctx, &p.class_ids);
+        let (triple, form) = (ctx.target_triple, p.form());
+        let off_of = |s: u32| crate::target_layout::layout_key_off(triple, form, s).to_string();
+        let (slot, off) = if p.agrees() {
+            (p.slot.to_string(), off_of(p.slot))
+        } else {
+            let bits = ctx.block().bitcast_double_to_i64(recv_box);
+            let biased = ctx.block().sub(
+                I64,
+                &bits,
+                &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
+            );
+            (
+                select_by_class(ctx, &biased, p, |s| s.to_string()),
+                select_by_class(ctx, &biased, p, &off_of),
+            )
+        };
+        let flags = flags
+            | if p.nullable { WPF_NULLABLE } else { 0 }
+            | if p.raw_f64 && flags & WPF_STORE == 0 {
+                WPF_RAW_F64
+            } else {
+                0
+            }
+            | if p.maybe_absent && flags & WPF_STORE == 0 {
+                WPF_MAYBE_ABSENT
+            } else {
+                0
+            };
+        ctx.block().call(
+            I32,
+            "perry_verify_facts_field",
+            &[
+                (DOUBLE, recv_box),
+                (DOUBLE, value),
+                (I64, &key),
+                (I64, &key_len),
+                (I64, &cids),
+                (I64, &ncids),
+                (I32, &slot),
+                (I32, &off),
+                (I32, &(p.kind_mask as i32).to_string()),
+                (I32, &flags.to_string()),
+                (I64, &site_arg.pointer),
+                (I64, site_arg.len.as_deref().unwrap()),
+            ],
+        );
+        return;
+    }
+    let site_arg =
+        crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::Slot, &p.class_ids);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let (c01, c23) = pack_cids(&p.class_ids);
-    let slot = if p.agrees() {
-        p.slot.to_string()
+    let (cids, ncids) = class_ids_operand(ctx, &p.class_ids);
+    // The slot names the key (F3); its byte offset is the address the
+    // access used, which the witness reads.
+    let (triple, form) = (ctx.target_triple, p.form());
+    let off_of = |s: u32| crate::target_layout::layout_key_off(triple, form, s).to_string();
+    let (slot, off) = if p.agrees() {
+        (p.slot.to_string(), off_of(p.slot))
     } else {
         let bits = ctx.block().bitcast_double_to_i64(recv_box);
         let biased = ctx.block().sub(
@@ -424,7 +1095,8 @@ pub(crate) fn emit_witness(
             &bits,
             &(super::receiver_range::RECEIVER_BIAS as i64).to_string(),
         );
-        select_by_class(ctx, &biased, p, |s| s.to_string())
+        let slot = select_by_class(ctx, &biased, p, |s| s.to_string());
+        (slot, select_by_class(ctx, &biased, p, &off_of))
     };
     let blk = ctx.block();
     let key_box = blk.load(DOUBLE, &key_handle_global);
@@ -434,6 +1106,11 @@ pub(crate) fn emit_witness(
         | if p.nullable { WPF_NULLABLE } else { 0 }
         | if p.raw_f64 && flags & WPF_STORE == 0 {
             WPF_RAW_F64
+        } else {
+            0
+        }
+        | if p.maybe_absent && flags & WPF_STORE == 0 {
+            WPF_MAYBE_ABSENT
         } else {
             0
         };
@@ -446,12 +1123,13 @@ pub(crate) fn emit_witness(
             (DOUBLE, recv_box),
             (DOUBLE, value),
             (I64, &key_handle),
-            (I64, &c01),
-            (I64, &c23),
+            (I64, &cids),
+            (I64, &ncids),
             (I32, &slot),
+            (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),
             (I32, &flags.to_string()),
-            (I64, &(site as i64).to_string()),
+            (I64, &site_arg),
         ],
     );
 }
@@ -462,8 +1140,13 @@ pub(crate) fn emit_witness(
 /// `POINTER_MASK` instead lowers to `bzhi` with an 8-bit count register on
 /// BMI2 targets, whose partial-register write makes the load wait on an
 /// unrelated earlier value: binary-trees arena +8% cycles.)
-pub(crate) fn emit_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, slot: u32) -> String {
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+pub(crate) fn emit_slot_ptr(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    form: crate::target_layout::HeaderForm,
+    slot: u32,
+) -> String {
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, form) as i64;
     let blk = ctx.block();
     let obj_bits = blk.bitcast_double_to_i64(recv_box);
     let biased = blk.sub(
@@ -504,9 +1187,9 @@ fn select_by_class(
 /// class id (case 2).
 pub(crate) fn emit_proof_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, p: &FieldProof) -> String {
     if p.agrees() {
-        return emit_slot_ptr(ctx, recv_box, p.slot);
+        return emit_slot_ptr(ctx, recv_box, p.form(), p.slot);
     }
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header = crate::target_layout::object_slot_base_bytes(ctx.target_triple, p.form()) as i64;
     let biased = {
         let blk = ctx.block();
         let bits = blk.bitcast_double_to_i64(recv_box);
@@ -523,13 +1206,165 @@ pub(crate) fn emit_proof_slot_ptr(ctx: &mut FnCtx<'_>, recv_box: &str, p: &Field
     blk.gep(I8, &base, &[(I64, &off64)])
 }
 
+/// The one receiver test of a proven access whose binding holds an object
+/// or null/undefined (F4; NULLCALL1: a proven method call too). The test
+/// is the tag compare the complete operation performs first; its nullish
+/// edge is that complete read of `property`, which throws the TypeError
+/// (`Cannot read properties of undefined (reading 'm')`, GetValue's
+/// ToObject, 6.2.5.5 / 7.1.18) and so never returns: the arm ends in
+/// `unreachable`, and every later access of the binding on this path sees
+/// an object without testing again. Leaves the current block on the object
+/// edge. `witness`: the read's check-mode claim on the nullish edge.
+pub(crate) fn emit_nullish_throw_test(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    property: &str,
+    byte_offset: u32,
+    witness: Option<(&FieldProof, u64)>,
+) {
+    // The binding holds an object or null/undefined (F4). The one test
+    // that stays sends null/undefined to the complete site operation,
+    // which throws the TypeError and so never returns here: the arm ends
+    // in `unreachable`, and every later access of the binding on this
+    // path sees an object without testing again.
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    let hit_idx = ctx.new_block("wpf.get.obj");
+    let miss_idx = ctx.new_block("wpf.get.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    if let Some((p, site)) = witness {
+        emit_witness(ctx, recv_box, recv_box, property, p, 0, site);
+    }
+    let feedback_site_id = super::emit_typed_feedback_register_site(
+        ctx,
+        super::TypedFeedbackKind::PropertyGet,
+        property,
+        super::TypedFeedbackContract::object_get_by_name(),
+    );
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // A non-object receiver: the complete read throws for nullish.
+    let _ = blk.call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[
+            (I64, &obj_bits),
+            (I64, &key_handle),
+            (I64, &feedback_site_id),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    if let Some(b) = stable_binding(ctx, object) {
+        ctx.wpfacts_tested.push((b, hit_idx));
+    }
+}
+
 /// `object.property` read through a zero-guard proof.
+/// RAYBOX15: a read whose every receiver class lacks the key on the
+/// instance and on its whole prototype chain (`ElisionFacts::key_absent`):
+/// OrdinaryGet (ECMA-262 10.1.8.1) reaches the chain's end and gives
+/// `undefined`. Unguarded proofs only (a guarded receiver may be another
+/// object). `Some(nullable)`: whether the nullish test stays.
+fn prove_absent(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> Option<bool> {
+    if property.starts_with('#')
+        || crate::expr::element_shape_loop_fact_for_property_get(ctx, object, property).is_some()
+    {
+        return None;
+    }
+    let (recv, _) = receiver(ctx, object)?;
+    if recv.checked
+        || ctx.wpfacts.interp_guard
+        || recv.class_ids.is_empty()
+        || !recv
+            .class_ids
+            .iter()
+            .all(|&c| ctx.wpfacts.key_absent(c, property))
+    {
+        return None;
+    }
+    Some(recv.nullable && !tested_in_block(ctx, object))
+}
+
+/// The one test a nullable receiver keeps: null/undefined go to the
+/// complete site operation, which throws the TypeError and never returns
+/// (the arm ends in `unreachable`); the object arm continues.
+fn emit_nullish_arm(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    recv_box: &str,
+    property: &str,
+    byte_offset: u32,
+    witness: Option<(&FieldProof, u64)>,
+) {
+    crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+    let hit_idx = ctx.new_block("wpf.get.obj");
+    let miss_idx = ctx.new_block("wpf.get.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    if let Some((p, site)) = witness {
+        emit_witness(ctx, recv_box, recv_box, property, p, 0, site);
+    }
+    let feedback_site_id = super::emit_typed_feedback_register_site(
+        ctx,
+        super::TypedFeedbackKind::PropertyGet,
+        property,
+        super::TypedFeedbackContract::object_get_by_name(),
+    );
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let key_bits = blk.bitcast_double_to_i64(&key_box);
+    let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
+    // A non-object receiver: the complete read throws for nullish.
+    let _ = blk.call(
+        DOUBLE,
+        "js_object_get_field_value",
+        &[
+            (I64, &obj_bits),
+            (I64, &key_handle),
+            (I64, &feedback_site_id),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    if let Some(b) = stable_binding(ctx, object) {
+        ctx.wpfacts_tested.push((b, hit_idx));
+    }
+}
+
 pub(crate) fn try_lower_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
     byte_offset: u32,
 ) -> Result<Option<String>> {
+    if let Some(nullable) = prove_absent(ctx, object, property) {
+        crate::expr::note_site("case1-wpfacts-absent");
+        let recv_box = lower_expr(ctx, object)?;
+        if nullable {
+            emit_nullish_arm(ctx, object, &recv_box, property, byte_offset, None);
+        }
+        return Ok(Some(crate::nanbox::double_literal(f64::from_bits(
+            crate::nanbox::TAG_UNDEFINED,
+        ))));
+    }
     let Some(p) = prove(ctx, object, property, Access::Get) else {
         return Ok(None);
     };
@@ -544,57 +1379,53 @@ pub(crate) fn try_lower_get(
     });
     let recv_box = lower_expr(ctx, object)?;
     if p.nullable {
-        // The binding holds an object or null/undefined (F4). The one test
-        // that stays sends null/undefined to the complete site operation,
-        // which throws the TypeError and so never returns here: the arm ends
-        // in `unreachable`, and every later access of the binding on this
-        // path sees an object without testing again.
-        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
-        let hit_idx = ctx.new_block("wpf.get.obj");
-        let miss_idx = ctx.new_block("wpf.get.nullish");
-        let hit_label = ctx.block_label(hit_idx);
-        let miss_label = ctx.block_label(miss_idx);
-        let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-        let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-        ctx.block()
-            .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
-        ctx.current_block = miss_idx;
-        emit_witness(ctx, &recv_box, &recv_box, property, &p, 0, site);
-        let feedback_site_id = super::emit_typed_feedback_register_site(
+        // The binding holds an object or null/undefined (F4).
+        emit_nullish_throw_test(
             ctx,
-            super::TypedFeedbackKind::PropertyGet,
+            object,
+            &recv_box,
             property,
-            super::TypedFeedbackContract::object_get_by_name(),
+            byte_offset,
+            Some((&p, site)),
         );
-        let key_idx = ctx.strings.intern(property);
-        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-        let blk = ctx.block();
-        let key_box = blk.load(DOUBLE, &key_handle_global);
-        let key_bits = blk.bitcast_double_to_i64(&key_box);
-        let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        // A non-object receiver: the complete read throws for nullish.
-        let _ = blk.call(
-            DOUBLE,
-            "js_object_get_field_value",
-            &[
-                (I64, &obj_bits),
-                (I64, &key_handle),
-                (I64, &feedback_site_id),
-            ],
-        );
-        blk.unreachable();
-        ctx.current_block = hit_idx;
-        if let Some(b) = stable_binding(ctx, object) {
-            ctx.wpfacts_tested.push((b, hit_idx));
-        }
     }
     let value = {
         let field_ptr = emit_proof_slot_ptr(ctx, &recv_box, &p);
         let val = ctx.block().load(DOUBLE, &field_ptr);
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
+        // The receiver of a fill push reads the Array while it is being born
+        // (wpfacts `push_fills`): its claim holds once the fill is over.
+        let filling = matches!(object, Expr::This)
+            && byte_offset != 0
+            && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
+        if let Some(r) = p
+            .array
+            .filter(|_| crate::verify_facts::enabled() && !filling)
+        {
+            // Check mode: the field's `Arr` claim, on the word just read.
+            super::index_get::array_rep::witness_value(
+                ctx,
+                &val,
+                r,
+                &format!("field {property} of {}", p.binding),
+            );
+        }
+        if let Some(r) = p.num_rep {
+            // Check mode (I32 at rest): the field's Number rep.
+            crate::codegen::signature_entry::witness_field_rep(
+                ctx,
+                r,
+                &val,
+                &format!("{property} of {}", p.binding),
+                p.num_zero_ok,
+            );
+        }
+        // A Number has one encoding in every JS value (the raw double), so
+        // a read the facts prove is a Number is the loaded word: no tag
+        // test, no select, no branch.
         val
     };
-    let numeric = p.raw_f64;
+    let numeric = p.number;
     let (semantic, rep) = if numeric {
         (SemanticKind::JsNumber, NativeRep::F64)
     } else {
@@ -643,6 +1474,13 @@ pub(crate) fn try_lower_get(
 /// object reached interpreted code by a prototype member); the receiver is
 /// an object (`checked` or `nullable`); its class id is one of the proof's
 /// (`checked`; the ids are constants of the compile, nothing is learned).
+///
+/// A checked site whose key the layout record serves tries the record arm
+/// (`layout_read::begin`) first: it hits every receiver whose layout holds
+/// the key, class instances, literals and parsed objects alike. The class-id
+/// arm runs only on its miss (a class whose key is not at its colour slot),
+/// and the ordinary site, on the already evaluated receiver, on the class-id
+/// arm's miss.
 fn lower_guarded_get(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -657,6 +1495,12 @@ fn lower_guarded_get(
         "case1-wpfacts-guarded"
     });
     let recv_box = lower_expr(ctx, object)?;
+    let record_arm = if p.checked {
+        let bits = ctx.block().bitcast_double_to_i64(&recv_box);
+        crate::expr::layout_read::begin(ctx, &bits, property, None)
+    } else {
+        None
+    };
     let hit_idx = ctx.new_block("wpf.gget.hit");
     let miss_idx = ctx.new_block("wpf.gget.miss");
     let done_idx = ctx.new_block("wpf.gget.done");
@@ -683,7 +1527,30 @@ fn lower_guarded_get(
             let chk_label = ctx.block_label(chk_idx);
             ctx.block().cond_br(&both, &chk_label, &miss_label);
             ctx.current_block = chk_idx;
+            // A literal family keeps its late keys and names class 0: its
+            // objects carry the family descriptor's layout word, not a class
+            // id (every other class is told by its class id alone).
+            let literals: Vec<u32> = p
+                .class_ids
+                .iter()
+                .copied()
+                .filter(|c| ctx.program_layouts.literal_families.contains(c))
+                .collect();
+            let literal_families: Vec<String> = literals
+                .into_iter()
+                .filter_map(|c| crate::lower_call::direct_method_guard::family_layout_id(ctx, c))
+                .collect();
             let blk = ctx.block();
+            // Word 0 is an object's class id but also an array's or a
+            // string's `length`: `[x]` would pass for a class whose id is 1.
+            // Only a GC_TYPE_OBJECT carries a class id there.
+            let type_ptr = super::receiver_range::emit_field_ptr(
+                blk,
+                &recv.biased,
+                -(perry_abi::GC_HEADER_SIZE as i64),
+            );
+            let type_byte = blk.load(I8, &type_ptr);
+            let is_object = crate::target_layout::emit_gc_type_is_object(blk, I8, &type_byte);
             let hdr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 0);
             let cid = blk.load(I32, &hdr);
             let mut any: Option<String> = None;
@@ -694,7 +1561,21 @@ fn lower_guarded_get(
                     None => eq,
                 });
             }
-            ok = any;
+            if !literal_families.is_empty() {
+                let word_ptr = super::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+                let word = blk.load(I32, &word_ptr);
+                for id in &literal_families {
+                    let eq = blk.icmp_eq(I32, &word, id);
+                    // 0: the runtime could not register the layout.
+                    let registered = blk.icmp_ne(I32, id, "0");
+                    let eq = blk.and(crate::types::I1, &eq, &registered);
+                    any = Some(match any {
+                        Some(prev) => blk.or(crate::types::I1, &prev, &eq),
+                        None => eq,
+                    });
+                }
+            }
+            ok = any.map(|any| blk.and(crate::types::I1, &is_object, &any));
         } else {
             ok = Some(both);
         }
@@ -710,18 +1591,44 @@ fn lower_guarded_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         val
     };
+    if p.maybe_absent {
+        // A declared key holds the hole until stored: an absent key reads
+        // through the prototype chain, which is the generic operation.
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(&fast);
+        let hole = blk.icmp_eq(
+            I64,
+            &bits,
+            &crate::nanbox::i64_literal(crate::nanbox::TAG_HOLE),
+        );
+        blk.cond_br(&hole, &miss_label, &done_label);
+    } else {
+        ctx.block().br(&done_label);
+    }
     let fast_end = ctx.block().label.clone();
-    ctx.block().br(&done_label);
     ctx.current_block = miss_idx;
-    let generic = Expr::PropertyGet {
-        object: Box::new(object.clone()),
-        property: property.to_string(),
-        byte_offset,
+    let slow = if record_arm.is_some() {
+        // The record arm has missed: the ordinary site, without a second
+        // record arm and without lowering the receiver again.
+        crate::expr::calls::emit_call_location_at(ctx, byte_offset);
+        super::property_get::generic_dispatch::lower_property_site_tail(
+            ctx,
+            property,
+            None,
+            recv_box.clone(),
+        )?
+    } else {
+        let generic = Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(object.clone()),
+            property: property.to_string(),
+            byte_offset,
+        };
+        let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
+        let slow = lower_expr(ctx, &generic);
+        ctx.wpfacts_off = was_off;
+        slow?
     };
-    let was_off = std::mem::replace(&mut ctx.wpfacts_off, true);
-    let slow = lower_expr(ctx, &generic);
-    ctx.wpfacts_off = was_off;
-    let slow = slow?;
     let slow_end = ctx.block().label.clone();
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
@@ -729,7 +1636,10 @@ fn lower_guarded_get(
         .block()
         .phi(DOUBLE, &[(&fast, &fast_end), (&slow, &slow_end)]);
     record(ctx, site, "get", property, &p);
-    Ok(value)
+    Ok(match record_arm {
+        Some(arm) => crate::expr::layout_read::finish(ctx, arm, &value),
+        None => value,
+    })
 }
 
 /// The proof of an elided store, with its site id (the store emission lives
@@ -781,4 +1691,226 @@ pub(crate) fn ta_field_kind(ctx: &FnCtx<'_>, ta_expr: &Expr) -> Option<u8> {
     (p.ta_stable && !p.nullable && p.kind_mask == K_OBJ)
         .then_some(p.ta_kind)
         .flatten()
+}
+
+impl FieldProof {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+#[cfg(test)]
+#[path = "wpfacts_access_tests.rs"]
+mod tests;
+
+/// ACCBUILD2 P3: the accessor function a named site at `offset` calls, when
+/// the facts prove it (`ElisionFacts::accessor_sets` / `accessor_gets`): the
+/// receiver's chain ends at one accessor property of the holder class's
+/// prototype with exactly one setter (`set`) or getter, so [[Set]] / [[Get]]
+/// call it with the receiver as `this` (10.1.9.2 step 3, 10.1.8.1). The call
+/// is direct, with no fallback beside it. The flag is `nullable` (COVER3):
+/// the receiver can also be `undefined` / `null`, and the caller keeps the
+/// one receiver test whose nullish edge is the complete operation (it
+/// throws). `None`: the site keeps its ordinary lowering.
+pub(crate) fn proven_accessor_fn(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+    set: bool,
+) -> Option<(String, bool)> {
+    // A scalar-replaced receiver is no object (`scalar_receiver`): its
+    // accesses are the frame slots' own, never a call with a `this`.
+    if ctx.wpfacts_off
+        || offset == 0
+        || property.starts_with('#')
+        || ctx.is_static_class_this(object)
+        || scalar_receiver(ctx, object)
+    {
+        return None;
+    }
+    let map = if set {
+        &ctx.wpfacts.accessor_sets
+    } else {
+        &ctx.wpfacts.accessor_gets
+    };
+    let (cid, symbol, nullable) = map.get(&(offset, property.to_string()))?.clone();
+    let prefix = if set { "__set_" } else { "__get_" };
+    let member = format!("{prefix}{property}");
+    // The symbol is the holder module's own (`program_facts.rs`
+    // `accessor_symbol_in`). The holder's names in this module, if any (the
+    // local class of `cid`, or the imported class stub(s) the source module's
+    // id is registered under: `class_ids`, an alias and its canonical name),
+    // must all give that same symbol; a disagreement keeps the site generic.
+    let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
+    names.extend(
+        ctx.class_ids
+            .iter()
+            .filter(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut found: Option<String> = None;
+    for class in names {
+        if super::property_get::class_has_evaluated_accessor(ctx, &class)
+            || ctx
+                .classes
+                .get(&class)
+                .is_some_and(|c| c.static_accessor_names.iter().any(|n| n == property))
+        {
+            return None;
+        }
+        let f = ctx.methods.get(&(class, member.clone()))?;
+        if *f != symbol {
+            return None;
+        }
+        found = Some(f.clone());
+    }
+    if found.is_none() {
+        // No name for the holder here (it is reached through a re-export or
+        // a value, never named): declare the holder module's accessor with
+        // the signature its module defines it with (`method_registry.rs`
+        // imported getters / setters: `double (double this)` and
+        // `double (double this, double value)`).
+        let params = if set {
+            vec![DOUBLE, DOUBLE]
+        } else {
+            vec![DOUBLE]
+        };
+        ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
+    }
+    Some((symbol, nullable))
+}
+
+/// ONCHANGE2: the method body a named call `object.property( ... )` at
+/// `offset` runs, when the facts prove it (`ElisionFacts::method_calls`):
+/// every receiver is an object (the member read cannot throw, 13.3.6.2) and
+/// the key's value at every receiver is the one method body `F` of the
+/// holder class (an ordinary method: not a generator, not async, not an
+/// accessor). 7.3.14 Call then runs `F` with the receiver as `this`; the
+/// call is direct, with no guard and no fallback beside it. Returns the
+/// holder class (the class that declares `F`) and `F`'s public entry, the
+/// one the dispatch tower's case arm calls. `None`: the site keeps its
+/// ordinary lowering.
+///
+/// ONCHANGE3: the entry is the facts' symbol, named from the holder's own
+/// module (`program_facts.rs` `method_symbol_in`). The holder's names here,
+/// if any, must give that same entry (else generic: the records disagree);
+/// with no name here (the class is reached through a value or a
+/// re-export), the entry is declared with the signature its module defines
+/// it with (`double (double this, double x params)`, as method_registry.rs
+/// declares an imported class's methods) and called with the facts' ABI.
+pub(crate) fn proven_method_fn(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+) -> Option<(Option<String>, String, crate::DirectAbi, bool)> {
+    if ctx.wpfacts_off
+        || ctx.wpfacts.interp_guard
+        || !perry_hir::method_call::named_site(property, offset)
+        || ctx.is_static_class_this(object)
+        // A scalar-replaced receiver is no object: the escape pass kept it in
+        // frame slots only because `simple_scalar_method_summary` inlines this
+        // call over those slots (`scalar_method.rs`); a direct entry would pass
+        // the never-written binding slot as `this`.
+        || scalar_receiver(ctx, object)
+    {
+        return None;
+    }
+    let (cid, fid, symbol, abi, nullable, imported_instance) = ctx
+        .wpfacts
+        .method_calls
+        .get(&(offset, property.to_string()))?
+        .clone();
+    if imported_instance {
+        debug_assert!(!nullable && matches!(object, Expr::LocalGet(_)));
+        ctx.pending_declares.push((
+            symbol.clone(),
+            DOUBLE,
+            vec![DOUBLE; abi.params as usize + 1],
+        ));
+        return Some((None, symbol, abi, false));
+    }
+    // NULLCALL1: a receiver a dominating access of the same binding has
+    // tested already is an object here.
+    let nullable = nullable && !tested_in_block(ctx, object);
+    // The holder's names in this module (as `proven_accessor_fn`): each must
+    // declare `F` itself under `property` and give the same entry.
+    let mut names: Vec<String> = class_name_of(ctx, cid).into_iter().collect();
+    names.extend(
+        ctx.class_ids
+            .iter()
+            .filter(|(name, &id)| id == cid && ctx.classes.contains_key(*name))
+            .map(|(name, _)| name.clone()),
+    );
+    let mut found: Option<(String, String)> = None;
+    let mut stub_named = false;
+    for class in names {
+        let c = ctx.classes.get(&class)?;
+        let method = c.methods.iter().rev().find(|m| m.name == property)?;
+        // ONCHANGE4: a class imported here is a structural stub
+        // (`codegen/mod.rs` imported_class_stubs: every method id 0, no
+        // params, no body). Its entry is the holder module's own name
+        // (method_registry.rs Phase F: `symbol_names::method(source prefix,
+        // class, m)`, declared `double(double this, double x params)`), and
+        // the facts' symbol was checked against that module's body
+        // (`method_symbol_in`: the last method `m` is `F`, ordinary). The
+        // name must give the facts' symbol; the call takes the facts' ABI.
+        // A local class never passes as a stub: its body `F` has the id the
+        // facts name, else `method_symbol_in` named no symbol.
+        let stub = method.id == 0 && method.params.is_empty() && method.body.is_empty() && fid != 0;
+        if stub {
+            if *ctx.methods.get(&(class.clone(), property.to_string()))? != symbol {
+                return None;
+            }
+            stub_named = true;
+            continue;
+        }
+        if perry_hir::method_call::target_in_class(c, fid, property).is_none()
+            || super::property_get::class_has_evaluated_accessor(ctx, &class)
+        {
+            return None;
+        }
+        let f = ctx.methods.get(&(class.clone(), property.to_string()))?;
+        if f.starts_with("perry_static_") || *f != symbol {
+            return None;
+        }
+        if found.is_none() {
+            found = Some((class, f.clone()));
+        }
+    }
+    match found {
+        Some((class, f)) => Some((Some(class), f, abi, nullable)),
+        // Named here only by an imported stub: the entry is declared already.
+        None if stub_named => Some((None, symbol, abi, nullable)),
+        None => {
+            let params = vec![DOUBLE; abi.params as usize + 1];
+            ctx.pending_declares.push((symbol.clone(), DOUBLE, params));
+            Some((None, symbol, abi, nullable))
+        }
+    }
+}
+
+/// ACCBUILD2 P3: a named read the facts prove calls one getter: the getter's
+/// direct call with the receiver as `this`; its result is the read's value.
+/// COVER3: a receiver that can be `undefined` / `null` keeps the one
+/// receiver test; its nullish edge is the complete [[Get]], whose ToObject
+/// throws the TypeError (6.2.5.5, 7.1.18) before any getter runs.
+pub(crate) fn try_lower_proven_getter(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    offset: u32,
+) -> Result<Option<String>> {
+    let Some((fn_name, nullable)) = proven_accessor_fn(ctx, object, property, offset, false) else {
+        return Ok(None);
+    };
+    let recv = lower_expr(ctx, object)?;
+    if nullable && !tested_in_block(ctx, object) {
+        emit_nullish_throw_test(ctx, object, &recv, property, offset, None);
+    }
+    Ok(Some(ctx.block().call(DOUBLE, &fn_name, &[(DOUBLE, &recv)])))
 }

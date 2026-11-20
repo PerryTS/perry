@@ -142,8 +142,10 @@ pub(crate) fn lower_lit(lit: &ast::Lit) -> Result<Expr> {
     match lit {
         ast::Lit::Num(n) => {
             let value = n.value;
-            // Check if this is an integer that fits in i64
-            if value.fract() == 0.0 && value >= i64::MIN as f64 && value <= i64::MAX as f64 {
+            // An integer that fits in i64. `i64::MAX as f64` is 2^63, which
+            // does not (`as i64` saturates it to 2^63 - 1, whose low 32 bits
+            // are -1, not 0): the upper bound is exclusive.
+            if value.fract() == 0.0 && value >= i64::MIN as f64 && value < i64::MAX as f64 {
                 Ok(Expr::Integer(value as i64))
             } else {
                 Ok(Expr::Number(value))
@@ -238,6 +240,7 @@ pub(crate) fn lower_assign_target_to_expr(
                 ast::MemberProp::Ident(ident) => {
                     let property = ident.sym.to_string();
                     Ok(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object,
                         property,
@@ -245,7 +248,13 @@ pub(crate) fn lower_assign_target_to_expr(
                 }
                 ast::MemberProp::Computed(computed) => {
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
-                    Ok(Expr::IndexGet { object, index })
+                    Ok(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object,
+                        index,
+                    })
                 }
                 ast::MemberProp::PrivateName(private) => {
                     // A compound/logical assignment reads the target before
@@ -258,6 +267,7 @@ pub(crate) fn lower_assign_target_to_expr(
                     let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
                     let property = private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: member.span.lo.0,
                         object,
                         property,

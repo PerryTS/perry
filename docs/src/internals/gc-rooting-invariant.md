@@ -670,7 +670,7 @@ fifteen shapes, each of which must be adjudicated.
 **A hand-written corpus cannot express this class of bug at dependency scale,
 and for a while nobody could tell, because it was green.**
 
-`scripts/gc_root_dominance_corpus.sh` compiles ~124 `test-files/` sources
+`scripts/gc_root_dominance_corpus.sh` compiles ~124 `tests/fixtures/programs/` sources
 chosen for the lowerings they exercise. It reads **zero** in both modes the CI
 gate runs — and it read zero while twenty lines of stock `zod` faulted
 deterministically under `PERRY_GC_PROTECT_FROMSPACE_DEPTH=800`. #7280 puts it in
@@ -700,7 +700,7 @@ npm ci --ignore-scripts                       # zod is a package.json devDepende
 python3 scripts/gc_root_dominance_check.py ir-corpus-dep --moving-only -v
 ```
 
-`test-files/gc-dep-corpus/main.ts` is the only entry point; the rest of that
+`tests/fixtures/programs/gc-dep-corpus/main.ts` is the only entry point; the rest of that
 directory reaches the compiler by being imported from it, and the generator
 **asserts that every `.ts` in the directory produced a module** — which is a
 check a size floor could not be, since ~90 modules of `zod` swamp any count a

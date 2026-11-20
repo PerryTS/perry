@@ -81,6 +81,7 @@ pub(super) fn try_module_class_static(
                                 "js_http_server_construct_with_this"
                             };
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::ExternFuncRef {
                                     name: extern_name.to_string(),
                                     param_types: Vec::new(),

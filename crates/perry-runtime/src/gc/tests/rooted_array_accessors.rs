@@ -447,7 +447,10 @@ fn descriptor_snapshot_named_array_rebind_merge_through_public_entries() {
                 let target = scope.root_nanbox_f64(if proxied {
                     let handler =
                         scope.root_nanbox_f64(object_value(crate::object::js_object_alloc(0, 0)));
-                    crate::proxy::js_proxy_new(receiver.get_nanbox_f64(), handler.get_nanbox_f64())
+                    crate::proxy_hooks::proxy_new(
+                        receiver.get_nanbox_f64(),
+                        handler.get_nanbox_f64(),
+                    )
                 } else {
                     receiver.get_nanbox_f64()
                 });

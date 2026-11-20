@@ -43,7 +43,127 @@ impl<T, const N: usize> PageMap<T, N> {
     }
 }
 
+/// A borrowed traversal of one canonical chunk directory. Boxes cannot move
+/// or be removed while this exclusive traversal exists; the current chunk is
+/// only loop state and never survives the caller's batch.
+pub(super) struct PageCursor<'a, T, const N: usize> {
+    map: &'a mut PageMap<T, N>,
+    key: Option<usize>,
+    chunk: *mut PageChunk<T, N>,
+}
+
+impl<T: Default, const N: usize> PageCursor<'_, T, N> {
+    pub(super) fn get_or_insert(&mut self, page: usize) -> &mut T {
+        let key = page / N;
+        if self.key != Some(key) {
+            self.chunk = &mut **self.map.chunks.entry(key).or_default();
+            self.key = Some(key);
+        }
+        // SAFETY: this cursor exclusively borrows the map and exposes no
+        // removal; inserting directory entries never moves boxed chunks.
+        let chunk = unsafe { &mut *self.chunk };
+        let slot = page % N;
+        let bit = 1u64 << slot;
+        if chunk.present & bit == 0 {
+            chunk.present |= bit;
+            self.map.len += 1;
+        }
+        &mut chunk.pages[slot]
+    }
+}
+
 impl<T: Default, const N: usize> PageMap<T, N> {
+    pub(super) fn cursor(&mut self) -> PageCursor<'_, T, N> {
+        PageCursor {
+            map: self,
+            key: None,
+            chunk: std::ptr::null_mut(),
+        }
+    }
+
+    /// Publish a contiguous page span with one directory lookup per chunk.
+    /// Existing payloads remain untouched; only missing presence bits change.
+    pub(super) fn ensure_range(&mut self, first: usize, last: usize) {
+        if first > last {
+            return;
+        }
+        let mut page = first;
+        loop {
+            let key = page / N;
+            let end = last.min(key * N + (N - 1));
+            let slot = page % N;
+            let width_minus_one = end - page;
+            let mask = (u64::MAX >> (63 - width_minus_one)) << slot;
+            let chunk = self.chunks.entry(key).or_default();
+            self.len += (mask & !chunk.present).count_ones() as usize;
+            chunk.present |= mask;
+            if end == last {
+                break;
+            }
+            page = end + 1;
+        }
+    }
+
+    /// Group consecutive keys in the same chunk. The list may be unsorted,
+    /// sparse or repeated; clearing each present slot still drops its payload.
+    pub(super) fn remove_pages(&mut self, pages: &[usize]) {
+        let mut at = 0;
+        while at < pages.len() {
+            let key = pages[at] / N;
+            let mut end = at;
+            let mut mask = 0u64;
+            while end < pages.len() && pages[end] / N == key {
+                mask |= 1u64 << (pages[end] % N);
+                end += 1;
+            }
+            self.remove_mask(key, mask);
+            at = end;
+        }
+    }
+
+    /// Retire a contiguous span directly from its canonical chunk presence.
+    /// No per-page request vector or replacement payload is needed for chunks
+    /// that disappear altogether. Partial chunks still reset removed slots.
+    pub(super) fn remove_range(&mut self, first: usize, last: usize) {
+        if first > last {
+            return;
+        }
+        let mut page = first;
+        loop {
+            let key = page / N;
+            let end = last.min(key * N + (N - 1));
+            let mask = (u64::MAX >> (63 - (end - page))) << (page % N);
+            self.remove_mask(key, mask);
+            if end == last {
+                break;
+            }
+            page = end + 1;
+        }
+    }
+
+    #[inline]
+    fn remove_mask(&mut self, key: usize, mask: u64) {
+        // Entry APIs may reserve on a vacant lookup. Retirement must not
+        // allocate or grow a directory when the requested chunk is absent.
+        let Some(chunk) = self.chunks.get_mut(&key) else {
+            return;
+        };
+        let mut removed = chunk.present & mask;
+        self.len -= removed.count_ones() as usize;
+        if removed == chunk.present {
+            // Drop owned payloads with the chunk instead of writing defaults
+            // into every slot just before freeing the same allocation.
+            self.chunks.remove(&key);
+        } else {
+            chunk.present &= !removed;
+            while removed != 0 {
+                let slot = removed.trailing_zeros() as usize;
+                removed &= removed - 1;
+                chunk.pages[slot] = T::default();
+            }
+        }
+    }
+
     pub(super) fn get_or_insert(&mut self, page: usize) -> &mut T {
         let chunk = self.chunks.entry(page / N).or_default();
         let slot = page % N;
@@ -287,5 +407,148 @@ mod tests {
             "directory and presence bits must add less than 6.25% to dense metadata"
         );
         assert_eq!(map.len(), 4096);
+    }
+}
+
+#[cfg(test)]
+mod batch_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn range_presence_matches_single_insert_at_boundaries_and_high_keys() {
+        let mut batch = PageMetaMap::new();
+        let mut oracle = PageMetaMap::new();
+        for (first, last) in [(7, 8), (61, 130), (2, 1), (usize::MAX - 70, usize::MAX)] {
+            batch.ensure_range(first, last);
+            for page in first..=last {
+                oracle.get_or_insert(page);
+            }
+            let keys = |map: &PageMetaMap| {
+                map.iter()
+                    .map(|(p, m)| (p, m.allocated_bytes))
+                    .collect::<BTreeMap<_, _>>()
+            };
+            assert_eq!(keys(&batch), keys(&oracle));
+            assert_eq!(batch.len(), oracle.len());
+        }
+        batch.get_or_insert(64).allocated_bytes = 19;
+        batch.ensure_range(0, 191);
+        assert_eq!(batch.get(&64).unwrap().allocated_bytes, 19);
+        batch.ensure_range(0, 191);
+        assert_eq!(batch.len(), batch.iter().count());
+    }
+
+    #[test]
+    fn grouped_removal_preserves_owned_payloads_sparse_neighbors_and_reinsertion() {
+        use std::sync::Arc;
+        let owner = Arc::new(());
+        let mut map = PageMap::<Option<Arc<()>>, 8>::new();
+        for page in [0, 7, 8, 9, 15, 16, 63, 64, usize::MAX] {
+            *map.get_or_insert(page) = Some(owner.clone());
+        }
+        map.remove_pages(&[9, 8, 9, 10, 0, usize::MAX, 64, 7]);
+        assert_eq!(Arc::strong_count(&owner), 4);
+        let keys: BTreeMap<_, _> = map.iter().map(|(p, v)| (p, v.is_some())).collect();
+        assert_eq!(keys, BTreeMap::from([(15, true), (16, true), (63, true)]));
+        assert_eq!(map.len(), 3);
+        assert!(map.get_or_insert(8).is_none());
+        map.remove_pages(&[15, 16, 63, 8]);
+        assert_eq!(Arc::strong_count(&owner), 1);
+        assert_eq!(map.len(), 0);
+        assert!(map.chunks.is_empty());
+    }
+
+    #[test]
+    fn a_borrowed_chunk_walk_matches_random_single_page_mutations() {
+        let mut map = PageMetaMap::new();
+        let mut oracle = BTreeMap::new();
+        {
+            let mut cursor = map.cursor();
+            for round in 0..8 {
+                for page in (0..200).chain([usize::MAX, usize::MAX - 1, 7, 129, 0]) {
+                    cursor.get_or_insert(page).dirty_slots += round + 1;
+                    *oracle.entry(page).or_insert(0usize) += round + 1;
+                }
+            }
+        }
+        assert_eq!(
+            map.iter()
+                .map(|(p, m)| (p, m.dirty_slots))
+                .collect::<BTreeMap<_, _>>(),
+            oracle
+        );
+        assert_eq!(map.len(), oracle.len());
+        map.remove_pages(&[0, 63, 64, 129, usize::MAX]);
+        let mut cursor = map.cursor();
+        for page in [0, 63, 64, 129, usize::MAX] {
+            assert_eq!(cursor.get_or_insert(page).dirty_slots, 0);
+        }
+    }
+}
+
+#[cfg(test)]
+mod range_removal_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn absent_retirement_never_allocates_or_grows_the_directory() {
+        let mut map = PageMetaMap::new();
+        map.remove_range(0, 64);
+        map.remove_pages(&[0, usize::MAX]);
+        assert_eq!(map.chunks.capacity(), 0);
+        map.get_or_insert(0);
+        let capacity = map.chunks.capacity();
+        for key in 1..capacity {
+            map.get_or_insert(key * 64);
+        }
+        assert_eq!(map.chunks.len(), capacity);
+        map.remove_range(usize::MAX - 63, usize::MAX);
+        map.remove_pages(&[usize::MAX, usize::MAX]);
+        assert_eq!(map.chunks.len(), capacity);
+        assert_eq!(map.chunks.capacity(), capacity);
+        assert_eq!(map.len(), capacity);
+    }
+
+    #[test]
+    fn range_retirement_matches_owned_payload_oracle_for_both_chunk_widths() {
+        fn check<const N: usize>() {
+            let owner = Arc::new(());
+            let mut map = PageMap::<Option<Arc<()>>, N>::new();
+            let mut oracle = BTreeMap::new();
+            for page in (0..3 * N).chain([usize::MAX, usize::MAX - 1, usize::MAX - N]) {
+                *map.get_or_insert(page) = Some(owner.clone());
+                oracle.insert(page, true);
+            }
+            for (first, last) in [
+                (3, 2),
+                (1, N - 2),
+                (0, 2 * N - 1),
+                (usize::MAX - N, usize::MAX),
+                (2 * N, 3 * N - 1),
+            ] {
+                map.remove_range(first, last);
+                oracle.retain(|&page, _| !(first <= page && page <= last));
+                assert_eq!(map.len(), oracle.len());
+                assert_eq!(Arc::strong_count(&owner), 1 + oracle.len());
+                assert_eq!(
+                    map.iter()
+                        .map(|(p, v)| (p, v.is_some()))
+                        .collect::<BTreeMap<_, _>>(),
+                    oracle,
+                );
+                if first <= last {
+                    // Includes a removed slot whose neighbors keep its chunk.
+                    assert!(map.get_or_insert(first).is_none());
+                    map.remove_range(first, first);
+                }
+            }
+            assert!(map.chunks.is_empty());
+            assert_eq!(map.len(), 0);
+        }
+        check::<8>();
+        check::<64>();
     }
 }

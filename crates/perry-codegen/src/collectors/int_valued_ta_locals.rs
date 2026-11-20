@@ -277,7 +277,7 @@ fn write_establishes_exact_i32(
 ) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -354,7 +354,7 @@ fn additive_write_admissible(
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
         // In-bounds-proven int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -411,7 +411,7 @@ pub(super) fn write_establishes_number(
         } => true,
         Expr::MathImul(_, _) => true,
         // In-bounds-PROVEN int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -579,6 +579,7 @@ fn additive_flow_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             // The try body may partially execute; the catch entry state is
             // unknown. Meet everything.
@@ -1006,6 +1007,7 @@ fn collect_facts<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_facts(body, types, guarded_number_array_params, in_loop, facts);
                 if let Some(c) = catch {
@@ -1142,6 +1144,7 @@ fn collect_loop_reseeded_locals<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_loop_reseeded_locals(body, types, guarded_number_array_params, false, out);
                 if let Some(c) = catch {
@@ -1304,6 +1307,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_refs_stmt(s, out);
@@ -1461,6 +1465,7 @@ fn observe_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 observe_stmts(body, cands, types, additive, exact_i32, disq, false);
                 if let Some(c) = catch {
@@ -1558,6 +1563,7 @@ fn observe(
             object,
             index,
             value,
+            ..
         } => {
             observe(object, false, cands, types, additive, exact_i32, disq);
             observe(index, false, cands, types, additive, exact_i32, disq);
@@ -1663,7 +1669,7 @@ fn observe_additive_rhs(
         // In-bounds-proven typed-array read operand: its INDEX is walked with
         // the strict (non-coercing) rule — a wrapped image used as an index
         // would be disqualifying, exactly as in ordinary code.
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             observe(object, false, cands, types, additive, exact_i32, disq);
             observe(index, false, cands, types, additive, exact_i32, disq);
         }

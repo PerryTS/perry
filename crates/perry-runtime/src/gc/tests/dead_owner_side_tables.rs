@@ -28,6 +28,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::value::TAG_UNDEFINED;
 
 pub(super) fn full_gc() {
@@ -96,7 +97,7 @@ pub(super) unsafe fn alloc_malloc_test_object() -> *mut crate::object::ObjectHea
 ///
 /// "The entry is gone" only says something about the death prune when the owner
 /// was genuinely DEAD. Arena block reset is all-or-nothing, so
-/// `gc::trace::mark_block_persisting_arena_objects` force-MARKS every object in
+/// `gc::mark::mark_block_persisting_arena_objects` force-MARKS every object in
 /// a block that still holds one reachable object — and a force-marked owner is
 /// *correctly* left registered, because a block that persists cannot recycle
 /// its address, so the entry is not stale. A case whose block picked up an
@@ -168,16 +169,10 @@ fn test_array_named_materialized_iterator_brands_follow_live_moves() {
 
 #[test]
 fn materialized_map_brand_moves_with_private_bag() {
-    check_materialized_map_brand(false);
+    check_materialized_map_brand();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Map iterator brand"]
-fn negative_control_objtables_map_iterator() {
-    check_materialized_map_brand(true);
-}
-
-fn check_materialized_map_brand(erase: bool) {
+fn check_materialized_map_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let map = crate::map::js_map_alloc(0);
     let original = crate::map::js_map_entries(map) as usize;
@@ -185,12 +180,6 @@ fn check_materialized_map_brand(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(original, moved);
-    if erase {
-        unsafe {
-            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
-            (*(*bag).meta).native_state = 0;
-        }
-    }
     assert!(util_types_is_map_iterator(moved));
     let fresh = crate::array::js_array_alloc(0) as usize;
     assert!(!util_types_is_map_iterator(fresh));
@@ -199,16 +188,10 @@ fn check_materialized_map_brand(erase: bool) {
 
 #[test]
 fn materialized_set_brand_moves_with_private_bag() {
-    check_materialized_set_brand(false);
+    check_materialized_set_brand();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Set iterator brand"]
-fn negative_control_objtables_set_iterator() {
-    check_materialized_set_brand(true);
-}
-
-fn check_materialized_set_brand(erase: bool) {
+fn check_materialized_set_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let set = crate::set::js_set_alloc(0);
     let original = crate::set::js_set_to_array(set) as usize;
@@ -216,12 +199,6 @@ fn check_materialized_set_brand(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(original, moved);
-    if erase {
-        unsafe {
-            let bag = crate::array::array_property_bag(moved as *const crate::array::ArrayHeader);
-            (*(*bag).meta).native_state = 0;
-        }
-    }
     assert!(util_types_is_set_iterator(moved));
     let fresh = crate::array::js_array_alloc(0) as usize;
     assert!(!util_types_is_set_iterator(fresh));
@@ -309,6 +286,51 @@ fn test_tenured_owner_descriptor_entries_survive_minor_gc() {
     );
 }
 
+/// On a minor, an owner's physical generation decides, not its TENURED flag:
+/// a TENURED object can still sit in a nursery block the minor sweep frees (#12135).
+#[test]
+fn tenured_owner_still_in_the_nursery_is_pruned_on_a_minor() {
+    let _serialized = crate::array::test_serialize();
+    let _guard = GcTestIsolationGuard::new();
+
+    let dead = unsafe { alloc_nursery_test_array() } as usize;
+    let marked = unsafe { alloc_nursery_test_array() } as usize;
+    let old = unsafe { alloc_old_test_array(0) }.0 as usize;
+    for (owner, generation) in [
+        (dead, crate::arena::HeapGeneration::Nursery),
+        (marked, crate::arena::HeapGeneration::Nursery),
+        (old, crate::arena::HeapGeneration::Old),
+    ] {
+        assert_eq!(crate::arena::classify_heap_generation(owner), generation);
+        crate::array::test_seed_element_shape_record(owner);
+    }
+    let headers = [dead, marked, old]
+        .map(|owner| unsafe { header_from_user_ptr(owner as *const u8) as *mut GcHeader });
+    unsafe {
+        (*headers[0]).gc_flags |= GC_FLAG_TENURED;
+        (*headers[1]).gc_flags |= GC_FLAG_TENURED | GC_FLAG_MARKED;
+        (*headers[2]).gc_flags |= GC_FLAG_TENURED;
+    }
+
+    // The fan-out a non-copying minor runs after its trace.
+    crate::gc::dead_owner::prune_dead_owner_side_tables_post_trace(false, false);
+
+    let dead_kept = crate::array::test_element_shape_record_exists(dead);
+    let marked_kept = crate::array::test_element_shape_record_exists(marked);
+    let old_kept = crate::array::test_element_shape_record_exists(old);
+    unsafe { (*headers[1]).gc_flags &= !GC_FLAG_MARKED };
+    crate::array::prune_dead_element_shape_owners(&|_| true);
+    assert!(
+        !dead_kept,
+        "an unmarked TENURED owner still in the nursery is dead after a minor"
+    );
+    assert!(marked_kept, "a marked nursery owner is live");
+    assert!(
+        old_kept,
+        "a minor proves nothing about an old-generation owner"
+    );
+}
+
 #[test]
 fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -342,9 +364,15 @@ fn test_dead_nursery_owner_descriptors_are_not_inherited_after_copied_minor() {
 /// Both halves are asserted: the census moves, AND the semantic consequence
 /// that makes the premise guard necessary in the first place — a force-marked
 /// owner is not dead, so the death prune correctly leaves its entry alone.
+///
+/// The pass runs only where a conservative scan was requested and cannot run
+/// (`GcCycleState::block_persistence_is_redundant`), so the collection here is
+/// the wasm allocation-point valve shape: a pinned `Scan` with the scan
+/// answering ineffective.
 #[test]
 fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
     let _guard = CopyingNurseryTestGuard::new(1);
+    let _effective = crate::gc::roots::ConservativeScanEffectiveTestGuard::set(false);
     crate::arena::arena_reset_all_blocks_to_zero();
 
     let (live, _) = unsafe { alloc_nursery_test_object(0) };
@@ -361,7 +389,16 @@ fn test_block_persistence_census_moves_when_a_block_has_a_live_tenant() {
     assert!(crate::closure::closure_get_own_dynamic_prop(dead, "memo").is_some());
 
     let force_marks_before = crate::gc::block_persist_force_mark_count();
-    full_gc();
+    {
+        // The test guard pins the scan mode, which makes `force_full_scan` a
+        // no-op; unpin it for this one collection.
+        let previous = roots::set_conservative_stack_scan_override(None);
+        let _scan =
+            roots::ManualGcScanGuard::force_full_scan(ConservativeScanSite::NurseryChurnSlackValve);
+        full_gc();
+        drop(_scan);
+        roots::set_conservative_stack_scan_override(previous);
+    }
 
     assert!(
         crate::gc::block_persist_force_mark_count() > force_marks_before,
@@ -408,6 +445,7 @@ fn test_dead_closure_side_table_entries_pruned_on_full_gc() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The per-object sweep arm (`gc_type_clear_dead_payload_side_tables`) was an
 /// explicit no-op for `ClosureDynamicProps`; assert it now clears all three
 /// tables when the sweep reclaims a dead closure header.
@@ -426,6 +464,7 @@ fn test_closure_dead_payload_arm_clears_side_tables() {
     assert!(!crate::closure::closure_is_key_deleted(owner, "length"));
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The `ObjectModuleWrapper` dead-payload arm pruned only OVERFLOW_FIELDS;
 /// its address-keyed sibling KEYS_INDEX (the key→slot sidecar built for
 /// objects past KEYS_INDEX_THRESHOLD own keys) was never removed on death, so
@@ -511,16 +550,10 @@ mod regexp_expandos;
 
 #[test]
 fn console_private_streams_move_with_the_instance() {
-    check_objtables_console(false);
+    check_objtables_console();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_console() {
-    check_objtables_console(true);
-}
-
-fn check_objtables_console(erase_invariant: bool) {
+fn check_objtables_console() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -540,11 +573,6 @@ fn check_objtables_console(erase_invariant: bool) {
     assert!(copying_minor_cycles() > cycles);
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     assert_ne!(moved, obj);
-    if erase_invariant {
-        unsafe {
-            (*(*moved).meta).native_state = 0;
-        }
-    }
     unsafe {
         assert_ne!(
             (*(*moved).meta).native_state,
@@ -578,16 +606,10 @@ fn check_objtables_console(erase_invariant: bool) {
 
 #[test]
 fn boxed_string_payload_moves_as_a_private_child_slot() {
-    check_objtables_boxed_payload(false);
+    check_objtables_boxed_payload();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_boxed_payload() {
-    check_objtables_boxed_payload(true);
-}
-
-fn check_objtables_boxed_payload(erase_invariant: bool) {
+fn check_objtables_boxed_payload() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -603,12 +625,6 @@ fn check_objtables_boxed_payload(erase_invariant: bool) {
     assert!(copying_minor_cycles() > cycles);
     let moved = f64::from_bits(js_shadow_slot_get(0));
     assert_ne!(moved.to_bits(), value.to_bits(), "wrapper must move");
-    if erase_invariant {
-        unsafe {
-            let obj = (moved.to_bits() & POINTER_MASK) as *mut crate::object::ObjectHeader;
-            (*(*obj).meta).boxed_primitive = crate::value::TAG_UNDEFINED;
-        }
-    }
     let (_, payload) = crate::builtins::boxed_primitive_payload(moved).unwrap();
     assert_ne!(
         payload.to_bits(),
@@ -663,7 +679,7 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(std::ptr::null(), 0);
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(std::ptr::null(), 0);
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
     crate::object::test_seed_transition_cache_entry(prev_shape_id, dead_key, next_keys);
@@ -686,14 +702,18 @@ fn test_dead_transition_cache_key_pruned_on_full_gc() {
 
 #[test]
 fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
+    // The predecessor is the entry's weak lookup key: the cache owns only its
+    // target, so a predecessor without another carrier retires and takes the
+    // entry with it.
     let _guard = CopyingNurseryTestGuard::new(1);
     gc_register_mutable_root_scanner(crate::object::scan_transition_cache_roots_mut);
+    gc_register_mutable_root_scanner(crate::object::shapes::scan_shape_table_rekey_mut);
 
     let next_keys = crate::arena::arena_alloc_gc_old(64, 8, GC_TYPE_ARRAY) as usize;
     js_shadow_slot_set(0, ptr_bits(next_keys));
     crate::arena::arena_reset_all_blocks_to_zero();
     let dead_predecessor_keys = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
-    let prev_shape_id = crate::object::shapes::shape_id_for_keys_ensure(
+    let prev_shape_id = crate::object::shapes::layout_for_keys_ensure(
         dead_predecessor_keys as *const crate::ArrayHeader,
         0,
     );
@@ -708,6 +728,7 @@ fn test_dead_transition_cache_predecessor_shape_pruned_on_full_gc() {
 
     full_gc();
 
+    assert!(crate::object::shapes::shape_is_retired(prev_shape_id));
     assert_eq!(
         crate::object::test_transition_cache_occupancy(),
         occupancy_before,
@@ -726,12 +747,12 @@ fn test_live_transition_cache_entry_survives_full_gc() {
     let live_key = crate::arena::arena_alloc_gc(64, 8, GC_TYPE_STRING) as usize;
     // This predecessor can recur from a generated module global; without such
     // an owner, retiring it and the now-unusable cache entry is intentional.
-    let prev_shape_id = crate::object::shapes::js_object_shape_id_for_keys(0, 0);
+    let prev_shape_id = crate::object::shapes::js_object_layout_for_keys(0, 0);
     js_shadow_slot_set(0, ptr_bits(next_keys));
     js_shadow_slot_set(1, ptr_bits(live_key));
 
     let occupancy_before = crate::object::test_transition_cache_occupancy();
-    crate::object::test_seed_transition_cache_entry(prev_shape_id, live_key, next_keys);
+    crate::object::test_seed_transition_cache_entry(LayoutWord(prev_shape_id), live_key, next_keys);
 
     full_gc();
 
@@ -746,16 +767,10 @@ fn test_live_transition_cache_entry_survives_full_gc() {
 
 #[test]
 fn reflect_metadata_record_moves_as_a_private_owner_child() {
-    check_reflect_metadata_record(false);
+    check_reflect_metadata_record();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved Reflect metadata record"]
-fn negative_control_objtables_reflect_metadata() {
-    check_reflect_metadata_record(true);
-}
-
-fn check_reflect_metadata_record(erase: bool) {
+fn check_reflect_metadata_record() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let owner = crate::object::js_object_alloc(0, 0);
     let value = crate::object::js_object_alloc(0, 0);
@@ -770,11 +785,6 @@ fn check_reflect_metadata_record(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::object::ObjectHeader;
     assert_ne!(moved, owner);
-    if erase {
-        unsafe {
-            (*(*moved).meta).reflect_metadata = 0;
-        }
-    }
     let result = crate::proxy::metadata::js_reflect_get_own_metadata(
         key,
         f64::from_bits(ptr_bits(moved as usize)),
@@ -825,17 +835,23 @@ fn error_meta_edge_is_enumerated_by_the_trace_visitor() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let err_h = scope.root_raw_mut_ptr(err);
 
-        crate::object::object_meta_ensure_for_cell(err as usize)
-            .expect("an error cell must be able to materialise a meta record");
+        crate::object::object_meta_ensure_for_cell(
+            err as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an error cell must be able to materialise a meta record");
 
         let err = err_h.get_raw_mut_ptr::<crate::error::ErrorHeader>();
         let meta_slot = &mut (*err).meta as *mut _ as *mut u64;
         let header = (err as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(header, |descriptor| {
-            descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
-        });
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
+            header,
+            |descriptor| {
+                descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
+            },
+        );
 
         assert!(
             visited.contains(&meta_slot),
@@ -870,8 +886,11 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let obj = crate::object::js_object_alloc(0, 0);
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_h = scope.root_raw_mut_ptr(obj);
-        let meta = crate::object::object_meta_ensure_for_cell(obj as usize)
-            .expect("an object cell must materialise a meta record");
+        let meta = crate::object::object_meta_ensure_for_cell(
+            obj as usize,
+            crate::object::MetaReason::CellExpando,
+        )
+        .expect("an object cell must materialise a meta record");
 
         let meta_header =
             (meta as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
@@ -879,7 +898,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
         let spill_slot = &mut (*meta).spill as *mut u64;
 
         let mut visited: Vec<*mut u64> = Vec::new();
-        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors(
+        crate::gc::layout_slot_visit::visit_gc_rewrite_slot_descriptors::<{ cfg!(test) }>(
             meta_header,
             |descriptor| {
                 descriptor.visit_slots(&mut |slot| visited.push(slot.slot));
@@ -902,7 +921,7 @@ fn object_meta_expando_edge_is_enumerated_by_the_trace_visitor() {
 }
 
 /// `ObjectMeta`'s field offsets are a contract with codegen (there are
-/// `offset_of!` asserts on `spill`, `reserved_48` and
+/// `offset_of!` asserts on `spill`, `function_layout_birth` and
 /// `array_tail_object_hot`). `expando` therefore has to be APPENDED, never
 /// inserted — inserting it after `spill` shifted the 48/56 fields and failed
 /// those compile-time asserts.
@@ -920,6 +939,7 @@ fn object_meta_expando_is_appended_not_inserted() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// #6759 phase 3: a transition-cache entry must NOT keep its target keys array
 /// alive, and an entry whose target died must be reaped.
 ///
@@ -936,7 +956,7 @@ fn object_meta_expando_is_appended_not_inserted() {
 ///
 /// The entry is seeded with a LIVE `prev_shape_id` on purpose. An earlier
 /// version of this test used `prev_shape_id = 0`, which the prune's
-/// pre-existing `shape_descriptor_by_id(..).is_none()` clause already treats as
+/// pre-existing `shape_descriptor_for_word(..).is_none()` clause already treats as
 /// dead — so it passed with the new clause deleted, proving nothing. Sabotage
 /// check: removing `is_dead_owner(entry.next_keys)` must fail this test.
 #[test]
@@ -950,7 +970,7 @@ fn transition_cache_entry_does_not_pin_its_target() {
         let live_shape = crate::object::shapes::test_shape_id_for_keys(keys as usize)
             .expect("a freshly allocated object must have a registered shape");
         assert!(
-            crate::object::shapes::shape_descriptor_by_id(live_shape).is_some(),
+            crate::object::shapes::test_descriptor_for_retained_word(live_shape).is_some(),
             "test premise: prev_shape_id must be LIVE, or the prune's existing \
              dead-shape clause decides the outcome and this test is vacuous"
         );

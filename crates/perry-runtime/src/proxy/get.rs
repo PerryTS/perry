@@ -130,15 +130,29 @@ fn proxy_get_with_receiver_impl(
             }
         }
     }
+    // An accessor on the target's chain runs with `this = receiver` (the
+    // proxy), as `target.[[Get]](key, receiver)` requires; a builtin getter's
+    // brand check then rejects it (`new Proxy(u8, {}).length` throws).
+    if receiver.get_nanbox_f64().to_bits() != target_h.get_nanbox_f64().to_bits() {
+        if let Some(value) = crate::object::property_ops::reflect::call_getter_with_receiver(
+            target_h.get_nanbox_f64(),
+            key_h.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+        ) {
+            return value;
+        }
+    }
     // Ordinary target getters and further prototype hops must keep Receiver.
     // Clear/restore the override around the operation; getters and Proxy hops
     // consume it before entering user code so nested reads bind independently.
     let previous_override =
-        crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64())
-            .map(|value| scope.root_nanbox_f64(value));
+        match crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64()) {
+            Some(value) => Some(scope.root_nanbox_f64(value)),
+            None => None,
+        };
     let result = target_get_property_key(target_h.get_nanbox_f64(), key_h.get_nanbox_f64());
     crate::object::accessor_receiver_override_end(
-        previous_override.map(|value| value.get_nanbox_f64()),
+        previous_override.map(crate::gc::RuntimeHandle::into_nanbox_f64),
     );
     result
 }

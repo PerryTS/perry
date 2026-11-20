@@ -39,6 +39,21 @@
         }
     }
 
+    // Positional `Image(url)` / `Image(url, alt)`. The widgets branch skips
+    // "Image" (so the option-bag form above can destructure it), which left
+    // the positional form with no lowering at all: the call fell through and
+    // produced a constant handle 1 — the first widget the program created —
+    // so adding the "image" to a container silently re-parented that widget.
+    if module == "perry/ui" && method == "Image" && object.is_none() && (args.len() == 1 || args.len() == 2) {
+        if let Some(sig) = perry_ui_table_lookup("Image") {
+            let mut positional: Vec<Expr> = args.to_vec();
+            if positional.len() == 1 {
+                positional.push(Expr::String(String::new()));
+            }
+            return lower_perry_ui_table_call(ctx, sig, &positional);
+        }
+    }
+
     // perry/ui WebView({ url, allowedDomains?, userAgent?, ephemeral?,
     //                    onShouldNavigate?, onLoaded?, onError?,
     //                    width?, height? }) — issue #658 Phase 1.

@@ -1,4 +1,5 @@
-//! One static `JsFunctionInfo` (perry-abi) per JS body a function object runs.
+//! One static `JsFunctionInfo` (perry-abi) per published JS body.
+//! Module bodies use the same records for stack identity without a callable birth.
 //!
 //! A function object's header points at its body's info
 //! (`perry_abi::CLOSURE_INFO_OFFSET`); every fact a caller needs about the
@@ -28,14 +29,29 @@ use crate::runtime_abi::{
     FN_ARROW, FN_ASYNC, FN_ASYNC_GENERATOR, FN_COMPILED_BODY, FN_GENERATOR, FN_HAS_DECLARED,
     FN_HAS_LENGTH, FN_HAS_NAME, FN_HAS_SOURCE, FN_NAME_IMAGE, FN_NON_CONSTRUCTOR,
     FN_NON_STRICT_ORDINARY, FN_PERMANENT_IMAGE, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER,
-    FN_REST_USER_AND_ARGUMENTS, FN_SOURCE_BLOCKS, FN_STRICT, NOT_PLAIN,
+    FN_REST_USER_AND_ARGUMENTS, FN_RETURNS_CAPTURE, FN_SOURCE_BLOCKS, FN_STRICT, NOT_PLAIN,
 };
 
 /// The LLVM type of a `JsFunctionInfo`, field for field (perry-abi's
 /// `#[repr(C)]` layout; LLVM lays it out for the target exactly as the
 /// runtime's C layout does, 32-bit pointers included).
 pub(crate) const INFO_TYPE: &str =
-    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64 }";
+    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }";
+
+/// The own slots a body's function objects are born with
+/// (`JsFunctionInfo::own_slots`): one, `prototype`, for a body that owns it
+/// from birth (a constructing plain function, a generator, an async
+/// generator); none for an arrow, an async function or a method.
+pub(crate) fn own_slots_for_flags(flags: u32) -> u16 {
+    use crate::runtime_abi::{FN_ARROW, FN_ASYNC, FN_GENERATOR, FN_NON_CONSTRUCTOR};
+    if flags & FN_GENERATOR != 0 {
+        1
+    } else if flags & (FN_ARROW | FN_ASYNC | FN_NON_CONSTRUCTOR) != 0 {
+        0
+    } else {
+        1
+    }
+}
 
 /// The info symbol of `body` (no `@`).
 pub(crate) fn info_symbol(body: &str) -> String {
@@ -96,14 +112,34 @@ pub(crate) struct FnInfoFacts {
     pub declared: u16,
     pub trusted: Option<CloneTarget>,
     pub versioned: Option<CloneTarget>,
+    /// The body is exactly `return <captured binding>` ([`ReturnedCapture`]).
+    pub returns_capture: Option<ReturnedCapture>,
     pub source: Option<RetainedSource>,
     pub name: Option<RetainedName>,
     pub constructor_layout: Option<ConstructorLayout>,
     /// Compiler-private synchronous continuation: mutable captures are its state slots.
     pub fixed_generator_state: bool,
+    /// Internal owner+offset entry; never an observable JS callable.
+    pub private_resume_frame: bool,
+    pub private_async_resume_frame: bool,
     /// The one generic entry for this body's fixed-signature operation.
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,
+    pub metadata: Option<(String, u32)>,
+    /// A source module body has stack identity but no callable birth or startup publication.
+    pub module_frame: bool,
+}
+
+/// `FN_RETURNS_CAPTURE` (perry-abi): what a body that is exactly `return
+/// <captured binding>` loads. It takes the info's trusted-clone words, so an
+/// info carrying it names no trusted clone.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ReturnedCapture {
+    /// The capture slot the body reads.
+    pub index: u32,
+    /// 0 when the capture word is the value; else one plus the value's byte
+    /// offset in the cell the capture word names (a box, a scope object).
+    pub cell: u64,
 }
 
 /// The rest kind of a body with a rest / `arguments` array.
@@ -191,9 +227,9 @@ impl FnInfoFacts {
         self.flags |= FN_GENERATOR;
     }
 
-    /// `async function*`: async and async-generator both.
+    /// `async function*`: the common generator bit plus its async subtype.
     pub(crate) fn set_async_generator(&mut self) {
-        self.flags |= FN_ASYNC_GENERATOR | FN_ASYNC;
+        self.flags |= FN_GENERATOR | FN_ASYNC_GENERATOR | FN_ASYNC;
     }
 
     /// Function kind without retained text (see
@@ -220,7 +256,7 @@ pub(crate) struct DefinedBody {
 }
 
 /// The module's info requests and facts.
-#[derive(Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct FnInfoState {
     requested: BTreeSet<String>,
     facts: BTreeMap<String, FnInfoFacts>,
@@ -245,6 +281,11 @@ impl FnInfoState {
     pub(crate) fn request_static_seed_body(&mut self, body: &str) -> String {
         self.static_seed_bodies.insert(body.to_string());
         self.request(body)
+    }
+
+    /// The body-kind flags recorded for `body` so far (0: none).
+    pub(crate) fn flags_of(&self, body: &str) -> u32 {
+        self.facts.get(body).map_or(0, |f| f.flags)
     }
 
     /// The facts of a body this module defines.
@@ -335,7 +376,7 @@ fn render_definition(
         "hidden ".to_string()
     } else {
         match def.linkage.as_str() {
-            "" => String::new(),
+            "" | "external" => String::new(),
             other => format!("{other} "),
         }
     };
@@ -343,7 +384,15 @@ fn render_definition(
         Some(t) => (format!("@{}", t.symbol), t.captures, t.boxed_mask),
         None => ("null".to_string(), 0, 0),
     };
-    let (trusted_code, trusted_captures, trusted_mask) = clone(&facts.trusted);
+    // A body whose whole effect is one capture read gains nothing from a
+    // trusted direct-call clone; its fact takes the clone's words.
+    let (trusted_code, trusted_captures, trusted_mask, returns_flag) = match facts.returns_capture {
+        Some(rc) => ("null".to_string(), rc.index, rc.cell, FN_RETURNS_CAPTURE),
+        None => {
+            let (code, captures, mask) = clone(&facts.trusted);
+            (code, captures, mask, 0)
+        }
+    };
     let (versioned_code, versioned_captures, versioned_mask) = clone(&facts.versioned);
     let info = info_symbol(body);
     let source_flags = facts.source.as_ref().map_or(0, |source| {
@@ -360,8 +409,14 @@ fn render_definition(
             }
     });
     let flags = facts.flags
+        | if facts.metadata.is_some() {
+            crate::runtime_abi::FN_HAS_METADATA
+        } else {
+            0
+        }
         | (u32::from(facts.call_entry_offset_words) << crate::runtime_abi::FN_CALL_ENTRY_SHIFT)
         | FN_COMPILED_BODY
+        | returns_flag
         | source_flags
         | if facts.constructor_layout.is_some() {
             crate::runtime_abi::FN_HAS_CONSTRUCTOR_LAYOUT
@@ -414,7 +469,7 @@ fn render_definition(
     // A masked 64-bit symbol difference is not a portable object relocation.
     let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
     let info_type = if compressed_in_mask {
-        INFO_TYPE.strip_suffix("i64 }").unwrap().to_string() + "{ i32, i32 } }"
+        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "{ i32, i32 }, i16 }"
     } else {
         INFO_TYPE.to_string()
     };
@@ -430,7 +485,8 @@ fn render_definition(
     let value = format!(
         "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
          ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 {plain}, \
-         {mask_field} }}",
+         {mask_field}, i16 {own} }}",
+        own = own_slots_for_flags(flags),
         params = saturate_u16(def.params as u64),
         plain = plain_params(def.params, flags),
         rest = facts.rest_fixed,
@@ -487,6 +543,10 @@ fn render_definition(
         types.push("ptr".to_string());
         fields.push(format!("ptr @{entry}"));
     }
+    if let Some((owner, ordinal)) = facts.metadata {
+        types.push("{ ptr, i32 }".to_string());
+        fields.push(format!("{{ ptr, i32 }} {{ ptr @{owner}, i32 {ordinal} }}"));
+    }
     if types.len() == 1 {
         format!("@{info} = {linkage}constant {info_type} {value}")
     } else {
@@ -506,7 +566,7 @@ mod tests {
     fn call_entry_offset_describes_native_and_wasm_optional_tails() {
         let mut facts = FnInfoFacts::default();
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 8);
+        assert_eq!(facts.call_entry_offset_words, 9);
         facts.source = Some(RetainedSource {
             global: "source".into(),
             offset: 0,
@@ -530,13 +590,13 @@ mod tests {
             symbols: 0,
         });
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 13);
+        assert_eq!(facts.call_entry_offset_words, 14);
         facts.set_call_entry("entry".into(), true);
         assert_eq!(facts.call_entry_offset_words, 11);
         // Framed source widens the tail by one more 8-byte unit.
         facts.source.as_mut().unwrap().decoded_offset = Some(7);
         facts.set_call_entry("entry".into(), false);
-        assert_eq!(facts.call_entry_offset_words, 14);
+        assert_eq!(facts.call_entry_offset_words, 15);
         facts.set_call_entry("entry".into(), true);
         assert_eq!(facts.call_entry_offset_words, 12);
     }
@@ -581,7 +641,7 @@ mod tests {
                 assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
                 assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
             } else {
-                assert!(ir.contains("i16, { i32, i32 } }, i32, i32 }"), "{ir}");
+                assert!(ir.contains("i16, { i32, i32 }, i16 }, i32, i32 }"), "{ir}");
                 assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
             }
         }
@@ -649,10 +709,54 @@ mod tests {
             lines,
             vec![format!(
                 "@perry_closure_m__3$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__3, \
-                 i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0 }}",
+                 i16 2, i16 1, i32 {}, i32 1, i32 0, ptr null, i64 0, ptr null, i32 0, i16 0, i16 0, i64 0, i16 0 }}",
                 FN_REST_USER | FN_HAS_LENGTH | FN_ARROW | FN_COMPILED_BODY
             )]
         );
+    }
+
+    /// A `return <captured binding>` body's fact takes the trusted-clone
+    /// words: flag, capture index, cell word, and no trusted clone even when
+    /// one was recorded.
+    #[test]
+    fn a_returned_capture_fact_takes_the_trusted_clone_words() {
+        let mut state = FnInfoState::default();
+        state.request("perry_closure_m__9");
+        let facts = state.facts_mut("perry_closure_m__9");
+        facts.set_arrow();
+        facts.trusted = Some(CloneTarget {
+            symbol: "perry_closure_m__9$trusted_boxes".into(),
+            captures: 1,
+            boxed_mask: 1,
+        });
+        facts.returns_capture = Some(ReturnedCapture { index: 3, cell: 17 });
+        let lines = state.render_globals(
+            |b| {
+                (b == "perry_closure_m__9")
+                    .then(|| defined(0, "internal"))
+                    .flatten()
+            },
+            [],
+            false,
+        );
+        assert_eq!(
+            lines,
+            vec![format!(
+                "@perry_closure_m__9$info = internal constant {INFO_TYPE} {{ ptr @perry_closure_m__9, \
+                 i16 0, i16 0, i32 {}, i32 0, i32 3, ptr null, i64 17, ptr null, i32 0, i16 0, i16 1, i64 0, i16 0 }}",
+                FN_ARROW | FN_COMPILED_BODY | FN_RETURNS_CAPTURE
+            )]
+        );
+    }
+
+    #[test]
+    fn async_generator_info_retains_common_generator_kind() {
+        let mut state = FnInfoState::default();
+        state.request("async_gen");
+        let facts = state.facts_mut("async_gen");
+        facts.set_async_generator();
+        let expected = FN_ASYNC | FN_GENERATOR | FN_ASYNC_GENERATOR;
+        assert_eq!(facts.flags & expected, expected);
     }
 
     /// Encoded `plain_params` is the body's `params + 1` unless it bundles a
@@ -679,7 +783,7 @@ mod tests {
                 .find(|l| l.starts_with(&format!("@{body}$info ")))
                 .unwrap();
             line.rsplit(", i16 ")
-                .next()
+                .nth(1)
                 .unwrap()
                 .split(',')
                 .next()
@@ -818,7 +922,7 @@ mod tests {
         assert!(line.contains("ptr @perry_closure_m__9$info to i64"));
         assert!(line.contains("ptr null, i32 31"));
         assert!(line.contains("i64 sub (i64 ptrtoint"));
-        assert!(line.ends_with(")) }"));
+        assert!(line.ends_with(")), i16 1 }"));
     }
 
     #[test]
@@ -842,7 +946,7 @@ mod tests {
             .remove(0);
         assert!(line.contains(&format!("{{ {INFO_TYPE}, i32, i32 }}")));
         assert!(line.contains("ptr @perry_closure_m__9$versioned"));
-        assert!(line.contains("i64 5 }"));
+        assert!(line.contains("i64 5, i16 1 }"));
         assert!(line.ends_with("i32 31 }"));
     }
 }
@@ -908,5 +1012,89 @@ mod constructor_tail_tests {
             "{{ {INFO_TYPE}, i32, i32, i32, i32, {{ ptr, ptr, i32, i32 }} }}"
         )));
         assert!(line.ends_with("{ ptr @ctor_layout, ptr @ctor_operands, i32 2, i32 0 } }"));
+    }
+}
+
+/// The private scalar capture body shares the typed closure's identity.
+pub(crate) fn normalized_capture_body_symbol(typed: &str) -> String {
+    format!("{typed}.$normalized_captures")
+}
+
+impl FnInfoState {
+    /// Apply worker changes relative to its immutable starting facts. Other
+    /// workers may have set independent flag bits on the same closure body.
+    pub(crate) fn merge_callable(&mut self, base: &Self, worker: Self) {
+        self.requested.extend(worker.requested);
+        self.static_seed_bodies.extend(worker.static_seed_bodies);
+        for (body, incoming) in worker.facts {
+            let previous = base.facts.get(&body);
+            if previous == Some(&incoming) {
+                continue;
+            }
+            // An explicitly created default fact still requests a local info
+            // definition. Absence and a present default record are distinct.
+            let previous = previous.cloned().unwrap_or_default();
+            let current = self.facts.entry(body).or_default();
+            let changed = previous.flags ^ incoming.flags;
+            current.flags = (current.flags & !changed) | (incoming.flags & changed);
+            macro_rules! field {
+                ($name:ident) => {
+                    if incoming.$name != previous.$name {
+                        assert!(
+                            current.$name == previous.$name || current.$name == incoming.$name,
+                            "conflicting callable function metadata"
+                        );
+                        current.$name = incoming.$name;
+                    }
+                };
+            }
+            field!(rest_fixed);
+            field!(length);
+            field!(declared);
+            field!(trusted);
+            field!(versioned);
+            field!(source);
+            field!(name);
+            field!(fixed_generator_state);
+            field!(returns_capture);
+            field!(constructor_layout);
+            field!(private_resume_frame);
+            field!(private_async_resume_frame);
+            field!(call_entry);
+            field!(call_entry_offset_words);
+            field!(metadata);
+            field!(module_frame);
+        }
+    }
+}
+
+#[cfg(test)]
+mod callable_merge_tests {
+    use super::*;
+    #[test]
+    fn callable_merge_keeps_explicit_default_body_info() {
+        let base = FnInfoState::default();
+        let mut serial = base.clone();
+        serial.facts_mut("body");
+        let mut merged = base.clone();
+        merged.merge_callable(&base, serial.clone());
+        let render = |s: &FnInfoState| {
+            s.render_globals(
+                |name| {
+                    (name == "body").then(|| DefinedBody {
+                        params: 0,
+                        linkage: "internal".into(),
+                    })
+                },
+                [],
+                false,
+            )
+        };
+        assert_eq!(
+            render(&serial).len(),
+            1,
+            "an explicit default emits its info"
+        );
+        assert_eq!(render(&merged), render(&serial));
     }
 }

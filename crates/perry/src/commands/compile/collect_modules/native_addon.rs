@@ -65,6 +65,13 @@ fn package_path(node_modules: &std::path::Path, name: &str) -> PathBuf {
 /// platform payload dependency. This covers napi-rs layouts such as
 /// `@napi-rs/foo` -> `@napi-rs/foo-win32-x64-msvc` without letting an
 /// unrelated transitive package inherit the permission.
+///
+/// The wrapper is looked up from the payload's enclosing `node_modules`
+/// (npm/yarn layouts) and, failing that, among the wrapper copies the walk
+/// entered, resolving the declared dependency from the wrapper's side. An
+/// isolated store (the pnpm global virtual store) keeps the wrapper outside
+/// every directory above the payload; only the wrapper's own `node_modules`
+/// links it.
 fn approved_owner_package(
     ctx: &CompilationContext,
     package_root: &std::path::Path,
@@ -98,7 +105,60 @@ fn approved_owner_package(
             }
         }
     }
-    None
+    let payload = package_root.canonicalize().ok()?;
+    ctx.native_addon_wrapper_roots.iter().find_map(|wrapper| {
+        declared_dependencies(wrapper)
+            .iter()
+            .any(|dependency| {
+                dependency == actual_name
+                    && resolve_package_from(wrapper, dependency).as_deref()
+                        == Some(payload.as_path())
+            })
+            .then(|| package_name_from_package_json(wrapper))
+            .flatten()
+    })
+}
+
+/// Record the package root of a walked module when it is an allowlisted
+/// Node-API wrapper, so its platform payloads can be approved through it.
+pub(super) fn note_native_addon_wrapper(ctx: &mut CompilationContext, module: &std::path::Path) {
+    if ctx.native_addon_packages.is_empty() {
+        return;
+    }
+    let Some(root) = nearest_package_root(module) else {
+        return;
+    };
+    if ctx.native_addon_wrapper_roots.contains(&root) {
+        return;
+    }
+    if package_name_from_package_json(&root)
+        .is_some_and(|name| ctx.native_addon_packages.contains(&name))
+    {
+        ctx.native_addon_wrapper_roots.insert(root);
+    }
+}
+
+/// The canonical root of package `name` as Node resolves it from package
+/// root `from`: the nearest `node_modules/<name>` at or above it.
+fn resolve_package_from(from: &std::path::Path, name: &str) -> Option<PathBuf> {
+    from.ancestors()
+        .map(|ancestor| package_path(&ancestor.join("node_modules"), name))
+        .find(|candidate| candidate.join("package.json").is_file())
+        .and_then(|candidate| candidate.canonicalize().ok())
+}
+
+fn declared_dependencies(package_root: &std::path::Path) -> Vec<String> {
+    let Some(manifest) = fs::read_to_string(package_root.join("package.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+    else {
+        return Vec::new();
+    };
+    ["dependencies", "optionalDependencies"]
+        .iter()
+        .filter_map(|section| manifest.get(section).and_then(|value| value.as_object()))
+        .flat_map(|dependencies| dependencies.keys().cloned())
+        .collect()
 }
 
 fn normalized_relative(path: &std::path::Path) -> String {
@@ -121,7 +181,17 @@ fn forbidden_node_import(name: &str) -> bool {
         || name.contains("Nan::")
 }
 
-fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
+/// Validate an approved addon binary and read its reach and Node-API imports.
+///
+/// Perry C host functions are exported for every linked addon because dynamic
+/// dependencies can reference them without listing them in this binary's
+/// imports.
+fn validate_node_api_binary(
+    path: &std::path::Path,
+) -> Result<(
+    std::collections::BTreeSet<perry_runtime_manifest::NodeApiReach>,
+    std::collections::BTreeSet<String>,
+)> {
     let bytes = fs::read(path)?;
     let file = object::File::parse(&*bytes).map_err(|error| {
         anyhow::anyhow!(
@@ -141,7 +211,13 @@ fn validate_node_api_binary(path: &std::path::Path) -> Result<()> {
             );
         }
     }
-    Ok(())
+    let inspect = |error: anyhow::Error| {
+        anyhow::anyhow!("cannot inspect imports for `{}`: {error}", path.display())
+    };
+    Ok((
+        imports::addon_reach(&file).map_err(inspect)?,
+        imports::node_api_imports(&file).map_err(inspect)?,
+    ))
 }
 
 fn path_is_inside_node_modules(path: &std::path::Path) -> bool {
@@ -164,7 +240,7 @@ pub(super) fn collect_node_addon_request(
         // Keep project entries in a namespace that cannot collide with the
         // existing `<package>/<entry>` logical-id scheme.
         let logical_id = format!("$project/{project_path}");
-        validate_node_api_binary(canonical)?;
+        let (reach, node_api_imports) = validate_node_api_binary(canonical)?;
         let package_dir = canonical
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."))
@@ -183,6 +259,10 @@ pub(super) fn collect_node_addon_request(
                 package_dir,
                 entry_relative,
                 ship_package_payload: false,
+                reach,
+                node_api_imports,
+                #[cfg(feature = "target-wasi")]
+                wasm_archives: Vec::new(),
             });
         return Ok(Some(logical_id));
     }
@@ -211,7 +291,7 @@ pub(super) fn collect_node_addon_request(
             actual_package,
         );
     };
-    validate_node_api_binary(canonical)?;
+    let (reach, node_api_imports) = validate_node_api_binary(canonical)?;
     let entry_relative = canonical
         .strip_prefix(&package_root)
         .unwrap_or(canonical)
@@ -231,8 +311,52 @@ pub(super) fn collect_node_addon_request(
             package_dir: package_root,
             entry_relative,
             ship_package_payload: true,
+            reach,
+            node_api_imports,
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
         });
     Ok(Some(logical_id))
+}
+
+/// WASI: record the addon at `entry` (a `.node` path inside the approved
+/// package at `package_root`) that the program links from its declared wasm32
+/// archives. Its logical id is the native one, `<package>/<entry>`, so the same
+/// requests resolve to it; no `.node` file needs to exist.
+pub(super) fn collect_linked_wasm_addon(
+    ctx: &mut CompilationContext,
+    package_root: &std::path::Path,
+    entry: &str,
+    _archives: Vec<PathBuf>,
+) -> Result<()> {
+    let (actual_package, version) = package_identity_from_package_json(package_root)
+        .unwrap_or_else(|| (package_root.display().to_string(), "0.0.0".to_string()));
+    let Some(owner_package) = approved_owner_package(ctx, package_root, &actual_package) else {
+        return Ok(());
+    };
+    let entry_relative = PathBuf::from(entry);
+    let logical_id = format!(
+        "{}/{}",
+        actual_package,
+        normalized_relative(&entry_relative)
+    );
+    ctx.native_addons
+        .entry(logical_id.clone())
+        .or_insert_with(|| NativeAddonModule {
+            logical_id,
+            package: owner_package,
+            version,
+            source_path: package_root.join(&entry_relative),
+            package_dir: package_root.to_path_buf(),
+            entry_relative,
+            ship_package_payload: false,
+            // The wasm32 archives' imports are not read: open.
+            reach: [perry_runtime_manifest::NodeApiReach::World].into(),
+            node_api_imports: Default::default(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: _archives,
+        });
+    Ok(())
 }
 
 /// Returns true exactly for `.node` inputs handled as sidecar graph members so
@@ -240,15 +364,38 @@ pub(super) fn collect_node_addon_request(
 pub(super) fn collect_or_refuse_node_addon(
     ctx: &mut CompilationContext,
     canonical: &std::path::Path,
+    target: Option<&str>,
 ) -> Result<bool> {
     if canonical.extension().and_then(|ext| ext.to_str()) == Some("node")
-        && nearest_package_root(canonical)
+        && (nearest_package_root(canonical)
             .as_deref()
             .is_some_and(|root| parcel_facade_without_approval(ctx, root))
+            || is_other_target_package_addon(ctx, canonical, target))
     {
         return Ok(true);
     }
     collect_node_addon_request(ctx, canonical).map(|request| request.is_some())
+}
+
+/// A package's prebuilt binary for another platform is not part of this
+/// target's graph. napi-rs and prebuild loaders name every platform's binary
+/// in literal `require` calls and try each in turn; under Node the
+/// wrong-platform load throws at runtime and the loader catches it. Such an
+/// edge is left unresolved, so its `require` throws the same way. Exact
+/// project paths (`perry.nativeAddonPaths`) keep their target check.
+pub(super) fn is_other_target_package_addon(
+    ctx: &CompilationContext,
+    canonical: &std::path::Path,
+    target: Option<&str>,
+) -> bool {
+    if ctx.native_addon_paths.contains_key(canonical)
+        || !nearest_package_root(canonical)
+            .as_deref()
+            .is_some_and(path_is_inside_node_modules)
+    {
+        return false;
+    }
+    discovery::is_other_target_addon(canonical, target)
 }
 
 fn parcel_facade_without_approval(ctx: &CompilationContext, root: &std::path::Path) -> bool {

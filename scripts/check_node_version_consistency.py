@@ -73,12 +73,12 @@ SEMVER = re.compile(r"^\d+\.\d+\.\d+$")
 # ---------------------------------------------------------------------------
 MIRRORS: tuple[tuple[str, str, str], ...] = (
     (
-        "CLAUDE.md",
+        "AGENTS.md",
         r"The oracle is Node `(\d+\.\d+\.\d+)`",
         "gap",
     ),
     (
-        "CLAUDE.md",
+        "AGENTS.md",
         r"`tools\.node\.version`\s*[—-]\s*currently \*\*(\d+\.\d+\.\d+)\*\*",
         "matrix",
     ),
@@ -88,7 +88,7 @@ MIRRORS: tuple[tuple[str, str, str], ...] = (
         "matrix",
     ),
     (
-        "test-parity/node-compat-matrix.baseline.json",
+        "tests/parity/node-compat-matrix.baseline.json",
         r'"nodeVersion":\s*"(\d+\.\d+\.\d+)"',
         "matrix",
     ),
@@ -139,14 +139,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         major_tracks_oracle=False,
         reason=(
             "Runs Node's OWN test corpus, which must be executed by the Node line "
-            "it was taken from. Derived from test-compat/node-core/pinned-version.txt "
+            "it was taken from. Derived from tests/compat/node-core/pinned-version.txt "
             "so the coupling is explicit instead of looking like drift (#6367). "
             "The Node core suite is inlined into the Extended Tests parent."
         ),
         locator=_workflow_pins,
     ),
     Exemption(
-        path="test-compat/node-core/pinned-version.txt",
+        path="tests/compat/node-core/pinned-version.txt",
         value="v22.x",
         major_tracks_oracle=False,
         reason=(
@@ -337,12 +337,12 @@ def self_test() -> int:
         return lambda path: overrides.get(path, _read(path))
 
     # Rule 1a: a drifted restatement is caught.
-    drifted = _read("CLAUDE.md").replace(
+    drifted = _read("AGENTS.md").replace(
         f"The oracle is Node `{real['gap']}`", "The oracle is Node `22.23.1`", 1
     )
     if not any(
         "states Node 22.23.1" in f
-        for f in check(reader=fake_reader({"CLAUDE.md": drifted}))
+        for f in check(reader=fake_reader({"AGENTS.md": drifted}))
     ):
         failures.append("rule 1 does not catch a drifted version restatement")
 
@@ -397,7 +397,7 @@ def self_test() -> int:
 
     # Rule 3a: a stale exemption (tree moved on) is caught.
     stale = Exemption(
-        path="test-compat/node-core/pinned-version.txt",
+        path="tests/compat/node-core/pinned-version.txt",
         value="v20.x",
         major_tracks_oracle=False,
         reason="self-test",

@@ -1,0 +1,1 @@
+Shape publication keeps its nursery, numeric-proof and locked-prototype checks but runs them inline, while marked-prototype reporting stays out of line. On the Supabase CLI, `--version` startup drops by 13.6 M instructions against the same main.

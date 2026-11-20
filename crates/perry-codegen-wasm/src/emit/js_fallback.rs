@@ -60,14 +60,18 @@ impl WasmModuleEmitter {
     ) {
         let pad = "  ".repeat(indent);
         match stmt {
+            // A HIR local lives for the whole function, as a WASM local does: the
+            // lowering of `try`/`finally` and `for...of` reads a local from the `catch` or
+            // `finally` beside the block that declared it. `var` gives the JS binding that
+            // scope; a block-scoped `let` is undeclared there.
             Stmt::Let { id, init, .. } => {
                 let name = format!("__l{}", id);
                 locals.insert(*id, name.clone());
                 if let Some(init_expr) = init {
                     let val = self.emit_js_expr(init_expr, locals);
-                    out.push_str(&format!("{pad}    let {name} = {val};\n"));
+                    out.push_str(&format!("{pad}    var {name} = {val};\n"));
                 } else {
-                    out.push_str(&format!("{pad}    let {name} = u64ToF64(TAG_UNDEFINED);\n"));
+                    out.push_str(&format!("{pad}    var {name} = u64ToF64(TAG_UNDEFINED);\n"));
                 }
             }
             Stmt::Expr(e) => {
@@ -121,21 +125,45 @@ impl WasmModuleEmitter {
                     .as_ref()
                     .map(|c| self.emit_js_expr(c, locals))
                     .unwrap_or_else(|| "1".to_string());
-                out.push_str(&format!("{pad}      while (toJsValue({cond})) {{\n"));
+                // A JS `for` header, so a `continue` still runs the update.
+                let upd = update
+                    .as_ref()
+                    .map(|u| self.emit_js_expr(u, locals))
+                    .unwrap_or_default();
+                let release = |threw| {
+                    condition
+                        .as_ref()
+                        .and_then(|c| super::stmt::collection_cursor_release(c, threw))
+                };
+                let release =
+                    release(true)
+                        .zip(release(false))
+                        .map(|((_, on_throw), (_, on_exit))| {
+                            (
+                                self.emit_js_expr(&on_throw, locals),
+                                self.emit_js_expr(&on_exit, locals),
+                            )
+                        });
+                if release.is_some() {
+                    out.push_str(&format!("{pad}      try {{\n"));
+                }
+                out.push_str(&format!("{pad}      for (; toJsValue({cond}); {upd}) {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 2);
                 }
-                if let Some(upd) = update {
-                    let u = self.emit_js_expr(upd, locals);
-                    out.push_str(&format!("{pad}        {u};\n"));
-                }
                 out.push_str(&format!("{pad}      }}\n"));
+                if let Some((on_throw, on_exit)) = release {
+                    out.push_str(&format!(
+                        "{pad}      }} catch (__e) {{ {on_throw}; throw __e; }} finally {{ {on_exit}; }}\n"
+                    ));
+                }
                 out.push_str(&format!("{pad}    }}\n"));
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 out.push_str(&format!("{pad}    try {{\n"));
                 for s in body {
@@ -219,20 +247,17 @@ impl WasmModuleEmitter {
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
         match expr {
+            // Rust spells an infinity `inf`, which is not a JS literal.
+            Expr::Number(n) if n.is_infinite() => {
+                if *n > 0.0 { "Infinity" } else { "(-Infinity)" }.to_string()
+            }
             Expr::Number(n) => format!("{}", n),
             Expr::Integer(i) => format!("{}", *i as f64),
             Expr::Bool(true) => "u64ToF64(TAG_TRUE)".to_string(),
             Expr::Bool(false) => "u64ToF64(TAG_FALSE)".to_string(),
             Expr::Undefined => "u64ToF64(TAG_UNDEFINED)".to_string(),
             Expr::Null => "u64ToF64(TAG_NULL)".to_string(),
-            Expr::String(s) => {
-                let escaped = s
-                    .replace('\\', "\\\\")
-                    .replace('"', "\\\"")
-                    .replace('\n', "\\n")
-                    .replace('\r', "\\r");
-                format!("fromJsValue(\"{}\")", escaped)
-            }
+            Expr::String(s) => format!("fromJsValue({})", js_string_literal(s)),
             Expr::ScopedTemp { id, value, body } => {
                 let prefix = format!("__scoped_v_{id}_");
                 let depth = locals
@@ -248,34 +273,95 @@ impl WasmModuleEmitter {
                 let body = self.emit_js_expr(body, &inner);
                 format!("({value_name} = {init}, {result_name} = {body}, {value_name} = undefined, {result_name})")
             }
-            Expr::LocalGet(id) => locals
-                .get(id)
-                .cloned()
-                .unwrap_or_else(|| format!("__l{}", id)),
+            // A local the body does not bind is a module-level `let`, promoted to an
+            // exported WASM global (`module_let_globals`); no JS binding exists for it.
+            Expr::LocalGet(id) => match locals.get(id) {
+                Some(name) => name.clone(),
+                None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
+                    Some(&gidx) => {
+                        format!(
+                            "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                            gidx
+                        )
+                    }
+                    None => format!("__l{}", id),
+                },
+            },
             Expr::LocalSet(id, val) => {
-                let name = locals
-                    .get(id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("__l{}", id));
                 let v = self.emit_js_expr(val, locals);
-                format!("({} = {})", name, v)
+                self.emit_js_local_set(*id, &v, locals)
             }
-            Expr::GlobalGet(id) => format!("__g{}", id),
-            Expr::GlobalSet(id, val) => {
+            // `x++` / `--x`: the local is read once, as a number; a postfix update yields
+            // the value it read.
+            Expr::Update { id, op, prefix } => {
+                let old = self.emit_js_expr(&Expr::LocalGet(*id), locals);
+                let sign = match op {
+                    UpdateOp::Increment => "+",
+                    UpdateOp::Decrement => "-",
+                };
+                let set = self.emit_js_local_set(*id, &format!("(__u {sign} 1)"), locals);
+                let result = if *prefix {
+                    set
+                } else {
+                    format!("({set}, __u)")
+                };
+                format!("((__u) => {result})(+toJsValue({old}))")
+            }
+            // An id with no WASM global is the HIR's unresolved-global sentinel (the receiver
+            // of `Promise.resolve`, `fetch`, `JSON.parse`); in JS that receiver is globalThis.
+            // The WASM arm reads the same id as undefined, but here a bare `__g{id}` would be
+            // an undeclared name and throw ReferenceError on entry to the async body.
+            Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
+                "globalThisValue()".to_string()
+            }
+            // A declared global lives in its WASM global, which the module exports by
+            // index; no JS binding `__g{id}` exists.
+            Expr::GlobalGet(id) => format!(
+                "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
+                self.global_map[id]
+            ),
+            Expr::GlobalSet(id, val) if self.global_map.contains_key(id) => {
                 let v = self.emit_js_expr(val, locals);
-                format!("(__g{} = {})", id, v)
+                format!(
+                    "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                    self.global_map[id], v
+                )
             }
+            Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                match op {
-                    BinaryOp::Add => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
-                    BinaryOp::Sub => format!("({} - {})", l, r),
-                    BinaryOp::Mul => format!("({} * {})", l, r),
-                    BinaryOp::Div => format!("({} / {})", l, r),
-                    BinaryOp::Mod => format!("({} % {})", l, r),
-                    _ => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
+                // `bridged`: the operator runs on the decoded JS values; the rest run on the
+                // f64 encodings directly.
+                let (js_op, bridged) = match op {
+                    BinaryOp::Add => ("+", true),
+                    BinaryOp::Sub => ("-", false),
+                    BinaryOp::Mul => ("*", false),
+                    BinaryOp::Div => ("/", false),
+                    BinaryOp::Mod => ("%", false),
+                    BinaryOp::Pow => ("**", true),
+                    BinaryOp::BitAnd => ("&", true),
+                    BinaryOp::BitOr => ("|", true),
+                    BinaryOp::BitXor => ("^", true),
+                    BinaryOp::Shl => ("<<", true),
+                    BinaryOp::Shr => (">>", true),
+                    BinaryOp::UShr => (">>>", true),
+                };
+                if bridged {
+                    format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
+                } else {
+                    format!("({l} {js_op} {r})")
                 }
+            }
+            // The same bridge as the WASM arm, so `in` agrees between sync and async bodies.
+            Expr::In { property, object } => {
+                let p = self.emit_js_expr(property, locals);
+                let o = self.emit_js_expr(object, locals);
+                // The property is evaluated before the object; both stay outside the arrow
+                // so an `await` in either remains inside the async body.
+                format!(
+                    "((__p, __o) => __memDispatch.object_has_property(toJsValue(__o), toJsValue(__p)) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))({p}, {o})"
+                )
             }
             Expr::Compare { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
@@ -298,11 +384,15 @@ impl WasmModuleEmitter {
             Expr::Logical { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                match op {
-                    LogicalOp::And => format!("(toJsValue({l}) ? {r} : {l})"),
-                    LogicalOp::Or => format!("(toJsValue({l}) ? {l} : {r})"),
-                    LogicalOp::Coalesce => format!("(isNull({l}) || isUndefined({l}) ? {r} : {l})"),
-                }
+                // The left operand runs once: the arrow yields `[left]` when it is the
+                // result, else null. The right operand stays outside the arrow so an
+                // `await` in it remains inside the async body.
+                let keep_left = match op {
+                    LogicalOp::And => "!toJsValue(__t)",
+                    LogicalOp::Or => "toJsValue(__t)",
+                    LogicalOp::Coalesce => "!(isNull(__t) || isUndefined(__t))",
+                };
+                format!("((((__t) => ({keep_left} ? [__t] : null))({l}) ?? [{r}])[0])")
             }
             Expr::Unary { op, operand } => {
                 let o = self.emit_js_expr(operand, locals);
@@ -312,7 +402,8 @@ impl WasmModuleEmitter {
                         "(toJsValue({}) ? u64ToF64(TAG_FALSE) : u64ToF64(TAG_TRUE))",
                         o
                     ),
-                    _ => o,
+                    UnaryOp::BitNot => format!("fromJsValue(~toJsValue({}))", o),
+                    UnaryOp::Pos => format!("fromJsValue(+toJsValue({}))", o),
                 }
             }
             Expr::Await(inner) => {
@@ -321,8 +412,16 @@ impl WasmModuleEmitter {
                 format!("fromJsValue(await toJsValue({}))", v)
             }
             Expr::Call { callee, args, .. } => {
-                let args_js: Vec<String> =
-                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let direct = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
+                    _ => None,
+                };
+                let args_js: Vec<String> = self
+                    .with_rest_packed(direct, args)
+                    .iter()
+                    .map(|a| self.emit_js_expr(a, locals))
+                    .collect();
                 match callee.as_ref() {
                     Expr::FuncRef(id) => {
                         if let Some(&func_idx) = self.func_map.get(id) {
@@ -347,6 +446,30 @@ impl WasmModuleEmitter {
                             .cloned()
                             .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string())
                     }
+                    // The Set/Map `for...of` cursor calls the bridges the WASM arm calls.
+                    Expr::ExternFuncRef { name, .. }
+                        if matches!(
+                            name.as_str(),
+                            "js_set_cursor_next"
+                                | "js_map_cursor_next"
+                                | "js_set_compaction_epoch"
+                                | "js_map_compaction_epoch"
+                                | "js_collection_cursor_release"
+                        ) =>
+                    {
+                        let bridge = if name.ends_with("cursor_next") {
+                            "collection_cursor_next"
+                        } else if name.ends_with("cursor_release") {
+                            "collection_cursor_release"
+                        } else {
+                            "collection_cursor_epoch"
+                        };
+                        format!(
+                            "fromJsValue(__memDispatch.{}({}))",
+                            bridge,
+                            host_args(&args_js)
+                        )
+                    }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
                             let args_i64: Vec<String> =
@@ -360,26 +483,139 @@ impl WasmModuleEmitter {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
                     }
+                    // `console.log(x)` lowers to `GlobalGet(0).log(x)`: a known global
+                    // in member position is the bare sentinel and codegen routes by the
+                    // method name, as the WASM arm does. Without this the call reads
+                    // `globalThis.log`, which is not a function.
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(property.as_str(), "log" | "warn" | "error") =>
+                    {
+                        format!(
+                            "(console.{}({}), u64ToF64(TAG_UNDEFINED))",
+                            property,
+                            host_args(&args_js)
+                        )
+                    }
                     Expr::PropertyGet {
                         object, property, ..
                     } => {
                         let obj = self.emit_js_expr(object, locals);
-                        let _args_str = args_js.join(", ");
                         format!(
-                            "fromJsValue(toJsValue({}).{}({}))",
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
                             obj,
-                            property,
-                            args.iter()
-                                .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
-                                .collect::<Vec<_>>()
-                                .join(", ")
+                            js_string_literal(property),
+                            host_args(&args_js)
+                        )
+                    }
+                    Expr::IndexGet { object, index, .. } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        let key = self.emit_js_expr(index, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), toJsValue({})), [{}]))",
+                            obj,
+                            key,
+                            host_args(&args_js)
+                        )
+                    }
+                    // A NaN-boxed callee: `__jsMethodInvoke` runs a Perry closure or a host function.
+                    _ => {
+                        let callee_js = self.emit_js_expr(callee, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({}) }}, [{}]))",
+                            callee_js,
+                            host_args(&args_js)
+                        )
+                    }
+                }
+            }
+            // `f(a, ...xs)` / `o.m(a, ...xs)`: a JS spread over the host values, then the
+            // same method lookup and invocation as `Expr::Call`.
+            Expr::CallSpread { callee, args, .. } => {
+                let list = args
+                    .iter()
+                    .map(|arg| match arg {
+                        CallArg::Expr(e) => format!("toJsValue({})", self.emit_js_expr(e, locals)),
+                        CallArg::Spread(e) => {
+                            format!("...toJsValue({})", self.emit_js_expr(e, locals))
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let direct = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
+                    _ => None,
+                };
+                // A compiled function takes NaN-boxed i64 arguments, one per parameter;
+                // a void export returns `undefined`.
+                if let Some(func_idx) = direct {
+                    return format!(
+                        "((__a) => u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{func_idx}, ...__a.map((__v) => f64ToU64(fromJsValue(__v)))) ?? TAG_UNDEFINED))([{list}])"
+                    );
+                }
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(id) if !self.global_map.contains_key(id))
+                        && matches!(
+                            property.as_str(),
+                            "log" | "info" | "warn" | "error" | "debug"
+                        ) =>
+                    {
+                        format!("(console.{property}({list}), u64ToF64(TAG_UNDEFINED))")
+                    }
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
+                            obj,
+                            js_string_literal(property),
+                            list
+                        )
+                    }
+                    Expr::IndexGet { object, index, .. } => {
+                        let obj = self.emit_js_expr(object, locals);
+                        let key = self.emit_js_expr(index, locals);
+                        format!(
+                            "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({obj}), toJsValue({key})), [{list}]))"
                         )
                     }
                     _ => {
                         let callee_js = self.emit_js_expr(callee, locals);
-                        format!("{}({})", callee_js, args_js.join(", "))
+                        format!(
+                            "fromJsValue(__jsMethodInvoke({{ r: undefined, m: 'value', f: toJsValue({callee_js}) }}, [{list}]))"
+                        )
                     }
                 }
+            }
+            // The bridge the WASM arms call, so both send `fetch(url, { method, body,
+            // headers: { Authorization } })`. Arguments evaluate in source order (url,
+            // auth header, body); the result is the request's promise, for the caller
+            // to await or chain.
+            Expr::FetchGetWithAuth { url, auth_header } => {
+                let u = self.emit_js_expr(url, locals);
+                let a = self.emit_js_expr(auth_header, locals);
+                format!(
+                    "((__u, __a) => fromJsValue(__memDispatch.fetch_with_options(toJsValue(__u), undefined, undefined, {{ Authorization: toJsValue(__a) }})))({}, {})",
+                    u, a
+                )
+            }
+            Expr::FetchPostWithAuth {
+                url,
+                auth_header,
+                body,
+            } => {
+                let u = self.emit_js_expr(url, locals);
+                let a = self.emit_js_expr(auth_header, locals);
+                let b = self.emit_js_expr(body, locals);
+                format!(
+                    "((__u, __a, __b) => fromJsValue(__memDispatch.fetch_with_options(toJsValue(__u), \"POST\", toJsValue(__b), {{ Authorization: toJsValue(__a) }})))({}, {}, {})",
+                    u, a, b
+                )
             }
             Expr::FetchWithOptions {
                 url,
@@ -410,7 +646,7 @@ impl WasmModuleEmitter {
                             opts.push_str(", ");
                         }
                         let v = self.emit_js_expr(val, locals);
-                        opts.push_str(&format!("'{}': getString({})", key, v));
+                        opts.push_str(&format!("{}: getString({})", js_string_literal(key), v));
                     }
                     opts.push('}');
                 }
@@ -425,25 +661,34 @@ impl WasmModuleEmitter {
                 object, property, ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
-                format!("fromJsValue(toJsValue({}).{})", obj, property)
+                format!(
+                    "fromJsValue(toJsValue({})[{}])",
+                    obj,
+                    js_string_literal(property)
+                )
             }
             Expr::PropertySet {
                 object,
                 property,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Object, then value, each evaluated once: the value is both stored and
+                // the expression's result, and may have side effects.
                 format!(
-                    "(toJsValue({}).{} = toJsValue({}), {})",
-                    obj, property, val, val
+                    "((__o, __v) => (toJsValue(__o)[{}] = toJsValue(__v), __v))({}, {})",
+                    js_string_literal(property),
+                    obj,
+                    val
                 )
             }
             Expr::Object(fields) => {
                 let mut parts = Vec::new();
                 for (key, val) in fields {
                     let v = self.emit_js_expr(val, locals);
-                    parts.push(format!("'{}': toJsValue({})", key, v));
+                    parts.push(format!("{}: toJsValue({})", js_string_literal(key), v));
                 }
                 format!("fromJsValue({{{}}})", parts.join(", "))
             }
@@ -453,6 +698,33 @@ impl WasmModuleEmitter {
                     .map(|e| format!("toJsValue({})", self.emit_js_expr(e, locals)))
                     .collect();
                 format!("fromJsValue([{}])", elems.join(", "))
+            }
+            // An array literal with a spread is a JS array literal: a spread element expands
+            // any iterable, and a hole stays a hole. Each element ends in a comma, so a
+            // trailing hole still counts toward the length.
+            Expr::ArraySpread(elements) => {
+                let elems: String = elements
+                    .iter()
+                    .map(|el| match el {
+                        ArrayElement::Expr(e) => {
+                            format!("toJsValue({}),", self.emit_js_expr(e, locals))
+                        }
+                        ArrayElement::Spread(e) => {
+                            format!("...toJsValue({}),", self.emit_js_expr(e, locals))
+                        }
+                        ArrayElement::Hole => ",".to_string(),
+                    })
+                    .collect();
+                format!("fromJsValue([{}])", elems)
+            }
+            Expr::ArrayKeys(a) | Expr::ArrayValues(a) | Expr::ArrayEntries(a) => {
+                let method = match expr {
+                    Expr::ArrayKeys(_) => "keys",
+                    Expr::ArrayValues(_) => "values",
+                    _ => "entries",
+                };
+                let v = self.emit_js_expr(a, locals);
+                format!("fromJsValue(toJsValue({}).{}())", v, method)
             }
             Expr::Conditional {
                 condition,
@@ -473,6 +745,8 @@ impl WasmModuleEmitter {
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
+                    "__perry_borrowed_proof" => "u64ToF64(TAG_FALSE)".to_string(),
+                    "__perry_runtime" => self.emit_js_runtime_intrinsic(method, args, locals),
                     "console" => {
                         let args_js: Vec<String> = args
                             .iter()
@@ -521,6 +795,16 @@ impl WasmModuleEmitter {
                     _ => {
                         if let Some(obj) = object {
                             let obj_js = self.emit_js_expr(obj, locals);
+                            // The HIR lowers a bare read of a host getter (`res.status`)
+                            // to this call with no arguments, the same shape as
+                            // `res.text()`; the member's value tells them apart.
+                            if args.is_empty() {
+                                return format!(
+                                    "fromJsValue(__jsNativeMember(toJsValue({}), {}))",
+                                    obj_js,
+                                    js_string_literal(method)
+                                );
+                            }
                             let args_js: Vec<String> = args
                                 .iter()
                                 .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
@@ -536,6 +820,79 @@ impl WasmModuleEmitter {
                         }
                     }
                 }
+            }
+            Expr::SetValueAt { set: coll, idx }
+            | Expr::MapEntryKeyAt { map: coll, idx }
+            | Expr::MapEntryValueAt { map: coll, idx } => {
+                let bridge = match expr {
+                    Expr::SetValueAt { .. } => "set_value_at",
+                    Expr::MapEntryKeyAt { .. } => "map_entry_key_at",
+                    _ => "map_entry_value_at",
+                };
+                format!(
+                    "fromJsValue(__memDispatch.{}(toJsValue({}), toJsValue({})))",
+                    bridge,
+                    self.emit_js_expr(coll, locals),
+                    self.emit_js_expr(idx, locals)
+                )
+            }
+            Expr::ArrayJoin { array, separator } => {
+                let a = self.emit_js_expr(array, locals);
+                let sep = separator
+                    .as_ref()
+                    .map(|sep| format!("toJsValue({})", self.emit_js_expr(sep, locals)))
+                    .unwrap_or_default();
+                format!("fromJsValue(toJsValue({}).join({}))", a, sep)
+            }
+            Expr::ObjectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.object_get_prototype_of(toJsValue({})))",
+                    o
+                )
+            }
+            Expr::ReflectGetPrototypeOf(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!(
+                    "fromJsValue(__memDispatch.reflect_get_prototype_of(toJsValue({})))",
+                    o
+                )
+            }
+            Expr::ObjectKeys(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.keys(toJsValue({})))", o)
+            }
+            Expr::ObjectValues(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.values(toJsValue({})))", o)
+            }
+            Expr::ObjectCreate(proto, props) => {
+                let proto = self.emit_js_expr(proto, locals);
+                let props = props.as_ref().map_or_else(
+                    || "undefined".to_string(),
+                    |p| format!("toJsValue({})", self.emit_js_expr(p, locals)),
+                );
+                format!("fromJsValue(__memDispatch.object_create(toJsValue({proto}), {props}))")
+            }
+            Expr::ObjectEntries(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(Object.entries(toJsValue({})))", o)
+            }
+            // The same bridge as the WASM arm, so `for...in` agrees between sync and async bodies.
+            Expr::ForInKeys(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(__memDispatch.for_in_keys(toJsValue({o})))")
+            }
+            Expr::ObjectRest {
+                object,
+                exclude_keys,
+            } => {
+                let keys: Vec<String> = exclude_keys.iter().map(|k| js_string_literal(k)).collect();
+                format!(
+                    "fromJsValue(__memDispatch.object_rest(toJsValue({}), [{}]))",
+                    self.emit_js_expr(object, locals),
+                    keys.join(", ")
+                )
             }
             Expr::ErrorNew(msg) => {
                 if let Some(m) = msg {
@@ -621,8 +978,19 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(JSON.stringify(toJsValue({})))", v)
             }
+            // The HIR lowers every `JSON.stringify` call to this form. The bridge
+            // is the one WASM code calls, so a closure replacer runs the same way.
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                let v = self.emit_js_expr(val, locals);
+                let r = self.emit_js_expr(replacer, locals);
+                let s = self.emit_js_expr(space, locals);
+                format!(
+                    "fromJsValue(__memDispatch.json_stringify(toJsValue({}), toJsValue({}), toJsValue({})))",
+                    v, r, s
+                )
+            }
             Expr::This => "__this".to_string(),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
                 format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)
@@ -631,6 +999,7 @@ impl WasmModuleEmitter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
@@ -648,9 +1017,10 @@ impl WasmModuleEmitter {
                 let obj = self.emit_js_expr(target, locals);
                 let k = self.emit_js_expr(key, locals);
                 let val = self.emit_js_expr(value, locals);
+                // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
-                    obj, k, val, val
+                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    obj, k, val
                 )
             }
             Expr::ArrayPush {
@@ -674,6 +1044,20 @@ impl WasmModuleEmitter {
             Expr::ObjectCoerce(val) => {
                 let v = self.emit_js_expr(val, locals);
                 format!("fromJsValue(Object(toJsValue({})))", v)
+            }
+            // `Math.max` / `Math.min` convert every argument with ToNumber after evaluating
+            // them all, as the JS builtins do.
+            Expr::MathMax(args) | Expr::MathMin(args) => {
+                let name = if matches!(expr, Expr::MathMax(_)) {
+                    "max"
+                } else {
+                    "min"
+                };
+                let args_js: Vec<String> = args
+                    .iter()
+                    .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
+                    .collect();
+                format!("Math.{}({})", name, args_js.join(", "))
             }
             Expr::MathFloor(x) => {
                 let v = self.emit_js_expr(x, locals);
@@ -699,8 +1083,60 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(x, locals);
                 format!("Math.abs({})", v)
             }
+            Expr::MathMinSpread(src) => {
+                let v = self.emit_js_expr(src, locals);
+                format!("Math.min(...toJsValue({}))", v)
+            }
+            Expr::MathMaxSpread(src) => {
+                let v = self.emit_js_expr(src, locals);
+                format!("Math.max(...toJsValue({}))", v)
+            }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
+            // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
+            // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
+            // `emit/expr/map_set.rs`).
+            Expr::NewDynamic { callee, args, .. } => {
+                let operands: Vec<&Expr> = std::iter::once(&**callee).chain(args).collect();
+                self.emit_js_bridge_call("new_dynamic", &operands, locals)
+            }
+            Expr::MapNew => self.emit_js_bridge_call("map_new", &[], locals),
+            Expr::SetNew => self.emit_js_bridge_call("set_new", &[], locals),
+            Expr::SetNewFromArray(a) => self.emit_js_bridge_call("set_new_from_array", &[a], locals),
+            Expr::MapSize(a) => self.emit_js_bridge_call("map_size", &[a], locals),
+            Expr::SetSize(a) => self.emit_js_bridge_call("set_size", &[a], locals),
+            Expr::MapEntries(a) => self.emit_js_bridge_call("map_entries", &[a], locals),
+            Expr::MapKeys(a) => self.emit_js_bridge_call("map_keys", &[a], locals),
+            Expr::MapValues(a) => self.emit_js_bridge_call("map_values", &[a], locals),
+            Expr::SetValues(a) => self.emit_js_bridge_call("set_values", &[a], locals),
+            Expr::MapClear(a) => self.emit_js_bridge_call("map_clear", &[a], locals),
+            Expr::SetClear(a) => self.emit_js_bridge_call("set_clear", &[a], locals),
+            Expr::MapGet { map, key } => self.emit_js_bridge_call("map_get", &[map, key], locals),
+            // The `has` and `delete` bridges answer 1/0 and nothing, for their WASM callers;
+            // JS wants the boolean, and `delete` says whether the entry was there.
+            Expr::MapHas { map: c, key: k } | Expr::SetHas { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.has(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            Expr::MapDelete { map: c, key: k } | Expr::SetDelete { set: c, value: k } => format!(
+                "fromJsValue(((c, k) => (c instanceof Map || c instanceof Set) && c.delete(k))(toJsValue({}), toJsValue({})))",
+                self.emit_js_expr(c, locals),
+                self.emit_js_expr(k, locals)
+            ),
+            // `set` and `add` yield the collection. The operands are the arrow's arguments,
+            // so each is evaluated once, in source order, and an `await` stays in the async body.
+            Expr::MapSet { map, key, value } => format!(
+                "((m, k, v) => (__memDispatch.map_set(toJsValue(m), toJsValue(k), toJsValue(v)), m))({}, {}, {})",
+                self.emit_js_expr(map, locals),
+                self.emit_js_expr(key, locals),
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::SetAdd { set_id, value } => format!(
+                "((s, v) => (__memDispatch.set_add(toJsValue(s), toJsValue(v)), s))({}, {})",
+                self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
+                self.emit_js_expr(value, locals)
+            ),
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
@@ -739,14 +1175,47 @@ impl WasmModuleEmitter {
             Expr::New {
                 class_name, args, ..
             } => {
-                let args_js: Vec<String> = args
-                    .iter()
-                    .map(|a| format!("toJsValue({})", self.emit_js_expr(a, locals)))
-                    .collect();
+                let args_js: Vec<String> =
+                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                if !self.user_classes.contains(class_name.as_str()) {
+                    // A host constructor (`Map`, `Error`, ...): the class name is a global.
+                    let host_args: Vec<String> = args_js
+                        .iter()
+                        .map(|a| format!("toJsValue({})", a))
+                        .collect();
+                    return format!(
+                        "fromJsValue(new globalThis[{}]({}))",
+                        js_string_literal(class_name),
+                        host_args.join(", ")
+                    );
+                }
+                // A user class, including the `__AnonShape_*` class of an object literal,
+                // has no JS constructor. Birth it as the WASM arm's `class_new` does
+                // (`__classInstance`) and run the compiled constructor, which returns `this`.
+                let instance = format!(
+                    "fromJsValue(__classInstance({}))",
+                    js_string_literal(class_name)
+                );
+                let Some(&ctor_idx) = self.class_ctor_map.get(class_name.as_str()) else {
+                    return instance;
+                };
+                let mut call_args = vec![format!("f64ToU64({})", instance)];
+                call_args.extend(args_js.iter().map(|a| format!("f64ToU64({})", a)));
+                // A WASM i64 parameter rejects a missing (undefined) argument, so pad
+                // to the constructor's arity. Excess arguments are still evaluated and
+                // the export ignores them.
+                if let Some(&expected) = self.func_param_counts.get(&ctor_idx) {
+                    while call_args.len() < expected {
+                        call_args.push("TAG_UNDEFINED".to_string());
+                    }
+                }
+                // Through the callback boundary: an exception the constructor raised
+                // under an enclosing WASM `try` is left pending, and this rethrows it
+                // here instead of handing back `this` as if it had succeeded.
                 format!(
-                    "fromJsValue(new (toJsValue(fromJsValue('{}')))({}))",
-                    class_name,
-                    args_js.join(", ")
+                    "u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{}, {}))",
+                    ctor_idx,
+                    call_args.join(", ")
                 )
             }
             Expr::InstanceOf { expr, ty, .. } => {
@@ -759,15 +1228,41 @@ impl WasmModuleEmitter {
             }
             Expr::TypeOf(operand) => {
                 let o = self.emit_js_expr(operand, locals);
-                format!("fromJsValue(typeof toJsValue({}))", o)
+                format!("fromJsValue(__typeOf(toJsValue({})))", o)
             }
             Expr::Void(e) => {
                 let v = self.emit_js_expr(e, locals);
                 format!("({}, u64ToF64(TAG_UNDEFINED))", v)
             }
-            Expr::Delete(e) => {
-                let v = self.emit_js_expr(e, locals);
-                format!("(delete toJsValue({}), u64ToF64(TAG_TRUE))", v)
+            // `delete` reaches the property reference, not the value read through it, so a
+            // nullish receiver throws; any other operand is still evaluated.
+            Expr::Delete(e) => match e.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } => format!(
+                    "fromJsValue(delete toJsValue({})[{}])",
+                    self.emit_js_expr(object, locals),
+                    js_string_literal(property)
+                ),
+                Expr::IndexGet { object, index, .. } => format!(
+                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    self.emit_js_expr(object, locals),
+                    self.emit_js_expr(index, locals)
+                ),
+                other => format!("({}, u64ToF64(TAG_TRUE))", self.emit_js_expr(other, locals)),
+            },
+            // The iteration nodes beside the iterator-record intrinsics call the bridges
+            // their WASM arms in `emit/expr/iterator_records.rs` call.
+            Expr::GetIterator(value) => format!(
+                "fromJsValue(__memDispatch.rt_getIterator(toJsValue({})))",
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::IteratorToArray(value) | Expr::ForOfToArray(value) => format!(
+                "fromJsValue(__memDispatch.rt_iterableToArray(toJsValue({})))",
+                self.emit_js_expr(value, locals)
+            ),
+            Expr::ArrayIterationPatched => {
+                "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
             _ => {
                 // Fallback: return undefined for unhandled expressions
@@ -775,4 +1270,124 @@ impl WasmModuleEmitter {
             }
         }
     }
+
+    /// JS for a `__perry_runtime` intrinsic: the same contract as the WASM arms in
+    /// `emit/expr/iterator_records.rs`. The mode-selected forms evaluate only the arm their
+    /// mode picks, and every other intrinsic is one call to the bridge the WASM arm calls.
+    /// An intrinsic without an arm throws, because an undefined result would run on with
+    /// wrong values.
+    fn emit_js_runtime_intrinsic(
+        &self,
+        method: &str,
+        args: &[Expr],
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        let js = |e: &Expr| self.emit_js_expr(e, locals);
+        let select = |mode: &Expr, then_js: String, else_js: String| {
+            format!("(toJsValue({}) ? {} : {})", js(mode), then_js, else_js)
+        };
+        let bridge = |name: &str, args: &[&Expr]| {
+            let args_js: Vec<String> = args.iter().map(|a| js(a)).collect();
+            format!(
+                "fromJsValue(__memDispatch.rt_{}({}))",
+                name,
+                host_args(&args_js)
+            )
+        };
+        match (method, args) {
+            ("arrayRecordForValue", [mode, proto_value, elem]) => {
+                select(mode, js(proto_value), js(elem))
+            }
+            ("arrayRecordForUpdate", [mode, update]) => select(mode, "0".to_string(), js(update)),
+            ("arrayRecordForBound", [mode, len, idx, step_call, state_set]) => format!(
+                "({}, {})",
+                js(state_set),
+                select(
+                    mode,
+                    select(step_call, js(idx), "Infinity".to_string()),
+                    js(len)
+                )
+            ),
+            ("arrayRecordIndex", [value]) => js(value),
+            // `(source, payload := ..., source := undefined)`: the payload write is the
+            // value, and the clear runs after it.
+            ("arrayRecordPayload", [_source, payload, clear]) => {
+                format!("[{}, {}][0]", js(payload), js(clear))
+            }
+            // The step runs before its output operand, which reads what it produced.
+            ("iteratorStep", [iter, next, output, read @ ..]) => {
+                let read_true = Expr::Bool(true);
+                let read = read.first().unwrap_or(&read_true);
+                format!(
+                    "[{}, {}][0]",
+                    bridge("iteratorStep", &[iter, next, read]),
+                    js(output)
+                )
+            }
+            // The second operand is a source offset for native `--debug-symbols` only.
+            ("requireObjectCoercible", [value, ..]) => bridge("requireObjectCoercible", &[value]),
+            (name, args) if expr::ITERATOR_RECORD_EAGER.contains(&name) => {
+                bridge(name, &args.iter().collect::<Vec<_>>())
+            }
+            _ => format!(
+                "(() => {{ throw new TypeError({}); }})()",
+                js_string_literal(&format!(
+                    "{method} is not supported in an async function body on the web target"
+                ))
+            ),
+        }
+    }
+
+    /// JS that calls `__memDispatch.<bridge>` on `operands` and NaN-boxes its result.
+    fn emit_js_bridge_call(
+        &self,
+        bridge: &str,
+        operands: &[&Expr],
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        let args: Vec<String> = operands
+            .iter()
+            .map(|e| self.emit_js_expr(e, locals))
+            .collect();
+        format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args))
+    }
+
+    /// JS that stores `value` in local `id` and yields it. A local the body does not bind
+    /// is a module-level `let` held in its exported WASM global.
+    fn emit_js_local_set(
+        &self,
+        id: LocalId,
+        value: &str,
+        locals: &BTreeMap<u32, String>,
+    ) -> String {
+        match locals.get(&id) {
+            Some(name) => format!("({} = {})", name, value),
+            None => match self.module_let_globals.get(&(self.current_mod_idx, id)) {
+                Some(&gidx) => format!(
+                    "((__v) => (wasmInstance.exports.__wasm_global_{}.value = f64ToU64(__v), __v))({})",
+                    gidx, value
+                ),
+                None => format!("(__l{} = {})", id, value),
+            },
+        }
+    }
+}
+
+/// NaN-boxed call arguments as a comma-separated list of JS values.
+fn host_args(args_js: &[String]) -> String {
+    args_js
+        .iter()
+        .map(|a| format!("toJsValue({})", a))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// A double-quoted JS string literal holding exactly `s`.
+fn js_string_literal(s: &str) -> String {
+    let escaped = s
+        .replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r");
+    format!("\"{}\"", escaped)
 }

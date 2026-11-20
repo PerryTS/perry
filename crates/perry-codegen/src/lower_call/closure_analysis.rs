@@ -55,6 +55,7 @@ pub fn collect_closure_introduced_ids(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 collect_closure_introduced_ids(s, out);
@@ -160,6 +161,7 @@ pub fn find_outer_writes_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 find_outer_writes_stmt(s, inner_ids, out);
@@ -236,7 +238,7 @@ fn find_outer_writes_expr(
         Expr::PropertyGet { object, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
             find_outer_writes_expr(index, inner_ids, out);
         }
@@ -400,6 +402,7 @@ fn find_thread_hazard_stmt(
             body,
             catch,
             finally,
+            ..
         } => stmts(body)
             .or_else(|| catch.as_ref().and_then(|cc| stmts(&cc.body)))
             .or_else(|| finally.as_deref().and_then(stmts)),

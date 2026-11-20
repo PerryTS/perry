@@ -1,0 +1,4 @@
+failed to add import node 1 for test case `import-already-exists`
+
+Caused by:
+    import name `foo` already exists in the graph

@@ -26,9 +26,6 @@ fn heap_object_addr(value: f64) -> Option<usize> {
     let top16 = bits >> 48;
     let addr = if top16 == POINTER_TAG_TOP16 {
         (bits & 0x0000_FFFF_FFFF_FFFF) as usize
-    } else if top16 == 0x0000 {
-        // Module-level object literals are stored as raw I64 pointers.
-        bits as usize
     } else {
         return None;
     };
@@ -38,7 +35,7 @@ fn heap_object_addr(value: f64) -> Option<usize> {
     unsafe {
         let gc_header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return None;
         }
     }
@@ -63,9 +60,7 @@ pub(super) fn prototype_token(value: f64) -> Option<u64> {
     }
 
     unsafe {
-        let gc_header =
-            (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header)._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
+        if crate::object::shapes::cell_prototype_is_null(addr) {
             return Some(TAG_NULL);
         }
         let obj = addr as *const crate::object::ObjectHeader;

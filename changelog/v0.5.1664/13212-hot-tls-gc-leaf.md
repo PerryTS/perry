@@ -1,0 +1,1 @@
+Fixed an Apple arm64 compile failure ("Cannot take the address of an inline asm!"): the hot-TLS thread-pointer read is now marked gc-leaf where it is emitted, so bodies without root slots no longer get it wrapped in a gc.statepoint.

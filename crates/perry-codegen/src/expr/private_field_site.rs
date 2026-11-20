@@ -8,7 +8,7 @@
 //! (`js_private_field_site_get` / `_set` -> `private_field_site_word`):
 //!
 //! ```text
-//!   ShapeId (bits 0..32) | slot (bits 32..48) | F64 lane (bit 48)
+//!   ShapeId (bits 0..32) | slot byte offset (bits 32..56) | F64 lane (bit 56)
 //! ```
 //!
 //! and only when the field is a plain inline slot whose lane is `Any` or
@@ -17,9 +17,12 @@
 //! the write is a raw double store into an `F64` lane (a non-finite or
 //! non-Number value takes the miss, whose checked store generalizes the
 //! lane), or a barriered store into an `Any` lane. The private brand check
-//! needs nothing more: the entry being in the shape IS the field being
-//! initialized, and a fresh evaluation of the class template clears every
-//! hit through the template bit (`emit_private_template_inert`).
+//! needs one more test: the entry being in the shape is the field being
+//! initialized, except in a class family, which lists the element as
+//! optional and holds the hole in its slot until the definition fills it, so
+//! a word hit takes the miss on a hole slot. A fresh evaluation of the class
+//! template clears every hit through the template bit
+//! (`emit_private_template_inert`).
 //!
 //! The miss is one runtime call that runs the brand check (which throws, or
 //! publishes the word) and then the ordinary by-name access of the field's
@@ -44,10 +47,10 @@ use super::{
     FnCtx,
 };
 
-/// The word's `F64` lane bit (runtime `PRIVATE_FIELD_SITE_F64`, `1 << 48`).
-const PRIVATE_FIELD_SITE_F64: &str = "281474976710656";
-/// The word's slot bits after `>> 32` (runtime `PRIVATE_FIELD_SITE_SLOT_MASK`).
-const PRIVATE_FIELD_SITE_SLOT_MASK: &str = "65535";
+/// The word's `F64` lane bit (runtime `PRIVATE_FIELD_SITE_F64`, `1 << 56`).
+const PRIVATE_FIELD_SITE_F64: &str = "72057594037927936";
+/// The word's slot offset bits after `>> 32` (runtime `PRIVATE_FIELD_SITE_SLOT_MASK`).
+const PRIVATE_FIELD_SITE_SLOT_MASK: &str = "16777215";
 /// `POINTER_TAG + 0x10_0000`: with the unsigned compare below, "a POINTER
 /// NaN-box above the native-handle band" in one test (as
 /// `emit_private_site_guard`).
@@ -219,21 +222,35 @@ fn emit_site_probe(
     }
 }
 
-/// The slot address a hit block reads or writes: the payload's inline
-/// fields plus `slot * 8`.
+/// The slot address a hit block reads or writes: the payload plus the slot's
+/// byte offset, the static shape's key offset or the one the site word holds.
 fn emit_slot_ptr(ctx: &mut FnCtx<'_>, hit: &SiteHit, payload: &str) -> String {
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
-    let blk = ctx.block();
-    let slot = match hit {
-        SiteHit::Static(sf) => sf.slot.to_string(),
+    let off = match hit {
+        SiteHit::Static(sf) => {
+            crate::target_layout::layout_key_off(ctx.target_triple, hit.form(), sf.slot).to_string()
+        }
         SiteHit::Word(word) => {
-            let slot = blk.lshr(I64, word, "32");
-            blk.and(I64, &slot, PRIVATE_FIELD_SITE_SLOT_MASK)
+            let blk = ctx.block();
+            let off = blk.lshr(I64, word, "32");
+            blk.and(I64, &off, PRIVATE_FIELD_SITE_SLOT_MASK)
         }
     };
+    let blk = ctx.block();
     let obj_ptr = blk.inttoptr(I64, payload);
-    let fields = blk.gep(I8, &obj_ptr, &[(I64, &header_skip)]);
-    blk.gep(DOUBLE, &fields, &[(I64, &slot)])
+    blk.gep(I8, &obj_ptr, &[(I64, &off)])
+}
+
+/// A site word's element is present unless `slot_bits`, the slot's word, is
+/// the hole: a class family lists its private elements as optional, and the
+/// field's definition fills the slot (runtime `private_field_site_word`).
+/// Branches to `miss_l` on the hole; leaves the present block current.
+fn emit_present_check(ctx: &mut FnCtx<'_>, slot_bits: &str, miss_l: &str) {
+    let present_idx = ctx.new_block("pfield.present");
+    let present_l = ctx.block_label(present_idx);
+    let blk = ctx.block();
+    let is_hole = blk.icmp_eq(I64, slot_bits, crate::nanbox::TAG_HOLE_I64);
+    blk.cond_br(&is_hole, miss_l, &present_l);
+    ctx.current_block = present_idx;
 }
 
 /// The brand owner operand of the runtime miss, as the guard arm passes it.
@@ -296,11 +313,16 @@ pub(crate) fn lower_get(
     let join_idx = ctx.new_block("pfield.join");
     let join_l = ctx.block_label(join_idx);
 
+    let miss_l = ctx.block_label(probe.miss_idx);
     let mut incoming: Vec<(String, String)> = Vec::new();
     for (hit_idx, hit) in &probe.hits {
         ctx.current_block = *hit_idx;
         let slot_ptr = emit_slot_ptr(ctx, hit, &probe.payload);
         let value = ctx.block().load(DOUBLE, &slot_ptr);
+        if matches!(hit, SiteHit::Word(_)) {
+            let bits = ctx.block().bitcast_double_to_i64(&value);
+            emit_present_check(ctx, &bits, &miss_l);
+        }
         incoming.push((value, ctx.block_label(ctx.current_block)));
         ctx.block().br(&join_l);
     }
@@ -465,6 +487,8 @@ pub(super) fn lower_set_operands(
                 ));
             }
             SiteHit::Word(word) => {
+                let bits = ctx.block().load(I64, &slot_ptr);
+                emit_present_check(ctx, &bits, &miss_l);
                 let raw_idx = ctx.new_block("pfield.set.raw");
                 let boxed_idx = ctx.new_block("pfield.set.boxed");
                 let raw_l = ctx.block_label(raw_idx);
@@ -514,4 +538,25 @@ pub(super) fn lower_set_operands(
     let mut incoming: Vec<(&str, &str)> = stored.iter().map(|l| (val, l.as_str())).collect();
     incoming.push((&miss_val, &miss_end));
     Ok(ctx.block().phi(DOUBLE, &incoming))
+}
+
+impl StaticFinal {
+    /// The header form predicted for the completed static shape.
+    fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl SiteHit {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    fn form(&self) -> crate::target_layout::HeaderForm {
+        match self {
+            SiteHit::Static(s) => s.form(),
+            // The runtime-published site word names its own layout; the
+            // form is the class's, whose instances all have the meta word.
+            SiteHit::Word(_) => crate::target_layout::HeaderForm::Meta,
+        }
+    }
 }

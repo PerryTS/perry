@@ -4,6 +4,30 @@
 
 use super::*;
 
+/// Relocation model of the target machine: PIC everywhere, except that a
+/// wasm32 target opted in with `PERRY_WASM_STATIC_RELOC=1` uses the static
+/// model (no GOT-indirected globals, a plain static wasm link).
+fn reloc_mode_for(effective_target: &str, wasm_static_opt_in: bool) -> RelocMode {
+    if wasm_static_opt_in && effective_target.starts_with("wasm32") {
+        RelocMode::Static
+    } else {
+        RelocMode::PIC
+    }
+}
+
+/// Whether `effective_target`'s thread-locals are emulated: OpenHarmony,
+/// where rustc builds the runtime archive with `tls-model = emulated` (its
+/// target spec), so the runtime's own thread-locals exist only as
+/// `__emutls_v.<name>` control variables. Emitted code that names one of them
+/// natively finds no TLS symbol to bind to, and the program's own
+/// thread-locals (module state of a program that starts a Worker) take the
+/// same model as the runtime it is linked with. Android (API 29,
+/// `android_api_level!`) builds its runtime with native thread-locals
+/// (`.cargo/config.toml`: `tls-model=global-dynamic`), so it is not emulated.
+pub(crate) fn emulated_tls(effective_target: &str) -> bool {
+    effective_target.contains("ohos")
+}
+
 pub(super) fn optimize_and_emit(
     module: &inkwell::module::Module<'_>,
     effective_target: &str,
@@ -15,6 +39,13 @@ pub(super) fn optimize_and_emit(
     native_roots: bool,
     mut stats: Option<&mut UnitCodegenStats>,
 ) -> Result<Vec<Vec<u8>>> {
+    let verification = if crate::verify_facts::enabled() {
+        Some(super::verify_facts_copies::Inventory::capture(module)?)
+    } else {
+        None
+    };
+    #[cfg(feature = "target-wasi")]
+    crate::wasi_toolchain::check_linked(effective_target)?;
     global_init(mllvm);
     announce();
 
@@ -56,7 +87,10 @@ pub(super) fn optimize_and_emit(
             &cpu,
             &features,
             opt_level,
-            RelocMode::PIC,
+            reloc_mode_for(
+                effective_target,
+                std::env::var("PERRY_WASM_STATIC_RELOC").as_deref() == Ok("1"),
+            ),
             CodeModel::Default,
         )
         .ok_or_else(|| anyhow!("failed to create TargetMachine for `{effective_target}`"))?;
@@ -69,12 +103,35 @@ pub(super) fn optimize_and_emit(
             perry_llvm_enable_wasm_eh(tm.as_mut_ptr().cast());
         }
     }
+    // One input section per function and per global (`-ffunction-sections
+    // -fdata-sections`), so the link drops every one nothing references (DCE
+    // layer 0). wasm-ld already links per function and keeps its own data
+    // layout.
+    if !effective_target.starts_with("wasm32") {
+        extern "C" {
+            fn perry_llvm_unique_sections(machine: *mut core::ffi::c_void);
+        }
+        unsafe {
+            perry_llvm_unique_sections(tm.as_mut_ptr().cast());
+        }
+    }
+    if emulated_tls(effective_target) {
+        extern "C" {
+            fn perry_llvm_emulated_tls(machine: *mut core::ffi::c_void);
+        }
+        unsafe {
+            perry_llvm_emulated_tls(tm.as_mut_ptr().cast());
+        }
+    }
 
     // Same trust order as the subprocess path: `-target` wins over whatever
     // triple the module text states, and the module optimizes under the
     // machine's real datalayout.
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
+    super::coff::coalesce_helpers(module, effective_target);
+    // Before the statepoint rewrite hides the callees (see `cold_paths`).
+    super::cold_paths::apply(module);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
@@ -120,14 +177,27 @@ pub(super) fn optimize_and_emit(
         // post-rewrite census bounds unrelated optimizer expansion without
         // changing the rooting mechanism.
         let rewrite_started = std::time::Instant::now();
-        module
-            .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
-            .map_err(|e| {
-                anyhow!(
-                    "in-process rewrite-statepoints-for-gc failed:\n{}",
-                    e.to_string()
-                )
-            })?;
+        // With the switch off this is the one run it always was. On, the
+        // same passes run in two parts around the dominated stack checks
+        // (`stack_checks`): after the inlining that duplicates them, before
+        // the rewrite turns their overflow arms into statepoints.
+        let rewrite = |passes: &str| {
+            module
+                .run_passes(passes, &tm, PassBuilderOptions::create())
+                .map_err(|e| {
+                    anyhow!(
+                        "in-process rewrite-statepoints-for-gc failed:\n{}",
+                        e.to_string()
+                    )
+                })
+        };
+        if super::stack_checks::prologue_cost_enabled() {
+            rewrite(crate::linker::STATEPOINT_INLINE_PASS)?;
+            super::stack_checks::apply(module);
+            rewrite(crate::linker::STATEPOINT_REWRITE_AFTER_INLINE)?;
+        } else {
+            rewrite(STATEPOINT_REWRITE_PASSES)?;
+        }
         // Verify the rewritten module before it reaches the backend. RS4GC
         // has produced verifier-invalid IR in the wild (#8121: it wrapped an
         // inline-asm barrier into a gc.statepoint), and unlike the external
@@ -170,6 +240,7 @@ pub(super) fn optimize_and_emit(
     if let Some(stats) = stats.as_deref_mut() {
         stats.optimize_secs = optimize_started.elapsed().as_secs_f64();
     }
+    super::equivalent_shape_bodies::apply(module);
     if native_roots {
         native_homes::publish(module)?;
         module
@@ -189,6 +260,7 @@ pub(super) fn optimize_and_emit(
             );
         }
     }
+    super::loop_alignment::apply(module, &target);
     // Include small units as well as budget offenders, so before/after size
     // audits do not lose their subject when a fix brings it below the cap.
     if std::env::var_os("PERRY_CODEGEN_UNIT_TIMINGS").is_some() {
@@ -205,6 +277,12 @@ pub(super) fn optimize_and_emit(
     // After every IR-level fold has seen the constants: NaN-box operands of
     // the marked functions become reads of the runtime's table.
     super::nanbox_operands::apply(module, effective_target);
+    if let Some(verification) = verification {
+        verification.finish(module)?;
+        module
+            .verify()
+            .map_err(|e| anyhow!("verification copy metadata: {e}"))?;
+    }
 
     // Last change to the module before emission, so it sees exactly the
     // functions that become symbols (see `crate::function_order`).
@@ -246,6 +324,86 @@ fn copy_emission_bytes(buffer: inkwell::memory_buffer::MemoryBuffer<'_>) -> Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A thread-local the module names, emitted for `triple` (assembly).
+    fn tls_access_asm(triple: &str) -> String {
+        let ir = r#"
+@PERRY_AGENT_PTRS = external thread_local global [8 x ptr]
+@module_state = thread_local global i64 0
+
+define ptr @agent_slot() {
+entry:
+  %p = getelementptr inbounds [8 x ptr], ptr @PERRY_AGENT_PTRS, i64 0, i64 2
+  %v = load ptr, ptr %p
+  ret ptr %v
+}
+
+define i64 @state() {
+entry:
+  %v = load i64, ptr @module_state
+  ret i64 %v
+}
+"#;
+        let asm = crate::inprocess::single_piece(
+            crate::inprocess::compile_ll_to_object_inprocess(
+                ir,
+                triple,
+                &["-O2".to_string(), "-S".to_string()],
+                "tls_model_probe",
+                false,
+            )
+            .expect("emit"),
+        );
+        String::from_utf8(asm).expect("utf-8 assembly")
+    }
+
+    /// OpenHarmony thread-locals take the model rustc builds its runtime
+    /// archive with (`tls-model = emulated`): every access goes through
+    /// `__emutls_get_address` on the `__emutls_v.<name>` control variable the
+    /// runtime defines, and no native TLS relocation is left for a `-shared`
+    /// link to reject. Linux and Android (API 29, runtime built with
+    /// `tls-model=global-dynamic`) keep native TLS.
+    #[test]
+    fn emulated_tls_matches_the_runtime_archive_model() {
+        for triple in ["aarch64-unknown-linux-ohos", "x86_64-unknown-linux-ohos"] {
+            assert!(emulated_tls(triple), "{triple}");
+            let asm = tls_access_asm(triple);
+            assert!(asm.contains("__emutls_get_address"), "{triple}:\n{asm}");
+            assert!(
+                asm.contains("__emutls_v.PERRY_AGENT_PTRS"),
+                "{triple}:\n{asm}"
+            );
+            assert!(asm.contains("__emutls_v.module_state"), "{triple}:\n{asm}");
+            for native in ["tprel", "tpoff", "tlsdesc", "tlsgd", "gottprel"] {
+                assert!(
+                    !asm.to_ascii_lowercase().contains(native),
+                    "{triple}: native TLS `{native}` left:\n{asm}"
+                );
+            }
+        }
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-unknown-linux-android29",
+            "x86_64-unknown-linux-android29",
+        ] {
+            assert!(!emulated_tls(triple), "{triple}");
+            let asm = tls_access_asm(triple);
+            assert!(!asm.contains("__emutls"), "{triple}:\n{asm}");
+        }
+    }
+
+    #[test]
+    fn static_reloc_is_opt_in_and_wasm32_only() {
+        for wasm in ["wasm32-wasip1", "wasm32-wasip2"] {
+            assert_eq!(reloc_mode_for(wasm, true), RelocMode::Static);
+            assert_eq!(reloc_mode_for(wasm, false), RelocMode::PIC);
+        }
+        for native in ["x86_64-unknown-linux-gnu", "aarch64-apple-darwin"] {
+            assert_eq!(reloc_mode_for(native, true), RelocMode::PIC);
+            assert_eq!(reloc_mode_for(native, false), RelocMode::PIC);
+        }
+    }
 
     #[test]
     fn emission_copy_excludes_storage_terminator_but_preserves_payload_zeros() {

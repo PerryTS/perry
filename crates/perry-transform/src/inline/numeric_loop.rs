@@ -63,6 +63,7 @@ mod tests {
     use super::*;
     use crate::inline::call_inliner::inline_calls_in_stmts;
     use crate::inline::ExactReceiverFacts;
+    use crate::local_occurrences::WriteCensus;
     use perry_hir::types::Type;
     use perry_hir::BinaryOp;
 
@@ -105,6 +106,7 @@ mod tests {
 
     fn call(id: FuncId) -> Stmt {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(id)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -117,6 +119,7 @@ mod tests {
             op: BinaryOp::Mul,
             left: Box::new(if field {
                 Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "a".into(),
                     byte_offset: 0,
@@ -162,6 +165,7 @@ mod tests {
             &mut HashMap::new(),
             &mut ExactReceiverFacts::new(),
             &mut 100,
+            &WriteCensus::unwritten(),
             None,
             &HashMap::new(),
             false,

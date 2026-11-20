@@ -1,0 +1,1 @@
+macOS stack refresh indexes the current widget registry once per refresh, preserving child order, wrapper replacement, alias selection and hidden reattachment while avoiding a registry scan for every sibling.

@@ -39,6 +39,8 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     pub is_entry_module: bool,
     pub non_entry_module_prefixes: &'a [String],
     pub output_type: &'a str,
+    /// R, on the entry module only (DESIGN §3.2 item 9).
+    pub realm_reach: Option<&'a perry_hir::realm_reach::RealmReach>,
     pub module_prefix: &'a String,
     pub class_table: &'a HashMap<String, &'a perry_hir::Class>,
     pub class_ids: &'a HashMap<String, u32>,
@@ -68,5 +70,5 @@ pub(super) struct ModuleArtifactsCtx<'a> {
     /// Keys global to `(class id, packed GcHeader word)` for inline `new`.
     pub class_header_image_inits: &'a HashMap<String, (u32, u64, u32)>,
     pub imported_class_stubs: &'a [perry_hir::Class],
-    pub cross_module: &'a CrossModuleCtx,
+    pub cross_module: &'a CrossModuleCtx<'a>,
 }

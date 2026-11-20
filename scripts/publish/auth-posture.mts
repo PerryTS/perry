@@ -104,10 +104,14 @@ export function prepublishOnlyGuard(): number {
 }
 
 // --- CLI entry (prepublishOnly guard) ---------------------------------------
+import { realpathSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
+// Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
+// /private/var, a linked checkout) that import.meta.url has resolved away.
 const isMainModule =
-  process.argv[1] === fileURLToPath(new URL(import.meta.url))
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(new URL(import.meta.url)))
 
 if (isMainModule) {
   process.exit(prepublishOnlyGuard())

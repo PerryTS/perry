@@ -10,7 +10,7 @@
  */
 
 import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -136,6 +136,12 @@ async function main(): Promise<void> {
 // Only run when invoked directly (node scripts/publish/brew/tap-publish.mts),
 // not when imported for testing.
 import { fileURLToPath } from 'node:url'
-if (process.argv[1] === fileURLToPath(new URL(import.meta.url))) {
+// Compare resolved paths: argv[1] keeps a symlinked prefix (macOS /var ->
+// /private/var, a linked checkout) that import.meta.url has resolved away.
+const isMainModule =
+  process.argv[1] !== undefined &&
+  realpathSync(process.argv[1]) === realpathSync(fileURLToPath(new URL(import.meta.url)))
+
+if (isMainModule) {
   await main()
 }

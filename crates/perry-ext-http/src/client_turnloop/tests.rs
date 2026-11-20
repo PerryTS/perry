@@ -16,9 +16,9 @@ fn headers(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 #[test]
 fn this_lane_owns_a_slot_no_other_subsystem_claims() {
     // 0 net, 1 this crate's server, 2 stdlib's fetch client, 3 SMTP,
-    // 4 fastify, 5 framework server, 7/8 ws, 9-12 the database bindings.
-    // The authority for that map is `perry-db-turnloop`'s `subsystem`
-    // module header; 6 was the one free slot below the database band.
+    // 4 fastify, 5 framework server, 7/8 ws. The band 9..=12 is reserved for
+    // database bindings, which no longer exist in this workspace; 6 was the
+    // one free slot below that band.
     assert_eq!(SUBSYSTEM, 6);
     for taken in [0u8, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12] {
         assert_ne!(SUBSYSTEM, taken, "slot {taken} belongs to another lane");

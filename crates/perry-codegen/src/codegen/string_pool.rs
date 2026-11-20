@@ -21,6 +21,25 @@ const IMAGE_STRING_HEADER_BYTES: usize = 20;
 pub(super) fn image_pointer(entry: &crate::strings::StringEntry) -> String {
     image::pointer(entry)
 }
+/// The symbol of `entry`'s image string record (`perry_image_literal_*`, one
+/// per spelling program-wide).
+pub(crate) fn image_record_symbol(entry: &crate::strings::StringEntry) -> String {
+    image::name(entry)
+}
+/// The image string record symbol of a string with these bytes (the same
+/// rule as `image_record_symbol`: long strings are named by digest).
+pub(crate) fn image_record_symbol_of(bytes: &[u8], is_wtf8: bool) -> String {
+    image::name_of(bytes, is_wtf8)
+}
+/// Define `entry`'s image string record in `llmod` (WRT step 2): a unit that
+/// emits no pool, such as the static seed unit, still defines the coalesced
+/// record its atoms and key lists name.
+pub(crate) fn emit_image_record(
+    llmod: &mut LlModule,
+    entry: &crate::strings::StringEntry,
+) -> String {
+    image::emit(llmod, entry)
+}
 mod image_handles;
 use image_handles::{
     add_mutable_string_handle, emit_prepare_agent_strings, emit_runtime_boxed_image_handle,
@@ -62,6 +81,9 @@ pub(super) fn emit_string_pool(
     // entries, constructors, accessors) key each class by its ClassId, never
     // by a name (`classes` above maps names, and two classes may share one).
     module_classes: &[perry_hir::Class],
+    // The lowered module: class method entries take their function kind
+    // from `perry_hir::fn_proto::FnProtoKind`.
+    hir_module: &perry_hir::Module,
     layouts: &crate::layout_families::ProgramLayouts,
     // #5592: user-visible `.name` overrides keyed by ClassId, for classes
     // whose HIR registration key was uniquified away from their JS name.
@@ -400,101 +422,27 @@ pub(super) fn emit_string_pool(
         ops_per_chunk,
     );
 
-    // Unloadable images must copy metadata; permanent executable images
-    // borrow it. The source planner preserves the same ownership split.
-    let register_name_fn = if strings_outlive_registry {
-        "js_register_function_name_static"
-    } else {
-        "js_register_function_name"
-    };
     let register_class_source_fn = if strings_outlive_registry {
         "js_register_class_source_static"
     } else {
         "js_register_class_source"
     };
-
-    // Register display names for top-level user functions so
-    // `console.log(myFn)` prints `[Function: myFn]` instead of
-    // `[Function (anonymous)]`. The runtime registry is keyed on the
-    // wrapper's compiled address (`__perry_wrap_<name>`), which is
-    // what `js_closure_alloc_singleton` stamps into ClosureHeader.
-    // See #1202.
-    if strings_outlive_registry {
-        let name_table = super::function_metadata_descriptors::emit_name_table(
-            chunker.module(),
-            module_prefix,
-            user_fn_name_constants
-                .iter()
-                .map(|(wrapper, name, len)| (wrapper.as_str(), name.as_str(), *len)),
-        );
-        if let Some(table) = name_table {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                "js_register_function_names_static",
-                &[
-                    (PTR, &format!("@{}", table.global)),
-                    (I32, &table.len.to_string()),
-                ],
-            );
-        }
-    } else {
-        for (wrapper_sym, name_const, name_len) in &user_fn_name_constants {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                register_name_fn,
-                &[
-                    (PTR, &format!("@{wrapper_sym}")),
-                    (PTR, &format!("@{name_const}")),
-                    (I32, &name_len.to_string()),
-                ],
-            );
-        }
-    }
-
-    // #4101: register each function's retained source text against the same
-    // wrapper/closure address `js_closure_alloc_singleton` stamps into the
-    // ClosureHeader, so `fn.toString()` resolves the source by func_ptr.
-    if strings_outlive_registry {
-        let source_table = super::function_metadata_descriptors::emit_source_table(
-            chunker.module(),
-            module_prefix,
-            user_fn_source_constants
-                .iter()
-                .map(|(wrapper, source, is_non_strict_ordinary)| {
-                    (
-                        wrapper.as_str(),
-                        source.constant_pointer(),
-                        source.byte_len,
-                        *is_non_strict_ordinary,
-                    )
-                }),
-        );
-        if let Some(table) = source_table {
-            chunker.roll_if_full();
-            chunker.current_block().call_void(
-                "js_register_function_sources_static",
-                &[
-                    (PTR, &format!("@{}", table.global)),
-                    (I32, &table.len.to_string()),
-                ],
-            );
-        }
-    } else {
-        for (wrapper_sym, source, is_non_strict_ordinary) in &user_fn_source_constants {
-            chunker.roll_if_full();
-            let blk = chunker.current_block();
-            let source_ref = source.pointer(blk);
-            blk.call_void(
-                "js_register_function_source",
-                &[
-                    (PTR, &format!("@{wrapper_sym}")),
-                    (PTR, &source_ref),
-                    (I32, &source.byte_len.to_string()),
-                    (I32, if *is_non_strict_ordinary { "1" } else { "0" }),
-                ],
-            );
-        }
-    }
+    // Register only the descriptor owner. No function addresses or names are
+    // indexed at startup. Unloadable images copy at this ownership boundary.
+    let owner = chunker.module().function_metadata_owner_symbol();
+    chunker.roll_if_full();
+    chunker.current_block().call_void(
+        "js_register_function_metadata",
+        &[
+            (PTR, &format!("@{owner}")),
+            (I32, if strings_outlive_registry { "1" } else { "0" }),
+        ],
+    );
+    debug_assert!(
+        user_fn_source_constants.is_empty(),
+        "every retained source has a canonical info"
+    );
+    let _ = user_fn_name_constants;
 
     // #11420: every input to a class's birth [[Prototype]] identity
     // (`shapes::class_proto_id`: the anon-shape set and the generic-origin
@@ -540,31 +488,37 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Mark each `__AnonShape_<hash>` class id. `({ x: 1 }).constructor ===
-    // Object` duck-checks (date-fns / drizzle / lodash) resolve through it,
-    // and it is what makes `class_proto_id` answer the ordinary object
-    // prototype an anon shape's instances are born with.
-    {
-        let mut anon_shape_ids: Vec<u32> = Vec::new();
-        for (class_name, class) in classes.iter() {
-            if *class_name != class.name || !class_name.starts_with("__AnonShape_") {
-                continue;
-            }
-            if let Some(cid) = class_ids.get(class_name).copied().filter(|&c| c != 0) {
-                anon_shape_ids.push(cid);
-            }
-        }
-        anon_shape_ids.sort_unstable();
-        anon_shape_ids.dedup();
-        chunker.literals = true;
-        for cid in anon_shape_ids {
+    // Class role descriptors must precede every role-dependent shape birth.
+    let declarations = super::class_declarations::class_declaration_globals(
+        hir_module,
+        &local_classes,
+        strings,
+        module_prefix,
+        &mut |body| {
             chunker.roll_if_full();
-            let blk = chunker.current_block();
-            blk.call_void(
-                "js_register_anon_shape_class_id",
-                &[(crate::types::I32, &cid.to_string())],
-            );
+            chunker.current_block().fn_info_ref(body)
+        },
+        layouts,
+        &fresh_class_templates
+            .iter()
+            .filter_map(|name| class_ids.get(name).copied())
+            .collect(),
+    );
+    for decl in declarations {
+        for global in decl.globals {
+            chunker.module().add_raw_global(global);
         }
+        chunker.literals = local_classes
+            .iter()
+            .any(|(cid, class)| *cid == decl.cid && class.name.starts_with("__AnonShape_"));
+        chunker.roll_if_full();
+        chunker.current_block().call_void(
+            "js_register_class_declaration",
+            &[
+                (I32, &decl.cid.to_string()),
+                (PTR, &format!("@{}", decl.symbol)),
+            ],
+        );
     }
 
     // Build per-class keys arrays via js_build_class_keys_array,
@@ -577,6 +531,7 @@ pub(super) fn emit_string_pool(
         .filter(|class| class.name.starts_with("__AnonShape_"))
         .filter_map(|class| class_ids.get(&class.name).copied())
         .collect();
+    let image_run = crate::stubs::snap_image_run();
     let class_ids_by_keys_name = super::static_shape_ids::ClassIdsByKeysName::new(class_ids);
     for (idx, (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words)) in
         class_keys_init_data.iter().enumerate()
@@ -605,7 +560,7 @@ pub(super) fn emit_string_pool(
         let cid_str = class_id.to_string();
         // A literal birth names the plain prototype (`BirthProto::Literal`), so
         // its shape mints pass class id 0, exactly as the startup literal seed
-        // (`js_shape_seed_plain`) does. Passing the anonymous class's own id was
+        // (`js_layout_seed_plain`) does. Passing the anonymous class's own id was
         // equivalent only while that id had no vtable class: per-module class
         // ids collide, so an `__AnonShape_*` id can also be another module's
         // DECLARED class, and the mint then derived that class's prototype --
@@ -682,13 +637,21 @@ pub(super) fn emit_string_pool(
             };
             blk.call(
                 I32,
-                "js_object_shape_id_for_class_keys_static",
+                "js_object_layout_for_class_keys_static",
                 &[
                     (I64, &arr),
                     (I32, &fc_str),
                     (I32, &live.to_string()),
                     (I32, &mint_cid_str),
-                    (I32, &requested),
+                    (
+                        PTR,
+                        &format!(
+                            "@{}",
+                            crate::layout_ordinals::request_symbol(
+                                requested.parse().expect("identity")
+                            )
+                        ),
+                    ),
                     (I64, &rep_str),
                 ],
             )
@@ -701,7 +664,7 @@ pub(super) fn emit_string_pool(
             match birth.wide_live {
                 birth_live if birth_live > 0 => blk.call(
                     I32,
-                    "js_object_shape_id_for_class_keys_live",
+                    "js_object_layout_for_class_keys_live",
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
@@ -712,7 +675,7 @@ pub(super) fn emit_string_pool(
                 ),
                 _ => blk.call(
                     I32,
-                    "js_object_shape_id_for_class_keys",
+                    "js_object_layout_for_class_keys",
                     &[
                         (I64, &arr),
                         (I32, &fc_str),
@@ -726,7 +689,9 @@ pub(super) fn emit_string_pool(
             "@{}",
             crate::typed_shape::shape_id_global_name_from_keys_global(global_name)
         );
-        blk.store(I32, &shape_id, &shape_global);
+        if requested == "0" {
+            blk.store(I32, &shape_id, &shape_global);
+        }
 
         // #8122: compose the class's inline-`new` header image —
         // `[packed GcHeader word | class_id | ShapeId << 32]` — beside the
@@ -770,6 +735,18 @@ pub(super) fn emit_string_pool(
     // native parent. Definition identity also avoids repeating the same edge
     // through self-binding aliases.
     for class in module_classes {
+        // Case 2c (E2a): a family class's parent edge is its family's parent:
+        // the whole program's resolution of its heritage
+        // (`layout_families::parents`), which every module's birth decision
+        // reads. The edge and the family layout have one source, so the
+        // runtime parent of a family class is its family parent from the
+        // init prelude on: no birth compares them.
+        if let Some(family) = layouts.families.get(&class.id) {
+            if family.parent_class_id != 0 {
+                parent_pairs.push((class.id, family.parent_class_id));
+            }
+            continue;
+        }
         if let Some(parent_name) = &class.extends_name {
             if let Some(&parent_cid) = class_ids.get(parent_name) {
                 if parent_cid != 0 {
@@ -962,7 +939,7 @@ pub(super) fn emit_string_pool(
                     &f.body,
                     fresh_class_templates.contains(class_name),
                 ),
-                generator: super::helpers::body_generator_record_kind(&f.body),
+                kind: perry_hir::fn_proto::FnProtoKind::of_function(hir_module, f),
             });
         }
         // #1787: the standalone constructor `<prefix>__<class>_constructor`
@@ -1034,7 +1011,7 @@ pub(super) fn emit_string_pool(
             .map(|c| {
                 c.params
                     .iter()
-                    .filter(|p| p.name.starts_with("__perry_cap_"))
+                    .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                     .count() as u32
             })
             .unwrap_or(0);
@@ -1068,29 +1045,9 @@ pub(super) fn emit_string_pool(
             ", i64 0".repeat(words - 1)
         ));
     }
-    // Each class's instance members: one image constant, registered once.
-    let declarations = super::class_declarations::class_declaration_globals(
-        &local_classes,
-        strings,
-        module_prefix,
-        &mut |body| chunker.current_block().fn_info_ref(body),
-        layouts,
-    );
-    for decl in declarations {
-        for global in decl.globals {
-            chunker.module().add_raw_global(global);
-        }
-        chunker.roll_if_full();
-        chunker.current_block().call_void(
-            "js_register_class_declaration",
-            &[
-                (I32, &decl.cid.to_string()),
-                (PTR, &format!("@{}", decl.symbol)),
-            ],
-        );
-    }
     method_triples.sort_unstable();
     let mut method_entries: Vec<StaticMethodEntry> = Vec::new();
+    let mut method_metadata_names: Vec<(String, String, usize)> = Vec::new();
     for (
         cid,
         method_name,
@@ -1117,7 +1074,6 @@ pub(super) fn emit_string_pool(
         // Its selected function object retains the lexical class evaluation.
         let home = fresh_cids.contains(&cid);
         let entry_name = format!("{}__eclo", llvm_name);
-        let entry_ref = format!("@{}", entry_name);
         method_entries.push(StaticMethodEntry {
             cid,
             llvm_name: llvm_name.clone(),
@@ -1126,7 +1082,12 @@ pub(super) fn emit_string_pool(
             has_user_rest: has_rest,
             has_synth_args,
             home: home && method_entries::source_needs_home(&local_classes, cid, definition_order),
-            generator: method_entries::source_generator_kind(&local_classes, cid, definition_order),
+            kind: method_entries::source_fn_proto_kind(
+                hir_module,
+                &local_classes,
+                cid,
+                definition_order,
+            ),
             generator_owner: method_entries::source_needs_owner(
                 &local_classes,
                 cid,
@@ -1135,11 +1096,12 @@ pub(super) fn emit_string_pool(
             ),
         });
         let bytes_i64 = blk.ptrtoint(&bytes_global, I64);
-        if home {
-            blk.call_void(
-                register_name_fn,
-                &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
-            );
+        if home && !entry.is_wtf8 {
+            method_metadata_names.push((
+                entry_name.clone(),
+                entry.bytes_global.clone(),
+                entry.byte_len,
+            ));
         }
         blk.call_void(
             "js_register_class_string_member_order",
@@ -1234,7 +1196,8 @@ pub(super) fn emit_string_pool(
                 has_user_rest,
                 has_synth_args,
                 home: fresh_cids.contains(&cid),
-                generator: method_entries::source_generator_kind(
+                kind: method_entries::source_fn_proto_kind(
+                    hir_module,
                     &local_classes,
                     cid,
                     definition_order,
@@ -1248,10 +1211,15 @@ pub(super) fn emit_string_pool(
             },
         );
         let blk = chunker.current_block();
-        blk.call_void(
-            register_name_fn,
-            &[(PTR, &entry_ref), (PTR, &bytes_global), (I32, &len_str)],
-        );
+        // FN_HAS_NAME licenses a UTF-8 info view. A computed WTF-8 key
+        // remains the closure's own name property, as before registration.
+        if !entry.is_wtf8 {
+            method_metadata_names.push((
+                entry_ref.trim_start_matches('@').to_string(),
+                entry.bytes_global.clone(),
+                entry.byte_len,
+            ));
+        }
         let entry_i64 = blk.ptrtoint(&entry_info_ref, I64);
         blk.call_void(
             "js_register_class_static_method_entry",
@@ -1304,14 +1272,10 @@ pub(super) fn emit_string_pool(
         );
     }
 
-    // Refs #618 / #420: register every class id with the runtime so
-    // `js_value_typeof` can distinguish a class ref (NaN-boxed INT32 with
-    // class_id payload) from a real int32 numeric value. Without this,
-    // `typeof <class>` returns "number" for classes that don't define any
-    // methods (the existing `js_register_class_method` loop only fires
-    // for classes with at least one method body). drizzle's `class
-    // FakePrimitiveParam { static [entityKind] = "FakePrimitiveParam" }`
-    // and similar method-less marker classes hit this.
+    // Refs #618 / #420: register every class id, including method-less marker
+    // classes. Class metadata and flagged prototype references use this
+    // registration; constructor values are their function objects, independent
+    // of any numerically equal INT32 word.
     {
         let mut all_class_ids: Vec<u32> = Vec::new();
         // Also collect `(cid, name)` pairs so we can mirror Perry's
@@ -1343,6 +1307,9 @@ pub(super) fn emit_string_pool(
         all_class_ids.sort_unstable();
         all_class_ids.dedup();
         for cid in all_class_ids {
+            // Image run: a literal-shape class is registered with its
+            // declaration, in the prepare phase (before the baseline).
+            chunker.literals = image_run && literal_classes.contains(&cid);
             chunker.roll_if_full();
             let blk = chunker.current_block();
             blk.call_void(
@@ -1355,6 +1322,7 @@ pub(super) fn emit_string_pool(
         // collection here since the pre-computed list is what we'll emit.
         let _ = named_classes;
     }
+    chunker.literals = false;
     // Mirror class names into the runtime so the V8 bridge can surface them
     // as `metatype.name`. Strings were pre-allocated above before `init_fn`
     // borrowed `llmod`. (#1021 NestJS.)
@@ -1372,8 +1340,8 @@ pub(super) fn emit_string_pool(
         );
     }
     // #9413: mirror each class's retained source text into the runtime so
-    // `Function.prototype.toString` on a class REF (an INT32 immediate, not a
-    // ClosureHeader) answers with the class source. Same shape, and the same
+    // `Function.prototype.toString` on a constructor function object answers
+    // with the class source. Same shape, and the same
     // output-kind spelling choice, as the function-source loop above (#11501:
     // an executable lends its rodata instead of copying every class body).
     for (cid, source) in &class_source_constants {
@@ -1404,7 +1372,9 @@ pub(super) fn emit_string_pool(
                     ctor.params
                         .iter()
                         .take_while(|p| {
-                            !p.is_rest && p.default.is_none() && !p.name.starts_with("__perry_cap_")
+                            !p.is_rest
+                                && p.default.is_none()
+                                && !perry_hir::cap_fields::is_cap_field_name(&p.name)
                         })
                         .count() as u32
                 })
@@ -1415,6 +1385,7 @@ pub(super) fn emit_string_pool(
     class_lengths.sort_unstable_by_key(|(cid, _)| *cid);
     class_lengths.dedup_by_key(|(cid, _)| *cid);
     for (cid, length) in class_lengths {
+        chunker.literals = image_run && literal_classes.contains(&cid);
         chunker.roll_if_full();
         chunker.current_block().call_void(
             "js_register_class_length",
@@ -1424,6 +1395,7 @@ pub(super) fn emit_string_pool(
             ],
         );
     }
+    chunker.literals = false;
 
     // Refs #486 (hono logger middleware): also register every class
     // getter in the runtime VTABLE_REGISTRY. Without this, cross-module
@@ -1622,7 +1594,7 @@ pub(super) fn emit_string_pool(
             {
                 continue;
             }
-            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+            let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
                 continue;
             };
             chunker.roll_if_full();
@@ -1633,13 +1605,16 @@ pub(super) fn emit_string_pool(
             let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
-                "js_object_final_shape_id_for_class_keys_static_constfn",
+                "js_object_final_layout_for_class_keys_static_constfn",
                 &[
                     (I64, &keys),
                     (I32, &shape.key_count.to_string()),
                     (I32, &shape.live.to_string()),
                     (I32, &birth.class_id.to_string()),
-                    (I32, &id.to_string()),
+                    (
+                        PTR,
+                        &format!("@{}", crate::layout_ordinals::request_symbol(id)),
+                    ),
                     (I64, &shape.rep.to_string()),
                     (
                         PTR,
@@ -1684,7 +1659,7 @@ pub(super) fn emit_string_pool(
             else {
                 continue;
             };
-            let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+            let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
                 continue;
             };
             super::static_private_class::emit_final_constants(
@@ -1712,13 +1687,16 @@ pub(super) fn emit_string_pool(
             let keys = crate::expr::unbox_to_i64(blk, &keys_value);
             blk.call(
                 I32,
-                "js_object_final_shape_id_for_class_keys_static_private",
+                "js_object_final_layout_for_class_keys_static_private",
                 &[
                     (I64, &keys),
                     (I32, &shape.key_count.to_string()),
                     (I32, &shape.live.to_string()),
                     (I32, &birth.class_id.to_string()),
-                    (I32, &id.to_string()),
+                    (
+                        PTR,
+                        &format!("@{}", crate::layout_ordinals::request_symbol(id)),
+                    ),
                     (I64, &shape.rep.to_string()),
                     (PTR, &private_ptr),
                     (I32, &shape.private.len().to_string()),
@@ -1732,13 +1710,23 @@ pub(super) fn emit_string_pool(
     for e in &method_entries {
         emit_class_method_entry(&mut chunker, e);
     }
-    method_entries::emit_computed_generator_entries(
+    method_entries::emit_computed_method_entries(
         &mut chunker,
+        hir_module,
         &local_classes,
         &fresh_cids,
         module_prefix,
     );
     let [literal_chunks, class_chunks] = chunker.finish();
+    for (body, global, byte_len) in method_metadata_names {
+        llmod.note_fn_info(&body, |f| {
+            f.name = Some(crate::fn_info::RetainedName {
+                global,
+                byte_len,
+                image: false,
+            })
+        });
+    }
     record_fn_info_facts(
         llmod,
         module_prefix,
@@ -1815,5 +1803,5 @@ use fn_info_facts::{record_fn_info_facts, FnInfoFactSources};
 mod class_name_registration_tests;
 
 #[path = "method_entries.rs"]
-mod method_entries;
+pub(super) mod method_entries;
 use method_entries::{emit_class_method_entry, emit_static_method_entry, StaticMethodEntry};

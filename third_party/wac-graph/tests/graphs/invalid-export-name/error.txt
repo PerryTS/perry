@@ -1,0 +1,5 @@
+failed to export node 0 in export 0 for test case `invalid-export-name`
+
+Caused by:
+    0: export name `!` is not valid
+    1: `!` is not in kebab case

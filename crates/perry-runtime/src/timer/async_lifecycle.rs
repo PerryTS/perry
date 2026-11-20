@@ -4,6 +4,6 @@
 /// clears itself: the current `after` event must precede `destroy`.
 pub(super) fn enqueue_destroy_ids(ids: [Option<u64>; 2]) {
     for async_id in ids.into_iter().flatten().filter(|id| *id != 0) {
-        crate::async_hooks::enqueue_gc_destroy(async_id);
+        crate::async_hook_slots::enqueue_gc_destroy(async_id);
     }
 }

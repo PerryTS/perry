@@ -41,6 +41,18 @@ macro_rules! closure_call_dispatch {
             if let Some(entry) = info.call_entry() {
                 return unsafe { crate::closure::body_call::call_entry_cells(closure, entry, this, &[$(std::cell::UnsafeCell::new($a)),*]) };
             }
+            // A no-op-backed built-in prototype method (`Headers.prototype.get`
+            // read off a `class X extends Headers` instance's chain) is not a
+            // body: it runs on the receiver, as `js_native_call_value` runs
+            // it. Its info is never plain, so only this ladder sees it.
+            if info.code == crate::object::global_this_builtin_noop_thunk as *const u8 {
+                if let Some(result) = unsafe {
+                    let args: [f64; $n] = [$($a),*];
+                    crate::object::try_dispatch_value_called_proto_method(closure, this, args.as_ptr(), args.len())
+                } {
+                    return result;
+                }
+            }
             match resolve_strategy(info).kind() {
                 DispatchKind::BoundMethod => unsafe {
                     dispatch_bound_method(closure, this, &[$($a),*])
@@ -432,8 +444,11 @@ mod abi_table_tests {
 
     #[test]
     fn closure_call_entries_match_the_abi_table() {
-        // `js_closure_call0` is `extern "C-unwind"` in unwinding (test) builds.
+        // Match closure_call_entry!'s ABI in both unwinding and panic-abort tests.
         let call0 = {
+            #[cfg(panic = "abort")]
+            let f: extern "C" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
+            #[cfg(not(panic = "abort"))]
             let f: extern "C-unwind" fn(*const ClosureHeader, JsThis) -> f64 = js_closure_call0;
             ("js_closure_call0", f as *const u8)
         };

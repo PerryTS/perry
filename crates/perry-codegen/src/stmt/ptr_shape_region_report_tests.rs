@@ -29,6 +29,8 @@ fn fixture() -> Module {
         op: BinaryOp::Add,
         prefix: false,
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     m
 }
@@ -80,22 +82,21 @@ fn selected_class_provenance_is_consumed_by_real_shape_guarded_region_accesses()
 }
 
 #[test]
-fn removing_static_supplier_does_not_claim_ptr_shape_consumption_for_learned_accesses() {
+fn standalone_compile_builds_its_own_static_supplier_plan() {
     let session = Session::start();
-    // Sabotage precisely the class-fact consumer's prerequisite, leaving the
-    // same selected receiver and real region accesses alive.
+    // A direct single-module caller gets a complete local image plan too.
     let ir = emit(&fixture());
     let entries = session.entries();
     assert!(entries.iter().any(|e| e.analysis == Analysis::PtrShape
         && e.outcome == Outcome::Selected
         && e.local_id == Some(1)));
-    assert!(ir.contains("rloop.fast") && ir.contains("@js_region_loop_prime("));
+    assert!(ir.contains("rloop.fast") && ir.contains("rloop.guard.static."));
     assert!(
-        !entries.iter().any(|e| e
+        entries.iter().any(|e| e
             .site
             .as_deref()
             .is_some_and(|s| s == "ptr_shape_region_get" || s == "ptr_shape_region_set")),
-        "learned words do not consume static class provenance: {entries:?}"
+        "standalone static words consume class provenance: {entries:?}"
     );
     assert!(entries.iter().any(|e| e.outcome == Outcome::Unconsumed
         && e.rule.as_deref() == Some(crate::expr::PTR_SHAPE_REGION_AUTHORITY)));
@@ -109,7 +110,9 @@ fn shape_barrier_removes_proof_attribution_but_keeps_guarded_type_hint_route() {
     // Ptr<Shape> consumption row when no such proof was selected.
     m.init
         .push(Stmt::Expr(Expr::Delete(Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::New {
+                byte_end: 0,
                 class_name: "Counter".into(),
                 args: vec![Expr::Integer(0)],
                 type_args: Vec::new(),
@@ -176,10 +179,13 @@ fn straight_line_numeric_load_and_update_remain_live() {
         op: BinaryOp::Add,
         prefix: false,
         strict: false,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     m.init.push(Stmt::Expr(Expr::Binary {
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "value".into(),
             byte_offset: 0,

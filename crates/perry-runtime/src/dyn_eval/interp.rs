@@ -10,6 +10,7 @@
 //! construct (see `bridge::throw_unsupported`).
 
 use perry_parser::swc_ecma_ast as ast;
+use swc_ecma_visit::{Visit, VisitWith};
 
 use super::bridge::{self, throw_unsupported};
 use super::expr::eval_expr;
@@ -165,6 +166,7 @@ fn collect_var_names_stmt(stmt: &ast::Stmt, out: &mut Vec<String>) {
         }
         While(w) => collect_var_names_stmt(&w.body, out),
         DoWhile(w) => collect_var_names_stmt(&w.body, out),
+        With(w) => collect_var_names_stmt(&w.body, out),
         Labeled(l) => collect_var_names_stmt(&l.body, out),
         Switch(sw) => {
             for case in &sw.cases {
@@ -453,11 +455,10 @@ fn invoke_interp_fn_entered(
         };
         bind_pattern(&ctx, pat, value, env_idx, true);
     }
-    // `var` hoisting (params win over the undefined pre-binding).
+    // `var` hoisting (params win over the undefined pre-binding). Only the
+    // call scope counts: an outer binding of the same name is shadowed.
     for name in &fun.hoisted_vars {
-        if !env::is_bound(root_get(env_idx), name) {
-            env::define(root_get(env_idx), name, bridge::undefined());
-        }
+        env::ensure_var_binding(root_get(env_idx), name);
     }
 
     match &fun.body {
@@ -587,7 +588,7 @@ pub(crate) fn exec_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow
 pub(crate) fn exec_script_stmts(ctx: &Ctx, stmts: &[ast::Stmt], env_idx: usize) -> Flow {
     let mut vars = Vec::new();
     collect_var_names(stmts, &mut vars);
-    vars.sort_unstable();
+    crate::cold_sort::sort_by(&mut vars, |a, b| a.cmp(b));
     vars.dedup();
     for name in vars {
         if !env::is_bound(root_get(env_idx), &name) {
@@ -618,7 +619,7 @@ pub(crate) fn exec_direct_eval_stmts(
 ) -> Flow {
     let mut vars = Vec::new();
     collect_var_names(stmts, &mut vars);
-    vars.sort_unstable();
+    crate::cold_sort::sort_by(&mut vars, |a, b| a.cmp(b));
     vars.dedup();
     for name in vars {
         env::ensure_var_binding(root_get(variable_env_idx), &name);
@@ -639,7 +640,58 @@ pub(crate) fn exec_direct_eval_stmts(
     Flow::Normal
 }
 
+/// A block owns its lexical declarations and block-level functions, including
+/// sloppy-mode Annex B functions. A binding-free block can execute in its
+/// parent's already-rooted environment. Decide directly from the borrowed AST;
+/// nothing is prepared or retained between executions.
+fn block_needs_environment(block: &ast::BlockStmt) -> bool {
+    if block.stmts.iter().any(|stmt| {
+        matches!(stmt, ast::Stmt::Decl(decl)
+            if !matches!(decl, ast::Decl::Var(var) if var.kind == ast::VarDeclKind::Var))
+    }) {
+        return true;
+    }
+
+    // Conservatively keep the current environment for potentially direct
+    // eval. Eval's own let/const have a separate lexical environment, so this
+    // could later be relaxed after a focused semantic proof.
+    struct DirectEval(bool);
+    impl Visit for DirectEval {
+        fn visit_expr(&mut self, expr: &ast::Expr) {
+            if !self.0 {
+                expr.visit_children_with(self);
+            }
+        }
+
+        fn visit_call_expr(&mut self, call: &ast::CallExpr) {
+            fn is_eval(expr: &ast::Expr) -> bool {
+                match expr {
+                    ast::Expr::Ident(ident) => ident.sym == "eval",
+                    ast::Expr::Paren(paren) => is_eval(&paren.expr),
+                    _ => false,
+                }
+            }
+            if matches!(&call.callee, ast::Callee::Expr(expr) if is_eval(expr)) {
+                self.0 = true;
+            } else if !self.0 {
+                call.visit_children_with(self);
+            }
+        }
+
+        // These calls execute in their own function environment. Their eval
+        // cannot introduce a binding into the block being considered here.
+        fn visit_function(&mut self, _: &ast::Function) {}
+        fn visit_arrow_expr(&mut self, _: &ast::ArrowExpr) {}
+    }
+    let mut direct_eval = DirectEval(false);
+    block.visit_with(&mut direct_eval);
+    direct_eval.0
+}
+
 fn exec_block_scope(ctx: &Ctx, block: &ast::BlockStmt, env_idx: usize) -> Flow {
+    if !block_needs_environment(block) {
+        return exec_stmts(ctx, &block.stmts, env_idx);
+    }
     let child = env::env_new(root_get(env_idx));
     let child_idx = root_push(child);
     hoist_fn_decls(ctx, &block.stmts, child_idx, true);
@@ -683,7 +735,8 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         }
         Throw(t) => {
             let value = eval_expr(ctx, &t.arg, env_idx);
-            crate::exception::js_throw(value)
+            // interpreted program throw: counted with dynamic code
+            crate::exception::throw_program_value(value)
         }
         While(w) => exec_while(ctx, w, env_idx, None),
         DoWhile(w) => exec_do_while(ctx, w, env_idx, None),
@@ -695,8 +748,21 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         Continue(c) => Flow::Continue(c.label.as_ref().map(|l| l.sym.to_string())),
         Labeled(l) => exec_labeled(ctx, l, env_idx),
         Try(t) => exec_try(ctx, t, env_idx),
-        With(_) => throw_unsupported("with statement"),
+        With(w) => exec_with(ctx, w, env_idx),
     }
+}
+
+fn exec_with(ctx: &Ctx, w: &ast::WithStmt, env_idx: usize) -> Flow {
+    let object = eval_expr(ctx, &w.obj, env_idx);
+    if bridge::is_nullish(object) {
+        bridge::throw_type_error("Cannot convert undefined or null to object");
+    }
+    let object_idx = root_push(crate::object::alloc::js_object_coerce(object));
+    let with_env = env::env_new_with(root_get(env_idx), root_get(object_idx));
+    let with_idx = root_push(with_env);
+    let flow = exec_stmt(ctx, &w.body, with_idx);
+    roots_truncate(object_idx);
+    flow
 }
 
 fn exec_decl(ctx: &Ctx, decl: &ast::Decl, env_idx: usize) -> Flow {
@@ -1079,14 +1145,15 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
             // try (or catch) threw. Run the finalizer, then rethrow — unless the
             // finalizer itself completes abruptly, which swallows the exception
             // (spec Completion-record semantics).
-            let exc = crate::exception::js_get_exception();
+            let exc = crate::exception::pending_exception();
             crate::exception::js_clear_exception();
-            let exc_idx = root_push(exc);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let caught = exc.root(&scope);
+            let exc_idx = root_push(caught.value());
             match exec_block_scope(ctx, finalizer, env_idx) {
                 Flow::Normal => {
-                    let exc = root_get(exc_idx);
                     roots_truncate(exc_idx);
-                    crate::exception::js_throw(exc)
+                    crate::exception::rethrow_caught(caught.caught())
                 }
                 abrupt => {
                     roots_truncate(exc_idx);
@@ -1111,15 +1178,15 @@ fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     // exception is live (in the rooted TLS slot); put the rooted stack + call
     // depth back to this try's entry state.
     super::interp_restore(saved);
-    let exc = crate::exception::js_get_exception();
+    let exc = crate::exception::pending_exception();
     crate::exception::js_clear_exception();
 
     let Some(handler) = &t.handler else {
         // No catch: let the outer trap (the finalizer wrapper — `try {} finally {}`
         // is the only parse without either) or the caller's trap take it.
-        crate::exception::js_throw(exc)
+        crate::exception::rethrow_caught(exc)
     };
-    let exc_idx = root_push(exc);
+    let exc_idx = root_push(exc.value());
     let catch_env = env::env_new(root_get(env_idx));
     let catch_env_idx = root_push(catch_env);
     if let Some(param) = &handler.param {

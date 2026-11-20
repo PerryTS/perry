@@ -1,0 +1,1 @@
+The Android runtime builds again. The GC native-stack scan (#13582) asks for the thread's stack top on Linux and Android, but `native_stack::stack_top` was compiled for Linux only, so `perry-runtime` failed to build for `aarch64-linux-android` and `x86_64-linux-android` (the nightly's Android cross legs). It is now built wherever `stack_bounds` is.

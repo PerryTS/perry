@@ -1,0 +1,10 @@
+package foo:component;
+
+world w {
+    export my-interface;
+}
+
+interface my-interface{
+    use foo:dependency/types.{my-record};
+    my-func: func() -> my-record;
+}

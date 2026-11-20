@@ -6,40 +6,6 @@
 use super::*;
 use crate::value::JSValue;
 
-pub(crate) fn process_release_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q457_0);
-    obj.set(
-        0,
-        JSValue::from_bits((module_string_value("node")).to_bits()),
-    );
-    obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
-    obj.set(2, JSValue::from_bits((module_string_value("")).to_bits()));
-    #[cfg(windows)]
-    obj.set(3, JSValue::from_bits((module_string_value("")).to_bits()));
-    module_object_value(obj.finish())
-}
-
-pub(crate) fn process_features_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q458_0);
-    obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(1, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(2, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(3, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(4, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(5, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(6, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(7, JSValue::from_bits((bool_value(true)).to_bits()));
-    obj.set(8, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(9, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(10, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(11, JSValue::from_bits((bool_value(false)).to_bits()));
-    obj.set(
-        12,
-        JSValue::from_bits((module_string_value("transform")).to_bits()),
-    );
-    module_object_value(obj.finish())
-}
-
 extern "C" fn process_report_function_get_report(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -112,7 +78,7 @@ fn throw_report_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 }
 
 fn process_report_default_filename() -> String {
-    format!("report.{}.json", std::process::id())
+    format!("report.{}.json", crate::os::current_process_id())
 }
 
 thread_local! {
@@ -147,7 +113,7 @@ pub(crate) fn process_report_value() -> f64 {
 }
 
 fn process_report_controller_object() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q459_0);
+    crate::realm_decl! { record obj, RECORD_Q459_0; realm { process.report, kind = namespace, members = { compact = false, attrs = writable | enumerable | configurable; directory = "", attrs = writable | enumerable | configurable; excludeEnv = false, attrs = writable | enumerable | configurable; excludeNetwork = false, attrs = writable | enumerable | configurable; filename = "", attrs = writable | enumerable | configurable; getReport, attrs = writable | enumerable | configurable; reportOnFatalError = false, attrs = writable | enumerable | configurable; reportOnSignal = false, attrs = writable | enumerable | configurable; reportOnUncaughtException = false, attrs = writable | enumerable | configurable; signal = "SIGUSR2", attrs = writable | enumerable | configurable; writeReport, attrs = writable | enumerable | configurable; }; } };
     obj.set(0, JSValue::from_bits((bool_value(false)).to_bits()));
     obj.set(1, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set(2, JSValue::from_bits((bool_value(false)).to_bits()));
@@ -155,7 +121,7 @@ fn process_report_controller_object() -> f64 {
     obj.set(4, JSValue::from_bits((module_string_value("")).to_bits()));
     obj.set( 5, JSValue::from_bits((module_function1(
             "getReport",
-            crate::fn_info!(process_report_function_get_report, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm(process.report.getReport, constructible = true)] export crate::process::report::process_report_function_get_report, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     obj.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
@@ -167,7 +133,7 @@ fn process_report_controller_object() -> f64 {
     );
     obj.set( 10, JSValue::from_bits((module_function2(
             "writeReport",
-            crate::fn_info!(process_report_function_write_report, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.report.writeReport, constructible = true)] export crate::process::report::process_report_function_write_report, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     module_object_value(obj.finish())
@@ -203,7 +169,7 @@ fn process_report_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -243,7 +209,10 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits((module_string_value(&format!("{:.0}", now_ms / 1000.0))).to_bits()),
     );
     obj.set(5, JSValue::from_bits((now_ms).to_bits()));
-    obj.set(6, JSValue::from_bits((std::process::id() as f64).to_bits()));
+    obj.set(
+        6,
+        JSValue::from_bits((crate::os::current_process_id() as f64).to_bits()),
+    );
     obj.set(7, JSValue::from_bits((0.0f64).to_bits()));
     obj.set(
         8,
@@ -291,7 +260,102 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits((module_string_value(std::env::consts::ARCH)).to_bits()),
     );
     obj.set(20, JSValue::from_bits((module_string_value("")).to_bits()));
-    module_object_value(obj.finish())
+    let header = module_object_value(obj.finish());
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let header = with_glibc_versions(header);
+    header
+}
+
+/// The header keys in Node order up to `nodejsVersion`'s successor: glibc
+/// Linux inserts `glibcVersionRuntime` and `glibcVersionCompiler` after
+/// `nodejsVersion` (index 10).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const HEADER_KEYS: [&str; 21] = [
+    "reportVersion",
+    "event",
+    "trigger",
+    "filename",
+    "dumpEventTime",
+    "dumpEventTimeStamp",
+    "processId",
+    "threadId",
+    "cwd",
+    "commandLine",
+    "nodejsVersion",
+    "wordSize",
+    "arch",
+    "platform",
+    "componentVersions",
+    "release",
+    "osName",
+    "osRelease",
+    "osVersion",
+    "osMachine",
+    "cpus",
+];
+
+/// Node prints `glibcVersionRuntime` and `glibcVersionCompiler` right after
+/// `nodejsVersion` on glibc Linux and omits them elsewhere. Packages that
+/// ship glibc and musl builds read `header.glibcVersionRuntime` and take the
+/// musl build when it is absent (the `detect-libc` / napi-rs loader
+/// convention). The two keys are interned here, when the report is built,
+/// like any string created at run time: they are not in the startup seed.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn with_glibc_versions(header: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(header);
+    let out = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 23));
+    for (index, name) in HEADER_KEYS.iter().enumerate() {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = module_object_ptr(source.get_nanbox_f64()).map_or(f64::NAN, |record| {
+            crate::object::js_object_get_field_by_name_f64(record, key)
+        });
+        out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+            module_set_field(object, name, value)
+        });
+        if index == 10 {
+            let runtime = module_string_value(&glibc_version_runtime());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionRuntime", runtime)
+            });
+            let compiler = module_string_value(&glibc_version_compiler());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionCompiler", compiler)
+            });
+        }
+    }
+    out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| module_object_value(object))
+}
+
+/// The glibc the process runs on, as `major.minor`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_runtime() -> String {
+    // SAFETY: glibc returns a pointer to a static NUL-terminated string.
+    unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The glibc the program was linked against, as `major.minor`. The compiler
+/// defines `perry_glibc_version_compiler` as the absolute symbol
+/// `major * 1000 + minor` in every glibc link it drives: the target
+/// sysroot's glibc when cross-linking, the link host's when linking
+/// natively (`link/glibc_version.rs`). Only a link Perry does not drive lacks
+/// it: the runtime crate's own test binaries, which cargo links natively, so
+/// the glibc they run on is the one they were linked against.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_compiler() -> String {
+    extern "C" {
+        #[linkage = "extern_weak"]
+        static perry_glibc_version_compiler: *const u8;
+    }
+    // SAFETY: an extern_weak static reads as the symbol's address, or null;
+    // the link defines this one as an absolute value.
+    let encoded = unsafe { perry_glibc_version_compiler as usize };
+    if encoded == 0 {
+        return glibc_version_runtime();
+    }
+    format!("{}.{}", encoded / 1000, encoded % 1000)
 }
 
 fn process_report_javascript_stack_object() -> f64 {
@@ -303,7 +367,7 @@ fn process_report_javascript_stack_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -334,7 +398,7 @@ fn process_report_javascript_heap_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -357,7 +421,7 @@ fn process_report_resource_usage_object() -> f64 {
         JSValue::from_bits(
             (module_object_value(unsafe {
                 crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+                    crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
                     std::ptr::NonNull::<f64>::dangling().as_ptr(),
                 )
             }))
@@ -459,7 +523,7 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
             "filename": filename.unwrap_or(""),
             "dumpEventTime": format!("{:.0}", now_ms / 1000.0),
             "dumpEventTimeStamp": now_ms,
-            "processId": std::process::id(),
+            "processId": crate::os::current_process_id(),
             "threadId": 0,
             "cwd": std::env::current_dir().map_or_else(
                 |_| String::new(),
@@ -527,6 +591,25 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
         "sharedObjects": []
     });
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let header = value["header"]
+            .as_object_mut()
+            .expect("header is an object");
+        let mut ordered = serde_json::Map::new();
+        for (key, item) in std::mem::take(header) {
+            let after_node = key == "nodejsVersion";
+            ordered.insert(key, item);
+            if after_node {
+                ordered.insert("glibcVersionRuntime".into(), glibc_version_runtime().into());
+                ordered.insert(
+                    "glibcVersionCompiler".into(),
+                    glibc_version_compiler().into(),
+                );
+            }
+        }
+        *header = ordered;
+    }
     #[cfg(windows)]
     if let Some(value) = value.as_object_mut() {
         value.remove("userLimits");
@@ -535,343 +618,7 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
     serde_json::to_string_pretty(&value).unwrap_or_else(|_| "{}".to_string())
 }
 
-pub(crate) fn process_config_value() -> f64 {
-    crate::object::runtime_layouts::runtime_record!(config, RECORD_Q468_0);
-    crate::object::runtime_layouts::runtime_record!(variables, RECORD_Q468_1);
-    crate::object::runtime_layouts::runtime_record!(target_defaults, RECORD_Q468_2);
-    crate::object::runtime_layouts::runtime_record!(configurations, RECORD_Q468_3);
-
-    variables.set(
-        0,
-        JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
-    );
-    variables.set(
-        1,
-        JSValue::from_bits((module_string_value(node_arch_name())).to_bits()),
-    );
-    variables.set(2, JSValue::from_bits((141.0f64).to_bits()));
-    variables.set(3, JSValue::from_bits((bool_value(false)).to_bits()));
-    variables.set(4, JSValue::from_bits((bool_value(true)).to_bits()));
-    variables.set(5, JSValue::from_bits((bool_value(false)).to_bits()));
-    variables.set(6, JSValue::from_bits((bool_value(false)).to_bits()));
-    variables.set(7, JSValue::from_bits((1.0f64).to_bits()));
-    variables.set(8, JSValue::from_bits((0.0f64).to_bits()));
-    variables.set(9, JSValue::from_bits((module_string_value("")).to_bits()));
-
-    target_defaults.set(0, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(1, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(2, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(3, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(4, JSValue::from_bits((module_array_value(&[])).to_bits()));
-    target_defaults.set(
-        5,
-        JSValue::from_bits((module_string_value("Release")).to_bits()),
-    );
-    configurations.set(
-        0,
-        JSValue::from_bits(
-            (module_object_value(unsafe {
-                crate::object::runtime_layouts::perry_build_runtime_record(
-                    std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
-                    std::ptr::NonNull::<f64>::dangling().as_ptr(),
-                )
-            }))
-            .to_bits(),
-        ),
-    );
-    target_defaults.set(
-        6,
-        JSValue::from_bits((module_object_value(configurations.finish())).to_bits()),
-    );
-
-    config.set(
-        0,
-        JSValue::from_bits((module_object_value(variables.finish())).to_bits()),
-    );
-    config.set(
-        1,
-        JSValue::from_bits((module_object_value(target_defaults.finish())).to_bits()),
-    );
-    module_object_value(config.finish())
-}
-
-pub(crate) fn process_allowed_flags_value() -> f64 {
-    const FLAGS: &[&str] = &[
-        "--abort-on-uncaught-exception",
-        "--addons",
-        "--allow-addons",
-        "--allow-child-process",
-        "--allow-fs-read",
-        "--allow-fs-write",
-        "--allow-inspector",
-        "--allow-net",
-        "--allow-wasi",
-        "--allow-worker",
-        "--async-context-frame",
-        "--conditions",
-        "--cpu-prof",
-        "--cpu-prof-dir",
-        "--cpu-prof-interval",
-        "--cpu-prof-name",
-        "--debug-arraybuffer-allocations",
-        "--debug-port",
-        "--deprecation",
-        "--diagnostic-dir",
-        "--disable-proto",
-        "--disable-sigusr1",
-        "--disable-warning",
-        "--disable-wasm-trap-handler",
-        "--disallow-code-generation-from-strings",
-        "--dns-result-order",
-        "--enable-etw-stack-walking",
-        "--enable-fips",
-        "--enable-network-family-autoselection",
-        "--enable-source-maps",
-        "--entry-url",
-        "--es-module-specifier-resolution",
-        "--experimental-abortcontroller",
-        "--experimental-addon-modules",
-        "--experimental-detect-module",
-        "--experimental-eventsource",
-        "--experimental-fetch",
-        "--experimental-global-customevent",
-        "--experimental-global-navigator",
-        "--experimental-global-webcrypto",
-        "--experimental-import-meta-resolve",
-        "--experimental-json-modules",
-        "--experimental-loader",
-        "--experimental-modules",
-        "--experimental-print-required-tla",
-        "--experimental-quic",
-        "--experimental-repl-await",
-        "--experimental-report",
-        "--experimental-require-module",
-        "--experimental-shadow-realm",
-        "--experimental-specifier-resolution",
-        "--experimental-sqlite",
-        "--experimental-strip-types",
-        "--experimental-test-isolation",
-        "--experimental-top-level-await",
-        "--experimental-transform-types",
-        "--experimental-vm-modules",
-        "--experimental-wasi-unstable-preview1",
-        "--experimental-wasm-modules",
-        "--experimental-websocket",
-        "--experimental-webstorage",
-        "--experimental-worker",
-        "--expose-gc",
-        "--extra-info-on-fatal-exception",
-        "--force-async-hooks-checks",
-        "--force-context-aware",
-        "--force-fips",
-        "--force-node-api-uncaught-exceptions-policy",
-        "--frozen-intrinsics",
-        "--global-search-paths",
-        "--heap-prof",
-        "--heap-prof-dir",
-        "--heap-prof-interval",
-        "--heap-prof-name",
-        "--heapsnapshot-near-heap-limit",
-        "--heapsnapshot-signal",
-        "--http-parser",
-        "--icu-data-dir",
-        "--import",
-        "--input-type",
-        "--insecure-http-parser",
-        "--inspect",
-        "--inspect-brk",
-        "--inspect-port",
-        "--inspect-publish-uid",
-        "--inspect-wait",
-        "--interpreted-frames-native-stack",
-        "--jitless",
-        "--loader",
-        "--localstorage-file",
-        "--max-http-header-size",
-        "--max-old-space-size",
-        "--max-old-space-size-percentage",
-        "--max-semi-space-size",
-        "--napi-modules",
-        "--network-family-autoselection",
-        "--network-family-autoselection-attempt-timeout",
-        "--no-addons",
-        "--no-allow-addons",
-        "--no-allow-child-process",
-        "--no-allow-inspector",
-        "--no-allow-net",
-        "--no-allow-wasi",
-        "--no-allow-worker",
-        "--no-async-context-frame",
-        "--no-cpu-prof",
-        "--no-debug-arraybuffer-allocations",
-        "--no-deprecation",
-        "--no-disable-sigusr1",
-        "--no-disable-wasm-trap-handler",
-        "--no-enable-fips",
-        "--no-enable-source-maps",
-        "--no-entry-url",
-        "--no-experimental-addon-modules",
-        "--no-experimental-detect-module",
-        "--no-experimental-eventsource",
-        "--no-experimental-global-navigator",
-        "--no-experimental-import-meta-resolve",
-        "--no-experimental-print-required-tla",
-        "--no-experimental-repl-await",
-        "--no-experimental-require-module",
-        "--no-experimental-shadow-realm",
-        "--no-experimental-sqlite",
-        "--no-experimental-transform-types",
-        "--no-experimental-vm-modules",
-        "--no-experimental-websocket",
-        "--no-experimental-webstorage",
-        "--no-extra-info-on-fatal-exception",
-        "--no-force-async-hooks-checks",
-        "--no-force-context-aware",
-        "--no-force-fips",
-        "--no-force-node-api-uncaught-exceptions-policy",
-        "--no-frozen-intrinsics",
-        "--no-global-search-paths",
-        "--no-heap-prof",
-        "--no-insecure-http-parser",
-        "--no-inspect",
-        "--no-inspect-brk",
-        "--no-inspect-wait",
-        "--no-network-family-autoselection",
-        "--no-node-snapshot",
-        "--no-openssl-legacy-provider",
-        "--no-openssl-shared-config",
-        "--no-pending-deprecation",
-        "--no-permission",
-        "--no-permission-audit",
-        "--no-preserve-symlinks",
-        "--no-preserve-symlinks-main",
-        "--no-report-compact",
-        "--no-report-exclude-env",
-        "--no-report-exclude-network",
-        "--no-report-on-fatalerror",
-        "--no-report-on-signal",
-        "--no-report-uncaught-exception",
-        "--no-require-module",
-        "--no-strip-types",
-        "--no-test-only",
-        "--no-throw-deprecation",
-        "--no-tls-max-v1.2",
-        "--no-tls-max-v1.3",
-        "--no-tls-min-v1.0",
-        "--no-tls-min-v1.1",
-        "--no-tls-min-v1.2",
-        "--no-tls-min-v1.3",
-        "--no-trace-deprecation",
-        "--no-trace-env",
-        "--no-trace-env-js-stack",
-        "--no-trace-env-native-stack",
-        "--no-trace-exit",
-        "--no-trace-promises",
-        "--no-trace-sigint",
-        "--no-trace-sync-io",
-        "--no-trace-tls",
-        "--no-trace-uncaught",
-        "--no-trace-warnings",
-        "--no-track-heap-objects",
-        "--no-use-bundled-ca",
-        "--no-use-env-proxy",
-        "--no-use-openssl-ca",
-        "--no-use-system-ca",
-        "--no-verify-base-objects",
-        "--no-warnings",
-        "--no-watch",
-        "--no-watch-preserve-output",
-        "--no-zero-fill-buffers",
-        "--node-memory-debug",
-        "--node-snapshot",
-        "--openssl-config",
-        "--openssl-legacy-provider",
-        "--openssl-shared-config",
-        "--pending-deprecation",
-        "--perf-basic-prof",
-        "--perf-basic-prof-only-functions",
-        "--perf-prof",
-        "--perf-prof-unwinding-info",
-        "--permission",
-        "--permission-audit",
-        "--preserve-symlinks",
-        "--preserve-symlinks-main",
-        "--prof-process",
-        "--redirect-warnings",
-        "--report-compact",
-        "--report-dir",
-        "--report-directory",
-        "--report-exclude-env",
-        "--report-exclude-network",
-        "--report-filename",
-        "--report-on-fatalerror",
-        "--report-on-signal",
-        "--report-signal",
-        "--report-uncaught-exception",
-        "--require",
-        "--require-module",
-        "--secure-heap",
-        "--secure-heap-min",
-        "--snapshot-blob",
-        "--stack-trace-limit",
-        "--strip-types",
-        "--test-coverage-branches",
-        "--test-coverage-exclude",
-        "--test-coverage-functions",
-        "--test-coverage-include",
-        "--test-coverage-lines",
-        "--test-global-setup",
-        "--test-isolation",
-        "--test-name-pattern",
-        "--test-only",
-        "--test-reporter",
-        "--test-reporter-destination",
-        "--test-rerun-failures",
-        "--test-shard",
-        "--test-skip-pattern",
-        "--throw-deprecation",
-        "--title",
-        "--tls-cipher-list",
-        "--tls-keylog",
-        "--tls-max-v1.2",
-        "--tls-max-v1.3",
-        "--tls-min-v1.0",
-        "--tls-min-v1.1",
-        "--tls-min-v1.2",
-        "--tls-min-v1.3",
-        "--trace-deprecation",
-        "--trace-env",
-        "--trace-env-js-stack",
-        "--trace-env-native-stack",
-        "--trace-event-categories",
-        "--trace-event-file-pattern",
-        "--trace-events-enabled",
-        "--trace-exit",
-        "--trace-promises",
-        "--trace-require-module",
-        "--trace-sigint",
-        "--trace-sync-io",
-        "--trace-tls",
-        "--trace-uncaught",
-        "--trace-warnings",
-        "--track-heap-objects",
-        "--unhandled-rejections",
-        "--use-bundled-ca",
-        "--use-env-proxy",
-        "--use-largepages",
-        "--use-openssl-ca",
-        "--use-system-ca",
-        "--v8-pool-size",
-        "--verify-base-objects",
-        "--warnings",
-        "--watch",
-        "--watch-kill-signal",
-        "--watch-path",
-        "--watch-preserve-output",
-        "--webstorage",
-        "--zero-fill-buffers",
-        "-C",
-        "-r",
-    ];
-    module_set_value(FLAGS)
-}
+pub(crate) use super::metadata_values::{
+    process_allowed_flags_value, process_config_value, process_features_value,
+    process_release_value,
+};

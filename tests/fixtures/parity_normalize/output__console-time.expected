@@ -1,0 +1,6 @@
+timerA: <timer>
+timerB: <timer>
+timerC: <timer>
+timerLog: <timer> extra payload
+timerD: <timer>
+notATimer: fast

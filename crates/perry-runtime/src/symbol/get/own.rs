@@ -8,7 +8,7 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     let addr = (bits & POINTER_MASK) as usize;
     {
         if let Some(header) = crate::value::addr_class::pointer_value_header(bits) {
-            if header.obj_type == crate::gc::GC_TYPE_OBJECT
+            if crate::gc_type_is_object!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 let obj = addr as *const crate::object::ObjectHeader;
@@ -41,7 +41,12 @@ pub(crate) unsafe fn own_symbol_slot(obj_f64: f64, sym_f64: f64) -> Option<OwnSy
     }
     // One holder resolution and one key scan answer both the accessor and
     // the data question.
-    let holder = crate::object::shaped_symbols::owner(obj_key)?;
+    let holder = match crate::object::shaped_symbols::owner(obj_key)? {
+        crate::object::descriptor_state::KeyTarget::Object(o) => o,
+        crate::object::descriptor_state::KeyTarget::Function(p) => {
+            return crate::closure::props::fn_sym_slot(p, sym_f64)
+        }
+    };
     let (keys, live) = crate::object::object_keys_and_live_slot_count(holder);
     let position = crate::object::shaped_symbols::position_in(keys, sym_key)?;
     let lane =

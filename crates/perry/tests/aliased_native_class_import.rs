@@ -81,8 +81,8 @@ fn print_hir(dir: &Path, source: &str) -> String {
 
 /// Aliased `net.BlockList`: the aliased construction + method dispatch must
 /// lower to the SAME canonical native-class HIR as the un-aliased form
-/// (`New { class_name: "BlockList" }` and `NativeMethodCall { class_name:
-/// Some("BlockList") }`). Asserted at the HIR layer because BlockList's runtime
+/// (`New { class_name: "BlockList" }` and the same property reads). Asserted
+/// at the HIR layer because BlockList's runtime
 /// construction has a separate, pre-existing "Invalid socket address" bug that
 /// affects the un-aliased path identically and is out of scope for this fix —
 /// the HIR-identity check isolates the alias-resolution behavior under test.
@@ -110,17 +110,13 @@ console.log(typeof q.addSubnet, typeof q.check);
 "#,
         )
     };
-    // The aliased form must resolve to the canonical "BlockList" class at both
-    // the construction site and the method-dispatch tag.
+    // The constructor carries the canonical class identity. `typeof` reads
+    // ordinary method properties, so no NativeMethodCall tag is expected;
+    // compare those reads with the unaliased HIR below.
     assert!(
         aliased.contains("New { class_name: \"BlockList\""),
         "aliased BlockList construction did not resolve to the canonical \
          class name; HIR:\n{aliased}"
-    );
-    assert!(
-        aliased.contains("class_name: Some(\"BlockList\")"),
-        "aliased BlockList method dispatch was not tagged ( net , BlockList ); \
-         HIR:\n{aliased}"
     );
     // It must NOT carry the local alias name anywhere a native class is named.
     assert!(

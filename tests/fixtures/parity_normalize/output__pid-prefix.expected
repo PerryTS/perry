@@ -1,0 +1,3 @@
+(node:<pid>) first
+(node:<pid>) second
+(node:12)DeprecationWarning-kept-shape

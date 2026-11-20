@@ -18,18 +18,18 @@ runs:
     # version is asserted. The action then picks mbx up from PATH. Install
     # outside ~/.cargo/bin: rust-cache's post step cleans that directory
     # before this action's own post step runs mbx.
-    - name: Build mbx 1.22.0 from crates.io (Intel macOS)
+    - name: Build mbx 1.28.0 from crates.io (Intel macOS)
       if: runner.os == 'macOS' && runner.arch == 'X64'
       shell: bash
       run: |
         set -euo pipefail
         root="$RUNNER_TEMP/perry-mbx"
-        cargo install --locked --version 1.22.0 --root "$root" mbx
+        cargo install --locked --version 1.28.0 --root "$root" mbx
         echo "$root/bin" >> "$GITHUB_PATH"
         installed=$("$root/bin/mbx" --version)
         case "$installed" in
-          *" 1.22.0"*|"1.22.0") ;;
-          *) echo "::error::expected mbx 1.22.0, got: $installed"; exit 1 ;;
+          *" 1.28.0"*|"1.28.0") ;;
+          *) echo "::error::expected mbx 1.28.0, got: $installed"; exit 1 ;;
         esac
     - name: Configure Mr Boxington (Intel macOS, mbx from PATH)
       if: runner.os == 'macOS' && runner.arch == 'X64'
@@ -42,7 +42,7 @@ runs:
       if: runner.os != 'macOS' || runner.arch != 'X64'
       uses: ./.github/actions/perry/jdx/mr-boxington-action
       with:
-        version: "1.22.0"
+        version: "1.28.0"
         github-cache-mode: objects
         cache-generation: ${{ inputs.cache-generation }}
         save-on-workflow-dispatch: ${{ inputs.save-on-workflow-dispatch }}

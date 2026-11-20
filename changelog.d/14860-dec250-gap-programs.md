@@ -1,0 +1,1 @@
+Adapt 26 gap programs that patch DEC 250-locked built-in prototypes: each locked mutation runs in `locked()` and `tests/parity/expected` holds Perry's output, so the programs check the lock instead of dying at the first patch.

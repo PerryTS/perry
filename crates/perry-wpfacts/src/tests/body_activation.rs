@@ -1,0 +1,150 @@
+//! DECISIONS 225: a function body contributes its births, effects and
+//! escapes only once the function can run. `Host::enable` is never invoked:
+//! the escape of `make` it would make never happens, so `make`'s only caller
+//! is the module body and `base.mk` is proven. Every way the body can run
+//! (a call, a closure, a getter, a field initializer, an escape to a global
+//! or to unknown code, eval, `new Function`) keeps it refused. Per unit the
+//! sites of bodies the whole program proves dead are exempt from the
+//! per-unit <= whole residual, and only those.
+
+use super::*;
+use crate::SiteFacts;
+
+const BASE: &str = r#"
+function make(base: { mk(k: number): { k: number } }) { return (k: number) => base.mk(k); }
+class Host {
+  enable() {
+    const load = (globalThis as any)["plug" + "in"];
+    const o = { q: 1 };
+    return load({ api: make, q: o.q });
+  }
+}
+const f = make({ mk: (k) => ({ k }) });
+const p = { r: 2 };
+console.log(f(1).k, p.r);
+"#;
+
+/// Each way `Host::enable` can run, and the activation path that sees it.
+const ARMS: &[(&str, &str, &str)] = &[
+    ("direct", "console.log(new Host().enable());", "call"),
+    (
+        "closure",
+        "function mkc() { return () => new Host().enable(); } const c = mkc(); console.log(c());",
+        "call",
+    ),
+    (
+        "getter",
+        "class G { get x() { return new Host().enable(); } } console.log(new G().x);",
+        "accessor",
+    ),
+    (
+        "fieldinit",
+        "class FI { x = new Host().enable(); } console.log(new FI().x);",
+        "this",
+    ),
+    (
+        "property",
+        "(globalThis as any).box = { k: Host }; console.log(0);",
+        "escape",
+    ),
+    (
+        "unknownfn",
+        "const g = (globalThis as any)[\"x\" + \"y\"]; if (g) g(Host); console.log(0);",
+        "escape",
+    ),
+    (
+        "eval",
+        "function ev() { return eval(\"new Host().enable()\"); } console.log(ev());",
+        "call",
+    ),
+    (
+        "function",
+        "const fn = new Function(\"H\", \"return new H().enable()\"); console.log(fn(Host));",
+        "call",
+    ),
+];
+
+fn proven(s: &SiteFacts) -> bool {
+    !matches!(s.verdict, Verdict::No(_))
+}
+
+fn mk(pf: &ProgramFacts) -> Vec<&SiteFacts> {
+    pf.sites
+        .iter()
+        .filter(|s| s.key == "mk" && s.is_call)
+        .collect()
+}
+
+/// The per-unit <= whole site residual: what a view of `u` proves that no
+/// view of `w` proves. A site `w`'s activation proved can never run is
+/// exempt (any fact about it is vacuously true there); a site of an active
+/// body never is.
+pub(super) fn stronger_sites(u: &ProgramFacts, w: &ProgramFacts) -> Vec<String> {
+    let mut out = Vec::new();
+    for s in u.sites.iter().filter(|s| proven(s)) {
+        let path = &u.module_paths[s.module as usize];
+        let whole_proves = w.sites.iter().any(|x| {
+            &w.module_paths[x.module as usize] == path
+                && x.byte_offset == s.byte_offset
+                && x.key == s.key
+                && x.is_call == s.is_call
+                && proven(x)
+        });
+        if !whole_proves && !w.dead_site(path, s) {
+            out.push(format!(
+                "{path}@{} .{} {:?}",
+                s.byte_offset, s.key, s.verdict
+            ));
+        }
+    }
+    out
+}
+
+#[test]
+fn an_uncalled_body_does_not_escape_what_it_names() {
+    // Main-red: on main `enable`'s body escapes `make`, its parameter is ⊤.
+    let pf = facts(BASE);
+    let s = mk(&pf);
+    assert!(
+        !s.is_empty() && s.iter().all(|s| proven(s)),
+        "{s:?}\n{}",
+        pf.dump_text()
+    );
+    // The dead body's own site has no verdict (generic code).
+    assert!(pf.sites.iter().all(|s| s.key != "q"), "{}", pf.dump_text());
+}
+
+#[test]
+fn every_way_the_body_can_run_keeps_it_refused() {
+    for (arm, tail, _) in ARMS {
+        // `plugin` is an unseen module's loader.
+        let pf = facts(&unseen(&format!("{BASE}{tail}\n")));
+        let s = mk(&pf);
+        assert!(
+            !s.is_empty() && s.iter().all(|s| !proven(s)),
+            "arm {arm}: {s:?}\n{}",
+            pf.dump_text()
+        );
+    }
+}
+
+#[test]
+fn sabotage_each_activation_path_proves_its_arm_wrongly() {
+    // Each arm's path left out: the body that runs is not walked, so the
+    // `mk` site is proven (or dropped as dead) although `make` escapes.
+    for (arm, tail, path) in ARMS
+        .iter()
+        .filter(|a| ["direct", "getter", "fieldinit", "property"].contains(&a.0))
+    {
+        let cfg = FactsConfig {
+            sabotage: Some(format!("activation:{path}")),
+            ..FactsConfig::default()
+        };
+        let pf = facts_with(&format!("{BASE}{tail}\n"), cfg);
+        assert!(
+            mk(&pf).iter().all(|s| proven(s)),
+            "arm {arm} sabotage {path}\n{}",
+            pf.dump_text()
+        );
+    }
+}

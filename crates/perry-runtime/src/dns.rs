@@ -18,6 +18,7 @@ use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
 use crate::value::{js_nanbox_pointer, JSValue, TAG_NULL, TAG_UNDEFINED};
 
 mod ffi;
+pub(crate) use ffi::dispatch_export;
 mod records;
 mod resolve_build;
 
@@ -177,9 +178,7 @@ fn js_string_to_rust(value: f64) -> Option<String> {
 
 fn numeric_value(value: f64) -> Option<f64> {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        Some(js_value.as_int32() as f64)
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(js_value.as_number())
     } else {
         None
@@ -215,7 +214,7 @@ fn value_gc_type(value: f64) -> Option<u8> {
 }
 
 fn is_plain_object_value(value: f64) -> bool {
-    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(value_gc_type(value), Some(crate::gc_object_type_pat!()))
 }
 
 fn option_field(options: f64, name: &str) -> f64 {
@@ -421,41 +420,38 @@ fn invalid_arg_value_received(value: f64) -> String {
     if let Some(s) = js_string_to_rust(value) {
         return format!("'{s}'");
     }
-    if js_value.is_int32() {
-        return js_value.as_int32().to_string();
-    }
     if js_value.is_number() {
         return value.to_string();
     }
     "{}".to_string()
 }
 
-fn type_error_value(message: &str, code: &'static str) -> f64 {
+fn type_error_value(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::type_error(msg);
+    err
 }
 
-fn range_error_value(message: &str, code: &'static str) -> f64 {
+fn range_error_value(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_rangeerror_new(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::range_error(msg);
+    err
 }
 
-fn plain_error_value(message: &str, code: &'static str) -> f64 {
+fn plain_error_value(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_message(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::error(msg);
+    err
 }
 
-fn throw_error_value(value: f64) -> ! {
-    crate::exception::js_throw(value)
+fn throw_error_value(value: crate::error::CoreError) -> ! {
+    crate::exception::throw_core(value)
 }
 
-fn invalid_callback_error(value: f64) -> f64 {
+fn invalid_callback_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The \"callback\" argument must be of type function. Received {}",
         crate::fs::validate::describe_received(value)
@@ -463,7 +459,7 @@ fn invalid_callback_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn invalid_hostname_error(value: f64) -> f64 {
+fn invalid_hostname_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The \"hostname\" argument must be of type string. Received {}",
         crate::fs::validate::describe_received(value)
@@ -471,7 +467,7 @@ fn invalid_hostname_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn invalid_hostname_value_error(value: f64) -> f64 {
+fn invalid_hostname_value_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The argument 'hostname' must be a non-empty string. Received {}",
         invalid_arg_value_received(value)
@@ -479,7 +475,7 @@ fn invalid_hostname_value_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_VALUE")
 }
 
-fn invalid_address_error(value: f64) -> f64 {
+fn invalid_address_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The argument 'address' is invalid. Received {}",
         invalid_arg_value_received(value)
@@ -487,7 +483,7 @@ fn invalid_address_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_VALUE")
 }
 
-fn invalid_family_error(value: f64) -> f64 {
+fn invalid_family_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The property 'options.family' must be one of: 0, 4, 6. Received {}",
         invalid_arg_value_received(value)
@@ -495,14 +491,14 @@ fn invalid_family_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_VALUE")
 }
 
-fn lookup_service_missing_args_error() -> f64 {
+fn lookup_service_missing_args_error() -> crate::error::CoreError {
     type_error_value(
         "The \"address\", \"port\", and \"callback\" arguments must be specified",
         "ERR_MISSING_ARGS",
     )
 }
 
-fn bad_port_error(value: f64) -> f64 {
+fn bad_port_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "Port should be >= 0 and < 65536. Received {}.",
         crate::fs::validate::describe_received(value)
@@ -510,8 +506,15 @@ fn bad_port_error(value: f64) -> f64 {
     range_error_value(&message, "ERR_SOCKET_BAD_PORT")
 }
 
-fn dns_not_found_error(hostname: &str) -> f64 {
+fn dns_not_found_error(hostname: &str) -> crate::error::CoreError {
     plain_error_value(&format!("getaddrinfo ENOTFOUND {hostname}"), "ENOTFOUND")
+}
+
+/// WASI preview 1 cannot resolve names; the resolver stub reports the positive
+/// `ENOTSUP`. (preview 2 reports negative `EAI_*` codes, so it never matches.)
+#[cfg(target_os = "wasi")]
+fn dns_not_supported_error(hostname: &str) -> crate::error::CoreError {
+    plain_error_value(&format!("getaddrinfo ENOTSUP {hostname}"), "ENOTSUP")
 }
 
 fn throw_invalid_dns_order(value: f64) -> ! {
@@ -522,7 +525,7 @@ fn throw_invalid_dns_order(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
 }
 
-fn invalid_name_error(value: f64) -> f64 {
+fn invalid_name_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The \"name\" argument must be of type string. Received {}",
         crate::fs::validate::describe_received(value)
@@ -542,7 +545,7 @@ fn throw_invalid_callback(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
 }
 
-fn invalid_rrtype_type_error(value: f64) -> f64 {
+fn invalid_rrtype_type_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The \"rrtype\" argument must be of type string. Received {}",
         crate::fs::validate::describe_received(value)
@@ -550,7 +553,7 @@ fn invalid_rrtype_type_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_TYPE")
 }
 
-fn invalid_rrtype_value_error(value: f64) -> f64 {
+fn invalid_rrtype_value_error(value: f64) -> crate::error::CoreError {
     let message = format!(
         "The argument 'rrtype' is invalid. Received {}",
         invalid_arg_value_received(value)
@@ -558,7 +561,7 @@ fn invalid_rrtype_value_error(value: f64) -> f64 {
     type_error_value(&message, "ERR_INVALID_ARG_VALUE")
 }
 
-fn parse_record_kind_result(value: f64) -> Result<RecordKind, f64> {
+fn parse_record_kind_result(value: f64) -> Result<RecordKind, crate::error::CoreError> {
     let Some(rrtype) = js_string_to_rust(value) else {
         return Err(invalid_rrtype_type_error(value));
     };
@@ -758,22 +761,22 @@ fn dns_query_error_value(
     code: &'static str,
     syscall: &'static str,
     hostname: &str,
-) -> f64 {
+) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, syscall);
     crate::node_submodules::register_error_hostname(msg, hostname.to_string());
-    let err = crate::error::js_error_new_with_message(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::error(msg);
+    err
 }
 
-fn resolve_error_value(kind: RecordKind, host: &str, err: DnsError) -> f64 {
+fn resolve_error_value(kind: RecordKind, host: &str, err: DnsError) -> crate::error::CoreError {
     let code = dns_error_code(err);
     let syscall = resolve_syscall(kind);
     dns_query_error_value(&format!("{syscall} {code} {host}"), code, syscall, host)
 }
 
-fn reverse_error_value(host: &str, err: DnsError) -> f64 {
+fn reverse_error_value(host: &str, err: DnsError) -> crate::error::CoreError {
     let code = dns_error_code(err);
     dns_query_error_value(
         &format!("getHostByAddr {code} {host}"),
@@ -789,7 +792,7 @@ fn resolve_records_result(
     kind: RecordKind,
     name: &str,
     servers: &[SocketAddr],
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     if deterministic() {
         return Ok(deterministic_resolve_records(kind, name));
     }
@@ -799,7 +802,10 @@ fn resolve_records_result(
     }
 }
 
-fn reverse_records_result(name: &str, servers: &[SocketAddr]) -> Result<f64, f64> {
+fn reverse_records_result(
+    name: &str,
+    servers: &[SocketAddr],
+) -> Result<f64, crate::error::CoreError> {
     if deterministic() {
         return Ok(match name.parse::<IpAddr>() {
             Ok(IpAddr::V4(ip)) if ip.is_loopback() => string_array_value(&["localhost"]),
@@ -827,7 +833,7 @@ fn reverse_records_result(name: &str, servers: &[SocketAddr]) -> Result<f64, f64
     }
 }
 
-fn validate_family(value: f64) -> Result<i32, f64> {
+fn validate_family(value: f64) -> Result<i32, crate::error::CoreError> {
     let Some(n) = numeric_value(value) else {
         return Err(invalid_family_error(value));
     };
@@ -863,7 +869,7 @@ fn default_loopback_addresses() -> Vec<ResolvedAddress> {
     }
 }
 
-fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
+fn parse_lookup_options(value: f64) -> Result<LookupOptions, crate::error::CoreError> {
     let js_value = JSValue::from_bits(value.to_bits());
     if js_value.is_undefined() || js_value.is_null() {
         return Ok(LookupOptions {
@@ -902,7 +908,7 @@ fn parse_lookup_options(value: f64) -> Result<LookupOptions, f64> {
 fn deterministic_lookup_addresses(
     hostname: &str,
     family: i32,
-) -> Result<Vec<ResolvedAddress>, f64> {
+) -> Result<Vec<ResolvedAddress>, crate::error::CoreError> {
     if localhost_name(hostname) {
         return Ok(match family {
             4 => vec![ipv4_loopback_address()],
@@ -927,13 +933,20 @@ fn deterministic_lookup_addresses(
 /// (verbatim leaves the list untouched).
 fn apply_result_order(addresses: &mut [ResolvedAddress]) {
     match DEFAULT_RESULT_ORDER.load(Ordering::Relaxed) {
-        RESULT_ORDER_IPV4_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 4)),
-        RESULT_ORDER_IPV6_FIRST => addresses.sort_by_key(|a| u8::from(a.family != 6)),
+        RESULT_ORDER_IPV4_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 4))
+        }
+        RESULT_ORDER_IPV6_FIRST => {
+            crate::cold_sort::sort_by_u64_key(addresses, |a| u64::from(a.family != 6))
+        }
         _ => {}
     }
 }
 
-fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>, f64> {
+fn lookup_addresses(
+    hostname: &str,
+    family: i32,
+) -> Result<Vec<ResolvedAddress>, crate::error::CoreError> {
     if deterministic() {
         return deterministic_lookup_addresses(hostname, family);
     }
@@ -955,8 +968,11 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
         .map(|iter| iter.collect::<Vec<_>>());
     #[cfg(target_os = "wasi")]
     let resolved = wasi_lookup_addresses(hostname, family);
-    let Ok(iter) = resolved else {
-        return Err(dns_not_found_error(hostname));
+    let iter = match resolved {
+        Ok(iter) => iter,
+        #[cfg(target_os = "wasi")]
+        Err(code) if code == libc::ENOTSUP => return Err(dns_not_supported_error(hostname)),
+        Err(_) => return Err(dns_not_found_error(hostname)),
     };
     let mut addresses: Vec<ResolvedAddress> = Vec::new();
     for socket_addr in iter {
@@ -982,7 +998,7 @@ fn lookup_addresses(hostname: &str, family: i32) -> Result<Vec<ResolvedAddress>,
 }
 
 #[cfg(target_os = "wasi")]
-fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>, ()> {
+fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>, i32> {
     use core::ffi::{c_char, c_void};
     extern "C" {
         fn perry_wasi_resolve(
@@ -1001,7 +1017,7 @@ fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>,
         };
         addresses.push(SocketAddr::new(ip, 0));
     }
-    let hostname = std::ffi::CString::new(hostname).map_err(|_| ())?;
+    let hostname = std::ffi::CString::new(hostname).map_err(|_| libc::EINVAL)?;
     let mut addresses = Vec::<SocketAddr>::new();
     let result = unsafe {
         perry_wasi_resolve(
@@ -1014,7 +1030,7 @@ fn wasi_lookup_addresses(hostname: &str, family: i32) -> Result<Vec<SocketAddr>,
     if result == 0 {
         Ok(addresses)
     } else {
-        Err(())
+        Err(result)
     }
 }
 
@@ -1036,7 +1052,7 @@ fn queue_callback(callback_value: f64, args: &[f64], provider_type: &'static str
     crate::timer::schedule_native_callback(callback as i64, args, provider_type);
 }
 
-fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
+fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, crate::error::CoreError> {
     let addresses = lookup_addresses(hostname, options.family)?;
     if options.all {
         Ok(lookup_all_result(&addresses))
@@ -1045,7 +1061,10 @@ fn lookup_value(hostname: &str, options: LookupOptions) -> Result<f64, f64> {
     }
 }
 
-fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<f64>, f64> {
+fn lookup_callback_values(
+    hostname: &str,
+    options: LookupOptions,
+) -> Result<Vec<f64>, crate::error::CoreError> {
     let addresses = lookup_addresses(hostname, options.family)?;
     if options.all {
         Ok(vec![null_value(), lookup_all_result(&addresses)])
@@ -1059,7 +1078,7 @@ fn lookup_callback_values(hostname: &str, options: LookupOptions) -> Result<Vec<
     }
 }
 
-fn parse_lookup_service_port(value: f64) -> Result<u16, f64> {
+fn parse_lookup_service_port(value: f64) -> Result<u16, crate::error::CoreError> {
     let n = if let Some(n) = numeric_value(value) {
         n
     } else if let Some(s) = js_string_to_rust(value) {
@@ -1086,7 +1105,10 @@ fn service_for_port(port: u16) -> String {
     }
 }
 
-fn lookup_service_result(address: &str, port: u16) -> Result<(String, String), f64> {
+fn lookup_service_result(
+    address: &str,
+    port: u16,
+) -> Result<(String, String), crate::error::CoreError> {
     if deterministic() {
         return match address.parse::<IpAddr>() {
             Ok(addr) if addr.is_loopback() => Ok(("localhost".to_string(), service_for_port(port))),
@@ -1159,7 +1181,7 @@ fn callback_record_args(args: i64, default_kind: Option<RecordKind>) -> (String,
 fn promise_record_args(
     args: i64,
     default_kind: Option<RecordKind>,
-) -> Result<(String, RecordKind), f64> {
+) -> Result<(String, RecordKind), crate::error::CoreError> {
     let name_value = arg(args, 0);
     let Some(name) = js_string_to_rust(name_value) else {
         return Err(invalid_name_error(name_value));
@@ -1208,7 +1230,7 @@ fn dns_callback_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
     let (name, kind, callback) = callback_record_args(args, default_kind);
     match resolve_records_result(kind, &name, &configured_servers()) {
         Ok(value) => call_success_callback(callback, value),
-        Err(error) => call_error_callback(callback, error),
+        Err(error) => call_error_callback(callback, error.value()),
     }
     undefined_value()
 }
@@ -1217,7 +1239,7 @@ fn dns_callback_reverse(args: i64) -> f64 {
     let (name, callback) = callback_reverse_args(args);
     match reverse_records_result(&name, &configured_servers()) {
         Ok(value) => call_success_callback(callback, value),
-        Err(error) => call_error_callback(callback, error),
+        Err(error) => call_error_callback(callback, error.value()),
     }
     undefined_value()
 }
@@ -1237,7 +1259,7 @@ fn dns_promise_resolve(args: i64, default_kind: Option<RecordKind>) -> f64 {
         promise_record_args(args, default_kind).unwrap_or_else(|error| throw_error_value(error));
     match resolve_records_result(kind, &name, &configured_promise_servers()) {
         Ok(value) => promise_value(value),
-        Err(error) => promise_rejected_value(error),
+        Err(error) => promise_rejected_value(error.value()),
     }
 }
 
@@ -1245,7 +1267,7 @@ fn dns_promise_reverse(args: i64) -> f64 {
     let name = promise_reverse_args(args);
     match reverse_records_result(&name, &configured_promise_servers()) {
         Ok(value) => promise_value(value),
-        Err(error) => promise_rejected_value(error),
+        Err(error) => promise_rejected_value(error.value()),
     }
 }
 
@@ -1359,7 +1381,7 @@ fn resolver_object(initial_servers: Vec<String>, options: f64) -> *mut ObjectHea
     }
     let (_, obj_ptr) = obj.across_mut::<ObjectHeader, _>(|| {
         obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
-            let _ = crate::async_hooks::init_resource(
+            let _ = crate::async_hook_slots::init_resource(
                 "DNSCHANNEL",
                 js_nanbox_pointer(obj_ptr as i64),
                 true,

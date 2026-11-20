@@ -25,6 +25,7 @@ fn function(id: u32, name: &str, value: Expr) -> Function {
 #[test]
 fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "value".to_string(),
         byte_offset: 0,
@@ -55,6 +56,7 @@ fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -75,7 +77,7 @@ fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
         "a base member must not directly call its base getter: {ir}"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_slow("),
+        ir.contains("call double @js_object_get_field_value("),
         "the property read must use runtime lookup: {ir}"
     );
 }

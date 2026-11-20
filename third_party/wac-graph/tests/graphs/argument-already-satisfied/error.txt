@@ -1,0 +1,4 @@
+failed to add argument edge from source node 1 to target node 2 referenced in argument 1 for test case `argument-already-satisfied`
+
+Caused by:
+    argument `a` has already been passed to the instantiation

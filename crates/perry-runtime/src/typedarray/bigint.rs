@@ -10,26 +10,7 @@
 //!   - `coerce_for_kind` — pick `ToBigInt` vs `ToNumber` by destination kind
 //!     for the construction / `set()` paths.
 
-use super::{
-    store_at, throw_type_error, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64,
-};
-
-pub(crate) fn is_bigint_kind(kind: u8) -> bool {
-    matches!(kind, KIND_BIGINT64 | KIND_BIGUINT64)
-}
-
-#[cold]
-pub(crate) fn throw_bigint_number_mix() -> ! {
-    // PERRY_BIGINT_MIX_DIAG=1: print a native backtrace before throwing so a
-    // compiled bundle's stackless "Cannot mix BigInt" error can be traced to
-    // its JS frame (same diagnostic hook as dynamic_arith's mixed-operand
-    // gate; used to root-cause #6649).
-    if std::env::var_os("PERRY_BIGINT_MIX_DIAG").is_some() {
-        eprintln!("[bigint-mix-diag] typedarray mix gate");
-        eprintln!("{}", std::backtrace::Backtrace::force_capture());
-    }
-    throw_type_error(b"Cannot mix BigInt and other types, use explicit conversions")
-}
+use super::{store_at, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64};
 
 #[inline]
 pub(super) fn validate_copy_kinds(dst_kind: u8, src_kind: u8) {
@@ -59,27 +40,6 @@ pub(super) fn copy_from_uint8_buffer(
     }
 }
 
-/// Extract the low 64 bits to write into a `BigInt64`/`BigUint64` slot. The
-/// element-set path hands us an already-`ToBigInt`-coerced, NaN-boxed BigInt
-/// (so reads round-trip the raw bits); internal `load_at`→`store_at` copies do
-/// the same. A bare finite Number falls back to a truncating `as i64` cast so
-/// any legacy numeric caller keeps its old behavior rather than reading garbage.
-pub(super) fn bigint_slot_bits(value: f64) -> u64 {
-    let bits = value.to_bits();
-    if (bits >> 48) >= 0x7FF8 {
-        let ptr = (bits & 0x0000_FFFF_FFFF_FFFF) as *const crate::bigint::BigIntHeader;
-        let cleaned = crate::bigint::clean_bigint_ptr(ptr);
-        if cleaned.is_null() {
-            return 0;
-        }
-        unsafe { (*cleaned).limbs[0] }
-    } else if value.is_finite() {
-        value as i64 as u64
-    } else {
-        0
-    }
-}
-
 /// Coerce a raw (NaN-boxed) source value to the representation `store_at`
 /// expects for `dst_kind`: a NaN-boxed BigInt for the bigint kinds (via
 /// `ToBigInt`), or a plain numeric f64 (via `ToNumber`) for every other kind.
@@ -89,6 +49,10 @@ pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
     if dst_kind == KIND_BIGINT64 || dst_kind == KIND_BIGUINT64 {
         to_bigint_for_store(raw)
     } else {
+        // ToNumber(BigInt) throws; `js_number_coerce` would convert it.
+        if crate::value::JSValue::from_bits(raw.to_bits()).is_bigint() {
+            crate::byte_cell_support::throw_bigint_number_mix();
+        }
         // Typed-array element conversion is the full observable ToNumber,
         // not the primitive-only numeric unboxer. In particular an object
         // source element must run its @@toPrimitive/valueOf hooks.
@@ -100,28 +64,17 @@ pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
 /// value re-boxed as a NaN-boxed BigInt. Per the ECMAScript `ToBigInt`
 /// abstract operation, a Number (including a NaN-boxed int32), `undefined`,
 /// `null`, and Symbols are NOT convertible and throw a `TypeError`; only
-/// BigInt, Boolean, and String inputs coerce.
+/// BigInt, Boolean, String and object (via ToPrimitive) inputs coerce.
+///
+/// The typed-array arm is the group's own; every other value is converted by
+/// `bigint_coerce`, which the BigInt statics call without this group.
 pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
     use crate::value::JSValue;
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_bigint() {
-        return value;
-    }
-    if jsval.is_bool() {
-        let n = if jsval.as_bool() { 1 } else { 0 };
-        return crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(n) as i64);
-    }
-    if jsval.is_any_string() {
-        // StringToBigInt (a malformed numeric string throws SyntaxError).
-        let bi = crate::bigint::js_bigint_from_f64(value);
-        return crate::value::js_nanbox_bigint(bi as i64);
-    }
-    // ToBigInt(object): `ToPrimitive(value, number)` (its `Symbol.toPrimitive` /
-    // `valueOf` / `toString`) then `ToBigInt` on the primitive result. A
-    // Symbol pointer is rejected (handled by the label path below); every other
-    // object — e.g. `bigIntView.fill({ valueOf() { return 7n } })` — must run its
-    // coercion hook rather than throwing "Cannot convert NaN to a BigInt".
-    if jsval.is_pointer() && unsafe { crate::symbol::js_is_symbol(value) } == 0 {
+    if jsval.is_pointer()
+        && !jsval.is_bigint()
+        && unsafe { crate::symbol::js_is_symbol(value) } == 0
+    {
         // A typed-array source with a *patched own* `valueOf`/`toString`
         // expando runs it first (test262 ctors-bigint/object-arg/
         // throws-setting-obj-* — the patch may throw, observably).
@@ -133,39 +86,10 @@ pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
                 return to_bigint_for_store(p);
             }
         }
-        match unsafe { crate::value::to_primitive_number(value) } {
-            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p)
-                if p.to_bits() != value.to_bits() =>
-            {
-                return to_bigint_for_store(p);
-            }
-            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
-                throw_type_error(b"Cannot convert object to primitive value");
-            }
-            // `Primitive` that didn't change (shouldn't happen for an object) and
-            // `DefaultString` (no usable `valueOf`/`toString`) fall through to the
-            // unconvertible-label `TypeError` below.
-            _ => {}
-        }
     }
-    let label = bigint_unconvertible_label(value);
-    throw_type_error(format!("Cannot convert {label} to a BigInt").as_bytes());
+    crate::bigint_coerce::to_bigint_not_typed_array(value)
 }
 
-/// Human-readable label for a value that `ToBigInt` rejects, matching Node's
-/// `Cannot convert <x> to a BigInt` TypeError text.
-fn bigint_unconvertible_label(value: f64) -> String {
-    use crate::value::JSValue;
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_undefined() {
-        "undefined".to_string()
-    } else if jsval.is_null() {
-        "null".to_string()
-    } else if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
-        "a Symbol value".to_string()
-    } else if jsval.is_int32() {
-        jsval.as_int32().to_string()
-    } else {
-        format!("{value}")
-    }
-}
+pub(crate) use crate::byte_cell_support::{
+    bigint_slot_bits, is_bigint_kind, throw_bigint_number_mix,
+};

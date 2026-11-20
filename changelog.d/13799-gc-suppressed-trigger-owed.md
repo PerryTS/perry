@@ -1,0 +1,1 @@
+A GC trigger check that an allocation reaches inside a `GcSuppressScope` is no longer dropped: it is owed and runs when the outermost scope closes. A loop of small Maps whose arena block boundaries all fell inside `Map` capacity growth ran without minors and grew the nursery without bound (2M Maps with array keys: peak RSS 171 MB, now 26 MB, with 2% fewer instructions).

@@ -213,7 +213,10 @@ impl SurvivalDiag {
     }
 }
 
+// Keep diagnostic HotKey descriptors out of LLVM's merged collector globals.
+// Otherwise Mach-O retains their resolver functions without the installer.
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static MINOR_SEQ: Cell<u64> = const { Cell::new(0) };
 }
 

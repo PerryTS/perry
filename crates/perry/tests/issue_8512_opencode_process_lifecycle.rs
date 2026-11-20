@@ -62,15 +62,14 @@ async function main() {
 main();
 "#;
 
-#[test]
-fn opencode_lsp_writable_callbacks_complete() {
+fn compile_and_run(source: &str) -> (String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let entry = dir.path().join("main.ts");
     let output = dir.path().join("main_bin");
     let child_cwd = dir.path().join("child-cwd");
     std::fs::create_dir(&child_cwd).expect("create distinct child cwd");
     let child_cwd = std::fs::canonicalize(child_cwd).expect("canonicalize child cwd");
-    std::fs::write(&entry, FIXTURE).expect("write fixture");
+    std::fs::write(&entry, source).expect("write fixture");
 
     let compile = Command::new(perry_bin())
         .current_dir(dir.path())
@@ -87,9 +86,8 @@ fn opencode_lsp_writable_callbacks_complete() {
         String::from_utf8_lossy(&compile.stderr)
     );
 
-    // A dropped completion callback leaves `cat` alive with stdin open, so use
-    // a hard timeout to turn that historical hang into a deterministic test
-    // failure.
+    // A missing lifecycle completion can leave the fixture's child alive;
+    // bound the run so a stalled callback or close event fails deterministically.
     let mut child = Command::new(&output)
         .current_dir(dir.path())
         .env("OPENCODE_CHILD_CWD", &child_cwd)
@@ -120,9 +118,7 @@ fn opencode_lsp_writable_callbacks_complete() {
             let _ = child.wait();
             let stdout = stdout_reader.join().expect("stdout reader");
             let stderr = stderr_reader.join().expect("stderr reader");
-            panic!(
-                "compiled fixture hung waiting for a child stdin callback:\nstdout: {stdout}\nstderr: {stderr}"
-            );
+            panic!("compiled child-process fixture timed out:\nstdout: {stdout}\nstderr: {stderr}");
         }
         std::thread::sleep(Duration::from_millis(25));
     };
@@ -133,6 +129,12 @@ fn opencode_lsp_writable_callbacks_complete() {
         status.success(),
         "compiled fixture failed ({status:?}):\nstdout: {stdout}\nstderr: {stderr}"
     );
+    (stdout, stderr)
+}
+
+#[test]
+fn opencode_lsp_writable_callbacks_complete() {
+    let (stdout, _) = compile_and_run(FIXTURE);
     for expected in [
         "WRITE_CB_ASYNC:true",
         "ENCODED_WRITE_CB_ASYNC:true",
@@ -147,4 +149,37 @@ fn opencode_lsp_writable_callbacks_complete() {
             "missing {expected:?} in {stdout:?}"
         );
     }
+}
+
+#[test]
+fn child_nonzero_exit_preserves_stdout_and_stderr_before_close() {
+    let (stdout, stderr) = compile_and_run(
+        r#"
+import { spawn } from "node:child_process";
+const child = spawn("/bin/sh", ["-c", "printf out; printf err >&2; exit 7"]);
+let out = "";
+let err = "";
+child.stdout.on("data", (chunk: Buffer) => out += chunk.toString());
+child.stderr.on("data", (chunk: Buffer) => err += chunk.toString());
+child.on("close", (code: number) => console.log("RESULT:" + code + ":" + out + ":" + err));
+"#,
+    );
+    assert_eq!(stdout, "RESULT:7:out:err\n");
+    assert!(stderr.is_empty(), "unexpected parent stderr: {stderr}");
+}
+
+#[test]
+fn child_timeout_reports_pending_stdin_write_failure_before_close() {
+    let (stdout, stderr) = compile_and_run(
+        r#"
+import { spawn } from "node:child_process";
+const child = spawn("/bin/sleep", ["30"], { timeout: 100 });
+child.stdin!.on("error", (error: any) => console.log("ERROR:" + error.code));
+child.stdin!.write(Buffer.alloc(1024 * 1024), (error: any) => console.log("CALLBACK:" + error.code));
+child.on("exit", () => console.log("EXIT"));
+child.on("close", () => console.log("CLOSED"));
+"#,
+    );
+    assert_eq!(stdout, "CALLBACK:EPIPE\nERROR:EPIPE\nEXIT\nCLOSED\n");
+    assert!(stderr.is_empty(), "unexpected parent stderr: {stderr}");
 }

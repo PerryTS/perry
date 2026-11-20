@@ -121,16 +121,17 @@ Linux addresses — use `is_above_handle_band` / `HANDLE_BAND_MAX`, never a bare
 `>= 0x10000`.
 
 **Version metadata.** External contributors must not touch
-`[workspace.package] version` in `Cargo.toml` or `**Current Version:**` in
-`CLAUDE.md`. Check and strip:
+`[workspace.package] version` in `Cargo.toml`. Check and strip:
 
 ```bash
-git diff origin/main train<N> -- Cargo.toml CLAUDE.md | grep -cE '^\+.*(^version|Current Version)'   # want 0
+git diff origin/main train<N> -- Cargo.toml | grep -cE '^\+version'   # want 0
 ```
 
 **Changelog.** Every PR needs `changelog.d/<PR>-<slug>.md`. Never append to
 `CHANGELOG.md` (frozen at v0.5.1264). Write the fragment yourself if it is
-missing.
+missing. At release time the maintainer folds the pending queue into
+`changelog/vX.Y.Z/` with `scripts/cut_release_notes.sh --fold`; released
+fragments are archived, never deleted.
 
 ### When to hold rather than land
 

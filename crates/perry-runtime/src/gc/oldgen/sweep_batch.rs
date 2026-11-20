@@ -45,8 +45,8 @@ impl PendingOldUnregister {
         // object, the batched removal below would not find it, and the page's
         // `allocated_bytes`/`object_count` would keep counting it.
         #[cfg(test)]
-        let expand = super::super::trace::block_skip::sabotage::get()
-            & super::super::trace::block_skip::sabotage::FORGET_RUN_EXPANSION
+        let expand = super::super::mark::block_skip::sabotage::get()
+            & super::super::mark::block_skip::sabotage::FORGET_RUN_EXPANSION
             == 0;
         #[cfg(not(test))]
         let expand = true;

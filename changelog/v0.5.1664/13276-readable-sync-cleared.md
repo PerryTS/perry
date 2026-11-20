@@ -1,0 +1,1 @@
+Fixed a `Readable` whose `_readableState.sync` was cleared buffering a `push()` until the scheduled resume; the chunk now reaches the `'data'` listener before `push()` returns, as in Node (the part streams of `@fastify/busboy`'s multipart parser clear it on every part).

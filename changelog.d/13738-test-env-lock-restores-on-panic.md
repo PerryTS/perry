@@ -1,0 +1,1 @@
+Tests: a perry test that panics while it owns the process environment no longer fails every later environment test with a poisoned lock; the lock restores the environment it handed out while the test unwinds.

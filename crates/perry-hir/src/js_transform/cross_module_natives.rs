@@ -344,6 +344,7 @@ pub fn scan_for_native_func_returns(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 scan_for_native_func_returns(
@@ -465,6 +466,7 @@ pub fn scan_for_ident_init_propagation(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 if scan_for_ident_init_propagation(
@@ -733,6 +735,7 @@ pub fn fix_native_instance_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 fix_native_instance_stmt(s, native_instances, local_id_instances);
@@ -866,7 +869,7 @@ pub fn fix_native_instance_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, value) in parts {
+            for value in parts.iter_mut().flatten() {
                 fix_native_instance_expr(value, native_instances, local_id_instances);
             }
         }
@@ -880,7 +883,7 @@ pub fn fix_native_instance_expr(
         Expr::PropertyUpdate { object, .. } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);
         }
@@ -888,6 +891,7 @@ pub fn fix_native_instance_expr(
             object,
             index,
             value,
+            ..
         } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);

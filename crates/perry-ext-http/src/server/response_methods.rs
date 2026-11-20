@@ -4,7 +4,7 @@
 use super::handle_dispatch::*;
 use super::types::TAG_UNDEFINED;
 use perry_ffi::TransientRootScope;
-use perry_ffi::{JsBody3, JsFunctionInfo, JsThis, RawClosureHeader};
+use perry_ffi::{JsFunctionInfo, JsThis, RawClosureHeader};
 
 extern "C" {
     fn js_node_http_response_layout_receiver(receiver: f64) -> i32;
@@ -18,7 +18,7 @@ extern "C" {
 }
 
 macro_rules! method {
-    ($body:ident, $op:ident, $info:ident, $min:expr, $server_only:expr) => {
+    ($body:ident, $op:ident, $min:expr, $server_only:expr) => {
         extern "C" fn $body(
             c: *const RawClosureHeader,
             this: JsThis,
@@ -45,13 +45,26 @@ macro_rules! method {
                 $op(handle, &args[..len])
             }
         }
-        static $info: JsFunctionInfo = JsFunctionInfo::of($body as JsBody3).with_declared(3);
     };
 }
-method!(set_header_body, set_header, SET_HEADER, 1, false);
-method!(write_head_body, write_head, WRITE_HEAD, 1, true);
-method!(write_body, write, WRITE, 1, false);
-method!(end_body, end, END, 0, false);
+method!(set_header_body, set_header, 1, false);
+#[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static SET_HEADER = crate::server::response_methods::set_header_body, 3; with_declared(3)); realm { "node:http.OutgoingMessage.prototype.setHeader", capture = property_key, constructible = true, spec = {length = 2}, emit = metadata(realm_http_set_header_public); } }
+method!(write_head_body, write_head, 1, true);
+#[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static WRITE_HEAD = crate::server::response_methods::write_head_body, 3; with_declared(3)); realm { "node:http.ServerResponse.prototype.writeHead", capture = property_key, constructible = true; } }
+method!(write_body, write, 1, false);
+#[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static WRITE = crate::server::response_methods::write_body, 3; with_declared(3)); realm { "node:http.OutgoingMessage.prototype.write", capture = property_key, constructible = true; } }
+method!(end_body, end, 0, false);
+#[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static END = crate::server::response_methods::end_body, 3; with_declared(3)); realm { "node:http.OutgoingMessage.prototype.end", capture = property_key, constructible = true; } }
+
+/// Whether `value` is the intrinsic `ServerResponse.prototype.writeHead` body
+/// (a closure whose info is [`WRITE_HEAD`]), not a program's replacement.
+pub(super) unsafe fn is_intrinsic_write_head(value: f64) -> bool {
+    if super::types::js_value_is_closure(value.to_bits() as i64) == 0 {
+        return false;
+    }
+    let closure = (value.to_bits() & super::types::PTR_MASK) as *const perry_ffi::ClosureHeader;
+    (*closure).info as usize == &WRITE_HEAD as *const JsFunctionInfo as usize
+}
 
 /// Cold prototype construction protocol of the existing HTTP export provider.
 /// The result is immutable image metadata, never a JS value or a heap edge.
@@ -109,6 +122,13 @@ pub(super) unsafe fn write(handle: i64, args: &[f64]) -> f64 {
         .map(|a| closure_arg(Some(*a)))
         .find(|c| *c != 0)
         .unwrap_or(0);
+    if let Some(encoding) = args.get(1) {
+        crate::server::response_cork::throw_unknown_chunked_encoding(
+            response_root.get(),
+            args[0],
+            encoding.to_bits() as i64,
+        );
+    }
     bool_value(
         crate::server::response::js_node_http_res_write_with_cb(response_root.get(), args[0], cb)
             != 0,

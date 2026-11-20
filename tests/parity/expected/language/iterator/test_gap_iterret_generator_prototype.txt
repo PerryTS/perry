@@ -1,0 +1,3 @@
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched-generator-return 0 1
+DEC 250: Cannot replace built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)

@@ -1,0 +1,7 @@
+Tie the six `%IteratorPrototype%`-family `frontier` pins in `scripts/gc_runtime_root_holders.json` to the registered scanner that reaches them.
+
+`scripts/gc_runtime_root_holders.py` only counts a holder as covered when the scanner is defined in the **same file** as the declaration. The eight `..._ITERATOR_PROTOTYPE_PTR_SLOT` atomics live in `crates/perry-runtime/src/object/iterator_prototypes.rs` while `object/mod.rs::scan_object_cache_roots_mut` visits all eight through their `RealmAtomicI64` handles, so every one of them reads as uncovered. The inventory's answer for that shape is a `frontier` pin carrying the scanner's exact registered name: the pin stays valid only while that registration exists, and deleting it invalidates the pin instead of leaving it matched.
+
+The two newest slots already had the annotation, added with them. The six older ones were pinned before that form existed, so they were plain debt — a deleted scanner registration would have left them matched and the gate green, which is the silent hole this list exists to prevent.
+
+Verified against the gate's own `apply_frontier` with `scan_object_cache_roots_mut` removed from the registered set: the six previously reported nothing and now report stale, alongside the two that were already annotated. With the registry intact the gate is unchanged (`OK — 1459 declarations, 484 classified, 304 pinned`). No runtime behaviour changes, no Rust source is touched, and the inventory file was not reformatted.

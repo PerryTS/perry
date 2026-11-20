@@ -1,0 +1,161 @@
+{
+  "date": "2026-10-27",
+  "base": "dd65cba7de9b01491a8910dce49a0f13465ed87d",
+  "scope": "Remove the transitive Tokio lock dependency on current main and prevent reintroduction without changing the separate WASI implementation branch.",
+  "rootCause": {
+    "chain": [
+      "perry-ext-pdf",
+      "printpdf 0.10.1",
+      "wasm-bindgen-futures 0.4.79",
+      "tokio 1.53.3"
+    ],
+    "target": "cfg(all(target_os = \"emscripten\", wasm_bindgen_unstable_tokio))",
+    "meaning": "Cargo resolves target-specific dependencies into the lockfile even when not compiling for that target; no claim that this runtime executed on WASI.",
+    "upstreamMetadata": "https://crates.io/api/v1/crates/wasm-bindgen-futures/0.4.79/dependencies"
+  },
+  "fix": {
+    "browserTargetPin": "wasm-bindgen-futures =0.4.78, default features disabled",
+    "matchingWasmBindgen": "0.2.128",
+    "matchingJsSys": "0.3.105",
+    "pinReleaseDate": "2026-09-04; older than the unchanged seven-day registry soak",
+    "unrelatedPackageEntriesPreserved": true,
+    "runtimeRustCodeChanged": false,
+    "newRuntimeOrProviderDependency": false,
+    "newAllowlistEntries": false
+  },
+  "enforcement": [
+    "offline check visits tracked and new non-ignored Cargo manifests and lockfiles, including nested standalone projects",
+    "normal/dev/build/workspace and target-specific dependencies checked, including renamed package aliases",
+    "every tokio-* family name rejected automatically, including future names",
+    "root and nested lock dependency references checked even when a referenced package entry is absent",
+    "valid TOML supports inline dependency arrays; malformed lockfiles and manifests fail closed",
+    "Rust namespace scan covers workspace and standalone-project source/test/bench/example directories",
+    "full workspace metadata uses --locked and checks remain read-only",
+    "independent tokio-ban CI preflight runs on every PR and core CI run without requiring Cargo or Rust setup",
+    "final gate explicitly requires success; skipped, missing, failed or cancelled preflight cannot pass",
+    "AGENTS.md states the no-Tokio policy, including optional and transitive dependencies"
+  ],
+  "verification": {
+    "checks": [
+      {
+        "phase": "self-test",
+        "exitCode": 0,
+        "summary": "tokio_inventory self-test: OK (workspace, custom cfg, future family and nested-lock controls caught)\n"
+      },
+      {
+        "phase": "cli-and-ci-tests",
+        "exitCode": 0,
+        "summary": "...\n----------------------------------------------------------------------\nRan 3 tests in 0.871s\n\nOK\n"
+      },
+      {
+        "phase": "offline-ban",
+        "exitCode": 0,
+        "summary": "tokio ban: 120 manifests, 26 lockfiles and Rust sources clean (offline)\n"
+      },
+      {
+        "phase": "full-ban",
+        "exitCode": 0,
+        "summary": "manifest edges to a tokio crate: 0\ntokio packages in Cargo.lock:    0\ntokio source lines:              0\nbanned names (22): tokio, tokio-macros, tokio-util, tokio-stream, tokio-rustls, tokio-native-tls, tokio-tungstenite, tokio-io-timeout, hyper-util, hyper-rustls, hyper-tls, h2, reqwest, tower, tower-http, sqlx, sqlx-core, sqlx-mysql, sqlx-postgres, redis, mongodb, async-compat\nnot tokio (checked against Cargo.lock):\n  lettre         0.11.23\n  tungstenite    0.30.0\n"
+      },
+      {
+        "phase": "ci-plan",
+        "exitCode": 0,
+        "summary": "ci_plan --self-test: 24 jobs, 3 tiers, all invariants hold\n"
+      },
+      {
+        "phase": "gc-gate-wiring",
+        "exitCode": 0,
+        "summary": "GC gate wiring OK (9 gates main-line-reachable and able to fail; 7 workflows checked for constant scheduled-run concurrency groups)\n"
+      },
+      {
+        "phase": "test-registration",
+        "exitCode": 0,
+        "summary": "test registration OK: checked 566 files against 4 registries\n  gc-repsel-corpus            124 candidates   124 registered   0 excluded\n  feature-matrix-probes        25 candidates    22 registered   3 excluded\n  compiler-output-workloads    23 candidates    21 registered   2 excluded\n  rust-test-modules           394 candidates   394 registered   0 excluded\n"
+      }
+    ],
+    "repositoryManifests": 120,
+    "repositoryLockfiles": 26,
+    "normalResolvedPackages": 1001,
+    "allFeaturesResolvedPackages": 1011,
+    "tokioPackages": 0,
+    "lockSha256": "9b4288f0e9abdf258279bab579fb687be6a65a9dca34a1878b5040a685e5c4dc",
+    "normalAndAllFeaturesMetadataLockedAndUnchanged": true,
+    "newPythonTestMethods": 3,
+    "ciResultCases": [
+      "success",
+      "failure",
+      "cancelled",
+      "skipped",
+      "missing"
+    ],
+    "cliCases": [
+      "clean offline with deliberately unusable Cargo",
+      "original transitive-dependency shape rejected",
+      "baseline update cannot legitimize Tokio",
+      "standalone target-specific renamed optional dev dependency rejected",
+      "nested standalone Tokio lock rejected",
+      "clean nested/root projects pass"
+    ],
+    "checkerControls": [
+      "inactive Emscripten custom cfg",
+      "optional build dependency with a future Tokio-family name",
+      "future source namespace with whitespace",
+      "dangling and inline lock dependency references",
+      "untracked nested project discovery",
+      "ignored build-cache exclusion",
+      "invalid lock/manifest rejection"
+    ],
+    "actionlint": {
+      "baselineExit": 1,
+      "changedExit": 1,
+      "baselineAndChangedMessagesIdentical": true,
+      "inheritedMessages": [
+        "property \"formatting\" is not defined in object type {} [expression]",
+        "receiver of object dereference \"tier\" must be type of object but got \"string\" [expression]",
+        "shellcheck reported issue in this script: SC2012:info:3:1: Use find instead of ls to better handle non-alphanumeric filenames [shellcheck]",
+        "shellcheck reported issue in this script: SC2086:info:144:16: Double quote to prevent globbing and word splitting [shellcheck]",
+        "shellcheck reported issue in this script: SC2129:style:2:1: Consider using { cmd1; cmd2; } >> file instead of individual redirects [shellcheck]"
+      ]
+    },
+    "wasmBranch": {
+      "head": "7139fa220fe6644967b7d81a0d6106651313a392",
+      "changed": false,
+      "newOfflineCheckerManifests": 124,
+      "newOfflineCheckerLockfiles": 26,
+      "result": "pass"
+    },
+    "hostedWorkflowRun": false,
+    "rustBuildOrRuntimeSuitesRun": false,
+    "rustBuildReason": "changes select a browser-only dependency version and enforce repository/CI policy; no runtime Rust implementation was changed"
+  },
+  "sourceSha256": {
+    ".github/workflows/test.yml": "8f495c6802f296570beeeee57be5b3fecdd54180e43364e9cfc0128a3a743f63",
+    "AGENTS.md": "46eacdf0535e07de6d9d2f817459d1106a83a660f2454b122f138364a61fc306",
+    "Cargo.lock": "9b4288f0e9abdf258279bab579fb687be6a65a9dca34a1878b5040a685e5c4dc",
+    "changelog.d/PENDING-no-tokio-dependency-ban.md": "6d7cdfcad921120316a676d038e406999ba88a4450b6ecea852b87a26edc4967",
+    "crates/perry-ext-pdf/Cargo.toml": "85b8b7aa1f5f5a5807f4d0d2cee1e76b6981620b6254df7060a1c141683e3c4b",
+    "docs/src/testing/ci-tiers.md": "b75a84fceee5e6ee3ffebfb523bc0b6a8823b51c8dc86135042fcecc1684441d",
+    "scripts/test_tokio_gate.py": "e3e37e94ad33c5f93df4551829debf81555a07223d311195ac06b4bc66c4cdde",
+    "scripts/tokio_inventory.py": "fc6df1658c791948462d348065dd52e7ac9f183c21d6802411c159d72173853c"
+  },
+  "evidence": {
+    "archive": "no-tokio-guard-20261027-evidence.tar.gz",
+    "sha256": "1e071a4db6422c454c6d4cc85a188bfb662d53347337250ce15a954cb5aea4dd",
+    "bytes": 1036257,
+    "members": 33
+  },
+  "deploymentState": {
+    "localBranch": "codex/no-tokio-guard-20261027",
+    "pushed": false,
+    "merged": false,
+    "existingRequiredContext": "pr-gate",
+    "branchProtectionChanged": false,
+    "existingAdminBypassEnabled": true,
+    "note": "GitHub CI changes become active when this branch lands; an administrator can still bypass existing repository protection."
+  },
+  "limitations": [
+    "no full native/PDF/browser/WASI runtime rebuild; locked dependency resolution and enforcement behavior were validated",
+    "five pre-existing actionlint diagnostics remain byte-identical by message; none added",
+    "this is an isolated main-based fix; it does not rebase or resolve the WASI branch main-drift conflicts"
+  ]
+}

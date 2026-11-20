@@ -162,6 +162,13 @@ The importing module:
 {{#include ../../examples/language/modules/main.ts:imports}}
 ```
 
+Top-level `this` follows the module goal. In an ES module it is `undefined`,
+per ECMA-262 §16.2.1.6.4; Perry treats a file as an ES module when its extension
+or nearest `package.json` says so (`.mjs`, `.mts`, `"type": "module"`) or when
+the source itself has an `import`/`export` declaration. A CommonJS file keeps
+the CommonJS meaning: top-level `this` is the `module.exports` stand-in object
+(not `globalThis`).
+
 ## BigInt
 
 ```typescript
@@ -194,13 +201,13 @@ The importing module:
 
 ## Garbage Collection
 
-Perry includes a mark-sweep garbage collector. It runs automatically when memory pressure is detected (~8MB arena blocks), but you can also trigger it manually:
+Perry uses a tracing generational collector with automatic allocation-pressure and safepoint scheduling. You can also request collection explicitly:
 
 ```typescript
 {{#include ../../examples/language/supported_features.ts:gc}}
 ```
 
-The GC uses conservative stack scanning to find roots and supports arena-allocated objects (arrays, objects) and malloc-allocated objects (strings, closures, promises, BigInts, errors).
+Copying minors, non-moving fallbacks and full sweeps cooperate with precise generated roots and runtime root scanners. Conservative stack scanning is diagnostic-only. See the [memory model](../internals/memory-model.md) for allocation and rooting details.
 
 ## JSX/TSX
 
@@ -242,9 +249,49 @@ perry compile src/main.js -o myapp
 ./myapp
 ```
 
-There are no guarantees for every dynamic JavaScript pattern (the
-[Limitations](limitations.md) still apply — no `eval`, no general dynamic
-`require()`), but most plain JavaScript projects compile and run.
+Dynamic evaluation and CommonJS have supported paths, with limits on interpreter behavior and runtime module loading. See [Limitations](limitations.md) for the current boundaries.
+
+## Build-time macro imports
+
+An import with `with { type: "macro" }` calls its exported functions during
+compilation and replaces each call with its JSON result:
+
+```typescript,no-test
+import { readTemplates } from "./templates.macro.ts" with { type: "macro" };
+const templates = await readTemplates();
+```
+
+Perry compiles a temporary native runner using its own compiler and host
+runtime; Node and Bun are not required. The runner awaits Promise results.
+Calls in one importing module share the macro module instance and execute in
+syntax traversal order, with nested calls evaluated before their consumers. Each result is captured
+before later calls can mutate the macro module's objects; static arguments
+receive JSON values rather than references into an earlier result.
+Macro calls run on every compilation, so changes to build-time input files are
+observed even when ordinary compilation caching is enabled. The macro import
+and its initializer do not enter the application's runtime
+module graph.
+
+Arguments must be statically known. JSON literals, arrays, objects, constant
+bindings, arithmetic, conditionals, templates and earlier macro results have
+supported paths. Object-valued constants must be used only in static macro
+arguments; aliases or other uses are conservatively refused. Dynamic calls,
+spread arguments, and escaping macro function bindings are compile errors
+naming the import. Type annotations do not establish static values.
+
+Results support null, booleans, Unicode scalar strings, finite numbers other
+than negative zero, dense arrays and
+plain objects. Object property order and own data keys are preserved. Functions,
+undefined, symbols, BigInt, cycles, accessors, non-enumerable properties and
+unsupported object instances fail compilation. Bun extensions such as Blob
+and Response serialization are not supported. A thrown error, rejected Promise
+or recursive macro expansion also fails compilation with the import identified.
+
+Macro file reads access the build machine's files. A macro's `import.meta.url`
+identifies its real source file while the native runner executes, including
+when the application uses `--source-root`. Inline the contents that the installed
+application needs; an ordinary runtime file read is not packaged by this feature.
+Runtime `import.meta` lowering is unchanged.
 
 ## Node.js Compatibility
 

@@ -26,10 +26,14 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
         count += 1;
         let request_handle = pending_request_handle(&ev);
         let terminal = terminal_http_event(&ev);
-        let async_id = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| {
-            request.async_id
-        })
-        .unwrap_or(0);
+        // A deferred Readable edge runs after the exchange's async resource
+        // was destroyed by its terminal event, so it has no hook scope.
+        let async_id = if matches!(ev, PendingHttpEvent::IncomingDrain { .. }) {
+            0
+        } else {
+            with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |request| request.async_id)
+                .unwrap_or(0)
+        };
         if async_id != 0 {
             js_async_hooks_provider_enter(async_id);
         }
@@ -95,6 +99,9 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
             } => client_events::handle_response_chunk_event(request_handle, chunk),
             PendingHttpEvent::ResponseEnd { request_handle } => {
                 client_events::handle_response_end_event(request_handle);
+            }
+            PendingHttpEvent::IncomingDrain { incoming, .. } => {
+                client_incoming_read::handle_drain(incoming);
             }
             PendingHttpEvent::Error {
                 request_handle,

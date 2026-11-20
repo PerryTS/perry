@@ -97,6 +97,15 @@ fn with_client<R>(id: i64, f: impl FnOnce(&mut Client) -> R) -> Option<R> {
     map.get_mut(&id).map(f)
 }
 
+/// Agent teardown: drop the in-flight clients of retiring connections. Their
+/// completion tokens are the runtime's to retire, and nothing is settled here.
+pub(crate) fn forget_clients(ws_ids: &std::collections::HashSet<usize>) {
+    clients()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .retain(|_, client| !ws_ids.contains(&client.ws_id));
+}
+
 fn forget(id: i64) -> Option<Client> {
     clients()
         .lock()
@@ -324,7 +333,9 @@ fn adopt(id: i64, leftover: Vec<u8>) {
     }
     let token = with_client(id, |client| client.token.take()).flatten();
     if let Some(token) = token {
-        token.resolve_number(ws_id as f64);
+        // A boxed handle, not a Number: the collector proves an id dead only
+        // when every JS copy of it is a handle word it can see.
+        token.resolve_bits(perry_ffi::JsValue::from_handle(ws_id as u64).bits());
     }
 }
 

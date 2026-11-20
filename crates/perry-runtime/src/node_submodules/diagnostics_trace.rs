@@ -144,11 +144,11 @@ pub(crate) extern "C" fn diag_trace_sync(
             set_field_value(
                 crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
                 "error",
-                err,
+                err.value(),
             );
             publish_channel(events[4], context);
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }
@@ -261,7 +261,7 @@ pub(crate) extern "C" fn diag_trace_wrapped_callback(
         Ok(result) => result,
         Err(callback_err) => {
             publish_channel(async_end, context);
-            crate::exception::js_throw(callback_err)
+            crate::exception::rethrow_caught(callback_err)
         }
     };
     publish_channel(async_end, context);
@@ -274,8 +274,8 @@ fn throw_trace_callback_not_function() -> ! {
     let msg = b"The \"callback\" argument must be of type function.";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     register_error_code(s, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(boxed_ptr(err))
+    let err = crate::error::CoreError::type_error(s);
+    crate::exception::throw_core(err)
 }
 
 pub(crate) extern "C" fn diag_trace_callback(
@@ -350,9 +350,9 @@ pub(crate) extern "C" fn diag_trace_callback(
     );
     js_closure_set_capture_f64(wrapped, 0, callback);
     js_closure_set_capture_f64(wrapped, 1, context);
-    js_closure_set_capture_ptr(wrapped, 2, events[2]);
-    js_closure_set_capture_ptr(wrapped, 3, events[3]);
-    js_closure_set_capture_ptr(wrapped, 4, events[4]);
+    crate::closure::closure_set_capture_word(wrapped, 2, events[2]);
+    crate::closure::closure_set_capture_word(wrapped, 3, events[3]);
+    crate::closure::closure_set_capture_word(wrapped, 4, events[4]);
 
     let wrapped_value = boxed_ptr(wrapped);
 
@@ -372,11 +372,11 @@ pub(crate) extern "C" fn diag_trace_callback(
             set_field_value(
                 crate::value::js_nanbox_get_pointer(context) as *mut ObjectHeader,
                 "error",
-                err,
+                err.value(),
             );
             publish_channel(events[4], context);
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }

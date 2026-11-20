@@ -120,7 +120,7 @@ pub fn is_proxy_cell(addr: usize) -> bool {
         && addr % std::mem::align_of::<GcHeader>() == 0
         && addr as u64 <= crate::value::POINTER_MASK
         // SAFETY: the honest-pointer invariant above.
-        && crate::proxy::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
+        && crate::proxy_hooks::is_proxy_header(unsafe { &*((addr - GC_HEADER_SIZE) as *const GcHeader) })
 }
 
 /// True when `id` is in the Web Streams sub-band of the handle band. Only a
@@ -135,7 +135,7 @@ const _: () = assert!(PROXY_ID_BAND_END == STREAM_ID_BAND_START);
 const _: () = assert!(HANDLE_BAND_MAX == STREAM_ID_BAND_END);
 
 /// Check if a pointer is a valid heap object (safe to dereference GcHeader).
-/// Values below `HANDLE_BAND_MAX` (2 MiB) are likely INT32_TAG extracts, small handles,
+/// Values below `HANDLE_BAND_MAX` (2 MiB) are likely INTERNAL_WORD_TAG extracts, small handles,
 /// or null. The upper bound filters out NaN-box tag bits that leaked through.
 /// Linux-family AArch64 targets can map userspace arenas anywhere in the full
 /// low 48-bit VA range, including addresses with bit 47 set (observed under
@@ -344,11 +344,29 @@ pub(crate) fn tracked_header_of_bits(bits: u64) -> Option<std::ptr::NonNull<GcHe
     unsafe { try_read_tracked_gc_header(bits as usize) }
 }
 
+/// The receiver of a primitive dispatch, for a value entry whose answer does
+/// not depend on WHICH Number the receiver is (a primitive `[[Set]]` target,
+/// a symbol-keyed read on a Number: both start at `Number.prototype`, and
+/// the `this` of an accessor travels separately).
+///
+/// A value whose top 16 bits are clear is a Number (a denormal, or +0); in
+/// value context an object carries `POINTER_TAG`. The legacy decodes below
+/// such an entry still read that shape as a raw object pointer, so the entry
+/// hands them the Number 1.0 instead, which every one of them classifies as
+/// a Number.
+#[inline(always)]
+pub(crate) fn number_receiver_for_dispatch(value: f64) -> f64 {
+    if value.to_bits() >> 48 == 0 {
+        1.0
+    } else {
+        value
+    }
+}
+
 /// Candidate object address carried by a NaN-boxed JS value, decided by the
 /// value's TAG before any magnitude test (#10479).
 ///
-/// Only two representations name an address: a `POINTER_TAG` payload and a
-/// legacy raw bitcast pointer (top 16 bits clear, above the null page). Every
+/// Only one representation names an address: a `POINTER_TAG` payload. Every
 /// other tag is a primitive whose low 48 bits are not an address, and several
 /// of them land inside the heap window, so the old "tag band `>= 0x7FF8` ⇒
 /// payload" decode turned them into plausible-looking pointers:
@@ -360,10 +378,11 @@ pub(crate) fn tracked_header_of_bits(bits: u64) -> Option<std::ptr::NonNull<GcHe
 ///   synthetic class id decodes to `0x8000_0000` (#10478's `C instanceof C`);
 /// * heap strings, bigints, JS handles and the undefined/null/boolean markers.
 ///
-/// All of those answer 0. So does an ordinary number: a bare top-16-clear
-/// word is only the legacy raw-pointer shape when the allocator owns it
-/// ([`try_read_tracked_gc_header`], or a registered buffer) — a denormal
-/// double such as `1e-310` decodes into the heap window too.
+/// All of those answer 0. So does every number, a bare top-16-clear word
+/// included: in value context an object carries `POINTER_TAG`, so that word
+/// is a denormal double (`1e-310` decodes into the heap window) or +0, never
+/// a reference. No allocator lookup decides it: a Number whose bits equal a
+/// live object's address is still a Number.
 ///
 /// A non-zero `POINTER_TAG` answer is a CANDIDATE, not a validity proof — it
 /// can still be a handle-band id — so pair it with a registry lookup or
@@ -373,22 +392,6 @@ pub(crate) fn object_ref_addr(value: f64) -> usize {
     let bits = value.to_bits();
     if (bits & crate::value::TAG_MASK) == crate::value::POINTER_TAG {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if (bits >> 48) == 0 && bits != 0 {
-        raw_object_ref_addr(bits as usize)
-    } else {
-        0
-    }
-}
-
-#[cold]
-fn raw_object_ref_addr(addr: usize) -> usize {
-    // Arbitrary bits: only the allocator may vouch for them. Every buffer and
-    // typed array is a tracked allocation except a process-global
-    // SharedArrayBuffer block (#10694: no registry is consulted any more).
-    let owned = unsafe { try_read_tracked_gc_header(addr) }.is_some()
-        || crate::shared_sab::is_shared_sab(addr);
-    if owned {
-        addr
     } else {
         0
     }
@@ -571,7 +574,9 @@ unsafe fn tracked_gc_header_admitting(
         |candidate| crate::arena::classify_heap_space_in_range(candidate).map(|(_, base, _)| base),
         crate::gc::gc_malloc_header_is_tracked,
     ) else {
-        let header = image::header(addr)?;
+        // Outside every allocator: an immutable image string, or a cell of the
+        // realm image (WRT): both are immortal and admitted by their sections.
+        let header = image::header(addr).or_else(|| realm::header(addr))?;
         return admit((*header.as_ptr()).obj_type).then_some(header);
     };
     if header_addr % std::mem::align_of::<GcHeader>() != 0 {
@@ -625,6 +630,7 @@ mod tests {
         assert!(!is_small_handle(HANDLE_BAND_MAX));
     }
 
+    #[cfg(target_pointer_width = "64")]
     #[test]
     fn try_read_gc_header_rejects_handles_without_deref() {
         // Would SIGSEGV on Linux if dereferenced (#4665/#4800) — must be None
@@ -638,22 +644,23 @@ mod tests {
         assert!(unsafe { try_read_gc_header(0x7FFD_0000_0000_0000) }.is_none());
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// #10479: only a `POINTER_TAG` payload or a raw pointer names an address.
     /// Every primitive band answers 0 — in particular the SSO and INT32 bands,
     /// whose payloads decode into the heap window.
     #[test]
     fn object_ref_addr_classifies_by_tag_before_magnitude() {
         use crate::value::{
-            BIGINT_TAG, INT32_TAG, JS_HANDLE_TAG, POINTER_TAG, SHORT_STRING_TAG, STRING_TAG,
-            TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+            BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_TAG, SHORT_STRING_TAG,
+            STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
         };
         let heap_addr = 0x7F12_3456_7890usize;
         let primitives = [
             SHORT_STRING_TAG | 0x0300_0069_7275, // "uri"
             SHORT_STRING_TAG | 0x0100_0000_0061, // "a"
             SHORT_STRING_TAG,                    // ""
-            INT32_TAG | 0x8000_0000,             // synthetic class ref
-            INT32_TAG | 5,
+            INTERNAL_WORD_TAG | 0x8000_0000,     // synthetic class ref
+            INTERNAL_WORD_TAG | 5,
             STRING_TAG | heap_addr as u64,
             BIGINT_TAG | heap_addr as u64,
             JS_HANDLE_TAG | 7,
@@ -685,12 +692,14 @@ mod tests {
             object_ref_addr(f64::from_bits(POINTER_TAG | 0x40001)),
             0x40001
         );
-        // The legacy raw-bitcast shape is kept for an allocator-owned object.
+        // A Number whose bits equal an allocator-owned object's address is
+        // still a Number: no ownership lookup turns it into a reference.
         let obj = crate::object::js_object_alloc(0, 0) as usize;
-        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), obj);
+        assert_eq!(object_ref_addr(f64::from_bits(obj as u64)), 0);
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn tracked_gc_classifier_accepts_injected_low_arena_membership() {
         use std::cell::Cell;
 
@@ -843,6 +852,7 @@ mod tests {
 mod known_plausible_alignment_tests {
     use super::*;
 
+    #[cfg(target_pointer_width = "64")]
     /// The alignment guard must be reachable from the DIRECT call path, not
     /// only through [`try_read_gc_header`].
     ///
@@ -879,6 +889,7 @@ mod known_plausible_alignment_tests {
         }
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// The same property through the wrapper, so both entry points are pinned.
     #[test]
     fn the_wrapper_also_rejects_a_misaligned_in_range_address() {
@@ -890,12 +901,25 @@ mod known_plausible_alignment_tests {
     }
 }
 
+#[cfg(any(test, all(feature = "wasm-image-selftest", target_family = "wasm")))]
+#[path = "addr_class/image_checks.rs"]
+mod image_checks;
 #[cfg(test)]
 #[path = "addr_class/image_tests.rs"]
 mod image_tests;
 
+/// Run the image classifier checks inside the linked program (see
+/// `image_checks.rs`); only an archive built for that purpose carries them.
+#[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
+pub(crate) fn wasm_image_selftest() {
+    image_checks::run_all();
+}
+
 #[path = "addr_class/image.rs"]
 mod image;
+
+#[path = "addr_class/realm.rs"]
+pub(crate) mod realm;
 
 /// Validate the string layout after the canonical ownership/type admission.
 /// The empty singleton has no GC header and is admitted by exact identity.
@@ -944,7 +968,45 @@ pub(crate) unsafe fn try_read_string_header<'a>(
     Some(string)
 }
 
+/// Is `addr` (a string payload address) inside the string image section,
+/// where the static image strings live (not an allocated image-marked atom)?
+#[cfg(test)]
+pub(crate) fn in_string_image_section_for_tests(addr: usize) -> bool {
+    let (start, end) = image::bounds();
+    (start..end).contains(&addr)
+}
+
 #[cfg(test)]
 pub(crate) fn image_string_for_tests() -> *const crate::string::StringHeader {
     image_tests::image_string()
+}
+
+/// Linear memory starts at address 0, so on wasm32 the link decides whether a
+/// real address can fall in the small-handle band. The stack goes first and
+/// static data after it (`link/wasi.rs` `STACK_SIZE`, `build.rs` for the
+/// runtime's own test link): a property-key atom in the data segment below
+/// `HANDLE_BAND_MAX` was read as a handle id, and `JSON.parse` or a
+/// Writable's `write` read back undefined.
+#[cfg(all(test, target_arch = "wasm32"))]
+mod linear_memory_layout_tests {
+    use super::HANDLE_BAND_MAX;
+
+    extern "C" {
+        /// wasm-ld: the end of the stack, where static data begins.
+        static __stack_high: u8;
+    }
+
+    #[test]
+    fn static_data_lies_above_the_handle_band() {
+        let data_start = unsafe { std::ptr::addr_of!(__stack_high) } as usize;
+        assert!(
+            data_start >= HANDLE_BAND_MAX,
+            "static data starts at {data_start:#x}, inside the handle band"
+        );
+        let atom = crate::string::intern_ascii_literal(b"write") as usize;
+        assert!(
+            atom >= HANDLE_BAND_MAX,
+            "key atom {atom:#x} in the handle band"
+        );
+    }
 }

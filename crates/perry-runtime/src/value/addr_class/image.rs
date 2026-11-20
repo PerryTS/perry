@@ -4,6 +4,8 @@ use super::*;
 
 // Always create the section, including in Rust tests and runtime-only links.
 // The sentinel is not a string and cannot pass the header checks below.
+// On wasm it is what makes the linker synthesize `__start_perry_strings` and
+// `__stop_perry_strings` even for a program with no string literal.
 // `used(linker)` keeps it through `-dead_strip` / `--gc-sections` / `/OPT:REF`,
 // and `bounds()` references it, so the object that needs the section bounds
 // always brings the section with it. Without both, ld64 drops the section in a
@@ -13,7 +15,7 @@ use super::*;
 #[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
 #[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
 #[cfg_attr(
-    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    not(any(target_vendor = "apple", target_os = "windows")),
     link_section = "perry_strings"
 )]
 static IMAGE_SECTION_SENTINEL: [u64; 1] = [0];
@@ -28,7 +30,7 @@ static IMAGE_START: [u64; 1] = [0];
 static IMAGE_END: [u64; 1] = [0];
 
 #[inline]
-fn bounds() -> (usize, usize) {
+pub(super) fn bounds() -> (usize, usize) {
     // A real reference: whatever links this function links the sentinel too.
     std::hint::black_box(std::ptr::addr_of!(IMAGE_SECTION_SENTINEL));
     #[cfg(target_vendor = "apple")]
@@ -55,7 +57,8 @@ fn bounds() -> (usize, usize) {
             std::ptr::addr_of!(IMAGE_END) as usize,
         )
     }
-    #[cfg(not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")))]
+    // ELF and wasm-ld both synthesize these for the C-identifier section name.
+    #[cfg(not(any(target_vendor = "apple", target_os = "windows")))]
     {
         unsafe extern "C" {
             static __start_perry_strings: u8;
@@ -66,10 +69,6 @@ fn bounds() -> (usize, usize) {
             std::ptr::addr_of!(__stop_perry_strings) as usize,
         )
     }
-    #[cfg(target_family = "wasm")]
-    {
-        (0, 0)
-    }
 }
 
 /// Validate every byte range BEFORE reading it. An aligned forged pointer
@@ -79,11 +78,17 @@ fn bounds() -> (usize, usize) {
 #[inline(never)]
 pub(super) unsafe fn header(addr: usize) -> Option<std::ptr::NonNull<GcHeader>> {
     use crate::string::StringHeader;
-    #[cfg(not(target_family = "wasm"))]
-    let (start, end) = bounds();
-    #[cfg(target_family = "wasm")]
-    let (start, end) = crate::wasm_image::bounds(addr.checked_sub(GC_HEADER_SIZE)?)?;
     let header_addr = addr.checked_sub(GC_HEADER_SIZE)?;
+    let (start, end) = bounds();
+    // Runtime images are not in the section on wasm; they own exact ranges
+    // registered at startup. Program literals are in it, so the section
+    // bounds are exact for them as on every other target.
+    #[cfg(target_family = "wasm")]
+    let (start, end) = if (start..end).contains(&header_addr) {
+        (start, end)
+    } else {
+        crate::wasm_image::bounds(header_addr)?
+    };
     let data = addr.checked_add(std::mem::size_of::<StringHeader>())?;
     if header_addr < start || data >= end || addr % 8 != 0 {
         return None;

@@ -1,0 +1,1 @@
+A typed array or Buffer indexed by a direct call of a module function (`src[idx(i)]`) stays sealed when that function is neither async nor a generator and every `return` of its own body is never a string. Module-level byte loops indexed that way keep their hoisted data pointer and bounds proof instead of falling back to the per-access slow path.

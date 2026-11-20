@@ -38,6 +38,7 @@ pub(super) fn try_process_module_methods(
                 // property so an ordinary process still throws TypeError.
                 "send" | "disconnect" => {
                     return Ok(Ok(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(crate::lower::expr_member::process_native_property(
                             method_name,
                         )),
@@ -355,6 +356,17 @@ pub(super) fn try_process_module_methods(
                         None
                     };
                     return Ok(Ok(Expr::ProcessHrtime(prior)));
+                }
+                // `process.hasOwnProperty(k)`: inherited from Object.prototype,
+                // dispatched by name on the process object at runtime.
+                "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        module: "process".to_string(),
+                        class_name: None,
+                        object: None,
+                        method: method_name.to_string(),
+                        args,
+                    }));
                 }
                 _ => {
                     let hint = unimpl_hints::module_member_hint("process", method_name)

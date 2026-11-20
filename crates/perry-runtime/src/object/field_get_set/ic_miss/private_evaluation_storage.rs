@@ -40,18 +40,22 @@ pub(crate) unsafe fn define_static_private_field(
     };
     let addr = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
     if crate::closure::is_closure_ptr(addr) {
-        crate::closure::props::bag_ensure(addr);
+        crate::closure::props::ensure_key_store(addr);
     }
-    let holder = private_element_holder(receiver.get_nanbox_f64()).expect("private field holder");
-    let holder = scope.root_raw_mut_ptr(holder);
-    holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
-        crate::object::key_attrs::apply_edits(
-            holder,
-            &[crate::object::key_attrs::AttrsEdit::Private(
-                storage.as_bytes(),
-            )],
-        );
-    });
+    match private_element_holder(receiver.get_nanbox_f64()).expect("private field holder") {
+        KeyTarget::Object(holder) => {
+            let holder = scope.root_raw_mut_ptr(holder);
+            holder.with_mut_ptr::<ObjectHeader, _>(|holder| {
+                crate::object::key_attrs::apply_edits(
+                    holder,
+                    &[crate::object::key_attrs::AttrsEdit::Private(
+                        storage.as_bytes(),
+                    )],
+                );
+            });
+        }
+        KeyTarget::Function(p) => crate::closure::props::fn_private_define(p, storage.as_bytes()),
+    }
     assert!(storage.set_cached(receiver.get_nanbox_f64(), value.get_nanbox_f64()));
 }
 
@@ -122,12 +126,16 @@ fn private_storage_evaluation_id(class_id: u32, receiver: Option<f64>, owner: Op
     };
     let object = JSValue::from_bits(brand).as_pointer::<ObjectHeader>();
     unsafe {
-        let meta = (*object).meta;
+        // A1_UNPROVEN: record-first: ic_miss entry (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
         if !meta.is_null() && (*meta).native_state != 0 {
             return (*meta).native_state;
         }
         // Metadata allocation can move the class; object_meta_ensure roots it.
-        let meta = crate::object::object_meta_ensure(object as *mut ObjectHeader);
+        let meta = crate::object::object_meta_ensure(
+            crate::meta_obj_runtime_born!(object as *mut ObjectHeader),
+            crate::object::MetaReason::ClassEvaluationPrivateStorage,
+        );
         let id = NEXT_PRIVATE_EVALUATION_ID
             .try_update(
                 std::sync::atomic::Ordering::Relaxed,
@@ -193,7 +201,8 @@ fn private_evaluation_field_get(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).get_cached(receiver);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .get_cached(receiver);
     }
     let owner = take_private_field_owner(class_id, name, false);
     let _owner = PrivateHintBrandScope::new(owner);
@@ -226,7 +235,8 @@ fn private_evaluation_field_set(
     if !private_template_may_be_evaluated(class_id) {
         let receiver = private_member_receiver(obj);
         let name = intern_private_name(name.as_bytes()).unwrap();
-        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name).set_cached(receiver, value);
+        return private_storage_key_by_id(class_id, PRIVATE_TEMPLATE_EVALUATION_ID, name)
+            .set_cached(receiver, value);
     }
     let owner = take_private_field_owner(class_id, name, true);
     let _owner = PrivateHintBrandScope::new(owner);

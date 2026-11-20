@@ -7,7 +7,9 @@ use perry_hir::{
 
 fn empty_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -24,6 +26,7 @@ fn empty_opts() -> CompileOptions {
         namespace_node_submodules: std::collections::HashMap::new(),
         namespace_v8_specifiers: std::collections::HashMap::new(),
         namespace_member_prefixes: std::collections::HashMap::new(),
+        namespace_source_prefixes: Default::default(),
         namespace_member_origin_names: std::collections::HashMap::new(),
         emit_ir_only: true,
         verify_native_regions: false,
@@ -33,8 +36,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -65,13 +66,17 @@ fn empty_opts() -> CompileOptions {
         namespace_entries: Vec::new(),
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -140,10 +145,12 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -151,11 +158,32 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 
 fn ir_for(module: Module) -> String {
     String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap()
+}
+
+/// The quiet-site facts the whole-program solve gives a loop
+/// `for (let i = 0; i < arr.length; i++) arr[i] = …` over a local Array
+/// literal (`perry compile`, `PERRY_FACTS_DUMP`: `arr.length` a quiet read
+/// with a primitive value, `arr[i]` a quiet element site). The length hoist
+/// keeps `arr.length` only on that word (#14537, `perry_codegen` `quiet`),
+/// and a unit test runs no solve. The HIR has offset 0 at both sites.
+fn quiet_site_opts() -> CompileOptions {
+    let mut elision = perry_codegen::ElisionFacts::default();
+    elision.quiet_reads.insert((0, "length".to_string()));
+    elision.primitive_reads.insert((0, "length".to_string()));
+    elision.quiet_elements.insert(0);
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..Default::default()
+        },
+        ..empty_opts()
+    }
 }
 
 fn block_between<'a>(ir: &'a str, start: &str, end: &str) -> &'a str {
@@ -192,6 +220,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -235,6 +264,9 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 )),
             },
             Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             })),
@@ -269,6 +301,7 @@ fn scalar_object_literal_keeps_observable_unobserved_initializers() {
                 ])),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
@@ -309,6 +342,8 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
                 op: BinaryOp::Add,
                 prefix: false,
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })),
         ],
         Vec::new(),
@@ -484,7 +519,9 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
                 init: Some(Expr::Array(vec![Expr::Bool(true)], None)),
             },
             Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "hasOwnProperty".to_string(),
@@ -535,9 +572,9 @@ fn c262_addition_assignment_operands_use_dynamic_add_helper() {
     );
 }
 
-#[test]
-fn bounded_integer_array_store_omits_layout_note_and_barrier() {
-    let module = base_module(
+/// `probe() { let arr: number[] = [0, 0, 0]; for (let i = 0; i < arr.length; i++) arr[i] = i + 1; return arr }`
+fn bounded_integer_array_store_module() -> Module {
+    base_module(
         "bounded_integer_array_store.ts",
         vec![
             Stmt::Let {
@@ -562,6 +599,7 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),
@@ -580,22 +618,26 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
                 // `js_array_fill_f64_iota_len_extend` — covered by
                 // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
                 // below.
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::Binary {
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::Binary {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
-                })],
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
         Vec::new(),
-    );
+    )
+}
 
-    let ir = ir_for(module);
+#[test]
+fn bounded_integer_array_store_omits_layout_note_and_barrier() {
+    let module = bounded_integer_array_store_module();
+    let ir = String::from_utf8(compile_module(&module, quiet_site_opts()).unwrap()).unwrap();
 
     assert!(
         ir.contains("idxset.bounded_numeric_fast") && ir.contains("store double"),
@@ -620,6 +662,23 @@ fn bounded_integer_array_store_omits_layout_note_and_barrier() {
     assert!(
         !ir.contains("call void @js_write_barrier_slot"),
         "integer store into a numeric array should not emit a slot barrier"
+    );
+}
+
+/// The twin: without the quiet-site facts the loop's sites may run program
+/// code (no solve, or an `arr` the solve does not prove a plain Array), the
+/// length hoist is refused (#14537) and no store takes the bounded arm; the
+/// loop reads `arr.length` live in its condition.
+#[test]
+fn bounded_integer_array_store_without_quiet_facts_takes_no_bounded_arm() {
+    let ir = ir_for(bounded_integer_array_store_module());
+    assert!(
+        !ir.contains("idxset.bounded"),
+        "without the facts' word on the loop's sites no store may take the bounded arm:\n{ir}"
+    );
+    assert!(
+        ir.contains("call double @js_value_length_property_f64("),
+        "premise: the refused loop reads its length at every step:\n{ir}"
     );
 }
 
@@ -655,6 +714,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "length".to_string(),
@@ -665,11 +725,11 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::IndexSet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                    value: Box::new(Expr::LocalGet(2)),
-                })],
+                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                    Box::new(Expr::LocalGet(2)),
+                ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1))),
         ],
@@ -813,11 +873,11 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(0.0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(2)),
-                index: Box::new(Expr::Integer(0)),
-                value: Box::new(Expr::LocalGet(1)),
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(2)),
+                Box::new(Expr::Integer(0)),
+                Box::new(Expr::LocalGet(1)),
+            )),
             Stmt::Return(Some(Expr::LocalGet(2))),
         ],
         Vec::new(),

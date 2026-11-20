@@ -48,6 +48,7 @@ pub(super) use super::{
 
 mod box_style;
 mod perf_hooks;
+mod walk_entry;
 
 use box_style::apply_box_style;
 
@@ -79,6 +80,9 @@ pub(crate) fn lower_native_method_call(
     object: Option<&Expr>,
     args: &[Expr],
 ) -> Result<String> {
+    if module == "__perry_borrowed_proof" {
+        return crate::expr::borrowed_call::lower_proof(ctx, class_name, object);
+    }
     if module == "array" && method == "push_field_single" {
         let (Some(receiver), [value]) = (object, args) else {
             bail!("push_field_single requires one receiver and argument");
@@ -489,6 +493,11 @@ pub(crate) fn lower_native_method_call(
     // inline .length guard checks ptr < 4096, and TAG_UNDEFINED's
     // lower 48 bits = 1).
     let Some(recv) = object else {
+        if let Some(export) =
+            crate::native_export_value::prepare(ctx.strings, module, method, false)
+        {
+            return crate::native_export_value::call(ctx, export, args);
+        }
         // `import { promises } from "node:fs"` / `"node:stream"`: the HIR
         // routes the binding to the `<mod>/promises` SUBMODULE (module_decl's
         // named-import table), so the call arrives as a receiver-less
@@ -614,3 +623,29 @@ pub(crate) fn lower_native_method_call(
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod fs_stream_list_tests {
+    /// Every method name the fs receiver arms match is in the one list
+    /// wpfacts reads (`perry_hir::folded_call::FS_STREAM_METHODS`), and the
+    /// list names no method without an arm.
+    #[test]
+    fn fs_receiver_arms_are_the_listed_methods() {
+        let src = include_str!("native_fs_branch.rs");
+        let end = src
+            .find("// fs module functions")
+            .expect("receiver block end");
+        let mut arms: Vec<&str> = Vec::new();
+        for (i, part) in src[..end].split('"').enumerate() {
+            let ident = !part.is_empty() && part.chars().all(|c| c.is_ascii_alphanumeric());
+            if i % 2 == 1 && ident && !part.starts_with("js_") && part != "fs" && part != "node" {
+                arms.push(part);
+            }
+        }
+        arms.sort_unstable();
+        arms.dedup();
+        let mut listed = perry_hir::folded_call::FS_STREAM_METHODS.to_vec();
+        listed.sort_unstable();
+        assert_eq!(arms, listed);
+    }
+}

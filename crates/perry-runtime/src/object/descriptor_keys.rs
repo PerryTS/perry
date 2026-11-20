@@ -1,6 +1,7 @@
 //! Own string keys retained from an ordinary data shape, or from the
 //! family's public name snapshot. One enumeration loop consumes either.
 use super::{shapes, ObjectHeader, ObjectKeys};
+use crate::codegen_abi::LayoutWord;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 
 /// Property facts owned by descriptor resolution. Exotic families keep their
@@ -71,7 +72,7 @@ impl OwnProperty {
                 let obj = crate::value::js_nanbox_get_pointer(descriptor) as *const ObjectHeader;
                 let keys = super::object_keys(obj);
                 let field = |name: &[u8]| {
-                    super::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+                    super::keys_find_property_slot_by_bytes(keys, keys.count(), name)
                         .map(|slot| super::field_get_set::js_object_get_key_field(obj, slot).bits())
                 };
                 let flags = if field(b"enumerable") == Some(crate::value::TAG_TRUE) {
@@ -94,7 +95,7 @@ impl OwnProperty {
 pub(crate) struct OwnNamesSnapshot<'scope> {
     keys: RuntimeHandle<'scope>,
     count: u32,
-    shape: u32,
+    shape: LayoutWord,
 }
 
 /// A plain ordinary data-key list answers own presence, attributes and slot
@@ -108,7 +109,7 @@ pub(crate) unsafe fn ordinary_data_shape(
     }
     let object = value.as_pointer::<ObjectHeader>();
     let header = crate::value::addr_class::try_read_gc_header(object as usize)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -145,7 +146,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
                 return Self {
                     keys: scope.root_raw_mut_ptr(keys.arr()),
                     count: keys.count(),
-                    shape: shapes::object_shape_id(receiver),
+                    shape: LayoutWord(shapes::object_layout_stamp(receiver).0),
                 };
             }
         }
@@ -155,7 +156,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         Self {
             keys: scope.root_raw_mut_ptr(names),
             count: keys.count(),
-            shape: 0,
+            shape: LayoutWord(0),
         }
     }
 
@@ -174,12 +175,12 @@ impl<'scope> OwnNamesSnapshot<'scope> {
     /// matching ShapeId proves this key still has default own-data attrs;
     /// its value is read now, so value-only mutations remain observable.
     pub(crate) unsafe fn data_value(&self, object: &RuntimeHandle<'_>, index: u32) -> Option<f64> {
-        if self.shape == 0 {
+        if self.shape == LayoutWord(0) {
             return None;
         }
         let receiver =
             crate::value::js_nanbox_get_pointer(object.get_nanbox_f64()) as *const ObjectHeader;
-        if shapes::object_shape_id(receiver) != self.shape {
+        if shapes::object_layout_stamp(receiver) != self.shape {
             return None;
         }
         Some(f64::from_bits(
@@ -213,7 +214,7 @@ impl<'scope> OwnNamesSnapshot<'scope> {
         &self,
         scope: &'result RuntimeHandleScope,
     ) -> RuntimeHandle<'result> {
-        if self.shape == 0 {
+        if self.shape == LayoutWord(0) {
             return scope.root_raw_mut_ptr(super::js_object_alloc(0, 0));
         }
         let result =
@@ -234,6 +235,6 @@ impl<'scope> OwnNamesSnapshot<'scope> {
     }
 
     pub(crate) fn has_final_result_keys(&self) -> bool {
-        self.shape != 0
+        self.shape != LayoutWord(0)
     }
 }

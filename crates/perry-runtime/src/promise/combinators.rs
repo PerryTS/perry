@@ -99,7 +99,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
         match (*promise).state {
             PromiseState::Fulfilled => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).value,
                         true,
@@ -110,7 +110,7 @@ pub(super) fn attach_promise_all_state(promise: *mut Promise, state: PromiseAllS
             }
             PromiseState::Rejected => {
                 TASK_QUEUE.with(|q| {
-                    q.borrow_mut().push_back(Task::PromiseAll(
+                    q.borrow_mut().enqueue_promise_job(Task::PromiseAll(
                         state,
                         (*promise).reason,
                         false,
@@ -282,7 +282,7 @@ pub extern "C" fn js_value_is_promise(value: f64) -> i32 {
     }
     // Off-GC-heap header-less allocations (small typed arrays / buffers) are
     // never Promises and must not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr_usize) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr_usize) {
         return 0;
     }
     unsafe {
@@ -446,7 +446,7 @@ pub(crate) fn combinator_iterable_to_array(
         let hdr = (raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         (*hdr).obj_type
     };
-    if obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(obj_type) {
         // #7497 (CodeRabbit): `raw` was computed above and then carried across a
         // user `[Symbol.iterator]` getter and a `"next"` key allocation before
         // being dereferenced. Root the receiver and re-derive its address after
@@ -561,9 +561,16 @@ static KEEP_PROMISE_ALL_SETTLED_ITERABLE: extern "C" fn(f64) -> *mut Promise =
 #[used(compiler)]
 static KEEP_PROMISE_ANY_ITERABLE: extern "C" fn(f64) -> *mut Promise = js_promise_any_iterable;
 
+/// One scheduled resolution: the promise and its value. The instrumented
+/// cohort's entry also names the init that queued it (SNAPK4 census).
+#[cfg(not(perry_gc_instruments))]
+pub(in crate::promise) type ScheduledResolve = (*mut Promise, f64);
+#[cfg(perry_gc_instruments)]
+pub(in crate::promise) type ScheduledResolve = (*mut Promise, f64, u32);
+
 // Queue for scheduled promise resolutions
 crate::perry_thread_local! {
-    pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<(*mut Promise, f64)>> = const { RefCell::new(Vec::new()) };
+    pub(in crate::promise) static SCHEDULED_RESOLVES: RefCell<Vec<ScheduledResolve>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Schedule a promise to be resolved with a value when microtasks run
@@ -571,7 +578,11 @@ crate::perry_thread_local! {
 #[no_mangle]
 pub extern "C" fn js_promise_schedule_resolve(promise: *mut Promise, value: f64) {
     SCHEDULED_RESOLVES.with(|q| {
+        #[cfg(not(perry_gc_instruments))]
         q.borrow_mut().push((promise, value));
+        #[cfg(perry_gc_instruments)]
+        q.borrow_mut()
+            .push((promise, value, crate::snap_census::job_owner()));
     });
 }
 
@@ -581,7 +592,7 @@ pub(super) fn process_scheduled_resolves() -> i32 {
     loop {
         let item = SCHEDULED_RESOLVES.with(|q| q.borrow_mut().pop());
         match item {
-            Some((promise, value)) => {
+            Some((promise, value, ..)) => {
                 js_promise_resolve(promise, value);
                 count += 1;
             }
@@ -754,7 +765,7 @@ pub(super) fn make_resolving_functions(
     *mut crate::closure::ClosureHeader,
     *mut crate::closure::ClosureHeader,
 ) {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_alloc;
     // #7497: four allocations follow, and `promise` / `guard` are STORED into
     // capture slots after them. Pre-fix all three lived in bare Rust locals, so
     // a copying minor here wrote pre-collection addresses into the two closures
@@ -777,8 +788,8 @@ pub(super) fn make_resolving_functions(
     };
     for handle in [&resolve_h, &reject_h] {
         let f = ptr_of(handle) as *mut crate::closure::ClosureHeader;
-        js_closure_set_capture_ptr(f, 0, ptr_of(&promise_h));
-        js_closure_set_capture_ptr(f, 1, ptr_of(&guard_h));
+        crate::closure::closure_set_capture_ref(f, 0, ptr_of(&promise_h));
+        crate::closure::closure_set_capture_ref(f, 1, ptr_of(&guard_h));
     }
     // Spec 27.2.1.3: the resolving functions are anonymous built-in functions
     // with own `length` = 1, `name` = "" (both non-writable, non-enumerable,
@@ -822,11 +833,9 @@ pub(super) extern "C" fn promise_resolve_fn(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let guard = crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     if !take_already_resolved(guard) {
         return undef;
     }
@@ -870,11 +879,9 @@ pub(super) extern "C" fn promise_reject_fn(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
     let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let guard = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let guard = crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     if !take_already_resolved(guard) {
         return undef;
     }
@@ -1033,9 +1040,7 @@ pub extern "C" fn js_promise_all(promises_arr: *const crate::array::ArrayHeader)
 /// calls, preserving registration order without penalizing the empty-slot fast
 /// path above.
 fn attach_promise_all_after_prior_reaction(promise: *mut Promise, state: PromiseAllState) {
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     // Both closure allocations may collect. Root every pointer that is stored
     // afterwards, including the first closure across allocation of the second.
@@ -1058,14 +1063,14 @@ fn attach_promise_all_after_prior_reaction(promise: *mut Promise, state: Promise
     let ptr_of =
         |h: &crate::gc::RuntimeHandle<'_>| crate::value::js_nanbox_get_pointer(h.get_nanbox_f64());
     let fulfill = ptr_of(&fulfill_h) as *mut crate::closure::ClosureHeader;
-    js_closure_set_capture_ptr(fulfill, 0, ptr_of(&result_h));
-    js_closure_set_capture_ptr(fulfill, 1, ptr_of(&results_h));
-    js_closure_set_capture_ptr(fulfill, 2, ptr_of(&state_h));
+    crate::closure::closure_set_capture_ref(fulfill, 0, ptr_of(&result_h));
+    crate::closure::closure_set_capture_ref(fulfill, 1, ptr_of(&results_h));
+    crate::closure::closure_set_capture_ref(fulfill, 2, ptr_of(&state_h));
     js_closure_set_capture_f64(fulfill, 3, state.index as f64);
 
     let reject = ptr_of(&reject_h) as *mut crate::closure::ClosureHeader;
-    js_closure_set_capture_ptr(reject, 0, ptr_of(&result_h));
-    js_closure_set_capture_ptr(reject, 1, ptr_of(&state_h));
+    crate::closure::closure_set_capture_ref(reject, 0, ptr_of(&result_h));
+    crate::closure::closure_set_capture_ref(reject, 1, ptr_of(&state_h));
 
     js_promise_attach_handlers(ptr_of(&promise_h) as *mut Promise, fulfill, reject);
 }
@@ -1075,12 +1080,14 @@ extern "C" fn promise_all_ordered_fulfill_handler(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    use crate::closure::js_closure_get_capture_f64;
     promise_all_fulfill_direct(
         PromiseAllState {
-            result_promise: js_closure_get_capture_ptr(closure, 0) as *mut Promise,
-            results_arr: js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader,
-            state_arr: js_closure_get_capture_ptr(closure, 2) as *mut crate::array::ArrayHeader,
+            result_promise: crate::closure::closure_capture_ref(closure, 0) as *mut Promise,
+            results_arr: crate::closure::closure_capture_ref(closure, 1)
+                as *mut crate::array::ArrayHeader,
+            state_arr: crate::closure::closure_capture_ref(closure, 2)
+                as *mut crate::array::ArrayHeader,
             index: js_closure_get_capture_f64(closure, 3) as u32,
         },
         value,
@@ -1093,10 +1100,9 @@ extern "C" fn promise_all_ordered_reject_handler(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
     promise_all_reject_direct(
-        js_closure_get_capture_ptr(closure, 0) as *mut Promise,
-        js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader,
+        crate::closure::closure_capture_ref(closure, 0) as *mut Promise,
+        crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader,
         reason,
     );
     0.0
@@ -1151,7 +1157,7 @@ fn promise_all_reject_direct(
 #[no_mangle]
 pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_get_f64, js_array_length};
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_alloc;
 
     // See `js_promise_all`: everything held across an input's resolution is
     // in a handle.
@@ -1173,10 +1179,18 @@ pub extern "C" fn js_promise_race(promises_arr: *const crate::array::ArrayHeader
     // the input index — so allocate once and share across all N inputs.
     // Saves (N-1) × 2 closure allocs per Promise.race call.
     let shared_resolve = js_closure_alloc(crate::fn_info!(promise_race_resolve_handler, 1), 1);
-    js_closure_set_capture_ptr(shared_resolve, 0, ptr_of::<Promise>(&result_promise) as i64);
+    crate::closure::closure_set_capture_ref(
+        shared_resolve,
+        0,
+        ptr_of::<Promise>(&result_promise) as i64,
+    );
     let shared_resolve = rooted_ptr(&scope, shared_resolve);
     let shared_reject = js_closure_alloc(crate::fn_info!(promise_race_reject_handler, 1), 1);
-    js_closure_set_capture_ptr(shared_reject, 0, ptr_of::<Promise>(&result_promise) as i64);
+    crate::closure::closure_set_capture_ref(
+        shared_reject,
+        0,
+        ptr_of::<Promise>(&result_promise) as i64,
+    );
     let shared_reject = rooted_ptr(&scope, shared_reject);
 
     // Normalize each input with PromiseResolve semantics before attaching handlers.
@@ -1200,8 +1214,7 @@ extern "C" fn promise_race_resolve_handler(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if result_promise.is_null() {
         return 0.0;
     }
@@ -1218,8 +1231,7 @@ extern "C" fn promise_race_reject_handler(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if result_promise.is_null() {
         return 0.0;
     }
@@ -1303,7 +1315,7 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     // first: they have no GcHeader, so they must be excluded before any probe
     // that back-reads `raw_ptr - GC_HEADER_SIZE` — including the
     // `is_date_cell_addr` call in this very chain (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(raw_ptr)
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(raw_ptr)
         || crate::set::is_registered_set(raw_ptr)
         || crate::map::is_registered_map(raw_ptr)
         || crate::symbol::is_registered_symbol(raw_ptr)
@@ -1327,13 +1339,14 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
         let gc_header =
             (obj_ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(gc_type) {
             return value;
         }
         (*obj_ptr).class_id
     };
-    if class_id == 0 {
-        // A plain object literal (`{ then(resolve, reject) {…} }` / `{ get then()
+    if class_id == 0 || !unsafe { crate::object::shapes::receiver_has_class_identity(obj_ptr) } {
+        // Ordinary/native receivers without a class holder use the actual
+        // `then` property. A plain literal (`{ then(resolve, reject) {…} }` / `{ get then()
         // {…} }`) has no class vtable, so the method-chain probe below can't see
         // its `then`. Per ECMA-262 PromiseResolveThenableJob the thenable check
         // is `Get(value, "then")` + IsCallable — independent of how `then` is
@@ -1376,14 +1389,14 @@ pub extern "C" fn js_assimilate_thenable(value: f64) -> f64 {
     ));
     resolve_handle.with_mut_ptr(|resolve| {
         promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            crate::closure::js_closure_set_capture_ptr(resolve, 0, promise as i64);
+            crate::closure::closure_set_capture_ref(resolve, 0, promise as i64);
         })
     });
     let reject_handle =
         scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(&PROMISE_REJECT_FN_INFO, 1));
     reject_handle.with_mut_ptr(|reject| {
         promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            crate::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
+            crate::closure::closure_set_capture_ref(reject, 0, promise as i64);
         })
     });
 
@@ -1509,7 +1522,7 @@ pub extern "C" fn js_promise_all_settled(
             let c = ptr_of::<crate::closure::ClosureHeader>(&closure);
             let captures = [&result_promise, &results_arr, &state_arr];
             for (slot, capture) in captures.into_iter().enumerate() {
-                crate::closure::js_closure_set_capture_ptr(
+                crate::closure::closure_set_capture_ref(
                     c,
                     slot as u32,
                     ptr_of::<u8>(capture) as i64,
@@ -1544,16 +1557,16 @@ extern "C" fn promise_all_settled_fulfill_handler(
     value: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    use crate::closure::js_closure_get_capture_f64;
 
     // Build the entry first: it allocates, and the captures are read after.
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_h = rooted_ptr(&scope, closure);
     let wrapped = build_settled_fulfilled(value);
     let closure = ptr_of::<crate::closure::ClosureHeader>(&closure_h) as *const _;
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let results_arr = crate::closure::closure_capture_ref(closure, 1) as *mut ArrayHeader;
+    let state_arr = crate::closure::closure_capture_ref(closure, 2) as *mut ArrayHeader;
     if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
         return 0.0;
     }
@@ -1577,16 +1590,16 @@ extern "C" fn promise_all_settled_reject_handler(
     reason: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    use crate::closure::js_closure_get_capture_f64;
 
     // Build the entry first: it allocates, and the captures are read after.
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure_h = rooted_ptr(&scope, closure);
     let wrapped = build_settled_rejected(reason);
     let closure = ptr_of::<crate::closure::ClosureHeader>(&closure_h) as *const _;
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let results_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let results_arr = crate::closure::closure_capture_ref(closure, 1) as *mut ArrayHeader;
+    let state_arr = crate::closure::closure_capture_ref(closure, 2) as *mut ArrayHeader;
     if result_promise.is_null() || results_arr.is_null() || state_arr.is_null() {
         return 0.0;
     }
@@ -1610,9 +1623,7 @@ extern "C" fn promise_all_settled_reject_handler(
 #[no_mangle]
 pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader) -> *mut Promise {
     use crate::array::{js_array_get_f64, js_array_length, js_array_set_f64};
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     // See `js_promise_all`: everything held across an input's resolution or a
     // handler allocation is in a handle.
@@ -1644,8 +1655,12 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
     // Reject still needs per-index since it must write its error into
     // the correct slot of `errors_arr` for the eventual AggregateError.
     let shared_fulfill = js_closure_alloc(crate::fn_info!(promise_any_fulfill_handler, 1), 2);
-    js_closure_set_capture_ptr(shared_fulfill, 0, ptr_of::<u8>(&result_promise) as i64);
-    js_closure_set_capture_ptr(shared_fulfill, 1, ptr_of::<u8>(&state_arr) as i64);
+    crate::closure::closure_set_capture_ref(
+        shared_fulfill,
+        0,
+        ptr_of::<u8>(&result_promise) as i64,
+    );
+    crate::closure::closure_set_capture_ref(shared_fulfill, 1, ptr_of::<u8>(&state_arr) as i64);
     let shared_fulfill = rooted_ptr(&scope, shared_fulfill);
 
     for i in 0..count {
@@ -1657,9 +1672,17 @@ pub extern "C" fn js_promise_any(promises_arr: *const crate::array::ArrayHeader)
         let promise = rooted_ptr(&scope, promise_ptr);
 
         let reject_closure = js_closure_alloc(crate::fn_info!(promise_any_reject_handler, 1), 4);
-        js_closure_set_capture_ptr(reject_closure, 0, ptr_of::<u8>(&result_promise) as i64);
-        js_closure_set_capture_ptr(reject_closure, 1, ptr_of::<u8>(&errors_arr) as i64);
-        js_closure_set_capture_ptr(reject_closure, 2, ptr_of::<u8>(&state_arr) as i64);
+        crate::closure::closure_set_capture_ref(
+            reject_closure,
+            0,
+            ptr_of::<u8>(&result_promise) as i64,
+        );
+        crate::closure::closure_set_capture_ref(
+            reject_closure,
+            1,
+            ptr_of::<u8>(&errors_arr) as i64,
+        );
+        crate::closure::closure_set_capture_ref(reject_closure, 2, ptr_of::<u8>(&state_arr) as i64);
         js_closure_set_capture_f64(reject_closure, 3, i as f64);
 
         js_promise_attach_handlers(ptr_of(&promise), ptr_of(&shared_fulfill), reject_closure);
@@ -1674,10 +1697,9 @@ extern "C" fn promise_any_fulfill_handler(
     value: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::js_closure_get_capture_ptr;
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let state_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let state_arr = crate::closure::closure_capture_ref(closure, 1) as *mut ArrayHeader;
     if result_promise.is_null() || state_arr.is_null() {
         return 0.0;
     }
@@ -1698,11 +1720,11 @@ extern "C" fn promise_any_reject_handler(
     reason: f64,
 ) -> f64 {
     use crate::array::{js_array_get_f64, js_array_set_f64, ArrayHeader};
-    use crate::closure::{js_closure_get_capture_f64, js_closure_get_capture_ptr};
+    use crate::closure::js_closure_get_capture_f64;
 
-    let result_promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let errors_arr = js_closure_get_capture_ptr(closure, 1) as *mut ArrayHeader;
-    let state_arr = js_closure_get_capture_ptr(closure, 2) as *mut ArrayHeader;
+    let result_promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let errors_arr = crate::closure::closure_capture_ref(closure, 1) as *mut ArrayHeader;
+    let state_arr = crate::closure::closure_capture_ref(closure, 2) as *mut ArrayHeader;
     if result_promise.is_null() || errors_arr.is_null() || state_arr.is_null() {
         return 0.0;
     }

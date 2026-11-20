@@ -109,12 +109,12 @@ fn callback_result_per_call() {
         const a = apply(id, new A()); const b = apply(id, new B());
         console.log(a.x, b.y);"
     ));
-    // CWL (layout as the unit of propagation): `apply` keeps one instance
-    // per program site, but `cb(v)` inside it is a dynamic callee bound per
-    // function token: one `id` instance for both, so both results hold A
-    // and B. Was: each call `apply`'s instances make got its own `id`.
-    exact(&pf, "x", 2);
-    exact(&pf, "y", 2);
+    // `id` is a pure parameter-to-return copy: each callback returns
+    // this call's argument, although its observation instance is shared.
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
+    sees(&pf, "x", "A");
+    sees(&pf, "y", "B");
 }
 
 /// A callee that itself calls: the calls instances make share one instance
@@ -167,7 +167,7 @@ fn recursion_stays_sound() {
 #[test]
 fn sabotage_unknown_code_writes_a_helper_argument() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function pass(o: any, f: any) {{ f(o); return o; }}
         const a = pass(new A(), ext);
@@ -201,7 +201,7 @@ fn sabotage_unknown_code_writes_a_helper_argument() {
 #[test]
 fn sabotage_callback_passed_to_unknown_code() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function cb(o: any) {{ return o.x; }}
         function give(f: any) {{ ext(f); }}
@@ -260,31 +260,154 @@ fn callback_instance_per_passing_call() {
     exact(&pf, "y", 1);
 }
 
-/// Diagnostics on a file: `CW_SRC=<file> cargo test -- --ignored debug_file --nocapture`.
 #[test]
-#[ignore]
-fn debug_file() {
-    let path = std::env::var("CW_SRC").expect("CW_SRC");
-    let src = std::fs::read_to_string(&path).expect("read");
+fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
+    use crate::model::{Cons, Key, TokKind, NO_NODE};
+    use crate::summary::body::{encode_body, BodyCons, BodyInput, CallOperand, Operand};
+    use crate::summary::SLOT;
+    let mut m = marker_model();
+    let param = m.node_l("parameter");
+    let constant = m.node_l("constant");
+    let ret = m.funcs[0].ret;
+    let effect = m.node_l("live effect");
+    let environment = m.node_l("environment");
+    let direct = m.tok(TokKind::ModNs(101));
+    let foreign = m.tok(TokKind::ModNs(102));
+    let object = m.tok(TokKind::ModNs(103));
+    let atom = m.atom("stored");
+    let key = Key::Named(atom);
+    let field = m.field(object, atom);
+    m.add_tok(param, foreign);
+    m.add_tok(environment, object);
+    // Input records the body's constant and operations, without online
+    // cons/edge calls. Incoming parameter values are a later binding.
+    let input = || {
+        let mut b = BodyInput::new(&[param, constant, ret], &[environment]);
+        b.params = vec![Operand::Slot(0)];
+        b.ret = Operand::Slot(2);
+        b.seeds.push((1, vec![direct], 0, false));
+        b.edges = vec![
+            (Operand::Slot(0), Operand::Slot(2)),
+            (Operand::Slot(1), Operand::Slot(2)),
+            (Operand::Slot(2), Operand::Absolute(effect)),
+        ];
+        b.cons.push((
+            Operand::Environment(0),
+            BodyCons::capture(
+                &Cons::Store {
+                    key,
+                    src: constant,
+                    site: 0,
+                },
+                |n| {
+                    assert_eq!(n, constant);
+                    Operand::Slot(1)
+                },
+                CallOperand::Absolute,
+            ),
+        ));
+        b
+    };
+    let snapshot = |m: &crate::model::Model| {
+        (
+            m.nodes
+                .iter()
+                .map(|n| {
+                    (
+                        n.pts.to_sorted(),
+                        n.prim,
+                        n.obs,
+                        n.succ.clone(),
+                        n.cons.len(),
+                    )
+                })
+                .collect::<Vec<_>>(),
+            m.work.get(),
+            m.toks.len(),
+            m.sum.of.len(),
+            m.sum.templates.len(),
+        )
+    };
+    let before = snapshot(&m);
+    let s = encode_body(input(), &Default::default());
+    assert!(
+        !s.seeds.iter().any(|(_, ts, _, _)| ts.contains(&foreign)),
+        "incoming caller points-to values became direct body seeds"
+    );
+    assert_eq!(before, snapshot(&m), "encoding changed the live model");
+    assert!(m.nodes[field as usize].pts.is_empty());
+    assert!(
+        m.nodes[effect as usize].pts.is_empty(),
+        "return escaped before seal"
+    );
+    let bytes = format!("{s:?}");
+    // Changing already-solved incoming values cannot change body bytes.
+    m.add_tok(param, object);
+    assert_eq!(
+        bytes,
+        format!("{:?}", encode_body(input(), &Default::default()))
+    );
+    // Publication is explicit and executes the sealed description once.
+    let nodes: Vec<_> = s.orig.iter().map(|_| m.node_l("published slot")).collect();
+    let mut nodes = nodes;
+    for &i in &s.outer {
+        nodes[i as usize] = environment;
+    }
+    let lower = |n| {
+        if n != NO_NODE && n & SLOT != 0 {
+            nodes[(n & !SLOT) as usize]
+        } else {
+            n
+        }
+    };
+    for (i, ts, prim, _) in &s.seeds {
+        m.add(nodes[*i as usize], ts, *prim);
+    }
+    for &(a, b) in &s.edges {
+        m.edge(lower(a), lower(b));
+    }
+    let prior_rules = m.nodes[environment as usize].cons.len();
+    for (h, c) in &s.cons {
+        m.cons(lower(*h), crate::summary::map_cons(c, lower, |k| k));
+    }
+    m.edge(param, lower(s.params[0]));
+    m.solve();
+    assert_eq!(m.nodes[environment as usize].cons.len(), prior_rules + 1);
+    assert_eq!(m.nodes[field as usize].pts.to_sorted(), vec![direct]);
+    assert!(m.nodes[effect as usize].pts.contains_tok(direct));
+    assert!(m.nodes[effect as usize].pts.contains_tok(foreign));
+}
+
+#[test]
+fn interrupted_solve_exports_incomplete_body_reach() {
+    // Enough work to exercise the hard stop after whole-program widening.
+    let src = format!(
+        "function f(x: any) {{ return x.k; }} {}",
+        "console.log(f({k: 1}));".repeat(256)
+    );
     let pf = facts_with(
         &src,
         FactsConfig {
-            explain: true,
-            unit: std::env::var_os("CW_UNIT").is_some(),
+            max_work: Some(1),
             ..Default::default()
         },
     );
-    let proven = pf
-        .sites
-        .iter()
-        .filter(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
-        .count();
-    eprintln!(
-        "proven {proven} of {} work {}",
-        pf.sites.len(),
-        pf.stats.work
+    assert!(pf.stats.aborted, "the interruption control must execute");
+    assert!(
+        !pf.body_reach.complete,
+        "interruption cannot export negative reach proofs"
     );
-    if let Ok(out) = std::env::var("CW_DUMP") {
-        std::fs::write(out, pf.dump_text()).unwrap();
+    let full = facts(&src);
+    assert!(
+        full.stats.work > 1000,
+        "hard-stop fixture must do enough work"
+    );
+    assert!(full.body_reach.complete);
+    assert!(!full.body_reach.bodies.is_empty());
+    for s in &full.sites {
+        assert!(
+            !pf.dead_site("test.ts", s),
+            "incomplete reach treats every body as active"
+        );
     }
 }

@@ -557,7 +557,7 @@ extern "C" fn read_throws(
     _this: crate::closure::JsThis,
     _size: f64,
 ) -> f64 {
-    crate::exception::js_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
+    crate::exception::test_throw(crate::closure::js_closure_get_capture_f64(closure, 0))
 }
 
 extern "C" fn transform_upper_callback(
@@ -1275,7 +1275,7 @@ fn stream_json_stringify_uses_node_state_shape() {
     ));
     assert_eq!(
         readable_json,
-        r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"pipes":[],"awaitDrainWriters":null}}"#
+        r#"{"_events":{},"_readableState":{"highWaterMark":65536,"buffer":[],"bufferIndex":0,"length":0,"fastChunk":null,"pipeOnData":null,"pipePause":null,"pipes":[],"awaitDrainWriters":null}}"#
     );
 
     let writable = js_node_stream_writable_new(f64::from_bits(TAG_UNDEFINED));

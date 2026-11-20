@@ -283,6 +283,7 @@ enum GzipStage {
 }
 struct Gzip {
     stage: GzipStage,
+    stop_after_member: bool,
     crc: flate2::Crc,
     buffers: BufferOwner,
 }
@@ -290,6 +291,7 @@ impl Gzip {
     fn new(input: Input, buffers: &BufferOwner) -> Self {
         Self {
             stage: GzipStage::Header(Header::default(), input),
+            stop_after_member: false,
             crc: flate2::Crc::new(),
             buffers: buffers.clone(),
         }
@@ -349,7 +351,11 @@ impl Gzip {
                     }
                     let input = std::mem::take(input);
                     self.crc.reset();
-                    self.stage = GzipStage::Next(input);
+                    self.stage = if self.stop_after_member {
+                        GzipStage::Done(input)
+                    } else {
+                        GzipStage::Next(input)
+                    };
                 }
                 GzipStage::Next(input) => {
                     let bytes = input.fill_buf()?;
@@ -381,7 +387,8 @@ impl Brotli {
             input,
             state: Placed::try_new(
                 buffers,
-                BrotliState::new(alloc.clone(), alloc.clone(), alloc),
+                // RFC 7932 only; `Payload::allow_brotli_large_window` opts in.
+                BrotliState::new_strict(alloc.clone(), alloc.clone(), alloc),
             )
             .ok_or_else(allocation::out_of_memory)?,
             total_out: 0,
@@ -438,7 +445,6 @@ struct Zstd {
     input: Input,
     engine: zstd::zstd_safe::DCtx<'static>,
     boundary: bool,
-    last_error: usize,
 }
 impl Zstd {
     fn new(input: Input) -> io::Result<Self> {
@@ -450,7 +456,6 @@ impl Zstd {
                 ctx
             },
             boundary: false,
-            last_error: 0,
         })
     }
     fn read(&mut self, out: &mut [u8]) -> io::Result<usize> {
@@ -472,7 +477,6 @@ impl Zstd {
             let remaining = match self.engine.decompress_stream(&mut output, &mut input) {
                 Ok(n) => n,
                 Err(code) => {
-                    self.last_error = code;
                     return Err(zstd_error(code));
                 }
             };
@@ -584,24 +588,55 @@ impl Decoder {
 /// One-shot and streaming inflate share the same decoder and state ownership.
 /// read_to_end writes directly into the result Vec, without an output copy.
 pub(crate) fn decode_bytes(data: &[u8], codec: Codec) -> io::Result<Vec<u8>> {
-    decode_with_dictionary(data, codec, None)
+    decode_options_bytes(data, codec, None, DecodePolicy::default())
 }
-pub(crate) fn decode_dictionary_bytes(
-    data: &[u8],
-    dictionary: Option<Vec<u8>>,
-) -> io::Result<Vec<u8>> {
-    decode_with_dictionary(data, Codec::Inflate, dictionary)
-}
-fn decode_with_dictionary(
+/// Zstd one-shots retain their strict default and typed dictionary errors.
+pub(super) fn decode_with_dictionary(
     data: &[u8],
     codec: Codec,
     dictionary: Option<Vec<u8>>,
 ) -> io::Result<Vec<u8>> {
+    decode_options_bytes(data, codec, dictionary, DecodePolicy::default())
+}
+#[derive(Debug)]
+struct TrailingGarbage;
+impl std::fmt::Display for TrailingGarbage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Trailing junk found after the end of the compressed stream")
+    }
+}
+impl std::error::Error for TrailingGarbage {}
+pub(crate) fn is_trailing_garbage(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|error| error.is::<TrailingGarbage>())
+}
+
+pub(crate) fn decode_options_bytes(
+    data: &[u8],
+    codec: Codec,
+    dictionary: Option<Vec<u8>>,
+    policy: DecodePolicy,
+) -> io::Result<Vec<u8>> {
     let buffers = BufferOwner::new();
     let mut decoder = Decoder::new(codec, &buffers)?
         .ok_or_else(|| io::Error::new(ErrorKind::InvalidInput, "encoder used as decoder"))?;
-    if let (Decoder::Zlib(inflate), Some(dictionary)) = (&mut decoder, dictionary) {
-        inflate.engine = super::inflate_context::Context::with_dictionary(&buffers, dictionary)?;
+    if let Some(dictionary) = dictionary {
+        match &mut decoder {
+            Decoder::Zlib(inflate) => {
+                inflate.engine =
+                    super::inflate_context::Context::with_dictionary(&buffers, dictionary)?;
+            }
+            Decoder::Zstd(zstd) => {
+                zstd.engine
+                    .load_dictionary(&dictionary)
+                    .map_err(zstd_error)?;
+            }
+            _ => {}
+        }
+    }
+    if let Decoder::Gzip(gzip) = &mut decoder {
+        gzip.stop_after_member = policy.reject_garbage;
     }
     decoder.input().borrow(data, true);
     struct Reader<'a> {
@@ -622,15 +657,43 @@ fn decode_with_dictionary(
         buffers: &buffers,
     }
     .read_to_end(&mut result);
+    // Input consumption reflects real engine progress, including header/trailer
+    // bytes. Capture it before clearing the step-local borrowed input pointer.
+    let consumed = decoder.input().consumed;
     decoder.input().clear_borrow();
-    decoded.map(|_| result)
+    match decoded {
+        Ok(_) if policy.reject_garbage && consumed < data.len() => {
+            Err(io::Error::new(ErrorKind::InvalidData, TrailingGarbage))
+        }
+        Ok(_) => Ok(result),
+        Err(error)
+            if policy.allow_incomplete
+                && error.kind() == ErrorKind::UnexpectedEof
+                && consumed == data.len() =>
+        {
+            Ok(result)
+        }
+        Err(error) => Err(error),
+    }
 }
 
-fn zstd_error(code: usize) -> io::Error {
-    io::Error::new(
-        ErrorKind::InvalidData,
-        zstd::zstd_safe::get_error_name(code),
-    )
+/// Retain the actual backend error number instead of reverse-mapping text.
+#[derive(Debug)]
+struct ZstdError(usize);
+impl std::fmt::Display for ZstdError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(zstd::zstd_safe::get_error_name(self.0))
+    }
+}
+impl std::error::Error for ZstdError {}
+
+pub(super) fn zstd_error(code: usize) -> io::Error {
+    io::Error::new(ErrorKind::InvalidData, ZstdError(code))
+}
+pub(super) fn zstd_error_details(error: &io::Error) -> Option<(String, i32)> {
+    let error = error.get_ref()?.downcast_ref::<ZstdError>()?;
+    let code = unsafe { zstd::zstd_safe::zstd_sys::ZSTD_getErrorCode(error.0) };
+    Some((format!("{code:?}"), code as i32))
 }
 
 enum Encoder {
@@ -783,8 +846,10 @@ pub(super) struct Payload {
     output_offset: usize,
     bytes_written: usize,
     error: Option<String>,
+    zstd_error: Option<(String, i32)>,
     buffers: BufferOwner,
     dictionary: Option<Vec<u8>>,
+    brotli_large_window: bool,
 }
 impl Payload {
     pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
@@ -808,7 +873,12 @@ impl Payload {
             inflate.engine =
                 super::inflate_context::Context::with_dictionary(&buffers, dictionary.clone())?;
         }
-        let encoder = if matches!(codec, Codec::Deflate) && dictionary.is_some() {
+        if let (Some(Decoder::Zstd(zstd)), Some(dictionary)) = (&mut decoder, &dictionary) {
+            zstd.engine
+                .load_dictionary(dictionary)
+                .map_err(zstd_error)?;
+        }
+        let mut encoder = if matches!(codec, Codec::Deflate) && dictionary.is_some() {
             Some(Encoder::Dictionary(super::deflate_context::Context::new(
                 &buffers,
                 level.level(),
@@ -819,6 +889,9 @@ impl Payload {
         } else {
             None
         };
+        if let (Some(Encoder::Zstd(zstd)), Some(dictionary)) = (&mut encoder, &dictionary) {
+            zstd.load_dictionary(dictionary).map_err(zstd_error)?;
+        }
         let scratch =
             PayloadBuffer::alloc(&buffers, chunk_size).ok_or_else(allocation::out_of_memory)?;
         #[cfg(test)]
@@ -835,8 +908,10 @@ impl Payload {
             output_offset: 0,
             bytes_written: 0,
             error: None,
+            zstd_error: None,
             buffers,
             dictionary,
+            brotli_large_window: false,
         })
     }
     /// Size scratch after Gzip's base option validation without replacing its
@@ -858,6 +933,10 @@ impl Payload {
             + self.decoder.as_ref().map_or(0, Decoder::native_bytes)
             + self.encoder.as_ref().map_or(0, Encoder::native_bytes)
             + self.error.as_ref().map_or(0, String::capacity)
+            + self
+                .zstd_error
+                .as_ref()
+                .map_or(0, |(code, _)| code.capacity())
             + self.dictionary.as_ref().map_or(0, Vec::capacity)
     }
     pub(super) fn step(
@@ -910,6 +989,7 @@ impl Payload {
                 self.bytes_written += consumed;
             }
             Err(e) => {
+                self.zstd_error = zstd_error_details(&e);
                 out.code = if super::inflate_context::needs_dictionary(&e) {
                     2
                 } else if e.kind() == ErrorKind::UnexpectedEof {
@@ -950,11 +1030,8 @@ impl Payload {
                 );
             }
         }
-        if let Some(Decoder::Zstd(z)) = &self.decoder {
-            if z.last_error != 0 {
-                let code = unsafe { zstd::zstd_safe::zstd_sys::ZSTD_getErrorCode(z.last_error) };
-                return (message, format!("{code:?}"), code as i32);
-            }
+        if let Some((code, errno)) = &self.zstd_error {
+            return (message, code.clone(), *errno);
         }
         (
             message,
@@ -977,13 +1054,25 @@ impl Payload {
             _ => {}
         }
     }
+    /// Accepts large-window Brotli streams (window up to 1 GiB), as Node does
+    /// under `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]`. Survives `reset`.
+    pub(super) fn allow_brotli_large_window(&mut self) {
+        self.brotli_large_window = true;
+        if let Some(Decoder::Brotli(brotli)) = &mut self.decoder {
+            brotli.state.large_window = true;
+        }
+    }
     pub(super) fn reset(&mut self) -> io::Result<()> {
+        let large_window = self.brotli_large_window;
         *self = Self::with_dictionary(
             self.codec,
             self.level,
             self.scratch.len(),
             self.dictionary.clone(),
         )?;
+        if large_window {
+            self.allow_brotli_large_window();
+        }
         Ok(())
     }
 }

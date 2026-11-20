@@ -68,9 +68,12 @@ pub(crate) fn emit_hot_tls_lookup(ctx: &mut FnCtx<'_>, stem: &str) -> HotTlsLook
     ctx.current_block = tsd_idx;
     let hot = {
         let blk = ctx.block();
+        // Marked leaf here, not left to the native-root lowering: a body with no
+        // root slots skips that pass, and its unmarked asm is then inlined into a
+        // body that is lowered, where RS4GC wraps it in an invalid statepoint.
         let tsd = blk.next_reg();
         blk.emit_raw(format!(
-            "  {tsd} = call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"()"
+            "  {tsd} = call i64 asm sideeffect \"mrs $0, tpidrro_el0\", \"=r\"() \"gc-leaf-function\""
         ));
         let base = blk.and(I64, &tsd, "-8");
         let offset = blk.shl(I64, &key, "3");

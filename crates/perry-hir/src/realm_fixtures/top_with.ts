@@ -1,0 +1,1 @@
+with (scope) { value; }

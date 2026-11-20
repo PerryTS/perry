@@ -16,13 +16,16 @@ set -euo pipefail
 
 target="${1:?usage: build_linux_musl.sh <rust-target>}"
 target_dir="${CARGO_TARGET_DIR:-target}"
-abort_target_dir="${PERRY_ABORT_TARGET_DIR:-target-abort}"
 
 case "$target" in
   x86_64-unknown-linux-musl)
     expected_machine=x86_64
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_x86_64_unknown_linux_musl=musl-gcc
+    # musl-tools has no C++ compiler; the image names one with Alpine's
+    # libstdc++ headers (perry-codegen's LLVM adapter).
+    export CXX_x86_64_unknown_linux_musl="${PERRY_MUSL_CXX:?musl image names no target C++ compiler}"
+    export CXXFLAGS_x86_64_unknown_linux_musl="--target=x86_64-unknown-linux-musl ${PERRY_MUSL_CXXFLAGS:?}"
     export AR_x86_64_unknown_linux_musl=ar
     # cc-rs' default, x86_64-linux-musl-ranlib, does not exist (CMake's static
     # archive step in libz-ng-sys).
@@ -32,6 +35,10 @@ case "$target" in
     expected_machine=aarch64
     rustflags="-C force-unwind-tables=yes -Zuse-sync-unwind=yes -C target-feature=+crt-static -L native=/opt/perry-musl/lib"
     export CC_aarch64_unknown_linux_musl=musl-gcc
+    # musl-tools has no C++ compiler; the image names one with Alpine's
+    # libstdc++ headers (perry-codegen's LLVM adapter).
+    export CXX_aarch64_unknown_linux_musl="${PERRY_MUSL_CXX:?musl image names no target C++ compiler}"
+    export CXXFLAGS_aarch64_unknown_linux_musl="--target=aarch64-unknown-linux-musl ${PERRY_MUSL_CXXFLAGS:?}"
     export AR_aarch64_unknown_linux_musl=ar
     # cc-rs' default, aarch64-linux-musl-ranlib, does not exist (CMake's static
     # archive step in libz-ng-sys).
@@ -113,16 +120,35 @@ cargo_build=(mbx build)
 "${cargo_build[@]}" --profile prod --target "$target" -p perry
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
 "${cargo_build[@]}" --profile prod --target "$target" -p perry-stdlib -p perry-stdlib-static
-# The WebAssembly host archive, co-built with the archives it links beside:
-# perry links it for a WebAssembly program and never builds it while compiling.
-"${cargo_build[@]}" --profile prod --target "$target" \
-  -p perry -p perry-runtime-static -p perry-stdlib-static -p perry-wasm-host
+# The compiler, both shipped wrapper archives and every native extension in one
+# graph (#7358), so they share one feature union. #5716: the governance
+# inventory is the explicit shipping set. Best-effort per crate, as on the other
+# release legs: if the combined build fails the core must still build alone,
+# and each extension is then retried on its own.
+governed_ext_packages=$(./scripts/release_ext_packages.sh)
+core_packages=(-p perry -p perry-runtime-static -p perry-stdlib-static)
+ext_packages=()
+while IFS= read -r package; do
+  ext_packages+=(-p "$package")
+done <<< "$governed_ext_packages"
+if ! "${cargo_build[@]}" --keep-going --profile prod --target "$target" \
+  "${core_packages[@]}" "${ext_packages[@]}"; then
+  echo "::warning::combined ext build failed on the musl target; building the core alone, then each extension on its own"
+  "${cargo_build[@]}" --profile prod --target "$target" "${core_packages[@]}"
+  while IFS= read -r package; do
+    echo "::group::build $package"
+    "${cargo_build[@]}" --profile prod --target "$target" "${core_packages[@]}" -p "$package" \
+      || echo "  (skipped $package -- failed to build on the musl target)"
+    echo "::endgroup::"
+  done <<< "$governed_ext_packages"
+fi
 
-# Ship the panic=abort runtime variant from the same sysroot.
-env CARGO_TARGET_DIR="$abort_target_dir" CARGO_PROFILE_PROD_PANIC=abort \
-  "${cargo_build[@]}" --profile prod --target "$target" -p perry-runtime -p perry-runtime-static
-cp "$abort_target_dir/$target/prod/libperry_runtime.a" \
-   "$target_dir/$target/prod/libperry_runtime_abort.a"
+# The WebAssembly host archive: perry links it for a WebAssembly program and
+# never builds it while compiling. lto=false, as in release-packages.yml: an
+# ["rlib", "staticlib"] crate is never LTO'd, and under lto="thin" cargo would
+# embed LLVM bitcode in every object it ships.
+CARGO_PROFILE_PROD_LTO=false \
+  "${cargo_build[@]}" --profile prod --target "$target" -p perry-wasm-host
 
 # GC effects sidecars (<archive>.gc-effects) over the final runtime bytes.
 # The analyzer runs on the glibc host, so it links the host's LLVM 22, not the

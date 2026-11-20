@@ -3,7 +3,10 @@
 use super::*;
 use crate::string::wtf8::{self, Wtf8Str};
 
+mod byte_eq;
+mod key_equal;
 mod keys;
+pub(crate) use key_equal::key_bytes_equal;
 #[cfg(test)]
 pub(crate) use keys::test_key_byte_reads;
 pub(crate) use keys::{js_string_key_bytes, js_string_key_matches, js_string_key_matches_bytes};
@@ -156,10 +159,10 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
 
     let a_valid = is_valid_string_ptr(a);
     let b_valid = is_valid_string_ptr(b);
-    if !a_valid && !b_valid {
-        return 1;
+    if !a_valid {
+        return i32::from(!b_valid);
     }
-    if !a_valid || !b_valid {
+    if !b_valid {
         return 0;
     }
 
@@ -175,7 +178,7 @@ pub extern "C" fn js_string_equals(a: *const StringHeader, b: *const StringHeade
         let data_b = string_data(b);
         let slice_a = std::slice::from_raw_parts(data_a, blen_a as usize);
         let slice_b = std::slice::from_raw_parts(data_b, blen_b as usize);
-        if slice_a == slice_b {
+        if byte_eq::equal(slice_a, slice_b) {
             1
         } else {
             0
@@ -403,8 +406,7 @@ fn throw_regexp_search_type_error(method_id: i32) -> ! {
     let message =
         format!("First argument to String.prototype.{method} must not be a regular expression");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Check if a string starts with a prefix
@@ -661,8 +663,7 @@ pub extern "C" fn js_string_normalize(
 fn throw_invalid_normalize_form() -> ! {
     let message = "The normalization form should be one of NFC, NFD, NFKC, NFKD.";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Apply the canonical-equivalence requirement shared by all locale-aware

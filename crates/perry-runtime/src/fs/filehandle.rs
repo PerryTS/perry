@@ -98,7 +98,7 @@ pub(crate) unsafe fn build_file_io_result(
 
 pub(crate) fn make_filehandle_method(fd: i32, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -108,7 +108,7 @@ pub(crate) fn make_filehandle_method_with_handle(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
@@ -120,7 +120,7 @@ fn make_filehandle_method_with_handle_length(
     length: u32,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
     crate::object::set_builtin_closure_length(closure as usize, length);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
@@ -150,9 +150,7 @@ fn filehandle_field_fd(handle: f64) -> Option<i32> {
     let value =
         crate::object::js_object_get_field_by_name(ptr as *const crate::object::ObjectHeader, key);
     let js = crate::value::JSValue::from_bits(value.bits());
-    if js.is_int32() {
-        Some(js.as_int32())
-    } else if js.is_number() {
+    if js.is_number() {
         Some(f64::from_bits(value.bits()) as i32)
     } else {
         None
@@ -231,7 +229,7 @@ fn live_filehandle_fd_or_ebadf(
     let fd = live_filehandle_fd(closure);
     if fd < 0 || !crate::fs::fd_is_registered(fd) {
         return Err(promise_rejected_fs(
-            crate::fs::validate::build_ebadf_error_value(syscall),
+            (crate::fs::validate::ebadf_error(syscall)).value(),
         ));
     }
     Ok(fd)
@@ -248,7 +246,7 @@ pub(crate) fn close_filehandle_fd(fd: i32, handle: f64) {
 
 fn make_read_lines_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -366,9 +364,9 @@ fn make_filehandle_webstream_callback(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, fd as i64);
+    crate::closure::closure_set_capture_word(closure, 0, fd as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, handle);
-    crate::closure::js_closure_set_capture_ptr(closure, 2, if auto_close { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 2, if auto_close { 1 } else { 0 });
     f64::from_bits(crate::value::JSValue::pointer(closure as *const u8).bits())
 }
 
@@ -543,9 +541,6 @@ fn options_number_field_checked(options: f64, field: &[u8], display: &str) -> Op
         return None;
     };
     let js = crate::value::JSValue::from_bits(value.bits());
-    if js.is_int32() {
-        return Some(js.as_int32() as f64);
-    }
     let n = f64::from_bits(value.bits());
     if js.is_number() && n.is_finite() {
         return Some(n);
@@ -582,15 +577,14 @@ fn parse_stream_iter_options(options: f64) -> (bool, Option<u64>, Option<u64>, u
     (auto_close, start, limit, chunk_size)
 }
 
-fn build_range_error_with_code_value(message: &str, code: &'static str) -> f64 {
+fn range_error_with_code(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::range_error(msg)
 }
 
-fn writer_limit_error() -> f64 {
-    build_range_error_with_code_value(
+fn writer_limit_error() -> crate::error::CoreError {
+    range_error_with_code(
         "The value of \"chunk\" is out of range. It exceeds the writer limit.",
         "ERR_OUT_OF_RANGE",
     )
@@ -620,7 +614,7 @@ fn stream_iter_method(
     info: *const crate::closure::JsFunctionInfo,
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, self_value);
     boxed_ptr(closure as *const u8)
 }
@@ -650,7 +644,7 @@ fn maybe_close_iter_handle(close: Option<(i32, f64)>) {
 enum StreamIterAction {
     Batch(Vec<u8>),
     Done(Option<(i32, f64)>),
-    Reject(f64),
+    Reject(crate::error::CoreError),
 }
 
 fn read_stream_iter_action(id: usize) -> StreamIterAction {
@@ -671,7 +665,7 @@ fn read_stream_iter_action(id: usize) -> StreamIterAction {
         let fd = filehandle_field_fd(state.handle).unwrap_or(state.fd);
         if fd < 0 || !fd_is_registered(fd) {
             state.done = true;
-            return StreamIterAction::Reject(crate::fs::validate::build_ebadf_error_value("read"));
+            return StreamIterAction::Reject(crate::fs::validate::ebadf_error("read"));
         }
         let max_len = state
             .remaining
@@ -682,16 +676,16 @@ fn read_stream_iter_action(id: usize) -> StreamIterAction {
         let read_result = FD_REGISTRY.with(|registry| {
             let mut registry = registry.borrow_mut();
             let Some(file) = registry.get_mut(&fd) else {
-                return Err(crate::fs::validate::build_ebadf_error_value("read"));
+                return Err(crate::fs::validate::ebadf_error("read"));
             };
             if let Some(position) = state.position {
                 if let Err(err) = file.seek(SeekFrom::Start(position)) {
-                    return Err(unsafe { build_fs_error_value_no_path(&err, "read") });
+                    return Err(unsafe { fs_error_no_path(&err, "read") });
                 }
             }
             match file.read(&mut bytes) {
                 Ok(n) => Ok(n),
-                Err(err) => Err(unsafe { build_fs_error_value_no_path(&err, "read") }),
+                Err(err) => Err(unsafe { fs_error_no_path(&err, "read") }),
             }
         });
         let n = match read_result {
@@ -729,7 +723,7 @@ extern "C" fn stream_iter_next_async_impl(
             maybe_close_iter_handle(close);
             promise_value_fs(build_read_lines_step(undefined_value(), true))
         }
-        StreamIterAction::Reject(err) => promise_rejected_fs(err),
+        StreamIterAction::Reject(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -759,7 +753,7 @@ extern "C" fn stream_iter_next_sync_impl(
             maybe_close_iter_handle(close);
             build_read_lines_step(undefined_value(), true)
         }
-        StreamIterAction::Reject(err) => crate::exception::js_throw(err),
+        StreamIterAction::Reject(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -866,7 +860,7 @@ pub(crate) extern "C" fn filehandle_pull_sync_impl(
 
 fn writer_method(id: usize, info: *const crate::closure::JsFunctionInfo) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 1);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     boxed_ptr(closure as *const u8)
 }
 
@@ -894,14 +888,14 @@ fn writer_write_common(
     data: f64,
     is_vector: bool,
     reject_on_limit: bool,
-) -> Result<bool, f64> {
+) -> Result<bool, crate::error::CoreError> {
     WRITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.get_mut(&id) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         };
         if state.closed {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         }
         let requested = if is_vector {
             buffers_total_len(data)
@@ -920,7 +914,7 @@ fn writer_write_common(
         let fd = filehandle_field_fd(state.handle).unwrap_or(state.fd);
         if fd < 0 || !fd_is_registered(fd) {
             state.closed = true;
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         }
         let position_value = state.position.map(|p| p as f64).unwrap_or_else(null_value);
         let written = if is_vector {
@@ -937,11 +931,11 @@ fn writer_write_common(
     })
 }
 
-fn writer_end_common(id: usize) -> Result<u64, f64> {
+fn writer_end_common(id: usize) -> Result<u64, crate::error::CoreError> {
     let (total, close) = WRITER_REGISTRY.with(|states| {
         let mut states = states.borrow_mut();
         let Some(state) = states.get_mut(&id) else {
-            return Err(crate::fs::validate::build_ebadf_error_value("write"));
+            return Err(crate::fs::validate::ebadf_error("write"));
         };
         if state.closed {
             return Ok((state.written, None));
@@ -964,7 +958,7 @@ extern "C" fn writer_write_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), data, false, true) {
         Ok(_) => promise_undefined_fs(),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -975,7 +969,7 @@ extern "C" fn writer_writev_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, true) {
         Ok(_) => promise_undefined_fs(),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -986,7 +980,7 @@ extern "C" fn writer_write_sync_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), data, false, false) {
         Ok(wrote) => bool_value(wrote),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -997,14 +991,14 @@ extern "C" fn writer_writev_sync_impl(
 ) -> f64 {
     match writer_write_common(writer_id(closure), buffers, true, false) {
         Ok(wrote) => bool_value(wrote),
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
 extern "C" fn writer_end_impl(closure: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => promise_value_fs(total as f64),
-        Err(err) => promise_rejected_fs(err),
+        Err(err) => promise_rejected_fs(err.value()),
     }
 }
 
@@ -1014,7 +1008,7 @@ extern "C" fn writer_end_sync_impl(
 ) -> f64 {
     match writer_end_common(writer_id(closure)) {
         Ok(total) => total as f64,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
@@ -1133,7 +1127,7 @@ pub(crate) extern "C" fn filehandle_writer_impl(
 }
 
 fn filehandle_close_promise() -> f64 {
-    crate::async_hooks::run_provider_completion("FILEHANDLECLOSEREQ", || {
+    crate::async_hook_slots::run_provider_completion("FILEHANDLECLOSEREQ", || {
         let promise =
             crate::promise::js_promise_resolved(f64::from_bits(crate::value::TAG_UNDEFINED));
         f64::from_bits(crate::value::JSValue::pointer(promise as *const u8).bits())
@@ -1253,7 +1247,7 @@ pub(crate) extern "C" fn filehandle_read_file_impl(
         if let Err(err) = file.read_to_end(&mut bytes) {
             // #10452: a failed read rejects (`EISDIR ... read` for a directory)
             // instead of resolving with whatever was read before it failed.
-            return promise_rejected_fs(unsafe { build_fs_error_value_no_path(&err, "read") });
+            return promise_rejected_fs(unsafe { (fs_error_no_path(&err, "read")).value() });
         }
         if read_file_encoding(encoding).is_none() {
             promise_value_fs(crate::buffer::bytes::from_slice(
@@ -1516,7 +1510,9 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
             let start_for_len = start.unwrap_or(0);
             if end >= start_for_len {
                 let max_len = end.saturating_sub(start_for_len).saturating_add(1);
-                let _ = Read::by_ref(file).take(max_len).read_to_end(&mut bytes);
+                let _ = Read::by_ref(&mut **file)
+                    .take(max_len)
+                    .read_to_end(&mut bytes);
             }
         } else {
             let _ = file.read_to_end(&mut bytes);
@@ -1585,22 +1581,24 @@ pub(crate) extern "C" fn filehandle_read_lines_impl(
 /// keeps the fs surface out of binaries that never create a FileHandle. The
 /// probe unifies the two identity checks the thread serializer used to call
 /// directly.
-static FS_THREAD_CODEC_IMPL: crate::thread::FsThreadCodec = crate::thread::FsThreadCodec {
-    is_filehandle: fs_codec_is_filehandle,
-    build_detached: build_detached_filehandle_object,
-};
+static FS_THREAD_CODEC_IMPL: crate::thread_hook_slots::FsThreadCodec =
+    crate::thread_hook_slots::FsThreadCodec {
+        is_filehandle: fs_codec_is_filehandle,
+        build_detached: build_detached_filehandle_object,
+    };
 
 fn fs_codec_is_filehandle(value: f64) -> bool {
     crate::fs::is_fs_filehandle_value(value) || crate::fs::filehandle_object_fd(value).is_some()
 }
 
 fn build_filehandle_object(fd: i32) -> f64 {
+    crate::fs::install_handle_roots();
     // Bounded native initialization; the created closures do not execute JS.
     let _no_move = crate::gc::GcSuppressScope::new();
     // Arm BEFORE the object exists: every FileHandle (attached or detached)
     // is minted here, so the thread codec is live from the first moment a
     // probe could ever match.
-    crate::thread::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
+    crate::thread_hook_slots::arm_fs_thread_codec(&FS_THREAD_CODEC_IMPL);
     let obj = crate::object::js_object_alloc(CLASS_ID_FS_FILEHANDLE, 23);
     let handle = f64::from_bits(crate::value::JSValue::pointer(obj as *const u8).bits());
     let set = |name: &str, v: f64| {
@@ -1769,9 +1767,9 @@ pub extern "C" fn js_fs_filehandle_open(path_value: f64, flags_value: f64) -> f6
 pub(crate) unsafe fn js_fs_filehandle_open_result(
     path_value: f64,
     flags_value: f64,
-) -> Result<f64, f64> {
+) -> Result<f64, crate::error::CoreError> {
     match fs_open_sync_result(path_value, flags_value) {
         Ok(fd) => Ok(build_filehandle_object(fd)),
-        Err((err, path)) => Err(build_fs_error_value(&err, "open", &path)),
+        Err((err, path)) => Err(fs_error(&err, "open", &path)),
     }
 }

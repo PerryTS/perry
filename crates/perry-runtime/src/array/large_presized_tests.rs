@@ -114,3 +114,56 @@ fn existing_sparse_indices_prevent_dense_growth_from_hiding_them() {
         assert_eq!(js_array_get_f64(arr, 500_000), 7.0);
     }
 }
+
+#[test]
+fn fill_covers_a_large_presized_array_without_leaving_its_store() {
+    unsafe {
+        const LENGTH: u32 = 1_200_000;
+        let arr = js_array_constructor_single(LENGTH as f64);
+        assert!((*arr).capacity < LENGTH, "fixture must be over-long");
+
+        let filled = js_array_fill(arr, 7.0);
+
+        assert_eq!((*filled).length, LENGTH);
+        assert!(
+            (*filled).capacity >= LENGTH,
+            "fill must make every slot addressable"
+        );
+        assert_eq!(js_array_get_f64(filled, 0), 7.0);
+        assert_eq!(js_array_get_f64(filled, LENGTH / 2), 7.0);
+        assert_eq!(js_array_get_f64(filled, LENGTH - 1), 7.0);
+        // The pre-fill head forwards to the grown one.
+        assert_eq!(js_array_get_f64(arr, LENGTH - 1), 7.0);
+    }
+}
+
+#[test]
+fn fill_range_grows_to_its_end_and_goes_sparse_for_a_far_short_range() {
+    unsafe {
+        const LENGTH: u32 = 1_200_000;
+        let arr = js_array_constructor_single(LENGTH as f64);
+        let crossing = js_array_fill_range(arr, 3.0, 2.0, 5000.0);
+        assert!((*crossing).capacity >= 5000);
+        assert_eq!(
+            js_array_get_f64(crossing, 1).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+        assert_eq!(js_array_get_f64(crossing, 2), 3.0);
+        assert_eq!(js_array_get_f64(crossing, 4999), 3.0);
+        assert_eq!(
+            js_array_get_f64(crossing, 5000).to_bits(),
+            crate::value::TAG_UNDEFINED
+        );
+
+        // A short range far past the store is stored sparsely, not as a million holes.
+        let far = js_array_fill_range(crossing, 5.0, 1_000_000.0, 1_000_010.0);
+        assert!(
+            (*far).capacity < 100_000,
+            "a short far range must not grow the store"
+        );
+        assert_eq!(js_array_get_f64(far, 1_000_000), 5.0);
+        assert_eq!(js_array_get_f64(far, 1_000_009), 5.0);
+        assert_eq!(js_array_get_f64(far, 2), 3.0);
+        assert_eq!((*far).length, LENGTH);
+    }
+}

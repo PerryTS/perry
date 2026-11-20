@@ -98,6 +98,20 @@ fn materialize_checked_integer_return(
     value
 }
 
+/// The runtime guards of a `buffer+len` span, `(data pointer, byte length)`.
+pub(crate) fn buffer_span_helpers(descriptor: &NativeAbiType) -> (&'static str, &'static str) {
+    match descriptor {
+        NativeAbiType::BufferAndLen { nullable: true } => (
+            "js_native_abi_check_nullable_buffer_data_ptr",
+            "js_native_abi_check_nullable_buffer_byte_len",
+        ),
+        _ => (
+            "js_native_abi_check_buffer_data_ptr",
+            "js_native_abi_check_buffer_byte_len",
+        ),
+    }
+}
+
 pub(super) fn lower_buffer_and_len_param(
     ctx: &mut FnCtx<'_>,
     descriptor: &NativeAbiType,
@@ -107,9 +121,10 @@ pub(super) fn lower_buffer_and_len_param(
     lowered: &mut Vec<String>,
     arg_types: &mut Vec<crate::types::LlvmType>,
 ) {
+    let (data_helper, len_helper) = buffer_span_helpers(descriptor);
     let blk = ctx.block();
-    let data_ptr = blk.call(PTR, "js_native_abi_check_buffer_data_ptr", &[(DOUBLE, val)]);
-    let byte_len = blk.call(I64, "js_native_abi_check_buffer_byte_len", &[(DOUBLE, val)]);
+    let data_ptr = blk.call(PTR, data_helper, &[(DOUBLE, val)]);
+    let byte_len = blk.call(I64, len_helper, &[(DOUBLE, val)]);
     let ptr_value = LoweredValue::buffer_view(
         data_ptr.clone(),
         byte_len.clone(),
@@ -127,10 +142,7 @@ pub(super) fn lower_buffer_and_len_param(
         js_argument_index,
         abi_slot_index,
         &ptr_value,
-        Some((
-            "js_native_abi_check_buffer_data_ptr",
-            "registered_buffer_span_data",
-        )),
+        Some((data_helper, "registered_buffer_span_data")),
         "buffer+len.data_ptr",
     );
     let len_value = LoweredValue::usize(byte_len.clone());
@@ -140,10 +152,7 @@ pub(super) fn lower_buffer_and_len_param(
         js_argument_index,
         abi_slot_index + 1,
         &len_value,
-        Some((
-            "js_native_abi_check_buffer_byte_len",
-            "registered_buffer_span_byte_len",
-        )),
+        Some((len_helper, "registered_buffer_span_byte_len")),
         "buffer+len.byte_len",
     );
     lowered.push(data_ptr);
@@ -602,7 +611,7 @@ pub(super) fn lower_manifest_param(
             lowered.push(raw);
             arg_types.push(I64);
         }
-        NativeAbiType::BufferAndLen => {
+        NativeAbiType::BufferAndLen { .. } => {
             lower_buffer_and_len_param(
                 ctx,
                 descriptor,
@@ -762,6 +771,14 @@ pub fn try_lower_extern_func_call(
     // tracked separately under #793.
     if let Some((submod_key, exported_name)) = ctx.import_function_node_submodule.get(name).cloned()
     {
+        if let Some(export) = crate::native_export_value::prepare_submodule(
+            ctx.strings,
+            &submod_key,
+            &exported_name,
+            false,
+        ) {
+            return Ok(Some(crate::native_export_value::call(ctx, export, args)?));
+        }
         // #11789 sweep: each argument is held across the ones after it, and
         // across `js_node_submodule_export_as_function`'s allocation below.
         let (lowered_args, args_group) = super::lower_call_args_rooted(ctx, args)?;

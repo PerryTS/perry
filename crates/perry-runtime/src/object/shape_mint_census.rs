@@ -27,6 +27,7 @@ use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+use crate::codegen_abi::ShapeId;
 use crate::hot_diag::{sink_from_env, write_sink, Sink};
 
 // 0 = not yet resolved, 1 = off, 2 = on. Three states rather than two
@@ -220,6 +221,7 @@ pub(crate) fn armed() -> bool {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn resolve_arming() -> bool {
     let on = sink().is_some();
@@ -503,7 +505,7 @@ pub(crate) fn classify_mint(
 /// Record one mint against complete sibling facts under this keys address.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn note_mint(
-    id: u32,
+    id: ShapeId,
     keys: u64,
     key_list_hash: u64,
     layout_hash: u64,
@@ -534,7 +536,7 @@ pub(crate) fn note_mint(
             line: site_line,
         };
         c.layout_by_id.insert(
-            id,
+            id.0,
             LayoutObservation {
                 hash: layout_hash,
                 origin: current,
@@ -565,7 +567,7 @@ pub(crate) fn note_mint(
         .entry(key_list_hash)
         .or_insert((0, logical_key_count));
     e.0 += 1;
-    c.mint_index_of.insert(id, index);
+    c.mint_index_of.insert(id.0, index);
 
     if index % (1 << 20) == 0 {
         drop(c);
@@ -573,7 +575,7 @@ pub(crate) fn note_mint(
     }
 }
 
-pub(crate) fn note_retire(id: u32) {
+pub(crate) fn note_retire(id: ShapeId) {
     if !armed() {
         return;
     }
@@ -581,7 +583,7 @@ pub(crate) fn note_retire(id: u32) {
     let Ok(mut c) = census().lock() else {
         return;
     };
-    if let Some(retired) = c.layout_by_id.remove(&id) {
+    if let Some(retired) = c.layout_by_id.remove(&id.0) {
         let origin = retired.origin;
         if !c
             .layout_by_id
@@ -603,7 +605,7 @@ pub(crate) fn note_retire(id: u32) {
         }
     }
     c.retires += 1;
-    if let Some(born) = c.mint_index_of.remove(&id) {
+    if let Some(born) = c.mint_index_of.remove(&id.0) {
         let b = bucket(now.saturating_sub(born));
         c.age_hist[b] += 1;
     }
@@ -726,7 +728,7 @@ pub(crate) fn dump() {
     if !c.define_outcomes.is_empty() {
         out.push_str("  defineProperty key-add, edge outcomes:\n");
         let mut d: Vec<(&&str, &u64)> = c.define_outcomes.iter().collect();
-        d.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        crate::cold_sort::sort_by(&mut d, |a, b| b.1.cmp(a.1));
         for (what, n) in d {
             out.push_str(&format!("    {what:<40} {n:>12}\n"));
         }
@@ -741,14 +743,14 @@ pub(crate) fn dump() {
     ));
     if !c.events.is_empty() {
         let mut ev: Vec<(&&str, &u64)> = c.events.iter().collect();
-        ev.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        crate::cold_sort::sort_by(&mut ev, |a, b| b.1.cmp(a.1));
         for (what, n) in ev {
             out.push_str(&format!("  event {what:<36} {n:>12}\n"));
         }
     }
     out.push_str("  by cause:\n");
     let mut causes: Vec<(&MintCause, &u64)> = c.by_cause.iter().collect();
-    causes.sort_unstable_by(|a, b| b.1.cmp(a.1));
+    crate::cold_sort::sort_by(&mut causes, |a, b| b.1.cmp(a.1));
     for (cause, n) in causes {
         out.push_str(&format!(
             "    {:<26} {:>12}  {:>5.1}%\n",
@@ -769,7 +771,9 @@ pub(crate) fn dump() {
     out.push('\n');
     out.push_str("  top key-name lists by mint count (hash, mints, keys):\n");
     let mut lists: Vec<(&u64, &(u64, u32))> = c.per_list.iter().collect();
-    lists.sort_unstable_by(|a, b| b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(b.0)));
+    crate::cold_sort::sort_by(&mut lists, |a, b| {
+        b.1 .0.cmp(&a.1 .0).then_with(|| a.0.cmp(b.0))
+    });
     for (h, (n, k)) in lists.into_iter().take(10) {
         out.push_str(&format!("    {h:#018x}  {n:>10}  {k} keys\n"));
     }
@@ -779,7 +783,7 @@ pub(crate) fn dump() {
         out.push_str("  top call sites: NOT COMPILED IN (shape-mint-diag)\n");
     }
     let mut sites: Vec<(&(&str, u32), &u64)> = c.by_site.iter().collect();
-    sites.sort_unstable_by(|a, b| b.1.cmp(a.1));
+    crate::cold_sort::sort_by(&mut sites, |a, b| b.1.cmp(a.1));
     for (site, n) in sites.into_iter().take(12) {
         let label = format!("{}:{}", site.0, site.1);
         out.push_str(&format!("    {label:<52} {n:>12}\n"));
@@ -788,7 +792,7 @@ pub(crate) fn dump() {
             .iter()
             .filter(|((s, _), _)| s == site)
             .collect();
-        per.sort_unstable_by(|a, b| b.1.cmp(a.1));
+        crate::cold_sort::sort_by(&mut per, |a, b| b.1.cmp(a.1));
         for ((_, cause), m) in per.into_iter().take(5) {
             out.push_str(&format!("      {:<26} {:>12}\n", cause.name(), m));
         }

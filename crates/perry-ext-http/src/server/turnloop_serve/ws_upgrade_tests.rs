@@ -64,13 +64,20 @@ unsafe extern "C" fn accepted(c: *const RawClosureHeader, _: JsThis, ws: f64, _:
     perry_ext_ws::js_ws_on(id, name.as_raw(), cb.get());
     undefined()
 }
+extern "C" {
+    fn js_run_agent_pumps() -> i32;
+}
 fn turn_until(mut done: impl FnMut() -> bool) {
     let until = Instant::now() + Duration::from_secs(10);
     while !done() {
         assert!(Instant::now() < until, "noServer upgrade stalled");
         perry_runtime::event_pump::js_loop_turn_bounded(2);
         crate::server::server::js_node_http_server_process_pending();
-        perry_ext_ws::js_ws_process_pending();
+        // The fixture is a non-main agent, so `ws` events reach it only through
+        // the per-agent pump `perry-ext-ws` registers, as in a `worker_threads`
+        // worker's own loop; naming `js_ws_process_pending` here would hide a
+        // pump that only the main loop runs.
+        unsafe { js_run_agent_pumps() };
         perry_runtime::promise::js_promise_run_microtasks();
     }
 }

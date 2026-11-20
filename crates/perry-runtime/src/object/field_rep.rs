@@ -8,7 +8,7 @@
 //! | `00` | [`REP_ANY`] | the slot holds a NaN-boxed value |
 //! | `01` | [`REP_F64`] | the slot holds a JS Number as raw IEEE bits: never in the tag band, any NaN canonical, an INT32 box stored as a double |
 //! | `10` | [`REP_F64_DEPRECATED`] | the same invariant as `F64` for the objects that still carry the shape; the lineage has generalized the slot. A learned fact, never identity |
-//! | `11` | [`REP_SPECIAL`] | a shape-owned side fact selects ConstFn (the slot is a closure of one static body) or optional NoPointer (the slot has no GC pointer) |
+//! | `11` | [`REP_SPECIAL`] | a shape-owned side fact selects ConstFn (the slot is a closure of one static body); a `11` lane outside the ConstFn mask is I32 (I32 at rest, PR C: the slot holds an I32 word `INTERNAL_WORD_TAG \| (u32)v`, `layout_slot`) |
 //!
 //! A slot at or past [`REP_SLOTS`], and every spill slot, is `Any`.
 //!
@@ -32,7 +32,7 @@ const LANE_LOW: u64 = 0x5555_5555_5555_5555;
 const LANE_HIGH: u64 = 0xAAAA_AAAA_AAAA_AAAA;
 
 /// The representation of `slot` in `rep`.
-#[inline]
+#[inline(always)]
 pub(crate) fn slot_rep(rep: u64, slot: u32) -> u64 {
     if slot >= REP_SLOTS {
         return REP_ANY;
@@ -46,6 +46,28 @@ pub(crate) fn with_slot_rep(rep: u64, slot: u32, value: u64) -> u64 {
     debug_assert!(slot < REP_SLOTS && value <= 0b11);
     let shift = 2 * slot;
     (rep & !(0b11 << shift)) | (value << shift)
+}
+
+/// `rep` with a SPECIAL lane at `slot`. A slot past word 0 has no bit in the
+/// word: its ConstFn lane is the shape's body-list entry, so `rep` is
+/// returned unchanged.
+#[inline]
+pub(crate) fn with_special_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_SPECIAL)
+    }
+}
+
+/// `rep` with the lane of `slot` set to `Any`; a slot past word 0 has no bit.
+#[inline]
+pub(crate) fn without_lane(rep: u64, slot: u32) -> u64 {
+    if slot >= REP_SLOTS {
+        rep
+    } else {
+        with_slot_rep(rep, slot, REP_ANY)
+    }
 }
 
 /// The lanes of every slot below `slot` (the whole word past it): the part
@@ -66,7 +88,7 @@ pub(crate) fn is_valid(rep: u64) -> bool {
 }
 
 /// One bit per `11` lane. The shape's `special_constfn_mask` names the
-/// ConstFn subset; the complement is reserved for NoPointer if P5 is accepted.
+/// ConstFn subset; the complement is the I32 subset ([`i32_lane_slots`]).
 /// Existing callers of [`is_valid`] still reject every special lane.
 #[inline]
 pub(crate) fn special_lane_slots(rep: u64) -> u32 {
@@ -80,10 +102,25 @@ pub(crate) fn special_lane_slots(rep: u64) -> u32 {
     slots
 }
 
+/// I32 at rest (representation RFC §10.7, PR C): the `11` lanes the shape's
+/// ConstFn mask does not name, one bit per slot. Each such slot holds an I32
+/// word `INTERNAL_WORD_TAG | (u32)v` for every object carrying the shape: never a
+/// pointer (the `0x7FFE` band), so the collector skips it like any
+/// represented lane, and read and written as a JS value only through the
+/// layout accessor (`crate::layout_slot`). The mask is derived from the two
+/// identity facts the record already has (`rep` and the ConstFn mask), so
+/// shape identity, the record layout and the static records are unchanged. An
+/// I32 word is also a NoPointer word: the reserved P5 interpretation, if it
+/// is ever produced, needs its own bit beside these two.
+#[inline]
+pub(crate) fn i32_lane_slots(rep: u64, special_constfn_mask: u32) -> u32 {
+    special_lane_slots(rep) & !special_constfn_mask
+}
+
 /// The extended representation is valid only when every ConstFn bit names a
-/// `11` lane. A `11` lane without that bit is the *reserved* NoPointer state;
-/// no current producer requests it. ConstFn metadata coverage is checked by
-/// the shape interner, which owns that metadata.
+/// `11` lane. A `11` lane without that bit is an I32 lane
+/// ([`i32_lane_slots`]). ConstFn metadata coverage is checked by the shape
+/// interner, which owns that metadata.
 #[inline]
 pub(crate) fn is_valid_with_special(rep: u64, special_constfn_mask: u32) -> bool {
     special_constfn_mask & !special_lane_slots(rep) == 0
@@ -93,6 +130,7 @@ pub(crate) fn is_valid_with_special(rep: u64, special_constfn_mask: u32) -> bool
 /// reads as `F64` (`01`). The deprecated state is a learned fact of a record,
 /// like the #10905 width fields, and two records that differ only in it are
 /// the same identity.
+#[cfg(test)]
 #[inline]
 pub(crate) fn identity(rep: u64) -> u64 {
     debug_assert!(is_valid(rep), "reserved rep lane in {rep:#x}");
@@ -186,8 +224,13 @@ pub(crate) fn normalized_without_special(rep: u64) -> u64 {
 /// fact by the type guard: NoPointer also admits booleans/null/undefined.
 #[inline]
 pub(crate) fn non_pointer_slot_bits(rep: u64, special_constfn_mask: u32) -> u32 {
-    let numeric = non_any_slot_bits(rep);
-    numeric | (special_lane_slots(rep) & !special_constfn_mask)
+    // Every represented lane is noncollectible except a ConstFn lane.
+    // The common zero ConstFn mask therefore needs no SPECIAL enumeration.
+    let represented = compact_lane_bits((rep | (rep >> 1)) & LANE_LOW);
+    if special_constfn_mask == 0 {
+        return represented;
+    }
+    represented & !(special_lane_slots(rep) & special_constfn_mask)
 }
 
 /// One bit per slot whose lane is `F64` or deprecated `F64`: a Number fact
@@ -195,13 +238,18 @@ pub(crate) fn non_pointer_slot_bits(rep: u64, special_constfn_mask: u32) -> u32 
 /// subset of SPECIAL, via [`non_pointer_slot_bits`].
 #[inline]
 pub(crate) fn non_any_slot_bits(rep: u64) -> u32 {
-    let mut x = (rep | (rep >> 1)) & LANE_LOW;
+    // XOR selects exactly 01 and 10; 00 and SPECIAL (11) both vanish.
+    compact_lane_bits((rep ^ (rep >> 1)) & LANE_LOW)
+}
+
+#[inline]
+fn compact_lane_bits(mut x: u64) -> u32 {
     x = (x | (x >> 1)) & 0x3333_3333_3333_3333;
     x = (x | (x >> 2)) & 0x0F0F_0F0F_0F0F_0F0F;
     x = (x | (x >> 4)) & 0x00FF_00FF_00FF_00FF;
     x = (x | (x >> 8)) & 0x0000_FFFF_0000_FFFF;
     x = (x | (x >> 16)) & 0x0000_0000_FFFF_FFFF;
-    (x as u32) & !special_lane_slots(rep)
+    x as u32
 }
 
 /// The bits an `F64` slot stores for the JS value `value_bits`, or `None`
@@ -251,7 +299,7 @@ mod tests {
 
     #[test]
     fn a_number_is_stored_as_its_canonical_double_and_a_tag_is_refused() {
-        let int32 = crate::value::INT32_TAG | 7;
+        let int32 = crate::value::INTERNAL_WORD_TAG | 7;
         assert_eq!(f64_slot_bits(int32), Some(7.0f64.to_bits()));
         assert_eq!(f64_slot_bits(1.5f64.to_bits()), Some(1.5f64.to_bits()));
         assert_eq!(
@@ -297,6 +345,19 @@ mod tests {
         assert_eq!(non_pointer_slot_bits(rep, constfn), (1 << 2) | (1 << 8));
         assert_eq!(slot_rep(identity_with_special(rep), 5), REP_SPECIAL);
         assert_eq!(normalized_without_special(rep), 0);
+    }
+
+    #[test]
+    fn i32_lanes_are_the_special_lanes_no_constfn_body_names() {
+        let rep = with_slot_rep(with_slot_rep(REP_F64, 2, REP_SPECIAL), 5, REP_SPECIAL);
+        assert_eq!(i32_lane_slots(rep, 0), (1 << 2) | (1 << 5));
+        assert_eq!(i32_lane_slots(rep, 1 << 5), 1 << 2);
+        assert!(is_valid_with_special(rep, 0));
+        // An I32 lane is no pointer and no Number fact for the type guard.
+        assert_eq!(non_pointer_slot_bits(rep, 0) & (1 << 2), 1 << 2);
+        assert_eq!(non_any_slot_bits(rep) & (1 << 2), 0);
+        // Identity keeps the code.
+        assert_eq!(slot_rep(identity_with_special(rep), 2), REP_SPECIAL);
     }
 
     #[test]

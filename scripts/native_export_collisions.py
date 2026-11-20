@@ -264,6 +264,136 @@ def positional_literal_params(definition):
     return {}
 
 
+def exporting_arm(definition):
+    """(matcher, body) token slices of the arm that emits an unmangled export."""
+    i = 0
+    while i < len(definition):
+        if definition[i] not in ("(", "[", "{"):
+            i += 1
+            continue
+        m_end = closing(definition, i)
+        if definition[m_end + 1:m_end + 3] != ["=", ">"] or definition[m_end + 3] not in ("(", "[", "{"):
+            i = m_end + 1
+            continue
+        b_end = closing(definition, m_end + 3)
+        body = definition[m_end + 4:b_end]
+        if "no_mangle" in body or "export_name" in body:
+            return definition[i + 1:m_end], body
+        i = b_end + 1
+    return None
+
+
+def parse_matcher(ts):
+    """A macro_rules matcher as nodes: ("lit", tok), ("frag", name, kind),
+    ("group", open, nodes) and ("rep", nodes, separator, op)."""
+    nodes, i = [], 0
+    while i < len(ts):
+        if ts[i] == "$" and i + 1 < len(ts) and ts[i + 1] == "(":
+            end = closing(ts, i + 1)
+            inner = parse_matcher(ts[i + 2:end])
+            k = end + 1
+            sep = None
+            if k < len(ts) and ts[k] not in ("*", "+", "?"):
+                sep, k = ts[k], k + 1
+            if k >= len(ts) or ts[k] not in ("*", "+", "?"):
+                raise ValueError("unsupported macro repetition")
+            nodes.append(("rep", inner, sep, ts[k]))
+            i = k + 1
+        elif ts[i] == "$" and i + 3 < len(ts) and ts[i + 2] == ":":
+            if ts[i + 3] not in ("ident", "literal", "tt"):
+                raise ValueError(f"unsupported macro fragment {ts[i + 3]}")
+            nodes.append(("frag", ts[i + 1], ts[i + 3]))
+            i += 4
+        elif ts[i] in ("(", "[", "{"):
+            end = closing(ts, i)
+            nodes.append(("group", ts[i], parse_matcher(ts[i + 1:end])))
+            i = end + 1
+        else:
+            nodes.append(("lit", ts[i]))
+            i += 1
+    return nodes
+
+
+def match_nodes(nodes, ts, i, end, binds):
+    """Match `nodes` against ts[i:end]; the index after the match, or None.
+
+    Repetitions are greedy without backtracking into earlier nodes, which is
+    exact for the declaration lists here (a `$($x:tt)*` only ever ends its
+    own delimited group). Every bound value is appended to binds[name].
+    """
+    for n, node in enumerate(nodes):
+        kind = node[0]
+        if kind == "lit":
+            if i >= end or ts[i] != node[1]:
+                return None
+            i += 1
+        elif kind == "frag":
+            if i >= end:
+                return None
+            if node[2] == "ident":
+                if not re.fullmatch(r"[A-Za-z_]\w*", ts[i]):
+                    return None
+                binds.setdefault(node[1], []).append(ts[i])
+                i += 1
+            elif node[2] == "literal":
+                k = i + 1 if ts[i] == "-" else i
+                if k >= end or not (ts[k].startswith(('"', "'", "b\"", "r", "c\"")) or ts[k][0].isdigit()
+                                    or ts[k] in ("true", "false")):
+                    return None
+                binds.setdefault(node[1], []).append("".join(ts[i:k + 1]))
+                i = k + 1
+            else:
+                k = closing(ts, i) + 1 if ts[i] in ("(", "[", "{") else i + 1
+                if ts[i] in (")", "]", "}") or k > end:
+                    return None
+                i = k
+        elif kind == "group":
+            if i >= end or ts[i] != node[1]:
+                return None
+            close = closing(ts, i)
+            if close >= end or match_nodes(node[2], ts, i + 1, close, binds) != close:
+                return None
+            i = close + 1
+        else:
+            _, inner, sep, op = node
+            count = 0
+            while i < end:
+                trial = {}
+                j = match_nodes(inner, ts, i, end, trial)
+                if j is None or j == i:
+                    break
+                for name, values in trial.items():
+                    binds.setdefault(name, []).extend(values)
+                i, count = j, count + 1
+                if op == "?":
+                    break
+                if sep is not None:
+                    if i < end and ts[i] == sep:
+                        follow = {}
+                        if match_nodes(inner, ts, i + 1, end, follow) is None:
+                            break
+                        i += 1
+                    else:
+                        break
+            if op == "+" and count == 0:
+                return None
+    return i
+
+
+def callback_list(definition):
+    """The token list a `($consumer:ident) => { $consumer! { LIST } }` macro
+    hands its consumer, or None for any other macro."""
+    if definition[:6] != ["(", "$", definition[2], ":", "ident", ")"] or definition[6:8] != ["=", ">"]:
+        return None
+    if definition[8] not in ("(", "[", "{"):
+        return None
+    body = definition[9:closing(definition, 8)]
+    if body[:3] != ["$", definition[2], "!"] or len(body) < 4 or body[3] not in ("(", "[", "{"):
+        return None
+    end = closing(body, 3)
+    return body[4:end] if end == len(body) - 1 or body[end + 1:] == [";"] else None
+
+
 def split_top_level(args, sep=","):
     parts, cur, k = [], [], 0
     while k < len(args):
@@ -290,7 +420,7 @@ def source_exports(sources):
     fail rather than silently losing the generated symbol from the inventory.
     """
     all_defs, all_macros, bodies, parsed, excluded = {}, {}, {}, {}, set()
-    layouts, positional = {}, {}
+    layouts, positional, matchers = {}, {}, {}
     for path, source in sources.items():
         parsed[path], test_modules = production_tokens(tokens(source))
         parent = Path(path).parent if Path(path).stem in ("lib", "mod") else Path(path).with_suffix("")
@@ -323,7 +453,25 @@ def source_exports(sources):
                 # The first ident matcher is the exported name in current macros.
                 first = next((m for m in re.finditer(r"\$ (\w+) : (\w+)", " ".join(definition)) if m.group(2) != "meta"), None)
                 if any(g.startswith("$") and (first is None or g[1:] != first.group(1) or first.group(2) != "ident") for g in generated):
-                    raise ValueError(f"{path}: {name} exports a non-first ident parameter")
+                    # A declaration-list consumer: the exported names are
+                    # ident fragments bound anywhere in its matcher, so the
+                    # invocation is matched against the matcher itself.
+                    arm = exporting_arm(definition)
+                    if arm is None:
+                        raise ValueError(f"{path}: {name} exports a non-first ident parameter")
+                    nodes = parse_matcher(arm[0])
+                    frags, stack = {}, list(nodes)
+                    while stack:
+                        node = stack.pop()
+                        if node[0] == "frag":
+                            frags[node[1]] = node[2]
+                        elif node[0] == "group":
+                            stack.extend(node[2])
+                        elif node[0] == "rep":
+                            stack.extend(node[1])
+                    if any(g.startswith("$") and frags.get(g[1:]) != "ident" for g in generated):
+                        raise ValueError(f"{path}: {name} exports a non-first ident parameter")
+                    matchers[name] = nodes
             signature = tuple(sorted(set(generated)))
             if name in all_defs and all_defs[name] != signature:
                 raise ValueError(f"{path}: conflicting export macro {name}")
@@ -333,6 +481,12 @@ def source_exports(sources):
             if name not in all_defs and any(definition[i] in all_defs and definition[i + 1] == "!"
                                             for i in range(len(definition) - 1)):
                 raise ValueError(f"{path}: wrapper macro {name} invokes an export macro; add expansion support")
+    callbacks = {}
+    for path, definitions in all_macros.items():
+        for name, definition in definitions.items():
+            listed = callback_list(definition)
+            if listed is not None:
+                callbacks[name] = listed
     out = defaultdict(set)
     for path, ts in bodies.items():
         for name in literal_exports(ts):
@@ -341,6 +495,20 @@ def source_exports(sources):
             out[name].add(path)
         i = 0
         while i + 2 < len(ts):
+            # `list_macro!(consumer)`: the list macro hands its declaration
+            # list to an exporting consumer; expand it as the consumer's own
+            # invocation.
+            if (ts[i] in callbacks and ts[i + 1] == "!" and ts[i + 2] in ("(", "{", "[")
+                    and ts[i + 4:i + 5] in ([")"], ["}"], ["]"]) and ts[i + 3] in matchers):
+                consumer, listed = ts[i + 3], callbacks[ts[i]]
+                binds = {}
+                if match_nodes(matchers[consumer], listed, 0, len(listed), binds) != len(listed):
+                    raise ValueError(f"{path}: {ts[i]} list does not match {consumer}")
+                for generated in all_defs[consumer]:
+                    for name in (binds.get(generated[1:], []) if generated.startswith("$") else [generated]):
+                        out[name].add(path)
+                i += 5
+                continue
             if ts[i] in all_defs and ts[i + 1] == "!" and ts[i + 2] in ("(", "{", "["):
                 end = closing(ts, i + 2)
                 args = ts[i + 3:end]
@@ -357,6 +525,15 @@ def source_exports(sources):
                             out[json.loads(arg[0])].add(path)
                         else:
                             out[generated].add(path)
+                    i = end + 1
+                    continue
+                if ts[i] in matchers:
+                    binds = {}
+                    if match_nodes(matchers[ts[i]], args, 0, len(args), binds) != len(args):
+                        raise ValueError(f"{path}: unsupported invocation of {ts[i]}")
+                    for generated in all_defs[ts[i]]:
+                        for name in (binds.get(generated[1:], []) if generated.startswith("$") else [generated]):
+                            out[name].add(path)
                     i = end + 1
                     continue
                 if ts[i] in layouts:
@@ -417,6 +594,14 @@ def self_test():
     assert cfg_without_tests(tokens('any(test, feature = "runtime-link")')) is None
     assert tokens('"a\\\n b" br#"quoted \" token"# \'\\u{7b}\'') == ['"a\\\n b"', 'br#"quoted \" token"#', "'\\u{7b}'"]
     assert not source_exports({"x": '/* /* nested */ #[no_mangle] fn bogus() {} */ const DOC: &str = "#[no_mangle] fn bogus() {}"; extern "C" { fn js_import(); }'})
+    callback = ('macro_rules! decls { ($c:ident) => { $c! { (S, "m", [(js_cb_one, "one", x y), (js_cb_two, "two", z)]), } }; } '
+                'macro_rules! consume { ($(($s:ident, $m:literal, [$(($g:ident, $n:literal, $($i:tt)*)),* $(,)?])),* $(,)?) => '
+                '{ $($(#[no_mangle] pub extern "C" fn $g() {})*)* }; } decls!(consume);')
+    exports = source_exports({"crates/a/src/lib.rs": callback})
+    assert set(exports) == {"js_cb_one", "js_cb_two"}, exports
+    exports = source_exports({"crates/a/src/lib.rs": 'macro_rules! consume { ($(($n:literal, $g:ident)),*) => '
+                              '{ $(#[no_mangle] pub extern "C" fn $g() {})* }; } consume!(("d", js_direct));'})
+    assert set(exports) == {"js_direct"}, exports
     assert check({"s": ["a", "b"]}, {})
     assert not check({"s": ["a", "b"]}, {"s": ["a", "b"]})
     assert check({"s": ["a", "b", "c"]}, {"s": ["a", "b"]})
@@ -431,8 +616,10 @@ def self_test():
     assert list(source_exports({"crates/a/src/lib.rs": prefixed})) == ["perry_atom_*"]
     named = 'macro_rules! img { ($n:ident, $e:literal) => { #[export_name = $e] static $n: u8 = 0; }; } img!(A, "perry_image_literal_0_61"); img!(B, "perry_image_literal_0_62");'
     assert sorted(source_exports({"crates/a/src/lib.rs": named})) == ["perry_image_literal_0_61", "perry_image_literal_0_62"]
+    second = 'macro_rules! entry { ($first:ident, $second:ident) => { #[no_mangle] pub extern "C" fn $second() {} }; } entry!(a, b);'
+    assert set(source_exports({"x": second})) == {"b"}
     try:
-        source_exports({"x": 'macro_rules! entry { ($first:ident, $second:ident) => { #[no_mangle] pub extern "C" fn $second() {} }; } entry!(a, b);'})
+        source_exports({"x": second.replace("$first:ident", "$first:expr")})
     except ValueError:
         pass
     else:

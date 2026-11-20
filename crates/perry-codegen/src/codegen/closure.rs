@@ -12,99 +12,22 @@ use crate::stmt;
 use crate::strings::StringPool;
 use crate::types::{LlvmType, DOUBLE, I1, I32, I64, PTR};
 
+pub(crate) use super::closure_captures::emit_typed_capture_guard;
+use super::closure_captures::{load_typed_capture, supports as capture_values_supported};
 use super::opts::CrossModuleCtx;
 use super::typed_abi::{
-    emit_typed_arg_guard, emit_typed_arg_to_raw, generic_closure_body_name,
-    lower_typed_f64_body_with_seed_locals_and_reps, lower_typed_i1_body_with_seed_locals,
-    lower_typed_i32_body_with_seed_locals, lower_typed_string_body_with_seed_locals,
-    typed_f64_closure_capture_reps, typed_f64_closure_name, typed_i1_closure_capture_reps,
-    typed_i1_closure_name, typed_i32_closure_capture_reps, typed_i32_closure_name,
-    typed_param_reps_for_params, typed_string_closure_capture_reps, typed_string_closure_name,
-    TypedFunctionTrampolineKind, TypedParamRep,
+    generic_closure_body_name, lower_typed_f64_body_with_seed_locals_and_reps,
+    lower_typed_i1_body_with_seed_locals, lower_typed_i32_body_with_seed_locals,
+    lower_typed_string_body_with_seed_locals, typed_f64_closure_capture_reps,
+    typed_f64_closure_name, typed_i1_closure_capture_reps, typed_i1_closure_name,
+    typed_i32_closure_capture_reps, typed_i32_closure_name, typed_param_reps_for_params,
+    typed_string_closure_capture_reps, typed_string_closure_name, TypedFunctionTrampolineKind,
+    TypedParamRep,
 };
-use super::typed_entry::{
-    emit_tiered_entry_dispatch, emit_typed_arg_to_raw_after_entry_tier, typed_entry_arg_guard,
-    EntryArgGuard,
-};
+use super::typed_entry::{emit_tiered_entry_dispatch, typed_entry_arg_guard, EntryArgGuard};
 
-fn emit_typed_closure_trampoline_fast_value(
-    blk: &mut crate::block::LlBlock,
-    kind: TypedFunctionTrampolineKind,
-    typed_name: &str,
-    arg_names: &[String],
-    arg_reps: &[TypedParamRep],
-) -> String {
-    match kind {
-        TypedFunctionTrampolineKind::F64 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            blk.call(DOUBLE, typed_name, &typed_args)
-        }
-        TypedFunctionTrampolineKind::I32 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_i32 = blk.call(I32, typed_name, &typed_args);
-            crate::expr::i32_to_nanbox(blk, &raw_i32)
-        }
-        TypedFunctionTrampolineKind::I1 => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let typed_i1 = blk.call(I1, typed_name, &typed_args);
-            let typed_i32 = blk.zext(I1, &typed_i1, I32);
-            crate::expr::i32_bool_to_nanbox(blk, &typed_i32)
-        }
-        TypedFunctionTrampolineKind::StringRef => {
-            let raw_args: Vec<String> = arg_names
-                .iter()
-                .zip(arg_reps.iter())
-                .map(|(arg, rep)| emit_typed_arg_to_raw_after_entry_tier(blk, *rep, arg))
-                .collect();
-            let mut typed_args: Vec<(LlvmType, &str)> = Vec::with_capacity(raw_args.len() + 1);
-            typed_args.push((I64, "%this_closure"));
-            typed_args.extend(
-                raw_args
-                    .iter()
-                    .zip(arg_reps.iter())
-                    .map(|(arg, rep)| (rep.llvm_ty(), arg.as_str())),
-            );
-            let raw_string = blk.call(I64, typed_name, &typed_args);
-            blk.call(DOUBLE, "js_nanbox_string", &[(I64, &raw_string)])
-        }
-    }
-}
+mod trampoline;
+use trampoline::emit_typed_closure_trampoline_fast_value;
 
 fn emit_public_typed_closure_trampoline(
     llmod: &mut LlModule,
@@ -140,30 +63,60 @@ fn emit_public_typed_closure_trampoline(
         TypedFunctionTrampolineKind::StringRef => typed_param_reps_for_params(params)
             .unwrap_or_else(|| vec![TypedParamRep::StringRef; params.len()]),
     };
+    let raw_captures = matches!(kind, TypedFunctionTrampolineKind::F64)
+        && capture_values_supported(params, capture_reps);
+    let typed_name = if raw_captures {
+        super::closure_captures::name(&typed_name)
+    } else {
+        typed_name
+    };
     let arg_names: Vec<String> = params.iter().map(|p| format!("%arg{}", p.id)).collect();
     let llvm_params = crate::expr::body_call::js_body_params(arg_names.iter().cloned());
     let capture_header = crate::target_layout::closure_header_size_bytes(&llmod.target_triple);
+    let preinline =
+        raw_captures && super::closure_captures::fits_preinline_budget(llmod, &typed_name);
     let wf = llmod.define_function(&public_name, DOUBLE, llvm_params);
+    wf.pre_statepoint_inline = preinline;
     let _ = wf.create_block("entry");
 
-    let (guards, capture_guard) = {
+    let (entry_values, guards) = {
         let blk = wf.block_mut(0).unwrap();
-        let guards: Vec<EntryArgGuard> = arg_names
+        let mut values = arg_names.clone();
+        let mut guards: Vec<EntryArgGuard> = arg_names
             .iter()
             .zip(arg_reps.iter())
             .map(|(arg, rep)| typed_entry_arg_guard(blk, *rep, arg))
             .collect();
-        let capture_guard = emit_entry_typed_capture_guard(blk, capture_header, capture_reps);
-        (guards, capture_guard)
+        // Captures obey the same actual-value admission as arguments. Plain
+        // Numbers need only the ordered tier; boxed int32s and numeric NaNs
+        // retain the full second tier. No capture annotation is a proof.
+        for (idx, rep) in capture_reps.iter().enumerate() {
+            let bits = load_entry_capture_word(blk, capture_header, idx);
+            let value = blk.bitcast_i64_to_double(&bits);
+            guards.push(typed_entry_arg_guard(blk, *rep, &value));
+            values.push(value);
+        }
+        (values, guards)
     };
     emit_tiered_entry_dispatch(
         wf,
         "typed_closure_public",
-        &arg_names,
+        &entry_values,
         &guards,
-        capture_guard,
+        None,
         &mut |blk, values| {
-            emit_typed_closure_trampoline_fast_value(blk, kind, &typed_name, values, &arg_reps)
+            emit_typed_closure_trampoline_fast_value(
+                blk,
+                kind,
+                &typed_name,
+                &values[..arg_names.len()],
+                &arg_reps,
+                if raw_captures {
+                    &values[arg_names.len()..]
+                } else {
+                    &[]
+                },
+            )
         },
         &mut |blk| {
             // The generic body is this entry's own continuation: it gets the
@@ -184,7 +137,7 @@ fn emit_public_typed_closure_trampoline(
 /// load at entry. The body's own capture layout puts `index` in range: every
 /// closure that reaches this body was born for it with every slot filled
 /// (`crate::stmt::binding_cell`).
-fn load_entry_capture_word(
+pub(super) fn load_entry_capture_word(
     blk: &mut crate::block::LlBlock,
     header_size: u64,
     index: usize,
@@ -193,62 +146,6 @@ fn load_entry_capture_word(
     let addr = blk.add(I64, "%this_closure", &offset.to_string());
     let ptr = blk.inttoptr(I64, &addr);
     blk.load(I64, &ptr)
-}
-
-fn load_typed_capture(
-    blk: &mut crate::block::LlBlock,
-    header_size: u64,
-    capture_index: usize,
-    rep: TypedParamRep,
-) -> String {
-    let captured_bits = load_entry_capture_word(blk, header_size, capture_index);
-    let captured = blk.bitcast_i64_to_double(&captured_bits);
-    // The public entry's capture guard admitted this value, so the inline
-    // conversions are exact (string materialization stays a call).
-    emit_typed_arg_to_raw(blk, rep, &captured)
-}
-
-/// [`emit_typed_capture_guard`] for a closure body's own entry: the words are
-/// the running closure's, loaded inline ([`load_entry_capture_word`]).
-fn emit_entry_typed_capture_guard(
-    blk: &mut crate::block::LlBlock,
-    header_size: u64,
-    capture_reps: &[TypedParamRep],
-) -> Option<String> {
-    let mut guard: Option<String> = None;
-    for (idx, rep) in capture_reps.iter().enumerate() {
-        let captured_bits = load_entry_capture_word(blk, header_size, idx);
-        let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let ok = emit_typed_arg_guard(blk, *rep, &captured);
-        guard = Some(match guard {
-            Some(prev) => blk.and(I1, &prev, &ok),
-            None => ok,
-        });
-    }
-    guard
-}
-
-pub(crate) fn emit_typed_capture_guard(
-    blk: &mut crate::block::LlBlock,
-    closure_handle: &str,
-    capture_reps: &[TypedParamRep],
-) -> Option<String> {
-    let mut guard: Option<String> = None;
-    for (idx, rep) in capture_reps.iter().enumerate() {
-        let idx = idx.to_string();
-        let captured_bits = blk.call(
-            I64,
-            "js_closure_get_capture_bits",
-            &[(I64, closure_handle), (I32, &idx)],
-        );
-        let captured = blk.bitcast_i64_to_double(&captured_bits);
-        let ok = emit_typed_arg_guard(blk, *rep, &captured);
-        guard = Some(match guard {
-            Some(prev) => blk.and(I1, &prev, &ok),
-            None => ok,
-        });
-    }
-    guard
 }
 
 pub(super) fn compile_typed_string_closure(
@@ -288,6 +185,8 @@ pub(super) fn compile_typed_string_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -316,6 +215,13 @@ pub(super) fn compile_typed_f64_closure(
         _ => return Err(anyhow!("compile_typed_f64_closure: expected Expr::Closure")),
     };
 
+    super::closure_captures::compile(
+        llmod,
+        func_id,
+        closure_expr,
+        module_prefix,
+        module_local_types,
+    )?;
     let generic_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
     let llvm_name = typed_f64_closure_name(&generic_name);
     let mut llvm_params: Vec<(LlvmType, String)> = Vec::with_capacity(params.len() + 1);
@@ -333,6 +239,8 @@ pub(super) fn compile_typed_f64_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -379,6 +287,8 @@ pub(super) fn compile_typed_i1_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -425,6 +335,8 @@ pub(super) fn compile_typed_i32_closure(
     lf.linkage = "internal".to_string();
     lf.force_inline = true;
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let value = {
         let blk = lf.block_mut(0).unwrap();
@@ -456,6 +368,42 @@ pub(super) fn compile_typed_i32_closure(
 /// index map; `current_closure_ptr` carries the closure pointer SSA
 /// value name.
 #[allow(clippy::too_many_arguments)]
+/// The [`ReturnedCapture`](crate::fn_info::ReturnedCapture) of a closure body
+/// that is exactly `return <captured binding>`, decided from the maps the
+/// body's own `LocalGet` lowering reads (`expr/literals_vars.rs`): an unboxed
+/// capture is the capture word itself; a boxed one is its cell's value, at
+/// the binding's scope slot (`scope_env::access::read_bits`) or at a JSValue
+/// box's offset 0 (`emit_box_read`). A binding that may still be in its dead
+/// zone needs no exclusion: its cell then holds `TAG_TDZ`, which the runtime
+/// reader declines, so the call throws as the body would. A compiler-private
+/// i32/i1 control cell is not a JSValue cell and gets no fact.
+fn returned_capture(
+    ctx: &FnCtx<'_>,
+    body: &[perry_hir::Stmt],
+) -> Option<crate::fn_info::ReturnedCapture> {
+    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)))] = body else {
+        return None;
+    };
+    let &index = ctx.closure_captures.get(id)?;
+    if ctx.pod_records.contains_key(id) || ctx.module_globals.contains_key(id) {
+        return None;
+    }
+    if !ctx.boxed_vars.contains(id) {
+        return Some(crate::fn_info::ReturnedCapture { index, cell: 0 });
+    }
+    if crate::expr::is_compiler_private_async_i32_control_local(ctx, *id)
+        || crate::expr::is_compiler_private_async_i1_control_local(ctx, *id)
+    {
+        return None;
+    }
+    let offset = crate::scope_env::access::slot(ctx, *id)
+        .map_or(0, |slot| crate::scope_env::access::slot_offset(slot.index));
+    Some(crate::fn_info::ReturnedCapture {
+        index,
+        cell: offset + 1,
+    })
+}
+
 pub(super) fn compile_closure(
     llmod: &mut LlModule,
     func_id: perry_hir::types::FuncId,
@@ -531,6 +479,10 @@ pub(super) fn compile_closure(
         _ => return Err(anyhow!("compile_closure: expected Expr::Closure")),
     };
 
+    let private_resume_frame =
+        crate::expr::private_resume_frame::is_entry(llmod, module_prefix, func_id);
+    let private_async_resume_frame =
+        crate::expr::private_resume_frame::is_async_entry(llmod, module_prefix, func_id);
     // A LocalId is module-unique, but a closure can only observe ids referenced
     // or declared in its own body (plus its parameters/capture list). Older
     // code cloned the complete module-wide boxed/type/reassignment tables into
@@ -573,7 +525,11 @@ pub(super) fn compile_closure(
     closure_relevant_ids.extend(params.iter().map(|p| p.id));
     closure_relevant_ids.extend(captures.iter().copied());
 
-    let public_llvm_name = crate::fn_info::closure_body_symbol(module_prefix, func_id);
+    let public_llvm_name = if private_resume_frame {
+        crate::expr::private_resume_frame::symbol(module_prefix, func_id)
+    } else {
+        crate::fn_info::closure_body_symbol(module_prefix, func_id)
+    };
     let typed_public_trampoline = if cross_module.typed_f64_closures.contains(&func_id) {
         Some(TypedFunctionTrampolineKind::F64)
     } else if cross_module.typed_i32_closures.contains(&func_id) {
@@ -603,13 +559,17 @@ pub(super) fn compile_closure(
     // proven-unused first callback parameter for the caller's stack context,
     // so its ABI and register footprint stay identical to the ordinary
     // trusted clone.
-    let llvm_params =
-        crate::expr::body_call::js_body_params(params.iter().map(|p| format!("%arg{}", p.id)));
+    let llvm_params = crate::expr::private_resume_frame::abi_params(
+        params,
+        private_resume_frame,
+        private_async_resume_frame,
+    );
 
     let ic_base = llmod.ic_counter;
-    let buffer_alias_base = llmod.buffer_alias_counter;
+    let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
     let closure_function_index = llmod.function_count();
     let lf = llmod.define_function(&llvm_name, DOUBLE, llvm_params);
+    lf.private_resume_entry = private_resume_frame || private_async_resume_frame;
     // #7908: closures live outside `hir.functions`, so they do not pass
     // through `codegen/function.rs`, which applies this same collector result
     // to ordinary functions. Without propagating the bit here, bounded
@@ -652,7 +612,9 @@ pub(super) fn compile_closure(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(params, body, &flat_const_ids),
+            cross_module
+                .closure_writes
+                .pointer_locals(params, body, &flat_const_ids),
             &cross_module.scope_map,
         );
         // #7208: reserve one slot per CAPTURED `this` / `new.target`, exactly
@@ -677,6 +639,8 @@ pub(super) fn compile_closure(
     };
 
     let _ = lf.create_block("entry");
+    let _verify_body = crate::verify_facts::body_scope(&lf.name);
+    crate::verify_facts::raw_body_entry(lf, func_id);
 
     let versioned_loop_deopt_context = versioned_loop_callback.then(|| {
         let scratch_param = params
@@ -729,18 +693,13 @@ pub(super) fn compile_closure(
                 .map(|(id, _)| *id),
         );
         for p in params {
-            let arg_name = format!("%arg{}", p.id);
-            // A closure region's Number parameter: an int32 box becomes the
-            // equal plain double once, here (`split_regions`).
-            let arg_name = if region_number_params.contains(&p.id) {
-                let is_int = super::typed_entry::emit_int32_box_test(blk, &arg_name);
-                let bits = blk.bitcast_double_to_i64(&arg_name);
-                let low = blk.trunc(I64, &bits, I32);
-                let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-                blk.select(I1, &is_int, DOUBLE, &as_f64, &arg_name)
-            } else {
-                arg_name
-            };
+            let arg_name = crate::expr::private_resume_frame::parameter_value(
+                blk,
+                params,
+                p.id,
+                private_resume_frame,
+                private_async_resume_frame,
+            );
             let slot = super::arguments::store_param_slot(blk, p, &closure_boxed_vars, &arg_name);
             if let Some(slot_idx) = shadow_slot_map
                 .get(&p.id)
@@ -936,6 +895,7 @@ pub(super) fn compile_closure(
     // wrapper's IIFE makes every module-level `function` declaration one — so
     // the served classification has to be told, exactly as
     // `codegen/function.rs` tells it. Read by nothing but the report.
+    let _life_scope = crate::collectors::life_census::compiling(Some(func_id));
     let _opt_report_scope = crate::opt_report::enter_closure(
         &opt_report_name,
         func_id,
@@ -959,6 +919,7 @@ pub(super) fn compile_closure(
         &cross_module.module_dispatch,
         // #9363: a closure body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     if !versioned_loop_callback {
         if let Some(callback_shapes) = cross_module.array_callback_shapes.get(&func_id) {
@@ -986,8 +947,11 @@ pub(super) fn compile_closure(
         &mut shadow_slot_map,
         native_facts.number_by_construction_locals(),
     );
-    let shadow_slot_clears_after_stmt =
-        crate::collectors::collect_shadow_slot_clear_points(body, &shadow_slot_map);
+    let shadow_slot_clears_after_stmt = crate::collectors::collect_shadow_slot_clear_points(
+        body,
+        &shadow_slot_map,
+        &cross_module.scope_map,
+    );
 
     // Representation-selection context gates (see codegen/function.rs).
     // Async-step closures (CPS-rewritten `async` closures — the rewrite clears
@@ -1149,14 +1113,22 @@ pub(super) fn compile_closure(
         });
 
     let mut ctx = FnCtx {
+        for_in_facts: Default::default(),
+        for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
+        numeric_order_functions: cross_module.numeric_order_functions,
+        numeric_order_closures: cross_module.numeric_order_closures,
+        numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
-        program_class_accessor_names: cross_module.program_class_accessor_names.clone(),
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
         source_function: format!("closure_{}", func_id),
         source_function_slug: crate::expr::native_region_slug(&format!("closure_{}", func_id)),
         active_region_id: None,
+        byte_view_fallback_loop: false,
         native_facts: &native_facts,
         locals,
         local_types,
@@ -1175,6 +1147,7 @@ pub(super) fn compile_closure(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -1183,13 +1156,17 @@ pub(super) fn compile_closure(
         loop_targets: Vec::new(),
         label_targets: HashMap::new(),
         pending_labels: Vec::new(),
+        region_only_label: None,
         classes,
         class_hierarchy: &cross_module.class_hierarchy,
         wpfacts: cross_module.wpfacts.clone(),
         program_layouts: cross_module.program_layouts.clone(),
+        receiver_families: cross_module.receiver_families.clone(),
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -1210,6 +1187,7 @@ pub(super) fn compile_closure(
         // separately from #9369, whose fixture family is the static body
         // itself.
         in_static_member: false,
+        method_home_local: None,
         super_called_stack: Vec::new(),
         shared_super_scope_active: false,
         // Only an arrow written inside the derived CONSTRUCTOR (directly or
@@ -1240,6 +1218,8 @@ pub(super) fn compile_closure(
             })
             .map(|name| class_ids.get(name.as_str()).copied().unwrap_or(0)),
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1283,6 +1263,9 @@ pub(super) fn compile_closure(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -1292,6 +1275,9 @@ pub(super) fn compile_closure(
         resolved_versioned_loop_callback_targets: HashMap::new(),
         trusted_box_captures,
         fixed_generator_state,
+        private_resume_frame,
+        private_async_resume_frame,
+        resume_locals: None,
         versioned_loop_deopt_context,
         trusted_box_capture_ptrs,
         ready_cell_roots: crate::stmt::binding_cell::ReadyCellRoots::with_entry_cells(
@@ -1302,6 +1288,8 @@ pub(super) fn compile_closure(
         object_literal_locals: HashSet::new(),
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
+        namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -1336,6 +1324,8 @@ pub(super) fn compile_closure(
         int_valued_i64_locals: native_facts.int_valued_i64_locals(),
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
+        facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -1348,6 +1338,7 @@ pub(super) fn compile_closure(
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -1361,6 +1352,9 @@ pub(super) fn compile_closure(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -1378,12 +1372,22 @@ pub(super) fn compile_closure(
         spec_abi_functions: &cross_module.spec_abi_functions,
         spec_return_proofs: &cross_module.spec_return_proofs,
         spec_ta_bindings: &cross_module.spec_ta_bindings,
-        spec_ta_ready: std::collections::HashSet::new(),
+        // Bindings proven at every read of this body (one rule with the
+        // pre-pass judge: `spec_abi_sites::ta_ready_at_entry`).
+        spec_ta_ready: crate::collectors::spec_abi_sites::ta_ready_at_entry(
+            &cross_module.spec_ta_bindings,
+            &cross_module.definite_init,
+            Some(func_id),
+        ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return: None,
+        sig_record_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
+        map_entry_fusion: Default::default(),
         i1_local_slots: HashMap::new(),
         index_used_locals: native_facts.index_used_locals(),
         strictly_i32_bounded_locals: native_facts.strictly_i32_bounded_locals(),
@@ -1396,7 +1400,6 @@ pub(super) fn compile_closure(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -1410,6 +1413,7 @@ pub(super) fn compile_closure(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
+        life_claims: native_facts.life_claims(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
@@ -1472,7 +1476,6 @@ pub(super) fn compile_closure(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -1480,6 +1483,8 @@ pub(super) fn compile_closure(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: std::collections::HashSet::new(),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -1488,7 +1493,7 @@ pub(super) fn compile_closure(
         known_noalias_buffer_locals: native_facts.known_noalias_buffer_locals(),
         sealed_buffer_locals: native_facts.sealed_buffer_locals(),
         late_exposed_buffer_locals: native_facts.late_exposed_buffer_locals(),
-        buffer_alias_base,
+        buffer_alias_scopes,
     };
 
     super::arguments::materialize_arguments_object(
@@ -1562,7 +1567,10 @@ pub(super) fn compile_closure(
     }
 
     // #10812: throw a catchable RangeError before the native stack runs out.
-    crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::numeric_order::parameters_ready(&mut ctx, params);
+    let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
+    crate::expr::resume_locals::enter(&mut ctx, params, body)?;
     if is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, body)
             .with_context(|| format!("lowering async closure body func_id={}", func_id))?;
@@ -1580,19 +1588,41 @@ pub(super) fn compile_closure(
             let boxed = crate::expr::nanbox_pointer_inline_pub(ctx.block(), &handle);
             ctx.block().ret(DOUBLE, &boxed);
         } else {
+            crate::expr::resume_locals::write_back(&mut ctx)?;
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    // The public body of a closure that is exactly `return <captured
+    // binding>` says so in its info: a read of an accessor whose getter it is
+    // loads the binding instead of calling (layout_probe `accessor_answer`).
+    let returns_capture = (llvm_name == public_llvm_name
+        && !trusted_box_captures
+        && !versioned_loop_callback
+        && typed_public_trampoline.is_none()
+        && !private_resume_frame
+        && !private_async_resume_frame
+        && !is_async
+        && !is_generator)
+        .then(|| returned_capture(&ctx, body))
+        .flatten();
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
+    crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);
     let ic_end = ctx.ic_site_counter;
     let pending = std::mem::take(&mut ctx.pending_declares);
     let helpers = std::mem::take(&mut ctx.pending_helpers);
-    let buffer_alias_used = ctx.buffer_data_slots.len() as u32;
+    let buffer_alias_scopes = std::mem::take(&mut ctx.buffer_alias_scopes);
     let native_rep_records = std::mem::take(&mut ctx.native_rep_records);
     drop(ctx);
+    if private_async_resume_frame {
+        crate::expr::private_resume_frame::async_adapter(llmod, module_prefix, func_id);
+    }
+    if let Some(rc) = returns_capture {
+        llmod.note_fn_info(&public_llvm_name, |facts| facts.returns_capture = Some(rc));
+    }
     llmod.ic_counter = ic_end;
-    llmod.buffer_alias_counter += buffer_alias_used;
+    llmod.commit_buffer_alias_scopes(buffer_alias_scopes);
     llmod.native_rep_records.extend(native_rep_records);
     for helper in helpers {
         llmod.add_outlined_helper(helper);
@@ -1618,12 +1648,16 @@ pub(super) fn compile_closure(
         && !is_generator
         && super::static_shape_ids::body_has_constfn_lane(&llvm_name)
     {
+        let callable_worker = llmod.callable_worker;
         if let Some(lowered) = llmod.function_mut(closure_function_index) {
-            if super::helpers::guarded_specialization_admits_preinline(
+            if callable_worker {
+                lowered.defer_self_preinline(body.len());
+            } else if super::helpers::guarded_specialization_admits_preinline(
                 lowered.estimated_ir_bytes(),
                 body.len(),
             ) {
                 lowered.pre_statepoint_inline = true;
+                lowered.guarded_preinline = true;
             }
         }
     }
@@ -1649,335 +1683,4 @@ pub(super) fn compile_closure(
 }
 
 #[cfg(test)]
-mod tests {
-    use perry_hir::types::Type;
-    use perry_hir::{Expr, Function, Module as HirModule, Stmt, UpdateOp};
-
-    /// Compile a one-closure module to LLVM IR text.
-    ///
-    /// `outer() { let x; const f = () => { x = 2; x++; return x; }; return f; }`
-    /// — the smallest shape that exercises all three capture accessors: a read
-    /// (`js_closure_get_capture_bits`), a write
-    /// (`js_closure_set_capture_bits`), and a read-modify-write whose coercion
-    /// (`js_to_numeric`) can run a user `valueOf` and therefore collect between
-    /// the read and the write.
-    fn one_capture_closure_ir() -> String {
-        let closure = Expr::Closure {
-            func_id: 1,
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![
-                Stmt::Expr(Expr::LocalSet(0, Box::new(Expr::Number(2.0)))),
-                Stmt::Expr(Expr::Update {
-                    id: 0,
-                    op: UpdateOp::Increment,
-                    prefix: false,
-                }),
-                Stmt::Return(Some(Expr::LocalGet(0))),
-            ],
-            captures: vec![0],
-            mutable_captures: vec![0],
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-        };
-        let mut hir = HirModule::new("closure_self_root_test");
-        hir.functions.push(Function {
-            id: 0,
-            name: "outer".to_string(),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![
-                Stmt::Let {
-                    id: 0,
-                    name: "x".to_string(),
-                    ty: Type::Any,
-                    mutable: true,
-                    init: None,
-                },
-                Stmt::Let {
-                    id: 2,
-                    name: "f".to_string(),
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(closure),
-                },
-                Stmt::Return(Some(Expr::LocalGet(2))),
-            ],
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        });
-        let opts = crate::CompileOptions {
-            emit_ir_only: true,
-            ..Default::default()
-        };
-        let bytes = crate::compile_module(&hir, opts).expect("closure test module compiles");
-        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
-    }
-
-    /// Same module, but the captured id has **no declaration site** in the
-    /// enclosing function, so `collect_boxed_vars` does not box it and the
-    /// closure body takes the *unboxed* capture accessors — the pair whose
-    /// writer (`js_closure_set_capture_bits`) does no bounds check at all.
-    fn unboxed_capture_update_ir() -> String {
-        let closure = Expr::Closure {
-            func_id: 1,
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![
-                Stmt::Expr(Expr::Update {
-                    id: 0,
-                    op: UpdateOp::Increment,
-                    prefix: false,
-                }),
-                Stmt::Return(Some(Expr::LocalGet(0))),
-            ],
-            captures: vec![0],
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-        };
-        let mut hir = HirModule::new("closure_unboxed_update_test");
-        hir.functions.push(Function {
-            id: 0,
-            name: "outer".to_string(),
-            type_params: Vec::new(),
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![
-                Stmt::Let {
-                    id: 2,
-                    name: "f".to_string(),
-                    ty: Type::Any,
-                    mutable: false,
-                    init: Some(closure),
-                },
-                Stmt::Return(Some(Expr::LocalGet(2))),
-            ],
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-            is_exported: false,
-            captures: Vec::new(),
-            decorators: Vec::new(),
-            was_plain_async: false,
-            was_unrolled: false,
-        });
-        let opts = crate::CompileOptions {
-            emit_ir_only: true,
-            ..Default::default()
-        };
-        let bytes = crate::compile_module(&hir, opts).expect("unboxed-capture module compiles");
-        String::from_utf8(bytes).expect("LLVM IR is UTF-8")
-    }
-
-    /// #7055: the closure's own `%this_closure` pointer must be a PRECISE GC
-    /// root, and capture accesses must read it back from that root.
-    ///
-    /// `%this_closure` is an LLVM parameter, i.e. a register the collector
-    /// cannot see. The shipped moving young collection runs at loop back-edge
-    /// polls with precise roots and no conservative native-stack scan, so a
-    /// closure relocated while its own body runs leaves that register pointing
-    /// into from-space — which is reset and reused before the body's next
-    /// capture access. `js_closure_get_capture_bits` then reads a foreign
-    /// object's `capture_count`, judges the index out of range and returns 0,
-    /// so every later boxed-capture read yields `undefined` and every write is
-    /// dropped.
-    ///
-    /// Teeth: with the fix reverted the body reads captures straight off the
-    /// parameter and the `js_closure_get_capture_bits(i64 %this_closure`
-    /// assertion below fails.
-    #[test]
-    fn closure_body_roots_its_own_closure_pointer_and_reads_captures_through_it() {
-        // This test asserts on the SHADOW-STACK lowering. Native roots are the
-        // default now, so it has to say which lowering it is testing.
-        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
-        let ir = one_capture_closure_ir();
-        // The public `perry_closure_*` symbol can be a typed trampoline over a
-        // straight-line `$typed_f64` clone; the real body is the one that
-        // carries a shadow frame. (The typed clone lowers arithmetic-only,
-        // loop-free, call-free statements — `lower_typed_f64_body_*` bails on
-        // anything else — so it contains no safepoint and its `%this_closure`
-        // register cannot go stale.)
-        let body = ir
-            .split("define ")
-            .find(|f| {
-                let name_starts_here = f.starts_with("double @perry_closure_")
-                    || f.starts_with("internal double @perry_closure_");
-                name_starts_here && f.contains("@js_shadow_frame_enter")
-            })
-            .unwrap_or_else(|| panic!("no shadow-framed closure body in IR:\n{ir}"));
-
-        // The prologue stores `%this_closure` into an `i64` root home and binds
-        // that alloca to a shadow-stack slot, so the collector marks and
-        // rewrites it. The home holds the bare pointer: shadow frames decode
-        // bare and NaN-boxed words alike, and the native-root lowering encodes
-        // an `i64` home itself, so codegen must not box it on the way in.
-        assert!(
-            body.contains("store i64 %this_closure, ptr "),
-            "closure prologue must store %this_closure into its rooted slot; body:\n{body}"
-        );
-        assert!(
-            !body.contains("or i64 %this_closure,"),
-            "the closure-pointer home holds the bare pointer, never a re-encoded \
-             word; body:\n{body}"
-        );
-        assert!(
-            body.contains("@js_shadow_slot_bind"),
-            "closure prologue must bind the closure-pointer slot as a GC root; body:\n{body}"
-        );
-
-        // And no capture access may use the raw (unrooted) parameter.
-        assert!(
-            !body.contains("@js_closure_get_capture_bits(i64 %this_closure"),
-            "capture reads must reload the closure pointer from its rooted \
-             slot, not use the %this_closure register; body:\n{body}"
-        );
-        // Belt and braces, and honestly labelled: this fixture does NOT emit the
-        // unboxed capture writer. `collect_boxed_vars` boxes every declared
-        // local a nested closure mutates (and `collect_boxed_param_ids` covers
-        // params), so a mutating capture always lowers to `get_capture_bits` +
-        // `js_box_set_bits`, never to `js_closure_set_capture_bits`. This
-        // assertion guards the unboxed writer against a future change to that
-        // boxing rule; it is not evidence about today's output.
-        assert!(
-            !body.contains("@js_closure_set_capture_bits(i64 %this_closure"),
-            "capture writes must reload the closure pointer from its rooted \
-             slot, not use the %this_closure register; body:\n{body}"
-        );
-
-        // Not vacuous: the fixture really does read, write and read-modify-write
-        // the capture, and the read-modify-write really does emit the ToNumeric
-        // coercion — the collect-capable call the reload below has to survive.
-        let accesses = body.matches("@js_closure_get_capture_bits(").count();
-        assert!(
-            accesses >= 2,
-            "fixture must access the capture more than once (read + write), or \
-             the per-access reload assertion below is vacuous; body:\n{body}"
-        );
-        assert!(
-            body.contains("@js_box_set_bits"),
-            "fixture must WRITE the capture, not only read it; body:\n{body}"
-        );
-        assert!(
-            body.contains("@js_to_numeric"),
-            "the captured `x++` must emit its ToNumeric coercion; body:\n{body}"
-        );
-
-        // The invariant, stated positively: EVERY capture access re-reads the
-        // rooted slot, so no access can be reached through a pointer loaded
-        // before an intervening collection. Pre-fix this count is 0.
-        let slot = {
-            let bind = body
-                .find("@js_shadow_slot_bind(")
-                .map(|i| &body[i..])
-                .and_then(|t| t.split_once("ptr "))
-                .map(|(_, rest)| rest)
-                .unwrap_or_else(|| panic!("no shadow-slot bind in body:\n{body}"));
-            bind.split(')').next().expect("bind operand").to_string()
-        };
-        let reload = format!("load i64, ptr {slot}");
-        assert!(
-            body.matches(reload.as_str()).count() >= accesses,
-            "every one of the {accesses} capture accesses must reload the \
-             closure pointer from its rooted slot {slot}; body:\n{body}"
-        );
-
-        // #7055 (CodeRabbit): the sharp case — `js_to_numeric` runs a user
-        // `valueOf`, i.e. arbitrary JS that can reach a loop poll and relocate
-        // this closure. The capture access that FOLLOWS it must come from a
-        // fresh load, never from a pointer materialized before the call.
-        let coerce_at = body.find("@js_to_numeric").expect("coercion call");
-        let next_access = body[coerce_at..]
-            .find("@js_closure_get_capture_bits(")
-            .map(|i| coerce_at + i)
-            .unwrap_or_else(|| {
-                panic!("fixture must access the capture after the coercion; body:\n{body}")
-            });
-        assert!(
-            body[coerce_at..next_access].contains(reload.as_str()),
-            "a capture access after `js_to_numeric` (which can run a user \
-             `valueOf` and relocate the closure) must re-read the closure \
-             pointer from its rooted slot {slot}; body:\n{body}"
-        );
-    }
-
-    /// #7055 (CodeRabbit 🟠 Major): `js_to_numeric` runs a user `valueOf` —
-    /// arbitrary JS that can reach a `js_gc_loop_safepoint` and relocate this
-    /// closure — and the *unboxed* capture writer
-    /// `js_closure_set_capture_bits` does NOT validate its pointer (unlike the
-    /// reader, which bounds-checks and returns 0). Writing through a closure
-    /// pointer materialized before the coercion would therefore store into
-    /// whatever the mutator has since placed at that recycled from-space
-    /// address. The write must use a pointer re-read from the rooted slot.
-    ///
-    /// Reachability, stated plainly: today `collect_boxed_vars` boxes every
-    /// declared local a nested closure mutates and `collect_boxed_param_ids`
-    /// covers params, so TypeScript cannot currently produce a mutating
-    /// *unboxed* capture — the fixture reaches this arm by omitting the
-    /// declaration site. The arm is live code with a memory-corrupting failure
-    /// mode if that boxing rule ever narrows, which is what this pins.
-    #[test]
-    fn unboxed_capture_write_reloads_the_closure_pointer_after_the_coercion() {
-        // This test asserts on the SHADOW-STACK lowering. Native roots are the
-        // default now, so it has to say which lowering it is testing.
-        let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
-        let ir = unboxed_capture_update_ir();
-        let body = ir
-            .split("define ")
-            .find(|f| {
-                let name_starts_here = f.starts_with("double @perry_closure_")
-                    || f.starts_with("internal double @perry_closure_");
-                name_starts_here && f.contains("@js_closure_set_capture_bits(")
-            })
-            .unwrap_or_else(|| panic!("no unboxed capture write in IR:\n{ir}"));
-
-        // Non-vacuous: this really is the unboxed arm, and the coercion really
-        // is emitted between the capture read and the capture write.
-        assert!(
-            !body.contains("@js_box_set_bits"),
-            "fixture must take the UNBOXED capture arm; body:\n{body}"
-        );
-        let coerce_at = body
-            .find("@js_to_numeric")
-            .unwrap_or_else(|| panic!("captured `x++` must emit its coercion; body:\n{body}"));
-        let write_at = body
-            .find("@js_closure_set_capture_bits(")
-            .expect("capture write");
-        assert!(
-            coerce_at < write_at,
-            "fixture must coerce before it writes; body:\n{body}"
-        );
-
-        let slot = {
-            let bind = body
-                .find("@js_shadow_slot_bind(")
-                .map(|i| &body[i..])
-                .and_then(|t| t.split_once("ptr "))
-                .map(|(_, rest)| rest)
-                .unwrap_or_else(|| panic!("no shadow-slot bind in body:\n{body}"));
-            bind.split(')').next().expect("bind operand").to_string()
-        };
-        assert!(
-            body[coerce_at..write_at].contains(&format!("load i64, ptr {slot}")),
-            "the unboxed capture write must re-read the closure pointer from \
-             its rooted slot {slot} after `js_to_numeric`; body:\n{body}"
-        );
-    }
-}
+mod tests;

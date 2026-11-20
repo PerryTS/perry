@@ -1,0 +1,1 @@
+Restore strict Rust warning checks by removing unused imports and redundant parentheses, matching helper visibility and platform/feature gates to their callers, and retaining test-only hooks only in test builds. Make the WASI FIFO fixture portable across Unix targets and declare enough static layout rows for the 16 KiB-page shape-retirement fixture.

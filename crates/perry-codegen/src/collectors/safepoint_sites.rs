@@ -164,6 +164,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n, all);
@@ -212,6 +213,7 @@ mod tests {
 
     fn call(args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::Undefined),
             args,
             type_args: vec![],
@@ -316,6 +318,8 @@ mod tests {
             object: Box::new(this()),
             property: p.to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         };
         // Three field stores in the constructor body.
         let body = vec![
@@ -331,12 +335,16 @@ mod tests {
             object: Box::new(this()),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(call(vec![])),
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         };
         // 1 for the IndexSet + 1 for the call in `value`.
         assert_eq!(count_safepoint_sites(&[Stmt::Expr(idx_set)]), 2);
 
         // A read (`PropertyGet`) is deliberately NOT a safepoint (it inlines).
         let get = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(this()),
             property: "x".to_string(),
             byte_offset: 0,

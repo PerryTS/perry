@@ -962,3 +962,8 @@ pub(crate) fn walk_malloc_headers_for_native_shutdown(visit: &mut dyn FnMut(*mut
         }
     }
 }
+
+#[inline]
+pub(super) fn malloc_object_count() -> usize {
+    MALLOC_STATE.with(|s| s.borrow().objects.len())
+}

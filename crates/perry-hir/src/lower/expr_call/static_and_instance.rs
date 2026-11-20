@@ -6,6 +6,7 @@ use anyhow::{anyhow, Result};
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
+use super::super::expr_member::is_worker_messaging_heap_object;
 use super::stream::is_stream_api_method;
 use crate::ir::*;
 use crate::lower_patterns::detect_native_instance_expr;
@@ -260,18 +261,6 @@ pub(super) fn try_static_method_and_instance(
                     );
                     let is_util_mime_instance = matches!(module_name.as_str(), "util" | "sys")
                         && matches!(class_name.as_str(), "MIMEType" | "MIMEParams");
-                    let is_worker_messaging_instance = module_name == "worker_threads"
-                        && matches!(class_name.as_str(), "BroadcastChannel" | "MessagePort")
-                        && matches!(
-                            method_name.as_str(),
-                            "postMessage"
-                                | "close"
-                                | "ref"
-                                | "unref"
-                                | "hasRef"
-                                | "addEventListener"
-                                | "removeEventListener"
-                        );
                     let is_node_stream_iterator_helper =
                         is_node_stream_iterator_helper_instance_method(
                             &module_name,
@@ -279,7 +268,7 @@ pub(super) fn try_static_method_and_instance(
                             &method_name,
                         );
                     if is_util_mime_instance
-                        || is_worker_messaging_instance
+                        || is_worker_messaging_heap_object(&module_name, &class_name)
                         || is_node_stream_iterator_helper
                     {
                         // MIMEType/MIMEParams methods are ordinary object

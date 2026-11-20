@@ -120,20 +120,6 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
                         );
                     }
                 }
-                // #3144: `const m = [].map` / `const s = "".slice` /
-                // `const f = Array.prototype.filter` — track the local so a
-                // later `m.call(arr, ...)` / `m.apply(arr, [...])` rewrites to a
-                // direct call. Uses the same receiver rule as the existing
-                // `.call`/`.apply` builtin-prototype rewrite.
-                if let Some(method) =
-                    crate::lower::expr_call::intrinsics::as_builtin_proto_method_ref(
-                        ctx,
-                        init_unwrapped,
-                    )
-                {
-                    ctx.builtin_proto_method_locals
-                        .insert(ident.id.sym.to_string(), method);
-                }
             }
         }
     }
@@ -347,7 +333,7 @@ pub(crate) fn pre_scan_weakref_locals(ast_module: &ast::Module, ctx: &mut Loweri
         // wrong answer, not a slow one, and it is what a poisoned name buys
         // back. A genuine proxy keeps working through the ordinary dynamic
         // property path (asserted in
-        // `test-files/test_gap_proxy_local_name_collision_7775.ts`).
+        // `tests/parity/language/object/test_gap_proxy_local_name_collision_7775.ts`).
         //
         // This subtraction is now a second line of defence, not the fix: the
         // set it edits is only the `is_proxy_local` fallback for receivers that

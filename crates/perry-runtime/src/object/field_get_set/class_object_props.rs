@@ -33,7 +33,7 @@ pub(crate) fn class_evaluation_prototype_class_id(ptr: usize) -> Option<u32> {
     }
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(ptr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -127,15 +127,12 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         }
         None => {
             // A statically resolved parent has no per-evaluation heritage
-            // value to pin (native constructors use reserved class ids).
-            // The declared prototype already carries that parent edge in its
-            // shape; copy it rather than defaulting this evaluation to Object.
-            let template_proto = super::super::class_registry::class_decl_prototype_value(class_id);
-            if JSValue::from_bits(template_proto.to_bits()).is_pointer() {
-                Some(super::super::js_object_get_prototype_of(template_proto).to_bits())
-            } else {
-                super::super::class_registry::global_object_prototype_bits()
-            }
+            // value to pin (native constructors use reserved class ids). Its
+            // edge is the declaration's static parent link, read from the
+            // declaration facts, not from the template's declaration holder:
+            // building this evaluation's prototype never builds the
+            // template's (S7b).
+            super::super::class_registry::static_parent_prototype_bits(class_id)
         }
     };
     finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
@@ -170,13 +167,15 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 .store(true, std::sync::atomic::Ordering::Relaxed);
             let proto_value = proto
                 .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64));
-            crate::object::install_evaluation_generator_symbols(
-                proto_value,
-                class.with_const_ptr::<ObjectHeader, _>(|c| {
-                    crate::value::js_nanbox_pointer(c as i64)
-                }),
-                class_id,
-            );
+            proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+                crate::object::class_registry::install_prototype_symbol_members(
+                    p,
+                    class_id,
+                    class.with_const_ptr::<ObjectHeader, _>(|c| {
+                        crate::value::js_nanbox_pointer(c as i64)
+                    }),
+                )
+            });
             class.with_mut_ptr::<ObjectHeader, _>(|class| {
                 super::class_object_template::class_object_add_internal_for(
                     class,
@@ -228,13 +227,16 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         });
     });
 
-    for (name, is_accessor) in super::super::class_registry::class_prototype_member_names(class_id)
-    {
-        if is_accessor {
+    for member in super::super::class_registry::class_prototype_member_names(class_id) {
+        let name = member.name;
+        if member.accessor {
             // S2: an accessor is a real accessor property of this prototype.
             proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
-                super::super::class_registry::install_decl_prototype_accessor_bytes(
-                    proto, class_id, &name,
+                super::super::class_registry::install_decl_prototype_accessor_at(
+                    proto,
+                    class_id,
+                    &name,
+                    Some(member.at),
                 )
             });
             continue;
@@ -256,6 +258,8 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 class_id,
                 &name,
                 class_value,
+                proto
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
             )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
@@ -271,11 +275,13 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
         });
     }
 
-    crate::object::install_evaluation_generator_symbols(
-        proto.with_const_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
-        class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
-        class_id,
-    );
+    proto.with_mut_ptr::<ObjectHeader, _>(|p| {
+        crate::object::class_registry::install_prototype_symbol_members(
+            p,
+            class_id,
+            class.with_const_ptr::<ObjectHeader, _>(|c| crate::value::js_nanbox_pointer(c as i64)),
+        )
+    });
     if let Some(parent_proto) = &parent_proto {
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
             super::super::prototype_chain::object_link_class_evaluation_prototype(
@@ -634,12 +640,13 @@ pub(super) unsafe fn instance_constructor_value(
     // fell through to `undefined`.
     if class_id == crate::weakref::CLASS_ID_WEAKMAP || class_id == crate::weakref::CLASS_ID_WEAKSET
     {
-        let name: &[u8] = if class_id == crate::weakref::CLASS_ID_WEAKMAP {
-            b"WeakMap"
-        } else {
-            b"WeakSet"
-        };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        let v = super::super::builtin_constructor_value(
+            if class_id == crate::weakref::CLASS_ID_WEAKMAP {
+                "WeakMap"
+            } else {
+                "WeakSet"
+            },
+        );
         return Some(JSValue::from_bits(v.to_bits()));
     }
     if class_id != 0 && class_has_own_method(class_id, "constructor") {
@@ -655,20 +662,21 @@ pub(super) unsafe fn instance_constructor_value(
             | CLASS_ID_BOXED_SYMBOL
     ) {
         let name = match class_id {
-            CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
-            CLASS_ID_BOXED_STRING => b"String".as_slice(),
-            CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
-            CLASS_ID_BOXED_BIGINT => b"BigInt".as_slice(),
-            CLASS_ID_BOXED_SYMBOL => b"Symbol".as_slice(),
+            CLASS_ID_BOXED_NUMBER => "Number",
+            CLASS_ID_BOXED_STRING => "String",
+            CLASS_ID_BOXED_BOOLEAN => "Boolean",
+            CLASS_ID_BOXED_BIGINT => "BigInt",
+            CLASS_ID_BOXED_SYMBOL => "Symbol",
             _ => unreachable!(),
         };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        // Declared phase-A globals, each a literal: the realm's core.
+        let v = crate::object::builtin_value_core(name);
         return Some(JSValue::from_bits(v.to_bits()));
     }
     // #11868: an anonymous shape is not a constructor identity. Let the
     // ordinary lookup read Object.prototype's own property, including edits,
     // deletion and accessors. The writable global Object binding is unrelated.
-    if class_id != 0 && is_anon_shape_class_id(class_id) {
+    if class_id != 0 && super::super::shapes::object_is_plain_record(obj) {
         return None;
     }
     // #10478: an `Object.create(proto)` result is stamped with a synthetic

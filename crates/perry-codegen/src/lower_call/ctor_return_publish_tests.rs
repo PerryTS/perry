@@ -66,6 +66,9 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         value: Box::new(Expr::LocalGet(1)),
         receiver: Box::new(Expr::This),
         strict: false,
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     })];
     body.extend(tail);
     Function {
@@ -110,6 +113,7 @@ fn class(id: u32, name: &str, extends_name: Option<&str>, ctor_tail: Vec<Stmt>) 
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -124,6 +128,7 @@ fn module(classes: Vec<Class>, construct: &str) -> Module {
         ty: Type::Named(construct.to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: construct.to_string(),
             args: vec![Expr::Integer(1)],
             type_args: Vec::new(),

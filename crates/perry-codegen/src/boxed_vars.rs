@@ -73,6 +73,19 @@ fn fixed_generator_slots(stmts: &[perry_hir::Stmt]) -> HashSet<u32> {
                 collect_closure_refs_and_writes_in_stmts(body, shared, &mut HashSet::new());
             }
         }
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } = expr
+        {
+            if module == "__perry_runtime" && method == "privateAsyncResumeFrame" {
+                if let Some(Expr::Closure { captures, .. }) = args.first() {
+                    out.extend(captures.iter().copied());
+                }
+            }
+        }
         // The caller handles each lexical scope independently.
         perry_hir::walker::walk_expr_children(expr, &mut |child| visit(child, out, shared));
     }
@@ -190,6 +203,7 @@ fn collect_prealloc_box_ids_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSe
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_prealloc_box_ids_in_stmts(body, out);
                 if let Some(c) = catch {
@@ -323,6 +337,7 @@ fn writes_all_precede_captures(stmts: &[perry_hir::Stmt], id: u32) -> bool {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     find_home(body, id, out);
                     if let Some(c) = catch {
@@ -470,6 +485,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
             body,
             catch,
             finally,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_stmts(body, out);
             if let Some(c) = catch {
@@ -574,7 +590,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             collect_nested_closure_boxed_vars_in_expr(then_expr, out);
             collect_nested_closure_boxed_vars_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(index, out);
         }
@@ -582,6 +598,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             object,
             index,
             value,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(index, out);
@@ -749,6 +766,7 @@ fn collect_self_recursive_closure_ids(stmts: &[perry_hir::Stmt], out: &mut HashS
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_self_recursive_closure_ids(body, out);
                 if let Some(c) = catch {
@@ -798,6 +816,7 @@ fn collect_for_init_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_for_init_ids(body, out);
                 if let Some(c) = catch {
@@ -890,6 +909,7 @@ fn collect_closure_refs_and_writes_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             collect_closure_refs_and_writes_in_stmts(body, refs, writes);
             if let Some(c) = catch {
@@ -996,7 +1016,7 @@ fn collect_closure_refs_and_writes_in_expr(
             collect_closure_refs_and_writes_in_expr(then_expr, refs, writes);
             collect_closure_refs_and_writes_in_expr(else_expr, refs, writes);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_refs_and_writes_in_expr(object, refs, writes);
             collect_closure_refs_and_writes_in_expr(index, refs, writes);
         }
@@ -1004,6 +1024,7 @@ fn collect_closure_refs_and_writes_in_expr(
             object,
             index,
             value,
+            ..
         } => {
             collect_closure_refs_and_writes_in_expr(object, refs, writes);
             collect_closure_refs_and_writes_in_expr(index, refs, writes);
@@ -1129,6 +1150,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
             body,
             catch,
             finally,
+            ..
         } => {
             collect_outer_writes_in_stmts(body, out);
             if let Some(c) = catch {
@@ -1249,7 +1271,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             collect_outer_writes_in_expr(then_expr, out);
             collect_outer_writes_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(index, out);
         }
@@ -1257,6 +1279,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             object,
             index,
             value,
+            ..
         } => {
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(index, out);
@@ -1342,6 +1365,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
             body,
             catch,
             finally,
+            ..
         } => {
             collect_write_ids_in_stmts(body, out);
             if let Some(c) = catch {
@@ -1460,7 +1484,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             collect_write_ids_in_expr(then_expr, out);
             collect_write_ids_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(index, out);
         }
@@ -1468,6 +1492,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             object,
             index,
             value,
+            ..
         } => {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(index, out);
@@ -1540,6 +1565,7 @@ pub(crate) fn collect_let_types_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_let_types_in_stmts(body, out);
                 if let Some(c) = catch {
@@ -1655,6 +1681,7 @@ fn collect_compiler_private_async_control_locals_in_stmts_inner(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_compiler_private_async_control_locals_in_stmts_inner(
                     body,
@@ -1712,6 +1739,17 @@ fn collect_compiler_private_async_control_locals_in_expr(
 ) {
     use perry_hir::Expr;
     match expr {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            ..
+        } if module == "__perry_runtime" && method == "privateAsyncResumeFrame" => {
+            crate::expr::private_resume_frame::collect_async_controls(args, i32_out, i1_out);
+            if let Some(closure) = args.first() {
+                collect_compiler_private_async_control_locals_in_expr(closure, i32_out, i1_out);
+            }
+        }
         Expr::LinkGeneratorPrototype {
             obj,
             fixed_state: true,
@@ -1784,7 +1822,7 @@ fn collect_closure_let_types_in_expr(
             collect_closure_let_types_in_expr(then_expr, out);
             collect_closure_let_types_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_closure_let_types_in_expr(object, out);
             collect_closure_let_types_in_expr(index, out);
         }
@@ -1827,149 +1865,8 @@ fn infer_refinable_type_without_context(init: &perry_hir::Expr) -> Option<perry_
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use perry_hir::types::Type;
-    use perry_hir::{Expr, Stmt};
-
-    fn closure(func_id: u32, captured_id: u32) -> Expr {
-        Expr::Closure {
-            func_id,
-            params: Vec::new(),
-            return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)))],
-            captures: vec![captured_id],
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: false,
-        }
-    }
-
-    #[test]
-    fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
-        let mut state = closure(10, 1);
-        if let Expr::Closure { body, .. } = &mut state {
-            body.insert(
-                0,
-                Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(2.0)))),
-            );
-        }
-        let mut stmts = vec![
-            Stmt::Let {
-                id: 1,
-                name: "state".into(),
-                ty: Type::Number,
-                mutable: true,
-                init: Some(Expr::Number(0.0)),
-            },
-            Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-                obj: Box::new(state),
-                is_async: false,
-                fixed_state: true,
-                i32_controls: vec![1],
-                i1_controls: vec![],
-            })),
-        ];
-        assert!(!collect_boxed_vars(&stmts).contains(&1));
-        let mut numbers = HashSet::new();
-        let mut booleans = HashSet::new();
-        collect_compiler_private_async_control_locals_in_stmts(&stmts, &mut numbers, &mut booleans);
-        assert_eq!(numbers, HashSet::from([1]));
-        assert!(booleans.is_empty());
-        let user = Stmt::Let {
-            id: 20,
-            name: "__gen_state".into(),
-            ty: Type::Number,
-            mutable: true,
-            init: Some(Expr::Number(1.0)),
-        };
-        collect_compiler_private_async_control_locals_in_stmts(
-            &[user],
-            &mut numbers,
-            &mut booleans,
-        );
-        assert_eq!(
-            numbers,
-            HashSet::from([1]),
-            "user spelling is not a scalar-slot proof"
-        );
-        stmts.insert(0, Stmt::PreallocateBoxes(vec![1]));
-        assert!(collect_boxed_vars(&stmts).contains(&1));
-    }
-
-    #[test]
-    fn captured_closure_value_is_boxed_only_for_real_self_capture() {
-        // #10520: the outer closure references `f`, but `f`'s initializer
-        // does not. Only `self_ref` captures itself before initialization.
-        let stmts = vec![
-            Stmt::Let {
-                id: 1,
-                name: "f".into(),
-                ty: Type::Any,
-                mutable: false,
-                init: Some(closure(10, 3)),
-            },
-            Stmt::Let {
-                id: 2,
-                name: "self_ref".into(),
-                ty: Type::Any,
-                mutable: false,
-                init: Some(closure(11, 2)),
-            },
-            Stmt::Expr(closure(12, 1)),
-        ];
-        let boxed = collect_boxed_vars(&stmts);
-        assert!(!boxed.contains(&1), "captured const closure needs no cell");
-        assert!(
-            boxed.contains(&2),
-            "a self-capturing initializer needs a cell"
-        );
-    }
-
-    #[test]
-    fn simple_refinement_uses_shared_hir_inference_for_constructed_values() {
-        assert_eq!(
-            refine_type_from_init_simple(&Expr::DateNew(vec![])),
-            Some(Type::Named("Date".to_string()))
-        );
-        assert_eq!(
-            refine_type_from_init_simple(&Expr::Uint8ArrayNew(None)),
-            Some(Type::Named("Uint8Array".to_string()))
-        );
-        assert_eq!(
-            refine_type_from_init_simple(&Expr::CryptoRandomBytes(Box::new(Expr::Integer(8)))),
-            Some(Type::Named("Uint8Array".to_string()))
-        );
-        assert_eq!(
-            refine_type_from_init_simple(&Expr::ArraySlice {
-                layout: None,
-                array: Box::new(Expr::Array(vec![], None)),
-                start: Box::new(Expr::Integer(0)),
-                end: None,
-            }),
-            Some(Type::Array(Box::new(Type::Any)))
-        );
-        assert_eq!(
-            refine_type_from_init_simple(&Expr::ArrayJoin {
-                array: Box::new(Expr::Array(vec![], None)),
-                separator: None,
-            }),
-            Some(Type::String)
-        );
-    }
-
-    #[test]
-    fn simple_refinement_filters_unknown_and_void_results() {
-        assert_eq!(refine_type_from_init_simple(&Expr::LocalGet(404)), None);
-        assert_eq!(refine_type_from_init_simple(&Expr::Undefined), None);
-        assert_eq!(refine_type_from_init_simple(&Expr::ProcessExit(None)), None);
-    }
-}
+#[path = "boxed_vars_tests.rs"]
+mod tests;
 
 #[cfg(test)]
 #[path = "boxed_vars_mapped_tests.rs"]

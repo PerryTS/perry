@@ -402,6 +402,7 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
             body,
             catch,
             finally,
+            ..
         } => {
             walk_stmts(body, in_loop, scan);
             if let Some(c) = catch {
@@ -504,7 +505,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             walk_expr(object, in_loop, scan);
             walk_expr(value, in_loop, scan);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             walk_expr(object, in_loop, scan);
             walk_expr(index, in_loop, scan);
         }
@@ -512,6 +513,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             object,
             index,
             value,
+            ..
         } => {
             walk_expr(object, in_loop, scan);
             walk_expr(index, in_loop, scan);
@@ -675,6 +677,7 @@ fn count_alloc_sites_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 count_alloc_sites_in_stmts(body, closure_id, sites);
                 if let Some(catch) = catch {
@@ -872,6 +875,7 @@ mod recursion_participant_tests {
 
     fn call_stmt(fid: u32) -> Stmt {
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(fid)),
             args: vec![Expr::Integer(1)],
             type_args: Vec::new(),
@@ -881,6 +885,7 @@ mod recursion_participant_tests {
 
     fn new_expr() -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: "Command".to_string(),
             args: Vec::new(),
             cap_args_appended: 0,
@@ -898,6 +903,7 @@ mod recursion_participant_tests {
                 ty: Type::Any,
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "commands".to_string(),
                     byte_offset: 0,
@@ -935,6 +941,7 @@ mod recursion_participant_tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }

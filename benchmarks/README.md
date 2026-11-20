@@ -509,9 +509,10 @@ them.
   otherwise-idle machine. Behavior under co-located-tenant pressure
   is not measured.
 - **Compile time / binary size.** Perry compiles slower than Go (Go
-  is famously fast at compile-time). Binary size is ~1 MB for hello
-  world; comparable to Go but bigger than Rust release binaries with
-  panic=abort + strip.
+  is famously fast at compile-time). Hello world is ~34 KB (no
+  runtime linked); small programs that use the runtime are ~5.5 MB
+  stripped on macOS arm64, tracked per program by
+  `scripts/runtime_size_budget.py`.
 
 ---
 
@@ -785,8 +786,8 @@ of being unfair.
 ## 3. Memory + GC stability
 
 [`scripts/run_memory_stability_tests.sh`](../scripts/run_memory_stability_tests.sh)
-+ [`test-files/test_memory_*.ts`](../test-files/) +
-[`test-files/test_gc_*.ts`](../test-files/) — 6 tests × 3 GC mode
++ [`tests/fixtures/programs/test_memory_*.ts`](../tests/fixtures/programs/) +
+[`tests/fixtures/programs/test_gc_*.ts`](../tests/fixtures/programs/) — 6 tests × 3 GC mode
 combos (default / mark-sweep escape hatch / gen-gc + write
 barriers) = 18 runs per CI invocation.
 

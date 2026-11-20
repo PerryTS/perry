@@ -18,7 +18,7 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     // but the constructor's actual function bag now owns the metadata.
     let _no_move = crate::gc::GcSuppressScope::new();
     let bits = normalize_target_bits(target);
-    let target = if bits & !POINTER_MASK == crate::value::INT32_TAG {
+    let target = if bits & !POINTER_MASK == crate::value::INTERNAL_WORD_TAG {
         crate::object::class_constructor_ref_value(bits as u32)
     } else {
         f64::from_bits(bits)
@@ -32,16 +32,16 @@ pub(super) unsafe fn metadata_record(target: f64, create: bool) -> *mut ObjectHe
     } else {
         None
     };
-    let owner = crate::object::descriptor_state::descriptor_holder(addr);
-    if owner.is_null() {
-        return std::ptr::null_mut();
-    }
-    let mut meta = (*owner).meta;
+    let target = crate::object::descriptor_state::owner_key_target(addr);
+    let mut meta = target.meta(crate::object::MetaReason::ReflectMetadata, false);
     if meta.is_null() {
         if !create {
             return std::ptr::null_mut();
         }
-        meta = crate::object::object_meta_ensure(owner);
+        meta = target.meta(crate::object::MetaReason::ReflectMetadata, true);
+        if meta.is_null() {
+            return std::ptr::null_mut();
+        }
     }
     if (*meta).reflect_metadata == 0 && create {
         let record = crate::object::js_object_alloc_null_proto(0, 0);
@@ -65,11 +65,8 @@ pub(super) fn lookup(target: f64, key: &str, property: Option<&str>) -> Option<f
         }
         let name = storage_key(key, property);
         let keys = crate::object::object_keys(record);
-        let index = crate::object::keys_find_property_slot_by_bytes(
-            keys.arr(),
-            keys.count(),
-            name.as_bytes(),
-        )?;
+        let index =
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name.as_bytes())?;
         Some(f64::from_bits(
             crate::object::field_get_set::js_object_get_key_field(record, index).bits(),
         ))

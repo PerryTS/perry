@@ -92,6 +92,45 @@ struct NodeRec {
     self_size: u32,
 }
 
+// Image strings are real GC-headed values but belong to linker-owned memory,
+// so neither allocator walk above can enumerate them. Follow traced references
+// to those immutable cells before assigning labels and edges. This extends only
+// the snapshot's existing local node index; no runtime registration is added.
+fn include_referenced_image_strings(recs: &mut Vec<NodeRec>, idx_of: &mut HashMap<usize, u32>) {
+    // Image strings have no reference slots, so only the original heap nodes
+    // need scanning. Reading a slot never allocates on the JS heap.
+    for index in 0..recs.len() {
+        let header = recs[index].header;
+        unsafe {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
+                let target = decode_slot_target(slot.read());
+                if target == 0 || idx_of.contains_key(&target) {
+                    return;
+                }
+                let Some(image) = crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                    target,
+                    GC_TYPE_STRING,
+                ) else {
+                    return;
+                };
+                let image = image.as_ptr();
+                if (*image)._reserved != crate::string::STRING_IMAGE_MARKER {
+                    return;
+                }
+                // The tracked-header admission checked the image section and
+                // complete record bounds. This header is read, never rewritten.
+                idx_of.insert(target, (recs.len() + 1) as u32);
+                recs.push(NodeRec {
+                    header: image,
+                    user: target,
+                    obj_type: GC_TYPE_STRING,
+                    self_size: (*image).size,
+                });
+            });
+        }
+    }
+}
+
 fn json_escape_into(s: &str, out: &mut String) {
     for ch in s.chars() {
         match ch {
@@ -153,7 +192,7 @@ unsafe fn read_heap_string(bits: u64, max_chars: usize) -> Option<String> {
 /// Snapshot node type + display name for one GC object.
 unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
     match rec.obj_type {
-        GC_TYPE_ARRAY | GC_TYPE_LAZY_ARRAY => (NODE_TYPE_ARRAY, "Array".to_string()),
+        crate::gc_array_type_pat!() | GC_TYPE_LAZY_ARRAY => (NODE_TYPE_ARRAY, "Array".to_string()),
         GC_TYPE_STRING => {
             let name = read_heap_string(
                 crate::value::JSValue::string_ptr(rec.user as *mut crate::StringHeader).bits(),
@@ -162,7 +201,7 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
             .unwrap_or_default();
             (NODE_TYPE_STRING, name)
         }
-        GC_TYPE_OBJECT => {
+        crate::gc_object_type_pat!() => {
             let obj = rec.user as *const crate::object::ObjectHeader;
             let class_id = (*obj).class_id;
             let name = if class_id != 0 {
@@ -200,6 +239,55 @@ unsafe fn node_label(rec: &NodeRec) -> (u32, String) {
     }
 }
 
+/// LIFE I3d (`gc::life_why`): the label of one object for a holder chain.
+#[cfg(perry_gc_instruments)]
+pub(super) unsafe fn life_label(header: *mut GcHeader) -> String {
+    let rec = NodeRec {
+        header,
+        user: (header as usize) + GC_HEADER_SIZE,
+        obj_type: (*header).obj_type,
+        self_size: (*header).size,
+    };
+    let (kind, name) = node_label(&rec);
+    let mut name: String = name.chars().take(48).collect();
+    if kind == NODE_TYPE_ARRAY && rec.obj_type != GC_TYPE_LAZY_ARRAY {
+        let arr = rec.user as *const crate::array::ArrayHeader;
+        let len = (*arr).length.min(8);
+        let els = crate::array::array_elements_ptr(arr);
+        name.push_str(&format!(" len={} [", (*arr).length));
+        for i in 0..len as usize {
+            let bits = *els.add(i);
+            let v = crate::value::JSValue::from_bits(bits);
+            // An element of key/attribute storage is not always a value (attribute words): read a
+            // string only behind a tracked string header.
+            let target = decode_slot_target(bits);
+            let tracked = crate::value::addr_class::try_read_tracked_gc_header_of_type(
+                target,
+                GC_TYPE_STRING,
+            )
+            .is_some();
+            let text = tracked
+                .then(|| read_heap_string(bits, 24))
+                .flatten()
+                .or_else(|| {
+                    v.is_short_string()
+                        .then(|| crate::value::boxed_text::short_string_content(v))
+                })
+                .unwrap_or_else(|| format!("{bits:#x}"));
+            name.push_str(&text);
+            name.push(',');
+        }
+        name.push(']');
+    }
+    format!(
+        "type={} size={} flags={:#x} {:?}",
+        rec.obj_type,
+        rec.self_size,
+        (*header).gc_flags,
+        name
+    )
+}
+
 /// Best-effort property name for inline object field `field_index`,
 /// resolved through the object's keys array. `None` for class
 /// instances (keys array is NULL) and non-string keys.
@@ -216,7 +304,7 @@ unsafe fn object_field_name(
         return None;
     }
     let keys_header = (keys_addr as *const u8).sub(GC_HEADER_SIZE) as *const GcHeader;
-    if (*keys_header).obj_type != GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*keys_header).obj_type) {
         return None;
     }
     let keys = keys_addr as *const crate::array::ArrayHeader;
@@ -296,6 +384,10 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
         idx_of.insert(rec.user, (i + 1) as u32);
     }
 
+    // Image strings live in linker-owned memory: neither allocator walk above
+    // can enumerate them, so follow traced references before labelling nodes.
+    include_referenced_image_strings(&mut recs, &mut idx_of);
+
     let mut strings = StringTable::new();
     let thread_id = crate::agent::current_thread_native_id();
     let root_name = strings.intern(&format!("(GC roots, thread {thread_id})"));
@@ -317,7 +409,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
     for (i, rec) in recs.iter().enumerate() {
         let from = i + 1;
         let mut ordinal: u32 = 0;
-        let (fields_base, fields_len) = if rec.obj_type == GC_TYPE_OBJECT {
+        let (fields_base, fields_len) = if crate::gc_type_is_object!(rec.obj_type) {
             let obj = rec.user as *const crate::object::ObjectHeader;
             let fc = unsafe {
                 crate::object::shapes::object_shape_descriptor(obj)
@@ -327,7 +419,12 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
             };
             if fc <= 10_000 {
                 (
-                    rec.user + std::mem::size_of::<crate::object::ObjectHeader>(),
+                    unsafe {
+                        crate::object::header::object_slot_at(
+                            obj as *mut crate::object::ObjectHeader,
+                            crate::object::header::meta_form_alloc_bytes(0) as u32,
+                        )
+                    } as usize,
                     fc * 8,
                 )
             } else {
@@ -339,7 +436,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
         // Element-index naming only for regular arrays — GC_TYPE_LAZY_ARRAY
         // has a different header layout, so its slots fall through to the
         // `internal` label below.
-        let (elems_base, elems_len) = if rec.obj_type == GC_TYPE_ARRAY {
+        let (elems_base, elems_len) = if crate::gc_type_is_array!(rec.obj_type) {
             let arr = rec.user as *const crate::array::ArrayHeader;
             (
                 unsafe { crate::array::array_elements_ptr(arr) as usize },
@@ -349,7 +446,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
             (0, 0)
         };
         unsafe {
-            visit_gc_rewrite_slots(rec.header, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(rec.header, |slot| {
                 let slot_ordinal = ordinal;
                 ordinal += 1;
                 let bits = slot.read();
@@ -474,7 +571,7 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
     if matches!(format, HeapSnapshotFormat::PerryDiagnostic) {
         out.push_str(&format!(
             r#","pid":{},"thread_id":{},"agent_id":{}"#,
-            std::process::id(),
+            crate::os::current_process_id(),
             thread_id,
             crate::agent::current_agent()
         ));
@@ -538,6 +635,49 @@ pub(crate) fn gc_build_v8_heap_snapshot_json_with_format(format: HeapSnapshotFor
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn snapshot_keeps_shared_image_string_nodes_and_element_edges() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::gc::register_runtime_handle_root_scanner_for_tests();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let image = crate::object::runtime_layouts::test_image_string();
+        let value = crate::value::JSValue::string_ptr(image.cast_mut());
+        let array = crate::array::js_array_alloc(2);
+        // Each push roots its receiver before any allocation; no collecting
+        // operation intervenes before the next push or the final root.
+        let array = crate::array::js_array_push(array, value);
+        let array = crate::array::js_array_push(array, value);
+        let _array_root = scope.root_raw_mut_ptr(array);
+        let json = super::gc_build_v8_heap_snapshot_json();
+        let doc: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let strings = doc["strings"].as_array().unwrap();
+        let nodes = doc["nodes"].as_array().unwrap();
+        let matching: Vec<usize> = nodes
+            .chunks(super::NODE_FIELD_COUNT as usize)
+            .enumerate()
+            .filter(|(_, node)| {
+                node[0].as_u64() == Some(super::NODE_TYPE_STRING as u64)
+                    && strings[node[1].as_u64().unwrap() as usize] == "highWaterMark"
+            })
+            .map(|(index, _)| index)
+            .collect();
+        assert_eq!(matching.len(), 1, "shared image string must appear once");
+        let target = matching[0] as u64 * super::NODE_FIELD_COUNT as u64;
+        let edges = doc["edges"].as_array().unwrap();
+        assert!(
+            edges
+                .chunks(3)
+                .filter(
+                    |edge| edge[0].as_u64() == Some(super::EDGE_TYPE_ELEMENT as u64)
+                        && edge[2].as_u64() == Some(target)
+                )
+                .count()
+                >= 2,
+            "both array slots must retain their edge to the image string"
+        );
+    }
+
     #[test]
     fn snapshot_has_real_nodes_and_edges() {
         // Allocate a recognizable object graph, keep it reachable (the

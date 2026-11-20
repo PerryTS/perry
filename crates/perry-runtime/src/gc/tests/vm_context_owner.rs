@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn vm_context_children_follow_the_moved_sandbox() {
-    check_context(false);
+    check_context();
 }
-#[test]
-#[ignore = "negative control: erase the moved sandbox's private context record"]
-fn negative_control_objtables_vm_context() {
-    check_context(true);
-}
-fn check_context(erase: bool) {
+fn check_context() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::object::js_object_alloc(0, 0);
@@ -23,9 +18,6 @@ fn check_context(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        crate::node_vm::owned_state::clear_context_for_test(moved);
-    }
     let (returned, child_after, strings, wasm, microtasks) =
         crate::node_vm::owned_state::context_fields_for_test(moved).unwrap();
     assert_eq!(returned, crate::value::POINTER_TAG | moved as u64);

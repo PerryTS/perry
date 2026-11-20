@@ -17,10 +17,8 @@
 //!    does (`undefined is not iterable`, `null is not iterable`). A bare,
 //!    subject-less message is unattributable — that is the whole defect.
 //! 2. `WebSocketServer.clients` must be the live `Set` on the DYNAMIC property
-//!    path too: an `any` alias, a computed key, or a helper taking the server
-//!    as an untyped parameter — which is how every compiled npm package reads
-//!    it, since a published bundle carries no types. #9335 exposed `clients`
-//!    only for a statically-typed receiver.
+//!    path too. That half tested the native `ws` binding, which was removed:
+//!    npm `ws` compiles from source and `clients` is its own `Set`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -114,49 +112,5 @@ console.log(message(() => { void [...(undefined as any)]; }));
     assert!(
         !stdout.lines().any(|line| line.trim() == "is not iterable"),
         "a bare, subject-less 'is not iterable' survived:\n{stdout}"
-    );
-}
-
-/// #9335 exposed `clients` only for a statically-typed receiver. MB24's own
-/// heartbeat is typed and stopped crashing, but any untyped read — which is
-/// what a compiled npm package emits — still produced `undefined` and put the
-/// 30-second crash straight back.
-#[test]
-fn websocket_server_clients_resolves_on_the_dynamic_path() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let stdout = compile_and_run(
-        dir.path(),
-        r#"
-import { WebSocketServer } from "ws";
-
-// `{ noServer: true }` is the shape the reporting service uses (#9324);
-// #9335's own test covers the `{ port: 0 }` arm.
-const wss = new WebSocketServer({ noServer: true });
-
-const anyAlias: any = wss;
-const key = "clients";
-function viaUntypedParam(server: any): any {
-  return server.clients;
-}
-
-console.log(Object.prototype.toString.call(wss.clients));
-console.log(Object.prototype.toString.call(anyAlias.clients));
-console.log(Object.prototype.toString.call((wss as any)[key]));
-console.log(Object.prototype.toString.call(viaUntypedParam(wss)));
-
-// The heartbeat loop that killed the process. Iterating the dynamic read
-// must not throw.
-let count = 0;
-for (const _client of anyAlias.clients) count += 1;
-console.log("iterated " + count);
-
-// A `noServer` WebSocketServer still holds the event loop open.
-process.exit(0);
-"#,
-    );
-
-    assert_eq!(
-        stdout,
-        "[object Set]\n[object Set]\n[object Set]\n[object Set]\niterated 0\n"
     );
 }

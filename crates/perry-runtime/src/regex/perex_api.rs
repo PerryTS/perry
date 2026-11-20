@@ -2,7 +2,7 @@
 //! owners and rethrown only after those owners have been released normally.
 use super::perex_memory::{MemoryBudget, StorageError};
 use super::perex_owner::{BuildError, GcProgram, HeapSubject};
-use super::perex_runtime::{self as host, CaptureMode, EngineError, Match};
+use super::perex_runtime::{self as host, CaptureMode, EngineError};
 use super::RegExpHeader;
 use crate::gc::{RuntimeHandle, RuntimeHandleScope};
 use crate::string::StringHeader;
@@ -54,7 +54,7 @@ pub(super) fn before_result_alloc() {
 /// Capture by reference when `f` can throw: its Rust frame can be abandoned by
 /// longjmp. Native ownership belongs in the caller, above this local trap.
 pub(crate) fn caught<T>(f: impl FnOnce() -> T) -> Result<T, EngineError> {
-    crate::exception::catch_js_throw(f).map_err(EngineError::Abrupt)
+    crate::exception::catch_thrown(f).map_err(EngineError::Abrupt)
 }
 
 pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
@@ -67,10 +67,10 @@ pub(crate) fn finish<T>(result: Result<T, EngineError>) -> T {
 fn raise(error: EngineError) -> ! {
     // No allocation/poll precedes rethrowing the returned exception bits.
     if let EngineError::Abrupt(value) = error {
-        crate::exception::js_throw(value);
+        crate::exception::rethrow_caught(value);
     }
     if let EngineError::Build(BuildError::Abrupt(bits)) = error {
-        crate::exception::js_throw(f64::from_bits(bits));
+        crate::exception::rethrow_caught(bits);
     }
     let type_error = matches!(error, EngineError::Type(_));
     let (message, syntax) = match error {
@@ -104,14 +104,14 @@ fn raise(error: EngineError) -> ! {
     let text = scope.root_string_ptr(text);
     let exception = text.with_mut_ptr::<StringHeader, _>(|text| {
         if type_error {
-            crate::error::js_typeerror_new(text)
+            crate::error::CoreError::type_error(text)
         } else if syntax {
-            crate::error::js_syntaxerror_new(text)
+            crate::error::CoreError::syntax_error(text)
         } else {
-            crate::error::js_rangeerror_new(text)
+            crate::error::CoreError::range_error(text)
         }
     });
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(exception as i64))
+    crate::exception::throw_core(exception)
 }
 
 /// Construction and reinitialization publish the program. Each operation owns
@@ -562,6 +562,7 @@ pub(crate) fn regexp(receiver: &RuntimeHandle<'_>) -> *mut RegExpHeader {
 /// The search is [`search_builtin`]'s, over the current addresses of the two
 /// roots, unless `reuse` holds bindings of both. Materialising an exec result
 /// reads through the roots again afterwards, under the only other JS trap.
+#[inline]
 pub(crate) fn execute_rooted(
     receiver: &RuntimeHandle<'_>,
     input: &RuntimeHandle<'_>,
@@ -571,32 +572,122 @@ pub(crate) fn execute_rooted(
     poll: &mut impl FnMut() -> Result<(), EngineError>,
     reuse: Option<&Reuse<'_, '_>>,
 ) -> Result<Option<ExecMatch>, EngineError> {
-    let has_indices = unsafe { (*super::regexp_data_ptr(regexp(receiver))).has_indices };
+    execute_rooted_output(
+        receiver, input, output, FullOutput, budget, memory, poll, reuse,
+    )
+}
+
+/// A full result has no projected-capture payload in its calling convention.
+/// The two result operations share the matcher, but only the projected
+/// consumer carries and checks a numbered capture.
+trait OutputProjection {
+    fn capture_index(&self) -> Option<usize>;
+}
+
+struct FullOutput;
+
+impl OutputProjection for FullOutput {
+    #[inline]
+    fn capture_index(&self) -> Option<usize> {
+        None
+    }
+}
+
+struct CaptureOutput(usize);
+
+impl OutputProjection for CaptureOutput {
+    #[inline]
+    fn capture_index(&self) -> Option<usize> {
+        Some(self.0)
+    }
+}
+
+pub(crate) fn execute_capture_rooted(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    capture: usize,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
+    execute_rooted_output(
+        receiver,
+        input,
+        ExecOutput::Object,
+        CaptureOutput(capture),
+        budget,
+        memory,
+        poll,
+        reuse,
+    )
+}
+
+fn execute_rooted_output<P: OutputProjection>(
+    receiver: &RuntimeHandle<'_>,
+    input: &RuntimeHandle<'_>,
+    output: ExecOutput,
+    projection: P,
+    budget: &mut Budget,
+    memory: &MemoryBudget,
+    poll: &mut impl FnMut() -> Result<(), EngineError>,
+    reuse: Option<&Reuse<'_, '_>>,
+) -> Result<Option<ExecMatch>, EngineError> {
+    // The receiver's matcher data and `lastIndex` are read once. On the RegExp
+    // birth layout (one header word, `instance::birth_layout`) both are that
+    // layout's own inline slots; any other layout (a subclass, an added own
+    // key, an accessor `lastIndex`) keeps the keyed brand read and the ordinary
+    // `Get(R, "lastIndex")`. Only copies of the data escape this read: the Get
+    // can run user code that recompiles the receiver.
+    let birth = super::instance::birth_layout(receiver.get_nanbox_f64());
+    let (has_indices, stateful, stored) = match birth {
+        Some(re) => unsafe {
+            let data = &*super::instance::builtin_data(re);
+            (
+                data.has_indices,
+                data.global || data.sticky,
+                super::instance::builtin_last_index(re),
+            )
+        },
+        None => unsafe {
+            let data = &*super::regexp_data_ptr(regexp(receiver));
+            let (has_indices, stateful) = (data.has_indices, data.global || data.sticky);
+            (
+                has_indices,
+                stateful,
+                super::get_last_index(regexp(receiver)),
+            )
+        },
+    };
     let mode = if matches!(output, ExecOutput::Test) {
         CaptureMode::Full
     } else {
         CaptureMode::All
     };
-    let stateful = unsafe {
-        let data = &*super::regexp_data_ptr(regexp(receiver));
-        data.global || data.sticky
-    };
     let Some(start) = exec_start(
         regexp(receiver),
         input.with_const_ptr::<StringHeader, _>(|s| s),
         stateful,
-        super::get_last_index(regexp(receiver)),
+        stored,
     )?
-    .map(Start::at) else {
+    else {
         return Ok(None);
     };
+    // The data the search runs on. A Number `lastIndex` ran nothing, so on the
+    // birth layout the slot read above still names it; otherwise user code may
+    // have run (`compile` publishes new data), so it is read again.
+    let data = match (start, birth) {
+        (Start::Number(_), Some(re)) => unsafe { super::instance::builtin_data(re) },
+        _ => super::regexp_data_ptr(regexp(receiver)),
+    };
+    let start = start.at();
+    // SAFETY: nothing has collected since `data` was read.
+    let data = unsafe { &*data };
+    let program = data.perex_program;
     // A string without the pattern's leading units (`perex_lead`) has no
     // start a match can take: the search fails before anything is bound.
     let excluded = unsafe {
-        super::perex_lead::excludes_header(
-            &*super::regexp_data_ptr(regexp(receiver)),
-            input.with_const_ptr::<StringHeader, _>(|s| s),
-        )
+        super::perex_lead::excludes_header(data, input.with_const_ptr::<StringHeader, _>(|s| s))
     };
     if excluded {
         if stateful {
@@ -640,7 +731,7 @@ pub(crate) fn execute_rooted(
         }
         None => search_from(
             regexp(receiver),
-            unsafe { (*super::regexp_data_ptr(regexp(receiver))).perex_program },
+            program,
             input.with_const_ptr::<StringHeader, _>(|s| s),
             start,
             stateful,
@@ -654,43 +745,58 @@ pub(crate) fn execute_rooted(
     let Some((full, position)) = found else {
         return Ok(None);
     };
-    let (array, groups) = match output {
-        ExecOutput::Object => {
-            let found = Match { full, captures };
-            let scope = RuntimeHandleScope::new();
-            let fresh;
-            let (bound_subject, bound_program) = match reused {
-                Some((_, program, subject)) => (subject, program),
-                None => {
-                    // The search read the string in place; materialisation
-                    // allocates, so it reads through rooted owners. The
-                    // position stays valid: these bind the same, unchanged
-                    // string, and nothing has run since the search.
-                    let owner = unsafe { GcProgram::from_regexp(&scope, regexp(receiver)) }
-                        .map_err(|e| {
-                            EngineError::Subject(perex::binding::SubjectError::Resource(e))
-                        })?;
-                    fresh = (bind_heap_subject(*input)?, bind_program(owner, budget)?);
-                    (&fresh.0, &fresh.1)
-                }
-            };
-            // Captures and all native owners remain ABOVE the JS trap. A
-            // thrown allocation/property operation returns here before they
-            // are dropped.
-            caught(|| {
-                super::perex_results::materialize(
-                    input,
-                    bound_subject,
-                    bound_program,
-                    &found,
-                    position,
-                    has_indices,
-                    budget,
-                    poll,
-                )
-            })??
+    let projected = projection
+        .capture_index()
+        .filter(|index| captures.as_ref().is_some_and(|slots| *index < slots.len()));
+    let (array, groups) = if let Some(index) = projected {
+        let fresh = bind_heap_subject(*input)?;
+        let slots = captures.as_deref();
+        let array = caught(|| {
+            super::perex_results::materialize_capture(&fresh, slots, position, index, budget, poll)
+        })??;
+        (array, std::ptr::null_mut())
+    } else {
+        // An absent numbered property can invoke an inherited getter with
+        // the result as its receiver, exposing every capture and metadata.
+        match output {
+            ExecOutput::Object => {
+                let slots = captures.as_deref();
+                let scope = RuntimeHandleScope::new();
+                let fresh;
+                let (bound_subject, bound_program) = match reused {
+                    Some((_, program, subject)) => (subject, program),
+                    None => {
+                        // The search read the string in place; materialisation
+                        // allocates, so it reads through rooted owners. The
+                        // position stays valid: these bind the same, unchanged
+                        // string, and nothing has run since the search.
+                        let owner = unsafe { GcProgram::from_regexp(&scope, regexp(receiver)) }
+                            .map_err(|e| {
+                                EngineError::Subject(perex::binding::SubjectError::Resource(e))
+                            })?;
+                        fresh = (bind_heap_subject(*input)?, bind_program(owner, budget)?);
+                        (&fresh.0, &fresh.1)
+                    }
+                };
+                // Captures and all native owners remain ABOVE the JS trap. A
+                // thrown allocation/property operation returns here before they
+                // are dropped.
+                caught(|| {
+                    super::perex_results::materialize(
+                        input,
+                        bound_subject,
+                        bound_program,
+                        full,
+                        slots,
+                        position,
+                        has_indices,
+                        budget,
+                        poll,
+                    )
+                })??
+            }
+            ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
         }
-        ExecOutput::Test => (std::ptr::null_mut(), std::ptr::null_mut()),
     };
     Ok(Some(ExecMatch {
         full,
@@ -840,6 +946,7 @@ fn exec_start(
 /// [`exec_start`] for a `lastIndex` that is not a Number, whose ToLength may
 /// run `valueOf` and so collect: the RegExp and the string are rooted across it.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn coerced_start(
     re: *mut RegExpHeader,
@@ -861,6 +968,15 @@ fn coerced_start(
 /// the TypeError for a non-writable `lastIndex` returned instead of thrown.
 /// Neither branch runs user code.
 fn store_last_index(re: *mut RegExpHeader, n: usize) -> Result<(), EngineError> {
-    super::set_last_index_caught(crate::value::js_nanbox_pointer(re as i64), n as f64)
-        .map_err(EngineError::Abrupt)
+    let receiver = crate::value::js_nanbox_pointer(re as i64);
+    // On the birth layout `lastIndex` is an own writable data property
+    // (22.2.3.1), so the Set is OrdinarySet's store of the value into its
+    // slot (10.1.9.2). A non-writable `lastIndex`, a frozen receiver or any
+    // other layout keeps the ordinary Set and its TypeError.
+    if let Some(re) = super::instance::birth_layout(receiver) {
+        // SAFETY: admitted just now; nothing collected since.
+        unsafe { super::instance::birth_set_last_index(re, n as f64) };
+        return Ok(());
+    }
+    super::set_last_index_caught(receiver, n as f64).map_err(EngineError::Abrupt)
 }

@@ -245,6 +245,7 @@ impl Rewrite<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.list(body);
                 if let Some(c) = catch {

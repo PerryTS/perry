@@ -1,19 +1,6 @@
 # Garbage collector: current architecture and operations
 
-> **Current as of 2026-08-12.** This is the source of truth for the collector
-> that ships. The [generational plan][generational-plan] and
-> [statepoint experiment][statepoint-experiment] are chronological
-> evidence; their opening decisions describe the date they were written, not
-> today's defaults.
->
-> This page deliberately names **no issue numbers**. A sentence of the form
-> "that phase is still unsliced (see the tracker)" becomes false the moment the
-> tracker closes, and nothing in the tree notices — which is exactly how three
-> paragraphs here went stale inside one landing train. State what the code does;
-> the tracker's state is not in this repository. Every number below is bound to
-> the constant it came from by
-> a `gc-fact` marker and re-derived by
-> `scripts/check_gc_doc_claims.py`, which `lint` runs.
+> **Reviewed against the code on 2026-11-01.** Historical plans record earlier designs. Source paths, `gc-fact` constants and `gc-symbol` checks below bind the operational description to the implementation.
 
 Perry uses a per-thread, tracing generational collector. JavaScript values are
 NaN-boxed, allocations carry an 8-byte `GcHeader`, and each runtime thread owns
@@ -69,6 +56,25 @@ ladder and fail on a mismatch (`crates/perry-runtime/src/gc/trigger_watermark.rs
 <!-- gc-symbol: repeated_gc_malloc_is_answered_by_the_fast_path in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 <!-- gc-symbol: a_watermark_the_ladder_disagrees_with_trips_the_verifier in crates/perry-runtime/src/gc/tests/trigger_watermark.rs -->
 
+**Batching young-leaf pressure.** Dedicated young pointer-free leaves can be
+collected without moving small cells, but deciding their liveness requires a
+census of young small cells. A leaf service is due only when Eden plus young
+leaves reaches the existing Eden allocation window and leaves occupy at least
+one quarter of that window. This prevents a nearly full Eden from buying a
+whole census for each small leaf birth. The small-cell copying cap remains
+independent: reaching it requires a tracing minor, even below the leaf floor.
+Suppressed allocation checks remain owed and run at the outermost scope exit.
+
+For small occupancy below cap `C`, survivor occupancy `S`, and Eden window `W`,
+a quiet young trigger bounds total young occupancy below
+`max(S + W, C + ceil(W / 4))`, before the existing allocation and safepoint
+slack. The first term is the survivor-credit policy's bound; the second bounds
+the additional batching allowance. Since `S <= small < C` and `W <= C`, quiet
+occupancy is below `2 * C`. The due answer and the inline allocation residual
+bound come from the same predicate; a leaf birth invalidates that bound.
+<!-- gc-symbol: near_full_eden_coalesces_repeated_leaf_censuses_from_owed_checks in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+<!-- gc-symbol: coalescing_cannot_grow_small_or_leaf_occupancy_past_the_bound in crates/perry-runtime/src/gc/tests/leaf_census_coalescing.rs -->
+
 **Per-live-object cost of a synchronous full.** Three parts of a full scale
 with the live set, and each has a cheaper exact form:
 
@@ -91,6 +97,20 @@ with the live set, and each has a cheaper exact form:
   could zero it.
 <!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
+
+**The post-minor coverage restore is bounded by the dirty pages.** After a
+minor clears the remembered set it re-derives it from the pre-clear dirty
+snapshot. An owner the dirty scan visited completely is skipped; any other old
+parent is walked, and of its in-body slots only those on a page the snapshot
+names: an old parent's in-body slot is described by its page, so one on a
+clean page owes nothing. A Map store, Set store or array that spans many pages
+therefore costs a minor its dirty pages, not its size. Slots outside the
+parent's body and malloc parents are owner qualified and keep the whole-owner
+walk. `PERRY_GC_RESTORE_DIRTY_PAGES=0` selects the whole-owner walk for every
+parent, and `=verify` runs both and aborts if the whole-owner walk finds an
+entry the bounded one did not restore (test and debug builds always do).
+<!-- gc-symbol: the_bounded_restore_rebuilds_the_pages_the_whole_owner_restore_rebuilds in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+<!-- gc-symbol: the_witness_reports_an_unbarriered_edge in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
 
 **Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its
 growth baseline, so old-gen garbage that a minor promoted and that died after
@@ -163,16 +183,24 @@ no fragmentation workload in the corpus exercises it — turning it back on is
 gated on a stress corpus existing, not on the contract. Nursery evacuation and
 normal old-generation sweep are unaffected either way.
 
-## Aging, promotion, and where an object is born
+## Aging, promotion, and where an object is born {#aging-promotion-and-where-an-object-is-born}
 
 The copying minor's tenuring threshold is **adaptive, not fixed**: it is the
 largest number of survivals `S` whose projected survivor occupancy still fits
-the desired survivor size, clamped to a ceiling of 4
-<!-- gc-fact: GC_COPY_PROMOTION_SURVIVALS = 4 in crates/perry-runtime/src/gc/layout.rs -->,
+the desired survivor size, held between the occupancy floor of 2
+<!-- gc-fact: OCCUPANCY_MIN_SURVIVALS = 2 in crates/perry-runtime/src/gc/tenuring.rs -->
+and the occupancy ceiling of 3
+<!-- gc-fact: OCCUPANCY_MAX_SURVIVALS = 3 in crates/perry-runtime/src/gc/tenuring.rs -->,
 and it drops to 1 (promote on first copy) when a measured survival-rate lock
-shows the aging round is filtering nothing. The loop is always on and has no env
-knob; `crates/perry-runtime/src/gc/tenuring.rs` is its definition and states the
-feedback signal it uses.
+shows the aging round is filtering nothing. The ceiling bounds the occupancy
+rule only, not the lock: a small survivor influx no longer raises `S` to 4, which
+re-copied every survivor once more for no measured benefit.
+`PERRY_GC_TENURING_SURVIVALS_MAX=4` restores the previous climb to the header's
+limit of 4
+<!-- gc-fact: GC_COPY_PROMOTION_SURVIVALS = 4 in crates/perry-runtime/src/gc/layout.rs -->;
+`PERRY_GC_TENURING_SURVIVALS=<n>` pins `S` for every minor and overrides both.
+The loop is always on; `crates/perry-runtime/src/gc/tenuring.rs` is its
+definition and states the feedback signal it uses.
 
 While the first nursery-growth sample is awaiting its first survivor round,
 copying minors keep pointer-bearing parents young for one additional round.
@@ -211,16 +239,26 @@ off outright rather than silently stop exercising their own subject.
 <!-- gc-symbol: in_place_promotion_leaves_the_object_at_its_address_in_old_gen in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
 <!-- gc-symbol: promote_in_place_knob_parses_both_states in crates/perry-runtime/src/gc/tests/promote_in_place.rs -->
 
-**Born-old thresholds are type-dependent.** A pointer-free allocation above
-16 KiB
+**Size selects storage, not necessarily age.** The large-object cutoffs are 16 KiB for pointer-free cells and 128 KiB for pointer-bearing cells. Eligible leaves and containers enter dedicated non-moving young storage: a minor traces their children, reclaims dead cells, or promotes survivors at the same address. Types with external backing, move hooks, or other address-stability contracts retain their specialized allocation policy.
 <!-- gc-fact: LARGE_OBJECT_THRESHOLD_BYTES = 16 * 1024 in crates/perry-runtime/src/gc/types.rs -->
-is born in old-gen; a pointer-bearing one stays nursery-resident until 128 KiB
-<!-- gc-fact: LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES = 128 * 1024 in crates/perry-runtime/src/gc/types.rs -->.
-The split matters when reading a survival ratio: a flat threshold sends the
-intermediate backing stores of a growing array straight to old-gen, so the
-garbage they abandon never appears in the young generation at all.
+<!-- gc-fact: LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES = 128 * 1024 in crates/perry-runtime/src/gc/types.rs -->
+<!-- gc-symbol: young_large_storage_admits in crates/perry-runtime/src/gc/types.rs -->
 
-## Roots, by target
+Admission is derived from GC type descriptors in `crates/perry-runtime/src/gc/types.rs`; allocation and collection live in `crates/perry-runtime/src/arena/allocators.rs` and `crates/perry-runtime/src/arena/young_large.rs`. Scoped JSON birth rules can keep eligible storage in the ordinary nursery beyond the normal cutoff.
+
+The inline nursery cursor carries a permission bound at `InlineArenaState.size`.
+It is zero while allocate-black is active; the physical block extent remains in
+`ArenaBlock.size`. Every birth-color transition and cursor refill updates this
+same bound. A successful positive-size bump therefore proves idle birth color
+for a complete unpublished layout, while the refused path retains ordinary
+coloring and mark seeding. Native roots still use LLVM statepoints.
+
+For compiler-owned descriptors uniquely named in the whole-image layout plan,
+fixed births initialize the header with the immutable template word from that
+same plan. Opaque or ambiguous descriptors keep their checked runtime load;
+no runtime shape lookup or validity structure is introduced.
+
+## Roots, by target {#roots-by-target}
 
 One root-set analysis feeds two lowerings:
 
@@ -285,7 +323,7 @@ explicit diagnostic/sensitivity arm. A full scan pins ambiguous roots and
 therefore makes the copying minor ineligible; it is useful evidence, not a
 second normal rooting backend.
 
-## Barriers and weak references
+## Barriers and weak references {#barriers-and-weak-references}
 
 Every old-to-young pointer publication must hit the remembered-set barrier.
 Codegen emits barriers for generated heap stores and runtime helpers perform
@@ -318,8 +356,7 @@ Platform hosts call `js_gc_memory_pressure(level)`:
 - if collection is unsafe, the request is made sticky and drains at the next
   precise safepoint/allocation check.
 
-Released 1 MiB blocks first enter a **per-thread LIFO reuse pool under a
-process-wide byte cap**. The reuse order is thread-local; the budget is not — a
+Released regular arena blocks first enter a **per-thread LIFO reuse pool under a process-wide byte cap**. The reuse order is thread-local; the budget is not — a
 single global reservation is what bounds N live agents to one allowance instead
 of N of them. The cap is derived by `gc_block_pool_cap_with_budget` in
 `crates/perry-runtime/src/gc/heap_budget.rs`: 64 MiB
@@ -406,7 +443,9 @@ These are the operational controls most useful outside collector development:
 | `PERRY_WRITE_BARRIERS=0` | compile/runtime barrier bisection; also forces full mark-sweep |
 | `PERRY_GC_SCAVENGE=0` | disable direct nursery scavenging for pacing comparison |
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
+| `PERRY_GC_RESTORE_DIRTY_PAGES=0` | walk whole owners in the post-minor coverage restore (`verify`: both walks, compared) |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
+| `PERRY_GC_TENURING_SURVIVALS_MAX=N` | ceiling of the adaptive tenuring threshold's occupancy rule (default 3, clamped to 2..4; `4` is the previous climb); the survival-rate lock is unaffected |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
 | `PERRY_GC_TRACE=1` | emit structured per-cycle trace records |
@@ -464,7 +503,7 @@ python3 scripts/check_gc_doc_claims.py
 python3 scripts/gc_runtime_root_holders.py --self-test
 python3 scripts/gc_runtime_root_holders.py
 python3 scripts/gc_root_dominance_check.py --self-test
-cargo test -p perry-runtime --lib
+RUST_TEST_THREADS=1 cargo test -p perry-runtime --lib
 ```
 
 The dedicated performance/rooting workflows have broader compiler and host

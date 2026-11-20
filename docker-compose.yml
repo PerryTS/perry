@@ -34,7 +34,7 @@ services:
       - .:/perry
       - cargo-cache:/root/.cargo/registry
       - cargo-git:/root/.cargo/git
-      - target-cache:/perry/target
+      - mbx-cache:/root/.cache/mbx
     working_dir: /perry
     environment:
       - CARGO_TERM_COLOR=always
@@ -93,7 +93,7 @@ services:
 volumes:
   cargo-cache:
   cargo-git:
-  target-cache:
+  mbx-cache:
   mysql-data:
   redis-data:
   postgres-data:

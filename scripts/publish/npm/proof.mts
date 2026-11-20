@@ -24,7 +24,14 @@ export async function packTarball(pkgDir: string): Promise<{
   } catch {
     return undefined
   }
-  const entry = Array.isArray(parsed) ? parsed[0] : undefined
+  // npm <= 11 prints an array of entries; npm 12 prints an object keyed by
+  // package name. A directory packs exactly one package either way.
+  const entries = Array.isArray(parsed)
+    ? parsed
+    : parsed && typeof parsed === 'object'
+      ? Object.values(parsed)
+      : []
+  const entry = entries.length === 1 ? entries[0] : undefined
   if (!entry || typeof entry !== 'object') return undefined
   const filename = (entry as { filename?: unknown }).filename
   const shasum = (entry as { shasum?: unknown }).shasum

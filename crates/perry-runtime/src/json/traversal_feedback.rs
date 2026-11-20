@@ -48,7 +48,9 @@ const RESAMPLE_EVERY: u8 = 16;
 
 // Two byte counters read once per parse. No heap pointer can live in either.
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static SCORE: Cell<u8> = const { Cell::new(0) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_json")]
     static EAGER_RUN: Cell<u8> = const { Cell::new(0) };
 }
 
@@ -82,35 +84,6 @@ pub(crate) unsafe fn after_cold_read(
     if flip {
         crate::json_tape::force_materialize_lazy(hdr);
     }
-}
-
-/// A lazy array was materialized whole by compiled code refreshing its local
-/// head (`js_array_refresh_local_head`) — the element-shape loop clone's
-/// preheader or a guarded indexed read's repair. Every element is now eagerly
-/// built, so the tape this array was parsed onto was wasted: the same evidence
-/// as a flip.
-pub(crate) fn note_compiled_materialization() {
-    SCORE.with(|s| s.set(s.get().saturating_add(2).min(SCORE_MAX)));
-}
-
-/// Is `addr` a lazy JSON array whose elements have not been built yet? Read by
-/// `js_array_refresh_local_head` before it materializes, so evidence is noted
-/// once per array. Its emitters are cold arms that run about once per
-/// receiver, so the tracked-header probe costs nothing measurable.
-///
-/// # Safety
-///
-/// `addr` must be a plausible heap address; the tracked-header read validates
-/// ownership before anything is dereferenced.
-pub(crate) unsafe fn lazy_array_unmaterialized(addr: usize) -> bool {
-    let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
-        return false;
-    };
-    if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_LAZY_ARRAY {
-        return false;
-    }
-    let lazy = addr as *const crate::json_tape::LazyArrayHeader;
-    (*lazy).magic == crate::json_tape::LAZY_ARRAY_MAGIC && (*lazy).materialized.is_null()
 }
 
 /// Should an otherwise tape-eligible parse go eagerly instead?

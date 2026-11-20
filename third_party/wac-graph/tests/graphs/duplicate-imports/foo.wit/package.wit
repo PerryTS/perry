@@ -1,0 +1,11 @@
+package test:foo;
+
+interface i {
+    use test:shared/types.{x};
+    f: func() -> x;
+}
+
+world w {
+    import i;
+    export i;
+}

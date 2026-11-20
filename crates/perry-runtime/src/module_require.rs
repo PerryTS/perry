@@ -68,40 +68,23 @@ pub extern "C" fn js_get_cjs_main_module() -> f64 {
     CJS_MAIN_MODULE.with(|slot| slot.borrow().map(f64::from_bits).unwrap_or_else(undefined))
 }
 
-/// Codegen FFI: emitted ONCE, in `main()`, before ANY module's `__init` runs
-/// — including the entry's own, since ESM's static-import evaluation order
-/// runs every hoisted dependency's top-level code before the importing
-/// module's (see `cjs_wrap`'s `require('./x')` -> `import` hoist). Node's
-/// loader sets up `require.main`/`process.mainModule` before invoking the
-/// entry's script body at all, so no CommonJS module - not even one loaded
-/// before the entry's own preamble textually runs - ever observes it unset.
-/// Perry can't replicate that ordering directly (the entry's real `module`
-/// record is built by JS the entry's own preamble emits, which necessarily
-/// runs LAST among a CJS entry's static imports), so this allocates a bare
-/// placeholder object and publishes THAT via [`js_set_cjs_main_module`]
-/// up front. Every non-entry module's `require.main` resolves to this same
-/// object from heap birth. When the entry's own preamble finally runs, it
-/// reclaims this exact object (via [`js_get_cjs_main_module`]) and fills in
-/// its real fields in place — same identity throughout, so a dependency that
-/// captured `require.main` before the entry ran still `===`-matches the
-/// entry's `module` afterward (JS identity survives mutation).
-///
-/// Codegen emits the call only when the entry module is itself CJS-wrapped
-/// (`collectors::is_cjs_wrapped_module`); an ESM entry never calls this, so
-/// [`js_get_cjs_main_module`] stays `undefined` for the lifetime of the heap
-/// — matching Node, where a CJS module reached only via `import` from an ESM
-/// entry has no CommonJS "main" at all.
+/// Codegen FFI: the CommonJS support module's one handoff, run before any
+/// CommonJS module body (every wrapped module imports the support module
+/// first). `cache` is the program's `require.cache` (a compiler-owned object
+/// whose keys are the graph's module paths); `main` is the entry's record, or
+/// `undefined` when the entry is not CommonJS (an ESM entry: `require.main`
+/// stays `undefined`, as in Node). From here on `Module._cache`,
+/// `createRequire().cache` and `process.mainModule` are these objects.
+/// Returns `require.extensions`.
 #[no_mangle]
-pub extern "C" fn js_bootstrap_cjs_main_module_placeholder() {
-    // Born with the CommonJS record layout: the entry's preamble fills the
-    // public keys in place and its factory goes to the private slot.
-    // SAFETY: `CJS_MODULE_RECORD` is a registered runtime layout.
-    let placeholder = object_value(unsafe {
-        crate::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            crate::object::runtime_layouts::CJS_MODULE_RECORD
-        ))
-    });
-    js_set_cjs_main_module(placeholder);
+pub extern "C" fn js_cjs_install(cache: f64, main: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let main = scope.root_nanbox_f64(main);
+    crate::object::install_module_cjs_cache_value(cache);
+    if !JSValue::from_bits(main.get_nanbox_f64().to_bits()).is_undefined() {
+        js_set_cjs_main_module(main.get_nanbox_f64());
+    }
+    crate::object::module_cjs_extensions_value()
 }
 
 /// GC root scanner for [`CJS_MAIN_MODULE`]: a raw heap pointer cached outside
@@ -119,7 +102,7 @@ pub fn scan_cjs_main_module_root_mut(visitor: &mut crate::gc::RuntimeRootVisitor
             // cache followed it" -- the load-bearing question for this
             // holder's identity guarantee, not visible from the generic
             // per-cycle counters.
-            if rewritten && crate::gc::gc_diag_enabled() {
+            if rewritten && crate::gc::diagnostic_hooks::enabled() {
                 CJS_MAIN_MODULE_REWRITES.with(|c| c.set(c.get() + 1));
                 eprintln!(
                     "[cjs-main-module] rewritten: new_bits={:#018x} total_rewrites={}",
@@ -280,7 +263,7 @@ fn validate_create_require_base(filename_or_url: f64) {
         }
         throw_invalid_value("filename", filename_or_url);
     }
-    if crate::url::node_compat::module_base_to_path(filename_or_url).is_some() {
+    if crate::module_require::file_url_text::module_base_to_path(filename_or_url).is_some() {
         return;
     }
     throw_invalid_value("filename", filename_or_url);
@@ -319,9 +302,9 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let message = format!("Cannot find module '{specifier}'");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "MODULE_NOT_FOUND");
-    let error = crate::error::js_error_new_with_message(msg);
+    let error = crate::error::CoreError::error(msg);
     let scope = crate::gc::RuntimeHandleScope::new();
-    let error_handle = scope.root_raw_mut_ptr(error);
+    let error_handle = error.root(&scope);
     let stack = crate::array::js_array_alloc_with_length(1);
     let stack_handle = scope.root_raw_mut_ptr(stack);
     let base_value = string_value(&base.to_string_lossy());
@@ -331,8 +314,10 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
     let stack_value = stack_handle.with_mut_ptr(|stack: *mut crate::array::ArrayHeader| {
         f64::from_bits(JSValue::array_ptr(stack).bits())
     });
-    let error_value = error_handle.with_mut_ptr(|error: *mut crate::object::ObjectHeader| {
-        let error_value = js_nanbox_pointer(error as i64);
+    {
+        let error_value = error_handle.value();
+        let error =
+            crate::value::js_nanbox_get_pointer(error_value) as *mut crate::object::ObjectHeader;
         unsafe {
             crate::object::exotic_expando::exotic_set_property(
                 error as usize,
@@ -342,9 +327,8 @@ fn throw_require_module_not_found(specifier: &str, base: &std::path::Path) -> ! 
                 error_value,
             );
         }
-        error_value
-    });
-    crate::exception::js_throw(error_value)
+    }
+    crate::exception::throw_core(error_handle.error())
 }
 
 fn throw_package_path_not_exported(specifier: &str) -> ! {
@@ -403,6 +387,7 @@ fn resolve_file_candidate(path: &std::path::Path) -> Option<std::path::PathBuf> 
             component => normalized.push(component.as_os_str()),
         }
     }
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY
         .with(|registry| registry.contains_registered(&normalized.to_string_lossy()))
         .then_some(normalized)
@@ -473,27 +458,6 @@ fn package_parts(specifier: &str) -> (&str, Option<&str>) {
     }
 }
 
-fn resolve_exports(value: &serde_json::Value, key: &str) -> Option<String> {
-    match value {
-        serde_json::Value::String(target) => Some(target.clone()),
-        serde_json::Value::Array(items) => items.iter().find_map(|v| resolve_exports(v, key)),
-        serde_json::Value::Object(map) => {
-            if let Some(target) = map.get(key) {
-                return resolve_exports(target, key);
-            }
-            for (condition, target) in map {
-                if matches!(condition.as_str(), "node" | "require" | "default") {
-                    if let Some(found) = resolve_exports(target, key) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        _ => None,
-    }
-}
-
 fn resolve_request(
     base: &std::path::Path,
     specifier: &str,
@@ -518,11 +482,12 @@ fn resolve_request(
         }
         if let Ok(text) = std::fs::read_to_string(package_dir.join("package.json")) {
             if let Ok(manifest) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let Some(exports) = manifest.get("exports") {
+                if let Some(exports) = package_exports::manifest_exports(&text) {
                     let key = subpath
                         .map(|s| format!("./{s}"))
                         .unwrap_or_else(|| ".".into());
-                    let target = resolve_exports(exports, &key).ok_or(ResolveError::NotExported)?;
+                    let target = package_exports::resolve_require(&exports, &key)
+                        .ok_or(ResolveError::NotExported)?;
                     return resolve_file(&package_dir.join(target)).ok_or(ResolveError::NotFound);
                 }
                 if let Some(subpath) = subpath {
@@ -622,108 +587,20 @@ fn cjs_record_field(value: f64, name: &str) -> Option<f64> {
     ))
 }
 
-/// A CommonJS record's ordinary-object header, for its internal slot.
-fn cjs_record_object(record: f64) -> Option<*mut crate::object::ObjectHeader> {
-    let jv = JSValue::from_bits(record.to_bits());
-    if !jv.is_pointer() {
-        return None;
-    }
-    let addr = crate::value::js_nanbox_get_pointer(record) as usize;
-    // SAFETY: a pointer-tagged value names a live GC cell or nothing.
-    let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT)
-        .then_some(addr as *mut crate::object::ObjectHeader)
-}
-
-/// The private slot key of [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
-/// that holds the module's factory.
-const CJS_FACTORY_KEY: &[u8] = b"#<perry:cjs-module-factory>";
-
 fn is_closure_value(value: f64) -> bool {
     JSValue::from_bits(value.to_bits()).is_pointer()
         && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize)
 }
 
-/// The factory slot of a CommonJS record: the private entry
-/// [`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)
-/// declares. A record whose keys were edited keeps the entry; any other
-/// object has none.
-fn cjs_record_factory_slot(obj: *mut crate::object::ObjectHeader) -> Option<u32> {
-    // SAFETY: `obj` is a live ordinary object; its keys are read, not kept.
-    unsafe {
-        let keys = crate::object::object_keys(obj);
-        if keys.is_null() {
-            return None;
-        }
-        crate::object::keys_find_private_slot_by_bytes(keys.arr(), keys.count(), CJS_FACTORY_KEY)
-    }
-}
-
-/// Codegen FFI: a CommonJS wrapper's module record, born with its final
-/// layout ([`CJS_MODULE_RECORD`](crate::object::runtime_layouts::CJS_MODULE_RECORD)):
-/// `exports`, `children` and `paths` are the wrapper's own literals, `id` and
-/// `filename` the module's path. `factory` goes to the private slot: not a
-/// property, so user code cannot read (or stringify) it, and its text (the
-/// whole module) is not retained for it.
-#[no_mangle]
-pub extern "C" fn js_cjs_module_record(
-    exports: f64,
-    filename: f64,
-    dir: f64,
-    children: f64,
-    parent: f64,
-    paths: f64,
-    factory: f64,
-) -> f64 {
-    use crate::object::runtime_layouts::cjs_module_slot as slot;
-    crate::object::runtime_layouts::runtime_record!(record, CJS_MODULE_RECORD);
-    let set = |s: u32, value: f64| record.set(s, JSValue::from_bits(value.to_bits()));
-    let undefined = f64::from_bits(TAG_UNDEFINED);
-    set(slot::EXPORTS, exports);
-    set(slot::RECORD, f64::from_bits(TAG_TRUE));
-    set(slot::ID, filename);
-    set(slot::PATH, dir);
-    set(slot::FILENAME, filename);
-    set(slot::LOADED, f64::from_bits(TAG_FALSE));
-    set(slot::CHILDREN, children);
-    set(slot::PARENT, parent);
-    set(slot::PATHS, paths);
-    set(slot::REQUIRE, undefined);
-    set(
-        slot::FACTORY,
-        if is_closure_value(factory) {
-            factory
-        } else {
-            undefined
-        },
-    );
-    object_value(record.finish())
-}
-
-/// Codegen FFI: store the entry module's factory in its record's private slot.
-/// The entry fills the main-module placeholder in place (its identity may
-/// already be `require.main` elsewhere), and the placeholder is born with the
-/// record layout, so the slot exists.
-#[no_mangle]
-pub extern "C" fn js_cjs_record_set_factory(record: f64, factory: f64) {
-    if !is_closure_value(factory) {
-        return;
-    }
-    let Some(obj) = cjs_record_object(record) else {
-        return;
-    };
-    if let Some(slot) = cjs_record_factory_slot(obj) {
-        crate::object::js_object_set_field(obj, slot, JSValue::from_bits(factory.to_bits()));
-    }
-}
-
-/// The factory kept in a CommonJS record's private slot.
-fn cjs_record_factory(record: f64) -> Option<f64> {
-    cjs_record_exports(record)?;
-    let obj = cjs_record_object(record)?;
-    let slot = cjs_record_factory_slot(obj)?;
-    let factory = f64::from_bits(crate::object::js_object_get_field(obj, slot).bits());
-    is_closure_value(factory).then_some(factory)
+/// The factory a CommonJS wrapper handed over with its partial publication
+/// (the path entry keeps it, never a property): a reload after
+/// `delete require.cache[path]` runs it again.
+fn path_module_factory(path: &str) -> Option<f64> {
+    let key = module_lookup_key(path);
+    MODULE_PATH_REGISTRY
+        .with(|registry| registry.factory(&key))
+        .map(f64::from_bits)
+        .filter(|factory| is_closure_value(*factory))
 }
 
 /// The value a completed path module published, WITHOUT triggering a deferred
@@ -781,7 +658,7 @@ fn link_parent(cache: f64, record: f64, parent_filename: &str) {
     let mut children_ptr = if children.is_pointer() {
         let ptr = children.as_pointer::<u8>();
         if unsafe { crate::value::addr_class::try_read_gc_header(ptr as usize) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             ptr as *mut crate::array::ArrayHeader
         } else {
@@ -823,9 +700,12 @@ impl Drop for PendingRequireParentGuard {
     }
 }
 
-fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f64 {
+fn require_path(path: &std::path::Path, parent_filename: &str) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let cache_handle = scope.root_nanbox_f64(cache);
+    // `Module._cache`: the program's `require.cache` from program start (the
+    // CommonJS support module initializes first, `init_order`), the object
+    // the module stores its record in during the load below.
+    let cache_handle = scope.root_nanbox_f64(crate::object::module_cjs_cache_value());
     let filename = path.to_string_lossy();
     if let Some((record, exports)) = cached_record(cache_handle.get_nanbox_f64(), &filename) {
         let exports_handle = scope.root_nanbox_f64(exports);
@@ -862,7 +742,7 @@ fn require_path(cache: f64, path: &std::path::Path, parent_filename: &str) -> f6
         JSValue::from_bits(loaded.to_bits()).is_bool()
             && JSValue::from_bits(loaded.to_bits()).as_bool()
     }) {
-        if let Some(factory) = cjs_record_factory(registered) {
+        if let Some(factory) = path_module_factory(&filename) {
             let factory_handle = scope.root_nanbox_f64(factory);
             let exports = crate::closure::js_closure_call0(
                 crate::value::js_nanbox_get_pointer(factory_handle.get_nanbox_f64())
@@ -1003,11 +883,7 @@ extern "C" fn require_thunk(
     let base = require_base_dir(closure);
     let parent_filename = require_base_filename(closure);
     match resolve_request(&base, &specifier) {
-        Ok(path) => require_path(
-            crate::object::module_cjs_cache_value(),
-            &path,
-            &parent_filename,
-        ),
+        Ok(path) => require_path(&path, &parent_filename),
         Err(ResolveError::NotExported) => throw_package_path_not_exported(&specifier),
         Err(ResolveError::NotFound) => throw_require_module_not_found(&specifier, &base),
     }
@@ -1135,9 +1011,39 @@ fn make_require(base: f64, main_value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_module_create_require(filename_or_url: f64) -> f64 {
     validate_create_require_base(filename_or_url);
-    let base = crate::url::node_compat::module_base_to_path(filename_or_url)
+    let base = crate::module_require::file_url_text::module_base_to_path(filename_or_url)
         .unwrap_or_else(|| value_to_string(filename_or_url, "filename"));
-    make_require(string_value(&base), undefined())
+    make_require(string_value(&directory_base_as_file(base)), undefined())
+}
+
+/// Node resolves a `createRequire` base that ends in a separator
+/// (`createRequire(new URL(".", import.meta.url))`) as a directory: the
+/// require is the one of a file named `noop.js` inside it, so its base
+/// directory is that directory, not its parent.
+fn directory_base_as_file(base: String) -> String {
+    if base.ends_with('/') {
+        format!("{base}noop.js")
+    } else {
+        base
+    }
+}
+
+#[cfg(test)]
+mod directory_base_tests {
+    use super::directory_base_as_file;
+
+    #[test]
+    fn a_trailing_separator_names_a_directory() {
+        assert_eq!(
+            directory_base_as_file("/app/src/".into()),
+            "/app/src/noop.js"
+        );
+        assert_eq!(
+            directory_base_as_file("/app/src/main.js".into()),
+            "/app/src/main.js"
+        );
+        assert_eq!(directory_base_as_file("/app/src".into()), "/app/src");
+    }
 }
 
 /// Devirt codegen entry for `module.createRequire(...)` (#6644). The require
@@ -1158,6 +1064,7 @@ pub extern "C" fn js_module_create_require_devirt(filename_or_url: f64) -> f64 {
     js_module_create_require(filename_or_url)
 }
 
+mod package_exports;
 mod path_registry;
 pub(crate) use path_registry::path_registry_census;
 pub use path_registry::{adopt_path_init_image, current_path_init_image, PathInitImage};
@@ -1217,6 +1124,7 @@ fn canonical_or_literal_suffix(path: &std::path::Path) -> std::path::PathBuf {
 /// machine, without touching the filesystem. Any other spelling is
 /// canonicalized first, so it still meets the module's one key.
 fn module_lookup_key(path: &str) -> String {
+    path_registry::register_pending_path_inits();
     if MODULE_PATH_REGISTRY.with(|registry| registry.contains_registered(path)) {
         return path.to_string();
     }
@@ -1250,14 +1158,28 @@ pub unsafe extern "C" fn js_register_path_init(path_ptr: *const u8, path_len: i6
     }
 }
 
+/// Codegen FFI: `registrar` (a generated function of `js_register_path_init`
+/// calls) registers its modules' initializers the first time this heap looks
+/// up an initializer it does not have, or hands its table to a worker. The
+/// entry of a program that is not closed passes its on-demand CommonJS
+/// modules here instead of registering each at startup.
+///
+/// # Safety
+/// `registrar` is a generated `extern "C" fn()` of this program image.
+#[no_mangle]
+pub unsafe extern "C" fn js_register_path_inits_lazily(registrar: unsafe extern "C" fn()) {
+    path_registry::defer_path_inits(registrar);
+}
+
 /// Codegen FFI: publish a CommonJS module's record before
 /// executing its body. This is visible only to recursive loads by the owning
 /// thread; concurrent callers wait for [`js_register_path_module`] and the
 /// generated initializer to complete.
 #[no_mangle]
-pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64) {
+pub extern "C" fn js_register_path_module_partial(path_value: f64, exports: f64, factory: f64) {
     let key = value_to_string(path_value, "path");
-    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial_exports(key, exports.to_bits())) {
+    let factory = is_closure_value(factory).then(|| factory.to_bits());
+    if !MODULE_PATH_REGISTRY.with(|r| r.register_partial(key, exports.to_bits(), factory)) {
         crate::fs::validate::throw_error_with_code(
             "Perry rejected path-module partial exports from a non-owner initializer",
             "ERR_PERRY_PATH_MODULE_OWNER",
@@ -1322,9 +1244,13 @@ pub extern "C" fn js_register_path_module(path_value: f64, exports: f64) {
 /// `init_addr` is codegen's `ptrtoint` of an `extern "C" fn()` module body.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
+    crate::snap_census::init_part();
+    if crate::snap_census::skip_body() {
+        return;
+    }
     let init_fn: extern "C" fn() = std::mem::transmute::<usize, _>(init_addr as usize);
     let boundary = MODULE_PATH_REGISTRY.with(|r| r.begin_module_boundary());
-    let outcome = crate::exception::js_call_catching(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     });
@@ -1333,29 +1259,55 @@ pub unsafe extern "C" fn js_run_module_init_catching(init_addr: i64) {
             MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, None));
         }
         Err(error) => {
-            MODULE_PATH_REGISTRY
-                .with(|r| r.finish_module_boundary(boundary, Some(error.to_bits())));
-            crate::exception::js_throw(error)
+            MODULE_PATH_REGISTRY.with(|r| r.finish_module_boundary(boundary, Some(error)));
+            crate::exception::rethrow_caught(error)
         }
     }
 }
 
+/// Record numbers of module evaluations, process-wide so a guard that exists
+/// once per thread (a worker program) still names a distinct record.
+static MODULE_INIT_SEQUENCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// The evaluation record number kept beside a module's guard byte, assigned on
+/// the guard's first evaluation. It follows the program's evaluation order; the
+/// guard's address follows the link and must not reach the record's key (the
+/// key text is hashed and compared on every module entry).
+///
+/// # Safety
+/// `guard_addr` names an emitted eight-byte guard global (`module_init.rs`):
+/// the guard is its first byte, bytes 4..8 are this number.
+unsafe fn module_init_record_number(guard_addr: i64) -> u32 {
+    use std::sync::atomic::Ordering::Relaxed;
+    let slot = std::sync::atomic::AtomicU32::from_ptr((guard_addr as *mut u8).add(4).cast::<u32>());
+    let number = slot.load(Relaxed);
+    if number != 0 {
+        return number;
+    }
+    let number = MODULE_INIT_SEQUENCE.fetch_add(1, Relaxed) + 1;
+    slot.store(number, Relaxed);
+    number
+}
+
 /// Execute one compiled module evaluation using the existing module registry.
-/// Its per-module guard address identifies the evaluation record independently
+/// Its per-module guard identifies the evaluation record independently
 /// of a possibly folded initializer body or CommonJS partial-export publication.
 /// An ESM or parse-error stub may throw before publishing anything. Successful reentries retain the emitted
 /// one-byte guard; a failure clears that guard and remains in the registry.
 ///
 /// # Safety
 /// `init_addr` names an `extern "C" fn()` evaluation body; `guard_addr` names
-/// its stable generated i8 global, thread-local for worker programs.
+/// its stable generated eight-byte global (guard byte, then the record number),
+/// thread-local for worker programs.
 #[no_mangle]
 pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: i64) {
-    let key = format!("\0module-init:{guard_addr:x}");
+    let key = format!("\0module-init:{:x}", module_init_record_number(guard_addr));
     let outcome = MODULE_PATH_REGISTRY.with(|registry| {
         assert!(registry.register_init(key.clone(), init_addr as usize));
         registry.require_with(&key, &run_path_initializer)
     });
+    #[cfg(perry_gc_instruments)]
+    crate::snap_census::init_guard(init_addr as usize, guard_addr as usize);
     match outcome {
         Ok(_) => {}
         Err(error) => {
@@ -1364,7 +1316,7 @@ pub unsafe extern "C" fn js_run_module_init_guarded(init_addr: i64, guard_addr: 
             *(guard_addr as *mut u8) = 0;
             match error {
                 PathModuleRequireError::Initializer(error) => {
-                    crate::exception::js_throw(f64::from_bits(error));
+                    crate::exception::rethrow_caught(error);
                 }
                 PathModuleRequireError::OwnershipConflict => {
                     crate::fs::validate::throw_error_with_code(
@@ -1398,19 +1350,22 @@ fn directory_module_candidates(key: &str) -> Vec<String> {
     candidates
 }
 
-fn run_path_initializer(addr: usize) -> Result<(), u64> {
+fn run_path_initializer(addr: usize) -> Result<(), crate::exception::Caught> {
     // SAFETY: `addr` came from codegen's `ptrtoint` of an `extern "C" fn()`
     // module initializer and was accepted once for this canonical path.
     let init_fn: extern "C" fn() = unsafe { std::mem::transmute::<usize, _>(addr) };
-    crate::exception::js_call_catching(|| {
+    crate::snap_census::init_enter(addr);
+    let outcome = crate::exception::catch_thrown(|| {
         init_fn();
         undefined()
     })
-    .map(|_| ())
-    .map_err(f64::to_bits)
+    .map(|_| ());
+    crate::snap_census::init_exit(outcome.is_err());
+    outcome
 }
 
 fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
+    path_registry::register_pending_path_inits();
     MODULE_PATH_REGISTRY.with(|r| r.require_with(key, &run_path_initializer))
 }
 
@@ -1419,13 +1374,12 @@ fn require_path_key(key: &str) -> Result<Option<u64>, PathModuleRequireError> {
 /// partial exports, while unrelated waiters receive only the final namespace.
 #[no_mangle]
 pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
+    let _require = crate::snap_census::require_scope();
     let path = value_to_string(path_value, "id");
     let key = module_lookup_key(&path);
     match require_path_key(&key) {
         Ok(Some(bits)) => return path_module_exports(bits),
-        Err(PathModuleRequireError::Initializer(error)) => {
-            crate::exception::js_throw(f64::from_bits(error))
-        }
+        Err(PathModuleRequireError::Initializer(error)) => crate::exception::rethrow_caught(error),
         Err(PathModuleRequireError::OwnershipConflict) => {
             crate::fs::validate::throw_error_with_code(
                 "Perry rejected a cross-owner path-module initialization cycle",
@@ -1439,7 +1393,7 @@ pub extern "C" fn js_require_path_module(path_value: f64) -> f64 {
         match require_path_key(&candidate) {
             Ok(Some(bits)) => return path_module_exports(bits),
             Err(PathModuleRequireError::Initializer(error)) => {
-                crate::exception::js_throw(f64::from_bits(error))
+                crate::exception::rethrow_caught(error)
             }
             Err(PathModuleRequireError::OwnershipConflict) => {
                 crate::fs::validate::throw_error_with_code(
@@ -1689,7 +1643,16 @@ fn dynamic_import_fallback_promise(spec: f64, options: f64, deferred_note: Optio
             crate::exception::string_header_to_string(crate::value::js_jsvalue_to_string(spec))
         },
     };
-    match data_import::load(&spec_str, options.get_nanbox_f64()) {
+    let attributes = match data_import::check_options(options.get_nanbox_f64()) {
+        Ok(attributes) => attributes,
+        Err(reason) => {
+            let reason = scope.root_nanbox_f64(reason);
+            return js_nanbox_pointer(
+                crate::promise::js_promise_rejected(reason.get_nanbox_f64()) as i64
+            );
+        }
+    };
+    match data_import::load(&spec_str, &attributes) {
         Ok(Some(namespace)) => {
             let namespace = scope.root_nanbox_f64(namespace);
             return js_nanbox_pointer(
@@ -1859,3 +1822,36 @@ mod builtin_allowlist_parity_tests {
 #[cfg(test)]
 #[path = "module_require/init_guard_tests.rs"]
 mod init_guard_tests;
+
+pub(crate) mod file_url_text;
+
+/// The SNAP census check run: evaluate the module whose initializer is
+/// `addr` (an imaged init the census entered inside a skipped body of D),
+/// once, through its emitted guard, or for a path-wrapper frame through the
+/// registry, as a `require` of it would.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn snap_evaluate_init(addr: usize, guard: usize) {
+    if guard != 0 {
+        // Static dependencies enter the evaluation directly: their path entry
+        // names the outer wrapper, so an address lookup cannot replay them.
+        unsafe {
+            let done = guard as *mut u8;
+            if *done != 0 {
+                return;
+            }
+            *done = 1;
+            js_run_module_init_guarded(addr as i64, guard as i64);
+        }
+        return;
+    }
+    let Some(key) = path_registry::key_of_init_addr(addr) else {
+        return;
+    };
+    let _require = crate::snap_census::require_scope();
+    let _ = require_path_key(&key);
+}
+
+/// This heap's path-module registry entries, for the image run.
+pub(crate) fn snap_image_registry() -> Vec<(String, Option<usize>, u8, Option<u64>, Option<u64>)> {
+    MODULE_PATH_REGISTRY.with(|r| r.snap_image_entries())
+}

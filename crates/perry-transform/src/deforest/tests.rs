@@ -1,7 +1,7 @@
 use super::*;
 
 // Sanity tests at the helper level. End-to-end tests live in
-// test-files/test_deforest_*.ts (compiled + run vs Node).
+// tests/fixtures/programs/test_deforest_*.ts (compiled + run vs Node).
 
 #[test]
 fn detects_simple_producer() {
@@ -56,6 +56,7 @@ fn rejects_producer_with_out_passed_to_call() {
     let mut func = make_simple_producer();
     // Replace the push with `helper(out)`.
     func.body[1] = Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(99)),
         args: vec![Expr::LocalGet(10)],
         type_args: vec![],
@@ -174,6 +175,7 @@ fn rejects_producer_called_inside_closure() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
@@ -182,6 +184,7 @@ fn rejects_producer_called_inside_closure() {
             },
             // return v.length;
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
@@ -264,6 +267,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![],
                 type_args: vec![],
@@ -327,6 +331,7 @@ fn deforests_producer_called_from_class_method() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
@@ -334,6 +339,7 @@ fn deforests_producer_called_from_class_method() {
                 }),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
@@ -371,6 +377,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -466,6 +473,7 @@ fn producer_and_plain_caller() -> Module {
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
@@ -587,6 +595,7 @@ fn rejects_deforest_when_class_method_uses_super() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
@@ -630,6 +639,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -678,6 +688,7 @@ fn still_deforests_when_method_has_no_super() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(1)),
                     args: vec![],
                     type_args: vec![],
@@ -685,6 +696,7 @@ fn still_deforests_when_method_has_no_super() {
                 }),
             },
             Stmt::Return(Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(30)),
                 property: "length".to_string(),
@@ -722,6 +734,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -834,6 +847,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
             ty: Type::Array(Box::new(Type::Number)),
             mutable: false,
             init: Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(1)),
                 args: vec![],
                 type_args: vec![],
@@ -855,6 +869,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(41)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(40)),
                     property: "length".to_string(),
                     byte_offset: 0,
@@ -867,10 +882,10 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
             }),
             body: vec![Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
-                value: Box::new(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(40)),
-                    index: Box::new(Expr::LocalGet(41)),
-                }),
+                value: Box::new(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(40)),
+                    Box::new(Expr::LocalGet(41)),
+                )),
                 field_writeback: None,
             })],
         },
@@ -925,6 +940,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: false,
                 init: Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(producer)),
                     args: vec![],
                     type_args: vec![],
@@ -943,6 +959,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(j)),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(child)),
                         property: "length".to_string(),
                         byte_offset: 0,
@@ -955,10 +972,10 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 }),
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: outer,
-                    value: Box::new(Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(child)),
-                        index: Box::new(Expr::LocalGet(j)),
-                    }),
+                    value: Box::new(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(child)),
+                        Box::new(Expr::LocalGet(j)),
+                    )),
                     field_writeback: None,
                 })],
             },

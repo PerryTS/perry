@@ -318,9 +318,6 @@ unsafe fn bigint_low_u64(v: JSValue) -> u64 {
 /// here — Bun requires numeric-ish args for integer slots too.
 pub(crate) unsafe fn value_to_u64_int(v: f64) -> u64 {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as i64 as u64;
-    }
     if jv.is_number() {
         return jv.as_number() as i64 as u64;
     }
@@ -336,9 +333,6 @@ pub(crate) unsafe fn value_to_u64_int(v: f64) -> u64 {
 /// Numeric coercion for float-typed args.
 pub(crate) unsafe fn value_to_f64_num(v: f64) -> f64 {
     let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
-    }
     if jv.is_number() {
         return jv.as_number();
     }
@@ -396,9 +390,6 @@ pub(crate) unsafe fn value_to_pointer_arg(v: f64) -> usize {
     }
     if jv.is_bool() {
         return jv.as_bool() as usize;
-    }
-    if jv.is_int32() {
-        return jv.as_int32() as i64 as usize;
     }
     if jv.is_number() {
         return jv.as_number() as i64 as usize;
@@ -530,11 +521,11 @@ fn bool_value(b: bool) -> f64 {
 }
 
 pub(crate) fn bigint_value_i64(v: i64) -> f64 {
-    crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_i64(v) as i64)
+    crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(v) as i64)
 }
 
 pub(crate) fn bigint_value_u64(v: u64) -> f64 {
-    crate::value::js_nanbox_bigint(crate::bigint::js_bigint_from_u64(v) as i64)
+    crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
 }
 
 /// Read a NUL-terminated UTF-8 C string at `addr` into a JS string.
@@ -581,11 +572,11 @@ unsafe fn call_and_convert_mode(
     let result = match ret_type {
         T_F64 => {
             let r = raw::call_f64(fn_ptr, image);
-            super::number_value(r)
+            super::float_value(r)
         }
         T_F32 => {
             let r = raw::call_f32(fn_ptr, image);
-            super::number_value(r as f64)
+            super::float_value(r as f64)
         }
         T_PTR | T_FUNCTION if pointer_bigint => {
             let r = raw::call_int(fn_ptr, image);

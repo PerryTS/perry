@@ -1,0 +1,1 @@
+- Schedule independent proven numeric guards before arithmetic comparisons, transport checked integer recursive returns, and reuse admitted numeric capture values across private closure entries.

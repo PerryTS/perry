@@ -43,6 +43,7 @@ pub(crate) fn lower_member_tail(
             };
             if is_dynamic_generator {
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_throw_restricted_function_property_assignment".to_string(),
                         param_types: vec![],
@@ -81,6 +82,7 @@ pub(crate) fn lower_member_tail(
                     && !ctx.shadows_unqualified_global(obj_name)
                 {
                     object_expr = Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::GlobalGet(0)),
                         property: obj_name.to_string(),
@@ -264,9 +266,8 @@ pub(crate) fn lower_member_tail(
                     // (global_this.rs), but the reroute-undo otherwise collapses
                     // them to `GlobalGet(0).<name>`, whose intrinsic path drops
                     // the metadata (`typeof` is "function" but `.name` was
-                    // undefined). `Array.fromAsync` is unreified and stays
-                    // undefined either way. Direct calls keep the intrinsic
-                    // fast path via the `!member_is_call_callee` gate.
+                    // undefined). Direct calls keep the intrinsic fast path
+                    // via the `!member_is_call_callee` gate.
                     // #4627: all six Number statics (isFinite / isInteger /
                     // isNaN / isSafeInteger / parseFloat / parseInt) are reified
                     // with metadata via install_constructor_static, so routing
@@ -547,6 +548,7 @@ pub(crate) fn lower_member_tail(
                 && matches!(&object_expr, Expr::GlobalGet(0))
             {
                 object_expr = Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
@@ -763,6 +765,10 @@ pub(crate) fn lower_member_tail(
             // bound to a local named `url`, which otherwise threw
             // "url.endsWith is not implemented in Perry (ahead-of-time)".
             && !super::super::array_fold::is_known_string_prototype_method(prop)
+            // A module namespace/default object inherits `Object.prototype`, so
+            // `buffer.hasOwnProperty(k)` (safer-buffer) is an ordinary inherited
+            // read, not a missing module export (#13963).
+            && !super::super::array_fold::is_known_object_prototype_method(prop)
         {
             // #3896: a bare *value read* of an absent member on a Node
             // builtin module namespace/default object is an ordinary
@@ -812,6 +818,7 @@ pub(crate) fn lower_member_tail(
         ast::MemberProp::Ident(ident) => {
             let property = ident.sym.to_string();
             Ok(Expr::PropertyGet {
+                byte_end: 0,
                 // #5247: carry the member access's source offset so a nullish
                 // receiver ("Cannot read properties of undefined") localizes.
                 byte_offset: member.span.lo.0,
@@ -950,6 +957,7 @@ pub(crate) fn lower_member_tail(
                     && !(key.len() > 1 && key.starts_with('0'));
                 if !is_numeric_string {
                     return Ok(Expr::PropertyGet {
+                        byte_end: 0,
                         // #5247: `obj["prop"]` folds to a PropertyGet — carry the
                         // member offset so a nullish receiver localizes too.
                         byte_offset: member.span.lo.0,
@@ -972,6 +980,7 @@ pub(crate) fn lower_member_tail(
                 && matches!(member.obj.as_ref(), ast::Expr::Ident(id) if id.sym.as_ref() == "console")
             {
                 return Ok(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_console_method_by_value".to_string(),
                         param_types: vec![Type::Any],
@@ -982,7 +991,13 @@ pub(crate) fn lower_member_tail(
                     byte_offset: 0,
                 });
             }
-            Ok(Expr::IndexGet { object, index })
+            Ok(Expr::IndexGet {
+                element_offset: member.span.lo.0,
+                byte_offset: 0,
+                byte_end: 0,
+                object,
+                index,
+            })
         }
         ast::MemberProp::PrivateName(private) => {
             // Private field access: this.#field -> PropertyGet with "#field".
@@ -992,6 +1007,7 @@ pub(crate) fn lower_member_tail(
             let object = wrap_private_guard(ctx, object, &private_name, PRIV_OP_READ);
             let property = private_storage_property(ctx, &private_name);
             Ok(Expr::PropertyGet {
+                byte_end: 0,
                 // #5247: `this.#field` — carry the member offset for nullish-receiver
                 // localization (consistency with the public-property path).
                 byte_offset: member.span.lo.0,

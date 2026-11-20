@@ -30,7 +30,7 @@ fn peel_webassembly_receiver_expr(mut expr: &ast::Expr) -> &ast::Expr {
 fn is_webassembly_namespace_receiver(ctx: &LoweringContext, expr: &ast::Expr) -> bool {
     match peel_webassembly_receiver_expr(expr) {
         ast::Expr::Ident(id) => {
-            id.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+            id.sym.as_ref() == "WebAssembly" && !ctx.shadows_unqualified_global("WebAssembly")
         }
         ast::Expr::Member(member) => {
             let ast::MemberProp::Ident(prop) = &member.prop else {
@@ -43,7 +43,7 @@ fn is_webassembly_namespace_receiver(ctx: &LoweringContext, expr: &ast::Expr) ->
                 peel_webassembly_receiver_expr(member.obj.as_ref()),
                 ast::Expr::Ident(root)
                     if root.sym.as_ref() == "globalThis"
-                        && ctx.lookup_local("globalThis").is_none()
+                        && !ctx.shadows_unqualified_global("globalThis")
             )
         }
         _ => false,
@@ -70,7 +70,7 @@ pub(super) fn try_module_static_methods(
                 (member.obj.as_ref(), &member.prop)
             {
                 if obj_ident.sym.as_ref() == "Bun"
-                    && ctx.lookup_local("Bun").is_none()
+                    && !ctx.shadows_unqualified_global("Bun")
                     && ctx.lookup_native_module("Bun").is_none()
                 {
                     if matches!(
@@ -379,7 +379,10 @@ pub(super) fn try_module_static_methods(
             // computed key does not fall through to generic dispatch (→
             // `TypeError: value is not a function`).
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "JSON" && !has_spread {
+            if obj_ident.sym.as_ref() == "JSON"
+                && !ctx.shadows_unqualified_global("JSON")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "parse" => {
@@ -495,20 +498,23 @@ pub(super) fn try_module_static_methods(
                 }
             }
 
-            // Check for performance.now() and the W3C User Timing methods.
-            // `now()` keeps its dedicated Expr; the rest lower to a
-            // receiver-less NativeMethodCall on the perf_hooks module, which
-            // the codegen dispatches to the `js_perf_*` runtime helpers. This
-            // applies only to the unshadowed global. Imports and local objects
-            // use normal receiver dispatch, preserving their actual methods.
+            // Check for the W3C User Timing methods on `performance`. They
+            // lower to a receiver-less NativeMethodCall on the perf_hooks
+            // module, which the codegen dispatches to the `js_perf_*` runtime
+            // helpers. This applies only to the unshadowed global. Imports and
+            // local objects use normal receiver dispatch, preserving their
+            // actual methods.
+            //
+            // `performance.now()` is NOT folded: harnesses and polyfills
+            // replace it (`Object.defineProperty(performance, "now", …)`,
+            // `performance.now = fake`), from any module, so the call must read
+            // the property. The ordinary method call does, and still reaches
+            // the native clock when nothing replaced it.
             if obj_ident.sym.as_ref() == "performance"
                 && !ctx.shadows_unqualified_global("performance")
             {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let m = method_ident.sym.as_ref();
-                    if m == "now" {
-                        return Ok(Ok(Expr::PerformanceNow));
-                    }
                     if matches!(
                         m,
                         "mark"
@@ -576,7 +582,7 @@ pub(super) fn try_module_static_methods(
 
             // Check for Response.json(value) / Response.redirect(url, status?) /
             // Response.error() static factories.
-            if obj_ident.sym.as_ref() == "Response" {
+            if obj_ident.sym.as_ref() == "Response" && !ctx.shadows_unqualified_global("Response") {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     match method_name {
@@ -602,7 +608,8 @@ pub(super) fn try_module_static_methods(
             //   helper kept for compatibility with the first PoC pass)
             // The standard `inst.exports.<method>(...)` shape is
             // recognised separately below as a syntactic pattern.
-            if obj_ident.sym.as_ref() == "WebAssembly" && ctx.lookup_local("WebAssembly").is_none()
+            if obj_ident.sym.as_ref() == "WebAssembly"
+                && !ctx.shadows_unqualified_global("WebAssembly")
             {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -651,211 +658,36 @@ pub(super) fn try_module_static_methods(
 
             // Check for Math.methodName() calls. #6677: match BOTH the dot form
             // and the string-literal computed form (`Math["max"](...)`).
-            if obj_ident.sym.as_ref() == "Math" {
+            if obj_ident.sym.as_ref() == "Math" && !ctx.shadows_unqualified_global("Math") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
-                    // Only `min` / `max` have arms written for a spread; every
-                    // other spread call declines (see `call_has_spread_arg`).
-                    if has_spread && !matches!(method_name, "min" | "max") {
-                        return Ok(Err(args));
-                    }
-                    match method_name {
-                        "floor" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathFloor(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
+                    match math_intrinsic(method_name, args, has_spread) {
+                        Ok(e) => return Ok(Ok(e)),
+                        Err(a) if has_spread => return Ok(Err(a)),
+                        // A member the intrinsic declined (a count of arguments
+                        // other than its arity): the ordinary property-get-then-call
+                        // on the live `Math` object, `this` = Math, every argument
+                        // already evaluated in order (13.3.6.1). The bare
+                        // `GlobalGet(0).<m>` receiver of the fall-through below would
+                        // read `globalThis.<m>`.
+                        Err(a)
+                            if super::super::array_fold::is_known_math_static_method(
+                                method_name,
+                            ) =>
+                        {
+                            let math = Expr::PropertyGet {
+                                byte_end: 0,
+                                byte_offset: 0,
+                                object: Box::new(Expr::GlobalThisExpr),
+                                property: "Math".to_string(),
+                            };
+                            return Ok(Ok(super::patched_builtin_call::dynamic_member_call(
+                                call,
+                                math,
+                                method_name.to_string(),
+                                a,
+                            )));
                         }
-                        "ceil" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCeil(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "round" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathRound(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "trunc" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTrunc(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sign" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSign(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "abs" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAbs(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sqrt" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSqrt(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log2" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog2(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log10" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog10(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "pow" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let base = args_iter.next().unwrap();
-                            let exp = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathPow(Box::new(base), Box::new(exp))));
-                        }
-                        "min" => {
-                            if has_spread {
-                                if args.len() == 1 {
-                                    return Ok(Ok(Expr::MathMinSpread(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                }
-                                // The compact HIR form records one spread
-                                // operand and no fixed prefix. Keep mixed
-                                // calls on the generic CallSpread path; folding
-                                // `Math.min(fixed, ...tail)` into MathMin would
-                                // coerce `tail` as one scalar argument.
-                                return Ok(Err(args));
-                            }
-                            return Ok(Ok(Expr::MathMin(args)));
-                        }
-                        "max" => {
-                            if has_spread {
-                                if args.len() == 1 {
-                                    return Ok(Ok(Expr::MathMaxSpread(Box::new(
-                                        args.into_iter().next().unwrap(),
-                                    ))));
-                                }
-                                return Ok(Err(args));
-                            }
-                            return Ok(Ok(Expr::MathMax(args)));
-                        }
-                        "random" => {
-                            return Ok(Ok(Expr::MathRandom));
-                        }
-                        "imul" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let a = args_iter.next().unwrap();
-                            let b = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathImul(Box::new(a), Box::new(b))));
-                        }
-                        "sin" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSin(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "cos" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCos(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "tan" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTan(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "asin" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAsin(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "acos" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAcos(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atan" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAtan(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atan2" if args.len() >= 2 => {
-                            let mut args_iter = args.into_iter();
-                            let y = args_iter.next().unwrap();
-                            let x = args_iter.next().unwrap();
-                            return Ok(Ok(Expr::MathAtan2(Box::new(y), Box::new(x))));
-                        }
-                        "cbrt" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCbrt(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "hypot" => {
-                            return Ok(Ok(Expr::MathHypot(args)));
-                        }
-                        "fround" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathFround(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "f16round" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathF16round(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "clz32" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathClz32(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "expm1" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathExpm1(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "log1p" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathLog1p(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "sinh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathSinh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "cosh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathCosh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "tanh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathTanh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "asinh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAsinh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "acosh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAcosh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "atanh" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathAtanh(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        "exp" if !args.is_empty() => {
-                            return Ok(Ok(Expr::MathExp(Box::new(
-                                args.into_iter().next().unwrap(),
-                            ))));
-                        }
-                        _ => {} // Fall through to generic handling
+                        Err(a) => args = a, // Fall through to generic handling
                     }
                 }
             }
@@ -867,7 +699,10 @@ pub(super) fn try_module_static_methods(
             // DataView-marked buffers) by re-emitting a `util/types`
             // NativeMethodCall — no new HIR variant or runtime helper needed.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "ArrayBuffer" && !has_spread {
+            if obj_ident.sym.as_ref() == "ArrayBuffer"
+                && !ctx.shadows_unqualified_global("ArrayBuffer")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "isView" {
@@ -891,7 +726,10 @@ pub(super) fn try_module_static_methods(
             // on the BigInt ctor closure for the `const B = BigInt; B.asIntN`
             // value path.)
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "BigInt" && !has_spread {
+            if obj_ident.sym.as_ref() == "BigInt"
+                && !ctx.shadows_unqualified_global("BigInt")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(m) = super::static_call_prop_name(&member.prop) {
                     if m == "asIntN" || m == "asUintN" {
@@ -911,7 +749,10 @@ pub(super) fn try_module_static_methods(
 
             // Check for Number.methodName() static calls. #6677: computed form too.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "Number" && !has_spread {
+            if obj_ident.sym.as_ref() == "Number"
+                && !ctx.shadows_unqualified_global("Number")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         // A missing argument is `undefined` (Type ≠ Number), so
@@ -967,7 +808,7 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for String.methodName() static calls. #6677: computed form too.
-            if obj_ident.sym.as_ref() == "String" {
+            if obj_ident.sym.as_ref() == "String" && !ctx.shadows_unqualified_global("String") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     // Scalar intrinsics receive flattened AST arguments, not
                     // expanded values. Let CallSpread preserve every argument
@@ -1088,23 +929,15 @@ pub(super) fn try_module_static_methods(
                                 args.into_iter().next().unwrap(),
                             ))));
                         }
-                        // `crypto.getRandomValues(buf)` fills the buffer
-                        // in-place with random bytes and returns it.
-                        // Lower as a synthetic instance method call so
-                        // the runtime buffer dispatcher (added in
-                        // perry-runtime/src/object.rs) handles it via
-                        // `js_buffer_fill_random`.
+                        // `crypto.getRandomValues(x)` is `randomFillSync(x)`
+                        // for every integer TypedArray: fill in place, return
+                        // the same object (#12819).
                         "getRandomValues" if !args.is_empty() => {
-                            let buf_arg = args.into_iter().next().unwrap();
-                            return Ok(Ok(Expr::Call {
-                                callee: Box::new(Expr::PropertyGet {
-                                    byte_offset: 0,
-                                    object: Box::new(buf_arg),
-                                    property: "$$cryptoFillRandom".to_string(),
-                                }),
-                                args: vec![],
-                                type_args: vec![],
-                                byte_offset: 0,
+                            let buffer = args.into_iter().next().unwrap();
+                            return Ok(Ok(Expr::CryptoRandomFillSync {
+                                buffer: Box::new(buffer),
+                                offset: Box::new(Expr::Undefined),
+                                size: Box::new(Expr::Undefined),
                             }));
                         }
                         // `crypto.randomBytes` / `randomUUID` /
@@ -1193,7 +1026,7 @@ pub(super) fn try_module_static_methods(
             // Check for Buffer.methodName() static calls — also accept
             // aliased imports per #831 (see the longer note at the
             // first Buffer site above).
-            let is_buffer_ref = obj_name == "Buffer"
+            let is_buffer_ref = (obj_name == "Buffer" && !ctx.shadows_unqualified_global("Buffer"))
                 || matches!(
                     ctx.lookup_native_module(obj_name),
                     Some(("buffer", Some("Buffer")))
@@ -1304,7 +1137,9 @@ pub(super) fn try_module_static_methods(
                             let a = iter.next().unwrap();
                             let b = iter.next().unwrap();
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     byte_offset: 0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
@@ -1323,7 +1158,7 @@ pub(super) fn try_module_static_methods(
             // static factories. Perry aliases Uint8Array → Buffer; route these
             // through the buffer native-module dispatch table (no new HIR
             // variant) so the runtime decodes into a fresh BufferHeader.
-            if obj_name == "Uint8Array" {
+            if obj_name == "Uint8Array" && !ctx.shadows_unqualified_global("Uint8Array") {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "fromBase64" | "fromHex") {
@@ -1348,10 +1183,7 @@ pub(super) fn try_module_static_methods(
             // is a real global typed-array constructor (not shadowed by a
             // local/import/class binding).
             if let Some(kind) = crate::ir::typed_array_kind_for_name(obj_name) {
-                let shadowed = ctx.lookup_local(obj_name).is_some()
-                    || ctx.lookup_func(obj_name).is_some()
-                    || ctx.lookup_imported_func(obj_name).is_some()
-                    || ctx.lookup_class(obj_name).is_some();
+                let shadowed = ctx.shadows_unqualified_global(obj_name);
                 // A spread call declines: see `call_has_spread_arg`.
                 if !shadowed && obj_name != "Uint8Array" && !has_spread {
                     if let ast::MemberProp::Ident(method_ident) = &member.prop {
@@ -1521,7 +1353,9 @@ pub(super) fn try_module_static_methods(
             }
 
             // Check for AbortSignal static helpers: timeout / abort / any (#2582).
-            if obj_ident.sym.as_ref() == "AbortSignal" {
+            if obj_ident.sym.as_ref() == "AbortSignal"
+                && !ctx.shadows_unqualified_global("AbortSignal")
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "timeout" | "abort" | "any") {
@@ -1537,7 +1371,10 @@ pub(super) fn try_module_static_methods(
             // Check for Date.now() / Date.parse() / Date.UTC() static method calls.
             // #6677: computed form too.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "Date" && !has_spread {
+            if obj_ident.sym.as_ref() == "Date"
+                && !ctx.shadows_unqualified_global("Date")
+                && !has_spread
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "now" {
                         return Ok(Ok(Expr::DateNow));
@@ -1561,7 +1398,10 @@ pub(super) fn try_module_static_methods(
             // arm intercepts both spellings and routes to dedicated
             // HIR variants.
             // A spread call declines: see `call_has_spread_arg`.
-            if obj_ident.sym.as_ref() == "URL" && !has_spread {
+            if obj_ident.sym.as_ref() == "URL"
+                && !ctx.shadows_unqualified_global("URL")
+                && !has_spread
+            {
                 // #6677: accept the string-literal computed form too.
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "canParse" && !args.is_empty() {
@@ -1614,4 +1454,182 @@ pub(super) fn try_module_static_methods(
         }
     }
     Ok(Err(args))
+}
+
+/// The intrinsic HIR of the direct call `Math.<method_name>(args…)`, or the
+/// arguments back when the call keeps its generic form (no intrinsic for the
+/// member, too few arguments, a spread it has no arm for). The lowering of a
+/// direct `Math` call and the facts rewrite of a call through a value proven
+/// to be the original member (`namespace_pairs::alias_call`) both build it.
+pub(crate) fn math_intrinsic(
+    method_name: &str,
+    args: Vec<Expr>,
+    has_spread: bool,
+) -> std::result::Result<Expr, Vec<Expr>> {
+    // Only `min` / `max` have arms written for a spread; every
+    // other spread call declines (see `call_has_spread_arg`).
+    if has_spread && !matches!(method_name, "min" | "max") {
+        return Err(args);
+    }
+    // ECMA-262 13.3.6.1 / 13.3.8.1 ArgumentListEvaluation evaluates EVERY
+    // argument expression, left to right, before the call, and the builtin
+    // then coerces only the ones its algorithm reads (21.3.2.x). A call with
+    // more arguments than the member's arity would lose the extra ones in an
+    // intrinsic with fixed operands (`Math.cos( 0, side() )` never ran
+    // `side()`): it keeps the generic call, which evaluates them all. Too few
+    // arguments also keep the generic call (the missing ones are undefined).
+    // `min` / `max` / `hypot` take any number of arguments.
+    let arity = match method_name {
+        "min" | "max" | "hypot" => None,
+        "random" => Some(0),
+        "pow" | "imul" | "atan2" => Some(2),
+        _ => Some(1),
+    };
+    if arity.is_some_and(|n| args.len() != n) {
+        return Err(args);
+    }
+    match method_name {
+        "floor" if !args.is_empty() => {
+            return Ok(Expr::MathFloor(Box::new(args.into_iter().next().unwrap())));
+        }
+        "ceil" if !args.is_empty() => {
+            return Ok(Expr::MathCeil(Box::new(args.into_iter().next().unwrap())));
+        }
+        "round" if !args.is_empty() => {
+            return Ok(Expr::MathRound(Box::new(args.into_iter().next().unwrap())));
+        }
+        "trunc" if !args.is_empty() => {
+            return Ok(Expr::MathTrunc(Box::new(args.into_iter().next().unwrap())));
+        }
+        "sign" if !args.is_empty() => {
+            return Ok(Expr::MathSign(Box::new(args.into_iter().next().unwrap())));
+        }
+        "abs" if !args.is_empty() => {
+            return Ok(Expr::MathAbs(Box::new(args.into_iter().next().unwrap())));
+        }
+        "sqrt" if !args.is_empty() => {
+            return Ok(Expr::MathSqrt(Box::new(args.into_iter().next().unwrap())));
+        }
+        "log" if !args.is_empty() => {
+            return Ok(Expr::MathLog(Box::new(args.into_iter().next().unwrap())));
+        }
+        "log2" if !args.is_empty() => {
+            return Ok(Expr::MathLog2(Box::new(args.into_iter().next().unwrap())));
+        }
+        "log10" if !args.is_empty() => {
+            return Ok(Expr::MathLog10(Box::new(args.into_iter().next().unwrap())));
+        }
+        "pow" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let base = args_iter.next().unwrap();
+            let exp = args_iter.next().unwrap();
+            return Ok(Expr::MathPow(Box::new(base), Box::new(exp)));
+        }
+        "min" => {
+            if has_spread {
+                if args.len() == 1 {
+                    return Ok(Expr::MathMinSpread(Box::new(
+                        args.into_iter().next().unwrap(),
+                    )));
+                }
+                // The compact HIR form records one spread
+                // operand and no fixed prefix. Keep mixed
+                // calls on the generic CallSpread path; folding
+                // `Math.min(fixed, ...tail)` into MathMin would
+                // coerce `tail` as one scalar argument.
+                return Err(args);
+            }
+            return Ok(Expr::MathMin(args));
+        }
+        "max" => {
+            if has_spread {
+                if args.len() == 1 {
+                    return Ok(Expr::MathMaxSpread(Box::new(
+                        args.into_iter().next().unwrap(),
+                    )));
+                }
+                return Err(args);
+            }
+            return Ok(Expr::MathMax(args));
+        }
+        "random" => {
+            return Ok(Expr::MathRandom);
+        }
+        "imul" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let a = args_iter.next().unwrap();
+            let b = args_iter.next().unwrap();
+            return Ok(Expr::MathImul(Box::new(a), Box::new(b)));
+        }
+        "sin" if !args.is_empty() => {
+            return Ok(Expr::MathSin(Box::new(args.into_iter().next().unwrap())));
+        }
+        "cos" if !args.is_empty() => {
+            return Ok(Expr::MathCos(Box::new(args.into_iter().next().unwrap())));
+        }
+        "tan" if !args.is_empty() => {
+            return Ok(Expr::MathTan(Box::new(args.into_iter().next().unwrap())));
+        }
+        "asin" if !args.is_empty() => {
+            return Ok(Expr::MathAsin(Box::new(args.into_iter().next().unwrap())));
+        }
+        "acos" if !args.is_empty() => {
+            return Ok(Expr::MathAcos(Box::new(args.into_iter().next().unwrap())));
+        }
+        "atan" if !args.is_empty() => {
+            return Ok(Expr::MathAtan(Box::new(args.into_iter().next().unwrap())));
+        }
+        "atan2" if args.len() >= 2 => {
+            let mut args_iter = args.into_iter();
+            let y = args_iter.next().unwrap();
+            let x = args_iter.next().unwrap();
+            return Ok(Expr::MathAtan2(Box::new(y), Box::new(x)));
+        }
+        "cbrt" if !args.is_empty() => {
+            return Ok(Expr::MathCbrt(Box::new(args.into_iter().next().unwrap())));
+        }
+        "hypot" => {
+            return Ok(Expr::MathHypot(args));
+        }
+        "fround" if !args.is_empty() => {
+            return Ok(Expr::MathFround(Box::new(args.into_iter().next().unwrap())));
+        }
+        "f16round" if !args.is_empty() => {
+            return Ok(Expr::MathF16round(Box::new(
+                args.into_iter().next().unwrap(),
+            )));
+        }
+        "clz32" if !args.is_empty() => {
+            return Ok(Expr::MathClz32(Box::new(args.into_iter().next().unwrap())));
+        }
+        "expm1" if !args.is_empty() => {
+            return Ok(Expr::MathExpm1(Box::new(args.into_iter().next().unwrap())));
+        }
+        "log1p" if !args.is_empty() => {
+            return Ok(Expr::MathLog1p(Box::new(args.into_iter().next().unwrap())));
+        }
+        "sinh" if !args.is_empty() => {
+            return Ok(Expr::MathSinh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "cosh" if !args.is_empty() => {
+            return Ok(Expr::MathCosh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "tanh" if !args.is_empty() => {
+            return Ok(Expr::MathTanh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "asinh" if !args.is_empty() => {
+            return Ok(Expr::MathAsinh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "acosh" if !args.is_empty() => {
+            return Ok(Expr::MathAcosh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "atanh" if !args.is_empty() => {
+            return Ok(Expr::MathAtanh(Box::new(args.into_iter().next().unwrap())));
+        }
+        "exp" if !args.is_empty() => {
+            return Ok(Expr::MathExp(Box::new(args.into_iter().next().unwrap())));
+        }
+        _ => {} // Fall through to generic handling
+    }
+    Err(args)
 }

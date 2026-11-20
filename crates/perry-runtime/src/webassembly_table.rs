@@ -4,37 +4,85 @@
 
 use super::*;
 
-pub(super) fn table_method_context<'scope>(
+/// Slots of the per-table state array kept in the wrapper's private
+/// `owned_state_bag::WASM_TABLE` slot (never an own property of the table).
+const STATE_VALUES: u32 = 0;
+const STATE_INST: u32 = 1;
+const STATE_NAME: u32 = 2;
+
+fn table_state(table: f64, index: u32) -> f64 {
+    let table = JSValue::from_bits(table.to_bits());
+    if !table.is_pointer() {
+        return nanbox_undefined();
+    }
+    let state = unsafe {
+        crate::object::owned_state_bag::load(
+            table.as_pointer::<u8>() as usize,
+            crate::object::owned_state_bag::WASM_TABLE,
+        )
+    };
+    let state = JSValue::from_bits(state.to_bits());
+    if !state.is_pointer() {
+        return nanbox_undefined();
+    }
+    crate::array::js_array_get_f64(state.as_pointer::<crate::array::ArrayHeader>(), index)
+}
+
+/// The host state of the table `this` names: `None` when `this` is not a
+/// table wrapper this runtime produced (its record holds no table handle).
+fn table_context<'scope>(
     scope: &'scope crate::gc::RuntimeHandleScope,
-    closure: *const crate::closure::ClosureHeader,
-) -> (
+    this: f64,
+) -> Option<(
     *mut c_void,
     *mut c_void,
     crate::gc::RuntimeHandle<'scope>,
     crate::gc::RuntimeHandle<'scope>,
-) {
-    let external = crate::closure::js_closure_get_capture_f64(closure, 0) as usize as *mut c_void;
-    let inst = crate::closure::js_closure_get_capture_f64(closure, 1) as usize as *mut c_void;
-    let name = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 2));
-    let table = scope.root_nanbox_f64(crate::closure::js_closure_get_capture_f64(closure, 3));
-    (external, inst, name, table)
+)> {
+    let receiver = JSValue::from_bits(this.to_bits());
+    if !receiver.is_pointer() {
+        return None;
+    }
+    let external = crate::object::registered_extern_handle(
+        receiver.as_pointer::<crate::object::ObjectHeader>() as usize,
+        b"table",
+    )? as *mut c_void;
+    let inst = table_state(this, STATE_INST) as usize as *mut c_void;
+    let name = scope.root_nanbox_f64(table_state(this, STATE_NAME));
+    let table = scope.root_nanbox_f64(this);
+    Some((external, inst, name, table))
+}
+
+fn table_receiver_error(api: &str) -> ! {
+    crate::exception::throw_core(wasm_type_error(&format!(
+        "WebAssembly.Table.{api}(): Receiver is not a WebAssembly.Table"
+    )))
+}
+
+fn set_table_state(table: f64, index: u32, value: f64) {
+    let table = JSValue::from_bits(table.to_bits());
+    if !table.is_pointer() {
+        return;
+    }
+    let _no_move = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let state = crate::object::owned_state_bag::load(
+            table.as_pointer::<u8>() as usize,
+            crate::object::owned_state_bag::WASM_TABLE,
+        );
+        let state = JSValue::from_bits(state.to_bits());
+        if state.is_pointer() {
+            crate::array::js_array_set_f64(
+                state.as_pointer::<crate::array::ArrayHeader>() as *mut crate::array::ArrayHeader,
+                index,
+                value,
+            );
+        }
+    }
 }
 
 pub(super) fn table_values(table: f64) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let table = scope.root_nanbox_f64(table);
-    let table_value = JSValue::from_bits(table.get_nanbox_f64().to_bits());
-    if !table_value.is_pointer() {
-        return nanbox_undefined();
-    }
-    let key = scope.root_string_ptr(named_key(b"__wasmValues"));
-    key.with_const_ptr(|key: *const crate::string::StringHeader| {
-        crate::object::js_object_get_field_by_name_f64(
-            JSValue::from_bits(table.get_nanbox_f64().to_bits())
-                .as_pointer::<crate::object::ObjectHeader>(),
-            key,
-        )
-    })
+    table_state(table, STATE_VALUES)
 }
 
 pub(super) fn wasm_function_external(value: f64) -> *mut c_void {
@@ -59,13 +107,12 @@ pub(super) fn wasm_function_external(value: f64) -> *mut c_void {
     ))
 }
 
-extern "C" fn js_wasm_table_get(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    index: f64,
-) -> f64 {
+/// `WebAssembly.Table.prototype.get` (reached through the engine hook).
+pub(super) extern "C" fn js_webassembly_table_get(this: f64, index: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let (external, inst, name, table) = table_method_context(&scope, closure);
+    let Some((external, inst, name, table)) = table_context(&scope, this) else {
+        table_receiver_error("get")
+    };
     let values = scope.root_nanbox_f64(table_values(table.get_nanbox_f64()));
     let values_value = JSValue::from_bits(values.get_nanbox_f64().to_bits());
     if !values_value.is_pointer() || !index.is_finite() || index < 0.0 {
@@ -127,14 +174,12 @@ extern "C" fn js_wasm_table_get(
     value
 }
 
-extern "C" fn js_wasm_table_set(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    index: f64,
-    value: f64,
-) -> f64 {
+/// `WebAssembly.Table.prototype.set`.
+pub(super) extern "C" fn js_webassembly_table_set(this: f64, index: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let (external, inst, name, table) = table_method_context(&scope, closure);
+    let Some((external, inst, name, table)) = table_context(&scope, this) else {
+        table_receiver_error("set")
+    };
     let is_null = (value.to_bits() == crate::value::TAG_NULL) as i32;
     let index = index.max(0.0) as usize;
     let function = wasm_function_external(value);
@@ -164,21 +209,19 @@ extern "C" fn js_wasm_table_set(
             crate::array::js_array_set_f64(values_ptr, index as u32, value);
         }
     } else {
-        crate::exception::js_throw(wasm_type_error_value(
+        crate::exception::throw_core(wasm_type_error(
             "WebAssembly.Table.set(): value is not a WebAssembly function",
         ));
     }
     nanbox_undefined()
 }
 
-extern "C" fn js_wasm_table_grow(
-    closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
-    delta: f64,
-    value: f64,
-) -> f64 {
+/// `WebAssembly.Table.prototype.grow`.
+pub(super) extern "C" fn js_webassembly_table_grow(this: f64, delta: f64, value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let (external, inst, name, table) = table_method_context(&scope, closure);
+    let Some((external, inst, name, table)) = table_context(&scope, this) else {
+        table_receiver_error("grow")
+    };
     let value_bits = value.to_bits();
     let is_null = matches!(
         value_bits,
@@ -226,51 +269,33 @@ extern "C" fn js_wasm_table_grow(
         values_ptr = crate::array::js_array_push_f64(values_ptr, fill);
         values.set_nanbox_f64(array_value(values_ptr));
     }
-    let table_value = JSValue::from_bits(table.get_nanbox_f64().to_bits());
-    if table_value.is_pointer() {
-        let _ = object_set(
-            table_value.as_pointer::<crate::object::ObjectHeader>()
-                as *mut crate::object::ObjectHeader,
-            b"length",
-            old_len.saturating_add(delta) as f64,
-        );
-    }
+    set_table_state(
+        table.get_nanbox_f64(),
+        STATE_VALUES,
+        values.get_nanbox_f64(),
+    );
     old_len as f64
 }
 
-pub(super) fn make_table_method(
-    external: *mut c_void,
-    inst: *mut c_void,
-    name: f64,
-    table: f64,
-    info: *const crate::closure::JsFunctionInfo,
-    display_name: &str,
-) -> f64 {
+/// The `length` getter of `WebAssembly.Table.prototype`: the host table's
+/// current size, read on every call (wasm code can grow the table too).
+pub(super) extern "C" fn js_webassembly_table_length(this: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let name = scope.root_nanbox_f64(name);
-    let table = scope.root_nanbox_f64(table);
-    let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 4));
-    if closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| closure.is_null()) {
-        return nanbox_undefined();
+    let Some((external, inst, name, _table)) = table_context(&scope, this) else {
+        table_receiver_error("length")
+    };
+    let len = if inst.is_null() {
+        unsafe { perry_wasm_host_table_len(external) }
+    } else if let Some((name_ptr, name_len)) = extract_string_bytes(name.get_nanbox_f64()) {
+        unsafe { perry_wasm_host_instance_table_len(inst, name_ptr.cast(), name_len) }
+    } else {
+        usize::MAX
+    };
+    if len == usize::MAX {
+        0.0
+    } else {
+        len as f64
     }
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_f64(closure, 0, external as usize as f64)
-    });
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_f64(closure, 1, inst as usize as f64)
-    });
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_f64(closure, 2, name.get_nanbox_f64())
-    });
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_f64(closure, 3, table.get_nanbox_f64())
-    });
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::object::set_bound_native_closure_name(closure, display_name)
-    });
-    closure.with_mut_ptr(|closure: *mut crate::closure::ClosureHeader| {
-        crate::value::js_nanbox_pointer(closure as i64)
-    })
 }
 
 pub(super) fn make_table_function(external: *mut c_void, context: f64) -> f64 {
@@ -317,6 +342,32 @@ pub(super) fn make_table_function(external: *mut c_void, context: f64) -> f64 {
     })
 }
 
+/// Publish the state of a table wrapper: `[values, inst, export name]` in the
+/// private `WASM_TABLE` slot of its owned-state bag (traced by the GC, never
+/// an own property). The wrapper is born by the caller as an instance of
+/// `WebAssembly.Table`; its members are `Table.prototype`'s.
+fn publish_table_state(table: f64, values: f64, inst: *mut c_void, name: f64) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let table = scope.root_nanbox_f64(table);
+    let values = scope.root_nanbox_f64(values);
+    let name = scope.root_nanbox_f64(name);
+    let state = scope.root_nanbox_f64(array_value(crate::array::js_array_alloc_with_length(3)));
+    let state_ptr = JSValue::from_bits(state.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::array::ArrayHeader>()
+        as *mut crate::array::ArrayHeader;
+    crate::array::js_array_set_f64(state_ptr, STATE_VALUES, values.get_nanbox_f64());
+    crate::array::js_array_set_f64(state_ptr, STATE_INST, inst as usize as f64);
+    crate::array::js_array_set_f64(state_ptr, STATE_NAME, name.get_nanbox_f64());
+    let table_value = JSValue::from_bits(table.get_nanbox_f64().to_bits());
+    unsafe {
+        crate::object::owned_state_bag::store(
+            table_value.as_pointer::<u8>() as usize,
+            crate::object::owned_state_bag::WASM_TABLE,
+            state.get_nanbox_f64(),
+        );
+    }
+}
+
 pub(super) fn make_table_object(
     external: *mut c_void,
     inst: *mut c_void,
@@ -328,13 +379,7 @@ pub(super) fn make_table_object(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let name = scope.root_nanbox_f64(name);
-    let receiver = JSValue::from_bits(receiver.to_bits());
-    let table_ptr = if receiver.is_pointer() {
-        receiver.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader
-    } else {
-        crate::object::js_object_alloc(0, 0)
-    };
-    let table = scope.root_nanbox_f64(object_value(table_ptr));
+    let table = scope.root_nanbox_f64(wrapper_birth(b"Table", receiver));
     let len = if inst.is_null() {
         unsafe { perry_wasm_host_table_len(external) }
     } else if let Some((name_ptr, name_len)) = extract_string_bytes(name.get_nanbox_f64()) {
@@ -354,42 +399,12 @@ pub(super) fn make_table_object(
             crate::array::js_array_push_f64(values_ptr, f64::from_bits(crate::value::TAG_NULL));
         values.set_nanbox_f64(array_value(values_ptr));
     }
-    let table_ptr = JSValue::from_bits(table.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::object::ObjectHeader>()
-        as *mut crate::object::ObjectHeader;
-    let _ = object_set(table_ptr, b"__wasmValues", values.get_nanbox_f64());
-    let methods = [
-        (
-            "get",
-            crate::fn_info!(js_wasm_table_get, 1; with_declared(1)),
-        ),
-        (
-            "grow",
-            crate::fn_info!(js_wasm_table_grow, 2; with_declared(2)),
-        ),
-        (
-            "set",
-            crate::fn_info!(js_wasm_table_set, 2; with_declared(2)),
-        ),
-    ];
-    for (method_name, info) in methods {
-        let method = scope.root_nanbox_f64(make_table_method(
-            external,
-            inst,
-            name.get_nanbox_f64(),
-            table.get_nanbox_f64(),
-            info,
-            method_name,
-        ));
-        let table_ptr = JSValue::from_bits(table.get_nanbox_f64().to_bits())
-            .as_pointer::<crate::object::ObjectHeader>()
-            as *mut crate::object::ObjectHeader;
-        let _ = object_set(table_ptr, method_name.as_bytes(), method.get_nanbox_f64());
-    }
-    let table_ptr = JSValue::from_bits(table.get_nanbox_f64().to_bits())
-        .as_pointer::<crate::object::ObjectHeader>()
-        as *mut crate::object::ObjectHeader;
-    let _ = object_set(table_ptr, b"length", len as f64);
+    publish_table_state(
+        table.get_nanbox_f64(),
+        values.get_nanbox_f64(),
+        inst,
+        name.get_nanbox_f64(),
+    );
     let table_ptr = JSValue::from_bits(table.get_nanbox_f64().to_bits())
         .as_pointer::<crate::object::ObjectHeader>();
     crate::object::register_wasm_extern_wrapper(table_ptr as usize, b"table", external as usize);

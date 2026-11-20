@@ -27,7 +27,7 @@ unsafe fn supports_generate_key(algorithm_bits: u64, algorithm: &str) -> bool {
     let object_form = algorithm_is_object(algorithm_bits);
     match algorithm {
         "ED25519" | "ED448" | "X25519" | "X448" | "KMAC128" | "KMAC256" | "ML-KEM-512"
-        | "ML-KEM-768" | "ML-KEM-1024" => true,
+        | "ML-KEM-768" | "ML-KEM-1024" | "ML-DSA-44" | "ML-DSA-65" | "ML-DSA-87" => true,
         "CHACHA20-POLY1305" => true,
         "HMAC" | "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" => object_form,
         "ECDSA" | "ECDH" => {
@@ -46,7 +46,7 @@ unsafe fn supports_import_key(algorithm_bits: u64, algorithm: &str) -> bool {
         "AES-GCM" | "AES-CBC" | "AES-CTR" | "AES-KW" | "AES-OCB" | "CHACHA20-POLY1305"
         | "PBKDF2" | "HKDF" | "ARGON2D" | "ARGON2I" | "ARGON2ID" | "ED25519" | "ED448"
         | "X25519" | "X448" | "KMAC128" | "KMAC256" | "ML-KEM-512" | "ML-KEM-768"
-        | "ML-KEM-1024" => true,
+        | "ML-KEM-1024" | "ML-DSA-44" | "ML-DSA-65" | "ML-DSA-87" => true,
         "HMAC" => algorithm_is_object(algorithm_bits),
         "ECDSA" | "ECDH" => algorithm_curve(algorithm_bits)
             .as_deref()
@@ -78,6 +78,9 @@ fn supports_export_key(algorithm: &str) -> bool {
             | "ML-KEM-512"
             | "ML-KEM-768"
             | "ML-KEM-1024"
+            | "ML-DSA-44"
+            | "ML-DSA-65"
+            | "ML-DSA-87"
             | "RSA-OAEP"
             | "RSA-PSS"
             | "RSASSA-PKCS1-V1_5"
@@ -110,7 +113,13 @@ pub unsafe extern "C" fn js_webcrypto_supports(
         "SIGN" | "VERIFY" => {
             matches!(
                 algorithm.as_str(),
-                "HMAC" | "ED25519" | "ED448" | "RSASSA-PKCS1-V1_5"
+                "HMAC"
+                    | "ED25519"
+                    | "ED448"
+                    | "RSASSA-PKCS1-V1_5"
+                    | "ML-DSA-44"
+                    | "ML-DSA-65"
+                    | "ML-DSA-87"
             )
         }
         "ENCRYPT" | "DECRYPT" => {
@@ -126,10 +135,12 @@ pub unsafe extern "C" fn js_webcrypto_supports(
         "GENERATEKEY" => supports_generate_key(algorithm_bits.to_bits(), &algorithm),
         "IMPORTKEY" => supports_import_key(algorithm_bits.to_bits(), &algorithm),
         "EXPORTKEY" => supports_export_key(&algorithm),
-        "ENCAPSULATEBITS" | "DECAPSULATEBITS" => matches!(
-            algorithm.as_str(),
-            "ML-KEM-512" | "ML-KEM-768" | "ML-KEM-1024"
-        ),
+        "ENCAPSULATEBITS" | "DECAPSULATEBITS" | "ENCAPSULATEKEY" | "DECAPSULATEKEY" => {
+            matches!(
+                algorithm.as_str(),
+                "ML-KEM-512" | "ML-KEM-768" | "ML-KEM-1024"
+            )
+        }
         _ => false,
     };
     js_bool(supported)

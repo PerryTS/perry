@@ -20,6 +20,8 @@ fn legacy_pre_upgraded_host_still_invokes_callback_once() {
     let scope = perry_ffi::TransientRootScope::enter();
     let clients = scope.root_nanbox(f64::from_bits(alloc_set(4).bits()));
     let server = register_handle(WsServerHandle {
+        owner_agent: perry_ffi::agent_post::current_agent(),
+        counted: false,
         listeners: HashMap::new(),
         port: 0,
         host: "127.0.0.1".into(),

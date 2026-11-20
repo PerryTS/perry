@@ -310,6 +310,7 @@ impl PageGenerationCacheSet {
     /// already covered. Returns false — and changes nothing — if the resulting
     /// span would exceed the cap.
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn rebase_to_cover(&mut self, key: usize) -> bool {
         let old_lo = self.base;
@@ -399,7 +400,7 @@ fn page_class_table_enabled() -> bool {
 /// One line under `PERRY_GC_DIAG=1`, emitted per copying minor from the
 /// collector (never at exit — the rig SIGKILLs the process).
 pub(crate) fn page_class_table_report() {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     // SAFETY: thread-local, single-threaded, shared borrow ends here.
@@ -459,6 +460,7 @@ mod page_class_table_tests {
 
     const MB: usize = 1 << GENERATION_CLASS_SHIFT;
 
+    #[cfg(target_pointer_width = "64")]
     /// The base is taken from the FIRST registration, wherever it is — not
     /// from a constant. An arena that starts at a high address (ASLR moved the
     /// base by 0x142920 classes between two measured runs) must hit the table,
@@ -511,6 +513,7 @@ mod page_class_table_tests {
     /// far address then reads a garbage entry and this test's generation
     /// assertion fails.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn a_key_outside_the_span_still_classifies_correctly() {
         if !page_class_table_enabled() {
             return;
@@ -574,6 +577,7 @@ mod page_class_table_tests {
         });
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// A key match is NOT an address match. Two ranges can share a 1 MiB class
     /// (`PageGenerationSlot::Multiple`); an entry confirmed for one must not
     /// answer for an address in the other.
@@ -618,6 +622,7 @@ mod page_class_table_tests {
         });
     }
 
+    #[cfg(target_pointer_width = "64")]
     /// Registration invalidates: a retagged block must never be answered from
     /// a stale entry. This is the 4-way set's original contract carried over.
     ///

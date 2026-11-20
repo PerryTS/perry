@@ -126,7 +126,7 @@ impl Reservation {
                 len = (len / 2) & !(ALIGN - 1);
                 continue;
             }
-            assert_eq!(libc::madvise(committed, prefix, libc::MADV_NOHUGEPAGE), 0);
+            super::advise_thp(committed, prefix, libc::MADV_NOHUGEPAGE);
             return Some(Box::new(Self {
                 descriptors: aligned,
                 base: aligned + prefix,
@@ -241,6 +241,21 @@ pub(crate) fn owned_space(addr: usize) -> Option<(HeapSpace, usize, *mut u64)> {
     })
 }
 
+/// Collector-only query. The barrier's age decoder remains unchanged.
+#[inline(always)]
+pub(crate) fn owned_storage(addr: usize) -> Option<(HeapSpace, usize, *mut u64, bool)> {
+    let (d, word) = owned_descriptor(addr)?;
+    let space = decode_space(word);
+    (space != HeapSpace::Unknown).then(|| {
+        (
+            space,
+            d.base.load(SeqCst),
+            d.starts.load(SeqCst) as *mut u64,
+            (word >> 8) & 15 == 3,
+        )
+    })
+}
+
 pub(crate) fn owned_uniform_generation(base: usize, end: usize) -> Option<HeapGeneration> {
     let (d, word) = owned_descriptor(base)?;
     (end > base && end <= d.end.load(SeqCst)).then(|| generation_for_space(decode_space(word)))
@@ -331,6 +346,9 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
     }
     classify(addr).is_some_and(|s| end <= s.end)
 }
+// Inlined into every caller: the ordinary block refill and the dedicated leaf
+// allocator each carry the same body, as the refill alone did before leaves.
+#[inline(always)]
 pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
     let Some(r) = initialized() else {
         return std::ptr::null_mut();
@@ -416,10 +434,38 @@ pub(super) unsafe fn map(kind: Kind, mapped: usize) -> *mut u8 {
             d.publication
                 .store(serial() | kind_bits(kind) | MAPPED, SeqCst);
         }
+        #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+        crate::snap_census::region_mapped(base, mapped);
         return data.cast();
     }
     std::ptr::null_mut()
 }
+/// `[base, base + len)` of the reservation's payload (empty before it
+/// exists). The SNAP census sizes its page map with it.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn payload_bounds() -> (usize, usize) {
+    initialized().map_or((0, 0), |r| (r.base, r.base + r.len))
+}
+
+/// Every mapped region, `[base, end)`, once each.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn for_each_mapped(mut f: impl FnMut(usize, usize)) {
+    let Some(r) = existing() else {
+        return;
+    };
+    let mut slot = 0;
+    while slot < r.len / ALIGN {
+        let d = r.descriptor(slot);
+        if d.publication.load(SeqCst) & MAPPED != 0 {
+            let (base, end) = (d.base.load(SeqCst), d.end.load(SeqCst));
+            f(base, end);
+            slot = (end - r.base).div_ceil(ALIGN).max(slot + 1);
+        } else {
+            slot += 1;
+        }
+    }
+}
+
 pub(super) unsafe fn unmap(data: *mut u8, mapped: usize) {
     let r = existing().expect("region reservation missing");
     let _guard = r.allocation.lock().unwrap_or_else(|e| e.into_inner());
@@ -453,6 +499,16 @@ pub(super) unsafe fn unmap(data: *mut u8, mapped: usize) {
 /// block mapped by one thread can be handed to another (the from-space
 /// quarantine ring is process-wide), and the new holder must classify it.
 pub(crate) fn set_space(base: usize, len: usize, space: HeapSpace, starts: Option<usize>) -> bool {
+    set_space_with_kind(base, len, space, starts, None)
+}
+
+pub(crate) fn set_space_with_kind(
+    base: usize,
+    len: usize,
+    space: HeapSpace,
+    starts: Option<usize>,
+    explicit_kind: Option<Kind>,
+) -> bool {
     let Some(r) = existing() else {
         return false;
     };
@@ -481,18 +537,13 @@ pub(crate) fn set_space(base: usize, len: usize, space: HeapSpace, starts: Optio
             d.owner.store(crate::agent::current_agent(), SeqCst);
             d.thread.store(crate::tls_hot::thread_identity(), SeqCst);
         }
-        let kind = match space {
-            HeapSpace::Old | HeapSpace::PromotedYoung | HeapSpace::Longlived if len > ALIGN => {
+        let kind = explicit_kind.unwrap_or_else(|| {
+            if (before >> 8) & 15 == 3 {
                 Kind::LargeObject
+            } else {
+                super::kind_for(generation_for_space(space), len)
             }
-            HeapSpace::Old | HeapSpace::PromotedYoung | HeapSpace::Longlived => Kind::OldBlock,
-            HeapSpace::Unknown => match (before >> 8) & 15 {
-                2 => Kind::OldBlock,
-                3 => Kind::LargeObject,
-                _ => Kind::NurseryBlock,
-            },
-            _ => Kind::NurseryBlock,
-        };
+        });
         d.publication.store(
             serial() | MAPPED | kind_bits(kind) | space_bits(space),
             SeqCst,

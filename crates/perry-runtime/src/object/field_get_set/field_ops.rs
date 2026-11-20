@@ -53,6 +53,7 @@ struct WarnNullPtrState {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn record_warn_null_ptr(obj: *mut ObjectHeader, field_index: u32, class_id: u32) {
     let (total_count, should_abort) = WARN_NULL_PTR_STATE.with(|cell| {
@@ -96,9 +97,26 @@ fn record_warn_null_ptr(obj: *mut ObjectHeader, field_index: u32, class_id: u32)
     }
 }
 
+/// A Number has one encoding in every JS value: the raw double. No store into
+/// an object field slot carries the INT32 word (top 32 bits `0x7FFE_0000`;
+/// the top-16 test would also match prototype refs, `0x7FFE_0001`), so a
+/// field the facts prove holds Numbers is read as a plain double. Debug
+/// builds only: the callers are `#[cfg(debug_assertions)]` statements, so
+/// a release build compiles the store entries exactly as before.
+#[cfg(debug_assertions)]
+#[inline(always)]
+pub(crate) fn debug_assert_one_number_encoding(bits: u64) {
+    debug_assert!(
+        bits >> 32 != 0x7FFE_0000,
+        "INT32 Number word {bits:#018x} stored into an object field"
+    );
+}
+
 /// Set a field on an object by index
 #[no_mangle]
 pub extern "C" fn js_object_set_field(obj: *mut ObjectHeader, field_index: u32, value: JSValue) {
+    #[cfg(debug_assertions)]
+    debug_assert_one_number_encoding(value.bits());
     let obj = {
         let b = obj as u64;
         let t = b >> 48;
@@ -240,7 +258,7 @@ pub extern "C" fn js_object_get_class_id(obj: *const ObjectHeader) -> u32 {
         }
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return 0;
         }
         (*obj).class_id
@@ -302,6 +320,8 @@ pub extern "C" fn js_object_set_field_by_index(
     field_index: u32,
     value: f64,
 ) {
+    #[cfg(debug_assertions)]
+    debug_assert_one_number_encoding(value.to_bits());
     if obj.is_null() || (obj as usize) < 0x10000 {
         return;
     }

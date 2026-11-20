@@ -1,0 +1,29 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "import",
+            "name": "foo",
+            "package": 0,
+            "export": "bar"
+        },
+        {
+            "type": "import",
+            "name": "bar",
+            "package": 0,
+            "export": "bar"
+        }
+    ],
+    "arguments": [
+        {
+            "source": 0,
+            "target": 1,
+            "name": "nope"
+        }
+    ]
+}

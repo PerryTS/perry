@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn wasm_imports_follow_moving_wrapper_and_die_with_it() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: erase the context cell's imports edge"]
-fn negative_control_objtables_wasm_import_objects() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -30,11 +25,6 @@ fn check(erase: bool) {
     let token = crate::wasm_instance_state::token(context);
     let imports = crate::wasm_instance_state::imports(token);
     assert_ne!(imports.to_bits(), imports_value.to_bits());
-    if erase {
-        unsafe {
-            crate::wasm_instance_state::clear_imports(context);
-        }
-    }
     js_gc_collect();
     let retained = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1)));
     assert_eq!(

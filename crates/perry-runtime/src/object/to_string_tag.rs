@@ -3,15 +3,87 @@
 
 use super::*;
 
+#[cfg(test)]
+mod fetch_handle_tests;
+
 pub(crate) fn web_stream_to_string_tag(value: f64) -> Option<&'static str> {
-    let id = stream_handle_id(value)?;
+    web_stream_interface_name(stream_handle_id(value)?)
+}
+
+/// The prototype of the Web Streams handle `id` (registry id): its
+/// interface's, born on first observation for the lazy stream families;
+/// `undefined` when `id` is no stream. Called by the streams provider's
+/// handle prototype hook, so a program without streams links none of it.
+pub fn web_stream_prototype_value(id: usize) -> f64 {
+    match web_stream_interface_name(id) {
+        Some(name) => crate::object::builtin_prototype_value(name),
+        None => f64::from_bits(crate::value::TAG_UNDEFINED),
+    }
+}
+
+/// The Web Streams interface stream registry id `id` is an instance of: the
+/// one map behind its tag and its prototype. Kind 3 is a default reader,
+/// 9 a BYOB reader, 10 a BYOB request; 6/7/8 are the controller families.
+/// Inlined into its callers (the tag and prototype readers), as the per-site
+/// tag matches it replaced were: no function of its own in a program.
+#[inline(always)]
+pub(crate) fn web_stream_interface_name(id: usize) -> Option<&'static str> {
     let kind_probe = stream_handle_kind_probe()?;
     match unsafe { kind_probe(id) } {
         1 => Some("ReadableStream"),
         2 => Some("WritableStream"),
+        3 => Some("ReadableStreamDefaultReader"),
         5 => Some("TransformStream"),
+        6 => Some("ReadableStreamDefaultController"),
+        7 => Some("TransformStreamDefaultController"),
+        8 => Some("ReadableByteStreamController"),
+        9 => Some("ReadableStreamBYOBReader"),
+        10 => Some("ReadableStreamBYOBRequest"),
         _ => None,
     }
+}
+
+/// The Web Fetch interface a registry handle id is an instance of, if any.
+pub(crate) fn fetch_handle_interface_name(addr: usize) -> Option<&'static str> {
+    let probe = crate::object::fetch_handle_kind_probe()?;
+    match unsafe { probe(addr) } {
+        1 => Some("Response"),
+        2 => Some("Request"),
+        3 => Some("Headers"),
+        4 => Some("Blob"),
+        5 => Some("File"),
+        6 => Some("FormData"),
+        _ => None,
+    }
+}
+
+/// Own properties shadow the actual prototype, even when their value is undefined.
+pub(crate) fn fetch_handle_constructor_value(addr: usize) -> Option<crate::value::JSValue> {
+    let name = fetch_handle_interface_name(addr)?;
+    let key = b"constructor";
+    if let Some(value) = unsafe {
+        super::handle_expando::handle_own_property_get(addr as i64, key.as_ptr(), key.len())
+    } {
+        return Some(crate::value::JSValue::from_bits(value.to_bits()));
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let prototype = super::prototype_chain::object_static_prototype(addr)
+        .map(f64::from_bits)
+        .unwrap_or_else(|| super::builtin_prototype_value(name));
+    let prototype = scope.root_nanbox_f64(prototype);
+    let prototype_value = crate::value::JSValue::from_bits(prototype.get_nanbox_u64());
+    if prototype_value.is_null() || prototype_value.is_undefined() {
+        return Some(crate::value::JSValue::undefined());
+    }
+    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    let key = crate::value::js_nanbox_string(key as i64);
+    let receiver = f64::from_bits(crate::value::HANDLE_TAG | addr as u64);
+    let value = crate::proxy::js_reflect_get_with_explicit_receiver(
+        prototype.get_nanbox_f64(),
+        key,
+        receiver,
+    );
+    Some(crate::value::JSValue::from_bits(value.to_bits()))
 }
 
 /// Remaining Web built-ins without a recorded prototype chain. Migrated
@@ -26,16 +98,8 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     if top16 == (crate::value::HANDLE_TAG >> 48) {
         // Web Fetch handle family — one shared id counter, disjoint registries
         // (see `js_fetch_handle_kind`'s own doc comment).
-        if let Some(probe) = crate::object::fetch_handle_kind_probe() {
-            match unsafe { probe(addr) } {
-                1 => return Some("Response"),
-                2 => return Some("Request"),
-                3 => return Some("Headers"),
-                4 => return Some("Blob"),
-                5 => return Some("File"),
-                6 => return Some("FormData"),
-                _ => {}
-            }
+        if let Some(name) = fetch_handle_interface_name(addr) {
+            return Some(name);
         }
         // #340/#341: TextEncoder/TextDecoder used to be sentinel ids handled
         // here. They are ordinary objects linked to their prototypes now, so
@@ -51,13 +115,13 @@ pub(crate) fn web_builtin_to_string_tag(value: f64) -> Option<&'static str> {
     // `try_read_gc_header` -- the same idiom `is_url_object_shape` /
     // `shape_is_url_search_params` already use for this exact receiver kind.
     let obj = match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => addr as *const ObjectHeader,
+        Some(h) if crate::gc_type_is_object!(h.obj_type) => addr as *const ObjectHeader,
         _ => return None,
     };
-    if crate::url::is_url_object_shape(obj as *mut ObjectHeader) {
+    if crate::object::url_layout::is_url_object_shape(obj as *mut ObjectHeader) {
         return Some("URL");
     }
-    if crate::url::search_params::shape_is_url_search_params(obj) {
+    if crate::url_hooks::shape_is_url_search_params(obj) {
         return Some("URLSearchParams");
     }
     None
@@ -80,6 +144,8 @@ unsafe fn string_value_to_owned(value: f64) -> Option<String> {
 }
 
 unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
     let bits = value.to_bits();
     if (bits & 0xFFFF_0000_0000_0000) != 0x7FFD_0000_0000_0000 {
         return None;
@@ -96,8 +162,8 @@ unsafe fn object_to_string_tag_property(value: f64) -> Option<String> {
     // Spec §20.1.3.6 step 6: Get(O, @@toStringTag) — own property first, then
     // the explicit prototype chain (set via Object.setPrototypeOf or the
     // runtime's object_set_static_prototype).
-    let tag_value = crate::symbol::own_symbol_property(value, sym_f64)
-        .or_else(|| crate::symbol::inherited_symbol_property(value, sym_f64))?;
+    let tag_value = crate::symbol::own_symbol_property(receiver.get_nanbox_f64(), sym_f64)
+        .or_else(|| crate::symbol::inherited_symbol_property(receiver.get_nanbox_f64(), sym_f64))?;
     string_value_to_owned(tag_value)
 }
 
@@ -125,8 +191,8 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
     if raw_addr < 0x1000 {
         return None;
     }
-    if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
-        return Some(crate::typedarray::name_for_kind(kind));
+    if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
+        return Some(crate::typedarray_hook_slots::name_for_kind(kind));
     }
     // Buffer-backed `Uint8Array` (and Node `Buffer`) — registered as a buffer
     // but still a TypedArray. Exclude the non-TypedArray buffer flavours.
@@ -146,6 +212,14 @@ pub(crate) fn typed_array_to_string_tag_name(value: f64) -> Option<&'static str>
 /// if registered, otherwise `Object` (matching Node for plain objects).
 #[no_mangle]
 pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
+    object_prototype_to_string(value)
+}
+
+/// Intrinsic entry for Rust callers whose exception boundary admits throwing
+/// tag getters, without crossing the non-unwinding C export wrapper.
+pub unsafe fn object_prototype_to_string(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(value);
     use crate::value::JSValue;
     const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
     const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
@@ -201,13 +275,13 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
     // test262 proxy-revoked-during-get-call).
     if jsv.is_pointer()
         && crate::value::addr_class::is_proxy_cell(raw_addr)
-        && crate::proxy::js_proxy_is_proxy(value) != 0
+        && crate::proxy_hooks::proxy_is_proxy(value) != 0
     {
         const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
         let is_array = crate::array::js_array_is_array(value).to_bits() == TAG_TRUE;
         let builtin_tag = if is_array {
             "Array"
-        } else if crate::proxy::proxy_wraps_callable(value) {
+        } else if crate::proxy_hooks::proxy_wraps_callable(value) {
             "Function"
         } else {
             "Object"
@@ -217,7 +291,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             None
         } else {
             let sym_f64 = f64::from_bits(POINTER_TAG | (sym as u64 & POINTER_MASK));
-            string_value_to_owned(crate::proxy::js_proxy_get(value, sym_f64))
+            string_value_to_owned(crate::proxy_hooks::proxy_get(value, sym_f64))
         };
         let formatted = match tag {
             Some(tag) => format!("[object {}]", tag),
@@ -268,11 +342,11 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
             Some("RegExp")
         } else if crate::symbol::is_registered_symbol(raw_addr) {
             Some("Symbol")
-        } else if let Some(kind) = crate::typedarray::lookup_typed_array_kind(raw_addr) {
+        } else if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr) {
             // Typed arrays are raw-i64 pointers with no brand arm; without this
             // they fall through to the `is_number()` fallback below (a small
             // raw-pointer bit pattern reads as a finite f64) → `[object Number]`.
-            Some(crate::typedarray::name_for_kind(kind))
+            Some(crate::typedarray_hook_slots::name_for_kind(kind))
         } else {
             None
         };
@@ -327,6 +401,9 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
+    let value = receiver.get_nanbox_f64();
+    let bits = value.to_bits();
+    let jsv = JSValue::from_bits(bits);
     // Intrinsic primitive-wrapper prototypes carry the corresponding internal
     // slot: `%Number.prototype%` has `[[NumberData]]` (+0), `%Boolean.prototype%`
     // has `[[BooleanData]]` (false), `%String.prototype%` has `[[StringData]]`
@@ -359,15 +436,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
     }
-    if jsv.is_int32() {
-        let class_id = (bits & 0xFFFF_FFFF) as u32;
-        if crate::object::is_class_id_registered(class_id) {
-            let bytes = b"[object Function]";
-            let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
-            return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
-        }
-    }
-    if jsv.is_int32() || jsv.is_number() {
+    if jsv.is_number() {
         let bytes = b"[object Number]";
         let str_ptr = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
         return f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK));
@@ -403,7 +472,7 @@ pub unsafe extern "C" fn js_object_to_string(value: f64) -> f64 {
         }
         let gc_header = raw_ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if crate::gc_type_is_array!(gc_type) || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             // #3553: a function's `arguments` object is represented as an array
             // carrying the GC_ARRAY_ARGUMENTS_OBJECT flag. Node tags it
             // `[object Arguments]`, not `[object Array]`.

@@ -351,6 +351,7 @@ pub fn is_node_core_module(module: &str) -> bool {
             | "timers"
             | "timers/promises"
             | "tls"
+            | "trace_events"
             | "tty"
             | "url"
             | "util"
@@ -753,19 +754,6 @@ mod tests {
             module_has_public_named_export("node:zlib", "codes"),
             "zlib.codes should be available to named imports"
         );
-    }
-
-    #[test]
-    fn ws_ready_state_constants_are_manifest_properties() {
-        for name in ["CONNECTING", "OPEN", "CLOSING", "CLOSED"] {
-            let entry = module_has_symbol("ws", name)
-                .unwrap_or_else(|| panic!("ws.{name} should be in the manifest"));
-            assert!(matches!(entry.kind, ApiKind::Property));
-            assert!(
-                module_has_public_named_export("ws", name),
-                "ws.{name} should be available to named imports"
-            );
-        }
     }
 
     #[test]

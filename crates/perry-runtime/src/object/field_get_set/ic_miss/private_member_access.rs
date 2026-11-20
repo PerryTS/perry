@@ -3,12 +3,14 @@ include!("private_evaluation_storage.rs");
 crate::perry_thread_local! {
     static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, &'static str)>> =
         std::cell::RefCell::new(None);
-    static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<crate::exception::CatchStack<PrivateMemberAccessHint>> =
-        std::cell::RefCell::new(crate::exception::CatchStack::new());
 }
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static PRIVATE_MEMBER_ACCESS_HINTS: crate::exception::marks::CatchStackKey<PrivateMemberAccessHint> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.private_member_access_hints);
 
 #[derive(Clone)]
-struct PrivateMemberAccessHint {
+pub(crate) struct PrivateMemberAccessHint {
     class_id: u32,
     /// Interned by `intern_private_name`: recording a hint allocates nothing.
     name: &'static str,
@@ -24,6 +26,13 @@ pub(crate) fn private_member_access_hints_unwind_to(sp: usize) {
     });
 }
 
+#[cfg(any(test, target_os = "wasi"))]
+pub(crate) fn private_member_access_hints_restore_depth(depth: usize) {
+    PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
+        hints.borrow_mut().restore_depth(depth);
+    });
+}
+
 pub(crate) fn private_member_access_hints_check_marks(sp: usize) {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| {
         crate::exception::marks::check_marks(
@@ -34,7 +43,7 @@ pub(crate) fn private_member_access_hints_check_marks(sp: usize) {
     });
 }
 
-#[cfg(test)]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) fn private_member_access_hints_depth() -> usize {
     PRIVATE_MEMBER_ACCESS_HINTS.with(|hints| hints.borrow().len())
 }
@@ -318,6 +327,23 @@ fn instance_ancestor_evaluation_brand(brand: f64, declaring_class_id: u32) -> Op
         .map(f64::to_bits)
 }
 
+/// The template-level static brand used when no lexical evaluation evidence
+/// exists (a plain function nested in a class body, called with an unrelated
+/// or absent `this`): the receiver is the declaring class itself, as its
+/// template ref (`A.#s`) or as its class object (`self.#s` where `self` is
+/// the static block's `this`). A subclass constructor has its own template
+/// id and is rejected, as V8 rejects it.
+fn static_template_brand(obj: f64, declaring_class_id: u32) -> bool {
+    if super::super::class_ref_id(obj) == Some(declaring_class_id) {
+        return true;
+    }
+    if !super::super::class_registry::is_class_object_value(obj) {
+        return false;
+    }
+    let object = JSValue::from_bits(obj.to_bits()).as_pointer::<ObjectHeader>();
+    !object.is_null() && js_object_get_class_id(object) == declaring_class_id
+}
+
 /// If the lexical class evaluation can be recovered from `brand_owner`,
 /// compare `obj` against that exact evaluation. `None` asks callers to retain
 /// the existing template-class check for ordinary (single-evaluation) classes.
@@ -392,7 +418,7 @@ pub extern "C" fn js_private_brand_check(
         ));
     }
     if is_static != 0
-        && (crate::proxy::js_proxy_is_proxy(obj) != 0
+        && (crate::proxy_hooks::proxy_is_proxy(obj) != 0
             || !private_static_receiver_is_constructor(obj))
     {
         return false_value;
@@ -428,7 +454,7 @@ pub extern "C" fn js_private_brand_check(
     let _owner = PrivateHintBrandScope::new(private_access_owner(brand_owner, declaring_class_id));
     let has_declaring_brand = if is_static != 0 {
         private_evaluation_brand_matches(obj, brand_owner, declaring_class_id)
-            .unwrap_or_else(|| super::super::class_ref_id(obj) == Some(declaring_class_id))
+            .unwrap_or_else(|| static_template_brand(obj, declaring_class_id))
     } else {
         // Installed elements are authoritative for returned receivers carrying
         // more than one evaluation's private elements.
@@ -462,9 +488,9 @@ fn throw_private_type_error(msg: &str) -> ! {
         msg.as_ptr(),
         msg.len() as u32,
     ));
-    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
-    let v = crate::value::JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(v))
+    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::CoreError::type_error(s));
+    let v = err;
+    crate::exception::throw_core(v)
 }
 
 #[cfg(test)]
@@ -821,6 +847,39 @@ mod repeated_evaluation_tests {
                 assert_eq!(field_get(), Some(value));
                 private_lexical_brand_pop();
             }
+        }
+    }
+
+    /// A plain function nested in a class body reads a static private
+    /// through a variable holding the class object (`self.#s`, `this` of a
+    /// static block), called with an unrelated or absent `this`: no
+    /// lexical evaluation evidence exists, and the template check must accept
+    /// the declaring class object (it only accepted the template ref before).
+    #[test]
+    fn static_template_brand_accepts_the_declaring_class_object() {
+        unsafe {
+            let a = class_object(62_533);
+            let other = class_object(62_534);
+            assert!(static_template_brand(a, 62_533));
+            assert!(
+                !static_template_brand(other, 62_533),
+                "another template is not the class"
+            );
+            let plain =
+                crate::value::js_nanbox_pointer(crate::object::js_object_alloc(62_533, 0) as i64);
+            assert!(
+                !static_template_brand(plain, 62_533),
+                "an instance is not the constructor"
+            );
+            assert_eq!(
+                private_evaluation_brand_matches(
+                    a,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                    62_533
+                ),
+                None,
+                "an absent `this` carries no evaluation evidence"
+            );
         }
     }
 

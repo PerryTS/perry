@@ -149,7 +149,7 @@ fn advertised_settings_report_the_clamped_values() {
     requested.max_concurrent_streams = u32::MAX;
     requested.max_frame_size = 1024;
     requested.max_header_list_size = 16;
-    let out = advertised_settings(&requested);
+    let out = advertised_settings(&requested, Role::Server);
     assert_eq!(out.max_concurrent_streams, 128);
     assert_eq!(out.max_frame_size, 16_384);
     assert_eq!(out.max_header_list_size, 4_096);
@@ -165,7 +165,7 @@ fn clamped_stream_limits_are_constructible() {
     for requested in [0u32, 1, 100, u32::MAX] {
         let mut settings = Http2SettingsState::default();
         settings.max_concurrent_streams = requested;
-        let advertised = advertised_settings(&settings);
+        let advertised = advertised_settings(&settings, Role::Server);
         let mut limits = Limits::default();
         limits.streams = advertised.max_concurrent_streams as usize;
         limits.frame_size = advertised.max_frame_size as usize;

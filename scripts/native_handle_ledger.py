@@ -76,11 +76,18 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "REMEMBERED_SET"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "CONS_PINNED"),
     ("crates/perry-runtime/src/gc/barrier/mod.rs", "EVER_DIRTY_OLD_PAGES"),
+    # The realm image's remembered set (WRT): image cells holding heap children.
+    ("crates/perry-runtime/src/gc/image_cells.rs", "IMAGE_REMEMBERED"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
+    # LIFE I3d's mark-parent record (PERRY_LIFE_REGIONS_WHY, instrumented
+    # runtime only: the module is #[cfg(perry_gc_instruments)]): header address
+    # -> the parent that marked it during the one armed full, cleared on arm.
+    ("crates/perry-runtime/src/gc/life_why.rs", "MAP"),
     # Compiled code/literal/site metadata, not heap object identity.
-    ("crates/perry-runtime/src/builtins/fn_metadata.rs", "REGISTRY"),
-    ("crates/perry-runtime/src/builtins/fn_metadata.rs", "OVERRIDES"),
+    # `builtins/fn_metadata.rs` used to hold `REGISTRY` and `OVERRIDES` here; #13442
+    # replaced both modules' tables with stable function-metadata identity, so the
+    # file declares no `static` at all and both classifications went stale.
     # Class ids are compiler metadata ids, not native-resource handles.
     ("crates/perry-runtime/src/object/class_constructors.rs", "CLASS_CAPTURE_VALUES"),
     ("crates/perry-runtime/src/object/class_env.rs", "CLASS_ENVS"),
@@ -93,8 +100,8 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/contracts.rs", "CLAIMS"),
     # Diagnostic site/class ids and owned Rust spellings -> numeric counters.
     ("crates/perry-runtime/src/object/dynamic_key_read/census.rs", "COUNTS"),
-    ("crates/perry-runtime/src/object/layout_desc.rs", "OUT_OF_ORDER_PAIRS"),
-    ("crates/perry-runtime/src/object/layout_desc.rs", "OTHER_KEYS"),
+    ("crates/perry-runtime/src/object/layout_desc/diagnostics.rs", "OUT_OF_ORDER_PAIRS"),
+    ("crates/perry-runtime/src/object/layout_desc/diagnostics.rs", "OTHER_KEYS"),
     # Keyed by agent id: two AtomicUsize counts, not a per-resource registry.
     ("crates/perry-stdlib/src/worker_threads.rs", "AGENT_WORKER_COUNTS"),
 }
@@ -114,8 +121,7 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/geisterhand_registry.rs", "REGISTRY"): 1,
     ("crates/perry-runtime/src/tui/hooks.rs", "SLOTS"): 1,
     ("crates/perry-runtime/src/tui/state.rs", "SLOTS"): 1,
-    ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
-    ("crates/perry-stdlib/src/common/handle_lifecycle.rs", "ORPHANS"): 1,
+    ("crates/perry-ffi/src/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
 }
 
@@ -250,11 +256,19 @@ def scan(root: Path = ROOT) -> tuple[dict[str, int], dict[str, int], set[tuple[s
 
 
 # a2ca8e952e moved the four byte-cell metadata registries out of header.rs;
-# that file is now only a re-export. The two paths share ONE existing budget.
+# that file is now only a re-export. Each pair of paths shares ONE existing budget.
 # Sum both sides: restoring a registry in the old file cannot mint headroom.
 LEDGER_PATH_MOVES = {
     "crates/perry-runtime/src/buffer/header.rs":
         "crates/perry-runtime/src/buffer/store/layout.rs",
+    # The shared pool lifecycle (its one orphan queue) moved from perry-stdlib into
+    # perry-ffi with the GC-proven id reuse; the file no longer exists in stdlib.
+    "crates/perry-stdlib/src/common/handle_lifecycle.rs":
+        "crates/perry-ffi/src/handle_lifecycle.rs",
+    # The npm `typescript` binding was removed and its crate renamed to
+    # perry-ext-bun; the Bun transpiler/build registries moved with the file.
+    "crates/perry-ext-typescript/src/bun.rs":
+        "crates/perry-ext-bun/src/bun.rs",
 }
 
 

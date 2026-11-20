@@ -1,0 +1,25 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wit"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "instantiation",
+            "package": 0
+        },
+        {
+            "type": "alias",
+            "source": 0,
+            "export": "my-func"
+        }
+    ],
+    "exports": [
+        {
+            "node": 1,
+            "name": "my-func"
+        }
+    ]
+}

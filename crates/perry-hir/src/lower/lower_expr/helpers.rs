@@ -17,11 +17,13 @@ use crate::lower_types::extract_ts_type_with_ctx;
 use crate::lower::module_decl::native_default_import::is_cjs_style_native_default_import;
 
 /// Whether `PERRY_GLOBAL_SCRIPT_THIS` is set — compile the program as a
-/// *global script* rather than a CJS module, so module top-level `this`
-/// lowers to `globalThis` instead of the `module.exports` stand-in
+/// *global script* rather than a CJS module, so a CommonJS module's top-level
+/// `this` lowers to `globalThis` instead of the `module.exports` stand-in
 /// (`Expr::ModuleTopThis`). This matches a conforming Test262 host (and the
 /// Node oracle's `vm.runInThisContext`, #5346/#5511); the default stays
-/// CJS so standalone builds match `node --experimental-strip-types`. Read
+/// CJS so standalone builds match `node --experimental-strip-types`. An ES
+/// module is unaffected: its top-level `this` is `undefined` whichever host
+/// evaluates it (#13558). Read
 /// once per process — the env is fixed for the lifetime of a compile (#5579).
 ///
 /// #11625: in `cfg(test)` builds only, an active
@@ -91,6 +93,7 @@ pub(crate) mod test_only {
 
 pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: helper_name.to_string(),
             param_types: Vec::new(),
@@ -114,6 +117,7 @@ pub(crate) fn throw_reference_error_expr(helper_name: &str) -> Expr {
 /// fallback so the two cannot drift.
 pub(crate) fn unresolved_global_get_expr(name: String, byte_offset: u32) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_global_get_or_throw_unresolved".to_string(),
             param_types: vec![Type::Any],
@@ -143,6 +147,7 @@ pub(crate) fn unresolved_global_get_expr(name: String, byte_offset: u32) -> Expr
 /// drift.
 pub(crate) fn strict_global_assign_existing_or_throw(name: String, value: Box<Expr>) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_global_assign_existing_or_throw".to_string(),
             param_types: vec![Type::Any, Type::Any],
@@ -198,6 +203,7 @@ pub(crate) fn is_known_global_identifier_name(name: &str) -> bool {
             | "DisposableStack"
             | "AsyncDisposableStack"
             | "SuppressedError"
+            | "Iterator"
             | "Proxy"
             | "Reflect"
             | "Uint8Array"
@@ -261,6 +267,7 @@ pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
         ty: Type::Any,
         mutable: true,
         init: Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_with_implicit_unset".to_string(),
                 param_types: vec![],
@@ -345,7 +352,7 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
         // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
         // (property reads are not side-effecting in this codebase's model).
         Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             opt_call_receiver_repeatable(object) && opt_call_receiver_repeatable(index)
         }
         _ => false,
@@ -401,6 +408,21 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         Some(v) => v,
         None => return Expr::Undefined,
     };
+    if method_name.is_none() {
+        if let Some((source, imported)) = ctx.native_import_value_origins.get(name) {
+            return Expr::Call {
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "js_native_module_named_esm_export_value".to_string(),
+                    param_types: vec![Type::String, Type::String],
+                    return_type: Type::Any,
+                }),
+                args: vec![Expr::String(source.clone()), Expr::String(imported.clone())],
+                type_args: vec![],
+                byte_offset: 0,
+                byte_end: 0,
+            };
+        }
+    }
     if module_name == "os" || module_name == "node:os" {
         if let Some(method) = method_name {
             match method {
@@ -414,6 +436,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         if let Some(method) = method_name {
             if matches!(method, "constants" | "kMaxLength" | "kStringMaxLength") {
                 return Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("buffer".to_string())),
                     property: method.to_string(),
@@ -426,6 +449,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         if let Some(method) = method_name {
             if method == "workerData" {
                 return Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
                     property: "workerData".to_string(),
@@ -436,6 +460,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
     if let Some(method) = method_name {
         if method == "default" {
             return Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
                 property: method.to_string(),
@@ -457,6 +482,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         // default/namespace import, which must observe CommonJS monkey patches
         // immediately.
         return Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_native_module_named_esm_export_value".to_string(),
                 param_types: vec![Type::String, Type::String],
@@ -474,6 +500,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         && is_cjs_style_native_default_import(module_name)
     {
         return Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::NativeModuleRef(module_name.to_string())),
             property: "default".to_string(),
@@ -494,6 +521,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         && ctx.lookup_builtin_module_alias(name).is_none()
     {
         return Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::NativeModuleRef("stream".to_string())),
             property: "default".to_string(),

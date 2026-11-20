@@ -61,8 +61,10 @@ fn runtime_handle_stack() -> StackRef {
 }
 
 /// Fallback arm of [`runtime_handle_stack`]: the raw `thread_local!` lookup,
-/// reached only before this thread's `HotTls` is published (or from inside
-/// `HotTls::fill` itself). `#[inline(never)]` on purpose, not just `#[cold]`.
+/// reached before this thread's `HotTls` is published, from inside
+/// `HotTls::fill`, and always on targets without the published shortcut.
+/// On targets with an expensive TLS resolver it is `#[inline(never)]` on
+/// purpose, not just `#[cold]`.
 ///
 /// `RuntimeHandleScope::new()` is called from dozens of arms throughout the
 /// runtime, many of them small and gated behind a cheap guard deep inside an
@@ -81,8 +83,13 @@ fn runtime_handle_stack() -> StackRef {
 /// `js_object_get_field_by_name`'s prologue. Keeping this arm opaque to the
 /// inliner is what lets the FAST (published) arm above stay `#[inline(always)]`
 /// without dragging the raw TLS call along with it at every call site.
-#[inline(never)]
-#[cold]
+// Linux resolves this const-initialized, non-dropping TLS cell at a fixed
+// offset. Inline that address calculation into the scope owner instead of
+// calling an outlined fallback on every resume. Darwin keeps the opaque
+// fallback so its expensive TLV lookup cannot escape caller guards.
+#[cfg_attr(target_os = "linux", inline(always))]
+#[cfg_attr(not(target_os = "linux"), inline(never))]
+#[cfg_attr(not(target_os = "linux"), cold)]
 #[cfg(not(any(target_os = "android", target_env = "ohos")))]
 fn runtime_handle_stack_cold() -> StackRef {
     RUNTIME_HANDLE_STACK.with(|stack| {
@@ -149,7 +156,7 @@ impl RuntimeHandleScope {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
         runtime_handle_slot_write_barrier(slot);
         let index = self.stack.push(slot);
@@ -246,7 +253,7 @@ impl RuntimeHandleScope {
         handles.iter().map(RuntimeHandle::get_nanbox_u64).collect()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::RawPointer(ptr as usize))
     }
@@ -349,6 +356,7 @@ fn runtime_handle_slot_write_barrier(slot: RuntimeHandleSlot) {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn runtime_handle_slot_write_barrier_active(slot: RuntimeHandleSlot) {
     match slot {
@@ -397,12 +405,14 @@ pub struct RuntimeHandle<'scope> {
 /// line in the release build — they showed up as 4.3 % and 3.0 % of a
 /// promise-heavy program's leaf samples purely as call frames.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn handle_used_after_scope() -> ! {
     panic!("runtime handle used after its scope was dropped");
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn handle_kind_mismatch(expected: &str) -> ! {
     panic!("runtime handle kind mismatch: expected {expected}");
@@ -423,7 +433,7 @@ fn raw_slot_tag(slot: RuntimeHandleSlot) -> u64 {
 const _: () = assert!(std::mem::size_of::<RuntimeHandleSlot>() == 16);
 
 impl<'scope> RuntimeHandle<'scope> {
-    #[inline]
+    #[inline(always)]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
         let slot = match self.stack.get(self.index) {
             Some(slot) => slot,
@@ -450,7 +460,7 @@ impl<'scope> RuntimeHandle<'scope> {
     /// method scopes the raw value, but it cannot keep that value current if a
     /// collection moves the allocation while `f` is running. Use
     /// [`Self::across_mut`] when the caller needs a post-collection address.
-    #[inline]
+    #[inline(always)]
     pub fn with_mut_ptr<T, R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
         f(self.get_raw_mut_ptr::<T>())
     }
@@ -559,6 +569,13 @@ impl<'scope> RuntimeHandle<'scope> {
         f64::from_bits(self.get_nanbox_u64())
     }
 
+    /// Read a handle consumed by an owned iterator or optional-root mapping.
+    /// The enclosing scope continues to own the root slot.
+    #[inline]
+    pub(crate) fn into_nanbox_f64(self) -> f64 {
+        self.get_nanbox_f64()
+    }
+
     #[inline]
     pub fn get_nanbox_u64(&self) -> u64 {
         self.with_slot(|slot| match slot {
@@ -582,7 +599,7 @@ impl<'scope> RuntimeHandle<'scope> {
         runtime_write_barrier_root_nanbox(bits);
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::RawPointer(addr)

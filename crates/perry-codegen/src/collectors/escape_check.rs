@@ -84,6 +84,7 @@ pub fn find_new_candidates(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 find_new_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
@@ -191,6 +192,7 @@ pub fn check_escapes_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 check_escapes_in_stmts(body, candidates, classes, escaped);
                 if let Some(c) = catch {
@@ -295,7 +297,7 @@ pub fn check_escapes_in_expr(
         Expr::PropertySet {
             object,
             value,
-            property,
+            property, ..
         } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(class_name) = candidates.get(id) {
@@ -621,14 +623,14 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index , .. } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
         }
         Expr::IndexSet {
             object,
             index,
-            value,
+            value, ..
         } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
@@ -655,7 +657,7 @@ pub fn check_escapes_in_expr(
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 check_escapes_in_expr(e, candidates, classes, escaped);
             }
         }

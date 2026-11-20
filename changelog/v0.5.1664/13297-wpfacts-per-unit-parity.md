@@ -1,0 +1,1 @@
+Per-unit whole-program facts now finish on the TypeScript compiler's checker units and prove more read and call sites per unit than before (tsc +4.8%, tssrc +6.9%, Effect schema +13.5%, AWFY Richards 44 → 126), with the same outputs. Compiling with per-unit facts costs more memory on some programs (Effect: about 17 GB instead of 3.5 GB) while this is tuned.

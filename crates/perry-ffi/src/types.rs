@@ -119,6 +119,17 @@ pub struct ObjectHeader {
     pub meta: *mut core::ffi::c_void,
 }
 
+impl ObjectHeader {
+    /// Whether the object carries no metadata record.
+    ///
+    /// # Safety
+    /// `this` points at a live object header.
+    #[inline(always)]
+    pub unsafe fn meta_is_null(this: *const ObjectHeader) -> bool {
+        (*this).meta.is_null()
+    }
+}
+
 /// Opaque runtime byte value. Resolve bytes through `bytes`, never pointer arithmetic.
 #[repr(C)]
 pub struct BufferHeader {
@@ -160,11 +171,11 @@ pub struct ClosureHeader {
     pub capture_count: u32,
     /// The function object's ShapeId.
     pub shape_id: u32,
+    /// The function object's own-property record (runtime-internal).
+    pub props: *mut u8,
     /// The body's static `JsFunctionInfo` (perry-abi): its code address and
     /// every fact the runtime needs about the body.
     pub info: *const perry_abi::JsFunctionInfo,
-    /// The function object's own-property record (runtime-internal).
-    pub props: *mut u8,
 }
 
 /// Opaque runtime-allocated Promise handle.

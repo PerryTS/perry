@@ -1,0 +1,6 @@
+failed to encode the graph
+
+Caused by:
+    0: failed to merge the type definition for implicit import `foo` due to conflicting types
+    1: mismatched type for export `baz`
+    2: expected function, found instance

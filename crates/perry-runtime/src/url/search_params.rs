@@ -21,6 +21,21 @@ pub(crate) const URL_SEARCH_PARAMS_OWNER: u32 = 1;
 /// reader lists them and no script can name them.
 const URL_SEARCH_PARAMS_ENTRIES_KEY: &str = "#<perry:url-search-params-entries>";
 
+/// The entries array, or one of its `[name, value]` pairs, as the value its
+/// slot holds: a `POINTER_TAG` array pointer. The slots are JS value slots (a
+/// field of the params object, an element of the entries array), so the edge
+/// carries its tag like every other value. One body for all the writers.
+#[inline(never)]
+fn entries_value(array: *mut ArrayHeader) -> f64 {
+    crate::value::js_nanbox_pointer(array as i64)
+}
+
+/// The array an entries slot holds; null for a slot that holds no pointer.
+#[inline(never)]
+fn entries_array_of(slot_value: f64) -> *mut ArrayHeader {
+    crate::value::js_nanbox_get_pointer(slot_value) as *mut ArrayHeader
+}
+
 /// True when a keys array leads with the native params' private entries
 /// slot. Only the layout carries that key as a private entry, so an ordinary
 /// object whose first key has the same spelling never passes.
@@ -107,7 +122,7 @@ pub(crate) fn url_search_params_backing_of(object: f64) -> Option<*mut ObjectHea
     // SAFETY: `try_read_gc_header` classifies the address before reading, and
     // rejects handles, slab buffers and anything without a plausible header.
     match unsafe { crate::value::addr_class::try_read_gc_header(obj as usize) } {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+        Some(header) if crate::gc_type_is_object!(header.obj_type) => {}
         _ => return None,
     }
     // `js_url_search_params_subclass_init` stores the backing as an OWN data
@@ -177,10 +192,7 @@ fn throw_invalid_query_pair_tuple() -> ! {
     let msg = b"Each query pair must be an iterable [name, value] tuple";
     let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_TUPLE");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 fn throw_missing_args(name_and_value: bool) -> ! {
@@ -191,8 +203,7 @@ fn throw_missing_args(name_and_value: bool) -> ! {
     };
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_MISSING_ARGS");
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -224,7 +235,7 @@ fn known_iterable_to_array(raw_ptr: i64) -> Option<*mut ArrayHeader> {
     }
     let raw = raw_ptr as *const u8;
     match gc_object_type(raw) {
-        Some(t) if t == crate::gc::GC_TYPE_ARRAY => Some(raw as *mut ArrayHeader),
+        Some(t) if crate::gc_type_is_array!(t) => Some(raw as *mut ArrayHeader),
         _ => None,
     }
 }
@@ -290,59 +301,6 @@ pub(crate) fn parse_query_string(query: &str) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Simple URL decoding (handles %XX sequences and + as space)
-pub(crate) fn url_decode(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut decoded = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                decoded.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = &s[i + 1..i + 3];
-                if let Ok(byte) = u8::from_str_radix(hex, 16) {
-                    decoded.push(byte);
-                    i += 3;
-                } else {
-                    decoded.push(bytes[i]);
-                    i += 1;
-                }
-            }
-            b => {
-                decoded.push(b);
-                i += 1;
-            }
-        }
-    }
-
-    String::from_utf8_lossy(&decoded).into_owned()
-}
-
-/// URL encode a string using the WHATWG application/x-www-form-urlencoded
-/// encode set used by URLSearchParams serialization. Unlike URL path
-/// encoding, this escapes `~` and leaves `*` literal.
-pub(crate) fn url_encode(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() * 3);
-    for c in s.chars() {
-        match c {
-            'A'..='Z' | 'a'..='z' | '0'..='9' | '-' | '_' | '.' | '*' => {
-                result.push(c);
-            }
-            ' ' => result.push('+'),
-            _ => {
-                for byte in c.to_string().as_bytes() {
-                    result.push_str(&format!("%{:02X}", byte));
-                }
-            }
-        }
-    }
-    result
-}
-
 fn coerce_search_param_arg(value: f64) -> String {
     string_from_header(js_url_coerce_string(value))
 }
@@ -359,9 +317,9 @@ pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) ->
         crate::object::js_get_global_this();
     }
     let obj = unsafe {
-        crate::object::layout_desc::perry_alloc_layout(std::ptr::addr_of!(
-            crate::object::runtime_layouts::URL_SEARCH_PARAMS
-        ))
+        crate::object::layout_desc::perry_alloc_layout(
+            crate::object::runtime_layouts::URL_SEARCH_PARAMS::desc(),
+        )
     };
     // Owner starts as undefined; the URL constructor sets it when it adopts
     // this params object as its `.searchParams`.
@@ -377,11 +335,11 @@ pub(crate) fn create_url_search_params_object(entries: Vec<(String, String)>) ->
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&value));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
 
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(obj, URL_SEARCH_PARAMS_ENTRIES, entries_f64);
 
     obj
@@ -396,7 +354,7 @@ pub(crate) fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(S
     let params = resolve_search_params_receiver(params);
 
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *mut ArrayHeader = f64::to_bits(entries_f64).cast_signed() as *mut ArrayHeader;
+    let entries_ptr = entries_array_of(entries_f64);
 
     if entries_ptr.is_null() {
         return Vec::new();
@@ -407,7 +365,7 @@ pub(crate) fn get_url_search_params_entries(params: *mut ObjectHeader) -> Vec<(S
 
     for i in 0..len {
         let pair_f64 = crate::array::js_array_get_f64(entries_ptr, i as u32);
-        let pair_ptr: *mut ArrayHeader = f64::to_bits(pair_f64).cast_signed() as *mut ArrayHeader;
+        let pair_ptr = entries_array_of(pair_f64);
 
         if !pair_ptr.is_null() {
             let key_f64 = crate::array::js_array_get_f64(pair_ptr, 0);
@@ -565,7 +523,7 @@ pub(crate) fn try_read_as_search_params(
         // reaches here (mirrors the guard `is_url_object_shape` already applies
         // to the sibling `js_url_href_if_url` probe).
         match crate::value::addr_class::try_read_gc_header(params as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
             _ => return None,
         }
         // A genuine URLSearchParams is always allocated with `class_id == 0`
@@ -707,10 +665,10 @@ pub extern "C" fn js_url_search_params_set(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -739,10 +697,10 @@ pub extern "C" fn js_url_search_params_append(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -766,10 +724,10 @@ pub extern "C" fn js_url_search_params_delete(params: *mut ObjectHeader, name_va
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -821,10 +779,10 @@ pub extern "C" fn js_url_search_params_delete2(
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -844,8 +802,7 @@ pub extern "C" fn js_url_search_params_size(params: *mut ObjectHeader) -> i32 {
     }
     let params = resolve_search_params_receiver(params);
     let entries_f64 = crate::object::js_object_get_field_f64(params, URL_SEARCH_PARAMS_ENTRIES);
-    let entries_ptr: *const ArrayHeader =
-        f64::to_bits(entries_f64).cast_signed() as *const ArrayHeader;
+    let entries_ptr = entries_array_of(entries_f64);
     if entries_ptr.is_null() {
         return 0;
     }
@@ -923,10 +880,10 @@ pub extern "C" fn js_url_search_params_sort(params: *mut ObjectHeader) {
         let mut pair = js_array_alloc(2);
         pair = js_array_push_f64(pair, create_string_f64(&key));
         pair = js_array_push_f64(pair, create_string_f64(&val));
-        let pair_f64 = f64::from_bits(i64::cast_unsigned(pair as i64));
+        let pair_f64 = entries_value(pair);
         entries_array = js_array_push_f64(entries_array, pair_f64);
     }
-    let entries_f64 = f64::from_bits(i64::cast_unsigned(entries_array as i64));
+    let entries_f64 = entries_value(entries_array);
     js_object_set_field_f64(
         resolve_search_params_receiver(params),
         URL_SEARCH_PARAMS_ENTRIES,
@@ -1014,7 +971,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         // GC_TYPE_ARRAY, and so on. `try_read_gc_header` also rejects small
         // handles / slab buffers that would otherwise deref a fake header.
         match crate::value::addr_class::try_read_gc_header(obj as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(h) if crate::gc_type_is_object!(h.obj_type) => {}
             _ => return false,
         }
         if (*obj).class_id != 0 {
@@ -1037,7 +994,7 @@ pub(crate) fn shape_is_url_search_params(obj: *const ObjectHeader) -> bool {
         // share that layout, so reject it (a real URLSearchParams shape never
         // has a lazy keys_array; returning false is correct).
         match crate::value::addr_class::try_read_gc_header(keys_arr as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
             _ => return false,
         }
         if keys_arr_view.count() == 0 {
@@ -1079,8 +1036,7 @@ fn search_params_of(object: f64) -> Option<*mut ObjectHeader> {
 fn throw_invalid_search_params_this() -> ! {
     let message = "Value of \"this\" must be of type URLSearchParams";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 fn search_params_proto_call(name: &str, this: crate::closure::JsThis, args: &[f64]) -> f64 {
@@ -1172,6 +1128,16 @@ pub(crate) fn try_url_search_params_dynamic_dispatch(
     url_search_params_dynamic_call(params, method_name, args_ptr, args_len)
 }
 
+/// The array iterator object over an eager view array (a boxed array).
+fn iterator_over(view: f64) -> f64 {
+    let array = (view.to_bits() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader;
+    if array.is_null() {
+        return view;
+    }
+    let iterator = crate::array::js_array_values_iter_obj(array);
+    f64::from_bits(crate::value::JSValue::pointer(iterator as usize as *const u8).bits())
+}
+
 pub(crate) fn url_search_params_dynamic_call(
     params: *mut ObjectHeader,
     name: &str,
@@ -1236,14 +1202,16 @@ pub(crate) fn url_search_params_dynamic_call(
                 .join("&");
             create_string_f64(&joined)
         }
-        // Iteration helpers surface as eager arrays, matching the convention
-        // the static lowering uses (`js_get_iterator` wraps an eager array in
-        // the runtime array iterator when driven through for-of). mysql2's
-        // `parseUrl` iterates `url.searchParams` and Node code commonly calls
-        // `.entries()` / `.getAll()` on dynamic receivers.
-        "entries" => js_url_search_params_entries_arr(params),
-        "keys" => js_url_search_params_keys_arr(params),
-        "values" => js_url_search_params_values_arr(params),
+        // mysql2's `parseUrl` iterates `url.searchParams` and Node code
+        // commonly calls `.entries()` / `.getAll()` on dynamic receivers.
+        // WHATWG: entries/keys/values (and [Symbol.iterator]) return an
+        // iterator, not an array — callers drive it with `.next()`. Each one
+        // walks a snapshot of the list with the standard array iterator
+        // object, which is itself iterable, so for-of/spread/Array.from over
+        // the result keep working.
+        "entries" => iterator_over(js_url_search_params_entries_arr(params)),
+        "keys" => iterator_over(js_url_search_params_keys_arr(params)),
+        "values" => iterator_over(js_url_search_params_values_arr(params)),
         "getAll" => {
             // The FFI helper returns RAW pointer bits (the static lowering
             // boxes them); re-box for the dynamic call path.
@@ -1305,3 +1273,5 @@ mod backing_probe_gate_tests {
         assert!(url_search_params_backing_of(1.0).is_none());
     }
 }
+
+pub(crate) use crate::string::form_codec::{url_decode, url_encode};

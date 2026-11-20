@@ -1,0 +1,1 @@
+A program that reaches perry-stdlib only through a provider with no matching import (`new SQL()` from "bun", `listen` from "bun") now initializes the stdlib it links: its handle dispatchers are registered, and `new SQL(":memory:")` no longer throws "Invalid native property owner" (test_gap_bun_sql_9604 matches bun).

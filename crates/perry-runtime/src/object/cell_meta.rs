@@ -49,9 +49,9 @@ pub(crate) unsafe fn cell_meta_slot_for_header(
     gc_hdr: &crate::gc::GcHeader,
 ) -> Option<*mut *mut ObjectMeta> {
     match gc_hdr.obj_type {
-        crate::gc::GC_TYPE_OBJECT => {
-            Some(&mut (*(user_ptr as *mut ObjectHeader)).meta as *mut *mut ObjectMeta)
-        }
+        ty @ crate::gc_object_type_pat!() => Some(crate::meta_slot_of!(
+            crate::meta_obj_from_type!(user_ptr as *mut ObjectHeader, ty)
+        )),
         crate::gc::GC_TYPE_ERROR => {
             Some(&mut (*(user_ptr as *mut crate::error::ErrorHeader)).meta as *mut *mut ObjectMeta)
         }
@@ -99,7 +99,7 @@ pub(crate) unsafe fn cell_has_meta_edge(user_ptr: usize) -> bool {
 /// keeps ECMA-262 insertion order for free because that is what an object's
 /// `keys_array` already does.
 pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectHeader> {
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    let meta = object_meta_ensure_for_cell(user_ptr, MetaReason::CellExpando)?;
     if (*meta).expando != 0 {
         return Some(
             crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
@@ -112,7 +112,7 @@ pub(crate) unsafe fn cell_expando_ensure(user_ptr: usize) -> Option<*mut ObjectH
     let owner = scope.root_raw_mut_ptr(user_ptr as *mut u8);
     let bag = js_object_alloc(0, 0);
     let user_ptr = owner.get_raw_mut_ptr::<u8>() as usize;
-    let meta = object_meta_ensure_for_cell(user_ptr)?;
+    let meta = object_meta_ensure_for_cell(user_ptr, MetaReason::CellExpando)?;
     if (*meta).expando != 0 {
         return Some(
             crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
@@ -142,4 +142,88 @@ pub(crate) unsafe fn cell_expando_get(user_ptr: usize) -> Option<*mut ObjectHead
         crate::value::JSValue::from_bits((*meta).expando).as_pointer::<ObjectHeader>()
             as *mut ObjectHeader,
     )
+}
+
+/// Does a Map, Set or Date cell carry a meta record: an own property or its
+/// own `[[Prototype]]` (both live there)? Without one the cell reads every
+/// key it is asked for from its family's intrinsic prototype. The one
+/// receiver proof behind `builtin_proto::receiver_pristine` and the
+/// `builtin_method` entries; `false` for every other kind.
+///
+/// # Safety
+/// `user_ptr` is a live cell whose GC header type is `obj_type`.
+#[inline(always)]
+pub(crate) unsafe fn builtin_cell_has_meta(user_ptr: usize, obj_type: u8) -> bool {
+    match obj_type {
+        crate::gc::GC_TYPE_MAP => {
+            !map_cell_meta(user_ptr as *const crate::map::MapHeader).is_null()
+        }
+        crate::gc::GC_TYPE_SET => {
+            !set_cell_meta(user_ptr as *const crate::set::SetHeader).is_null()
+        }
+        crate::gc::GC_TYPE_DATE_CELL => {
+            !(*date_cell_meta_slot(user_ptr as *mut crate::date::DateCell)).is_null()
+        }
+        _ => false,
+    }
+}
+
+/// The meta word of a Map cell (its own header carries it, not an `ObjectHeader`).
+#[inline(always)]
+pub(crate) unsafe fn map_cell_meta(cell: *const crate::map::MapHeader) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The meta word of a Set cell.
+#[inline(always)]
+pub(crate) unsafe fn set_cell_meta(cell: *const crate::set::SetHeader) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The address of a Promise cell's meta word (the collector's edge).
+#[inline(always)]
+pub(crate) unsafe fn promise_cell_meta_slot(
+    cell: *mut crate::promise::Promise,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of an Error cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn error_cell_meta_slot(
+    cell: *mut crate::error::ErrorHeader,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a Map cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn map_cell_meta_slot(cell: *mut crate::map::MapHeader) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a Set cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn set_cell_meta_slot(cell: *mut crate::set::SetHeader) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The meta word of a Promise cell.
+#[inline(always)]
+pub(crate) unsafe fn promise_cell_meta(cell: *const crate::promise::Promise) -> *mut ObjectMeta {
+    (*cell).meta
+}
+
+/// The address of a Date cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn date_cell_meta_slot(cell: *mut crate::date::DateCell) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
+}
+
+/// The address of a RegExp cell's meta word.
+#[inline(always)]
+pub(crate) unsafe fn regexp_cell_meta_slot(
+    cell: *mut crate::regex::RegExpHeader,
+) -> *mut *mut ObjectMeta {
+    std::ptr::addr_of_mut!((*cell).meta)
 }

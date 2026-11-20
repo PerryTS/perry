@@ -70,6 +70,7 @@ fn pretenure_literal_seed(expr: &mut Expr) {
     match expr {
         Expr::Object(props) if props.is_empty() => {
             *expr = Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::ExternFuncRef {
                     name: "js_object_literal_prototype_birth".into(),
                     param_types: vec![],

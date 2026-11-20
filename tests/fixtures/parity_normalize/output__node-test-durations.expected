@@ -1,0 +1,6 @@
+▶ suite
+  ✔ case one (<duration>)
+  ✖ case two (<duration>) trailing
+  ﹣ skipped (<duration>)
+ℹ duration_ms <duration>
+ℹ duration_ms <duration>

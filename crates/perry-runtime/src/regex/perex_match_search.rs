@@ -30,7 +30,7 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     dispatch::require_object(receiver)?;
     // The eight Gets below would each reach a builtin flag getter over this
     // RegExp's header, which `perex_construct` publishes together with the
-    // canonical flags text in spec order (`dgimsuvy`, the order below). So the
+    // canonical flags text in spec order (`dgimsuvy`, `FLAG_TEXT_ORDER`). So the
     // answer is that text. Each Get went through `js_reflect_get` in a trap
     // frame: ~70k instructions for a two-flag RegExp (#10518).
     let re = crate::value::js_nanbox_get_pointer(receiver) as *const super::RegExpHeader;
@@ -46,25 +46,38 @@ pub(crate) fn flags(receiver: f64) -> Result<*mut StringHeader, EngineError> {
     }
     let scope = RuntimeHandleScope::new();
     let receiver = scope.root_nanbox_f64(receiver);
+    // Node's Get order (`sticky` before `unicodeSets`, observable through
+    // user getters); the text keeps the canonical `d g i m s u v y` order.
+    let mut present = [false; 8];
+    for (name, slot) in FLAG_READ_ORDER {
+        present[slot] = crate::value::js_is_truthy(dispatch::get(&receiver, name)?) != 0;
+    }
     let mut output = [0u8; 8];
     let mut length = 0;
-    for (name, byte) in [
-        (b"hasIndices".as_slice(), b'd'),
-        (b"global", b'g'),
-        (b"ignoreCase", b'i'),
-        (b"multiline", b'm'),
-        (b"dotAll", b's'),
-        (b"unicode", b'u'),
-        (b"unicodeSets", b'v'),
-        (b"sticky", b'y'),
-    ] {
-        if crate::value::js_is_truthy(dispatch::get(&receiver, name)?) != 0 {
-            output[length] = byte;
+    for (slot, byte) in FLAG_TEXT_ORDER.iter().enumerate() {
+        if present[slot] {
+            output[length] = *byte;
             length += 1;
         }
     }
     api::caught(|| crate::string::js_string_from_bytes(output.as_ptr(), length as u32))
 }
+
+/// The flag characters of `RegExp.prototype.flags` in their text order.
+const FLAG_TEXT_ORDER: [u8; 8] = *b"dgimsuvy";
+
+/// The flag properties in node's `Get` order with their index in
+/// [`FLAG_TEXT_ORDER`]: V8 reads `sticky` before `unicodeSets`.
+const FLAG_READ_ORDER: [(&[u8], usize); 8] = [
+    (b"hasIndices", 0),
+    (b"global", 1),
+    (b"ignoreCase", 2),
+    (b"multiline", 3),
+    (b"dotAll", 4),
+    (b"unicode", 5),
+    (b"sticky", 7),
+    (b"unicodeSets", 6),
+];
 
 pub(super) fn subject(
     input: RuntimeHandle<'_>,
@@ -90,8 +103,9 @@ pub(super) fn match_flags(
     budget: &mut Budget,
 ) -> Result<(bool, bool), EngineError> {
     let value = receiver.get_nanbox_f64();
-    if let Some(re) = crate::regex::instance::builtin(value) {
-        // The builtin fact neither collects nor calls user code.
+    if let Some(re) = crate::object::regex_read_sites::flag_receiver(value) {
+        // The flag accessors are the builtins over this receiver's internal
+        // flags: neither collects nor calls user code.
         let data = unsafe { &*crate::regex::instance::builtin_data(re) };
         return Ok((data.global, data.unicode));
     }
@@ -314,7 +328,7 @@ pub(crate) fn string(
     if crate::proxy::reflect_value_is_object(pattern.get_nanbox_f64()) {
         let method = scope.root_nanbox_f64(dispatch::get_symbol(&pattern, operation.symbol())?);
         if !matches!(method.get_nanbox_f64().to_bits(), TAG_UNDEFINED | TAG_NULL) {
-            if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+            if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
                 return Err(EngineError::Type("RegExp symbol method is not callable"));
             }
             return dispatch::call_one(&method, &pattern, &receiver);
@@ -339,7 +353,7 @@ pub(crate) fn string(
     })??;
     let re = scope.root_nanbox_f64(js_nanbox_pointer(re as i64));
     let method = scope.root_nanbox_f64(dispatch::get_symbol(&re, operation.symbol())?);
-    if !crate::proxy::proxy_wraps_callable(method.get_nanbox_f64()) {
+    if !crate::proxy_hooks::proxy_wraps_callable(method.get_nanbox_f64()) {
         return Err(EngineError::Type("RegExp symbol method is not callable"));
     }
     let argument = scope.root_nanbox_f64(

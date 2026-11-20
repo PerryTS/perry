@@ -15,7 +15,7 @@ fn lowered_function_debug(source: &str, name: &str) -> String {
 
 fn global_property_construct(name: &str) -> String {
     format!(
-        r#"NewDynamic {{ callee: PropertyGet {{ object: GlobalGet(0), property: "{name}", byte_offset: 0 }}"#
+        r#"NewDynamic {{ callee: PropertyGet {{ object: GlobalGet(0), property: "{name}", byte_offset: 0, byte_end: 0 }}"#
     )
 }
 

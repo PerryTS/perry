@@ -1,0 +1,1 @@
+wpfacts: a read of a key that no receiver holds, on closed fixed object-literal layouts whose prototype is the unwritten Object.prototype that lacks the key, is proven to give undefined (chess search options maxDepth/maxNodes); a key some receivers hold and others lack stays "slots differ".

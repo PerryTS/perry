@@ -1,0 +1,1 @@
+- Preserve exported fixed-record ABI entry points for native callers without forcing their code into every executable. Runtime record/image helpers now use compiler retention like the other ABI anchors; registered layout and atom sections keep their existing linker retention. This removes an artificial retention edge and does not change runtime dispatch or add caches.

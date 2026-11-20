@@ -1,0 +1,9 @@
+[profile.issue-o2]
+inherits = "release"
+opt-level = 2
+lto = "fat"
+strip = false
+[profile.issue-o2.package.perry-runtime]
+opt-level = 2
+[profile.issue-o2.package.perry-stdlib]
+opt-level = 2

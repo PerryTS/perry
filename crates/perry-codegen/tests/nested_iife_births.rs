@@ -10,6 +10,18 @@ use std::time::{Duration, Instant};
 /// finished (opencode packages/tui/src/app.tsx ran away to 140+ GB).
 #[test]
 fn nested_iifes_walk_each_body_once() {
+    // Debug HIR lowering needs the same stack used by its other fixtures;
+    // the CLI gives compilation workers 128 MiB. Keep the birth-walk time
+    // bound below unchanged rather than timing a libtest stack overflow.
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(check_nested_iife_births)
+        .expect("spawn lowering fixture")
+        .join()
+        .expect("nested IIFE lowering fixture");
+}
+
+fn check_nested_iife_births() {
     let mut body = "{ const o = { x: 1, y: 2 }; return o.x + a39; }".to_string();
     for i in (0..39).rev() {
         body = format!(

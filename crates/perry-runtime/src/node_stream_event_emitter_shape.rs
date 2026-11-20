@@ -3,6 +3,7 @@
 //! shapes answer.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// `value` as a live ordinary object: an arena cell whose header says an
 /// unforwarded `GC_TYPE_OBJECT`, with its header's object flags.
@@ -16,7 +17,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
     // SAFETY: canonical ownership admission precedes all header reads.
     let tracked = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
     let header = unsafe { tracked.as_ref() };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((addr as *mut crate::object::ObjectHeader, header._reserved))
 }
@@ -27,7 +28,7 @@ pub(super) fn ordinary_object(value: f64) -> Option<(*mut crate::object::ObjectH
 /// `obj` is a live object with at least `slot + 1` inline slots.
 #[inline]
 pub(super) unsafe fn slot_bits(obj: *const crate::object::ObjectHeader, slot: u32) -> u64 {
-    let fields = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
+    let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj as *mut _));
     std::ptr::read((fields as *const u64).add(slot as usize))
 }
 
@@ -72,7 +73,8 @@ pub(super) fn own_slot_in(
     // SAFETY: as above; the shape record and its key list are read
     // immediately, with no allocation in between.
     unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: stream object layout word (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if (!meta.is_null() && (*meta).elements != 0)
             || crate::object::key_attrs::object_summary(obj)
                 & crate::object::key_attrs::SUMMARY_ACCESSOR
@@ -81,7 +83,7 @@ pub(super) fn own_slot_in(
             return None;
         }
         let id = (*obj).shape_word();
-        if !crate::object::shapes::is_site_matchable_shape_id(id) {
+        if !crate::object::shapes::is_site_matchable_layout_word(id) {
             return None;
         }
         // A family object: its layout's index answers, and a slot holding
@@ -94,7 +96,7 @@ pub(super) fn own_slot_in(
                 Some((_, slot)) => Some(Some(slot)),
             };
         }
-        let record = crate::object::shapes::shape_record_by_id(id)?;
+        let record = crate::object::shapes::shape_record_for_word(LayoutWord(id))?;
         match record.own_data_slot_of_value(key_bits, bytes)? {
             Some(slot) if slot_bits(obj, slot) == crate::value::TAG_HOLE => None,
             found => Some(found),
@@ -115,7 +117,8 @@ pub(super) fn shape_prototype(obj: *const crate::object::ObjectHeader) -> Option
 pub(super) fn null_prototype(obj: *const crate::object::ObjectHeader, flags: u16) -> bool {
     // SAFETY: a live ordinary object the caller validated.
     let word = unsafe { crate::object::shapes::object_prototype_word(obj) };
-    word == crate::value::TAG_NULL || (word == 0 && flags & crate::gc::OBJ_FLAG_NULL_PROTO != 0)
+    let _ = flags;
+    word == crate::value::TAG_NULL
 }
 
 /// What `target`'s shape says about its own key `key` ([`own_slot_of`]); a
@@ -484,7 +487,7 @@ pub(super) fn remove_only_listener_fast(target: f64, event: f64, listener: f64) 
     let deleted =
         unsafe { crate::object::delete_last_key::try_delete_last_added_key_at(events_obj, slot) };
     if deleted.is_none() {
-        let _ = crate::object::js_object_delete_dynamic_value(view.events, event);
+        let _ = crate::object::delete_dynamic_value(view.events, event);
     }
     true
 }

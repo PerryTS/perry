@@ -1,14 +1,133 @@
-//! Call binding, constructor flow and escaping receivers.
+//! Call binding and constructor flow (escaping receivers are in `escape`).
 use super::*;
 
 impl Model {
+    /// The native member `t` a named member-call site binds on its own
+    /// receiver under the key it names (`Model::named_calls`): the site
+    /// states that route itself. A borrowed, protocol or derived call has
+    /// another call id or key and is no such binding.
+    fn named_own_member(&self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
+        let (Some(&(key, recv)), Some(r)) = (self.named_calls.get(&call), this_tok) else {
+            return false;
+        };
+        let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
+            return false;
+        };
+        identity
+            .rsplit_once('.')
+            .is_some_and(|(_, k)| k == self.atoms[key as usize])
+            && self.nodes[recv as usize].pts.contains_tok(r)
+    }
+
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
-        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn) {
+        // MATHB1B: the generic-arm call of a namespace pair does not bind
+        // the original member: the pair's intrinsic arm is that call
+        // (`Gen::namespace_pair`).
+        if let Some((ns, key)) = self.ns_pair_of(call) {
+            if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+                if identity.rsplit_once('.').is_some_and(|(n, k)| {
+                    crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]
+                }) {
+                    return;
+                }
+            }
+        }
+        self.diagnostic_callee(call, t);
+        if !self.named_own_member(call, t, this_tok) {
+            crate::family_reach::callee(self, t);
+        }
+        // A bare marker is another unit's value (DECISIONS 119): its call
+        // is its contract's escape, and the call itself is one of an
+        // unknown function (the reader cannot follow what it is given).
+        if self.bare_marker(t) {
+            // DECISIONS 140: a plain call of a parameter's own marker is a
+            // call the caller's unit runs on the function it passed, with
+            // the arguments as the contract describes them (checked as the
+            // result is, `contract_check`): nothing escapes here. The
+            // result is that unknown function's. An argument marker is a
+            // call of each parameter it stands for (DECISIONS 44); a member
+            // with values beside it (a published method's receiver and what
+            // it reaches, DECISIONS 107) is described by them and adds no
+            // callee of its own (DECISIONS 143): the values are called.
+            let cs = &self.calls[call as usize];
+            // A receiver node of this unit's (`o.k()` with the marker under
+            // `k`) travels to the caller's unit described as the call's
+            // `this` (`ParamCall::this`), as the arguments do; a receiver
+            // token given from outside the call (`this_tok`, `ThisArg::Tok`)
+            // is the escape below.
+            let plain = this_tok.is_none()
+                && matches!(cs.this, ThisArg::Undef | ThisArg::Node(_))
+                && cs.spread.is_empty();
+            if let Some(own) = plain.then(|| self.own_param_members(t)).flatten() {
+                if self.bind_done.insert((call, t, u32::MAX - 3)) {
+                    self.mark_use(t, crate::model::MARK_READ);
+                    let own = own.into_iter().map(|(f, i)| (f, i, None)).collect();
+                    self.marker_call(own, None, call);
+                }
+                return;
+            }
+            let spread = !cs.spread.is_empty();
+            self.mark_escape_why(t, &|m: &Self| {
+                if spread {
+                    "call: spread arguments".into()
+                } else if !plain {
+                    "call: with a receiver".into()
+                } else if m.reach_marker.contains(&t) {
+                    "call: of a reach".into()
+                } else {
+                    "call: of a marker that is no own parameter".into()
+                }
+            });
+            return self.call_tok(call, TOP, this_tok);
+        }
+        // A builtin reads its arguments by position: with a spread, it
+        // reads the positional view of the argument list (`with_native`
+        // gives the same view to the models it runs).
+        let call = if matches!(
+            self.toks[t as usize],
+            TokKind::BuiltinFn(_) | TokKind::Builtin(_)
+        ) {
+            self.builtin_args_view(call)
+        } else {
+            call
+        };
+        let prev = self.cur_native_call.replace(call);
+        let native = self.native_call(call, t, this_tok);
+        self.cur_native_call = prev;
+        if native {
+            return;
+        }
+        if matches!(self.toks[t as usize], TokKind::Top | TokKind::BuiltinFn(_)) {
+            if let Some(d) = self.diagnostic.as_mut() {
+                let n = d.cause_node;
+                d.unknown_calls.entry(call).or_insert((n, t == TOP));
+                d.unknown_callee.entry(call).or_insert(t);
+            }
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
             if let Some(x) = this_tok {
-                let r = self.reason("receiver of a call of an unknown function value");
+                let r = if self.explain {
+                    let ret = self.calls[call as usize].ret;
+                    let f = self.node_fn[ret as usize];
+                    let why = format!(
+                        "receiver of a call of an unknown function value ({} callee in {}, call {call}{}, receiver {})",
+                        self.callee_name(t),
+                        self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str()),
+                        if self.protocol_calls.contains(&call) { ", protocol" } else { "" },
+                        self.tok_name(x)
+                    );
+                    self.reason(&why)
+                } else if self.diagnostic.is_some() {
+                    self.reason(&format!(
+                        "receiver of a call of an unknown function value [call {call}]"
+                    ))
+                } else {
+                    self.reason("receiver of a call of an unknown function value")
+                };
+                if self.keysnap.is_some() {
+                    self.keysnap_note(call, t, x);
+                }
                 self.escape(x, r);
             }
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
@@ -22,14 +141,24 @@ impl Model {
             return;
         }
         match self.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn => unreachable!(),
+            TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
+            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
+            // a direct one takes today's path too.
+            TokKind::Proxy(p) => {
+                self.proxy_degrade(p, "call");
+                self.call_tok(call, TOP, this_tok);
+            }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
                     self.this_into(call, t, this_tok);
                 }
             }
-            TokKind::Bound(_) => self.call_bound(call, t),
+            TokKind::Bound(_) => {
+                // −0 tolerance: a bound function's arguments are observed.
+                self.zs_call_args(call);
+                self.call_bound(call, t)
+            }
             TokKind::ClassObj(_) => {
                 // Calling a class without `new` throws; nothing flows.
             }
@@ -39,20 +168,139 @@ impl Model {
             }
             TokKind::Builtin(ns) => self.with_b(|m| {
                 let prev = std::mem::replace(&mut m.cur_this, this_tok);
+                let pc = m.cur_native_call.replace(call);
                 builtins::call_builtin_ns(m, ns, call);
+                m.cur_native_call = pc;
                 m.cur_this = prev;
             }),
             TokKind::Obj(_, _)
             | TokKind::Proto(_)
             | TokKind::ObjectProto
-            | TokKind::NativeProto(_)
+            | TokKind::NativeProto(..)
             | TokKind::ModNs(_) => {
                 // Not callable (TypeError) — unless it is a builtin object
                 // that is a function (Proxy over a function etc., ⊤ anyway).
                 // A parameter marker stands for the caller's values: one may
                 // be a function.
-                self.mark_use(t, crate::model::MARK_ESCAPE);
+                self.mark_escape_why(t, &|_| "call: of a non-callable".into());
+                // Array.prototype.toString (23.1.3.36 step 3): `join` is
+                // called only if IsCallable; otherwise the result is the
+                // String of Object.prototype.toString (20.1.3.6), no throw.
+                if self.tostring_join_calls.contains(&call) && !self.is_marker(t) {
+                    let ret = self.calls[call as usize].ret;
+                    self.add_prim(ret, prim::STR);
+                }
             }
+        }
+    }
+
+    /// ECMA-262 7.3.14 Call step 2 / 7.2.4 IsConstructor: token `t` is an
+    /// ordinary object without [[Call]] and so without [[Construct]] (an
+    /// object literal, an array, a plain instance, a class prototype object,
+    /// a builtin prototype, a module namespace): calling it, or a builtin
+    /// step that requires it to be a constructor, only throws a TypeError.
+    /// A parameter marker stands for the caller's values (one may be a
+    /// function), so it is none.
+    pub(crate) fn no_call_tok(&self, t: Tok) -> bool {
+        matches!(
+            self.toks[t as usize],
+            TokKind::Obj(_, _)
+                | TokKind::Proto(_)
+                | TokKind::ObjectProto
+                | TokKind::NativeProto(..)
+                | TokKind::ModNs(_)
+        ) && !self.is_marker(t)
+    }
+
+    /// The own parameters marker `t` stands for (DECISIONS 140): its
+    /// members, each a contract function's own parameter marker that has
+    /// not escaped; a member with values beside it adds none (DECISIONS
+    /// 143). `None`: some member is no such marker, or none is left.
+    pub(crate) fn own_param_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32)>> {
+        self.marker_members(t)
+            .into_iter()
+            .map(|m| match self.param_marker.get(&m) {
+                _ if self.beside_values(m) && !self.unrun_param(m) => Some(None),
+                Some(&(f, i))
+                    if i != u32::MAX
+                        && self.marker_of.get(&(f, i)) == Some(&m)
+                        && !self.marker_is_top(m) =>
+                {
+                    Some(Some((f, i)))
+                }
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// DECISIONS 236: the members a method call on `t` is recorded for:
+    /// `own_param_members`, and a receiver marker's keyed reach (`this.f`,
+    /// a path marker under a named key of an unescaped receiver marker) as
+    /// (function, `u32::MAX`, `Some(f)`): each unit holding a receiver runs
+    /// the call on what its object holds under `f` (its own chain, its own
+    /// stores, ⊤ where its object escaped or `f` was written through ⊤).
+    /// `None`: some member is neither, or none is left.
+    pub(crate) fn mcall_members(&self, t: Tok) -> Option<Vec<(FnIdx, u32, Option<Atom>)>> {
+        self.marker_members(t)
+            .into_iter()
+            .map(|m| match self.param_marker.get(&m) {
+                _ if self.beside_values(m) && !self.unrun_param(m) => Some(None),
+                Some(&(f, i))
+                    if i != u32::MAX
+                        && self.marker_of.get(&(f, i)) == Some(&m)
+                        && !self.marker_is_top(m) =>
+                {
+                    Some(Some((f, i, None)))
+                }
+                Some(&(f, u32::MAX)) => match self.path_parent.get(&m) {
+                    Some(&(rm, Some(k)))
+                        if self.marker_of.get(&(f, u32::MAX)) == Some(&rm)
+                            && !self.marker_is_top(rm)
+                            && !self.marker_is_top(m) =>
+                    {
+                        Some(Some((f, u32::MAX, Some(k))))
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(|v| v.into_iter().flatten().collect::<Vec<_>>())
+            .filter(|v| !v.is_empty())
+    }
+
+    /// Records a call through the parameters `own` (`key`: a method of
+    /// theirs; a path: of the receiver's field, DECISIONS 236) for the
+    /// caller's unit to run (DECISIONS 140/144); its result is that
+    /// unknown code's. DECISIONS 165: a parameter of a published method no
+    /// unit runs (`unrun_param`) stands for no value of another unit, so
+    /// a call through it runs nowhere and has no result; the call stays
+    /// recorded for a unit that will run the method, whose run solves this
+    /// unit again with the parameter described or bare.
+    fn marker_call(
+        &mut self,
+        own: Vec<(FnIdx, u32, Option<Atom>)>,
+        key: Option<Atom>,
+        call: CallId,
+    ) {
+        let mut runs = false;
+        for (f, i, path) in own {
+            runs |= path.is_some()
+                || i == u32::MAX
+                || !self
+                    .marker_of
+                    .get(&(f, i))
+                    .is_some_and(|&m| self.unrun_param(m));
+            if !self.marker_calls.contains(&(f, i, path, key, call)) {
+                self.marker_calls.push((f, i, path, key, call));
+            }
+        }
+        if runs {
+            let ret = self.calls[call as usize].ret;
+            self.add_tok(ret, TOP);
+            self.add_prim(ret, prim::ALL);
         }
     }
 
@@ -60,12 +308,62 @@ impl Model {
     /// escape, the result is ⊤; with `sink_this` (no receiver token given),
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
+        self.diagnostic_callee(call, t);
+        if !self.realm_held && self.prov.is_some() {
+            self.why_hold(
+                if t == TOP {
+                    "callee-top"
+                } else {
+                    "callee-builtin"
+                },
+                call,
+                Some(t),
+            );
+        }
+        if crate::unksrc::on() {
+            let kind = if t == TOP {
+                "callee-top"
+            } else {
+                "callee-builtin"
+            };
+            let why = format!("{:?}", self.toks[t as usize]);
+            let f = crate::unksrc::call_fn(self, call);
+            crate::unksrc::note(kind, &why, call, f);
+            if !self.realm_held {
+                crate::unksrc::held(kind, &why, call, f);
+            }
+        }
+        // Unknown code runs, handed values or not: it holds the realm.
+        if !self.realm_held {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            if self.keysnap.is_some() {
+                self.keysnap_at(
+                    true,
+                    "unknown callee (unknown_callee_args)",
+                    Some(call),
+                    r,
+                    Some(t),
+                );
+            }
+            self.hold_realm(r);
+        }
+        // −0 tolerance: unknown code receives the arguments.
+        self.zs_call_args(call);
         if t == TOP {
             self.top_calls += 1;
         }
-        let r = if t == TOP {
+        let r = if t == TOP && self.diagnostic.is_some() {
+            self.reason(&format!(
+                "passed to a call of an unknown function value [call {call}]"
+            ))
+        } else if t == TOP {
             self.reason("passed to a call of an unknown function value")
         } else {
+            crate::builtins::anyfall(
+                "opaque callee",
+                &self.tok_name(t),
+                &format!("call {call} this {:?}", self.calls[call as usize].this),
+            );
             self.reason("passed to an opaque builtin function value")
         };
         let na = self.calls[call as usize].args.len();
@@ -86,6 +384,16 @@ impl Model {
             }
         }
         let ret = self.calls[call as usize].ret;
+        let region = self.calls[call as usize].region;
+        self.raise_top(
+            region,
+            ret,
+            if t == TOP {
+                "a call of an unknown function value may throw anything"
+            } else {
+                "an opaque builtin call may throw anything"
+            },
+        );
         if t == TOP {
             self.add_tok(ret, TOP);
         } else {
@@ -97,9 +405,40 @@ impl Model {
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
     pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.bind_args_bound(call, t);
+        self.prov_call = pc;
+    }
+
+    pub(crate) fn bind_args_bound(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
+        self.activate(f, "call");
+        if let Some(pat) = crate::model::why_act() {
+            if self.funcs[f as usize].name.contains(pat.as_str()) {
+                let c = &self.calls[call as usize];
+                eprintln!(
+                    "perry: wpfacts: call {call} (result n{}, region n{}) binds {}",
+                    c.ret, c.region, self.funcs[f as usize].name
+                );
+            }
+        }
+        if self.diagnostic.is_some() {
+            let kind = if self.ctor_calls.contains(&call) {
+                "new"
+            } else {
+                "call"
+            };
+            self.diagnostic_reach(f, kind, call);
+        }
+        if !self.ctor_calls.contains(&call) {
+            self.called.insert(f);
+        }
         if !self.sum.ready {
             // Summaries do not exist yet: bind once they do.
             self.sum
@@ -114,6 +453,10 @@ impl Model {
         if !self.bind_done.insert((call, t, u32::MAX - 1)) {
             return;
         }
+        // What the callee's body throws reaches the call's region.
+        let raise = self.raise_of(f);
+        let region = self.calls[call as usize].region;
+        self.edge(raise, region);
         if self.summarized(f) {
             self.bind_summarized(call, t);
             return;
@@ -126,13 +469,19 @@ impl Model {
             .then_some(self.funcs[f].args_all);
         let nparams = self.funcs[f].params.len();
         let nargs = self.calls[c].args.len();
+        // A hidden capture parameter holds its class environment slot,
+        // not what the call passes (DECISIONS 117, 127).
+        let caps: Vec<Option<NodeId>> = (0..nparams)
+            .map(|i| self.capture_param(f as FnIdx, i))
+            .collect();
         for i in 0..nargs {
             let a = self.calls[c].args[i];
             if i < nparams {
                 let p = self.funcs[f].params[i];
-                self.edge(a, p);
+                self.edge(caps[i].unwrap_or(a), p);
             } else if let Some(rest) = rest {
-                let fa = self.field_any_node_of_node(rest);
+                let exact = self.calls[c].spread.is_empty();
+                let fa = self.rest_elem_node(rest, exact.then_some((i - nparams) as u32));
                 self.edge(a, fa);
             }
             if let Some(args_all) = args_all {
@@ -142,23 +491,30 @@ impl Model {
         // Missing arguments are undefined.
         for i in nargs..nparams {
             let p = self.funcs[f].params[i];
-            self.add_prim(p, prim::UNDEF);
+            match caps[i] {
+                Some(env) => self.edge(env, p),
+                None => self.add_prim(p, prim::UNDEF),
+            }
         }
         let nspread = self.calls[c].spread.len();
         for j in 0..nspread {
             let s = self.calls[c].spread[j];
-            // Spread arrays: their elements may be any parameter.
+            // Spread arrays: their elements may be any parameter. A spread
+            // yields elements, never a method a computed key could name.
             let elems = self.node_l("spread-elems");
+            let ek = self.elem_key();
             self.cons(
                 s,
                 Cons::Load {
-                    key: Key::Any,
+                    key: ek,
                     dst: elems,
                 },
             );
             for i in 0..nparams {
-                let p = self.funcs[f].params[i];
-                self.edge(elems, p);
+                if caps[i].is_none() {
+                    let p = self.funcs[f].params[i];
+                    self.edge(elems, p);
+                }
             }
             if let Some(rest) = rest {
                 let fa = self.field_any_node_of_node(rest);
@@ -170,17 +526,57 @@ impl Model {
         }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
-        self.edge(fret, cret);
+        if self.ret_param_into(call, f as FnIdx) {
+            return;
+        }
+        let params = self.funcs[f].params.clone();
+        if !self.rel_into(call, FN_RUN | f as u32, &params) {
+            self.edge(fret, cret);
+        }
+    }
+
+    /// RULE RP (`gen/ret_param.rs`): `f` returns its unreassigned plain
+    /// parameter `i` at every completion, so this call's result is the
+    /// argument this call passes at `i` (`undefined` when it passes fewer),
+    /// ECMA-262 10.2.1.3, not the return node every call of `f` shares.
+    /// The binding is per callee: a call whose callee set holds other
+    /// functions takes each one's result from its own binding. Out: `new`
+    /// (10.2.2: the result is the object unless the value is one), a spread
+    /// argument (the position is unknown), a hidden capture parameter, and
+    /// a function whose parameters something outside the call protocol
+    /// writes (`foreign_params`; not `no_summary`, which the activation pass sets on every function: there the call still binds its own argument). Arguments reach the parameter by position
+    /// through the same `CallSite::args` (`bind_args_bound`).
+    pub(crate) fn ret_param_into(&mut self, call: CallId, f: FnIdx) -> bool {
+        let Some(i) = self.funcs[f as usize].ret_param.map(|i| i as usize) else {
+            return false;
+        };
+        let c = call as usize;
+        if self.funcs[f as usize].foreign_params
+            || self.ctor_calls.contains(&call)
+            || !self.calls[c].spread.is_empty()
+            || i >= self.funcs[f as usize].params.len()
+            || self.capture_param(f, i).is_some()
+        {
+            return false;
+        }
+        let cret = self.calls[c].ret;
+        self.rel(|| format!("retparam {call} {f} {i}"));
+        match self.calls[c].args.get(i).copied() {
+            Some(a) => self.edge(a, cret),
+            None => self.add_prim(cret, prim::UNDEF),
+        }
+        true
     }
 
     /// Calling a bound function: its target with the bound this; bound +
     /// call args land in any parameter (positions shift).
     pub(super) fn call_bound(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         let TokKind::Bound(b) = self.toks[t as usize] else {
             return;
         };
         if self.bound_synth.contains(&call) {
-            self.into_merged(call, b, false);
+            self.into_merged(call, b, 0);
             return;
         }
         let c = self.calls[call as usize].clone();
@@ -191,16 +587,22 @@ impl Model {
         }
         let mut args: Vec<NodeId> = bargs.clone();
         args.extend(c.args.iter().copied());
-        let call2 = self.solver_call(
+        let Some(call2) = self.solver_call_keyed(
             call,
+            (crate::summary::MK_BOUND_CALL, b, 0),
+            None,
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(bthis),
                 args,
                 spread: c.spread.clone(),
                 ret: c.ret,
                 site: c.site,
+                region: self.thrown,
             },
-        );
+        ) else {
+            return;
+        };
         self.bound_synth.insert(call2);
         self.rel(|| format!("boundcall {call2} {call} {b}"));
         // Positions shift when the bound args are not a prefix of the
@@ -215,11 +617,13 @@ impl Model {
         self.cons(target, Cons::Call { call: call2 });
     }
 
-    /// Bound value `b`'s merged call (`new` or not): bound args first, then
-    /// every argument of every call routed here as a spread (the target
-    /// may itself hold bound values, so these calls must not nest).
-    fn bound_merged(&mut self, b: u32, new: bool) -> CallId {
-        if let Some(&c) = self.bound_merged.get(&(b, new)) {
+    /// Bound value `b`'s merged call, per use `k` (0: a call, 1: `new`
+    /// (`Cons::New`), 2: `new` of a program constructor (`Cons::NewProgram`)):
+    /// bound args first, then every argument of every call routed here as a
+    /// spread (the target may itself hold bound values, so these calls must
+    /// not nest).
+    fn bound_merged(&mut self, b: u32, k: u8) -> CallId {
+        if let Some(&c) = self.bound_merged.get(&(b, k)) {
             return c;
         }
         let (target, bthis, bargs) = self.bound[b as usize].clone();
@@ -230,7 +634,8 @@ impl Model {
         let ret = self.node_l("bound-ret");
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
-            this: if new {
+            first_arg_fixed: false,
+            this: if k != 0 {
                 ThisArg::Undef
             } else {
                 ThisArg::Node(bthis)
@@ -239,16 +644,17 @@ impl Model {
             spread: vec![arr, sp],
             ret,
             site: 0,
+            region: self.thrown,
         });
-        self.bound_merged.insert((b, new), call);
+        self.bound_merged.insert((b, k), call);
         self.bound_synth.insert(call);
-        self.rel(|| format!("boundmerged {call} {b} {}", new as u8));
+        self.rel(|| format!("boundmerged {call} {b} {k}"));
         self.cons(
             target,
-            if new {
-                Cons::New { call }
-            } else {
-                Cons::Call { call }
+            match k {
+                0 => Cons::Call { call },
+                1 => Cons::New { call },
+                _ => Cons::NewProgram { call },
             },
         );
         call
@@ -256,8 +662,8 @@ impl Model {
 
     /// A solver-made call `call` through bound value `b`: its arguments
     /// join the merged call's, its result is the merged call's.
-    fn into_merged(&mut self, call: CallId, b: u32, new: bool) {
-        let m = self.bound_merged(b, new);
+    fn into_merged(&mut self, call: CallId, b: u32, k: u8) {
+        let m = self.bound_merged(b, k);
         if m == call {
             return;
         }
@@ -274,14 +680,97 @@ impl Model {
         self.edge(ret, c.ret);
     }
 
-    pub(super) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
-        // Elements of whatever array the node holds: a store relay.
+    /// The argument list a builtin model reads for `call` (ECMA-262
+    /// 13.3.8.1 ArgumentListEvaluation, 20.2.3.1 Function.prototype.apply
+    /// with 7.3.19 CreateListFromArrayLike, 28.1.1 Reflect.apply): the
+    /// models read positions, and a spread puts its elements at positions
+    /// no one knows. Without a spread: `call` itself. With one: a call with
+    /// the same receiver, spreads, result and region whose every position
+    /// `i` holds each spread's elements (index keys and the any-index
+    /// field: an array of unknown length can put any element anywhere) and
+    /// every argument `args[j]` with `j <= i` (a spread before it shifts it
+    /// right); a first argument no spread precedes stays alone at 0. The
+    /// entries are the call's own positions, and one more when every own
+    /// position is fixed; the last entry then holds the spread elements and
+    /// every unfixed argument, which is what any later position holds, so
+    /// `CallSite::arg` answers every position from it. The user-function binding reads
+    /// a spread the same way (`bind_args`). One view per call; a view is
+    /// its own view.
+    pub(crate) fn builtin_args_view(&mut self, call: CallId) -> CallId {
+        // `PERRY_FACTS_REACH_SPREAD_ARGS=0` (`reach::spread_args`): the
+        // previous model, the call as it is.
+        if self.calls[call as usize].spread.is_empty() || !self.reach_spread_args {
+            return call;
+        }
+        if let Some(&v) = self.spread_view.get(&call) {
+            return v;
+        }
+        let c = self.calls[call as usize].clone();
+        let elems = self.node_l("spread-view-elems");
+        for &s in &c.spread {
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: elems });
+        }
+        let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
+        let n = c.args.len().max(fixed + 1);
+        let mut args = Vec::with_capacity(n);
+        for i in 0..n {
+            if i < fixed {
+                args.push(c.args[i]);
+                continue;
+            }
+            let p = self.node_l("spread-view-arg");
+            self.edge(elems, p);
+            let hi = (i + 1).min(c.args.len());
+            for j in fixed.min(hi)..hi {
+                self.edge(c.args[j], p);
+            }
+            args.push(p);
+        }
+        let v = self.solver_call_raw(
+            call,
+            CallSite {
+                // No spread leads the list: `args[0]` is still the call's
+                // own first argument, and the view says so.
+                first_arg_fixed: fixed == 1,
+                this: c.this.clone(),
+                args,
+                spread: c.spread.clone(),
+                ret: c.ret,
+                site: c.site,
+                region: c.region,
+            },
+        );
+        self.spread_view.insert(call, v);
+        self.spread_view.insert(v, v);
+        v
+    }
+
+    pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
+        self.rest_elem_node(arr_node, None)
+    }
+
+    /// The store relay of the rest array `arr_node` holds at index `at`
+    /// (ECMA-262 10.2.11, 8.6.3 BindingRestElement: CreateArrayFromList of
+    /// the remaining arguments in order): its index slot `at`
+    /// (`Model::index_slot`), when the call has no spread argument before
+    /// it; `None`: any element.
+    pub(crate) fn rest_elem_node(&mut self, arr_node: NodeId, at: Option<u32>) -> NodeId {
+        let ek = match at {
+            Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
+            None => self.elem_key(),
+        };
+        // Elements of whatever array the node holds: a store relay. A rest
+        // array is made from the arguments at indices 0..n: the store is an
+        // element store (`elem_key`), which no named non-index key of the
+        // array reads (`is_elem_array`), so an argument is never its
+        // `indexOf` or `@@iterator`.
         let relay = self.node_named("elems-into", || format!("elems-into({arr_node})"));
         let site = self.anon_store_site();
         self.cons(
             arr_node,
             Cons::Store {
-                key: Key::Any,
+                key: ek,
                 src: relay,
                 site,
             },
@@ -294,12 +783,21 @@ impl Model {
         // writer, because rest arrays are Arr templates.
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: 0,
             func: 0,
             desc: "binding".into(),
             ctor_phase_of: None,
             birth: true,
             ctor_fn: None,
+            rooted: false,
+            deep: false,
+            key_value: None,
+            in_loop: None,
+            define_attrs: None,
+            proto_named: false,
+            assign: false,
+            proto_of: None,
         });
         id
     }
@@ -316,16 +814,35 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
+        let a = name;
         let name = self.atoms[name as usize].clone();
-        self.with_b(|m| builtins::construct_named(m, &name, call));
+        if name == proxy::PROXY_NEW {
+            return self.proxy_new(call);
+        }
+        // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
+        // what the program stored over it (`program_global_fn`) is
+        // constructed too. Perry lowers a literal builtin name to the
+        // intrinsic (below), node constructs the stored value: the union
+        // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, &name, call);
+        }
+        if builtins::program_global_fn(self, &name) {
+            let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let f = builtins::global_field(self, g, a);
+            self.cons(f, Cons::New { call });
+        }
+        self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 
     /// The token `new` at `call` gives template `tm`: one per birth site. A
     /// template-wide mark already on the template's own token holds for it.
     pub(crate) fn site_tok(&mut self, tm: TmplId, call: CallId) -> Tok {
         // Another unit's class: one token for all its instances here (its
-        // facts are its defining unit's).
-        let call = if self.foreign.contains_key(&tm) {
+        // facts are its defining unit's). The instance other units construct
+        // of a published class is its own token (DECISIONS 125): what the
+        // constructor does to it happens to the instance its methods run on.
+        let call = if self.foreign.contains_key(&tm) || self.contract_new.contains(&call) {
             NO_CTX
         } else {
             call
@@ -347,14 +864,26 @@ impl Model {
     }
 
     /// Birth-site tokens a template-wide mark on `t` also holds for.
-    fn wide_sites(&self, t: Tok) -> Vec<Tok> {
+    pub(super) fn wide_sites(&self, t: Tok) -> Vec<Tok> {
         match self.toks[t as usize] {
             TokKind::Obj(tm, NO_CTX) => self.site_toks.get(&tm).cloned().unwrap_or_default(),
             _ => Vec::new(),
         }
     }
 
+    pub(super) fn chain_has_foreign_returning_ctor(&self, tm: TmplId) -> bool {
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if self.foreign_ctor_returns.contains(&c) {
+                return true;
+            }
+            cur = self.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     pub fn construct(&mut self, call: CallId, t: Tok) {
+        self.diagnostic_callee(call, t);
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -364,6 +893,11 @@ impl Model {
         if !self.construct_done.insert((call, t)) {
             return;
         }
+        // `new` of a bare marker: of an unknown constructor (DECISIONS 119).
+        if self.bare_marker(t) {
+            self.mark_escape_why(t, &|_| "new: of a marker".into());
+            return self.construct(call, TOP);
+        }
         let c = self.calls[call as usize].clone();
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
@@ -371,6 +905,44 @@ impl Model {
                 let inst = self.site_tok(tm, ctx);
                 self.add_tok(c.ret, inst);
                 self.run_ctor_chain(call, tm, inst);
+                // Another unit's constructor up the chain returns an object:
+                // `new` yields that value, which this unit cannot name.
+                if self.chain_has_foreign_returning_ctor(tm) {
+                    self.add_top(c.ret, |_| {
+                        "`new` of a class whose constructor (another unit's) returns an object"
+                            .into()
+                    });
+                }
+            }
+            // DECISIONS 210: another unit's contract function: its instances
+            // are its owner's `new <f>` layout, which the owner constructs
+            // with what this unit passes (published, `constructed`). The
+            // contract's argument effects happen here; no receiver of this
+            // unit runs the body (a receiver of this unit escaped the
+            // function through the `.constructor` rule and broke it). Until
+            // the owner publishes the layout the result is unknown.
+            TokKind::Func(f, _) if self.foreign_ctor.contains_key(&f) => {
+                self.constructed.insert(f);
+                self.ctor_calls.insert(call);
+                match self.foreign_ctor[&f] {
+                    Some((n, tm)) => {
+                        self.edge(n, c.ret);
+                        // Its owner's function may return an object: `new`
+                        // yields that value, which this unit cannot name.
+                        if self.foreign_ctor_returns.contains(&tm) {
+                            self.add_top(c.ret, |_| {
+                                "`new` of another unit's constructor function that returns an object"
+                                    .into()
+                            });
+                        }
+                    }
+                    None => self.add_top(c.ret, |_| {
+                        "instance of another unit's constructor function (layout not published)"
+                            .into()
+                    }),
+                }
+                self.call_tok(call, t, None);
+                self.ctor_ret_objects(call, t, c.ret);
             }
             TokKind::Func(f, _) => {
                 let tm = self.fn_inst_template(f);
@@ -381,11 +953,56 @@ impl Model {
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
             }
-            TokKind::Top | TokKind::BuiltinFn => {
+            // A method of an intrinsic prototype is no constructor
+            // (TypeError): nothing flows.
+            TokKind::BuiltinFn(Native::Member { .. })
+                if !builtins::native_constructible(self, t) => {}
+            // A realm constructor whose declaration says what `new` does
+            // (declared at the body its dispatch arm calls): the declaration
+            // runs, as for a global constructor by name. Any value of it
+            // (`const S = inspector.Session; new S()`) is that constructor.
+            TokKind::BuiltinFn(Native::Member { identity, .. })
+                if !self.unit_mode && builtins::declared_construct(identity).is_some() =>
+            {
+                let e = builtins::declared_construct(identity).expect("guarded");
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_construct(m, e, call));
+            }
+            TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }
+                if !self.realm_held && self.prov.is_some() {
+                    self.why_hold(
+                        if t == TOP { "new-top" } else { "new-builtin" },
+                        call,
+                        Some(t),
+                    );
+                }
+                if crate::unksrc::on() {
+                    let kind = if t == TOP { "new-top" } else { "new-builtin" };
+                    let why = format!("{:?}", self.toks[t as usize]);
+                    let f = crate::unksrc::call_fn(self, call);
+                    crate::unksrc::note(kind, &why, call, f);
+                    if !self.realm_held {
+                        crate::unksrc::held(kind, &why, call, f);
+                    }
+                }
+                if !self.realm_held {
+                    let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+                    if self.keysnap.is_some() {
+                        self.keysnap_at(
+                            true,
+                            "new of an unknown constructor (construct)",
+                            Some(call),
+                            r,
+                            Some(t),
+                        );
+                    }
+                    self.hold_realm(r);
+                }
                 let r = self.reason("passed to `new` of an unknown constructor");
+                self.zs_call_args(call);
                 for &a in c.args.iter().chain(c.spread.iter()) {
                     self.sink_node(a, r);
                 }
@@ -398,30 +1015,151 @@ impl Model {
                 }
             }
             TokKind::Bound(b) => {
+                self.zs_call_args(call);
                 if self.bound_synth.contains(&call) {
-                    self.into_merged(call, b, true);
+                    self.into_merged(call, b, 1);
                     return;
                 }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                let call2 = self.solver_call(
+                let Some(call2) = self.solver_call_keyed(
                     call,
+                    (crate::summary::MK_BOUND_NEW, b, 0),
+                    None,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args,
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
+                        region: self.thrown,
                     },
-                );
+                ) else {
+                    return;
+                };
                 self.bound_synth.insert(call2);
                 self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
             }
-            TokKind::Builtin(ns) => self.with_b(|m| builtins::new_builtin_ns(m, ns, call)),
+            TokKind::Builtin(ns) => {
+                self.with_native(call, |m, call| builtins::new_builtin_ns(m, ns, call))
+            }
             _ => {}
         }
+    }
+
+    /// `Cons::NewProgram`: `call` constructs `t` when `t` is a program
+    /// constructor, a class or function of the program's code (a bound one
+    /// through its target). A realm constructor (`%Array%`, a builtin
+    /// function value, ⊤'s) is the built-in's own result, already made.
+    pub fn construct_program(&mut self, call: CallId, t: Tok) {
+        match self.toks[t as usize] {
+            TokKind::ClassObj(_) | TokKind::Func(_, _) => self.construct(call, t),
+            TokKind::Bound(b) => {
+                if !self.construct_done.insert((call, t)) {
+                    return;
+                }
+                // A call this construct made through a bound value: the
+                // target may hold bound values again, so it joins `b`'s one
+                // merged construct instead of nesting (as `Cons::New` does).
+                if self.bound_synth.contains(&call) {
+                    self.into_merged(call, b, 2);
+                    return;
+                }
+                let (target, _bthis, bargs) = self.bound[b as usize].clone();
+                let c = self.calls[call as usize].clone();
+                let mut args = bargs;
+                args.extend(c.args.iter().copied());
+                let Some(call2) = self.solver_call_keyed(
+                    call,
+                    (crate::summary::MK_BOUND_NEW_PROGRAM, b, 0),
+                    None,
+                    CallSite {
+                        first_arg_fixed: false,
+                        this: ThisArg::Undef,
+                        args,
+                        spread: c.spread.clone(),
+                        ret: c.ret,
+                        site: c.site,
+                        region: self.thrown,
+                    },
+                ) else {
+                    return;
+                };
+                self.bound_synth.insert(call2);
+                self.cons(target, Cons::NewProgram { call: call2 });
+            }
+            _ => {}
+        }
+    }
+
+    /// `Cons::FromArrayLike` of token `t`: `Array.from` reads a program
+    /// object whose `@@iterator` may be nullish as an array-like (ECMA-262
+    /// 23.1.2.1 step 5): ToLength(Get(t, "length")), then Get(t, k) for each
+    /// index, into `dst`. Only a program value (an object of a program
+    /// template, a function, a class, a prototype): an Array, a builtin's
+    /// object (a collection, an iterator, all of them iterable) or ⊤ is the
+    /// iteration's (`load_from` under the iteration key).
+    pub fn from_array_like(&mut self, t: Tok, dst: NodeId) {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _)
+                if self.tmpls[tm as usize].kind.is_fact_unit() && !self.is_array_like(t) => {}
+            TokKind::Func(_, _) | TokKind::Bound(_) | TokKind::ClassObj(_) | TokKind::Proto(_) => {}
+            _ => return,
+        }
+        // GetMethod(t, @@iterator) is nullish when t's own value under the
+        // key is, or when t holds none and its chain's is. Each half may be
+        // nullish: the own fields under the key (stored values, no read of
+        // the absence: an instance never holds a class's method), and the
+        // read of the key from t's prototypes, which ends `undefined` where
+        // no link holds it.
+        let src = self.node_l("from-source");
+        self.add_tok(src, t);
+        let wk = self.atom(crate::builtins::WK_ITERATOR);
+        let protos = self.node_l("from-prototypes");
+        self.cons(src, Cons::ProtoOf { dst: protos });
+        let inherited = self.node_l("from-inherited-iterator");
+        self.cons(
+            protos,
+            Cons::Load {
+                key: Key::Named(wk),
+                dst: inherited,
+            },
+        );
+        let like = self.node_l("from-array-like");
+        let own = self.field_r(t, wk);
+        let any = self.field_any(t);
+        for test in [inherited, own, any] {
+            self.cons(
+                test,
+                Cons::Guard {
+                    test: guard::NULLISH,
+                    from: src,
+                    dst: like,
+                },
+            );
+        }
+        let la = self.atom("length");
+        let len = self.node_l("from-length");
+        self.cons(
+            like,
+            Cons::Load {
+                key: Key::Named(la),
+                dst: len,
+            },
+        );
+        let r = self.reason("ToLength of an Array.from array-like length");
+        self.cons(
+            len,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+            },
+        );
+        let ek = self.elem_key();
+        self.cons(like, Cons::Load { key: ek, dst });
     }
 
     /// `super(...)` from a subclass constructor: the parent chain runs on
@@ -462,9 +1200,9 @@ impl Model {
                 self.cons(receiver, Cons::SuperCtor { class: tm, call });
                 self.add_tok(receiver, inst);
             }
-            (None, None, Some(_)) => {
-                self.with_b(|m| builtins::native_parent_ctor(m, tm, call, inst))
-            }
+            (None, None, Some(_)) => self.with_native(call, |m, call| {
+                builtins::native_parent_ctor(m, tm, call, inst)
+            }),
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
                 let receiver = self.node_l("implicit-super-this");
@@ -473,6 +1211,22 @@ impl Model {
             }
             (None, None, None) => {}
         }
+    }
+
+    /// Whether constructor `f` may return a value `new` keeps instead of its
+    /// `this`: an object (or ⊤) other than the receiver itself. A primitive
+    /// return is ignored by `new`.
+    pub(crate) fn ctor_returns_object(&self, f: FnIdx) -> bool {
+        let fi = &self.funcs[f as usize];
+        if fi.ret == NO_NODE {
+            return false;
+        }
+        let this = (fi.this != NO_NODE).then(|| self.nodes[fi.this as usize].pts.to_sorted());
+        self.nodes[fi.ret as usize]
+            .pts
+            .to_sorted()
+            .iter()
+            .any(|t| !this.as_ref().is_some_and(|ts| ts.contains(t)))
     }
 
     /// The objects constructor `f` returns for `call` (its instance's
@@ -494,7 +1248,9 @@ impl Model {
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
         // Object tokens only (a primitive return is ignored by `new`).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        self.edge(ret, filt);
+        // A body that completes returns `undefined` (`narrow::may_complete`),
+        // which `new` never yields.
+        self.cons(ret, Cons::NotNullish { dst: filt });
         // `filt` keeps prims; dst gets them too, which is a harmless
         // over-approximation for kinds only when the ctor returns
         // primitives — but it would pollute `new` results, so relay
@@ -514,6 +1270,10 @@ impl Model {
             display: format!("new {name}"),
             birth_keys,
             definite,
+            declared: Vec::new(),
+            reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(f),
             native_parent: None,
@@ -523,513 +1283,255 @@ impl Model {
             proto_members: vec![],
             parent_value: None,
             parent_links: Vec::new(),
+            null_proto: false,
+            chain_miss: false,
+            chain_miss_open: false,
+            species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.fn_inst.insert(f, id);
+        // DECISIONS 210: a layout made for a function that already left.
+        let ft = self.funcs[f as usize].token;
+        if let Some(&r) = self.escaped.get(&ft) {
+            self.construct_unknown(ft, f, r);
+        }
         id
     }
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // A name-keyed fold's dispatch (`Gen::name_fold_call`): the helper
+        // serves a receiver of its own kind itself, with no lookup.
+        if let Some(&brand) = self.name_fold_calls.get(&call) {
+            if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what, .. } if what == brand)
+                {
+                    return;
+                }
+            }
+        }
+        // An array is never the iterator the iteration protocol steps or
+        // closes: the step of the iterated value itself (`v.next()`,
+        // `Gen::iterate`) is made only on a value `js_get_iterator` returns
+        // unchanged, never an array (it gives a fresh array iterator); a
+        // for-of record's payload holds the source array beside the
+        // iterator, and closes it through a fresh array iterator
+        // (`js_array_record_close`), not itself. The same predicate as
+        // `Cons::IterNext`'s: the runtime makes no such call on an array,
+        // whatever its chain holds.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && matches!(self.atoms[a as usize].as_str(), "next" | "return")
+                && matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+                    if matches!(self.tmpls[tm as usize].kind, TmplKind::Arr { .. }))
+            {
+                return;
+            }
+        }
+        // DECISIONS 242(2): a call of a key the receiver may not own.
+        if t != TOP {
+            self.note_chain_miss(t, key);
+        }
+        // A method of a published receiver's class (DECISIONS 59).
+        let virt = match key {
+            Key::Named(a) if t != TOP => self.virt_load(t, a),
+            _ => None,
+        };
         // A builtin protocol call (ToPrimitive, iteration ...) is a touch.
+        // A call of a receiver marker's class method is a read: the callee
+        // runs on the marker, so what it does to it is its own use.
         let bits = if self.protocol_calls.contains(&call) {
             crate::model::MARK_TOUCH
+        } else if virt.is_some() {
+            crate::model::MARK_READ
         } else {
             crate::model::MARK_ESCAPE
         };
+        // DECISIONS 144: a method call on a parameter's own marker
+        // (`p.forEach(cb)`, `key.compareTo(k)`) is a call the caller's unit
+        // runs on the value it passed, as a plain call through it is
+        // (DECISIONS 140): its receiver use is a read of the key, the
+        // arguments go to the caller's unit described as the result is.
+        if let (Key::Named(a), None, false) = (key, virt, self.protocol_calls.contains(&call)) {
+            let plain = self.calls[call as usize].spread.is_empty();
+            if let Some(own) = plain.then(|| self.mcall_members(t)).flatten() {
+                if self.bind_done.insert((call, t, u32::MAX - 4)) {
+                    self.mark_use(t, crate::model::MARK_READ);
+                    let r = self.keyed_reach_of(t, a);
+                    self.mark_use(r, crate::model::MARK_READ);
+                    self.marker_call(own, Some(a), call);
+                }
+                return;
+            }
+        }
+        // A marker with its callers' values beside it (decision 13,
+        // DECISIONS 107, 148): the call is made on those values (below),
+        // whose contracts carry what it does to them to their units
+        // (DECISIONS 143). Its own use is a read of the method under the key,
+        // as for a parameter's own marker (DECISIONS 144), not an escape:
+        // nothing of the receiver reaches code the solve does not see. A
+        // reach marker is its own reach under every key (`marker_load`).
+        if bits == crate::model::MARK_ESCAPE
+            && t != TOP
+            && self.is_marker(t)
+            && self.beside_values(t)
+        {
+            self.mark_use(t, crate::model::MARK_READ);
+            let r = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any(_) => self.reach_of(t),
+            };
+            self.mark_use(r, crate::model::MARK_READ);
+            return;
+        }
         self.mark_use(t, bits);
         if t == TOP {
             self.call_tok(call, TOP, Some(TOP));
             return;
         }
-        // Own function-valued fields, then the prototype chain.
-        let own = match key {
-            Key::Named(a) => self.field(t, a),
-            Key::Any => self.all_fields(t),
-        };
-        self.bind_via(own, call, t);
-        self.with_b(|m| builtins::own_method(m, t, key, call));
-        // Methods on the chain (shared), builtin prototype methods, and
-        // getters returning functions (per receiver, accessor keys only).
-        let cv = self.cv(t, key);
-        self.bind_via(cv, call, t);
-        let cp = self.cp(t);
-        self.cons(
-            cp,
-            Cons::ProtoMethods {
-                origin: t,
-                key,
-                call,
-            },
-        );
-        self.accessor_walk(t, t, key, ChainAct::Call(call));
-    }
-
-    // --------------------------------------------------------------- escape
-
-    pub fn escape(&mut self, t: Tok, reason: u32) {
-        if t == TOP || self.is_escaped(t) {
+        // A marker is use tracking, not a value (DECISIONS 111): the values
+        // it stands for sit beside it and are called there. It has no chain
+        // and no accessors; its method is what it reaches under the key,
+        // and calling that is an escape of it (`call_tok`). One with its
+        // callers' values beside it (a described parameter: DECISIONS 13,
+        // 107, 148) adds no callee of its own (DECISIONS 143): the call is
+        // made on those values, whose contract carries it to their unit.
+        if self.is_marker(t) {
+            if self.beside_values(t) {
+                return;
+            }
+            let m = match key {
+                Key::Named(a) => self.marker_load(t, Some(a)),
+                Key::Any(_) => self.reach_of(t),
+            };
+            self.mark_escape_why(m, &|mm: &Self| match key {
+                Key::Named(a)
+                    if matches!(mm.atoms[a as usize].as_str(), "call" | "apply" | "bind") =>
+                {
+                    format!("method: .{}", mm.atoms[a as usize])
+                }
+                Key::Named(_) if mm.reach_marker.contains(&t) => "method: of a reach".into(),
+                Key::Named(_) => "method: of a marker that is no own parameter".into(),
+                Key::Any(_) => "method: computed key".into(),
+            });
+            // That method is an unknown function, as a plain call through a
+            // marker is (`call_tok`): the arguments escape, the result is
+            // unknown (DECISIONS 202).
+            if self.bind_done.insert((call, TOP, u32::MAX - 2)) {
+                self.unknown_callee_args(call, TOP, false);
+            }
             return;
         }
-        if self.closed_pub_reason == Some(reason) {
-            if let TokKind::Func(f, _) = self.toks[t as usize] {
-                if self.closed_params.contains_key(&f) {
-                    if self.closed_pub.insert(t) {
-                        self.escape_fn_params(t, reason);
-                    }
+        // Native own statics, fields and inherited methods are the same
+        // ordinary read whether the source immediately calls the value or
+        // saves it first. This also covers constructors without a specialized
+        // namespace model.
+        if !self.unit_mode
+            && matches!(self.toks[t as usize], TokKind::BuiltinFn(_))
+            && matches!(key, Key::Named(_))
+        {
+            let callee = self.node_l("builtin-function-read");
+            self.load_from(t, t, key, callee);
+            self.bind_via(callee, call, t);
+            return;
+        }
+        // A described namespace method is the ordinary member value,
+        // called with its receiver. Its aliases use the very same model.
+        if !self.unit_mode {
+            if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
+                if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
+                    || builtins::namespace_receiver_getter(self, t, &self.atoms[a as usize])
+                {
+                    let callee = self.node_l("builtin-function-read");
+                    self.load_from(t, t, key, callee);
+                    self.bind_via(callee, call, t);
                     return;
                 }
             }
         }
-        // A builtin prototype as the operand of a compiled construct the
-        // model does not follow (`Gen::fail_closed`) may get any key written
-        // (`fnproto_write` fails closed). The runtime's own operations and
-        // callbacks are not that: they never write the intrinsics, and a
-        // compiled function called from unknown code sees ⊤ parameters, whose
-        // writes `store_into` records.
-        if self.fnproto_write.is_none()
-            && matches!(self.toks[t as usize], TokKind::ObjectProto)
-            && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
-        {
-            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
-            self.note_fnproto_write(t, None, &what);
+        // The formatter's `[util.inspect.custom]` hook on a realm object
+        // (`format_jsvalue`, perry-runtime builtins/formatting.rs): an own
+        // entry under the `Symbol.for("nodejs.util.inspect.custom")` key, or
+        // the `__perry_inspect_custom__` method of the object's class. No
+        // realm object carries either, and the runtime declares no member
+        // under that name: the hook is what the program stored on the
+        // object under a key that may name it (a String key never does,
+        // `key_shape`), the ordinary read's values. With none, nothing runs:
+        // the runtime prints the object.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && self.atoms[a as usize] == crate::model::INSPECT_CUSTOM_METHOD
+                && matches!(self.toks[t as usize], TokKind::Builtin(_))
+            {
+                let callee = self.node_l("builtin-inspect-hook");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
         }
-        if matches!(
-            self.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
-        ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
-        {
-            let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
-            crate::builtins::note_native_write(self, t, None, &what);
+        // A missing intrinsic member calls exactly the ordinary read's
+        // values, including program fields, getters and reopened chains.
+        // No callable value means a TypeError, with no argument escape. The
+        // global object under a key the program owns is such a member too
+        // (`global_user_method`).
+        if let Key::Named(a) = key {
+            if builtins::undeclared(self, t, a) || builtins::global_user_method(self, t, a) {
+                let callee = self.node_l("builtin-member-read");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
         }
-        if matches!(
-            self.toks[t as usize],
-            TokKind::Builtin(BuiltinNs::GlobalThis)
-        ) {
-            crate::builtins::note_global_in_top(self);
-        }
-        // Runtime-owned objects do not "escape": unknown code already holds
-        // them. Object.prototype's unmodeled mutations are E5/E6 (modeled
-        // operations) or E14 (interpreted code), never a side effect of some
-        // value reaching unknown code; its user-stored members escape where
-        // they are stored (`builtins::tok_store`).
-        if matches!(
-            self.toks[t as usize],
-            TokKind::ObjectProto
-                | TokKind::BuiltinFn
-                | TokKind::Builtin(_)
-                | TokKind::NativeProto(_)
-        ) {
-            return;
-        }
-        if self.rel_phase != b'S' {
-            self.rel(|| format!("escapeseed {t} {reason}"));
-        }
-        self.with_s(|m| m.escape_inner(t, reason));
-        for s in self.wide_sites(t) {
-            self.escape(s, reason);
-        }
-    }
-
-    pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
-        self.escaped.insert(t, reason);
-        let w = (t >> 6) as usize;
-        if self.esc_bits.len() <= w {
-            self.esc_bits.resize(w + 1, 0);
-        }
-        self.esc_bits[w] |= 1 << (t & 63);
-    }
-
-    /// Unknown code calls `f`: unknown arguments, the result escapes.
-    pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
-        if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Escape(ft, reason));
-            return;
-        }
-        let f = self.tok_fn(ft);
-        if self.summarized(f) {
-            self.escape_summarized(ft, reason);
-            return;
-        }
-        let fi = self.funcs[f as usize].clone();
-        let why = |m: &Self| format!("param of escaped function: {}", m.reasons[reason as usize]);
-        // A closed function's callers are known: what they pass. Only
-        // through its publication (decision 19); any other escape lets
-        // unknown code call it.
-        let closed = if self.closed_pub_reason == Some(reason) {
-            self.closed_params.get(&f).cloned()
-        } else {
-            None
+        // Own function-valued fields, then the prototype chain.
+        let own = match (key, virt) {
+            (Key::Named(_), Some(v)) => v,
+            (Key::Named(a), None) => self.field_r(t, a),
+            (Key::Any(_), _) => self.key_fields(t, key),
         };
-        for (i, &p) in fi.params.iter().enumerate() {
-            match closed.as_ref().and_then(|c| c.get(i).copied()) {
-                Some(a) => self.edge(a, p),
-                None => {
-                    self.add_top(p, why);
-                    self.add_prim(p, prim::ALL);
-                }
+        self.bind_via(own, call, t);
+        self.builtin_field_use(t, key, ChainAct::Call(call));
+        // A key only another unit's subclass defines runs that subclass's
+        // method (DECISIONS 97).
+        if let (Key::Named(a), Some(_)) = (key, virt) {
+            for n in self.virt_call(t, a) {
+                self.bind_via(n, call, t);
             }
         }
-        for &p in fi.rest.iter() {
-            self.add_top(p, why);
-            self.add_prim(p, prim::ALL);
-        }
-        if self.contract_fns.contains(&f) {
-            // Design §11.2: other units call it through its contract.
-            for (i, &p) in fi.params.iter().enumerate() {
-                let mk = self.param_marker_tok(f, i as u32);
-                self.add_tok(p, mk);
-            }
-            self.add_top(fi.args_all, why);
-            self.contract_rets.push((f, fi.ret));
+        // A parameter marker has no prototype here (DECISIONS 119,
+        // `load_from`); a receiver marker has its classes'.
+        if self.is_marker(t) && !self.virt_protos.contains_key(&t) {
             return;
         }
-        if let Some(rest) = fi.rest {
-            let r = self.field_any_node_of_node(rest);
-            self.add_top(r, why);
-        }
-        self.add_top(fi.args_all, why);
-        self.sink_node(fi.ret, reason);
-    }
-
-    /// A class published to other units as a contract (design §11.2), not
-    /// an escape: they may construct it with unknown arguments, read every
-    /// field of what they construct (getters run, contents leave), call its
-    /// methods and accessors on those instances, and use its static members
-    /// as unknown code does. Its methods run with `this` = ⊤ (any receiver)
-    /// and that instance. Everything else they do to it (stores, opening
-    /// operations, the prototype or a method used as a value, passing it to
-    /// code outside the program) is their census report; a broken class is
-    /// published as an escape instead.
-    ///
-    /// A method called by another unit runs on one of those instances: its
-    /// `this` holds the class's receiver token. Reading through it gives ⊤
-    /// (as reading through ⊤ does: the method sees whatever other units did),
-    /// and storing into it, an opening operation on it or its escape happen
-    /// to the constructed instance (`contract_recv`). Reading the instance's
-    /// own contents there would run every method over every value other
-    /// units can put in it (commander's Command: 217 receiver layouts per
-    /// method).
-    pub(crate) fn publish_class(&mut self, tm: TmplId, reason: u32) {
-        let cobj = self.tok(TokKind::ClassObj(tm));
-        let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-        let rt = self.tmpls.len() as TmplId;
-        let display = format!("{}:receiver", self.tmpls[tm as usize].display);
-        self.tmpls.push(Template {
-            kind: TmplKind::BObj {
-                module: 0,
-                site: 0,
-                what: "contract receiver",
-            },
-            display,
-            birth_keys: Vec::new(),
-            definite: Vec::new(),
-            parent: None,
-            ctor: None,
-            native_parent: None,
-            accessor_keys: Vec::new(),
-            has_computed_members: false,
-            field_init: None,
-            proto_members: Vec::new(),
-            parent_value: None,
-            parent_links: Vec::new(),
-        });
-        let recv = self.tok(TokKind::Obj(rt, NO_CTX));
-        let any = self.field_any(recv);
-        self.add_top(any, |m| {
-            format!(
-                "receiver of a method another unit calls: {}",
-                m.reasons[reason as usize]
-            )
-        });
-        self.add_prim(any, prim::ALL);
-        self.contract_recv.insert(recv, vec![inst]);
-        self.contract_recv_of.insert(tm, recv);
-        // Static members and the class object's own fields.
-        let pa = self.atom("prototype");
-        let mut statics: Vec<NodeId> = self
-            .fields
-            .iter()
-            .filter(|(&(h, a), _)| h == cobj && a != pa)
-            .map(|(_, &n)| n)
-            .collect();
-        statics.extend(self.field_any.get(&cobj).copied());
-        statics.sort_unstable();
-        // Other units call a static method on the class object, through
-        // its function contract (§11.2: a static member is part of the
-        // class contract; its result is checked like any contract result).
-        for &n in &statics {
-            for t in self.nodes[n as usize].pts.to_sorted() {
-                if let TokKind::Func(f, _) = self.toks[t as usize] {
-                    if !self.is_escaped(t) && self.funcs[f as usize].func_id != u32::MAX {
-                        self.contract_fns.insert(f);
-                    }
-                    if !self.funcs[f as usize].lexical_this {
-                        let this = self.funcs[f as usize].this;
-                        self.add_tok(this, cobj);
-                    }
+        // A receiver token / marker is no builtin object: its methods are
+        // its classes' (`virt_protos`).
+        let own_members = !self.virt_protos.contains_key(&t);
+        // DECISIONS 234: the callee lookup is a [[Get]]. A key every object
+        // `t` denotes holds as an own data property stops it at the object,
+        // as for a read: the call binds the program prototypes' methods (a
+        // superset), not the builtin members, which it takes once the key
+        // no longer shadows them (`flush_shadowed`).
+        // ECMA-262 10.1.8.1 OrdinaryGet: a sure own data property is the
+        // callee; the lookup ends at the object (`surely_own_data`).
+        if let Key::Named(a) = key {
+            if self.surely_own_data(t, a) {
+                if virt.is_some() {
+                    let f = self.field_r(t, a);
+                    self.bind_via(f, call, t);
                 }
+                self.note_own_stopped(t, t, a, ChainAct::Call(call));
+                return;
             }
         }
-        for n in statics {
-            self.sink_node(n, reason);
-        }
-        // Methods along the chain inside the unit: they run on `inst` and on
-        // unknown receivers.
-        let ca = self.atom("constructor");
-        let mut cur = Some(tm);
-        let mut members: Vec<NodeId> = Vec::new();
-        while let Some(c) = cur {
-            let proto = self.tok(TokKind::Proto(c));
-            members.extend(
-                self.fields
-                    .iter()
-                    .filter(|(&(h, a), _)| h == proto && a != ca)
-                    .map(|(_, &n)| n),
-            );
-            members.extend(self.field_any.get(&proto).copied());
-            cur = self.tmpls[c as usize].parent;
-        }
-        members.sort_unstable();
-        for &n in &members {
-            for t in self.nodes[n as usize].pts.to_sorted() {
-                if let TokKind::Func(f, _) = self.toks[t as usize] {
-                    self.published_this.insert(f, recv);
-                }
+        match self.shadow_key(t, key) {
+            Some(a) => {
+                let cv = self.cv_of(t, key, false);
+                self.bind_via(cv, call, t);
+                self.note_shadowed(t, a, ChainAct::Call(call), own_members);
             }
+            None => self.builtin_members(t, key, ChainAct::Call(call), own_members),
         }
-        for n in members {
-            self.sink_node(n, reason);
-        }
-        // Other units construct it with unknown arguments.
-        let ret = self.node_l("contract-new");
-        let args_n = self.node_l("contract-args");
-        self.add_top(args_n, |m| {
-            format!(
-                "constructor args from another unit: {}",
-                m.reasons[reason as usize]
-            )
-        });
-        self.add_prim(args_n, prim::ALL);
-        let call = self.calls.len() as CallId;
-        self.calls.push(CallSite {
-            this: ThisArg::Undef,
-            args: vec![args_n; 8],
-            spread: vec![],
-            ret,
-            site: 0,
-        });
-        self.construct(call, cobj);
-        // ... and read every field of what they construct.
-        let all = self.all_fields(inst);
-        self.cons(all, Cons::TopSink { reason });
-        let r = self.node_l("contract-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(inst, inst, Key::Any, ChainAct::Load(r));
-    }
-
-    /// This unit gives `t`, an instance of its published class `tm`, to
-    /// other units (a contract result or value): they call its methods, so
-    /// what those do to their receiver happens to `t` as well, replayed
-    /// from the receiver's log and forwarded from now on. True when `t` is
-    /// new here.
-    pub(crate) fn give_out(&mut self, tm: TmplId, t: Tok) -> bool {
-        let Some(&recv) = self.contract_recv_of.get(&tm) else {
-            return false;
-        };
-        let given = self.contract_recv.entry(recv).or_default();
-        if given.contains(&t) {
-            return false;
-        }
-        given.push(t);
-        for e in self.recv_log.get(&recv).cloned().unwrap_or_default() {
-            match e {
-                crate::model::RecvEffect::Store(key, src, site) => {
-                    self.store_into(t, key, src, site)
-                }
-                crate::model::RecvEffect::Hard(kind, reason) => self.mark_hard(t, kind, reason),
-                crate::model::RecvEffect::Escape(reason) => self.escape(t, reason),
-            }
-        }
-        true
-    }
-
-    pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
-        self.mark_use(t, crate::model::MARK_ESCAPE);
-        if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log
-                .entry(t)
-                .or_default()
-                .push(crate::model::RecvEffect::Escape(reason));
-            for i in is {
-                self.escape(i, reason);
-            }
-        }
-        if matches!(self.toks[t as usize], TokKind::Proto(_)) {
-            self.mark_escaped(t, reason);
-            self.resume_stopped(t);
-        }
-        self.mark_escaped(t, reason);
-        self.rel(|| format!("escaped {t}"));
-        // Unknown code reads every field and can write any key.
-        let all = self.all_fields(t);
-        self.cons(all, Cons::TopSink { reason });
-        let any = self.field_any(t);
-        self.add_top(any, |m| {
-            format!(
-                "field of escaped {}: {}",
-                m.tok_kind_word(t),
-                m.reasons[reason as usize]
-            )
-        });
-        self.add_prim(any, prim::ALL);
-        if let Some(tm) = self.tmpl_of(t) {
-            *self.adds_keys.entry(tm).or_default() += 1;
-        }
-        // Its prototypes are reachable (`Object.getPrototypeOf`).
-        let pn = self.proto_node(t);
-        self.cons(pn, Cons::TopSink { reason });
-        // Unknown code calls the functions it reaches through `t` (its
-        // fields and prototype sink above, so each escapes): they run in
-        // their unknown-code instance with `this` = ⊤, never in the
-        // instance of `t`'s layout (an escaped value binds no layout).
-        // Unknown code can also write any key of it: every setter on its
-        // chain (its own accessors included) runs with `this` = it and an
-        // unknown value (a direct eval writes the caller's locals exactly so,
-        // through the setters of its bindings object); and read any key:
-        // every getter runs and its result reaches unknown code.
-        let w = self.node_l("escaped-store");
-        self.add_top(w, |m| {
-            format!(
-                "stored into an escaped {}: {}",
-                m.tok_kind_word(t),
-                m.reasons[reason as usize]
-            )
-        });
-        self.add_prim(w, prim::ALL);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Store(w));
-        let r = self.node_l("escaped-load");
-        self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::Any, ChainAct::Load(r));
-        match self.toks[t as usize].clone() {
-            TokKind::Func(f, _) => {
-                let fi = self.funcs[f as usize].clone();
-                if !fi.lexical_this {
-                    self.escape_this(t, reason);
-                }
-                self.escape_fn_params(t, reason);
-            }
-            TokKind::ClassObj(tm) => {
-                let p = self.tok(TokKind::Proto(tm));
-                self.escape(p, reason);
-                // Unknown code may construct it with unknown arguments.
-                let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                let ret = self.node_l("top-new");
-                let args_n = self.node_l("top-args");
-                self.add_top(args_n, |m| {
-                    format!(
-                        "constructor args from unknown code: {}",
-                        m.reasons[reason as usize]
-                    )
-                });
-                self.add_prim(args_n, prim::ALL);
-                let call = self.calls.len() as CallId;
-                self.calls.push(CallSite {
-                    this: ThisArg::Undef,
-                    args: vec![args_n; 8],
-                    spread: vec![],
-                    ret,
-                    site: 0,
-                });
-                self.construct(call, t);
-                self.sink_node(ret, reason);
-                self.escape(inst, reason);
-            }
-            TokKind::Obj(tm, _) => {
-                // `.constructor` reaches the class value.
-                if let TmplKind::Class { .. } = self.tmpls[tm as usize].kind {
-                    let c = self.tok(TokKind::ClassObj(tm));
-                    self.escape(c, reason);
-                }
-                if let TmplKind::FnInst { func } = self.tmpls[tm as usize].kind {
-                    let ft = self.funcs[func as usize].token;
-                    self.escape(ft, reason);
-                }
-            }
-            TokKind::Proto(tm) => {
-                let c = self.tok(TokKind::ClassObj(tm));
-                // `.constructor` on the prototype.
-                if matches!(self.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
-                    self.escape(c, reason);
-                }
-            }
-            TokKind::Bound(b) => {
-                let (target, bthis, bargs) = self.bound[b as usize].clone();
-                for n in [target, bthis].into_iter().chain(bargs) {
-                    self.sink_node(n, reason);
-                }
-            }
-            _ => {}
-        }
-    }
-
-    pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
-        if kind == Hard::E6SetPrototypeOf {
-            self.super_relink.insert(t);
-        }
-        if matches!(
-            kind,
-            Hard::E5DefineProperty | Hard::E7Delete | Hard::E15With
-        ) {
-            self.note_fnproto_write(t, None, kind.code());
-        }
-        if matches!(
-            kind,
-            Hard::E5DefineProperty | Hard::E6SetPrototypeOf | Hard::E7Delete | Hard::E15With
-        ) {
-            crate::builtins::note_native_write(self, t, None, kind.code());
-        }
-        if t == TOP {
-            return;
-        }
-        if let Some(is) = self.contract_recv.get(&t).cloned() {
-            self.recv_log
-                .entry(t)
-                .or_default()
-                .push(crate::model::RecvEffect::Hard(kind, reason));
-            for i in is {
-                self.mark_hard(i, kind, reason);
-            }
-        }
-        self.mark_use(t, crate::model::MARK_ESCAPE);
-        // `Object.setPrototypeOf(Object.prototype, p)` throws unless `p` is
-        // null (its [[Prototype]] already): nothing changes (immutable
-        // prototype exotic object). A ⊤ target that may be it is no E6 on it.
-        if kind == Hard::E6SetPrototypeOf && matches!(self.toks[t as usize], TokKind::ObjectProto) {
-            return;
-        }
-        if self.hard.contains_key(&t) {
-            return;
-        }
-        if self.rel_phase != b'S' {
-            self.rel(|| format!("hardseed {t} {} {reason}", kind.code()));
-        }
-        if matches!(self.toks[t as usize], TokKind::Proto(_)) {
-            self.hard.insert(t, (kind, reason));
-            self.with_s(|m| m.resume_stopped(t));
-        }
-        self.hard.insert(t, (kind, reason));
-        self.rel(|| format!("hardmark {t} {}", kind.code()));
-        // Deleting / redefining can move values or install accessors: the
-        // object's fields are now written by unknown code as well.
-        let any = self.field_any(t);
-        self.add_prim(any, prim::ALL);
-        if let Some(tm) = self.tmpl_of(t) {
-            *self.adds_keys.entry(tm).or_default() += 1;
-        }
-        for s in self.wide_sites(t) {
-            self.mark_hard(s, kind, reason);
-        }
+        // Getters returning functions (per receiver, accessor keys only).
+        self.accessor_walk(t, t, key, ChainAct::Call(call));
     }
 }

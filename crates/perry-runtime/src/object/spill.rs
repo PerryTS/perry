@@ -85,7 +85,7 @@ pub(crate) unsafe fn spill_capable_owner(obj_ptr: usize) -> bool {
         return false;
     }
     match crate::value::addr_class::try_read_gc_header(obj_ptr) {
-        Some(h) => h.obj_type == crate::gc::GC_TYPE_OBJECT,
+        Some(h) => crate::object_has_meta_word!(h.obj_type),
         None => false,
     }
 }
@@ -108,7 +108,7 @@ pub(crate) fn spill_get_present(obj_ptr: usize, field_index: usize) -> Option<u6
     }
     unsafe {
         let obj = obj_ptr as *const ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         if meta.is_null() {
             return None;
         }
@@ -163,10 +163,11 @@ pub(crate) fn spill_get(obj_ptr: usize, field_index: usize) -> Option<u64> {
 pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64> {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
-        if (*obj).meta.is_null() {
+        if crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index)).is_null() {
             return None;
         }
-        let spill = (*(*obj).meta).spill as *const crate::array::ArrayHeader;
+        let spill = (*crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index)))
+            .spill as *const crate::array::ArrayHeader;
         if spill.is_null() || field_index >= (*spill).length as usize {
             return None;
         }
@@ -186,7 +187,7 @@ pub(crate) fn spill_get_inline(obj_ptr: usize, field_index: usize) -> Option<u64
 pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usize) -> bool {
     unsafe {
         let obj = obj_ptr as *const ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         if meta.is_null() {
             return false;
         }
@@ -203,7 +204,7 @@ pub(crate) fn spill_store_would_be_in_capacity(obj_ptr: usize, field_index: usiz
 pub(crate) fn spill_overwrite_present(obj_ptr: usize, field_index: usize, vbits: u64) -> bool {
     unsafe {
         let obj = obj_ptr as *mut ObjectHeader;
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         if meta.is_null() || (*meta).elements != 0 {
             return false;
         }
@@ -229,7 +230,7 @@ pub(crate) fn spill_set(obj_ptr: usize, field_index: usize, vbits: u64) {
         // in-range barriered store cannot allocate or move anything, so no
         // handle scope is needed. This is every write after the first to a
         // given width (e.g. round-robin updates across an object array).
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         // The physical write below belongs to the spill Array, so its layout
         // note cannot identify the owning Array-subclass object. Retire that
         // owner's cached numeric-prefix proof before changing any spill slot.
@@ -290,8 +291,11 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
 
         let scope = crate::gc::RuntimeHandleScope::new();
         let obj_handle = scope.root_raw_mut_ptr(obj);
-        let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| object_meta_ensure(obj));
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: tested by the bool spill_capable_owner, no `t` in hand (kind-A/B question for S0b-S0e).
+        let (_, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
+            object_meta_ensure(crate::meta_obj_runtime_born!(obj), MetaReason::SpillReserve)
+        });
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_count));
         if (*meta).spill != 0 {
             return;
         }
@@ -299,7 +303,7 @@ pub(crate) fn reserve_object_spill(obj_ptr: usize, field_count: u32) {
         let (spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
             crate::array::js_array_alloc_with_length_exact(field_count)
         });
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_count));
         if (*meta).spill == 0 {
             (*meta).spill = spill as u64;
             crate::gc::runtime_write_barrier_slot(
@@ -345,6 +349,16 @@ fn spill_safepoint(obj_ptr: usize) {
 #[inline]
 fn spill_safepoint(_obj_ptr: usize) {}
 
+/// Power-of-two spill capacity, at least 8, that holds `field_index`:
+/// the same value as `(field_index + 1).next_power_of_two().max(8)`. Setting
+/// the low three bits first makes the floor of 8 part of the rounding, so the
+/// value is the next power of two above `field_index | 7` with no separate
+/// clamp.
+#[inline(always)]
+fn spill_grown_capacity(field_index: usize) -> usize {
+    ((field_index | 7) + 1).next_power_of_two()
+}
+
 /// Allocation path: ensure the meta record and a buffer wide enough for
 /// `field_index`, then store. Roots the owner AND the incoming value across
 /// the allocations.
@@ -375,7 +389,8 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // never reported (its target is live, just relocated). Re-read the
         // bits from the handle immediately before the store.
         let value_handle = scope.root_nanbox_u64(vbits);
-        object_meta_ensure(obj);
+        // A1_UNPROVEN: tested by the bool spill_capable_owner, no `t` in hand (kind-A/B question for S0b-S0e).
+        object_meta_ensure(crate::meta_obj_runtime_born!(obj), MetaReason::Spill);
         // Test-only stand-in for the collection `object_meta_ensure` (and the
         // buffer allocation below) can genuinely take. Same pattern, and same
         // reason, as `json_tape::json_tape_safepoint`: the window is one
@@ -383,13 +398,13 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
         // in it is a coin flip. Compiles to nothing outside `cfg(test)`.
         spill_safepoint(obj_ptr);
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         let needed = field_index + 1;
         if spill.is_null() || ((*spill).capacity as usize) < needed {
             // Lengths are u32. Keep ordinary power-of-two growth, falling
             // back to exact capacity when rounding would exceed that range.
-            let new_cap = u32::try_from(needed.next_power_of_two().max(8))
+            let new_cap = u32::try_from(spill_grown_capacity(field_index))
                 .unwrap_or_else(|_| u32::try_from(needed).expect("spill index checked"));
             // length == capacity and every slot TAG_HOLE from birth, so the
             // GC element range covers the whole buffer and in-range
@@ -399,7 +414,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             let (new_spill, obj) = obj_handle.across_mut::<ObjectHeader, _>(|| {
                 crate::array::js_array_alloc_with_length(new_cap)
             });
-            let meta = (*obj).meta;
+            let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
             let old = (*meta).spill as *const crate::array::ArrayHeader;
             if !old.is_null() {
                 let old_len = (*old).length as usize;
@@ -429,7 +444,7 @@ fn spill_set_slow(obj_ptr: usize, field_index: usize, vbits: u64) {
             );
         }
         let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_from_storage!(obj as *mut _, field_index));
         let spill = (*meta).spill as *mut crate::array::ArrayHeader;
         spill_store_slot(spill, field_index, value_handle.get_nanbox_u64());
     }
@@ -559,9 +574,8 @@ pub(crate) fn learned_inline_field_count(class_id: u32) -> u32 {
 /// own property bags before reaching shaped-object field storage.
 #[inline]
 pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
-    if unsafe {
-        super::overflow::store_index(obj_ptr as *mut ObjectHeader, field_index as u32, vbits)
-    } {
+    if unsafe { super::overflow::home::store_index_in::<false>(obj_ptr, field_index as u32, vbits) }
+    {
         return;
     }
     assert!(
@@ -579,6 +593,24 @@ pub(crate) fn overflow_set(obj_ptr: usize, field_index: usize, vbits: u64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn spill_grown_capacity_is_the_clamped_next_power_of_two() {
+        let old = |f: usize| (f + 1).next_power_of_two().max(8);
+        for f in 0..=(1usize << 20) {
+            assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+        }
+        for k in 3..40 {
+            let p = 1usize << k;
+            for f in [p - 2, p - 1, p, p + 1, p + 7, p + 8] {
+                assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+            }
+        }
+        let top = u32::MAX as usize;
+        for f in [top - 1, top] {
+            assert_eq!(super::spill_grown_capacity(f), old(f), "field_index {f}");
+        }
+    }
+
     use super::*;
 
     #[test]

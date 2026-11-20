@@ -167,8 +167,8 @@ fn a_deeper_callee_store_reaches_every_caller() {
     sees(&pf, "b", "B");
 }
 
-/// Pins the documented loss of §14.3: two calls deep through a this-less
-/// helper, both callers' layouts join.
+/// Pure parameter returns preserve the caller's value two calls deep,
+/// while the helper's body still has its layout-keyed observation.
 #[test]
 fn depth_two_context_is_per_layout() {
     let pf = facts(&format!(
@@ -179,9 +179,9 @@ fn depth_two_context_is_per_layout() {
         const a = f(new A()); const b = f(new B());
         console.log(a.x, b.y);"
     ));
-    // Shape, not call string (DECISIONS 28): below a site's own callee the
-    // context is the receiver layout; `id` is this-less, so one instance
-    // serves both calls and each read sees A and B.
-    exact(&pf, "x", 2);
-    exact(&pf, "y", 2);
+    // Returning an unchanged parameter needs no additional context.
+    exact(&pf, "x", 1);
+    exact(&pf, "y", 1);
+    sees(&pf, "x", "A");
+    sees(&pf, "y", "B");
 }

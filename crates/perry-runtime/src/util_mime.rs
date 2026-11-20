@@ -97,8 +97,7 @@ fn ptr_value<T>(ptr: *mut T) -> f64 {
 
 fn throw_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_invalid_mime_syntax(kind: &str, input: &str, index: Option<usize>) -> ! {
@@ -598,9 +597,6 @@ fn optional_port(value: f64) -> Option<i64> {
     let js = JSValue::from_bits(value.to_bits());
     if js.is_undefined() || js.is_null() {
         return None;
-    }
-    if js.is_int32() {
-        return Some(js.as_int32() as i64);
     }
     if js.is_number() && value.is_finite() {
         return Some(value as i64);

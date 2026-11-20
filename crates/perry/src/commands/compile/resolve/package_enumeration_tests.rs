@@ -63,3 +63,21 @@ fn ancestor_package_roots_deduplicate_physical_paths() {
     let roots = enumerate_installed_package_roots(&root.join("z/member"));
     assert_eq!(roots["dup"], vec![physical.canonicalize().unwrap()]);
 }
+
+#[test]
+fn pnpm_store_transitive_packages_are_enumerated() {
+    // pnpm links a member's direct dependencies only; transitive ones live
+    // behind `.pnpm`, in the hidden hoist or per-package store entries.
+    let fixture = tempfile::tempdir().unwrap();
+    let root = fixture.path();
+    let nm = root.join("node_modules");
+    fs::create_dir_all(nm.join("direct")).unwrap();
+    fs::create_dir_all(nm.join(".pnpm/node_modules/hoisted-core")).unwrap();
+    fs::create_dir_all(nm.join(".pnpm/@scope+deep@1.0.0/node_modules/@scope/deep")).unwrap();
+    fs::write(nm.join(".pnpm/lock.yaml"), "").unwrap();
+
+    let found = enumerate_installed_packages(root);
+    assert!(found.contains("direct"), "{found:?}");
+    assert!(found.contains("hoisted-core"), "{found:?}");
+    assert!(found.contains("@scope/deep"), "{found:?}");
+}

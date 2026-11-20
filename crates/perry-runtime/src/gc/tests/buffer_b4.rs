@@ -467,6 +467,7 @@ fn pinned_inline_detach_retains_pages_until_the_last_unpin() {
     drop(first);
     assert_eq!(decommits(), before, "one pin still owns the inline pages");
     check(&second);
+    #[cfg(target_os = "linux")]
     let data = second.as_ptr();
     drop(second);
     assert_eq!(

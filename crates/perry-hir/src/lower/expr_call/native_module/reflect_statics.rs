@@ -17,7 +17,10 @@ pub(super) fn try_reflect_statics(
     args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // A spread call declines: see `call_has_spread_arg`.
-    if obj_name == "Reflect" && !super::super::call_has_spread_arg(call) {
+    if obj_name == "Reflect"
+        && !ctx.shadows_unqualified_global("Reflect")
+        && !super::super::call_has_spread_arg(call)
+    {
         // #6677: accept the string-literal computed form too.
         if let Some(method_name) = super::super::static_call_prop_name(&member.prop) {
             match method_name {
@@ -117,6 +120,7 @@ pub(super) fn try_reflect_statics(
                                         .map(|e| lower_expr(ctx, &e.expr))
                                         .collect::<Result<Vec<_>>>()?;
                                     return Ok(Ok(Expr::New {
+                                        byte_end: 0,
                                         class_name: cls_name,
                                         args: new_args,
                                         type_args: vec![],

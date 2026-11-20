@@ -160,9 +160,11 @@ fn null_prototype_absence_reads_undefined_per_receiver() {
     crate::object::js_object_set_prototype_of(obj.with_mut_ptr(boxed), f64::from_bits(TAG_NULL));
     let key = crate::runtime_state_key!(NAME);
     assert_eq!(read(key, &obj).to_bits(), TAG_UNDEFINED);
-    // The probe no longer answers absence from the receiver's shape (that
-    // memo is gone): it declines and the ordinary Get produces `undefined`.
-    assert_eq!(leaf(key, &obj), None);
+    // The receiver's record lists its keys and its prototype is null, so the
+    // probe proves the absence from that record on this use (no memo: the
+    // record is the receiver's current shape; DEC 243(5) deleted the TEXT arm
+    // that used to decline here).
+    assert_eq!(leaf(key, &obj).map(f64::to_bits), Some(TAG_UNDEFINED));
     let same_shape = object(&scope);
     crate::object::js_object_set_prototype_of(
         same_shape.with_mut_ptr(boxed),

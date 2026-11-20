@@ -49,9 +49,9 @@
 //! off a raw header and then allocates.
 //!
 //! On top of that the owner can disown its tape *deterministically*: once
-//! `force_materialize_lazy` installs `materialized`, the tape is provably
-//! garbage (every subsequent read goes through the `ArrayHeader`), so
-//! `json_tape::release_tape_after_materialize` frees it right there without
+//! `force_materialize_lazy` turns the owner into the ordinary array, the tape
+//! is provably garbage (no lazy reader can reach it), so
+//! `json_tape::release_tape` frees it right there without
 //! waiting for any collector. That is the path `field_access` takes after
 //! #7537's scan flip, which is why the fix does not depend on GC timing for
 //! the workload that motivated it.

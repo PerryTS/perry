@@ -73,7 +73,9 @@ pub(crate) fn emit_static_call_guard(
     // The inline hit reads little-endian LP64 layouts (8-byte memo words, the
     // key's halves); other targets always ask the runtime.
     let triple = ctx.target_triple;
-    let lp64_le = (triple.starts_with("x86_64") || triple.starts_with("aarch64"))
+    let lp64_le = (triple.starts_with("x86_64")
+        || triple.starts_with("aarch64")
+        || triple.starts_with("arm64"))
         && !triple.starts_with("aarch64_be")
         && !triple.contains("32");
     if !lp64_le {
@@ -291,6 +293,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 } else {
                     ctx.class_ids.get(class_name).copied()
                 };
+                // FVA 3.4: the facts prove `C.<method>` is this declaration
+                // for the program's life: the call needs no guard. A contract
+                // build keeps the guard, and its miss is the witness's abort.
+                let proven = owns_method
+                    && static_cid.is_some_and(|cid| {
+                        crate::expr::wpfacts_access::proves_static(ctx, cid, method_name)
+                    });
+                let contracts = crate::verify_facts::witnesses();
+                if proven {
+                    crate::verify_facts::tick(ctx);
+                }
+                let static_cid = static_cid.filter(|_| !proven || contracts);
                 // The class whose ClassBody declares the body this call runs.
                 let owner_cid = {
                     let mut cur = class_name.clone();
@@ -455,6 +469,12 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     while lowered.len() < declared_count {
                         lowered.push(undef.clone());
                     }
+                    // JavaScript ignores arguments past the declared width, and a
+                    // wasm32 call must match the callee's signature exactly. The
+                    // extras are already evaluated above.
+                    if let Some(&declared) = ctx.method_param_counts.get(&key) {
+                        lowered.truncate(declared);
+                    }
                 }
                 let arg_slices: Vec<(crate::types::LlvmType, &str)> =
                     lowered.iter().map(|s| (DOUBLE, s.as_str())).collect();
@@ -480,6 +500,42 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let direct_pred = ctx.block().label.clone();
                 ctx.block().br(&join_label);
                 ctx.current_block = generic_idx;
+                if proven {
+                    crate::verify_facts::normal_call_miss(class_name, method_name);
+                }
+                if proven && contracts {
+                    crate::verify_facts::covered(
+                        crate::verify_facts::Fact::StaticGuard,
+                        || serde_json::json!({"class":static_cid,"key":method_name}),
+                    );
+                    let site = crate::verify_facts::site_arg(
+                        ctx,
+                        &format!("static call {class_name}.{method_name} class_id={static_cid:?}"),
+                        crate::verify_facts::Fact::StaticGuard,
+                        static_cid.as_slice(),
+                    );
+                    let undefined = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+                    let observed = if crate::verify_facts::enabled() {
+                        &recv
+                    } else {
+                        &undefined
+                    };
+                    let _ = crate::verify_facts::check(
+                        ctx,
+                        I32,
+                        "perry_wpfacts_check_miss",
+                        &[(DOUBLE, observed)],
+                        &site,
+                    );
+                } else if proven {
+                    let site = ctx.wpfacts_sites as i64;
+                    ctx.wpfacts_sites += 1;
+                    let _ = ctx.block().call(
+                        I32,
+                        "perry_wpfacts_check_call_miss",
+                        &[(PTR, "null"), (I64, &site.to_string())],
+                    );
+                }
                 let (args_ptr, args_len) = if raw_args.is_empty() {
                     ("null".to_string(), "0".to_string())
                 } else {

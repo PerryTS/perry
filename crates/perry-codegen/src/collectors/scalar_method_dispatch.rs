@@ -134,6 +134,15 @@ pub struct ModuleDispatchFacts {
     /// reads its `.buffer` (`collectors/sealed_buffers.rs`). `None` when never
     /// computed, which seals nothing.
     buffer_exposure: Option<super::sealed_buffers::BufferExposure>,
+    /// The program's array iteration protocol is unreachable for an ordinary
+    /// Array: no iteration member is writable (`expr::array_iteration_facts`
+    /// is 0, so `js_array_record_enter` answers the indexed mode for every
+    /// array) and `%ArrayIteratorPrototype%` never gains `return`
+    /// (`arrayRecordClose` lowers to nothing). A record `for…of` over a
+    /// proven Array is then exactly its indexed walk. Installed by codegen
+    /// from the whole-program facts; false (keep the iterator mode) when
+    /// never installed.
+    array_record_protocol_dead: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -160,6 +169,7 @@ impl Default for ModuleDispatchFacts {
             new_bindings: HashMap::new(),
             ocreate_bindings: HashMap::new(),
             buffer_exposure: None,
+            array_record_protocol_dead: false,
         }
     }
 }
@@ -217,6 +227,15 @@ impl ModuleDispatchFacts {
 
     /// Representation-selection Phase 3b: does the module contain any §5.2
     /// shape-barrier site (first-increment module-wide kill rule)?
+    /// Install the whole-program array iteration verdict (see the field).
+    pub(crate) fn install_array_record_protocol_dead(&mut self, dead: bool) {
+        self.array_record_protocol_dead = dead;
+    }
+
+    pub(crate) fn array_record_protocol_dead(&self) -> bool {
+        self.array_record_protocol_dead
+    }
+
     pub(crate) fn has_shape_barrier_sites(&self) -> bool {
         self.shape_barrier_sites
     }
@@ -396,9 +415,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
         .classes
         .iter()
         .filter(|class| {
-            class.getters.is_empty()
-                && class.setters.is_empty()
-                && class.computed_members.is_empty()
+            class.getters.is_empty() && class.setters.is_empty() && !class.has_evaluated_members()
         })
         .map(|class| class.name.as_str())
         .collect();
@@ -508,6 +525,16 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
 /// (constructor, field initializers, methods, accessors, computed members) —
 /// for expressions that can rewrite a class's prototype.
 pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
+    collect_module_dispatch_facts_with(hir, &Default::default())
+}
+
+/// [`collect_module_dispatch_facts`] with the module's proven method sites
+/// (`ElisionFacts::native_member_calls`): a proven Buffer read keeps its
+/// buffer sealed (`sealed_buffers::buffer_exposure`).
+pub fn collect_module_dispatch_facts_with(
+    hir: &Module,
+    native_member_calls: &std::collections::BTreeSet<u32>,
+) -> ModuleDispatchFacts {
     let mut facts = ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
@@ -525,7 +552,11 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
         new_bindings: HashMap::new(),
         ocreate_bindings: HashMap::new(),
-        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(hir)),
+        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(
+            hir,
+            native_member_calls,
+        )),
+        array_record_protocol_dead: false,
     };
 
     // #7139: resolve the CommonJS wrap's `exports` / `require` scaffolding
@@ -755,7 +786,7 @@ fn note_prototype_effect(
         } if is_prototype_key(property) => {
             note_prototype_holder(object, facts);
         }
-        Expr::IndexGet { object, index } | Expr::IndexSet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
             if matches!(index.as_ref(), Expr::String(key) if is_prototype_key(key)) {
                 note_prototype_holder(object, facts);
             }
@@ -821,6 +852,7 @@ fn collect_candidate_property_writes(
             object,
             index,
             value: _,
+            ..
         } => {
             if let Expr::String(property) = index.as_ref() {
                 record(object, property);
@@ -947,6 +979,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for_each_expr_in_stmts(body, f);
             if let Some(catch) = catch {
@@ -1019,6 +1052,7 @@ mod tests {
                 params: Vec::new(),
                 return_type: Type::Number,
                 body: vec![Stmt::Return(Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "value".to_string(),
@@ -1042,6 +1076,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),
@@ -1055,6 +1090,7 @@ mod tests {
             ty: Type::Named(class_name.to_string()),
             mutable: false,
             init: Some(Expr::New {
+                byte_end: 0,
                 class_name: class_name.to_string(),
                 args: Vec::new(),
                 type_args: Vec::new(),
@@ -1066,7 +1102,9 @@ mod tests {
 
     fn call_method_stmt(method: &str) -> Stmt {
         Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(RECEIVER)),
                 property: method.to_string(),
@@ -1085,6 +1123,9 @@ mod tests {
             value: Box::new(Expr::Number(99.0)),
             receiver: Box::new(Expr::LocalGet(RECEIVER)),
             strict: false,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         })
     }
 
@@ -1115,6 +1156,7 @@ mod tests {
             new_bindings: HashMap::new(),
             ocreate_bindings: HashMap::new(),
             buffer_exposure: None,
+            array_record_protocol_dead: false,
         }
     }
 
@@ -1211,6 +1253,7 @@ mod tests {
         let mut module = Module::new("m.ts");
         module.init.push(Stmt::Expr(Expr::ObjectDefineProperty(
             Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::ClassRef("C".to_string())),
                 property: "prototype".to_string(),
@@ -1234,6 +1277,7 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 77,
                     object: Box::new(Expr::ClassRef("C".to_string())),
                     property: "prototype".to_string(),
@@ -1243,13 +1287,21 @@ mod tests {
                 PROTO,
             )))),
             Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(PROTO)),
                 index: Box::new(Expr::String("getValue".to_string())),
             }))),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 78,
                     object: Box::new(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(PROTO)),
                         index: Box::new(Expr::String("getValue".to_string())),
                     }),
@@ -1284,6 +1336,8 @@ mod tests {
             object: Box::new(Expr::LocalGet(PROTO)),
             property: "getValue".to_string(),
             value: Box::new(Expr::Number(9.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }));
         module.classes.push(class.clone());
 
@@ -1304,6 +1358,7 @@ mod tests {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(6)),
                 property: "prototype".to_string(),

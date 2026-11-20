@@ -275,6 +275,7 @@ mod tests {
 
     use crate::inline::call_inliner::try_inline_simple_call;
     use crate::inline::{inline_functions, ExactReceiverFact, ExactReceiverFacts, MethodCandidate};
+    use crate::local_occurrences::WriteCensus;
     use perry_hir::types::{FuncId, LocalId, Type};
     use perry_hir::{CompareOp, Function, Module, Param};
     use std::collections::HashMap;
@@ -311,6 +312,7 @@ mod tests {
 
     fn call(func: FuncId, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(func)),
             args,
             type_args: Vec::new(),
@@ -444,6 +446,8 @@ mod tests {
             object: Box::new(Expr::This),
             property: "x".into(),
             value: Box::new(Expr::Integer(1)),
+            byte_offset: 0,
+            byte_end: 0,
         });
         let candidate = |body: Vec<Stmt>| {
             let mut methods = HashMap::new();
@@ -466,7 +470,9 @@ mod tests {
             },
         );
         let method_call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(7)),
                 property: "m".into(),
                 byte_offset: 0,
@@ -484,6 +490,7 @@ mod tests {
                 &HashMap::new(),
                 &facts,
                 &mut next_local_id,
+                &WriteCensus::unwritten(),
                 None,
                 &HashMap::new(),
                 false,

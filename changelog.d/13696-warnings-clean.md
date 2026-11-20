@@ -1,0 +1,1 @@
+Clear the deny-warnings errors in perry-runtime, perry-codegen, perry-ext-http, perry-stdlib and perry-component-host (unnecessary unsafe, unused imports, dead code), so the scheduled warnings job passes. No behavior change.

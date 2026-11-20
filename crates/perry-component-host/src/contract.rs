@@ -12,7 +12,7 @@ pub(crate) fn validate(
     component: &Component,
     world: &World,
     wasi_enabled: bool,
-) -> Result<()> {
+) -> Result<BTreeMap<String, ResourceType>> {
     ensure!(
         world.schema_version == SCHEMA_VERSION,
         "unsupported WIT manifest version"
@@ -35,7 +35,8 @@ pub(crate) fn validate(
         .context("component imports do not match WIT")?;
     checker
         .interfaces(engine, &world.exports, &exports, false)
-        .context("component exports do not match WIT")
+        .context("component exports do not match WIT")?;
+    Ok(checker.resources)
 }
 
 struct Checker<'a> {
@@ -110,6 +111,10 @@ impl Checker<'_> {
         let ComponentItem::ComponentFunc(actual) = actual else {
             bail!("expected component function");
         };
+        ensure!(
+            expected.async_ == actual.async_(),
+            "async calling convention mismatch"
+        );
         let params: Vec<_> = actual.params().collect();
         ensure!(
             expected.params.len() == params.len(),
@@ -130,6 +135,12 @@ impl Checker<'_> {
     }
 
     fn resource(&mut self, key: &str, actual: ResourceType) -> Result<()> {
+        ensure!(
+            self.resources
+                .iter()
+                .all(|(other, ty)| other == key || *ty != actual),
+            "distinct WIT resources share a canonical identity"
+        );
         if let Some(previous) = self.resources.insert(key.to_string(), actual) {
             ensure!(previous == actual, "resource identity mismatch for {key}");
         }
@@ -165,6 +176,12 @@ impl Checker<'_> {
                 self.resource(key, *resource)?
             }
             (Wit::List(expected), Type::List(actual)) => self.ty(expected, &actual.ty(), depth)?,
+            (Wit::Future(expected), Type::Future(actual)) => {
+                self.optional(expected.as_deref(), actual.ty().as_ref(), depth)?
+            }
+            (Wit::Stream(expected), Type::Stream(actual)) => {
+                self.optional(expected.as_deref(), actual.ty().as_ref(), depth)?
+            }
             (Wit::Option(expected), Type::Option(actual)) => {
                 self.ty(expected, &actual.ty(), depth)?
             }

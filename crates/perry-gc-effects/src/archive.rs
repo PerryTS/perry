@@ -307,6 +307,7 @@ fn decode_sections<'data>(
 pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
     let mut nodes = Vec::new();
     let mut globals = HashSet::new();
+    let mut held = Vec::new();
     for archive in archives {
         let bytes =
             std::fs::read(archive).with_context(|| format!("read {}", archive.display()))?;
@@ -339,6 +340,20 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                     object::BinaryFormat::Coff => Format::Coff,
                     f => bail!("unsupported object format {f:?}"),
                 };
+                // COFF names every COMDAT section of a kind alike (`.rdata`,
+                // `.text$mn`), so a relocation through a section symbol must
+                // name the one section it points at, not every section that
+                // shares the spelling. Joined by name, each object's `.rdata`
+                // sections all reached one another and the held-data closure
+                // grew to nodes x functions (hours and 14+ GB on the Windows
+                // stdlib). ELF and Mach-O section names are already unique.
+                let uniq = |idx: object::SectionIndex, nm: &str| -> String {
+                    if fmt == Format::Coff {
+                        format!("{nm}#{}", idx.0)
+                    } else {
+                        nm.to_owned()
+                    }
+                };
                 // Index once: Rust's one-function-per-section objects otherwise
                 // turn a section-by-symbol scan into quadratic archive parsing.
                 let mut symbols: HashMap<object::SectionIndex, BTreeMap<u64, Vec<String>>> =
@@ -368,9 +383,52 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                         .or_default()
                         .entry(symbol.address())
                         .or_default()
-                        .push(sym.to_owned());
+                        .push(if symbol.kind() == object::SymbolKind::Section {
+                            uniq(section, sym)
+                        } else {
+                            sym.to_owned()
+                        });
                 }
                 for section in file.sections() {
+                    if data_holds_addresses(section.kind(), section.name().unwrap_or("")) {
+                        // The addresses a data section holds (a vtable, a
+                        // static table, a function-info record).
+                        let mut targets = Vec::new();
+                        for (_, reloc) in section.relocations() {
+                            let target = match reloc.target() {
+                                RelocationTarget::Symbol(i) => {
+                                    let s = file.symbol_by_index(i)?;
+                                    if s.kind() == object::SymbolKind::Section {
+                                        s.section_index()
+                                            .and_then(|i| {
+                                                let n = file.section_by_index(i).ok()?;
+                                                n.name().ok().map(|n| uniq(i, n))
+                                            })
+                                            .unwrap_or_default()
+                                    } else {
+                                        fmt.norm(s.name()?)
+                                    }
+                                }
+                                RelocationTarget::Section(i) => {
+                                    uniq(i, file.section_by_index(i)?.name()?)
+                                }
+                                _ => continue,
+                            };
+                            targets.push(target);
+                        }
+                        if !targets.is_empty() {
+                            let mut names = vec![uniq(section.index(), section.name()?)];
+                            if let Some(labels) = symbols.get(&section.index()) {
+                                names.extend(labels.values().flatten().map(|s| fmt.norm(s)));
+                            }
+                            held.push(crate::graph::DataSection {
+                                obj: name.clone(),
+                                names,
+                                targets,
+                            });
+                        }
+                        continue;
+                    }
                     if section.kind() != SectionKind::Text {
                         continue;
                     }
@@ -385,12 +443,12 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                             section.name()?
                         )
                     } else {
-                        section.name()?.to_owned()
+                        uniq(section.index(), section.name()?)
                     };
                     let base = section.address();
                     let mut labels = symbols.remove(&section.index()).unwrap_or_default();
                     if labels.is_empty() {
-                        labels.insert(base, vec![section.name()?.into()]);
+                        labels.insert(base, vec![uniq(section.index(), section.name()?)]);
                     }
                     let mut relocs = Vec::new();
                     for (offset, reloc) in section.relocations() {
@@ -399,15 +457,17 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
                                 let s = file.symbol_by_index(i)?;
                                 if s.kind() == object::SymbolKind::Section {
                                     s.section_index()
-                                        .and_then(|i| file.section_by_index(i).ok())
-                                        .and_then(|s| s.name().ok().map(str::to_owned))
+                                        .and_then(|i| {
+                                            let n = file.section_by_index(i).ok()?;
+                                            n.name().ok().map(|n| uniq(i, n))
+                                        })
                                         .unwrap_or_else(|| s.name().unwrap_or("").to_owned())
                                 } else {
                                     s.name()?.to_owned()
                                 }
                             }
                             RelocationTarget::Section(i) => {
-                                file.section_by_index(i)?.name()?.to_owned()
+                                uniq(i, file.section_by_index(i)?.name()?)
                             }
                             _ => continue,
                         };
@@ -444,7 +504,25 @@ pub fn build_graph(archives: &[PathBuf]) -> Result<Graph> {
         })?;
         nodes.extend(decoded);
     }
-    Graph::new(nodes, globals)
+    Graph::new(nodes, globals, held)
+}
+
+/// Whether a relocation in this section is an address the program's data
+/// holds. Unwind tables, exception tables and debug sections name every
+/// function without holding a callable address.
+fn data_holds_addresses(kind: SectionKind, name: &str) -> bool {
+    let data = match kind {
+        SectionKind::Data
+        | SectionKind::ReadOnlyData
+        | SectionKind::ReadOnlyDataWithRel
+        | SectionKind::Tls => true,
+        // `.init_array` and its kin.
+        SectionKind::Elf(_) => name.contains("_array"),
+        _ => false,
+    };
+    data && !["eh_frame", "except_tab", "unwind", "debug", "llvm", "note"]
+        .iter()
+        .any(|part| name.contains(part))
 }
 
 #[cfg(test)]

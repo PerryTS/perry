@@ -1,6 +1,7 @@
 use super::*;
 use std::any::Any;
 
+mod diagnostic;
 mod mutable_slot;
 mod rooted_values;
 pub(super) use mutable_slot::{mark_mutable_slot, MutableRootSlot, MutableRootSlotKind};
@@ -11,15 +12,20 @@ mod shadow_layout;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 mod shadow_stack;
 mod stack_maps;
+pub(super) use stack_maps::install_verify_walker;
 mod stack_roots;
 pub(crate) use stack_maps::census_rows::stack_map_index_census;
 mod temp_roots;
+mod walk_origin;
 pub(super) use stack_maps::ensure_built as ensure_stack_maps_built;
 pub(super) use stack_maps::initialize as initialize_stack_maps;
 pub(super) use stack_maps::native_maps_active as native_stack_maps_active;
 pub(super) use stack_maps::publish_rewrite_walk_stats as stack_maps_publish_rewrite_walk_stats;
 pub(super) use stack_maps::record_native_stack_walk_source;
 pub(super) use stack_maps::verify_native_slots_post_walk as stack_maps_native_slot_verify;
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+pub(crate) use walk_origin::offering_entry_asm;
+pub(crate) use walk_origin::{EntryOrigin as EntryWalkOrigin, WalkOrigin};
 
 pub use rooted_values::RootedValues;
 pub(super) use runtime_handles::{
@@ -47,13 +53,15 @@ pub(crate) use stack_roots::with_stack_roots;
 // `gc::roots::…` or reaches it through `mod.rs`'s `pub use roots::*`, so the
 // whole surface is re-exported here — same shape, and same `allow`, as the
 // `shadow_stack` re-exports below.
+#[cfg(test)]
+pub(crate) use scan_mode::ConservativeScanEffectiveTestGuard;
 #[allow(unused_imports)]
 pub(crate) use scan_mode::{
-    conservative_stack_scan_decision, conservative_stack_scan_decision_for,
-    conservative_stack_scan_mode, conservative_stack_scan_mode_from_value,
-    resolve_conservative_stack_scan_mode, set_conservative_stack_scan_override,
-    ConservativeStackScanDecision, ConservativeStackScanMode, ManualGcScanGuard,
-    CONSERVATIVE_STACK_SCAN_OVERRIDE,
+    collection_point_is_precise, conservative_scan_is_effective, conservative_stack_scan_decision,
+    conservative_stack_scan_decision_for, conservative_stack_scan_mode,
+    conservative_stack_scan_mode_from_value, resolve_conservative_stack_scan_mode,
+    set_conservative_stack_scan_override, ConservativeStackScanDecision, ConservativeStackScanMode,
+    ManualGcScanGuard, CONSERVATIVE_STACK_SCAN_OVERRIDE,
 };
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::shadow_stack_has_active_frame;
@@ -68,8 +76,8 @@ pub(crate) use shadow_layout::{ShadowEntry, SLOT_ACTIVE, SLOT_PTR_MASK};
 #[allow(unused_imports)]
 pub use shadow_layout::{
     ShadowStackState, SHADOW_ENTRY_META_OFFSET, SHADOW_ENTRY_SIZE, SHADOW_SLOT_ACTIVE_BIT,
-    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_FRAME_TOP_OFFSET,
-    SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
+    SHADOW_STACK_GROW_RESERVE, SHADOW_STACK_HEADER_SLOTS, SHADOW_STATE_CAP_OFFSET,
+    SHADOW_STATE_FRAME_TOP_OFFSET, SHADOW_STATE_LEN_OFFSET, SHADOW_STATE_PTR_OFFSET,
 };
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::bound_slot_meta;
@@ -78,7 +86,7 @@ pub(crate) use shadow_stack::SHADOW;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub(crate) use shadow_stack::{frame_root_restore, frame_root_savepoint};
 // Only the WASI exception handlers name the savepoint type.
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use shadow_stack::FrameRootSavepoint;
 #[cfg(any(test, not(perry_native_stack_maps)))]
 pub use shadow_stack::{
@@ -94,7 +102,7 @@ pub(crate) use temp_roots::temp_root_len;
 pub(crate) use temp_roots::temp_root_push_at;
 /// #7469: consumed by `crate::tls_hot::fill`, which lives outside `gc`.
 pub(crate) use temp_roots::temp_roots_hot_addr;
-#[cfg(target_os = "wasi")]
+#[cfg(any(test, target_os = "wasi"))]
 pub(crate) use temp_roots::temp_roots_truncate_to;
 pub use temp_roots::{
     js_array_push_f64_temp_rooted, js_gc_temp_root_get, js_gc_temp_root_push, js_gc_temp_root_set,
@@ -403,6 +411,23 @@ pub fn gc_register_mutable_root_scanner_named(source: &'static str, scanner: Mut
     gc_register_named_mutable_root_scanner(source, scanner);
 }
 
+/// Register an installer's per-thread scanner once, including late installs.
+pub(crate) fn gc_register_mutable_root_scanner_named_once(
+    name: &'static str,
+    scanner: MutableRootScanner,
+) {
+    let exists = MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        scanners
+            .borrow()
+            .iter()
+            .rev()
+            .any(|entry| entry.name == name && std::ptr::fn_addr_eq(entry.scanner, scanner))
+    });
+    if !exists {
+        gc_register_named_mutable_root_scanner(name, scanner);
+    }
+}
+
 pub(super) fn gc_register_mutable_root_scanner_with_source(
     scanner: MutableRootScanner,
     source: MutableRootScannerSource,
@@ -534,6 +559,7 @@ pub extern "C" fn js_gc_register_global_root(ptr: i64) {
 /// failure unwinds from here; across the C ABI it aborts the process.
 pub(super) fn register_global_root(root: *mut u64) {
     if !root.is_null() {
+        let _bookkeeping = crate::snap_census::bookkeeping();
         unsafe {
             super::root_words::verify_jsvalue_root_word(*root, "global");
             runtime_write_barrier_root_nanbox(*root);
@@ -541,6 +567,19 @@ pub(super) fn register_global_root(root: *mut u64) {
     }
     GLOBAL_ROOTS.with(|roots| {
         roots.borrow_mut().push(root);
+    });
+    crate::snap_census::global_root(root as usize);
+}
+
+/// Every registered module-global root slot (the SNAP census tracks them).
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) fn for_each_global_root_slot(mut f: impl FnMut(usize)) {
+    GLOBAL_ROOTS.with(|roots| {
+        for &root in roots.borrow().iter() {
+            if !root.is_null() {
+                f(root as usize);
+            }
+        }
     });
 }
 
@@ -878,8 +917,9 @@ pub(super) enum RuntimeRootVisitMode<'a> {
         valid_ptrs: &'a ValidPointerSet,
     },
     Verify {
-        verifier: EvacuationVerifier<'a>,
-        surface: &'static str,
+        context: diagnostic::DiagnosticRootContext<'a>,
+        visit: diagnostic::DiagnosticRootCallback,
+        metadata_rewrite: bool,
     },
     Copy {
         mark: &'a mut dyn FnMut(f64),
@@ -941,9 +981,19 @@ impl<'a> RuntimeRootVisitor<'a> {
         }
     }
 
-    pub(super) fn for_copying_mark(collector: &'a mut CopyingNurseryCollector) -> Self {
+    pub(super) fn for_copying_mark<const DIAGNOSTICS: bool>(
+        collector: &'a mut CopyingNurseryCollector,
+    ) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::CopyingMark { collector },
+            mode: if DIAGNOSTICS {
+                RuntimeRootVisitMode::Verify {
+                    context: diagnostic::DiagnosticRootContext::CopyingMark(collector),
+                    visit: diagnostic::copying_mark,
+                    metadata_rewrite: false,
+                }
+            } else {
+                RuntimeRootVisitMode::CopyingMark { collector }
+            },
             root_source_stats: None,
             young_scope: true,
         }
@@ -959,7 +1009,11 @@ impl<'a> RuntimeRootVisitor<'a> {
 
     pub(super) fn for_verify(verifier: EvacuationVerifier<'a>, surface: &'static str) -> Self {
         Self {
-            mode: RuntimeRootVisitMode::Verify { verifier, surface },
+            mode: RuntimeRootVisitMode::Verify {
+                context: diagnostic::DiagnosticRootContext::Verify { verifier, surface },
+                visit: diagnostic::verify_root,
+                metadata_rewrite: true,
+            },
             root_source_stats: None,
             young_scope: false,
         }
@@ -1034,7 +1088,10 @@ impl<'a> RuntimeRootVisitor<'a> {
             &self.mode,
             RuntimeRootVisitMode::Rewrite { .. }
                 | RuntimeRootVisitMode::CopyingRewrite { .. }
-                | RuntimeRootVisitMode::Verify { .. }
+                | RuntimeRootVisitMode::Verify {
+                    metadata_rewrite: true,
+                    ..
+                }
         )
     }
 
@@ -1051,20 +1108,16 @@ impl<'a> RuntimeRootVisitor<'a> {
                 }
                 None
             }
-            RuntimeRootVisitMode::CopyingMark { collector } => {
-                decode_nanboxed_root_word(bits).and_then(|word| collector.visit_root_word(word))
-            }
+            RuntimeRootVisitMode::CopyingMark { collector } => decode_nanboxed_root_word(bits)
+                .and_then(|word| collector.visit_root_word::<{ cfg!(test) }>(word)),
             RuntimeRootVisitMode::CopyingRewrite { collector } => {
                 decode_nanboxed_root_word(bits).and_then(|_| collector.rewrite_value_bits(bits))
             }
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => {
                 try_rewrite_nanboxed_value(bits, valid_ptrs)
             }
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_bits) = verifier.stale_nanboxed_value(bits) {
-                    panic_stale_forwarded_reference(*verifier, surface, 0, bits, new_bits);
-                }
-                None
+            RuntimeRootVisitMode::Verify { context, visit, .. } => {
+                visit(context, diagnostic::DiagnosticRootSlot::Nanbox(bits))
             }
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(bits));
@@ -1087,21 +1140,16 @@ impl<'a> RuntimeRootVisitor<'a> {
                 checker.check_addr(addr);
                 None
             }
-            RuntimeRootVisitMode::CopyingMark { collector } => collector.visit_raw_addr(addr),
+            RuntimeRootVisitMode::CopyingMark { collector } => {
+                collector.visit_raw_addr::<{ cfg!(test) }>(addr)
+            }
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
             RuntimeRootVisitMode::Rewrite { valid_ptrs } => try_rewrite_raw_addr(addr, valid_ptrs),
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
-                    panic_stale_forwarded_reference(
-                        *verifier,
-                        surface,
-                        0,
-                        copy_tag | (addr as u64 & POINTER_MASK),
-                        copy_tag | (new_addr as u64 & POINTER_MASK),
-                    );
-                }
-                None
-            }
+            RuntimeRootVisitMode::Verify { context, visit, .. } => visit(
+                context,
+                diagnostic::DiagnosticRootSlot::Tagged(addr, copy_tag),
+            )
+            .map(|addr| addr as usize),
             RuntimeRootVisitMode::Copy { mark } => {
                 (*mark)(f64::from_bits(copy_tag | (addr as u64 & POINTER_MASK)));
                 None
@@ -1119,17 +1167,9 @@ impl<'a> RuntimeRootVisitor<'a> {
             RuntimeRootVisitMode::CopyingCheck { .. } => None,
             RuntimeRootVisitMode::CopyingMark { .. } => None,
             RuntimeRootVisitMode::CopyingRewrite { collector } => collector.rewrite_raw_addr(addr),
-            RuntimeRootVisitMode::Verify { verifier, surface } => {
-                if let Some(new_addr) = verifier.stale_raw_addr(addr) {
-                    panic_stale_forwarded_reference(
-                        *verifier,
-                        surface,
-                        0,
-                        addr as u64,
-                        new_addr as u64,
-                    );
-                }
-                None
+            RuntimeRootVisitMode::Verify { context, visit, .. } => {
+                visit(context, diagnostic::DiagnosticRootSlot::Metadata(addr))
+                    .map(|addr| addr as usize)
             }
             RuntimeRootVisitMode::Mark { .. } | RuntimeRootVisitMode::Copy { .. } => None,
         }
@@ -1475,7 +1515,7 @@ pub(super) fn visit_shadow_stack_root_slots(
                 break;
             }
             let header = *s.ptr.add(header_base);
-            let slot_count = header.meta;
+            let slot_count = header.bound;
             let slots_end = top + slot_count;
             if slots_end > s.len {
                 break;
@@ -1946,5 +1986,75 @@ pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
                 (*ctx.legacy_stats).pinned_bytes += bytes;
             }
         }
+    }
+}
+
+/// Every root the full trace reads, as the words the slots hold, for the
+/// image capture. Read-only: the visitors run in copy mode and only report.
+pub(crate) fn image_visit_roots(visit: &mut dyn FnMut(u64)) {
+    ensure_stack_maps_built();
+    visit_shadow_stack_root_slots(|slot| visit(unsafe { slot.read() }));
+    visit_global_root_slots(|slot| visit(unsafe { slot.read() }));
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for entry in scanners {
+        let mut mark = |value: f64| visit(value.to_bits());
+        let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+        (entry.scanner)(&mut visitor);
+    }
+    let mut mark = |value: f64| visit(value.to_bits());
+    let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+    visit_ffi_mutable_registered_roots(&mut visitor);
+    let legacy: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in legacy {
+        scanner(&mut |value: f64| visit(value.to_bits()));
+    }
+    let ffi: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in ffi {
+        let mut sink: &mut dyn FnMut(u64) = &mut *visit;
+        let ctx = &mut sink as *mut &mut dyn FnMut(u64) as *mut c_void;
+        extern "C" fn emit(value: f64, ctx: *mut c_void) {
+            let sink = unsafe { &mut *(ctx as *mut &mut dyn FnMut(u64)) };
+            sink(value.to_bits());
+        }
+        scanner(emit, ctx);
+    }
+}
+
+/// The censuss mark: every root the collectors full trace reads, by
+/// source, as the words the slots hold. Instrumented builds only.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn census_visit_roots(visit: &mut dyn FnMut(&'static str, u64)) {
+    ensure_stack_maps_built();
+    visit_shadow_stack_root_slots(|slot| {
+        let source = match slot.kind {
+            MutableRootSlotKind::ShadowStack => "shadow_stack",
+            _ => "stack_map",
+        };
+        visit(source, unsafe { slot.read() });
+    });
+    visit_global_root_slots(|slot| visit("module_global", unsafe { slot.read() }));
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for entry in scanners {
+        let name = entry.name;
+        let mut mark = |value: f64| visit(name, value.to_bits());
+        let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+        (entry.scanner)(&mut visitor);
+    }
+    let mut mark = |value: f64| visit("ffi_mutable_scanner", value.to_bits());
+    let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+    visit_ffi_mutable_registered_roots(&mut visitor);
+    let legacy: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in legacy {
+        scanner(&mut |value: f64| visit("legacy_scanner", value.to_bits()));
+    }
+    let ffi: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in ffi {
+        let mut sink: &mut dyn FnMut(&'static str, u64) = &mut *visit;
+        let ctx = &mut sink as *mut &mut dyn FnMut(&'static str, u64) as *mut c_void;
+        extern "C" fn emit(value: f64, ctx: *mut c_void) {
+            let sink = unsafe { &mut *(ctx as *mut &mut dyn FnMut(&'static str, u64)) };
+            sink("ffi_scanner", value.to_bits());
+        }
+        scanner(emit, ctx);
     }
 }

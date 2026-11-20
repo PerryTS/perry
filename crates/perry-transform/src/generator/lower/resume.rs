@@ -28,6 +28,7 @@ pub(crate) fn wrap_generator_resume_body(
                 ],
             }),
             finally: None,
+            forof_completion: None,
         },
     ]
 }
@@ -61,8 +62,35 @@ pub(crate) fn wrap_async_gen_step_body(
                 ],
             }),
             finally: None,
+            forof_completion: None,
         },
     ]
+}
+
+/// The fixed-state record body under its completion catch: a throw that
+/// leaves the body marks the generator completed and not executing, then
+/// propagates (27.5.3.3 steps 8-9: the abrupt completion completes the
+/// generator). The re-entrancy and completed tests stay with the caller,
+/// which owns `executing`/`done` before the call.
+pub(crate) fn wrap_fixed_state_completion(
+    body: Vec<Stmt>,
+    executing_id: LocalId,
+    done_id: LocalId,
+    catch_id: LocalId,
+) -> Vec<Stmt> {
+    vec![Stmt::Try {
+        body,
+        catch: Some(CatchClause {
+            param: Some((catch_id, "__gen_exec_e".to_string())),
+            body: vec![
+                Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
+                Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
+                Stmt::Throw(Expr::LocalGet(catch_id)),
+            ],
+        }),
+        finally: None,
+        forof_completion: None,
+    }]
 }
 
 pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
@@ -92,7 +120,9 @@ pub(crate) fn generator_executing_type_error() -> Expr {
 
 pub(crate) fn promise_reject(value: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::GlobalGet(0)),
             property: "reject".to_string(),
@@ -124,6 +154,7 @@ pub(crate) fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, exec
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 prepend_executing_clear_before_returns(body, executing_id);
                 if let Some(catch) = catch {

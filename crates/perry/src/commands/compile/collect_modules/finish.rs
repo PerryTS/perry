@@ -21,6 +21,17 @@ pub(crate) fn collect_module_finish(
         module_name,
         mut hir_module,
     } = prepared;
+    // A wrapped module's cache key, in finish (evaluation) order.
+    if hir_module
+        .imports
+        .iter()
+        .any(|i| i.source == super::super::cjs_wrap::support::SPECIFIER)
+    {
+        let key = perry_hir::source_remap::baked_path_of(&canonical).into_owned();
+        if !ctx.cjs_support_keys.contains(&key) {
+            ctx.cjs_support_keys.push(key);
+        }
+    }
 
     // Issue #535 — `perry/ui` `state<T>` desugar pass.
     let is_harmonyos = matches!(target, Some("harmonyos") | Some("harmonyos-simulator"));
@@ -305,6 +316,7 @@ pub(crate) fn collect_module_finish(
             collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
             ..Default::default()
         });
+        perry_transform::lower_async_module_body(&mut hir_module);
         transform_async_to_generator(&mut hir_module);
         // #8595: outline an oversized module-entry body into per-chunk
         // functions so no single function carries the whole init (which is
@@ -349,11 +361,15 @@ pub(crate) fn collect_module_finish(
         // GC cell per scope activation. Last, so it sees the preallocation
         // statements the async/generator transforms emitted.
         perry_codegen::scope_env::group_scope_boxes(&mut hir_module);
+    } else {
+        // The web target compiles to wasm, which has no `yield`: its generators
+        // become the same state machines, with `finally` bodies inlined first.
+        inline_finally_into_returns(&mut hir_module);
+        perry_transform::transform_generators_without_private_frames(&mut hir_module);
     }
 
-    // Set optional-feature gates (regex/temporal/url/crypto/events/etc.) so
-    // auto-optimize links only the runtime subsystems this module can reach.
-    feature_detect::detect_optional_feature_usage(ctx, &hir_module);
+    // Optional features are selected after the graph-wide CommonJS proof
+    // discards unreachable loader arms (run_pipeline).
 
     let collected_after_insert = ctx.native_modules.len() + ctx.js_modules.len() + 1;
     progress.record(ProgressSnapshot {

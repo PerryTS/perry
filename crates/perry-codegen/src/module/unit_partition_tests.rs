@@ -253,6 +253,30 @@ fn hidden_image_literals_keep_cross_module_coalescing() {
     assert_eq!(make_unique_owner_global(&definition), definition);
 }
 
+/// fn_record's image descriptor is `linkonce_odr` in every module, one copy per
+/// program. In a split module its owner must keep it weak: a strong owner and
+/// the other modules' weak copies share one COMDAT group, which lld rejects.
+#[test]
+fn cross_module_linkonce_owner_stays_weak() {
+    use super::make_unique_owner_global;
+    for format in [
+        crate::fn_record::RecordFormat::Elf,
+        crate::fn_record::RecordFormat::MachO,
+    ] {
+        for (_, line) in crate::fn_record::image_lines(format) {
+            if !line.contains(" = linkonce_odr ") {
+                continue;
+            }
+            let owned = make_unique_owner_global(&line);
+            assert_eq!(owned, line.replacen(" = linkonce_odr ", " = weak_odr ", 1));
+        }
+    }
+    assert_eq!(
+        make_unique_owner_global("@g = linkonce hidden constant i32 0"),
+        "@g = weak hidden constant i32 0"
+    );
+}
+
 #[test]
 fn mach_o_offset_alias_has_one_hidden_owner() {
     fn fixture() -> LlModule {
@@ -431,4 +455,42 @@ fn split_shared_helpers_keep_their_owner_without_local_users() {
         assert!(run.success(), "{helper}: {run}");
     }
     fs::remove_dir_all(scratch).unwrap();
+}
+
+/// ld64's `section$start` / `section$end` symbols are spelled quoted
+/// (`@"\01section$start$..."`). A unit that emits a global naming them must
+/// declare them too; the reference scan once read only unquoted names, so
+/// every unit but the first failed to parse ("use of undefined value").
+#[test]
+fn quoted_external_declarations_follow_their_users_into_every_unit() {
+    let mut refs = std::collections::HashSet::new();
+    super::collect_symbol_refs(
+        "@b = constant { ptr, ptr } { ptr @\"\\01section$start$__TEXT$__s\", ptr @plain }, c\"x@\"",
+        &mut refs,
+    );
+    assert!(
+        refs.contains("@\"\\01section$start$__TEXT$__s\""),
+        "{refs:?}"
+    );
+    assert!(refs.contains("@plain"), "{refs:?}");
+
+    let mut module = LlModule::new("x86_64-apple-macosx13.0.0");
+    module.add_raw_global("@\"\\01section$start$__TEXT$__s\" = external hidden global i8".into());
+    module
+        .add_raw_global("@bounds = internal constant ptr @\"\\01section$start$__TEXT$__s\"".into());
+    for name in ["first", "second"] {
+        module
+            .define_function(name, PTR, vec![])
+            .create_block("entry")
+            .ret(PTR, "@bounds");
+    }
+    let units = module.render_codegen_units(2);
+    assert_eq!(units.len(), 2);
+    for unit in &units {
+        assert!(unit.contains("@bounds = "), "{unit}");
+        assert!(
+            unit.contains("@\"\\01section$start$__TEXT$__s\" = external hidden global i8"),
+            "{unit}"
+        );
+    }
 }

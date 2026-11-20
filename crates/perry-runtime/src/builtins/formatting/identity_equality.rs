@@ -11,7 +11,7 @@ fn is_weak_collection_value(value: f64) -> bool {
     }
     unsafe {
         let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!((*gc_header).obj_type) {
             return false;
         }
         let obj = ptr as *const crate::object::ObjectHeader;

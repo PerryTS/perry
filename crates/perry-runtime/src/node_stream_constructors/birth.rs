@@ -2,6 +2,7 @@
 //! Fixed layout and optional hook keys use the existing shape transition authority.
 //! Instances retain the two-slot inline prefix and canonical overflow layout.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[derive(Clone, Copy)]
 pub(crate) enum Kind {
@@ -27,11 +28,11 @@ impl Kind {
     pub(crate) fn layout(self) -> *const crate::object::layout_desc::PerryLayoutDesc {
         use crate::object::runtime_layouts as rl;
         match self {
-            Self::Readable => &raw const rl::READABLE,
-            Self::Writable => &raw const rl::WRITABLE,
-            Self::Duplex => &raw const rl::DUPLEX,
-            Self::Transform => &raw const rl::TRANSFORM,
-            Self::PassThrough => &raw const rl::PASSTHROUGH,
+            Self::Readable => rl::READABLE::desc(),
+            Self::Writable => rl::WRITABLE::desc(),
+            Self::Duplex => rl::DUPLEX::desc(),
+            Self::Transform => rl::TRANSFORM::desc(),
+            Self::PassThrough => rl::PASSTHROUGH::desc(),
         }
     }
 }
@@ -40,16 +41,45 @@ impl Kind {
 /// as the successor's presence in this agent's shape directory.
 #[derive(Clone, Copy)]
 struct BirthWrite {
-    from: u32,
-    to: u32,
+    from: LayoutWord,
+    to: LayoutWord,
     slot: u32,
-    chain: [u32; 8],
+    chain: [LayoutWord; 8],
     depth: usize,
 }
-pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>);
+pub(crate) struct BirthWriteSite(std::cell::Cell<Option<BirthWrite>>, std::cell::Cell<bool>);
+crate::perry_thread_local! {
+    /// Sites of this thread that ever held a memo (thread-local statics live as
+    /// long as the thread, so the pointers stay valid for every recompute).
+    static WRITE_SITES: std::cell::RefCell<Vec<*const BirthWriteSite>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+/// Claim the successor word of every write memo (full-trace recompute): the
+/// memo names a row by word and reads it, so the row must not retire.
+pub(crate) fn note_write_site_carriers() {
+    WRITE_SITES.with(|sites| {
+        for &site in sites.borrow().iter() {
+            // SAFETY: registered from a live thread-local of this thread.
+            if let Some(memo) = unsafe { (*site).0.get() } {
+                crate::object::shape_carriers::note_shape_id(memo.to);
+            }
+        }
+    });
+}
 impl BirthWriteSite {
     pub(crate) const fn new() -> Self {
-        Self(std::cell::Cell::new(None))
+        Self(std::cell::Cell::new(None), std::cell::Cell::new(false))
+    }
+
+    /// Remember a transition: the successor row is claimed now and re-claimed
+    /// after every full trace (`note_write_site_carriers`), because `write`
+    /// reads it by word on the next birth.
+    fn set_memo(&self, memo: BirthWrite) {
+        crate::object::shape_carriers::note_shape_id(memo.to);
+        if !self.1.replace(true) {
+            WRITE_SITES.with(|s| s.borrow_mut().push(self as *const _));
+        }
+        self.0.set(Some(memo));
     }
 
     #[inline(never)]
@@ -73,7 +103,7 @@ impl BirthWriteSite {
             if chain_shapes(stream, None)
                 .is_some_and(|(chain, depth)| chain == memo.chain && depth == memo.depth)
             {
-                if let Some(to) = crate::object::shapes::shape_descriptor_by_id(memo.to) {
+                if let Some(to) = crate::object::shapes::shape_descriptor_for_word(memo.to) {
                     // SAFETY: this site's exact historical successor is still
                     // present, and the complete predecessor guard matched.
                     if unsafe {
@@ -112,17 +142,16 @@ impl BirthWriteSite {
         let obj = object_ptr_from_value(stream.get_nanbox_f64()).unwrap();
         let to = unsafe { crate::object::shapes::object_shape_stamp(obj) };
         if let (Some((chain, depth)), Some(record)) =
-            (proof, crate::object::shapes::shape_record_by_id(to))
+            (proof, crate::object::shapes::shape_record_for_word(to))
         {
             if let Some(slot) = unsafe {
-                let keys = record.keys() as *mut crate::array::ArrayHeader;
                 crate::object::keys_find_property_slot_by_bytes(
-                    keys,
+                    record.keys_view(),
                     record.logical_key_count(),
                     key.bytes,
                 )
             } {
-                let descriptor = crate::object::shapes::shape_descriptor_by_id(to).unwrap();
+                let descriptor = crate::object::shapes::shape_descriptor_for_word(to).unwrap();
                 let entry = unsafe {
                     crate::object::key_attrs::keys_entry(descriptor.keys_view().arr(), slot)
                 };
@@ -131,13 +160,13 @@ impl BirthWriteSite {
                 {
                     return;
                 }
-                self.0.set(Some(BirthWrite {
+                self.set_memo(BirthWrite {
                     from,
                     to,
                     slot,
                     chain,
                     depth,
-                }));
+                });
             }
         }
     }
@@ -145,7 +174,7 @@ impl BirthWriteSite {
 
 /// Validate the ordered chain without keeping heap addresses. A setter or
 /// non-writable data property on the key refuses birth replay.
-pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([u32; 8], usize)> {
+pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([LayoutWord; 8], usize)> {
     let _no_move = crate::gc::GcSuppressScope::new();
     let obj = object_ptr_from_value(stream)?;
     let mut bits = unsafe { crate::object::shapes::object_prototype_word(obj) };
@@ -154,9 +183,9 @@ pub(super) fn chain_shapes(stream: f64, key: Option<&[u8]>) -> Option<([u32; 8],
     }
     walk_shapes(bits, key)
 }
-pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([u32; 8], usize)> {
+pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([LayoutWord; 8], usize)> {
     let _no_move = crate::gc::GcSuppressScope::new();
-    let mut chain = [0; 8];
+    let mut chain = [LayoutWord(0); 8];
     let mut depth = 0;
     while bits != TAG_NULL && bits != 0 && bits != TAG_UNDEFINED {
         let proto = object_ptr_from_value(f64::from_bits(bits))?;
@@ -164,14 +193,14 @@ pub(super) fn walk_shapes(mut bits: u64, key: Option<&[u8]>) -> Option<([u32; 8]
             return None;
         }
         let shape = unsafe { crate::object::shapes::object_shape_stamp(proto) };
-        let record = crate::object::shapes::shape_descriptor_by_id(shape)?;
+        let record = crate::object::shapes::shape_descriptor_for_word(shape)?;
         chain[depth] = shape;
         depth += 1;
         let keys = record.keys_view();
         if let Some(key) = key {
-            if let Some(slot) = unsafe {
-                crate::object::keys_find_slot_by_bytes_resolved(keys.arr(), keys.count(), key)
-            } {
+            if let Some(slot) =
+                unsafe { crate::object::keys_find_slot_by_bytes_resolved(keys, keys.count(), key) }
+            {
                 let entry = unsafe { crate::object::key_attrs::keys_entry(keys.arr(), slot) };
                 if !crate::object::key_attrs::entry_is_plain_writable_data(entry) {
                     return None;
@@ -202,6 +231,41 @@ pub(crate) use stream_birth_field;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// F2 #3: a write memo's successor word survives full traces with no
+    /// receiver on it; fails if the recompute does not re-note it.
+    #[test]
+    fn write_memo_successor_is_carried_across_full_traces() {
+        let _guard = crate::gc::CopyingNurseryTestGuard::new(0);
+        let site = BirthWriteSite::new();
+        let to = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        site.set_memo(BirthWrite {
+            from: LayoutWord(0),
+            to,
+            slot: 0,
+            chain: [LayoutWord(0); 8],
+            depth: 0,
+        });
+        let control = {
+            let obj = crate::object::js_object_alloc(0, 0);
+            unsafe { crate::object::shapes::transition_object_shape_semantics(obj) }
+        };
+        for round in 0..3 {
+            crate::gc::test_collect_synchronous_full_trace();
+            assert!(
+                crate::object::shapes::shape_is_retired(control),
+                "control must retire"
+            );
+            assert!(
+                !crate::object::shapes::shape_is_retired(to),
+                "round {round}: write memo successor retired"
+            );
+            assert!(crate::object::shapes::shape_descriptor_for_word(to).is_some());
+        }
+    }
 
     #[test]
     fn shell_has_node_state_layout_and_bounded_inline_prefix() {

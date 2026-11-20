@@ -4,16 +4,10 @@ use super::support::*;
 
 #[test]
 fn symbol_data_child_moves_with_exotic_owner() {
-    check_owned_data(false);
+    check_owned_data();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved owner's symbol data slot"]
-fn negative_control_objtables_symbol_data() {
-    check_owned_data(true);
-}
-
-fn check_owned_data(erase: bool) {
+fn check_owned_data() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::promise::js_promise_new();
@@ -31,11 +25,6 @@ fn check_owned_data(erase: bool) {
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
     let symbol = (js_shadow_slot_get(1) & crate::value::POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        unsafe {
-            crate::object::shaped_symbols::delete(moved, symbol);
-        }
-    }
     let child_after = crate::symbol::symbol_property_root_bits(moved, symbol).unwrap()
         & crate::value::POINTER_MASK;
     assert_ne!(child_after, child as u64);

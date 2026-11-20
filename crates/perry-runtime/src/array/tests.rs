@@ -54,8 +54,11 @@ fn assert_numeric_raw_values(arr: *mut ArrayHeader, expected: &[f64]) {
     }
 }
 
+/// A raw 0x7FFE word, not a Number: no API builds an INT32 Number (P3 B4a).
+/// These tests pin the store-side canonicalization of such a word, a consumer
+/// that B4b deletes with the rest of the INT32 consumers.
 fn int32_jsvalue_bits(value: i32) -> u64 {
-    crate::value::JSValue::int32(value).bits()
+    crate::value::INTERNAL_WORD_TAG | u64::from(value as u32)
 }
 
 fn assert_canonical_raw_slot(arr: *mut ArrayHeader, index: u32, expected: f64) {
@@ -703,7 +706,7 @@ fn test_new_array_holes_flag_walk_free_guard_and_sound_downgrade() {
         // bits even though the dense RawF64 flag is not set: a verbatim
         // INT32-boxed slot would read as NaN payload through the guarded
         // loop's raw-f64 loads.
-        let int32_value = f64::from_bits(crate::value::INT32_TAG | 7u64);
+        let int32_value = f64::from_bits(crate::value::INTERNAL_WORD_TAG | 7u64);
         js_array_set_f64(arr, 0, int32_value);
         let elements = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
         assert_eq!(
@@ -761,7 +764,7 @@ fn test_holes_invariant_recorded_by_verify_walk_survives_strict_probe() {
 #[test]
 fn test_numeric_array_mark_canonicalizes_int32_and_nan_inline() {
     let arr = js_array_alloc_with_length(3);
-    let int32_value = f64::from_bits(crate::value::INT32_TAG | ((-17i32 as u32) as u64));
+    let int32_value = f64::from_bits(crate::value::INTERNAL_WORD_TAG | ((-17i32 as u32) as u64));
     let payload_nan = f64::from_bits(0x7FF8_0000_0000_1234);
 
     js_array_set_f64(arr, 0, int32_value);
@@ -1483,7 +1486,7 @@ fn test_array_length_rejects_nanboxed_non_pointers_before_registry_probe() {
         crate::value::TAG_FALSE,
         crate::value::TAG_TRUE,
         crate::value::TAG_HOLE,
-        crate::value::INT32_TAG | 1,
+        crate::value::INTERNAL_WORD_TAG | 1,
     ] {
         assert_eq!(js_array_length(bits as *const ArrayHeader), 0);
     }
@@ -1776,7 +1779,7 @@ fn refresh_local_head_follows_growth_forwarding() {
         );
         let stale_box =
             f64::from_bits(crate::value::POINTER_TAG | (stale as u64 & crate::value::POINTER_MASK));
-        let fresh = crate::array::header::js_array_refresh_local_head(stale_box);
+        let fresh = crate::array::js_array_refresh_local_head(stale_box);
         let fresh_addr = (fresh.to_bits() & crate::value::POINTER_MASK) as usize;
         assert_eq!(
             fresh_addr, cur as usize,
@@ -1786,7 +1789,7 @@ fn refresh_local_head_follows_growth_forwarding() {
         let live_box =
             f64::from_bits(crate::value::POINTER_TAG | (cur as u64 & crate::value::POINTER_MASK));
         assert_eq!(
-            crate::array::header::js_array_refresh_local_head(live_box).to_bits(),
+            crate::array::js_array_refresh_local_head(live_box).to_bits(),
             live_box.to_bits()
         );
         // Non-pointer values pass through untouched.
@@ -1796,7 +1799,7 @@ fn refresh_local_head_follows_growth_forwarding() {
             crate::value::TAG_NULL,
         ] {
             assert_eq!(
-                crate::array::header::js_array_refresh_local_head(f64::from_bits(bits)).to_bits(),
+                crate::array::js_array_refresh_local_head(f64::from_bits(bits)).to_bits(),
                 bits
             );
         }

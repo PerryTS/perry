@@ -947,6 +947,7 @@ pub(crate) fn guarded_undefined_method_candidate(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body_has_loop_guard(body, id, in_loop)
                     || catch
@@ -1117,6 +1118,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 scan_only_direct_conditions(body, id, guards)
                     && catch
@@ -1169,7 +1171,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 return None;
             }
             let field_name = param.default.as_ref().and_then(field_default)?;
-            let (field_index, _) = class
+            let (field_index, field) = class
                 .fields
                 .iter()
                 // Packed slots: private fields are not slots of the class
@@ -1177,6 +1179,10 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 .filter(|field| field.key_expr.is_none() && !field.is_private)
                 .enumerate()
                 .find(|(_, field)| field.decorators.is_empty() && field.name == field_name)?;
+            // A private entry before it moves it off its packed index (#8969).
+            if perry_hir::private_names::private_entry_precedes([class.fields.as_slice()], field) {
+                return None;
+            }
             let prologue_stmt_index = method
                 .body
                 .iter()
@@ -1258,6 +1264,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body_contains_await(body)
                 || catch
@@ -1671,6 +1678,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),

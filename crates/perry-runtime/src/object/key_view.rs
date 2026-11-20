@@ -84,13 +84,33 @@ pub(crate) unsafe fn keys_may_have_holes(keys: ObjectKeys) -> bool {
 /// storage for it. A layout's slots are physical inline slots (a declared
 /// layout's birth allocates them all, holding the hole), whatever the shape's
 /// live bound says; past the inline storage a slot lives in the spill.
-#[inline]
-unsafe fn slot_word(obj: *const ObjectHeader, slot: u32) -> Option<u64> {
-    if slot < super::object_inline_capacity(obj) {
+/// `cap` is `obj`'s [`super::object_inline_capacity`], read once by the caller.
+#[inline(always)]
+unsafe fn slot_word(obj: *const ObjectHeader, slot: u32, cap: u32) -> Option<u64> {
+    if slot < cap {
         let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
         return Some(*fields.add(slot as usize));
     }
     super::spill::spill_get_present(obj as usize, slot as usize)
+}
+
+/// Does storage slot `slot` of `obj` hold the hole?
+///
+/// # Safety
+/// `obj` is a live object header.
+#[inline(always)]
+pub(crate) unsafe fn slot_holds_hole(obj: *const ObjectHeader, slot: u32) -> bool {
+    slot_word(obj, slot, super::object_inline_capacity(obj)) == Some(TAG_HOLE)
+}
+
+/// [`slot_holds_hole`] with `obj`'s inline capacity `cap` read once by a
+/// caller that tests many slots.
+///
+/// # Safety
+/// `obj` is a live object header; `cap` is its [`super::object_inline_capacity`].
+#[inline(always)]
+pub(crate) unsafe fn slot_holds_hole_within(obj: *const ObjectHeader, slot: u32, cap: u32) -> bool {
+    slot_word(obj, slot, cap) == Some(TAG_HOLE)
 }
 
 /// One object's own layout keys, read through the hole rule.
@@ -139,7 +159,11 @@ impl KeyView {
         if position >= self.keys.count() {
             return false;
         }
-        slot_word(self.obj, self.keys.storage_slot(position)) == Some(TAG_HOLE)
+        slot_word(
+            self.obj,
+            self.keys.storage_slot(position),
+            super::object_inline_capacity(self.obj),
+        ) == Some(TAG_HOLE)
     }
 }
 
@@ -176,7 +200,7 @@ unsafe fn own_key_bytes_is_hole_slow(obj: *const ObjectHeader, bytes: &[u8]) -> 
     if view.keys.is_null() {
         return false;
     }
-    match super::keys_find_property_slot_by_bytes(view.keys.arr(), view.keys.count(), bytes) {
+    match super::keys_find_property_slot_by_bytes(view.keys, view.keys.count(), bytes) {
         Some(position) => !view.present(position),
         None => false,
     }
@@ -224,7 +248,13 @@ pub(crate) unsafe fn fill_hole(obj: *mut ObjectHeader, slot: u32, value: u64) {
     let position = (0..keys.count()).find(|&p| keys.storage_slot(p) == slot);
     let at_end = !super::overflow::has_overflow(obj)
         && position.is_some_and(|position| {
-            !super::layout_desc::later_late_key_present(obj, keys.arr(), keys.count(), position)
+            !super::layout_desc::later_late_key_present(
+                obj,
+                keys.arr(),
+                keys.count(),
+                position,
+                super::object_inline_capacity(obj),
+            )
         });
     match position {
         Some(position) if !at_end => {

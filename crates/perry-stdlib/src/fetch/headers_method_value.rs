@@ -29,12 +29,6 @@ extern "C" {
         index: u32,
         value: f64,
     );
-    #[link_name = "js_closure_set_capture_ptr"]
-    fn provider_js_closure_set_capture_ptr(
-        closure: *mut perry_runtime::closure::ClosureHeader,
-        index: u32,
-        value: i64,
-    );
     #[link_name = "js_nanbox_pointer"]
     fn provider_js_nanbox_pointer(pointer: i64) -> f64;
 }
@@ -63,8 +57,8 @@ pub(crate) fn headers_bound_method_value(headers_id: usize, method_name: &'stati
         unsafe { provider_js_closure_alloc(&perry_runtime::closure::BOUND_METHOD_INFO, 3) };
     unsafe {
         provider_js_closure_set_capture_f64(closure, 0, handle_to_f64(headers_id));
-        provider_js_closure_set_capture_ptr(closure, 1, method_name.as_ptr() as i64);
-        provider_js_closure_set_capture_ptr(closure, 2, method_name.len() as i64);
+        perry_runtime::closure::closure_set_capture_word(closure, 1, method_name.as_ptr() as i64);
+        perry_runtime::closure::closure_set_capture_word(closure, 2, method_name.len() as i64);
     }
     let value = unsafe { provider_js_nanbox_pointer(closure as i64) };
     unsafe { js_write_barrier_root_nanbox(value.to_bits()) };

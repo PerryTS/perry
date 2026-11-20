@@ -47,6 +47,7 @@
 //! at equal capacity was worth 50% on the write loop (#8977). This one starts
 //! 2-way for that reason.
 
+use crate::codegen_abi::LayoutWord;
 use crate::object::ObjectHeader;
 
 const READ_STUB_BUCKETS: usize = 2048;
@@ -71,8 +72,16 @@ fn bucket_of(token: u64, key_bits: u64) -> usize {
     // Multiplicative mixing taking the TOP bits of the product. An SSO key's
     // LOW bits are its first byte, so a low-bit index collapses a whole key
     // family onto a few buckets — measured on the write side before #8977.
-    let h = (token ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    ((h >> 40) as usize) & (READ_STUB_BUCKETS - 1)
+    // The token is mixed BEFORE it meets the key: layout words of one program
+    // are consecutive rows and short keys differ in their first byte's low
+    // bits, so a bare `token ^ key_bits` maps (row r, key k) and (row r ^ d,
+    // key k ^ d) to one bucket. Three such pairs thrash a two-way bucket, and
+    // which pairs meet moved with every program's row numbering.
+    // The index is the product's TOP bits, a single shift with no mask, so
+    // the token's own multiply costs nothing over the old `token ^ key` hash.
+    let h =
+        (token.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ key_bits).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    (h >> (64 - READ_STUB_BUCKETS.trailing_zeros())) as usize
 }
 
 /// An entry word with this bit set is a CONFIRMED ABSENCE, not a slot: an
@@ -104,7 +113,7 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
     }
     // Admission belongs to publication. Alias registration changes the shape,
     // so a hit on an admitted shape needs no second shape-kind lookup.
-    if crate::object::shapes::shape_object_kind_by_id(token as u32)
+    if crate::object::shapes::shape_object_kind_for_word(LayoutWord(token as u32))
         .is_some_and(crate::object::shapes::ShapeObjectKind::is_native_alias)
     {
         return;
@@ -139,10 +148,10 @@ fn read_stub_insert(token: u64, key_bits: u64, slot: u64) {
 #[inline(always)]
 unsafe fn receiver_shape_token(obj: *const ObjectHeader) -> Option<u64> {
     let stamp = crate::object::shapes::object_shape_stamp(obj);
-    if stamp == 0 {
+    if stamp == LayoutWord(0) {
         return None;
     }
-    Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp as u64)
+    Some(crate::object::shapes::PIC_ID_TOKEN_BIT | stamp.0 as u64)
 }
 
 /// The stub's receiver guard: the token to file or look up an entry under, or
@@ -174,7 +183,7 @@ unsafe fn stub_receiver_token(obj: *const ObjectHeader) -> Option<u64> {
     let gc = crate::value::addr_class::try_read_gc_header(obj as usize)?;
     const STUB_BLOCKING: u16 =
         crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if gc.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(gc.obj_type)
         || gc.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || gc._reserved & STUB_BLOCKING != 0
     {
@@ -229,7 +238,8 @@ pub(crate) unsafe fn read_stub_lookup_or_absent(
     if terminal != 0 {
         let proto = crate::array::object_prototype_addr_if_resolved();
         if proto == 0
-            || crate::object::shapes::object_shape_stamp(proto as *const ObjectHeader) != terminal
+            || crate::object::shapes::object_shape_stamp(proto as *const ObjectHeader)
+                != LayoutWord(terminal)
         {
             return None;
         }
@@ -331,3 +341,30 @@ unsafe fn read_slot_by_tag(obj: *const ObjectHeader, addr: usize, slot: u32) -> 
 #[cfg(test)]
 #[path = "read_stub_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod bucket_mix_tests {
+    use super::bucket_of;
+
+    /// Consecutive layout rows with one-byte keys that differ in the same low
+    /// bits must not share buckets by construction (`token ^ key` did: every
+    /// pair below collided).
+    #[test]
+    fn row_and_key_low_bits_do_not_cancel() {
+        let mut pairs = 0;
+        let mut same = 0;
+        for row in 0x8000_0080u64..0x8000_00A0 {
+            for k in 0x61u64..0x67 {
+                for d in 1u64..8 {
+                    pairs += 1;
+                    same += usize::from(bucket_of(row, k) == bucket_of(row ^ d, k ^ d));
+                }
+            }
+        }
+        assert_eq!(pairs, 1344);
+        assert!(
+            same <= 8,
+            "{same} of {pairs} cancelling pairs share a bucket"
+        );
+    }
+}

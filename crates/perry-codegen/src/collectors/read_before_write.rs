@@ -257,6 +257,7 @@ fn each_stmt<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(&'a Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 each_stmt(body, f);
                 if let Some(cc) = catch {
@@ -558,6 +559,7 @@ impl Walk<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 // A throw can leave the block before any of its writes, so
                 // the catch and the finally start from the state before it.
@@ -747,19 +749,22 @@ mod tests {
         }
     }
 
-    /// #12658: `var r = 0; if (k) { r = n + 1; } var n = 5; n = n * 2;
-    /// return r + n;` with `var n` hoisted as its `undefined` seed.
+    /// #12658's shape: `var r = 0; if (k) { r = n; } var n = 5; n = n >> 1;
+    /// return r + n;` with `var n` hoisted as its `undefined` seed. (The issue
+    /// wrote `n + 1` and `n * 2`; those writes are not int32 without a range
+    /// for `n`, so the fixture uses writes whose only question is the read
+    /// position.)
     fn issue_body() -> Vec<Stmt> {
         vec![
             let_(R, Some(Expr::Integer(0))),
             let_(N, Some(Expr::Undefined)),
             Stmt::If {
                 condition: get(K),
-                then_branch: vec![set(R, bin(BinaryOp::Add, get(N), Expr::Integer(1)))],
+                then_branch: vec![set(R, get(N))],
                 else_branch: None,
             },
             let_(N, Some(Expr::Integer(5))),
-            set(N, bin(BinaryOp::Mul, get(N), Expr::Integer(2))),
+            set(N, bin(BinaryOp::Shr, get(N), Expr::Integer(1))),
             Stmt::Return(Some(bin(BinaryOp::Add, get(R), get(N)))),
         ]
     }
@@ -935,6 +940,7 @@ mod tests {
                 body: catch_body,
             }),
             finally: None,
+            forof_completion: None,
         };
         assert!(!flags_x(vec![try_(vec![throw()])]));
         assert!(flags_x(vec![try_(vec![])]));
@@ -949,6 +955,7 @@ mod tests {
                 body: vec![],
                 catch: None,
                 finally: Some(vec![Stmt::Return(None)]),
+                forof_completion: None,
             }],
             else_branch: Some(vec![set(X, Expr::Integer(1))]),
         }]));
@@ -961,12 +968,14 @@ mod tests {
                 body: vec![],
             }),
             finally: Some(vec![]),
+            forof_completion: None,
         }]));
         // A finally's write counts after the try ...
         assert!(!flags_x(vec![Stmt::Try {
             body: vec![],
             catch: None,
             finally: Some(vec![set(X, Expr::Integer(1))]),
+            forof_completion: None,
         }]));
         // ... but a read in it still sees the state before the block.
         let body = vec![
@@ -975,6 +984,7 @@ mod tests {
                 body: vec![set(X, Expr::Integer(1))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(get(X))]),
+                forof_completion: None,
             },
         ];
         assert!(reads_before_write(&body, &HashSet::from([X])).contains(&X));
@@ -1161,6 +1171,7 @@ mod tests {
 
     fn call(callee: Expr, args: Vec<Expr>) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args,
             type_args: Vec::new(),

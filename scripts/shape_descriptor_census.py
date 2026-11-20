@@ -262,14 +262,24 @@ def assert_rule3_licenses_the_kind_fence_removal(rule3: str, gc_types: str) -> N
     # collector knows about, so re-derive that set from `gc/types.rs` instead
     # of trusting a count. A kind's discriminant is a decimal or hex literal or
     # a codegen ABI constant; `GC_TYPE_MAX` is the id bound, not a kind.
+    # The object kinds' discriminants live in the shared ABI crate
+    # (`perry_abi::GC_TYPE_OBJECT`, re-exported through `codegen_abi`), so a
+    # kind is declared either by a `pub const` whose value is a literal or an
+    # ABI path, or by a `pub use` re-export of the ABI constant.
     declared = {
         name
         for name, _ in re.findall(
             r"pub\s+const\s+(GC_TYPE_\w+)\s*:\s*u8\s*=\s*"
-            r"(0x[0-9A-Fa-f]+|\d+|crate::codegen_abi::\w+)\s*;",
+            r"(0x[0-9A-Fa-f]+|\d+|(?:crate::codegen_abi|perry_abi)::\w+)\s*;",
             gc_types,
         )
-    } - {"GC_TYPE_MAX"}
+    } | set(
+        re.findall(
+            r"pub\s+use\s+(?:crate::codegen_abi|perry_abi)::(GC_TYPE_\w+)\s*;",
+            gc_types,
+        )
+    )
+    declared -= {"GC_TYPE_MAX"}
     if not declared:
         raise CensusError("gc/types.rs declares no GC kinds: rule-3 coverage is unknowable")
     classified = {kind for kind, _ in verdicts}
@@ -326,28 +336,39 @@ DISPATCH_CHECKS = (
      r"class_holder::try_class_holder_fast_dispatch\(object,\s*&key,\s*args_ptr,\s*args_len\)",
      "method tower delegates to the shape-based holder walk"),
     ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method",
+     r"chain_method_admitting\(start,\s*key,\s*\|_\|\s*true\)",
+     "method wrapper delegates to the descriptor walk"),
+    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
      r"crate::object::shapes::object_shape_record\(holder\)",
      "method holder resolves its current descriptor"),
-    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method",
-     r"key_position\(keys,\s*record\.logical_key_count\(\),\s*key\)",
+    ("crates/perry-runtime/src/object/native_call_method/class_holder.rs", "chain_method_admitting",
+     r"key_position\((?:keys|record\.keys_view\(\)),\s*record\.logical_key_count\(\),\s*key\)",
      "method key lookup is bounded by descriptor count"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
-     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*word\);",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);",
      "read probe resolves the receiver's current layout word"),
     ("crates/perry-runtime/src/object/layout_probe.rs", "probe_get_at",
-     r"if\s+r\.is_null\(\)\s*\{\s*return\s+array_named_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
-     "nonordinary read routes to the checked array path"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
-     r"let\s+r\s*=\s*record_of\(dir,\s*\(\*obj\)\.parent_class_id\);\s*if\s+r\.is_null\(\)\s*\|\|\s*\(\*r\)\.object_kind\(\)\s*!=\s*super::ShapeObjectKind::Ordinary\s*\{\s*return\s+0;",
+     r"if\s+r\.is_null\(\)\s*\{(?:\s*//[^\n]*)*\s*return\s+bag_first_get::<ABSENT>\(\s*dir,\s*obj,\s*key_bits,\s*site_key_hash::<LAZY_HASH>\(key_bits,\s*hash\),\s*\);",
+     "nonordinary read routes to the bag-first own-key path"),
+    # The bag-first arm answers only from the bag's OWN descriptor record;
+    # every decline goes on to the checked array path.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_own",
+     r"let\s+word\s*=\s*\(\*bag\)\.parent_class_id;[\s\S]*?let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\{\s*return\s+Err\(false\);",
+     "bag-first read resolves the bag's own layout record"),
+    ("crates/perry-runtime/src/object/layout_probe.rs", "bag_first_get",
+     r"Err\(true\)\s*=>\s*array_named_get_past_bag::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),\s*Err\(false\)\s*=>\s*array_named_get::<ABSENT>\(dir,\s*obj,\s*key_bits,\s*hash\),",
+     "a bag decline routes to the checked array path"),
+    ("crates/perry-runtime/src/object/layout_probe.rs", "set_front",
+     r"let\s+word\s*=\s*\(\*obj\)\.parent_class_id;\s*let\s+r\s*=\s*record_of\(dir,\s*LayoutWord\(word\)\);\s*if\s+r\.is_null\(\)\s*\|\|\s*!\(\*r\)\.kind_is\(super::ShapeObjectKind::Ordinary\)\s*\{\s*return\s+Stored\(0\);",
      "store probe rejects a missing or nonordinary receiver record"),
-    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_probe_set",
+    ("crates/perry-runtime/src/object/layout_probe.rs", "record_plan",
      r"key_storage_slot\(keys,\s*pos\)",
      "store slot comes from the receiver's descriptor entry"),
     ("crates/perry-runtime/src/object/shape_store.rs", "dynamic_store_receiver",
      r"let\s+id\s*=\s*super::layout_desc::layout_id_of_word\(\(\*obj\)\.parent_class_id\);",
      "dynamic store derives identity from the receiver"),
     ("crates/perry-runtime/src/object/shape_store.rs", "dynamic_store_receiver",
-     r"let\s+record\s*=\s*shapes::shape_record_by_id\(id\)\?;",
+     r"let\s+record\s*=\s*shapes::shape_record_of_receiver\(id\)\?;",
      "dynamic store resolves its receiver's shape record"),
     ("crates/perry-runtime/src/object/shape_store.rs", "try_dynamic_store",
      r"let\s+record\s*=\s*dynamic_store_receiver\(obj\)\?;",
@@ -358,14 +379,16 @@ DISPATCH_CHECKS = (
     ("crates/perry-codegen/src/expr/property_get/generic_dispatch.rs", "lower_property_site_tail",
      r'cond_br\(&served,\s*&merge_label,\s*&call_label\)',
      "declined reads enter complete property semantics"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'icmp_ne\(I32,\s*&stored,\s*"0"\)',
+    # The static-key store site is one out-of-line call, `perry_store_or_put`:
+    # the store probe, then complete `[[Set]]` when the probe declines.
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"if\s+perry_probe_set\(dir,\s*obj_bits,\s*key_bits,\s*hash,\s*value\)\s*!=\s*0\s*\{\s*return\s+value;",
      "only an admitted store probe succeeds"),
-    ("crates/perry-codegen/src/expr/put_value_store_ic.rs", "emit_static_store_ic_site",
-     r'cond_br\(&hit,\s*&merge_label,\s*&slow_label\)',
+    ("crates/perry-runtime/src/object/layout_probe.rs", "perry_store_or_put",
+     r"put_value::js_put_value_set\(\s*obj,\s*f64::from_bits\(key_bits\),\s*value,\s*obj,\s*strict,?\s*\)",
      "declined stores enter complete Set semantics"),
     ("crates/perry-codegen/src/expr/proxy_reflect.rs", "lower_put_value_dyn_ic_inline",
-     r'"js_put_value_set_dynamic",\s*&\[\(DOUBLE,\s*t\),\s*\(DOUBLE,\s*k\),\s*\(DOUBLE,\s*v\),\s*\(I32,\s*strict_i32\)\]',
+     r'"js_put_value_set_dynamic",\s*&\[\s*\(crate::types::PTR,\s*&dir\),\s*\(DOUBLE,\s*t\),\s*\(DOUBLE,\s*k\),\s*\(DOUBLE,\s*v\),\s*\(I32,\s*strict_i32\),?\s*\]',
      "dynamic store forwards receiver/key/value/strictness"),
 )
 
@@ -384,7 +407,10 @@ def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
     for name, absence in (("perry_probe_get", "true"), ("perry_probe_get_binding", "false")):
         body = blank_rust_comments_and_literals(function_body(probe, name))
         if not re.fullmatch(
-            r"\s*probe_get::<" + absence + r">\(dir,\s*obj_biased,\s*key_bits,\s*hash\)\s*", body
+            # An instrumented build (`perry_gc_instruments`) first names a global key.
+            r"\s*(?:#\[cfg\(perry_gc_instruments\)\]\s*let\s+mut\s+scratch\s*=\s*\[0;[^\]]*\];\s*"
+            r"#\[cfg\(perry_gc_instruments\)\]\s*let\s+_gkey\s*=[^;]*;\s*)?"
+            r"probe_get::<" + absence + r">\(dir,\s*obj_biased,\s*key_bits,\s*hash\)\s*", body
         ):
             raise CensusError(name + " bypasses the receiver-layout authority")
     for path, name, calls in (
@@ -394,7 +420,7 @@ def assert_layout_dispatch_authority(sources: dict[str, str]) -> None:
          "lower_property_site_tail", ("perry_probe_get", "perry_probe_get_binding",
                                      "perry_probe_get_length", "js_object_get_field_slow")),
         ("crates/perry-codegen/src/expr/put_value_store_ic.rs",
-         "emit_static_store_ic_site", ("perry_probe_set", "js_put_value_set")),
+         "emit_static_store_ic_site", ("perry_store_or_put",)),
     ):
         body = function_body(sources[path], name)
         for callee in calls:
@@ -424,6 +450,8 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         "crates/perry-runtime/src/object/shapes.rs",
         "crates/perry-runtime/src/object/shapes_slot_list.rs",
         "crates/perry-runtime/src/object/shapes_store.rs",
+        "crates/perry-runtime/src/object/shapes_store/slab.rs",
+        "crates/perry-runtime/src/object/shapes_store/flat.rs",
         "crates/perry-runtime/src/object/mod.rs",
         "crates/perry-runtime/src/object/live_slots.rs",
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
@@ -465,7 +493,15 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         + clean["crates/perry-runtime/src/object/shapes_slot_list.rs"]
         + "\n"
         + clean["crates/perry-runtime/src/object/shapes_store.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_store/slab.rs"]
+        + "\n"
+        + clean["crates/perry-runtime/src/object/shapes_store/flat.rs"]
     )
+    flat = clean["crates/perry-runtime/src/object/shapes_store/flat.rs"]
+    require_code(flat, r"struct\s+Region\s*\{\s*base\s*:\s*\*mut\s+ShapeRecord", "one immovable descriptor Region")
+    if re.search(r"\brealloc\s*\(", blank_rust_comments_and_literals(flat)):
+        raise CensusError("descriptor Region must never realloc")
     object_mod = clean["crates/perry-runtime/src/object/mod.rs"]
     live_slots = clean["crates/perry-runtime/src/object/live_slots.rs"]
     codegen_alloc = clean["crates/perry-codegen/src/lower_call/new_alloc.rs"]
@@ -518,13 +554,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         # into a rehashing bucket) moves them under the collector's feet.
         (r"slab\s*:\s*(?:std::cell::)?UnsafeCell\s*<\s*ShapeSlab\s*>", "by-id descriptor slab with stable record addresses"),
         (r"struct\s+Slot\s*<\s*T\s*>\s*\(\s*std::ptr::NonNull\s*<\s*T\s*>\s*\)", "a slab slot is one pointer to its own allocation"),
-        (r"type\s+ChunkCells\s*=\s*\[\s*UnsafeCell\s*<\s*ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]", "slab chunks individually allocated, never reallocated"),
+        (r"type\s+ChunkCells\s*=\s*\[\s*UnsafeCell\s*<\s*\*mut\s+ShapeRecord\s*>\s*;\s*CHUNK_LEN\s*\]", "slab chunks hold pointers to stable Region records"),
         (r"type\s+PageSlots\s*=\s*\[\s*Slot\s*<\s*ChunkCells\s*>\s*;\s*PAGE_LEN\s*\]", "slab pages hold chunk pointers, not records"),
         (r"type\s+Page\s*=\s*Slot\s*<\s*PageSlots\s*>", "slab directory entries are page pointers"),
         (r"pages\s*:\s*Vec\s*<\s*Page\s*>", "slab directory is a vector of page pointers"),
         # `keys` must stay the FIRST field of the `#[repr(C)]` record: the
         # record address IS the rewritable keys slot (`keys_slot`).
-        (r"#\[repr\(C\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
+        (r"#\[repr\(C(?:,\s*align\(8\))?\)\]\s*(?:#\[[^\]]*\]\s*)*pub\(crate\)\s+struct\s+ShapeRecord\s*\{\s*(?://[^\n]*\n\s*)*pub\(super\)\s+keys\s*:\s*u64", "slab record is repr(C) with the keys word first"),
         (r"logical_key_count\s*:\s*u32", "exact logical-key fact"),
         (r"live_inline_slot_count\s*:\s*u32", "exact live-slot fact"),
         (r"semantic_generation\s*:\s*u64", "semantic transition fact"),
@@ -554,7 +590,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     if re.search(r"\bfetch_add\s*\(", allocator):
         raise CensusError("ShapeId allocator wraps instead of parking")
     require_code(shapes, r"\bfn\s+shape_id_exhausted_abort\b", "exhaustion fail-stop")
-    public_ensure = function_body(shapes, "shape_id_for_keys_ensure")
+    public_ensure = function_body(shapes, "layout_for_keys_ensure")
     require_code(
         public_ensure,
         r"publish_shape_result\s*\(",
@@ -594,19 +630,20 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
                 + ", ".join(sorted(scanner_slot_apis))
             )
 
-    # #11549: the walk's ONE body is the generic `_inline` form (the `dyn`
-    # wrapper only forwards to it), and the copying drain's plain-object scan
-    # is a second enumeration of the same object slots. Both must emit the
-    # descriptor's keys edge and neither may read the deleted mirror.
+    # The dispatcher selects either the specialized object walk or the
+    # generic enumeration. The copying drain has a third enumeration. Every
+    # body must emit the descriptor's keys edge without the deleted mirror.
+    dispatch = function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline")
+    for callee in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
+        # A const-generic diagnostics turbofish is the same call.
+        require_code(dispatch, rf"\b{callee}\s*(?:::<[^>]*>\s*)?\(header,\s*visit\)",
+                     f"layout dispatcher reaches {callee}")
     for body_name, body in (
-        (
-            "visit_gc_layout_slot_descriptors_inline",
-            function_body(layout_visit, "visit_gc_layout_slot_descriptors_inline"),
-        ),
-        (
-            "plain_object_plan",
-            function_body(copying_object_scan, "plain_object_plan"),
-        ),
+        ("visit_gc_layout_slot_descriptors_generic",
+         function_body(layout_visit, "visit_gc_layout_slot_descriptors_generic")),
+        ("visit_object_layout_slots",
+         function_body(layout_visit, "visit_object_layout_slots")),
+        ("plain_object_plan", function_body(copying_object_scan, "plain_object_plan")),
     ):
         require_code(
             body,
@@ -653,19 +690,26 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         )
     assert_before(
         ensure,
-        "slab_mut().insert",
+        "slab_mut().publish_dynamic",
         ensure_append,
         "by-id descriptor before reverse accelerator",
     )
     assert_before(
         ensure,
-        "slab_mut().insert",
+        "slab_mut().publish_dynamic",
         "facts_append_fresh",
         "by-id descriptor before facts accelerator",
     )
     # The structural publish body (charter step 5: `publish_object_shape_from`
     # delegates to it with an all-Any rep).
-    sync = function_body(shapes, "publish_object_shape_from_rep")
+    # `publish_object_shape_from_rep` now delegates to the newborn-aware
+    # `publish_object_shape_from_rep_born`, which owns the body.
+    require_code(
+        function_body(shapes, "publish_object_shape_from_rep"),
+        r"\bpublish_object_shape_from_rep_born\s*\(",
+        "publish_object_shape_from_rep delegates to its born body",
+    )
+    sync = function_body(shapes, "publish_object_shape_from_rep_born")
     # #9317 routed every post-birth ShapeId publication through
     # `stamp_object_shape_id_with_carrier_note`, which performs the header
     # write and then arms `old_carrier` for a promoted receiver. The header
@@ -712,11 +756,22 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # keep the cache-carried versions an optimization cache can reinstall,
     # and must run AFTER the successor is stamped and armed (#9200's order).
     retirement = function_body(shapes, "retire_owned_shape_siblings")
+    # The family lookup is `ShapeTableInner::family_ids(node, keys)`: the
+    # canonical list's own family, else the owned-array index keyed by the
+    # array address. Either way it is scoped to this array.
     require_code(
         retirement,
-        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        r"\.\s*family_ids\s*\(\s*\w+\s*,\s*keys\s*\)",
         "keys-scoped descriptor lineage index",
     )
+    family_ids = function_body(shapes, "family_ids")
+    require_code(
+        family_ids,
+        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
+        "keys-scoped descriptor lineage index (family_ids)",
+    )
+    if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", family_ids):
+        raise CensusError("descriptor family lookup scans the global descriptor table")
     if re.search(r"slab\(\)\s*\.\s*for_each\s*\(", retirement):
         raise CensusError("owned-history retirement scans the global descriptor table")
     require_code(
@@ -786,7 +841,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
             raise CensusError(f"{name} reintroduced a legacy header guard fact")
         require_code(
             body,
-            r"object_shape(?:_(?:id|descriptor))?\s*\(",
+            r"object_(?:shape(?:_(?:id|descriptor))?|layout_stamp)\s*\(",
             f"{name} ShapeId authority",
         )
 
@@ -826,7 +881,13 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     # matcher points at a separately traced data cell, never an exotic receiver.
     for name in ("object_is_regular", "object_is_shaped"):
         body = function_body(object_mod, name)
-        require_code(body, r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT", f"{name} GC kind")
+        # `gc_type_is_object!(t)` (perry-abi object_type.rs) expands to
+        # `t == GC_TYPE_OBJECT`, the same test.
+        require_code(
+            body,
+            r"obj_type\s*==\s*crate::gc::GC_TYPE_OBJECT|crate::gc_type_is_object!\(\s*\w+\.obj_type\s*\)",
+            f"{name} GC kind",
+        )
         if re.search(r"regex_header_has_magic|object_type", body):
             raise CensusError(f"{name} reintroduced an old payload discriminator")
     require_code(
@@ -858,7 +919,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
         (instance_slow, r"object_alloc_plain_born\s*\(\s*2\s*,\s*shape\s*\)", "slow ordinary birth"),
         (instance, r"arena_alloc_gc_no_collect\(size,\s*8,\s*crate::gc::GC_TYPE_OBJECT\)", "noncollecting ordinary birth"),
         (instance, r"\(\*receiver\)\.parent_class_id\s*=\s*shape", "birth uses the prepared shape"),
-        (instance, r"new_slow\(shape,\s*data\)", "declined nursery birth reaches slow birth"),
+        (instance, r"new_slow\(LayoutWord\(shape\),\s*data\)", "declined nursery birth reaches slow birth"),
         (instance_slow, r"prepare_shape\s*\(\s*receiver\s*\)", "canonical birth on miss"),
         (prepare, r"MATCHER_READ\.birth_key\(\)", "qualified intrinsic matcher key"),
         (prepare, r"extend_key_with_entry\s*\(\s*&proof,\s*CanonicalKeys::EMPTY,\s*private_key,\s*PRIVATE_FIELD_ENTRY", "intrinsic private matcher entry"),
@@ -1003,7 +1064,7 @@ def assert_authority_surfaces(sources: dict[str, str]) -> None:
     class_probe = function_body(object_mod, "object_is_regular")
     require_code(
         class_probe,
-        r"shape_object_kind_by_id\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
+        r"shape_object_kind_of_receiver\([\s\S]*?\)\s*\.is_some_and\(\|kind\| kind\.is_ordinary_layout\(\)\)",
         "ordinary-object descriptor kind authority",
     )
 
@@ -1162,10 +1223,20 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     shapes_path = "crates/perry-runtime/src/object/shapes.rs"
     store_path = "crates/perry-runtime/src/object/shapes_store.rs"
+    region_path = "crates/perry-runtime/src/object/shapes_store/flat.rs"
+    changed_region = dict(sources)
+    old = "base: *mut ShapeRecord"
+    if changed_region[region_path].count(old) != 1:
+        raise CensusError("Region stability sabotage subject missing")
+    changed_region[region_path] = changed_region[region_path].replace(old, "base: Vec<ShapeRecord>", 1)
+    expect_rejected("Region records replaced by a moving vector", lambda: assert_authority_surfaces(changed_region))
+    reallocating_region = dict(sources)
+    reallocating_region[region_path] += "\nfn census_bad_realloc() { realloc(); }\n"
+    expect_rejected("Region reallocation", lambda: assert_authority_surfaces(reallocating_region))
     flat_slab = dict(sources)
     flat_slab[store_path] = flat_slab[store_path].replace(
-        "type ChunkCells = [UnsafeCell<ShapeRecord>; CHUNK_LEN];",
-        "type ChunkCells = Vec<UnsafeCell<ShapeRecord>>;",
+        "type ChunkCells = [UnsafeCell<*mut ShapeRecord>; CHUNK_LEN];",
+        "type ChunkCells = Vec<UnsafeCell<*mut ShapeRecord>>;",
         1,
     )
     expect_rejected(
@@ -1218,6 +1289,32 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         lambda: assert_authority_surfaces(plan_fact_read),
     )
 
+    for path, name in (
+        ("crates/perry-runtime/src/gc/layout_slot_visit.rs", "visit_gc_layout_slot_descriptors_generic"),
+        ("crates/perry-runtime/src/gc/layout_slot_visit.rs", "visit_object_layout_slots"),
+        ("crates/perry-runtime/src/gc/copying_object_scan.rs", "plain_object_plan"),
+    ):
+        missing_edge = dict(sources)
+        body = function_body(sources[path], name)
+        changed = body.replace("gc_shape_keys_edge_slot", "lost_keys_edge_slot", 1)
+        assert changed != body, f"missing mutation subject: {name}"
+        missing_edge[path] = sources[path].replace(body, changed, 1)
+        expect_rejected(f"{name} loses descriptor keys edge",
+                        lambda: assert_authority_surfaces(missing_edge))
+
+    for name in ("visit_object_layout_slots", "visit_gc_layout_slot_descriptors_generic"):
+        missing_route = dict(sources)
+        path = "crates/perry-runtime/src/gc/layout_slot_visit.rs"
+        # The dispatcher calls both walks with a const-generic diagnostics
+        # turbofish; the mutation drops whichever spelling the source uses.
+        call = re.search(
+            rf"\b{name}\s*(?:::<[^>]*>\s*)?\(header,\s*visit\);", sources[path]
+        )
+        assert call is not None, f"missing mutation subject: {name}"
+        missing_route[path] = sources[path].replace(call.group(0), "return;", 1)
+        expect_rejected(f"dispatcher loses {name}",
+                        lambda: assert_authority_surfaces(missing_route))
+
     # Both reverse accelerators must remain downstream of the actual mint,
     # including after a wrapper refactor. Exercise each ordering separately.
     for accelerator in ("family_append_fresh", "facts_append_fresh"):
@@ -1225,7 +1322,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
         mint_body = function_body(
             inverted_mint[shapes_path], "shape_descriptor_mint_fresh"
         )
-        inverted_body = swap_once(mint_body, "slab_mut().insert", accelerator)
+        inverted_body = swap_once(mint_body, "slab_mut().publish_dynamic", accelerator)
         inverted_mint[shapes_path] = inverted_mint[shapes_path].replace(
             mint_body, inverted_body, 1
         )
@@ -1236,8 +1333,10 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
 
     inverted_publication = dict(sources)
     path = "crates/perry-runtime/src/object/shapes.rs"
+    # The structural publish's body lives in the newborn-aware
+    # `publish_object_shape_from_rep_born`; the plain entry only delegates.
     publication_body = function_body(
-        inverted_publication[path], "publish_object_shape_from_rep"
+        inverted_publication[path], "publish_object_shape_from_rep_born"
     )
     inverted_body = swap_once(
         publication_body,
@@ -1260,9 +1359,11 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     retirement_body = function_body(
         unscoped_retirement[path], "retire_owned_shape_siblings"
     )
+    # The lookup is `inner.family_ids(node, keys)`; unscope it by dropping
+    # the keys argument the index is keyed by.
     unscoped_body, substitutions = re.subn(
-        r"families\s*\.\s*get\s*\(\s*&keys\s*\)",
-        "families.get(&0)",
+        r"\.\s*family_ids\s*\(\s*(\w+)\s*,\s*keys\s*\)",
+        r".family_ids(\1, 0)",
         retirement_body,
         count=1,
     )
@@ -1277,7 +1378,7 @@ def run_sabotage_selftests(sources: dict[str, str], baseline: dict[str, object])
     )
 
     early_retirement = dict(sources)
-    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep")
+    publish_body = function_body(early_retirement[path], "publish_object_shape_from_rep_born")
     early_body = swap_once(
         publish_body,
         "stamp_object_shape_id_with_carrier_note",
@@ -1415,7 +1516,7 @@ def compare_exact_census(observed: dict[str, object], baseline: dict[str, object
             )
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--emit-baseline",
@@ -1423,18 +1524,27 @@ def main() -> None:
         help="print the current exact multiset for reviewed baseline refresh",
     )
     args = parser.parse_args()
-    run_literal_lexer_selftest()
-    sources = rust_sources()
-    observed = observed_census(sources)
-    if args.emit_baseline:
-        print(json.dumps(observed, indent=2, sort_keys=True))
-        return
-    baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
-    compare_exact_census(observed, baseline)
-    assert_authority_surfaces(sources)
-    run_sabotage_selftests(sources, baseline)
+    try:
+        run_literal_lexer_selftest()
+        sources = rust_sources()
+        observed = observed_census(sources)
+        if args.emit_baseline:
+            print(json.dumps(observed, indent=2, sort_keys=True))
+            return 0
+        baseline = json.loads(BASELINE_PATH.read_text(encoding="utf-8"))
+        compare_exact_census(observed, baseline)
+        assert_authority_surfaces(sources)
+        run_sabotage_selftests(sources, baseline)
+    except (CensusError, AssertionError) as error:
+        # A detected drift must read as a verdict, not as a traceback. This census
+        # stacks dozens of independent assertions, so every run reports exactly one
+        # of them; an escaping exception buries which subject moved under a stack
+        # trace and makes the next one harder to reach.
+        print(f"::error::shape_descriptor_census: {error}")
+        return 1
     print(json.dumps(observed["summary"], indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

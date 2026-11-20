@@ -102,16 +102,12 @@ from `well_known_bindings.toml`. Regenerate this table with
 | `perry-ext-argon2` | `argon2` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-bcrypt` | `bcrypt` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-better-sqlite3` | `better-sqlite3` | External integration | Move to an external native package | Bundled; migration pending |
-| `perry-ext-cheerio` | `cheerio` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-ethers` | `ethers` | Source package | Compile the upstream package source | Bundled; migration pending |
+| `perry-ext-bun` | `perry/bun-transpiler` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-http` | `http`<br>`http2`<br>`https` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-net` | `net` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
-| `perry-ext-nodemailer` | `nodemailer` | Source package | Compile the upstream package source | Bundled; migration pending |
 | `perry-ext-parcel-watcher` | `@parcel/watcher`<br>`@parcel/watcher-darwin-arm64`<br>`@parcel/watcher-darwin-x64`<br>`@parcel/watcher-linux-arm64-glibc`<br>`@parcel/watcher-linux-arm64-musl`<br>`@parcel/watcher-linux-x64-glibc`<br>`@parcel/watcher-linux-x64-musl`<br>`@parcel/watcher-win32-arm64`<br>`@parcel/watcher-win32-x64` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-pdf` | `@perryts/pdf` | External integration | Move to an external native package | Bundled; migration pending |
 | `perry-ext-sharp` | `sharp` | External integration | Move to an external native package | Bundled; migration pending |
-| `perry-ext-typescript` | `typescript` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-undici` | `undici` | Source package | Compile the upstream package source | Bundled; migration pending |
-| `perry-ext-ws` | `ws` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
+| `perry-ext-ws` | `perry/websocket` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 | `perry-ext-zlib` | `zlib` | Runtime API | Keep near core; consolidate when practical | Bundled; retained |
 <!-- END GENERATED BINDING GOVERNANCE -->

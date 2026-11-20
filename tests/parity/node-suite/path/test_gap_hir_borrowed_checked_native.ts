@@ -1,0 +1,17 @@
+import path from "node:path";
+import os from "node:os";
+import fs from "node:fs";
+const join = path.join;
+const platform = os.platform;
+const existsSync = fs.existsSync;
+console.log(path.join.call(null, "a", "b"));
+console.log(os.platform.call(null) === process.platform);
+console.log(fs.existsSync.call(null, "/definitely-not-a-real-Z2-path"));
+const code = process.argv[2] || "p.join = function () { return 911; }; o.platform = function () { return 912; }; f.existsSync = function () { return 913; };";
+new Function("p", "o", "f", code)(path, os, fs);
+const a = path.join.call(null, "a", "b");
+const b = os.platform.apply(null, []);
+const c = fs.existsSync.call(null, "/definitely-not-a-real-Z2-path");
+const restore = process.argv[3] || "p.join = j; o.platform = platform; f.existsSync = existsSync;";
+new Function("p", "o", "f", "j", "platform", "existsSync", restore)(path, os, fs, join, platform, existsSync);
+console.log(a, b, c);

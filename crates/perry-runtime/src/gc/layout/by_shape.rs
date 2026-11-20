@@ -12,6 +12,8 @@
 #[cfg(any(debug_assertions, test))]
 use super::layout_pointer_bearing_bits;
 use super::{HeapPayloadSlotSelection, HeapSlotRange, LayoutSlotMask};
+#[cfg(test)]
+use crate::codegen_abi::LayoutWord;
 use crate::object::field_rep;
 use crate::object::shapes::ShapeRecordRef;
 
@@ -49,6 +51,11 @@ fn selection_for_rep_with_special(
     let slot_count = payload.slot_count();
     if slot_count == 0 {
         return HeapPayloadSlotSelection::Empty;
+    }
+    // All-Any is itself an exact shape fact. Avoid compacting thirty-two
+    // representation lanes only to discover that none can be skipped.
+    if rep == 0 {
+        return HeapPayloadSlotSelection::All { cursor: 0 };
     }
     let skip = field_rep::non_pointer_slot_bits(rep, special_constfn_mask);
     if skip == 0 || slot_count > INLINE_MASK_SLOTS {
@@ -192,7 +199,7 @@ mod tests {
         let text = crate::string::js_string_from_bytes(b"txt".as_ptr(), 3);
         let text = f64::from_bits(crate::JSValue::string_ptr(text).bits());
         crate::object::js_object_set_field_by_name(obj, key("byshape_s"), text);
-        (obj, crate::object::shapes::object_shape_stamp(obj))
+        (obj, crate::object::shapes::object_shape_stamp(obj).0)
     }
 
     unsafe fn header_of(obj: *mut crate::object::ObjectHeader) -> *mut GcHeader {
@@ -208,7 +215,7 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         unsafe {
             let (obj, id) = number_and_string();
-            let rep = crate::object::shapes::shape_descriptor_by_id(id)
+            let rep = crate::object::shapes::shape_descriptor_for_word(LayoutWord(id))
                 .expect("shape")
                 .rep;
             assert_eq!(
@@ -222,17 +229,21 @@ mod tests {
                 slots.selection,
                 HeapPayloadSlotSelection::Masked { mask: LayoutSlotMask::Inline(m), .. } if m & 0b11 == 0b10
             );
-            let fields = (obj as *mut u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
-            let payload = HeapSlotRange::new(fields as *mut u64, 2);
+            let fields = crate::object::header::object_slot_at(
+                obj,
+                crate::object::header::meta_form_alloc_bytes(0) as u32,
+            );
+            let payload = HeapSlotRange::new(fields, 2);
             let correct =
                 selection_by_shape(crate::object::shapes::object_shape_record(obj), payload);
             let correct_ok = skipped_pointer_slot(payload, &correct).is_none();
 
             // Sabotage: the same keys with BOTH lanes F64, stamped on the object.
-            let d = crate::object::shapes::shape_descriptor_by_id(id).expect("shape");
+            let d =
+                crate::object::shapes::shape_descriptor_for_word(LayoutWord(id)).expect("shape");
             let wrong = crate::object::shapes::publish_shape_result(
                 crate::object::shapes::shape_descriptor_ensure_with_rep(
-                    d.keys as usize as *const crate::array::ArrayHeader,
+                    d.keys_view(),
                     d.logical_key_count,
                     d.live_inline_slot_count,
                     d.semantic_generation,
@@ -250,7 +261,7 @@ mod tests {
             let record = crate::object::shapes::object_shape_record(obj);
             let sabotaged = selection_by_shape(record, payload);
             let found = skipped_pointer_slot(payload, &sabotaged);
-            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, id);
+            crate::object::shapes::stamp_object_shape_id_with_carrier_note(obj, LayoutWord(id));
 
             assert!(masked, "By shape, only the Any lane is traced");
             assert!(correct_ok, "a correct object: no pointer is skipped");

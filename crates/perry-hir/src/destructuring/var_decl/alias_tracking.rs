@@ -241,7 +241,7 @@ pub(crate) fn track_decl_aliases(
                         | "WebSocket"
                 ) =>
             {
-                ctx.register_let_class_alias(name.to_string(), property.clone());
+                ctx.register_global_class_alias(name.to_string(), property.clone());
                 if matches!(
                     property.as_str(),
                     "Blob" | "File" | "FormData" | "Headers" | "Request" | "Response"

@@ -1,0 +1,1 @@
+Fix openAsBlob validation to reject falsy non-string MIME types except undefined and preserve filesystem stat errors. Strengthen the parity matrix to observe each invalid case without aborting before valid Blob content, type casing, and export checks.

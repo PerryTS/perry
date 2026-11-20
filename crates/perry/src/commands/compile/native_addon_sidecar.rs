@@ -481,6 +481,10 @@ mod tests {
                 package_dir: package,
                 entry_relative: PathBuf::from("demo.node"),
                 ship_package_payload: true,
+                reach: Default::default(),
+                node_api_imports: Default::default(),
+                #[cfg(feature = "target-wasi")]
+                wasm_archives: Vec::new(),
             },
         );
         let root = stage_native_addon_sidecar(&ctx, &output, None)
@@ -554,6 +558,10 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: kept[0].into(),
             ship_package_payload: true,
+            reach: Default::default(),
+            node_api_imports: Default::default(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
         };
         let ctx = CompilationContext::new(dir.path().to_path_buf());
         let actual = addon_payload_files(&ctx, &addon)
@@ -604,6 +612,10 @@ mod tests {
             package_dir: package.clone(),
             entry_relative: "index.node".into(),
             ship_package_payload: true,
+            reach: Default::default(),
+            node_api_imports: Default::default(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
         };
         fs::write(package.join("package.json"), r#"{"name":"demo"}"#).unwrap();
         assert_eq!(package_entry_aliases(&addon), vec!["demo"]);

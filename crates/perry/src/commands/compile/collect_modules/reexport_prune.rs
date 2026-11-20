@@ -66,6 +66,14 @@ fn enabled() -> bool {
 }
 
 impl ReexportPruner {
+    /// `path` is the source of a re-export this pass postponed: nothing
+    /// demands it, and the walk does not collect it.
+    pub(crate) fn postponed(&self, path: &Path) -> bool {
+        self.edges
+            .iter()
+            .any(|e| !e.active && (e.source_path == path || e.target == path))
+    }
+
     fn demand(&mut self, path: &Path, incoming: Demand) -> bool {
         let current = self.demands.entry(path.to_owned()).or_default();
         if current.all {

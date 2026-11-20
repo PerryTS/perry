@@ -1,3 +1,4 @@
+mod discard;
 use super::{literal, Names, Resources};
 use anyhow::{bail, Result};
 use std::fmt::Write;

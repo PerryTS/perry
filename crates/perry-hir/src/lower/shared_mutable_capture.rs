@@ -32,12 +32,12 @@ use crate::walker::{walk_expr_children, walk_expr_children_mut};
 /// closure boundaries. A field-init arrow that does `c += 1` lands its write on
 /// the rebind local INSIDE the closure, so the descent is essential to detect
 /// class-side mutation of a capture.
-fn collect_assigned_deep_stmt(stmt: &Stmt, out: &mut HashSet<LocalId>) {
+pub(crate) fn collect_assigned_deep_stmt(stmt: &Stmt, out: &mut HashSet<LocalId>) {
     for_each_child_stmt(stmt, &mut |s| collect_assigned_deep_stmt(s, out));
     for_each_top_expr(stmt, &mut |e| collect_assigned_deep_expr(e, out));
 }
 
-fn collect_assigned_deep_expr(expr: &Expr, out: &mut HashSet<LocalId>) {
+pub(crate) fn collect_assigned_deep_expr(expr: &Expr, out: &mut HashSet<LocalId>) {
     match expr {
         // A `LocalSet(id, ClassCaptureValue{..})` is the capture REBIND, not a
         // real mutation — every captured param/local carries one, so counting
@@ -532,6 +532,7 @@ impl<'a> CensusWalker<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body, scope, loop_depth, false);
                 if let Some(c) = catch {
@@ -669,6 +670,7 @@ fn demote_redeclarations_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             stmts(body, seen);
             if let Some(c) = catch {
@@ -800,6 +802,7 @@ fn retype_lets_in_stmt(stmt: &mut Stmt, targets: &HashSet<LocalId>) {
             body,
             catch,
             finally,
+            ..
         } => {
             recur(body);
             if let Some(cc) = catch {
@@ -1288,6 +1291,7 @@ fn for_each_child_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(&mut *f);
             if let Some(c) = catch {
@@ -1351,6 +1355,7 @@ fn is_redundant_cell_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) 
         object,
         property,
         value,
+        ..
     }] = items
     else {
         return false;
@@ -1361,7 +1366,7 @@ fn is_redundant_cell_propagation(items: &[Expr], index_uses: &HashSet<LocalId>) 
     };
     index_uses.contains(&written)
         && matches!(object.as_ref(), Expr::This)
-        && property.starts_with("__perry_cap_")
+        && crate::cap_fields::is_cap_field_name(property)
         && matches!(value.as_ref(), Expr::LocalGet(id) if *id == written)
 }
 
@@ -1471,6 +1476,9 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
                     id,
                     Box::new(Expr::Array(
                         vec![Expr::IndexGet {
+                            byte_end: 0,
+                            element_offset: 0,
+                            byte_offset: 0,
                             object: Box::new(Expr::LocalGet(id)),
                             index: Box::new(Expr::Integer(0)),
                         }],
@@ -1488,6 +1496,7 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, shared, index_uses);
             if let Some(c) = catch {
@@ -1541,6 +1550,9 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // the ARRAY handle and is not re-rewritten.
         Expr::LocalGet(id) if index_uses.contains(id) => {
             *expr = Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(*id)),
                 index: Box::new(Expr::Integer(0)),
             };
@@ -1562,6 +1574,9 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
                 object: Box::new(Expr::LocalGet(*id)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(v),
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
             };
             return;
         }
@@ -1569,7 +1584,9 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
         // handle on the instance field so methods snapshot the shared array.
         Expr::PropertySet {
             object, property, ..
-        } if matches!(object.as_ref(), Expr::This) && property.starts_with("__perry_cap_") => {
+        } if matches!(object.as_ref(), Expr::This)
+            && crate::cap_fields::is_cap_field_name(property) =>
+        {
             return;
         }
         // Constructor PUBLISH `ClassEnvSet { value: LocalGet(param) }`: the
@@ -1589,6 +1606,9 @@ fn rewrite_expr(expr: &mut Expr, shared: &HashSet<LocalId>, index_uses: &HashSet
                 },
                 prefix: *prefix,
                 strict: false,
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
             };
             return;
         }

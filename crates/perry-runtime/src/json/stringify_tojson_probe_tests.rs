@@ -89,7 +89,7 @@ fn json_tojson_key_probe_rejects_inline_and_nonstring_values_without_allocation(
         for value in [
             JSValue::null(),
             JSValue::undefined(),
-            JSValue::int32(42),
+            JSValue::number(f64::from(42)),
             JSValue::bool(true),
             JSValue::from_bits(crate::value::TAG_HOLE),
             JSValue::string_ptr(std::ptr::null_mut()),
@@ -199,10 +199,10 @@ fn probe_test_class_id(n: u32) -> u32 {
     0x7EEE_0000 | n
 }
 
-/// A non-pointer JS value: enough to make the ordinary prototype read answer
+/// A canonical JS Number: enough to make the ordinary prototype read answer
 /// `Some`, and safe for the root store's write barrier.
 fn probe_test_method_bits() -> u64 {
-    JSValue::int32(1).bits()
+    JSValue::number(1.0).bits()
 }
 
 #[test]
@@ -472,33 +472,36 @@ fn class_chain_tojson_memo_holds_every_shape_of_one_nested_literal() {
 
 #[test]
 fn only_a_surface_free_anon_shape_is_a_plain_record() {
-    assert!(super::class_is_plain_record(0));
+    let plain = crate::object::js_object_alloc(0, 0);
+    assert!(unsafe { super::object_is_plain_record(plain) });
 
     let never_registered = probe_test_class_id(0x81);
     assert!(
-        !super::class_is_plain_record(never_registered),
+        !unsafe {
+            super::object_is_plain_record(crate::object::js_object_alloc(never_registered, 0))
+        },
         "a class id that is not a registered anon shape is a real class"
     );
 
     let anon = probe_test_class_id(0x82);
-    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
-    assert!(super::class_is_plain_record(anon));
+    unsafe { crate::object::declarations::test_declare_anonymous(anon) };
+    assert!(unsafe { super::object_is_plain_record(crate::object::js_object_alloc(anon, 0)) });
 
-    // Class ids are per module, so an anon shape id can collide with a declared
-    // class. A registered name is that class's evidence.
+    // A declared descriptor has its own identity even when its body is empty.
     let named = probe_test_class_id(0x83);
     unsafe {
-        crate::object::js_register_anon_shape_class_id(named);
         crate::object::js_register_class_name(named, b"Declared".as_ptr(), 8);
     }
-    assert!(!super::class_is_plain_record(named));
+    assert!(!unsafe { super::object_is_plain_record(crate::object::js_object_alloc(named, 0)) });
 
     let with_proto_object = probe_test_class_id(0x84);
-    unsafe { crate::object::js_register_anon_shape_class_id(with_proto_object) };
+    unsafe { crate::object::declarations::test_declare_anonymous(with_proto_object) };
     let proto = crate::object::js_object_alloc(0, 0);
     crate::object::class_prototype_object_root_store(with_proto_object, proto);
     assert!(
-        !super::class_is_plain_record(with_proto_object),
+        !unsafe {
+            super::object_is_plain_record(crate::object::js_object_alloc(with_proto_object, 0))
+        },
         "a materialized prototype object can carry arbitrary properties"
     );
 }
@@ -506,13 +509,14 @@ fn only_a_surface_free_anon_shape_is_a_plain_record() {
 #[test]
 fn a_late_prototype_to_json_retires_a_cached_plain_record_verdict() {
     let anon = probe_test_class_id(0x91);
-    unsafe { crate::object::js_register_anon_shape_class_id(anon) };
-    assert!(super::class_is_plain_record(anon));
+    unsafe { crate::object::declarations::test_declare_anonymous(anon) };
+    let receiver = crate::object::js_object_alloc(anon, 0);
+    assert!(unsafe { super::object_is_plain_record(receiver) });
     let proto = crate::object::js_object_alloc(0, 1);
     crate::object::test_seed_class_prototype_object_root(anon, proto as usize);
     crate::object::class_prototype_set(anon, "toJSON".to_string(), probe_test_method_bits());
     assert!(
-        !super::class_is_plain_record(anon),
+        !unsafe { super::object_is_plain_record(receiver) },
         "a cached plain-record verdict must not outlive a prototype `toJSON`"
     );
 }
@@ -539,7 +543,7 @@ fn object_literal_shapes_reach_the_flat_emitter() {
 
         // What HIR does to a closed-shape literal: an anon shape class.
         let anon = probe_test_class_id(0xA1);
-        crate::object::js_register_anon_shape_class_id(anon);
+        crate::object::declarations::test_declare_anonymous(anon);
         (*obj()).class_id = anon;
         let bits = value.get_nanbox_f64().to_bits();
         let result = super::super::stringify_flat::try_object(bits)
@@ -548,6 +552,7 @@ fn object_literal_shapes_reach_the_flat_emitter() {
 
         // A real class with the same own fields must keep the general walk.
         let declared = probe_test_class_id(0xA2);
+        crate::object::js_register_class_name(declared, b"Declared".as_ptr(), 8);
         (*obj()).class_id = declared;
         let bits = value.get_nanbox_f64().to_bits();
         assert!(super::super::stringify_flat::try_object(bits).is_none());
@@ -659,10 +664,12 @@ fn plain_object_member_admits_only_what_the_member_dispatch_would_walk() {
 
         // An anon-shape literal qualifies; a declared class does not.
         let anon = probe_test_class_id(0xB1);
-        crate::object::js_register_anon_shape_class_id(anon);
+        crate::object::declarations::test_declare_anonymous(anon);
         (*obj(&plain)).class_id = anon;
         assert!(super::plain_object_member(bits, &mut proof).is_some());
-        (*obj(&plain)).class_id = probe_test_class_id(0xB2);
+        let declared = probe_test_class_id(0xB2);
+        crate::object::js_register_class_name(declared, b"Declared".as_ptr(), 8);
+        (*obj(&plain)).class_id = declared;
         assert!(super::plain_object_member(bits, &mut proof).is_none());
         (*obj(&plain)).class_id = 0;
 
@@ -750,4 +757,67 @@ fn to_json_index_key_is_the_decimal_index() {
         assert_eq!(bytes, index.to_string().as_bytes());
     }
     super::reset_to_json_key();
+}
+
+extern "C" fn declared_test_method(_this: f64) -> f64 {
+    1.0
+}
+
+/// A declared class with one compiled method, as codegen registers it, and
+/// its declared prototype object built.
+fn declared_class_with_prototype(class_id: u32, method: &str, parent: Option<u32>) {
+    unsafe {
+        crate::object::js_register_class_name(class_id, b"Declared".as_ptr(), 8);
+        crate::object::js_register_class_method_with_entry(
+            class_id as i64,
+            method.as_ptr(),
+            method.len() as i64,
+            declared_test_method as *const () as usize as i64,
+            0,
+            0,
+            0,
+            0,
+        );
+    }
+    if let Some(parent) = parent {
+        crate::object::js_register_class_parent(class_id, parent);
+    }
+    let _ = crate::object::class_decl_prototype_value(class_id);
+}
+
+/// JSTR1 A: a declared class instance whose holders (its class's and its
+/// parent's declared prototypes, then `%Object.prototype%`) list no `toJSON`
+/// is answered "absent" from those shapes, by both the rooted probe and the
+/// walk's allocation-free one; a `toJSON` on either prototype keeps the
+/// generic read. Before, every class with a prototype holder declined to the
+/// generic `toJSON` read once per serialized instance.
+#[test]
+fn a_declared_class_instance_without_to_json_is_answered_from_its_holders() {
+    let _no_gc = crate::gc::GcSuppressScope::new();
+    let _ = crate::object::builtin_prototype_value("Object");
+    let (base, derived) = (0x7D60, 0x7D61);
+    declared_class_with_prototype(base, "m", None);
+    declared_class_with_prototype(derived, "n", Some(base));
+    let instance = crate::object::js_object_alloc(derived, 0);
+    crate::object::js_object_set_field_by_name(instance, crate::string::canonical_key(b"a"), 1.0);
+    let ptr = instance as *const u8;
+    unsafe {
+        assert!(super::class_chain_may_have_to_json((*instance).class_id));
+        assert!(super::class_holders_lack_to_json(ptr));
+        assert!(to_json_definitely_absent(ptr));
+        assert!(!inherited_to_json_possible_without_gc(ptr, false));
+    }
+
+    // `toJSON` on the parent's declared prototype: the generic read stays.
+    let (with_base, with_derived) = (0x7D62, 0x7D63);
+    declared_class_with_prototype(with_base, "toJSON", None);
+    declared_class_with_prototype(with_derived, "n", Some(with_base));
+    let inherits = crate::object::js_object_alloc(with_derived, 0);
+    let ptr = inherits as *const u8;
+    unsafe {
+        assert!(!super::class_holders_lack_to_json(ptr));
+        assert!(!to_json_definitely_absent(ptr));
+        assert!(inherited_to_json_possible_without_gc(ptr, false));
+    }
+    assert!(unsafe { super::object_get_to_json(ptr) }.is_some());
 }

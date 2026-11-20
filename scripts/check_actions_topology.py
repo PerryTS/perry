@@ -68,6 +68,11 @@ def main() -> int:
         route_job = category.get('route_job', 'route')
         if category.get('route_job') and route_job not in jobs:
             errors.append(f'{parent}/{category_id}: missing category router {route_job}')
+        # A router that starts on an ineligible workflow_run spends a runner to
+        # select nothing, so eligibility is decided by the job-level `if`.
+        if 'workflow_run' in triggers and route_job in jobs:
+            if 'workflow_run' not in str(jobs[route_job].get('if') or ''):
+                errors.append(f'{parent}/{category_id}: {route_job} must decide workflow_run eligibility in its job-level if')
         concurrency = workflow.get('concurrency') or {}
         parent_group = str(concurrency.get('group') or '')
         if category_id not in {'ci', 'release-packages', 'release-hono-server'}:
@@ -172,8 +177,8 @@ def main() -> int:
         errors.append('release-packages.yml/build-cross: expected matrix with exactly eight include rows')
     if 'uses' in cross or not {'preflight', 'await-tests'}.issubset(set(cross.get('needs') or [])):
         errors.append('release-packages.yml/build-cross: malformed job or missing release test dependencies')
-    if len(owners) != 38:
-        errors.append(f'catalog owns {len(owners)} distinct source workflows; expected 38')
+    if len(owners) != 39:
+        errors.append(f'catalog owns {len(owners)} distinct source workflows; expected 39')
 
     if errors:
         print('Actions topology FAILED:', file=sys.stderr)

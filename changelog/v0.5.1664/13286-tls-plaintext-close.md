@@ -1,0 +1,1 @@
+Fix TLS servers hanging when rejecting an initial plaintext client. Close these peers without unread TLS alert bytes, while retaining fatal alerts after a valid ClientHello has selected a TLS protocol.

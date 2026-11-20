@@ -16,7 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use perry_hir::fx::{FxHashMap, FxHashSet};
-use perry_hir::{ArrayElement, CallArg, Class, Expr, Function, Module, Stmt};
+use perry_hir::{ArrayElement, CallArg, Class, Expr, Function, Module, ObjectPart, Stmt};
 
 /// Why a value may be stringified. Grouped by [`Reason::category`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -632,6 +632,7 @@ impl<'a> Build<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(cx, body);
                 if let Some(c) = catch {
@@ -1039,10 +1040,9 @@ impl<'a> Build<'a> {
                 vec![]
             }
             Expr::Call { callee, args, .. } => self.call(cx, callee, args),
-            // The CommonJS wrapper hands its factory to the runtime: as the
-            // last argument of the record it builds, or (the entry's record)
-            // through setCjsFactory. The runtime keeps it in the record's
-            // private slot (no property) and only ever calls it
+            // The CommonJS wrapper hands its factory to the runtime as the
+            // last argument of the partial publication. The runtime's path
+            // entry keeps it (no property) and only ever calls it
             // (`module_require.rs`), so the factory reaches no sink here. A
             // valued function's return already flows to the untracked-caller
             // sink. Every other argument stays a builtin sink.
@@ -1052,10 +1052,8 @@ impl<'a> Build<'a> {
                 object: None,
                 args,
                 ..
-            } if module == "__perry_runtime"
-                && (method == "setCjsFactory" || method == "newCjsModuleRecord") =>
-            {
-                let factory = if method == "setCjsFactory" { 1 } else { 6 };
+            } if module == "__perry_runtime" && method == "registerPathModulePartial" => {
+                let factory = 2;
                 let detail = format!("NativeMethodCall:{module}.{method}");
                 for (i, a) in args.iter().enumerate() {
                     let v = self.expr(cx, a);
@@ -1124,7 +1122,7 @@ impl<'a> Build<'a> {
                 self.sink_vals(&o, Reason::ErrorMessage, "property-update");
                 vec![]
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 self.expr(cx, object);
                 let k = self.expr(cx, index);
                 self.sink_vals(&k, Reason::ToPropertyKey, "index");
@@ -1134,6 +1132,7 @@ impl<'a> Build<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 let o = self.expr(cx, object);
                 self.sink_vals(&o, Reason::ErrorMessage, "index-write");
@@ -1175,9 +1174,12 @@ impl<'a> Build<'a> {
                 vec![]
             }
             Expr::ObjectSpread { parts } => {
-                for (key, x) in parts {
-                    let v = self.expr(cx, x);
-                    if key.is_some() {
+                for part in parts {
+                    if let ObjectPart::Computed { key, .. } = part {
+                        self.expr(cx, key);
+                    }
+                    let v = self.expr(cx, part.value());
+                    if part.defines_key() {
                         self.sink_vals(&v, Reason::HeapStore, "object-literal");
                     }
                 }
@@ -1256,7 +1258,7 @@ impl<'a> Build<'a> {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                     }
-                    Expr::IndexGet { object, index } => {
+                    Expr::IndexGet { object, index, .. } => {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                         let k = self.expr(cx, index);
@@ -1520,10 +1522,10 @@ fn builtin_reason(name: &str, e: &Expr) -> Reason {
 }
 
 /// An exported name only a type, interface or enum declaration binds holds
-/// no function value.
+/// no function value. The type/interface case is the HIR's one predicate
+/// (`Module::is_type_only_export_binding`), the one the facts read too.
 fn type_only_name(m: &Module, name: &str) -> bool {
-    m.type_aliases.iter().any(|t| t.name == name)
-        || m.interfaces.iter().any(|i| i.name == name)
+    m.is_type_only_export_binding(name)
         || m.enums.iter().any(|e| e.name == name)
         || m.imports.iter().any(|i| {
             i.type_only
@@ -1562,7 +1564,9 @@ fn defines_call_props(m: &Module) -> bool {
             Expr::PropertySet { property, .. } if named(property) => found = true,
             Expr::Object(props) if props.iter().any(|(k, _)| named(k)) => found = true,
             Expr::ObjectSpread { parts }
-                if parts.iter().any(|(k, _)| k.as_deref().is_some_and(named)) =>
+                if parts
+                    .iter()
+                    .any(|p| matches!(p, ObjectPart::Define(k, _) if named(k))) =>
             {
                 found = true
             }

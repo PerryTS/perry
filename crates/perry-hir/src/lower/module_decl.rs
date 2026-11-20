@@ -7,12 +7,12 @@ use anyhow::Result;
 use swc_common::Spanned;
 use swc_ecma_ast as ast;
 mod default_export_binding;
+pub(super) mod import_redeclaration;
 mod namespace;
 pub(super) mod native_default_import;
 pub(super) mod native_profile_import;
 mod object_literal;
-mod static_import_bindings;
-mod typescript;
+pub(super) mod static_import_bindings;
 
 // Re-export moved items so existing `crate::...` / `super::*` call paths keep
 // resolving. `lower_namespace_as_class` is also called from `lower/stmt.rs`.
@@ -48,6 +48,7 @@ pub(super) fn register_exported_local_variables(ctx: &LoweringContext, module: &
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_bindings(body, bindings);
                     if let Some(catch) = catch {
@@ -90,6 +91,7 @@ pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
     decl: &ast::ModuleDecl,
+    deferred_namespace_locals: &std::collections::HashSet<String>,
 ) -> Result<()> {
     match decl {
         ast::ModuleDecl::Import(import_decl) => {
@@ -251,11 +253,11 @@ pub(crate) fn lower_module_decl(
                             .unwrap_or_else(|| local.clone());
                         if is_native {
                             let is_node_core = perry_api_manifest::is_node_core_module(&source);
-                            if typescript::should_defer_unknown_named_import(
-                                &source,
-                                &imported,
-                                is_node_core,
-                            ) {
+                            if is_node_core
+                                && !perry_api_manifest::module_has_public_named_export(
+                                    &source, &imported,
+                                )
+                            {
                                 // Almost always a TS TYPE in a mixed import —
                                 // `import { createCipheriv, BinaryLike } from "crypto"`.
                                 // tsc/esbuild/Bun all erase such a specifier; bailing here
@@ -290,22 +292,22 @@ pub(crate) fn lower_module_decl(
                                     )
                                 {
                                     (format!("inspector.{imported}"), None)
-                                } else if matches!(source.as_str(), "fs" | "dns" | "stream")
-                                    && imported == "promises"
+                                } else if matches!(
+                                    source.as_str(),
+                                    "dns" | "stream" | "readline" | "timers"
+                                ) && imported == "promises"
                                 {
-                                    // `import { promises } from "node:fs"` binds the
-                                    // promises SUBMODULE namespace — route it exactly
-                                    // like `import * as x from "node:fs/promises"`.
-                                    // The generic arm below made it a native METHOD
-                                    // (`fs.promises`), so `promises.realpath(p)`
-                                    // dispatched the callback-API `fs.realpath` and
-                                    // resolved `undefined` (the compiled CLI's file cache
-                                    // normalized every path to `undefined` and every
-                                    // later fs call threw).
+                                    // Other promises exports retain their submodule
+                                    // dispatch. FS uses the parent export cell so
+                                    // its named value is the CommonJS object.
                                     (format!("{source}/promises"), None)
                                 } else {
                                     (source.clone(), Some(imported.clone()))
                                 };
+                            if native_method.is_none() && native_module != source {
+                                ctx.native_import_value_origins
+                                    .insert(local.clone(), (source.clone(), imported.clone()));
+                            }
                             init_named_cell(module, &source, &imported, native_method.as_ref());
                             ctx.register_native_module(local.clone(), native_module, native_method);
                             // #1991: `perry/ui` exposes these as numeric
@@ -343,9 +345,6 @@ pub(crate) fn lower_module_decl(
                                     });
                                 }
                             }
-                            typescript::register_runtime_enum(
-                                ctx, module, &source, &local, &imported,
-                            );
                         } else {
                             if !bare_prefix_only && is_node_builtin_module(&source) {
                                 ctx.register_builtin_named_import(
@@ -555,6 +554,7 @@ pub(crate) fn lower_module_decl(
                 type_only: whole_decl_type_only,
                 runtime_erased,
                 is_dynamic: false,
+                is_deferred: import_decl.phase == ast::ImportPhase::Defer,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -703,8 +703,10 @@ pub(crate) fn lower_module_decl(
                                             }
                                             "AsyncLocalStorage" => Some("async_hooks".to_string()),
                                             "AsyncResource" => Some("async_hooks".to_string()),
-                                            "WebSocket" | "WebSocketServer" => {
-                                                Some("ws".to_string())
+                                            "WebSocket"
+                                                if ctx.names_global_websocket(class_name) =>
+                                            {
+                                                Some("__websocket__".to_string())
                                             }
                                             _ => None,
                                         }
@@ -722,7 +724,13 @@ pub(crate) fn lower_module_decl(
                                     let module_name = match (class_name, module_name.as_deref()) {
                                         _ if matches!(
                                             sqlite_export,
-                                            Some("DatabaseSync" | "StatementSync" | "Session")
+                                            Some(
+                                                "Database"
+                                                    | "DatabaseSync"
+                                                    | "Statement"
+                                                    | "StatementSync"
+                                                    | "Session"
+                                            )
                                         ) =>
                                         {
                                             None
@@ -778,8 +786,10 @@ pub(crate) fn lower_module_decl(
                                                     Some("async_hooks".to_string())
                                                 }
                                                 "AsyncResource" => Some("async_hooks".to_string()),
-                                                "WebSocket" | "WebSocketServer" => {
-                                                    Some("ws".to_string())
+                                                "WebSocket"
+                                                    if ctx.names_global_websocket(class_name) =>
+                                                {
+                                                    Some("__websocket__".to_string())
                                                 }
                                                 _ => None,
                                             }
@@ -1339,7 +1349,9 @@ pub(crate) fn lower_module_decl(
                     }
                 }
                 ast::Decl::Class(class_decl) => {
-                    let class = lower_class_decl(ctx, class_decl, true)?;
+                    let mut class = lower_class_decl(ctx, class_decl, true)?;
+                    // R9BIRTH6: the init index its evaluation starts at.
+                    class.decl_stmt = (!class.is_nested).then_some(module.init.len() as u32);
                     let class_name = class.name.clone();
                     // Issue #711: dynamic parent-class registration at the
                     // source position (see non-export class arm below for
@@ -1477,46 +1489,70 @@ pub(crate) fn lower_module_decl(
                             // codegen expected a local function body that was
                             // never emitted, and the link failed on
                             // `__perry_wrap_perry_fn_<mod>__<name>`.
+                            //
+                            // The forwarding import is the one `import { x } from
+                            // "<source>"` would lower to, and whether it stands in
+                            // for the re-export is that import's own predicate,
+                            // `Import::has_native_value_bindings`, the one the
+                            // driver (var-export classification) and codegen (the
+                            // getter in `export_value_wrappers.rs`) read. A Node
+                            // builtin without a native Rust module of its own
+                            // (`node:stream/web`) is such a source too: gating on
+                            // `is_native_module_specifier` alone left `export {
+                            // ReadableStream } from "node:stream/web"` a plain
+                            // ReExport, and importers linked against a
+                            // `__perry_wrap_perry_fn_<mod>__ReadableStream` that no
+                            // module defines.
                             let native_source = canonicalize_native_import_source(&source);
-                            if is_native_module_specifier(&source) {
-                                let is_node_core =
-                                    perry_api_manifest::is_node_core_module(&native_source);
-                                if is_node_core
-                                    && !perry_api_manifest::module_has_public_named_export(
-                                        &native_source,
-                                        &local,
-                                    )
-                                {
-                                    crate::lower_bail!(
-                                        named.span,
-                                        "The requested module '{}' does not provide an export named '{}'",
-                                        source,
-                                        local
-                                    );
+                            let is_native = is_native_module_specifier(&source);
+                            let mut forwarding_import = Import {
+                                source: if is_bare_prefix_only_builtin(&native_source) {
+                                    source.clone()
+                                } else {
+                                    native_source.clone()
+                                },
+                                specifiers: Vec::new(),
+                                is_native,
+                                module_kind: if is_native {
+                                    ModuleKind::NativeRust
+                                } else {
+                                    ModuleKind::NativeCompiled
+                                },
+                                resolved_path: None,
+                                type_only: false,
+                                runtime_erased: false,
+                                is_dynamic: false,
+                                is_deferred: false,
+                                is_dynamic_target: false,
+                                is_deferred_require: false,
+                                is_adopted_require: false,
+                            };
+                            if forwarding_import.has_native_value_bindings() {
+                                if is_native {
+                                    let is_node_core =
+                                        perry_api_manifest::is_node_core_module(&native_source);
+                                    if is_node_core
+                                        && !perry_api_manifest::module_has_public_named_export(
+                                            &native_source,
+                                            &local,
+                                        )
+                                    {
+                                        crate::lower_bail!(
+                                            named.span,
+                                            "The requested module '{}' does not provide an export named '{}'",
+                                            source,
+                                            local
+                                        );
+                                    }
+                                    init_named_cell(module, &native_source, &local, Some(&local));
                                 }
                                 let synthetic_local =
                                     format!("__perry_builtin_reexport_{}", ctx.fresh_local());
-                                init_named_cell(module, &native_source, &local, Some(&local));
-                                module.imports.push(Import {
-                                    source: if is_bare_prefix_only_builtin(&native_source) {
-                                        source.clone()
-                                    } else {
-                                        native_source
-                                    },
-                                    specifiers: vec![ImportSpecifier::Named {
-                                        imported: local,
-                                        local: synthetic_local.clone(),
-                                    }],
-                                    is_native: true,
-                                    module_kind: ModuleKind::NativeRust,
-                                    resolved_path: None,
-                                    type_only: false,
-                                    runtime_erased: false,
-                                    is_dynamic: false,
-                                    is_dynamic_target: false,
-                                    is_deferred_require: false,
-                                    is_adopted_require: false,
+                                forwarding_import.specifiers.push(ImportSpecifier::Named {
+                                    imported: local,
+                                    local: synthetic_local.clone(),
                                 });
+                                module.imports.push(forwarding_import);
                                 module.exports.push(Export::Named {
                                     local: synthetic_local,
                                     exported,
@@ -1586,7 +1622,13 @@ pub(crate) fn lower_module_decl(
                         // not a bare `perry_fn_<mod>__z` function symbol. This is
                         // exactly how zod re-exports `z`, so without this every
                         // `z.object` / `z.coerce` in consumer code is undefined.
-                        if let Some(ns_source) = ctx.namespace_import_sources.get(&local).cloned() {
+                        let deferred_namespace = deferred_namespace_locals.contains(&local);
+                        if let Some(ns_source) = ctx
+                            .namespace_import_sources
+                            .get(&local)
+                            .filter(|_| !deferred_namespace)
+                            .cloned()
+                        {
                             module.exports.push(Export::NamespaceReExport {
                                 source: ns_source,
                                 name: exported.clone(),
@@ -1594,6 +1636,9 @@ pub(crate) fn lower_module_decl(
                             continue;
                         }
 
+                        let local = default_export_binding::materialize_native_default_alias(
+                            ctx, module, &local,
+                        );
                         module.exports.push(Export::Named {
                             local: local.clone(),
                             exported: exported.clone(),
@@ -1984,65 +2029,6 @@ pub(crate) fn lower_module_decl(
     Ok(())
 }
 
-/// `import G = Ns.Member` (an entity name, not `require`) is the declaration
-/// tsc emits for it: `var G = Ns.Member`, or `export var` for `export import`.
-/// A namespace is an ordinary object (#12775). Rewritten before any pass, so
-/// the hoisting pre-scan, export registration and lowering all see an
-/// ordinary `var`. `None` (no such alias) lowers the original with no clone.
-pub(crate) fn rewrite_import_equals_aliases(ast_module: &ast::Module) -> Option<ast::Module> {
-    let is_alias = |item: &ast::ModuleItem| {
-        matches!(
-            item,
-            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::TsImportEquals(d))
-                if !d.is_type_only && matches!(d.module_ref, ast::TsModuleRef::TsEntityName(_))
-        )
-    };
-    if !ast_module.body.iter().any(is_alias) {
-        return None;
-    }
-    let mut out = ast_module.clone();
-    for item in &mut out.body {
-        let ast::ModuleItem::ModuleDecl(ast::ModuleDecl::TsImportEquals(d)) = item else {
-            continue;
-        };
-        let ast::TsModuleRef::TsEntityName(entity) = &d.module_ref else {
-            continue;
-        };
-        if d.is_type_only {
-            continue;
-        }
-        let var = ast::Decl::Var(Box::new(ast::VarDecl {
-            span: d.span,
-            ctxt: Default::default(),
-            kind: ast::VarDeclKind::Var,
-            declare: false,
-            decls: vec![ast::VarDeclarator {
-                span: d.span,
-                name: ast::Pat::Ident(d.id.clone().into()),
-                init: Some(Box::new(ts_entity_expr(entity))),
-                definite: false,
-            }],
-        }));
-        *item = if d.is_export {
-            ast::ModuleItem::ModuleDecl(ast::ModuleDecl::ExportDecl(ast::ExportDecl {
-                span: d.span,
-                decl: var,
-            }))
-        } else {
-            ast::ModuleItem::Stmt(ast::Stmt::Decl(var))
-        };
-    }
-    Some(out)
-}
-
-/// `A.B.C` of a TypeScript entity name as the member expression it reads.
-fn ts_entity_expr(entity: &ast::TsEntityName) -> ast::Expr {
-    match entity {
-        ast::TsEntityName::Ident(ident) => ast::Expr::Ident(ident.clone()),
-        ast::TsEntityName::TsQualifiedName(q) => ast::Expr::Member(ast::MemberExpr {
-            span: q.span,
-            obj: Box::new(ts_entity_expr(&q.left)),
-            prop: ast::MemberProp::Ident(q.right.clone()),
-        }),
-    }
-}
+#[path = "module_decl/import_equals.rs"]
+mod import_equals;
+pub(crate) use import_equals::rewrite_import_equals_aliases;

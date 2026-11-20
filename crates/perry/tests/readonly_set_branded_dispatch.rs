@@ -101,3 +101,29 @@ console.log("subclass", subclass.contains(99), subclass.contains(1));
          subclass true false\n"
     );
 }
+
+#[test]
+fn own_accessor_and_custom_prototype_methods_are_observable() {
+    let stdout = compile_and_run(
+        r#"
+class Holder {
+  constructor(public readonly values: ReadonlySet<number>) {}
+  call(key: number) { return this.values.has(key); }
+}
+const own = new Set([1]);
+const original = Set.prototype.has;
+let reads = 0;
+Object.defineProperty(own, "has", {get() { reads++; return original; }});
+console.log("own", new Holder(own).call(1), reads);
+const custom = new Set([1]);
+Object.setPrototypeOf(custom, {has(key: number) { return true; }});
+console.log("prototype", new Holder(custom).call(99));
+let rejected = false;
+const broken = new Set([1]);
+Object.defineProperty(broken, "has", {value: 3});
+try { new Holder(broken).call(1); } catch (_) { rejected = true; }
+console.log("noncallable", rejected);
+"#,
+    );
+    assert_eq!(stdout, "own true 1\nprototype true\nnoncallable true\n");
+}

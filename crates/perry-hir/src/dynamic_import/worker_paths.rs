@@ -75,17 +75,7 @@ pub fn resolve_worker_path<V: Borrow<Expr>>(
     if matches!(original, Resolution::Set(_)) {
         return (original, false);
     }
-    let mut resolver = WorkerPaths {
-        module,
-        consts,
-        param_literals,
-        local_literals,
-        arguments: HashMap::new(),
-        locals: HashSet::new(),
-        calls: HashSet::new(),
-        work: WORK_LIMIT,
-        opaque_return: None,
-    };
+    let mut resolver = WorkerPaths::new(module, consts, param_literals, local_literals);
     let resolution = match resolver.resolve(arg, 0) {
         Ok(values) if !values.paths.is_empty() => Resolution::Set(values.paths),
         Ok(_) => Resolution::Unresolved(format!(
@@ -100,6 +90,21 @@ pub fn resolve_worker_path<V: Borrow<Expr>>(
     (resolution, resolver.opaque_return.is_some())
 }
 
+pub fn resolve_worker_eval_source<V: Borrow<Expr>>(
+    arg: &Expr,
+    module: &Module,
+    consts: &HashMap<u32, V>,
+    param_literals: &HashMap<u32, Vec<String>>,
+    local_literals: &HashMap<u32, Vec<String>>,
+) -> Resolution {
+    let mut resolver = WorkerPaths::new(module, consts, param_literals, local_literals);
+    resolver.string_limit = None;
+    match resolver.strings(arg, 0) {
+        Ok(values) => Resolution::Set(values),
+        Err(reason) => Resolution::Unresolved(format!("Worker eval source: {reason}")),
+    }
+}
+
 struct WorkerPaths<'a, V> {
     module: &'a Module,
     consts: &'a HashMap<u32, V>,
@@ -109,10 +114,31 @@ struct WorkerPaths<'a, V> {
     locals: HashSet<u32>,
     calls: HashSet<u32>,
     work: usize,
+    string_limit: Option<usize>,
     opaque_return: Option<String>,
 }
 
-impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
+impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
+    fn new(
+        module: &'a Module,
+        consts: &'a HashMap<u32, V>,
+        param_literals: &'a HashMap<u32, Vec<String>>,
+        local_literals: &'a HashMap<u32, Vec<String>>,
+    ) -> Self {
+        Self {
+            module,
+            consts,
+            param_literals,
+            local_literals,
+            arguments: HashMap::new(),
+            locals: HashSet::new(),
+            calls: HashSet::new(),
+            work: WORK_LIMIT,
+            string_limit: Some(STRING_LIMIT),
+            opaque_return: None,
+        }
+    }
+
     fn tick(&mut self, depth: usize) -> Result<(), PathError> {
         if depth >= DEPTH_LIMIT {
             return Err(PathError::Invalid(format!(
@@ -135,7 +161,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
         let expr = crate::tdz_check::without_checks(expr);
         match expr {
             Expr::Await(value) => self.resolve(value, depth + 1),
-            Expr::String(value) => bounded(vec![value.clone()], &mut self.work),
+            Expr::String(value) => bounded(vec![value.clone()], &mut self.work, self.string_limit),
             Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
                 self.strings(value, depth + 1).map(PathValues::strings)
             }
@@ -154,7 +180,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                         .or_else(|| self.local_literals.get(id))
                         .cloned()
                         .ok_or_else(|| "binding is mutable or has no static string value".into())
-                        .and_then(|paths| bounded(paths, &mut self.work))
+                        .and_then(|paths| bounded(paths, &mut self.work, self.string_limit))
                 } else {
                     Err("helper reads a mutable or non-static binding".into())
                 };
@@ -195,12 +221,24 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
             } => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;
-                product(&left, &right, |a, b| format!("{a}{b}"), &mut self.work)
+                product(
+                    &left,
+                    &right,
+                    |a, b| format!("{a}{b}"),
+                    &mut self.work,
+                    self.string_limit,
+                )
             }
             Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;
-                product(&left, &right, static_path_join, &mut self.work)
+                product(
+                    &left,
+                    &right,
+                    static_path_join,
+                    &mut self.work,
+                    self.string_limit,
+                )
             }
             Expr::StringReplace {
                 string,
@@ -219,7 +257,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                     return Err("conditional mixes URL and string values".into());
                 }
                 then_values.paths.extend(else_values.paths);
-                let mut values = bounded(then_values.paths, &mut self.work)?;
+                let mut values = bounded(then_values.paths, &mut self.work, self.string_limit)?;
                 values.is_url = then_values.is_url;
                 Ok(values)
             }
@@ -231,7 +269,14 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                     let mut paths = vec![String::new()];
                     for arg in args {
                         let next = self.strings(arg, depth + 1)?;
-                        paths = product(&paths, &next, static_path_join, &mut self.work)?.paths;
+                        paths = product(
+                            &paths,
+                            &next,
+                            static_path_join,
+                            &mut self.work,
+                            self.string_limit,
+                        )?
+                        .paths;
                     }
                     return Ok(PathValues::strings(if args.is_empty() {
                         vec![".".into()]
@@ -272,6 +317,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                         &mut paths,
                         string.replacen(pattern, replacement, 1),
                         &mut self.work,
+                        self.string_limit,
                     )?;
                 }
             }
@@ -306,7 +352,7 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                 if !is_relative_specifier(&path) {
                     return Err("registry values must be relative module paths".into());
                 }
-                push_path(&mut paths, path, &mut self.work)?;
+                push_path(&mut paths, path, &mut self.work, self.string_limit)?;
             }
         }
         Ok(PathValues::strings(paths))
@@ -430,7 +476,12 @@ impl<V: Borrow<Expr>> WorkerPaths<'_, V> {
                         Ok(returned) => {
                             values.is_url |= returned.is_url;
                             for path in returned.paths {
-                                push_path(&mut values.paths, path, &mut self.work)?;
+                                push_path(
+                                    &mut values.paths,
+                                    path,
+                                    &mut self.work,
+                                    self.string_limit,
+                                )?;
                             }
                         }
                         Err(PathError::Opaque(reason)) => {
@@ -521,12 +572,19 @@ fn spend(work: &mut usize) -> Result<(), PathError> {
     Ok(())
 }
 
-fn push_path(paths: &mut Vec<String>, path: String, work: &mut usize) -> Result<(), PathError> {
+fn push_path(
+    paths: &mut Vec<String>,
+    path: String,
+    work: &mut usize,
+    string_limit: Option<usize>,
+) -> Result<(), PathError> {
     spend(work)?;
-    if path.len() > STRING_LIMIT {
-        return Err(PathError::Invalid(format!(
-            "resolved path exceeds string length limit {STRING_LIMIT}"
-        )));
+    if let Some(limit) = string_limit {
+        if path.len() > limit {
+            return Err(PathError::Invalid(format!(
+                "resolved path exceeds string length limit {limit}"
+            )));
+        }
     }
     if !paths.contains(&path) {
         if paths.len() == DYNAMIC_IMPORT_PATH_CAP {
@@ -539,10 +597,10 @@ fn push_path(paths: &mut Vec<String>, path: String, work: &mut usize) -> Result<
     Ok(())
 }
 
-fn bounded(paths: Vec<String>, work: &mut usize) -> Paths {
+fn bounded(paths: Vec<String>, work: &mut usize, string_limit: Option<usize>) -> Paths {
     let mut out = Vec::new();
     for path in paths {
-        push_path(&mut out, path, work)?;
+        push_path(&mut out, path, work, string_limit)?;
     }
     Ok(PathValues::strings(out))
 }
@@ -552,11 +610,12 @@ fn product(
     right: &[String],
     combine: impl Fn(&str, &str) -> String,
     work: &mut usize,
+    string_limit: Option<usize>,
 ) -> Paths {
     let mut out = Vec::new();
     for a in left {
         for b in right {
-            push_path(&mut out, combine(a, b), work)?;
+            push_path(&mut out, combine(a, b), work, string_limit)?;
         }
     }
     Ok(PathValues::strings(out))

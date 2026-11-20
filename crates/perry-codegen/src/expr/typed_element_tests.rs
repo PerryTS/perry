@@ -68,6 +68,7 @@ fn holder(fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -106,6 +107,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
 
 fn get(object: u32, property: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(object)),
         property: property.to_string(),
@@ -114,6 +116,9 @@ fn get(object: u32, property: &str) -> Expr {
 
 fn element(object: u32, property: &str, index: u32) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(get(object, property)),
         index: Box::new(Expr::LocalGet(index)),
     }
@@ -126,6 +131,9 @@ fn store(object: u32, property: &str, index: u32, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(get(object, property)),
         strict: true,
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -282,11 +290,14 @@ fn arena_module(call_between: bool) -> Module {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     }];
     make.push(store(1, "left", 4, Expr::LocalGet(2)));
     if call_between {
         make.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(21)),
             args: Vec::new(),
             type_args: Vec::new(),

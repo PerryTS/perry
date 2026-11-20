@@ -34,6 +34,7 @@ thread_local! {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub fn throw_not_callable() -> ! {
     let count = THROW_NOT_CALLABLE_COUNT.with(|c| {

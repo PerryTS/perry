@@ -129,7 +129,7 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
             rewrite_state_in_expr(object, reg);
             rewrite_state_in_expr(value, reg);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             rewrite_state_in_expr(object, reg);
             rewrite_state_in_expr(index, reg);
         }

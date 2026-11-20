@@ -1,0 +1,1 @@
+The builtin-prototype alias fold (x.call(...) on an alias of a builtin prototype method) is now keyed on the resolved binding, so a same-named local in another scope no longer rewrites to a call with an undefined this.

@@ -5,10 +5,15 @@ use super::*;
 /// Accepts string or Buffer for both password and salt.
 ///
 /// `digest_ptr` is the NaN-unboxed pointer to the digest-algorithm string
-/// (`'sha256'`, `'sha512'`, …). A null/empty/unknown digest defaults to
-/// SHA-256 — the algorithm SCRAM and the previous callers relied on. The
-/// digest was silently ignored before, so `pbkdf2Sync(..., 'sha512')`
-/// produced a SHA-256 key (#1355).
+/// (`'sha256'`, `'sha512'`, …). The name must be one Perry implements;
+/// anything else (including the empty string) throws node's
+/// `TypeError [ERR_CRYPTO_INVALID_DIGEST]`. Previously an unknown name was
+/// silently derived with SHA-256, so `pbkdf2Sync(..., 'md5')` and
+/// `pbkdf2Sync(..., 'not-a-digest')` both returned a SHA-256 key. The digest
+/// was silently ignored before that, so `pbkdf2Sync(..., 'sha512')` produced a
+/// SHA-256 key (#1355).
+/// A null/sentinel pointer means no digest argument was supplied at all: the
+/// async `pbkdf2` callback form still tolerates that and derives with SHA-256.
 /// The derivation itself: owned bytes in, owned bytes out, no JS heap.
 ///
 /// Split out of [`js_crypto_pbkdf2_bytes`] so the async entry point can hand
@@ -26,6 +31,7 @@ pub(super) fn pbkdf2_derive(
     use sha2::{Sha224, Sha384};
     let mut out = vec![0u8; keylen];
     match digest {
+        "md5" => pbkdf2_hmac::<Md5>(password, salt, iterations, &mut out),
         "sha1" => pbkdf2_hmac::<Sha1>(password, salt, iterations, &mut out),
         "sha224" => pbkdf2_hmac::<Sha224>(password, salt, iterations, &mut out),
         "sha384" => pbkdf2_hmac::<Sha384>(password, salt, iterations, &mut out),
@@ -33,22 +39,48 @@ pub(super) fn pbkdf2_derive(
         // After the `replace('-', "")` normalization, "sha512-256" comes
         // through as "sha512256".
         "sha512256" => pbkdf2_hmac::<Sha512_256>(password, salt, iterations, &mut out),
-        // "sha256" and the empty/unknown default.
+        // "sha256", and no digest argument at all (the async callback form's
+        // tolerated case, see `pbkdf2_digest_name`).
         _ => pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut out),
     }
     out
 }
 
-/// Normalize the digest-name argument. `digest_ptr` may be a null/sentinel
-/// pointer (no arg passed) — the empty string then selects SHA-256.
+/// Normalize and validate the digest-name argument. `digest_ptr` may be a
+/// null/sentinel pointer (no argument passed at all) — the empty string then
+/// selects SHA-256 for the async callback form, which node itself rejects but
+/// which predates this module.
+///
+/// OpenSSL registers a fixed set of spellings per digest and node accepts
+/// exactly those, case-insensitively. Stripping every hyphen instead (the
+/// first version of this check) accepted names node rejects — `m-d5` became
+/// `md5`, `sha-512-256` became `sha512256` — so match the registered
+/// spellings. A name Perry does not implement throws node's
+/// `TypeError [ERR_CRYPTO_INVALID_DIGEST]` instead of deriving a SHA-256 key
+/// the caller never asked for; the message names the value as the caller wrote
+/// it, like `createHmac` does.
 unsafe fn pbkdf2_digest_name(digest_ptr: i64) -> String {
     if (digest_ptr as usize) < 0x1000 {
-        String::new()
-    } else {
-        String::from_utf8_lossy(&bytes_from_ptr(digest_ptr))
-            .to_ascii_lowercase()
-            .replace('-', "")
+        return String::new();
     }
+    let raw = String::from_utf8_lossy(&bytes_from_ptr(digest_ptr)).to_string();
+    match raw.to_ascii_lowercase().as_str() {
+        // The seven PBKDF2 digests Perry implements, under the spellings node
+        // accepts. node's remaining set (sha3-*, shake*, blake2*, ripemd160,
+        // sha512-224, …) reports this error rather than a wrong key.
+        "md5" => "md5",
+        "sha1" | "sha-1" => "sha1",
+        "sha224" | "sha-224" | "sha2-224" => "sha224",
+        "sha256" | "sha-256" | "sha2-256" => "sha256",
+        "sha384" | "sha-384" | "sha2-384" => "sha384",
+        "sha512" | "sha-512" | "sha2-512" => "sha512",
+        "sha512-256" | "sha2-512/256" | "sha-512/256" => "sha512256",
+        _ => perry_runtime::fs::validate::throw_type_error_with_code(
+            &format!("Invalid digest: {raw}"),
+            "ERR_CRYPTO_INVALID_DIGEST",
+        ),
+    }
+    .to_string()
 }
 
 #[no_mangle]
@@ -98,7 +130,7 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_async_alg(
     // job roots; owner-thread delivery receives their rewritten values.
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback_bits);
-    let snapshot = perry_runtime::async_hooks::async_local_storage_static_snapshot_value();
+    let snapshot = perry_runtime::async_hook_slots::async_local_storage_static_snapshot_value();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
         vec![callback.get_nanbox_f64().to_bits(), snapshot.to_bits()],
         move || pbkdf2_derive(&password, &salt, iterations, keylen, &digest),
@@ -107,7 +139,7 @@ pub unsafe extern "C" fn js_crypto_pbkdf2_async_alg(
             let callback = scope.root_nanbox_f64(f64::from_bits(roots[0]));
             let snapshot = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(roots[1]))
                 as *const perry_runtime::closure::ClosureHeader;
-            perry_runtime::async_hooks::run_with_context_snapshot(snapshot, || {
+            perry_runtime::async_hook_slots::run_with_context_snapshot(snapshot, || {
                 deliver_kdf_callback(delivery, callback.get_nanbox_f64(), "PBKDF2REQUEST");
                 f64::from_bits(JSValue::undefined().bits())
             });
@@ -246,7 +278,7 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
         .unwrap_or_else(|error| throw_scrypt_param_error(error));
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let callback = scope.root_nanbox_f64(callback_bits);
-    let snapshot = perry_runtime::async_hooks::async_local_storage_static_snapshot_value();
+    let snapshot = perry_runtime::async_hook_slots::async_local_storage_static_snapshot_value();
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
         vec![callback.get_nanbox_f64().to_bits(), snapshot.to_bits()],
         move || {
@@ -267,7 +299,7 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
             let callback = scope.root_nanbox_f64(f64::from_bits(roots[0]));
             let snapshot = perry_runtime::value::js_nanbox_get_pointer(f64::from_bits(roots[1]))
                 as *const perry_runtime::closure::ClosureHeader;
-            perry_runtime::async_hooks::run_with_context_snapshot(snapshot, || {
+            perry_runtime::async_hook_slots::run_with_context_snapshot(snapshot, || {
                 deliver_kdf_callback(delivery, callback.get_nanbox_f64(), "SCRYPTREQUEST");
                 f64::from_bits(JSValue::undefined().bits())
             });
@@ -279,6 +311,8 @@ pub unsafe extern "C" fn js_crypto_scrypt_async(
 struct NodeArgon2Params {
     message: Vec<u8>,
     nonce: Vec<u8>,
+    secret: Vec<u8>,
+    associated_data: Vec<u8>,
     parallelism: u32,
     tag_length: usize,
     memory: u32,
@@ -324,7 +358,7 @@ unsafe fn argon2_value_bytes(bits: u64) -> Option<Vec<u8>> {
     if addr < 0x1000 {
         return None;
     }
-    if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return perry_runtime::buffer::bytes::no_gc(|scope| {
             let value = f64::from_bits(JSValue::pointer(addr as *const u8).bits());
             perry_runtime::buffer::bytes::bytes(value, scope)
@@ -343,6 +377,22 @@ unsafe fn argon2_bytes_field(params_bits: u64, name: &[u8], display_name: &str) 
         argon2_type_error(display_name);
     };
     argon2_value_bytes(bits).unwrap_or_else(|| argon2_type_error(display_name))
+}
+
+unsafe fn argon2_optional_bytes_field(
+    params_bits: u64,
+    name: &[u8],
+    display_name: &str,
+) -> Vec<u8> {
+    let object = JSValue::from_bits(params_bits).as_pointer::<ObjectHeader>();
+    let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+    let value = js_object_get_field_by_name(object, key);
+    // The generic field helper treats every special-value tag as absent,
+    // including null and booleans. Only undefined omits an optional input.
+    if value.is_undefined() {
+        return Vec::new();
+    }
+    argon2_value_bytes(value.bits()).unwrap_or_else(|| argon2_type_error(display_name))
 }
 
 unsafe fn argon2_u32_field(
@@ -381,9 +431,17 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
     let passes = argon2_u32_field(bits, b"passes", "passes", 1, u32::MAX as u64);
     let tag_length = argon2_u32_field(bits, b"tagLength", "tagLength", 4, u32::MAX as u64) as usize;
 
+    let secret = argon2_optional_bytes_field(bits, b"secret", "secret");
+    if secret.len() > u32::MAX as usize {
+        argon2_range_error("secret.byteLength", 0, u32::MAX as u64, secret.len() as u64);
+    }
+    let associated_data = argon2_optional_bytes_field(bits, b"associatedData", "associatedData");
+
     NodeArgon2Params {
         message,
         nonce,
+        secret,
+        associated_data,
         parallelism,
         tag_length,
         memory,
@@ -397,8 +455,8 @@ unsafe fn parse_node_argon2_params(params_bits: f64) -> NodeArgon2Params {
 unsafe fn node_argon2_plan(
     algorithm_ptr: i64,
     params_bits: f64,
-) -> (argon2::Argon2<'static>, NodeArgon2Params) {
-    use argon2::{Algorithm, Argon2, Params, Version};
+) -> (argon2::Algorithm, argon2::Params, NodeArgon2Params) {
+    use argon2::{Algorithm, AssociatedData, Params, ParamsBuilder};
 
     let algorithm = String::from_utf8_lossy(&bytes_from_ptr(algorithm_ptr)).to_string();
     let algorithm_kind = match algorithm.as_str() {
@@ -409,30 +467,49 @@ unsafe fn node_argon2_plan(
     };
 
     let params = parse_node_argon2_params(params_bits);
-    let argon_params = Params::new(
-        params.memory,
-        params.passes,
-        params.parallelism,
-        Some(params.tag_length),
-    )
-    .unwrap_or_else(|_| {
+    let data = AssociatedData::new(&params.associated_data).unwrap_or_else(|_| {
         argon2_range_error(
-            "memory",
-            (params.parallelism as u64).saturating_mul(8).max(8),
-            u32::MAX as u64,
-            params.memory as u64,
+            "associatedData.byteLength",
+            0,
+            Params::MAX_DATA_LEN as u64,
+            params.associated_data.len() as u64,
         )
     });
-    (
-        Argon2::new(algorithm_kind, Version::V0x13, argon_params),
-        params,
-    )
+    let argon_params = ParamsBuilder::new()
+        .m_cost(params.memory)
+        .t_cost(params.passes)
+        .p_cost(params.parallelism)
+        .output_len(params.tag_length)
+        .data(data)
+        .build()
+        .unwrap_or_else(|_| {
+            argon2_range_error(
+                "memory",
+                (params.parallelism as u64).saturating_mul(8).max(8),
+                u32::MAX as u64,
+                params.memory as u64,
+            )
+        });
+    (algorithm_kind, argon_params, params)
 }
 
 /// The derivation itself: owned data in, owned bytes out, no JS heap. An empty
 /// result is Node's "the derivation failed", which the callers turn into an
 /// empty Buffer exactly as before.
-fn node_argon2_derive(argon: argon2::Argon2<'static>, params: &NodeArgon2Params) -> Vec<u8> {
+fn node_argon2_derive(
+    algorithm: argon2::Algorithm,
+    argon_params: argon2::Params,
+    params: &NodeArgon2Params,
+) -> Vec<u8> {
+    // Borrow the owned secret only while deriving, on whichever thread runs
+    // this job. Neither a leaked secret nor a JS heap pointer crosses threads.
+    let argon = argon2::Argon2::new_with_secret(
+        &params.secret,
+        algorithm,
+        argon2::Version::V0x13,
+        argon_params,
+    )
+    .expect("secret length was validated on the calling thread");
     let mut out = vec![0u8; params.tag_length];
     if argon
         .hash_password_into(&params.message, &params.nonce, &mut out)
@@ -447,8 +524,8 @@ unsafe fn node_argon2_key(
     algorithm_ptr: i64,
     params_bits: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
-    alloc_buffer_from_slice(&node_argon2_derive(argon, &params))
+    let (algorithm, argon_params, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    alloc_buffer_from_slice(&node_argon2_derive(algorithm, argon_params, &params))
 }
 
 #[no_mangle]
@@ -468,10 +545,10 @@ pub unsafe extern "C" fn js_crypto_argon2_async(
     // turnloop P4: argon2 is memory-hard by design, so it is the most expensive
     // thing in this file to run on the thread that owns the JS heap. Argument
     // validation throws and stays here; the derivation goes to the pool.
-    let (argon, params) = node_argon2_plan(algorithm_ptr, params_bits);
+    let (algorithm, argon_params, params) = node_argon2_plan(algorithm_ptr, params_bits);
     perry_runtime::turnloop_pool::submit_or_run_inline_rooted(
         vec![callback_bits.to_bits()],
-        move || node_argon2_derive(argon, &params),
+        move || node_argon2_derive(algorithm, argon_params, &params),
         move |delivery, roots| {
             let callback = roots
                 .first()
@@ -566,13 +643,15 @@ pub unsafe extern "C" fn js_crypto_get_ciphers() -> *mut perry_runtime::array::A
         "aes-256-gcm",
         "aes256-wrap",
         "id-aes256-wrap",
+        "chacha20-poly1305",
     ])
 }
 
 pub(super) struct CipherInfo {
     name: &'static str,
     nid: f64,
-    block_size: f64,
+    /// `None` for a stream cipher: node reports `blockSize: undefined`.
+    block_size: Option<f64>,
     iv_len: Option<f64>,
     key_len: f64,
     mode: &'static str,
@@ -583,7 +662,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-cbc" => Some(CipherInfo {
             name: "aes-128-cbc",
             nid: 419.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 16.0,
             mode: "cbc",
@@ -591,7 +670,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-cbc" => Some(CipherInfo {
             name: "aes-192-cbc",
             nid: 423.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 24.0,
             mode: "cbc",
@@ -599,7 +678,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-cbc" => Some(CipherInfo {
             name: "aes-256-cbc",
             nid: 427.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: Some(16.0),
             key_len: 32.0,
             mode: "cbc",
@@ -607,7 +686,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-ecb" => Some(CipherInfo {
             name: "aes-128-ecb",
             nid: 418.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 16.0,
             mode: "ecb",
@@ -615,7 +694,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-ecb" => Some(CipherInfo {
             name: "aes-192-ecb",
             nid: 422.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 24.0,
             mode: "ecb",
@@ -623,7 +702,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-ecb" => Some(CipherInfo {
             name: "aes-256-ecb",
             nid: 426.0,
-            block_size: 16.0,
+            block_size: Some(16.0),
             iv_len: None,
             key_len: 32.0,
             mode: "ecb",
@@ -631,7 +710,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes128-wrap" | "aes128-wrap" => Some(CipherInfo {
             name: "id-aes128-wrap",
             nid: 788.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 16.0,
             mode: "wrap",
@@ -639,7 +718,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes192-wrap" | "aes192-wrap" => Some(CipherInfo {
             name: "id-aes192-wrap",
             nid: 789.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 24.0,
             mode: "wrap",
@@ -647,7 +726,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "id-aes256-wrap" | "aes256-wrap" => Some(CipherInfo {
             name: "id-aes256-wrap",
             nid: 790.0,
-            block_size: 8.0,
+            block_size: Some(8.0),
             iv_len: Some(8.0),
             key_len: 32.0,
             mode: "wrap",
@@ -655,7 +734,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-128-gcm" | "id-aes128-gcm" => Some(CipherInfo {
             name: "id-aes128-gcm",
             nid: 895.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 16.0,
             mode: "gcm",
@@ -663,7 +742,7 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-192-gcm" | "id-aes192-gcm" => Some(CipherInfo {
             name: "id-aes192-gcm",
             nid: 898.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 24.0,
             mode: "gcm",
@@ -671,10 +750,18 @@ pub(super) fn cipher_info_for_name(name: &str) -> Option<CipherInfo> {
         "aes-256-gcm" | "id-aes256-gcm" => Some(CipherInfo {
             name: "id-aes256-gcm",
             nid: 901.0,
-            block_size: 1.0,
+            block_size: Some(1.0),
             iv_len: Some(12.0),
             key_len: 32.0,
             mode: "gcm",
+        }),
+        "chacha20-poly1305" => Some(CipherInfo {
+            name: "chacha20-poly1305",
+            nid: 1018.0,
+            block_size: None,
+            iv_len: Some(12.0),
+            key_len: 32.0,
+            mode: "stream",
         }),
         _ => None,
     }
@@ -694,6 +781,7 @@ pub(super) fn cipher_info_for_nid(nid: i32) -> Option<CipherInfo> {
         895 => cipher_info_for_name("aes-128-gcm"),
         898 => cipher_info_for_name("aes-192-gcm"),
         901 => cipher_info_for_name("aes-256-gcm"),
+        1018 => cipher_info_for_name("chacha20-poly1305"),
         _ => None,
     }
 }
@@ -729,7 +817,12 @@ pub unsafe extern "C" fn js_crypto_get_cipher_info(alg_bits: f64, options_bits: 
     let obj = js_object_alloc(0, 6);
     set_object_string_field(obj, b"name", info.name);
     set_object_value_field(obj, b"nid", info.nid);
-    set_object_value_field(obj, b"blockSize", info.block_size);
+    set_object_value_field(
+        obj,
+        b"blockSize",
+        info.block_size
+            .unwrap_or(f64::from_bits(JSValue::undefined().bits())),
+    );
     if let Some(iv_len) = iv_len {
         set_object_value_field(obj, b"ivLength", iv_len);
     }
@@ -1033,11 +1126,7 @@ fn scrypt_numeric_value(value: JSValue, name: &str, max: u64) -> u64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let number = if value.is_int32() {
-        value.as_int32() as f64
-    } else {
-        value.as_number()
-    };
+    let number = value.as_number();
     if !number.is_finite() || number.fract() != 0.0 {
         let message = format!(
             "The value of \"{name}\" is out of range. It must be an integer. Received {}",
@@ -1066,7 +1155,7 @@ unsafe fn scrypt_options_object(options_bits: f64) -> Option<*const ObjectHeader
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(ptr as *const ObjectHeader)
@@ -1315,7 +1404,9 @@ pub unsafe extern "C" fn js_crypto_generate_key_pair_sync(type_ptr: i64, options
         // 'ec' (default/prime256v1) and the explicit 'prime256v1'/'p-256'.
         "ec" | "prime256v1" | "p-256" | "p256" => {
             use p256::pkcs8::{EncodePrivateKey, EncodePublicKey, LineEnding};
-            let secret = p256::SecretKey::random(&mut rand_core_06::OsRng);
+            let secret = <p256::SecretKey as p256::elliptic_curve::Generate>::generate_from_rng(
+                &mut rand::rng(),
+            );
             let priv_pem = secret
                 .to_pkcs8_pem(LineEnding::LF)
                 .ok()
@@ -1451,3 +1542,7 @@ mod scrypt_tests {
         assert!(checked_scrypt_params(4096, 8, 1, 4_197_376).is_ok());
     }
 }
+
+#[cfg(test)]
+#[path = "argon2_tests.rs"]
+mod argon2_tests;

@@ -42,11 +42,7 @@ fn optional_index(value: f64, name: &str) -> Option<usize> {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let number = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else {
-        js_value.as_number()
-    };
+    let number = js_value.as_number();
     if !number.is_finite() || number.fract() != 0.0 {
         let message = format!(
             "The value of \"{}\" is out of range. It must be an integer. Received {}",
@@ -129,8 +125,8 @@ pub extern "C" fn js_buffer_copy_bytes_from(
             return copy_element_range(view, 1, offset_value, length_value);
         }
 
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-            let size = crate::typedarray::elem_size_for_kind(kind);
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+            let size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
             return copy_element_range(view, size, offset_value, length_value);
         }
     }

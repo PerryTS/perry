@@ -290,9 +290,9 @@ static CLASS_HAS_INSTANCE_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, usi
 
 /// Per-class `Symbol.toStringTag` getter hook. Maps class_id → raw function
 /// pointer with signature `extern "C" fn(this: f64) -> f64` returning a
-/// NaN-boxed STRING_TAG value with the user's tag text. Populated at module
-/// init from `__perry_wk_tostringtag_<class>` top-level functions lifted by
-/// the HIR class lowering. Consulted by `js_object_to_string` so
+/// NaN-boxed STRING_TAG value with the tag text. Populated by runtime-native
+/// classes (`web_locks`); a user class's `get [Symbol.toStringTag]` is an
+/// ordinary prototype member, read by `Get(O, @@toStringTag)`. Consulted by `js_object_to_string` so
 /// `Object.prototype.toString.call(x)` returns `[object <tag>]`.
 static CLASS_TO_STRING_TAG_REGISTRY: ImageTable<RwLock<Option<PtrHashMap<u32, usize>>>> =
     ImageTable::new(|image| &image.to_string_tag);
@@ -346,7 +346,21 @@ pub(crate) fn lookup_has_instance_hook(class_id: u32) -> Option<usize> {
 #[inline(never)]
 fn lookup_has_instance_hook_slow(class_id: u32) -> Option<usize> {
     let reg = CLASS_HAS_INSTANCE_REGISTRY.read().unwrap();
-    reg.as_ref().and_then(|m| m.get(&class_id).copied())
+    let reg = reg.as_ref()?;
+    // A static method is inherited: `class SubEven extends Even` answers
+    // `x instanceof SubEven` through `Even[Symbol.hasInstance]` (the nearest
+    // class up the parent chain that declares one).
+    let mut cid = class_id;
+    for _ in 0..32 {
+        if let Some(hook) = reg.get(&cid) {
+            return Some(*hook);
+        }
+        match get_parent_class_id(cid) {
+            Some(parent) if parent != 0 && parent != cid => cid = parent,
+            _ => return None,
+        }
+    }
+    None
 }
 
 #[inline]

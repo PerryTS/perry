@@ -46,11 +46,18 @@ fn collection_receivers_still_use_their_authoritative_registries() {
     let set_receiver = crate::value::js_nanbox_pointer(set as i64);
 
     let before = probes();
-    assert_eq!(js_dyn_index_get(map_receiver, 0.0), 1.0);
+    // A Map has no indexed own property: `m[0]` is undefined, not its first key.
+    assert_eq!(
+        js_dyn_index_get(map_receiver, 0.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
     assert_eq!(probes(), (before.0 + 1, before.1));
 
     let before = probes();
-    assert_eq!(js_dyn_index_get(set_receiver, 0.0), 20.0);
+    assert_eq!(
+        js_dyn_index_get(set_receiver, 0.0).to_bits(),
+        crate::value::TAG_UNDEFINED
+    );
     assert_eq!(probes(), (before.0, before.1 + 1));
 
     let before = probes();
@@ -60,6 +67,13 @@ fn collection_receivers_still_use_their_authoritative_registries() {
     let before = probes();
     assert_eq!(js_dyn_index_set(set_receiver, 0.0, 88.0), 88.0);
     assert_eq!(probes(), (before.0, before.1 + 1));
+
+    // The keyed store is an ordinary [[Set]]: it created the own property
+    // "0" (the read sees it) and left the collection storage alone.
+    assert_eq!(js_dyn_index_get(map_receiver, 0.0), 99.0);
+    assert_eq!(js_dyn_index_get(set_receiver, 0.0), 88.0);
+    assert_eq!(crate::map::js_map_size(map), 1);
+    assert_eq!(crate::set::js_set_size(set), 1);
 }
 
 #[test]

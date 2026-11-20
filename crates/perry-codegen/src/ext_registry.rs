@@ -51,10 +51,12 @@
 //! bindings whose symbol names don't map cleanly to a binding key
 //! (`js_node_http_*` → `http`). But a large family of data-store / client
 //! wrappers name every symbol `js_<binding>_*` 1:1 with the binding key
-//! (`js_undici_*` → `perry-ext-undici`). Those are routed generically by
-//! [`EXT_PREFIX_REGISTRY`], so an AOT-compiled `undici`/`typescript`
-//! (a `perry.compilePackages` member that never appears in any import set)
-//! still flips its wrapper onto the link line off the emitted FFI alone.
+//! (`js_parcel_watcher_*` → `perry-ext-parcel-watcher`). Those are routed
+//! generically by [`EXT_PREFIX_REGISTRY`], so a program that reaches the
+//! family without importing its package (an AOT-compiled
+//! `perry.compilePackages` member, or a runtime global such as
+//! `Bun.Transpiler`) still flips its wrapper onto the link line off the
+//! emitted FFI alone.
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -493,9 +495,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // `node:http` without a source-level `import "ws"`. The codegen receiver
     // rows still emit the ws client helper symbols, so those calls must flip
     // the `ws` well-known wrapper onto the link line independently.
-    ("js_ws_send_client_i64",                       OwnerKind::WellKnown("ws")),
-    ("js_ws_close_client_i64",                      OwnerKind::WellKnown("ws")),
-    ("js_ws_on_client_i64",                         OwnerKind::WellKnown("ws")),
+    ("js_ws_send_client_i64",                       OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_client_i64",                      OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_on_client_i64",                         OwnerKind::WellKnown("perry/websocket")),
     // #6439: the same "no source-level `import \"ws\"`" situation reaches the
     // REST of the ws surface, not just the three client helpers above. A library
     // that merely *mentions* a socket API gets its module compiled — and its
@@ -519,33 +521,33 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
     // does (verified to fix both `api.ts` and `web.ts` of the effect repro).
     // The flip also drops perry-stdlib's `bundled-ws`, so there is no
     // duplicate-symbol risk.
-    ("js_ws_connect",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_connect_start",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_send",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_send_value",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_send_value_client_i64",                 OwnerKind::WellKnown("ws")),
-    ("js_ws_close",                                 OwnerKind::WellKnown("ws")),
-    ("js_ws_close_with",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_close_with_client_i64",                 OwnerKind::WellKnown("ws")),
-    ("js_ws_ping",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_pong",                                  OwnerKind::WellKnown("ws")),
-    ("js_ws_terminate",                             OwnerKind::WellKnown("ws")),
-    ("js_ws_on",                                    OwnerKind::WellKnown("ws")),
-    ("js_ws_receive",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_is_open",                               OwnerKind::WellKnown("ws")),
-    ("js_ws_ready_state",                           OwnerKind::WellKnown("ws")),
-    ("js_ws_message_count",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_wait_for_message",                      OwnerKind::WellKnown("ws")),
-    ("js_ws_handle_to_i64",                         OwnerKind::WellKnown("ws")),
-    ("js_ws_handle_upgrade",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_send_to_client",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_close_client",                          OwnerKind::WellKnown("ws")),
-    ("js_ws_server_new",                            OwnerKind::WellKnown("ws")),
-    ("js_ws_server_clients",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_server_address",                        OwnerKind::WellKnown("ws")),
-    ("js_ws_server_emit",                           OwnerKind::WellKnown("ws")),
-    ("js_ws_server_close",                          OwnerKind::WellKnown("ws")),
-    ("js_ws_server_close_with",                     OwnerKind::WellKnown("ws")),
+    ("js_ws_connect",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_connect_start",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_value",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_value_client_i64",                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close",                                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_with",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_with_client_i64",                 OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_ping",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_pong",                                  OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_terminate",                             OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_on",                                    OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_receive",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_is_open",                               OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_ready_state",                           OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_message_count",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_wait_for_message",                      OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_handle_to_i64",                         OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_handle_upgrade",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_send_to_client",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_close_client",                          OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_new",                            OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_clients",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_address",                        OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_emit",                           OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_close",                          OwnerKind::WellKnown("perry/websocket")),
+    ("js_ws_server_close_with",                     OwnerKind::WellKnown("perry/websocket")),
 
     // ── #1724: global Blob/File + URL object-URL helpers ──────────────
     // `new Blob([...])`, `new File([...], name)`, `URL.createObjectURL`,
@@ -600,13 +602,9 @@ const FFI_REGISTRY: &[(&str, OwnerKind)] = &[
 const EXT_PREFIX_REGISTRY: &[(&str, &str)] = &[
     // @parcel/watcher's notify-backed native-addon facade.
     ("js_parcel_watcher_", "@parcel/watcher"),
-    // undici HTTP/1.1 client + Agent/ProxyAgent (perry-ext-undici).
-    ("js_undici_",     "undici"),
-    // Native runtime TypeScript transpilation subset (#8511).
-    ("js_typescript_", "typescript"),
-    // Bun runtime transpilation/build subset shares the pinned SWC wrapper.
-    ("js_bun_transpiler_", "typescript"),
-    ("js_bun_build", "typescript"),
+    // Bun runtime transpilation/build (#9602), perry-ext-bun's pinned SWC.
+    ("js_bun_transpiler_", "perry/bun-transpiler"),
+    ("js_bun_build", "perry/bun-transpiler"),
 ];
 
 /// Return the well-known binding that provides an emitted FFI symbol. The
@@ -749,7 +747,7 @@ pub fn symbol_owners(symbol: &str) -> Option<SymbolOwners> {
         ));
     }
     // Ext-binding prefix net: an emitted `js_<binding>_*` symbol needs its
-    // well-known wrapper (an AOT-compiled `undici` / `typescript` is in no
+    // well-known wrapper (a family reached without an import is in no
     // import set). The marker is the matched prefix.
     EXT_PREFIX_REGISTRY
         .iter()
@@ -893,7 +891,7 @@ mod tests {
     #[test]
     fn check_emitted_providers_names_the_missing_owner() {
         let mut set = ProviderSet::new();
-        set.insert(OwnerKind::WellKnown("ws"));
+        set.insert(OwnerKind::WellKnown("perry/websocket"));
         assert!(check_emitted_providers(&set, "m.ts", ["js_ws_send", "js_array_push_f64"]).is_ok());
         let err = check_emitted_providers(&set, "m.ts", ["js_crypto_"]).unwrap_err();
         assert!(
@@ -948,7 +946,7 @@ mod tests {
         replay_ffi_symbols(["js_ws_connect_start", "js_not_a_real_symbol"]);
         let got = take_used_providers();
         assert!(
-            got.contains(&OwnerKind::WellKnown("ws")),
+            got.contains(&OwnerKind::WellKnown("perry/websocket")),
             "replayed ws symbol must record the ws provider, got {:?}",
             got
         );
@@ -1129,7 +1127,7 @@ mod tests {
         ] {
             let owner = match symbol {
                 symbol if symbol.starts_with("js_net_") => OwnerKind::WellKnown("net"),
-                symbol if symbol.starts_with("js_ws_") => OwnerKind::WellKnown("ws"),
+                symbol if symbol.starts_with("js_ws_") => OwnerKind::WellKnown("perry/websocket"),
                 _ => OwnerKind::WellKnown("http"),
             };
             assert_symbol_routes_to(symbol, owner);
@@ -1247,13 +1245,10 @@ mod tests {
     fn emitted_ext_prefix_symbols_route_to_well_known_binding() {
         let _guard = ProviderTestGuard::new();
         for (symbol, binding) in [
-            ("js_undici_request", "undici"),
-            ("js_undici_proxy_agent_new", "undici"),
             ("js_parcel_watcher_subscribe", "@parcel/watcher"),
             ("js_parcel_watcher_get_events_since", "@parcel/watcher"),
-            ("js_typescript_transpile_module", "typescript"),
-            ("js_bun_transpiler_new", "typescript"),
-            ("js_bun_build", "typescript"),
+            ("js_bun_transpiler_new", "perry/bun-transpiler"),
+            ("js_bun_build", "perry/bun-transpiler"),
         ] {
             assert_symbol_routes_to(symbol, OwnerKind::WellKnown(binding));
         }
@@ -1266,12 +1261,12 @@ mod tests {
     fn ext_prefix_net_does_not_over_match() {
         let _guard = ProviderTestGuard::new();
         let _ = take_used_providers();
-        record_ffi_call("js_undici_request");
+        record_ffi_call("js_parcel_watcher_subscribe");
         let got = take_used_providers();
-        assert!(got.contains(&OwnerKind::WellKnown("undici")));
+        assert!(got.contains(&OwnerKind::WellKnown("@parcel/watcher")));
         assert!(
-            !got.contains(&OwnerKind::WellKnown("@parcel/watcher")),
-            "undici symbol must not flip @parcel/watcher, got {got:?}"
+            !got.contains(&OwnerKind::WellKnown("perry/bun-transpiler")),
+            "a @parcel/watcher symbol must not flip perry/bun-transpiler, got {got:?}"
         );
 
         let _ = take_used_providers();
@@ -1291,17 +1286,25 @@ mod tests {
         let _ = take_used_providers();
 
         begin_module_capture();
-        record_ffi_call("js_undici_request");
-        record_ffi_call("js_undici_proxy_agent_new"); // same family: one marker, deduped
+        record_ffi_call("js_parcel_watcher_subscribe");
+        record_ffi_call("js_parcel_watcher_get_events_since"); // same family: one marker, deduped
         let captured = take_module_capture();
-        assert_eq!(captured, vec!["js_undici_"]);
+        assert_eq!(captured, vec!["js_parcel_watcher_"]);
 
         let _ = take_used_providers();
         replay_ffi_symbols(captured);
         let got = take_used_providers();
         assert!(
-            got.contains(&OwnerKind::WellKnown("undici")),
-            "replaying the captured prefix marker must reproduce the undici flip, got {got:?}"
+            got.contains(&OwnerKind::WellKnown("@parcel/watcher")),
+            "replaying the captured prefix marker must reproduce the @parcel/watcher flip, got {got:?}"
         );
     }
+}
+
+pub(crate) fn merge_callable_capture(markers: Vec<&'static str>) {
+    MODULE_CAPTURE.with(|s| {
+        if let Some(active) = s.borrow_mut().as_mut() {
+            active.extend(markers);
+        }
+    });
 }

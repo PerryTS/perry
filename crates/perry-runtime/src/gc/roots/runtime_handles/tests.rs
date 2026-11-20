@@ -107,19 +107,53 @@ fn ffi_indices_and_kind_checks_survive_growth_and_restore() {
     let scope = RuntimeHandleScope::new();
     let root = scope.root_raw_mut_ptr(std::ptr::null_mut::<u8>());
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_u64() }))
-            .is_err()
+        crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
+            root.get_nanbox_u64()
+        }))
+        .is_err()
     );
     js_ffi_root_scope_exit(base);
     assert!(
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| { root.get_nanbox_f64() }))
-            .is_err()
+        crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
+            root.get_nanbox_f64()
+        }))
+        .is_err()
     );
 }
 
 #[test]
 #[cfg(not(any(target_os = "android", target_env = "ohos")))]
 fn handle_storage_teardown_clears_cache_before_late_scope_drop() {
+    const CHILD: &str = "PERRY_HANDLE_STORAGE_TEARDOWN_CHILD";
+    const ATTEMPT: &str = "handle storage released; attempting resurrection";
+    const RESURRECTED: &str = "released TLS storage was resurrected";
+    if std::env::var_os(CHILD).is_none() {
+        let output = crate::test_support::this_test_process()
+            .env(CHILD, "1")
+            .output()
+            .expect("spawn the TLS teardown witness");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(ATTEMPT),
+            "teardown assertions did not finish: {stderr}"
+        );
+        assert!(
+            !stderr.contains(RESURRECTED),
+            "released TLS storage must reject resurrection: {stderr}"
+        );
+        let terminated = crate::test_support::died_of_abort(output.status);
+        #[cfg(target_os = "macos")]
+        let terminated = {
+            use std::os::unix::process::ExitStatusExt;
+            terminated || output.status.signal() == Some(libc::SIGTRAP)
+        };
+        assert!(
+            terminated,
+            "unexpected TLS panic termination: {}",
+            output.status
+        );
+        return;
+    }
     struct LateScope(RefCell<Option<RuntimeHandleScope>>);
     impl Drop for LateScope {
         fn drop(&mut self) {
@@ -128,14 +162,10 @@ fn handle_storage_teardown_clears_cache_before_late_scope_drop() {
             assert!(crate::tls_hot::hot().runtime_handle_stack.get().is_null());
             drop(self.0.get_mut().take());
             assert_eq!(runtime_handle_stack().len(), 0);
-            assert!(
-                std::panic::catch_unwind(|| {
-                    let scope = RuntimeHandleScope::new();
-                    let _ = scope.root_nanbox_f64(1.0);
-                })
-                .is_err(),
-                "released TLS storage must not be resurrected"
-            );
+            eprintln!("{ATTEMPT}");
+            let scope = RuntimeHandleScope::new();
+            let _ = scope.root_nanbox_f64(1.0);
+            panic!("{RESURRECTED}");
         }
     }
     thread_local! {

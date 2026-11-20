@@ -1,0 +1,1 @@
+Fix a SIGTRAP when an async generator's `return(value)` received a promise with a `constructor` getter: the whole-program facts now model the `constructor` read that PromiseResolve performs, so dead-body removal keeps the getter.

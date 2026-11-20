@@ -11,6 +11,7 @@
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, LocalId, Type};
 
+mod async_frame;
 mod box_release;
 mod break_continue;
 mod helpers;
@@ -20,6 +21,8 @@ mod iter_result_rewrite;
 mod linearize;
 mod lower;
 mod per_iteration;
+mod private_frame;
+mod private_frame_records;
 mod rewrite_returns;
 
 // Explicit named re-exports so siblings can reach each other via
@@ -27,22 +30,26 @@ mod rewrite_returns;
 // cross-module symbol here.
 pub(crate) use box_release::build_box_release_stmts;
 pub(crate) use break_continue::{
-    body_contains_yield, collect_hoisted_vars, fix_break_continue_sentinels,
-    fix_break_continue_sentinels_in_catches, fix_break_continue_sentinels_in_stmts,
-    fix_placeholder_state, prefix_loop_continues, rewrite_break_continue_in_stmts,
-    stmts_have_continue_inside_try_finally,
+    body_contains_yield, collect_hoisted_decl_facts, collect_hoisted_vars,
+    fix_break_continue_sentinels, fix_break_continue_sentinels_in_catches,
+    fix_break_continue_sentinels_in_stmts, fix_placeholder_state, prefix_loop_continues,
+    rewrite_break_continue_in_stmts, stmts_have_continue_inside_try_finally,
 };
 pub(crate) use helpers::{
-    alloc_local, make_iter_result, rewrite_hoisted_lets_in_stmts, wrap_returns_in_promise,
+    alloc_local, initialize_tdz_lets_in_stmts, make_iter_result, rewrite_hoisted_lets_in_stmts,
+    strip_tdz_preallocs_in_stmts, wrap_returns_in_promise,
 };
 pub(crate) use hoist_yields::hoist_yields_in_stmts;
-pub(crate) use id_scan::{compute_max_func_id, compute_max_local_id};
+pub(crate) use id_scan::compute_max_func_id;
+// Also codegen's value-record rewrite (perry-codegen `value_records`).
+pub use id_scan::compute_max_local_id;
 pub(crate) use iter_result_rewrite::rewrite_stmt;
 pub(crate) use linearize::{
     linearize_body, CatchRoute, DelegationRoute, FinallyRoute, State, StateExit,
 };
 pub(crate) use lower::{
-    transform_generator_function, transform_generator_function_with_extra_captures,
+    restore_in_class_closures, transform_generator_function,
+    transform_generator_function_with_extra_captures,
 };
 pub(crate) use per_iteration::{
     collect_per_iteration_ids, collect_written_suspended_loop_captures,
@@ -107,6 +114,18 @@ fn record_async_generator_func(id: FuncId) {
 
 /// Transform all generator functions in a module into state machine form.
 pub fn transform_generators(module: &mut Module) {
+    lower_generators(module);
+    private_frame::run(module);
+}
+
+/// The state-machine lowering alone, for a backend without the native
+/// private-frame intrinsics (`__perry_runtime.privateResumeFrame` and its steps)
+/// that `transform_generators` rewrites local consumers into.
+pub fn transform_generators_without_private_frames(module: &mut Module) {
+    lower_generators(module);
+}
+
+fn lower_generators(module: &mut Module) {
     // #3664: reset the per-thread async-generator accumulator for this module.
     ASYNC_GENERATOR_FUNC_IDS.with(|s| s.borrow_mut().clear());
     // Load the param-prologue lengths recorded by lowering so the transform can
@@ -119,9 +138,15 @@ pub fn transform_generators(module: &mut Module) {
         }
     });
 
+    let private_async = async_frame::admission(module);
+
     // Compute the next available local and func IDs by scanning the module
     let mut next_local_id = compute_max_local_id(module) + 1;
     let mut next_func_id = compute_max_func_id(module) + 1;
+
+    // Plain functions in class bodies keep their class evaluation's private
+    // environment (before generator lowering, which handles its own bodies).
+    restore_in_class_closures(module, &mut next_local_id);
 
     for func in &mut module.functions {
         if func.is_generator {
@@ -130,7 +155,11 @@ pub fn transform_generators(module: &mut Module) {
             if func.is_async {
                 record_async_generator_func(func.id);
             }
-            transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            let controls =
+                transform_generator_function(func, &mut next_local_id, &mut next_func_id);
+            if private_async.contains(&func.id) {
+                async_frame::lower(func, controls);
+            }
         }
     }
 
@@ -238,6 +267,24 @@ pub fn transform_generators(module: &mut Module) {
             transform_generator_closures_in_stmts(&mut b, &mut next_local_id, &mut next_func_id);
             m.body = b;
         }
+        // Field initializers and computed keys are evaluated outside any method
+        // body, so `static f = function* () {}` is only reachable from here.
+        for field in class
+            .fields
+            .iter_mut()
+            .chain(class.static_fields.iter_mut())
+        {
+            for e in field.init.iter_mut().chain(field.key_expr.iter_mut()) {
+                transform_generator_closures_in_expr(e, &mut next_local_id, &mut next_func_id);
+            }
+        }
+        for member in &mut class.computed_members {
+            transform_generator_closures_in_expr(
+                &mut member.key_expr,
+                &mut next_local_id,
+                &mut next_func_id,
+            );
+        }
     }
 
     // #3664: drain the async-generator func_ids collected above (named + closure
@@ -246,6 +293,18 @@ pub fn transform_generators(module: &mut Module) {
         let collected = std::mem::take(&mut *s.borrow_mut());
         module.async_generator_funcs.extend(collected);
     });
+}
+
+fn transform_generator_closures_in_expr(
+    expr: &mut Expr,
+    next_local_id: &mut LocalId,
+    next_func_id: &mut FuncId,
+) {
+    let mut stmts = [Stmt::Expr(std::mem::replace(expr, Expr::Undefined))];
+    transform_generator_closures_in_stmts(&mut stmts, next_local_id, next_func_id);
+    if let [Stmt::Expr(e)] = &mut stmts {
+        *expr = std::mem::replace(e, Expr::Undefined);
+    }
 }
 
 fn transform_generator_closures_in_stmts(
@@ -320,6 +379,7 @@ fn transform_generator_closures_in_stmts(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(f) = finally {
                             push_stmt_slice(&mut stack, f);

@@ -30,6 +30,21 @@ Supported on `ServerResponse`: `.statusCode` (get/set),
 `.on('finish'|'close', cb)`. Auto Content-Length on `.end()` when no
 `Transfer-Encoding` was set.
 
+### Live request and response prototypes
+
+HTTP/1 handler arguments inherit from `http.IncomingMessage.prototype` and
+`http.ServerResponse.prototype`. HTTP/2 compatibility handlers use
+`http2.Http2ServerRequest.prototype` and `http2.Http2ServerResponse.prototype`.
+`Object.getPrototypeOf`, `instanceof`, and inherited `constructor` reads expose
+those identities, and helpers added to the prototypes are available on live
+messages.
+
+Prototype replacements and patched methods take precedence over inherited
+native members. `Object.setPrototypeOf(message, null)` removes inherited
+members, not own properties: for example, an HTTP/1 request retains its own
+`method`, whereas an HTTP/2 compatibility request's inherited `method` is no
+longer available. Restore the original prototype before using its methods again.
+
 ### `https.createServer({ key, cert }, handler)`
 
 ```typescript,no-test
@@ -163,6 +178,15 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 {{#include ../../examples/stdlib/http/snippets.ts:fetch-api}}
 ```
 
+Fetch objects expose their inherited `constructor` and symbol properties.
+Own properties, including an own `constructor` set to `undefined`, take
+precedence over the prototype. Replacing a global constructor does not
+change the constructor inherited by existing instances.
+
+`Headers` and `FormData` are iterable and can be passed to
+`Object.fromEntries`, which respects an own `Symbol.iterator` override.
+Symbol presence checks (`Symbol.iterator in headers`) do not invoke property getters.
+
 ## Axios
 
 ```typescript,no-test
@@ -175,21 +199,15 @@ Perry's Fastify implementation is API-compatible with the npm package. Routes, r
 {{#include ../../examples/stdlib/http/snippets.ts:websocket-client}}
 ```
 
-`new WebSocketServer({ server: httpServer })` shares an existing HTTP server's
-port: ordinary requests still reach the HTTP handler and WebSocket upgrades
-fire `wss.on("connection", (ws, req) => ...)`. `wss.address()` reports the
-host server's address. Closing the WebSocket server detaches it without
-closing the shared HTTP listener.
+`ws` has no native binding: `import { WebSocket, WebSocketServer } from "ws"`
+compiles the real npm package from source (install it with `npm install ws`),
+so its framing, `permessage-deflate`, close handshake and the
+`WebSocketServer` modes (`{ port }`, `{ server }`, `{ noServer: true }` with
+`handleUpgrade`) are the package's own code running over Perry's `node:http`
+and `node:net`.
 
-For manual routing, create `new WebSocketServer({ noServer: true })` and call
-`wss.handleUpgrade(req, socket, head, (ws, req) => wss.emit("connection", ws, req))`
-from the HTTP server's `upgrade` listener. The callback runs once; it controls
-whether the connection event is emitted. The native HTTP transport performs
-the handshake before dispatching `upgrade`, as described above.
-
-A standalone `new WebSocketServer({ port: 0 })` binds an ephemeral port and
-emits `listening`. Read `wss.address().port` inside that listener to connect to
-it. Its address object contains `address`, `family`, and `port`.
+The global `WebSocket` (no import) is Perry's native client, served by
+`perry-ext-ws`.
 
 ## AWS S3 / S3-Compatible Object Storage
 

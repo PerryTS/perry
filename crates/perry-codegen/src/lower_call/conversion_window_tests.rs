@@ -143,6 +143,7 @@ fn ffi_manifest_call_roots_first_string_pointer_across_second_conversion() {
     // `js_native_abi_check_string_ptr` of each argument in order.
     let ir = compile_stmt(
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "probe_ffi_strings".to_string(),
                 param_types: Vec::new(),

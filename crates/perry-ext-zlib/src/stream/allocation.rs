@@ -136,6 +136,7 @@ impl<T: HookFill> Allocator<T> for BufferAlloc {
         };
         if !T::ZERO_IS_DEFAULT {
             for i in 0..len {
+                // GC_STORE_AUDIT(INIT): BufferAlloc hook returns fresh native PayloadBuffer-owned storage before HookBlock publication. HookFill is private and implemented only for listed scalar/codec types; nonzero-default types initialized elementwise. HookBlock retains BufferOwner and drops elements before freeing; no JSValue slots are installed.
                 unsafe { ptr.as_ptr().add(i).write(T::default()) };
             }
         }
@@ -160,6 +161,7 @@ impl<T> Placed<T> {
     /// Move `value` into a buffer; `None` when the backing refuses.
     pub(super) fn try_new(owner: &BufferOwner, value: T) -> Option<Self> {
         let mut buffer = Self::buffer(owner)?;
+        // GC_STORE_AUDIT(INIT): Placed<T> initializes fresh PayloadBuffer before returning owner. All call sites instantiate native z_stream or Brotli decoder/encoder states (deflate_context32,inflate_context94,driver382/649), carrying native allocation hooks/owned buffers, not GC JSValue fields. BufferOwner retained through PayloadBuffer, codec teardown before release.
         unsafe { buffer.as_mut_ptr().cast::<T>().write(value) };
         Some(Self {
             buffer,

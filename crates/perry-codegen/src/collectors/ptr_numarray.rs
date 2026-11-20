@@ -566,7 +566,7 @@ impl<'a> UseWalk<'a> {
     /// tracked array itself" (number|undefined — valid exactly where a
     /// ToNumber/short-circuit context absorbs the undefined).
     fn value_or_element_is_numeric(&self, tracked: u32, e: &Expr) -> bool {
-        if let Expr::IndexGet { object, index } = e {
+        if let Expr::IndexGet { object, index, .. } = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if *id == tracked && self.key_is_provably_numeric(index) {
                     return true;
@@ -640,6 +640,7 @@ impl<'a> UseWalk<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {
@@ -678,7 +679,7 @@ impl<'a> UseWalk<'a> {
             // non-numeric key is an ordinary [[Get]] — harmless for the
             // element invariants, but the KEY expression may itself contain a
             // bare reference; keep it simple and require numeric).
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.is_candidate(*id) {
                         if !self.key_is_provably_numeric(index) {
@@ -698,6 +699,7 @@ impl<'a> UseWalk<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.is_candidate(*id) {
@@ -879,6 +881,7 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut impl FnMut(&Stmt)) {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     go(body, f);
                     if let Some(c) = catch {
@@ -924,6 +927,7 @@ mod tests {
 
     fn new_array(args: Vec<Expr>) -> Expr {
         Expr::New {
+            byte_end: 0,
             class_name: "Array".to_string(),
             args,
             type_args: vec![],
@@ -939,6 +943,9 @@ mod tests {
 
     fn index_get(id: u32, index: Expr) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(index),
         }
@@ -949,11 +956,15 @@ mod tests {
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(index),
             value: Box::new(value),
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         }
     }
 
     fn property_get(object: Expr, property: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: property.to_string(),
             byte_offset: 0,
@@ -1136,6 +1147,8 @@ mod tests {
                     object: Box::new(Expr::LocalGet(ARR)),
                     property: "length".to_string(),
                     value: Box::new(Expr::Integer(0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ),
             (
@@ -1252,6 +1265,9 @@ mod tests {
                     )),
                     index: Box::new(Expr::Integer(5)),
                     value: Box::new(Expr::Number(1.0)),
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                 },
             ),
             (

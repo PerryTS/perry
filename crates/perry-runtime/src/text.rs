@@ -164,7 +164,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
     }
     let addr = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     let obj = addr as *mut ObjectHeader;
@@ -172,7 +172,7 @@ fn text_native_state(value: f64, class_id: u32) -> Option<u64> {
         if (*obj).class_id != class_id {
             return None;
         }
-        let meta = (*obj).meta;
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         if meta.is_null() {
             return Some(0);
         }
@@ -229,7 +229,10 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
     }
     if state != 0 {
         obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
-            let meta = crate::object::object_meta_ensure(obj);
+            let meta = crate::object::object_meta_ensure(
+                crate::meta_obj_runtime_born!(obj),
+                crate::object::MetaReason::RuntimeHandle,
+            );
             // A decoder whose state word never landed would read back as the
             // lenient utf-8 default -- wrong label, wrong `fatal` -- rather than
             // fail, so the only way this stays honest is that the meta exists.
@@ -244,6 +247,23 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
 
 /// Map a user-supplied encoding label to (enum, canonical-name).
 /// Returns `None` for unsupported labels (caller throws `RangeError`).
+/// Decode immutable bytes with a TextDecoder label, for APIs that expose the
+/// same encoding semantics without creating a user-visible decoder object.
+/// Returns the allocated StringHeader pointer, or `None` for an unsupported
+/// label so the caller can raise its API-specific error.
+pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i64> {
+    let (encoding, label) = resolve_decoder_label(raw_label)?;
+    // TextDecoder's default ignoreBOM=false consumes one leading Unicode BOM.
+    // Only Unicode encodings have BOM signatures; single-byte labels preserve
+    // these bytes as ordinary content.
+    let bytes = match encoding {
+        DecoderEncoding::Utf8 => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes),
+        DecoderEncoding::Utf16Le => bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes),
+        DecoderEncoding::SingleByte(_) => bytes,
+    };
+    Some(decode_bytes(bytes, encoding, false, label))
+}
+
 fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
     // WHATWG label matching: trim ASCII whitespace, case-insensitive.
     let l = raw
@@ -269,9 +289,7 @@ fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
 
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(bits))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 pub(crate) fn text_encoder_string_ptr(value: f64) -> *const StringHeader {
@@ -449,8 +467,11 @@ fn text_encoder_describe_received(value: f64) -> String {
 
     let addr = text_value_pointer_addr(value);
     if addr >= 0x1000 {
-        if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-            return format!("an instance of {}", crate::typedarray::name_for_kind(kind));
+        if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr) {
+            return format!(
+                "an instance of {}",
+                crate::typedarray_hook_slots::name_for_kind(kind)
+            );
         }
         if crate::buffer::is_data_view(addr) {
             return "an instance of DataView".to_string();
@@ -504,7 +525,9 @@ fn text_encoder_encode_into_source(source: f64) -> *const StringHeader {
 fn text_encoder_encode_into_dest(dest: f64) -> f64 {
     let addr = text_value_pointer_addr(dest);
     if addr >= 0x1000 {
-        if crate::typedarray::lookup_typed_array_kind(addr) == Some(crate::typedarray::KIND_UINT8) {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+            == Some(crate::typedarray_hook_slots::KIND_UINT8)
+        {
             return dest;
         }
         if crate::buffer::is_registered_buffer(addr)
@@ -616,8 +639,6 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
         const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
         if (bits & TAG_MASK) == POINTER_TAG {
             (bits & POINTER_MASK) as usize
-        } else if !value.is_nan() && bits != 0 && bits < 0x0001_0000_0000_0000 {
-            bits as usize
         } else {
             0
         }
@@ -1064,8 +1085,8 @@ mod tests {
         let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
         let ab = crate::buffer::js_array_buffer_new(4);
         let ab_value = f64::from_bits(crate::value::JSValue::pointer(ab as *const u8).bits());
-        let words = crate::typedarray_view::js_typed_array_view(
-            crate::typedarray::KIND_UINT32 as i32,
+        let words = crate::typedarray_hook_slots::js_typed_array_view(
+            crate::typedarray_hook_slots::KIND_UINT32 as i32,
             ab_value,
             undef,
             undef,
@@ -1075,7 +1096,7 @@ mod tests {
 
         // "ABCD" on a little-endian host, "DCBA" on a big-endian one — the
         // assertion compares against the backing rather than a fixed literal.
-        crate::typedarray::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
+        crate::typedarray_hook_slots::js_typed_array_set(words, 0, 0x4443_4241u32 as f64);
         let expected = crate::buffer::bytes::no_gc(|scope| {
             std::str::from_utf8(
                 &crate::buffer::bytes::bytes(crate::value::js_nanbox_pointer(ab as i64), scope)

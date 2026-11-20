@@ -130,6 +130,7 @@ pub(super) fn collect_entry_env_literals(hir: &HirModule) -> Vec<(String, String
             object,
             property,
             value,
+            ..
         } = expr
         {
             if matches!(object.as_ref(), Expr::ProcessEnv) {

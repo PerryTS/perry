@@ -1,0 +1,9 @@
+package test:scheduler-wake@1.0.0;
+
+world scheduler-wake {
+    // A harmless type anchor makes the maintained backend emit stream helpers.
+    export signal-type: func() -> stream;
+    export wait: async func(id: u32) -> u32;
+    export wake: func(id: u32);
+    export wake-twice: func(id: u32);
+}

@@ -358,14 +358,18 @@ impl Drop for ClaimGuard {
 }
 
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
     static STATE: Cell<LoopState> = const { Cell::new(LoopState::Unset) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
     static AGENT_LOOP: RefCell<Option<AgentLoop>> = const { RefCell::new(None) };
     /// This thread's route slot, from the claim to thread exit. See
     /// [`ClaimGuard`].
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
     static CLAIM: RefCell<Option<ClaimGuard>> = const { RefCell::new(None) };
     /// Completions moved out of the driver by [`AgentLoop::record`] and not
     /// yet routed. Owned by this thread, drained in FIFO order by
     /// [`dispatch_staged`] once no borrow on `AGENT_LOOP` is held.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
     static STAGED: RefCell<Vec<turnloop::Completion>> = const { RefCell::new(Vec::new()) };
 }
 
@@ -469,6 +473,10 @@ fn dispatch_staged() {
         return;
     }
     for completion in batch.drain(..) {
+        if is_component_io(&completion) {
+            STAGED.with(|staged| staged.borrow_mut().push(completion));
+            continue;
+        }
         if completion.token == TIMER_TOKEN {
             // The JS timer heap's deadline. Nothing to deliver: the expiry IS
             // the wake, and the timers phase reads the heap. Counted so a
@@ -491,7 +499,7 @@ fn dispatch_staged() {
         } else if crate::turnloop_post::owns(completion.token) {
             crate::turnloop_post::dispatch(completion);
         } else {
-            crate::turnloop_net::dispatch(completion);
+            super::service_hooks::net_dispatch(completion);
         }
     }
     // Give the emptied allocation back so steady-state dispatch allocates
@@ -502,6 +510,71 @@ fn dispatch_staged() {
             *slot = batch;
         }
     });
+}
+
+/// Component completions belong to their native operation owners. They are
+/// consumed explicitly, including when a normal event-pump turn discovers them.
+pub(crate) const COMPONENT_IO_TOKEN: Token = perry_component_io::TOKEN;
+
+fn is_component_io(completion: &turnloop::Completion) -> bool {
+    completion.token == COMPONENT_IO_TOKEN
+}
+
+/// Turn the existing driver without invoking any subsystem or JS callback.
+///
+/// A guest wait supplies full operation identities, never reusable numeric
+/// slots. Foreign completions remain in STAGED in their original order. Close
+/// acknowledgements are selected by full handle identity because Closed has no
+/// operation ID. This function neither owns nor creates a second driver.
+pub(crate) fn component_turn_and_take(
+    operations: &[turnloop::OpId],
+    closing: &[Handle],
+    timeout: Timeout,
+) -> turnloop::Result<Vec<turnloop::Completion>> {
+    fn take(operations: &[turnloop::OpId], closing: &[Handle]) -> Vec<turnloop::Completion> {
+        STAGED.with(|staged| {
+            staged
+                .borrow_mut()
+                .extract_if(.., |completion| {
+                    is_component_io(completion)
+                        && (completion.op.is_some_and(|op| operations.contains(&op))
+                            || (matches!(completion.result, turnloop::OpResult::Closed)
+                                && completion.handle.is_some_and(|h| closing.contains(&h))))
+                })
+                .collect()
+        })
+    }
+    let completed = take(operations, closing);
+    if !completed.is_empty() {
+        return Ok(completed);
+    }
+    if !ensure_loop_with(Profile::Net) {
+        return Err(turnloop::Error::new(turnloop::ErrorKind::Unsupported));
+    }
+    AGENT_LOOP.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        let agent = slot.as_mut().expect("ensured agent loop");
+        // Publish the same wake endpoint used by the ordinary event pump.
+        // Do not inspect NOTIFIED: unrelated JS work cannot interrupt this
+        // guest wait by forcing repeated zero-time turns.
+        agent.in_turn.store(true, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_add(1, Ordering::SeqCst);
+        let result = agent.driver.turn(timeout, &mut agent.completions);
+        agent.in_turn.store(false, Ordering::SeqCst);
+        PARKED_LOOPS.fetch_sub(1, Ordering::SeqCst);
+        match result {
+            Ok(info) => {
+                agent.record(&info);
+                Ok(())
+            }
+            Err(error) => {
+                agent.stats.turns += 1;
+                agent.stats.turn_errors += 1;
+                Err(error)
+            }
+        }
+    })?;
+    Ok(take(operations, closing))
 }
 
 /// Whether this thread may take the precise park path. One TLS read once the
@@ -590,6 +663,7 @@ const _: () = assert!(
 /// so a panic is swallowable exactly where this bug lives. A printed warning
 /// that lets the program continue is the silent degradation with extra output.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn loop_creation_failed(profile: Profile, agent: AgentId, error: turnloop::Error) -> ! {
     eprintln!(
@@ -675,7 +749,7 @@ fn upgrade_profile(profile: Profile) -> bool {
         return true;
     }
     debug_assert_eq!(
-        crate::turnloop_net::live_handles() + crate::turnloop_proc::live_handles(),
+        super::service_hooks::net_live_handles() + crate::turnloop_proc::live_handles(),
         0,
         "the loop profile is upgraded before the first handle, never under one"
     );
@@ -1208,7 +1282,7 @@ pub fn shutdown_current_thread() {
         // (exactly-once release, DESIGN D4). `Loop::drop` would free the
         // descriptors either way; this is what lets a binding's own
         // bookkeeping see the close rather than inferring it from teardown.
-        crate::turnloop_net::shutdown_current_thread();
+        super::service_hooks::net_shutdown();
         crate::turnloop_proc::shutdown_current_thread();
         // P4: settle every outstanding job before the loop goes away, so a job
         // the pool is still running cannot complete into a closed port and
@@ -1311,7 +1385,7 @@ fn print_stats(id: AgentId, stats: LoopStats) {
         crate::turnloop_proc::adopted_total(),
         crate::turnloop_proc::live_handles(),
         dgram_sockets_on_turnloop(),
-        crate::os::signal::signals_on_turnloop(),
+        crate::os_hook_slots::signals_on_turnloop(),
     );
     // P4's own "the subject ran" line. `completions` above cannot distinguish a
     // socket P1 carried from a blocking job P4 carried, and a program that ran
@@ -1340,3 +1414,29 @@ fn dgram_sockets_on_turnloop() -> u64 {
 #[cfg(test)]
 #[path = "agent_loop_tests.rs"]
 mod tests;
+
+pub(super) fn turn_bounded(budget_ms: u64) {
+    if !eligible() || !ensure_loop() {
+        return;
+    }
+    if budget_ms == 0 || !has_outstanding_work() {
+        // Nothing to wait *for*: collect anything already queued and
+        // return rather than burning the caller's budget in an OS wait.
+        settle_turn();
+        return;
+    }
+    let deadline = std::time::Instant::now() + std::time::Duration::from_millis(budget_ms);
+    if park_until(deadline) == Park::Notified {
+        // #11417: the park declines to WAIT when a main-thread notify is
+        // pending or tokio-owned work appeared, and leaves the flag for
+        // `js_wait_for_event` — but it also skips the turn, and a turn is the
+        // only thing that collects a completion. A caller of this function is
+        // not `js_wait_for_event`: it is a native API (or a pool waiter) that
+        // loops on it until its own completion lands, and nothing in that loop
+        // consumes the flag. So every call returned without turning, and the
+        // caller spun until someone else happened to clear a process-global
+        // flag — for ever, on a thread that is not the primary agent's. Still
+        // do not block (the pending wake is real), but collect what is ready.
+        settle_turn();
+    }
+}

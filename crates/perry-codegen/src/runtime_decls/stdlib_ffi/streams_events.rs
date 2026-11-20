@@ -1,5 +1,5 @@
-//! node:stream, EventEmitter, domain, StringDecoder, querystring, and
-//! nodemailer stdlib FFI declarations
+//! node:stream, EventEmitter, domain, StringDecoder and querystring stdlib
+//! FFI declarations
 //! (extracted from stdlib_ffi.rs).
 
 use crate::module::LlModule;
@@ -195,9 +195,4 @@ pub(crate) fn declare_streams_events(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE, DOUBLE, DOUBLE],
     );
-
-    // ========== Nodemailer ==========
-    module.declare_function("js_nodemailer_create_transport", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_nodemailer_send_mail", I64, &[I64, I64]);
-    module.declare_function("js_nodemailer_verify", I64, &[I64]);
 }

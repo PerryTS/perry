@@ -49,6 +49,7 @@ fn class_c() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -65,6 +66,7 @@ fn class_d() -> Class {
 
 fn new_of(name: &str) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: name.to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -117,6 +119,7 @@ fn push(array_id: u32, value: Expr) -> Stmt {
 
 fn read_x(id: u32) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "x".to_string(),
         byte_offset: 0,
@@ -128,6 +131,8 @@ fn store_x(id: u32) -> Stmt {
         object: Box::new(Expr::LocalGet(id)),
         property: "x".to_string(),
         value: Box::new(Expr::Number(1.0)),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -139,6 +144,7 @@ fn bounded_loop(idx: u32, arr: u32, body: Vec<Stmt>) -> Stmt {
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx)),
             right: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(arr)),
                 property: "length".to_string(),
                 byte_offset: 0,
@@ -214,6 +220,9 @@ fn let_elem_ty(id: u32, name: &str, arr: u32, idx: u32, ty: Type) -> Stmt {
         ty,
         mutable: false,
         init: Some(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(arr)),
             index: Box::new(Expr::LocalGet(idx)),
         }),
@@ -395,7 +404,11 @@ fn bounded_direct_field_read_preserves_the_arrays_exact_class() {
             5,
             1,
             vec![Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(5)),
                 }),
@@ -426,7 +439,11 @@ fn bounded_direct_non_field_read_denies_exactness() {
             5,
             1,
             vec![Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(5)),
                 }),
@@ -452,6 +469,7 @@ fn escaping_array_callback_element_denies_the_whole_group() {
             99,
             vec![callback_param(6, Type::Named("C".to_string()))],
             vec![Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(9)),
                 args: vec![Expr::LocalGet(6)],
                 type_args: Vec::new(),
@@ -637,6 +655,7 @@ fn array_escaping_as_a_call_argument_denies_the_push() {
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(9)),
             args: vec![Expr::LocalGet(1)],
             type_args: Vec::new(),
@@ -720,6 +739,9 @@ fn an_indexed_store_denies_the_array() {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Number(9.0)),
             value: Box::new(Expr::Number(1.0)),
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     assert!(!promote(&stmts, &classes).contains_key(&2));
@@ -882,6 +904,8 @@ fn unbounded_element_read_is_not_provenance() {
             object: Box::new(Expr::LocalGet(6)),
             property: "extra".to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
     ];
     let promoted = promote(&stmts, &classes);
@@ -943,6 +967,7 @@ fn a_loop_bounded_by_a_non_array_length_does_not_license_the_read() {
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(8)),
                     property: "length".to_string(),
                     byte_offset: 0,
@@ -1031,6 +1056,8 @@ fn one_member_failing_containment_voids_the_group() {
                     object: Box::new(Expr::LocalGet(6)),
                     property: "extra".to_string(),
                     value: Box::new(Expr::Number(1.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
         ),
@@ -1091,8 +1118,12 @@ fn an_element_passed_to_a_callee_denies_the_array() {
                 read_x(6),
                 // `f(rows[i])` — the element escapes, the array does not.
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(9)),
                     args: vec![Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(5)),
                     }],
@@ -1131,6 +1162,9 @@ fn an_unlicensed_element_binding_denies_the_array() {
             ty: Type::Named("C".to_string()),
             mutable: false,
             init: Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Number(0.0)),
             }),
@@ -1139,6 +1173,8 @@ fn an_unlicensed_element_binding_denies_the_array() {
             object: Box::new(Expr::LocalGet(7)),
             property: "extra".to_string(),
             value: Box::new(Expr::Number(1.0)),
+            byte_offset: 0,
+            byte_end: 0,
         }),
         bounded_loop(5, 1, vec![let_elem(6, "r", 1, 5), read_x(6)]),
     ];
@@ -1346,11 +1382,16 @@ fn a_property_store_through_an_element_denies_the_array() {
             1,
             vec![Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(5)),
                 }),
                 property: "extra".to_string(),
                 value: Box::new(Expr::Number(1.0)),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
         // `for (…) { const r = rows[i]; use(r.x); }`
@@ -1381,6 +1422,9 @@ fn a_property_update_through_an_element_denies_the_array() {
             1,
             vec![Stmt::Expr(Expr::PropertyUpdate {
                 object: Box::new(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(5)),
                 }),
@@ -1388,6 +1432,8 @@ fn a_property_update_through_an_element_denies_the_array() {
                 op: perry_hir::BinaryOp::Add,
                 prefix: false,
                 strict: true,
+                byte_offset: 0,
+                byte_end: 0,
             })],
         ),
         bounded_loop(8, 1, vec![let_elem(6, "r", 1, 8), read_x(6)]),
@@ -1431,6 +1477,8 @@ fn group_integrity_drops_the_aliases_of_a_dropped_member() {
                     object: Box::new(Expr::LocalGet(6)),
                     property: "extra".to_string(),
                     value: Box::new(Expr::Number(1.0)),
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
             ],
         ),
@@ -1474,11 +1522,17 @@ fn an_array_pushed_into_another_array_is_disqualified() {
         // expression neither walk tracks.
         Stmt::Expr(Expr::IndexSet {
             object: Box::new(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(2)),
                 index: Box::new(Expr::Number(0.0)),
             }),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(new_of("D")),
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         }),
         bounded_loop(5, 1, vec![let_elem(6, "r", 1, 5), read_x(6)]),
     ];
@@ -1490,25 +1544,20 @@ fn an_array_pushed_into_another_array_is_disqualified() {
     assert!(!promote(&stmts, &classes).contains_key(&6));
 }
 
-/// **CodeRabbit 🟡 #6** (`is_empty` covered only `arrays`). The other three
-/// maps are kept consistent with `arrays` by construction today — `pushed` is
-/// `retain`ed against it, `element_reads` only inserts for a proven root, and
-/// an empty `arrays` returns `default()` — but that is an invariant no type
-/// enforces, and `is_empty()` gates every consumer. Assert it directly so a
-/// future edit that populates one map without the other is caught here rather
-/// than by a wrong answer.
+/// `is_empty()` gates every consumer and keys on `arrays` alone, so a denied
+/// region must answer no query from the other maps either.
 #[test]
-fn is_empty_covers_every_fact_map() {
+fn an_empty_region_answers_no_query() {
     let c = class_c();
     let cs = [c];
     let classes = classes_of(&cs);
-    // A region with an array that fails E3 (call-argument escape): every map
-    // must come back empty together.
+    // A region with an array that fails E3 (call-argument escape).
     let denied = vec![
         let_arr(1, "rows"),
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(9)),
             args: vec![Expr::LocalGet(1)],
             type_args: Vec::new(),
@@ -1517,10 +1566,12 @@ fn is_empty_covers_every_fact_map() {
     ];
     let facts = elements(&denied, &classes);
     assert!(facts.is_empty());
-    assert!(
-        facts.debug_all_maps_empty(),
-        "is_empty must imply ALL maps empty"
-    );
+    assert!(!facts.push_is_contained(2, 1));
+    assert!(facts.member_group_root(2).is_none());
+    assert!(facts.proven_array_root(1).is_none());
+    assert!(facts.group_members().is_empty());
+    assert!(facts.proven_array_classes().is_empty());
+    assert_eq!(facts.callback_param_sites().count(), 0);
 
     // And the converse: a proven region is not `is_empty`.
     let proven = vec![
@@ -1530,7 +1581,7 @@ fn is_empty_covers_every_fact_map() {
     ];
     let facts = elements(&proven, &classes);
     assert!(!facts.is_empty());
-    assert!(!facts.debug_all_maps_empty());
+    assert!(facts.push_is_contained(2, 1));
 }
 
 // ── GC rooting obligations ─────────────────────────────────────────────────

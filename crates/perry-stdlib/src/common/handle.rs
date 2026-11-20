@@ -68,7 +68,7 @@ pub fn acquire_common_handle_registration(
 }
 
 /// Native preparation API. Common retirements are parked until a full heap
-/// trace proves them unreachable (see `handle_lifecycle`), never quarantined
+/// trace proves them unreachable (see `perry_ffi::handle_lifecycle`), never quarantined
 /// on a timer, so this drain never makes a common id reusable.
 pub fn drain_quarantined_common_handles() -> usize {
     REGISTRATIONS.drain(std::time::Instant::now())
@@ -99,14 +99,36 @@ pub fn register_reclaimable_handle<T: 'static + Send + Sync>(value: T) -> Handle
         }
     };
     let handle = publish_payload(value, identity);
-    super::handle_lifecycle::park_reclaimable(identity);
+    perry_ffi::handle_lifecycle::park_reclaimable(identity, &COMMON_PAYLOADS);
     handle
 }
 
-pub use super::handle_lifecycle::{parked_handle_count, retain_strongly};
+/// The common payload map as the owner of its reclaimable ids.
+struct CommonPayloads;
+
+impl perry_ffi::handle_lifecycle::ParkedPayloadOwner for CommonPayloads {
+    fn release(&self, identity: NativeRegistrationIdentity) {
+        // A concurrent `drop_handle` may have retired it already; that path
+        // parked the id itself and owns it now.
+        if !REGISTRATIONS.begin_retirement_of(identity) {
+            return;
+        }
+        let payload = HANDLES.remove(&identity.numeric_id());
+        assert!(REGISTRATIONS.finish_retirement_reusable(identity));
+        drop(payload);
+    }
+
+    fn property_bag(&self, id: Handle) -> Option<u64> {
+        native_property_bag(id)
+    }
+}
+
+static COMMON_PAYLOADS: CommonPayloads = CommonPayloads;
+
+pub use perry_ffi::handle_lifecycle::{parked_handle_count, retain_strongly};
 
 fn begin_common_registration() -> Result<NativeRegistrationIdentity, NativeRegistrationError> {
-    super::handle_lifecycle::note_registration();
+    perry_ffi::handle_lifecycle::note_registration();
     REGISTRATIONS.begin_registration_in_domain(*COMMON_DOMAIN, NativeRegistrationKind::Payload)
 }
 
@@ -115,7 +137,7 @@ fn begin_common_registration() -> Result<NativeRegistrationIdentity, NativeRegis
 /// `ERR_PERRY_HANDLE_IDS_EXHAUSTED`, not a process abort. Reclamation of
 /// parked ids is requested first, so a later registration can succeed.
 fn throw_ids_exhausted(error: NativeRegistrationError) -> ! {
-    super::handle_lifecycle::request_full_trace();
+    perry_ffi::handle_lifecycle::request_full_trace();
     let message = format!(
         "Perry native handle ids exhausted ({error:?}): all {} ids of the shared handle \
          band are live or still referenced by JavaScript values",
@@ -284,7 +306,7 @@ pub fn drop_handle(handle: Handle) -> bool {
 }
 
 /// Retirement parks the id until a full heap trace proves no JS value still
-/// holds it (`handle_lifecycle`), then recycles it. A timer quarantine would
+/// holds it (`perry_ffi::handle_lifecycle`), then recycles it. A timer quarantine would
 /// recycle ids that JS still holds as bare numbers, with no lease to stop it;
 /// before #11453 the id was tombstoned forever instead, which bounded a
 /// process to one band's worth of common handles.
@@ -294,7 +316,7 @@ fn remove_payload(handle: Handle) -> Option<Box<dyn Any + Send + Sync>> {
         return None;
     }
     let removed = HANDLES.remove(&handle).map(|(_, record)| record.payload);
-    super::handle_lifecycle::park_retired(identity);
+    perry_ffi::handle_lifecycle::park_retired(identity);
     removed
 }
 
@@ -438,7 +460,8 @@ fn scan_native_payload_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
     // Full marks reach parked owners through the existing handle observer.
     // Minors and relocation scans rewrite every bag owned by this mutator.
     for mut entry in HANDLES.iter_mut() {
-        if visitor.is_full_mark() && !super::handle_lifecycle::root_native_payload_bag(*entry.key())
+        if visitor.is_full_mark()
+            && !perry_ffi::handle_lifecycle::payload_bag_is_rooted(*entry.key())
         {
             continue;
         }

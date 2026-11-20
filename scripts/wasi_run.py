@@ -9,13 +9,18 @@ are reported and exit nonzero, never silently treated as expected passes.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import difflib
+import io
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
+
+import wasi_imports_check
+from gc_corpus_sources import SourceResolutionError, resolve_sources
 
 ROOT = Path(__file__).resolve().parent.parent
 GAP_SAMPLES = [
@@ -25,6 +30,52 @@ GAP_SAMPLES = [
     "test_gap_object_methods",
 ]
 CORE_ACCEPTANCE = {"bytes", "date", "filesystem", "gc", "tagged_values", "timer"}
+# The two output flavours. `p2` is a component (`--target wasi`); `p1` is a core
+# module that imports only `wasi_snapshot_preview1` (`--target wasip1`) and
+# needs wasmtime's exception-handling proposal switched on.
+TARGETS = {"p2": "wasi", "p1": "wasip1"}
+WASMTIME_FLAGS = {"p2": [], "p1": ["-W", "exceptions=y"]}
+
+
+def gap_sources(root: Path, filters: list[str] | tuple[str, ...] = (), *,
+                samples: list[str] | tuple[str, ...] | None = None) -> list[Path]:
+    """Resolve filtered sample IDs, retaining legacy locators and precedence."""
+    names = [name for name in (GAP_SAMPLES if samples is None else samples)
+             if not filters or any(f in name for f in filters)]
+    sources = {name: root / "tests/fixtures/programs" / f"{name}.ts" for name in names}
+    pending = [name for name in names if not sources[name].exists()]
+    if pending:
+        try:
+            sources.update(resolve_sources(root, pending))
+        except SourceResolutionError as exc:
+            if any(issue.kind != "unknown" for issue in exc.issues):
+                raise
+            # Missing samples keep reaching the oracle through the legacy path.
+            missing = {issue.case_id for issue in exc.issues}
+            remaining = [name for name in pending if name not in missing]
+            if remaining:
+                sources.update(resolve_sources(root, remaining))
+    return [sources[name] for name in names]
+
+
+def check_imports(wasm: Path, allow_perry_net: bool = False,
+                  allow_perry_host: bool = False) -> tuple[bool, str]:
+    """A linked P1 module may import nothing but the functions of
+    `wasi_snapshot_preview1`, each with its standard signature; a module built
+    with `PERRY_WASM_NET=1` may also import the `perry_net` functions, and one
+    built with `PERRY_WASM_DISCARD=1` `perry_host.discard_pages`.
+
+    A component (or anything that is not a core module) is rejected, so a
+    wrongly wrapped output cannot pass.
+    """
+    report = io.StringIO()
+    with contextlib.redirect_stdout(report):
+        try:
+            ok = wasi_imports_check.check(wasm, allow_perry_net, allow_perry_host) == 0
+        except ValueError as exc:
+            print(f"{wasm}: {exc}")
+            ok = False
+    return ok, report.getvalue()
 
 
 def normalized(data: bytes) -> str:
@@ -33,7 +84,7 @@ def normalized(data: bytes) -> str:
 
 def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
              timeout: int, expected_output: str | None = None,
-             keep_intermediates: bool = False) -> dict:
+             keep_intermediates: bool = False, flavour: str = "p2") -> dict:
     name = source.stem
     wasm = output / f"{name}.wasm"
     wasm.unlink(missing_ok=True)
@@ -41,7 +92,7 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
     result = {"name": name, "stage": "compile", "passed": False}
     env = dict(os.environ, PERRY_NO_AUTO_OPTIMIZE="1", PERRY_NO_CACHE="1")
-    command = [str(perry), "compile", str(source), "--target", "wasi", "-o", str(wasm)]
+    command = [str(perry), "compile", str(source), "--target", TARGETS[flavour], "-o", str(wasm)]
     if keep_intermediates:
         # Keep all diagnostic inputs inside this case's retained output tree.
         # PERRY_SAVE_LL does not switch away from the in-process LLVM backend.
@@ -59,11 +110,34 @@ def run_case(perry: Path, wasmtime: str, source: Path, output: Path,
         if compiled.returncode or not wasm.is_file():
             result["detail"] = normalized(compiled.stderr)[-4000:]
             return result
+        if flavour == "p1":
+            result["stage"] = "imports"
+            imports_ok, imports_report = check_imports(wasm)
+            (output / f"{name}.imports.log").write_text(imports_report, encoding="utf-8")
+            if not imports_ok:
+                result["detail"] = imports_report[-4000:]
+                return result
         result["stage"] = "run"
-        executed = subprocess.run(
-            [wasmtime, "run", *config.get("wasmtime_args", []), str(wasm),
-             *config.get("program_args", [])],
-            cwd=output, capture_output=True, timeout=timeout)
+        # `peer` names a host-side helper in the fixtures' _helpers directory that
+        # runs beside the guest; the words of its first output line (the ports it
+        # bound) are appended to the program arguments.
+        peer = None
+        peer_args: list[str] = []
+        if "peer" in config:
+            peer = subprocess.Popen([sys.executable, str(source.parent / "_helpers" / config["peer"])],
+                                    stdout=subprocess.PIPE, text=True)
+            peer_args = peer.stdout.readline().split()
+        try:
+            executed = subprocess.run(
+                [wasmtime, "run", *WASMTIME_FLAGS[flavour], *config.get("wasmtime_args", []), str(wasm),
+                 *config.get("program_args", []), *peer_args],
+                cwd=output, capture_output=True, timeout=timeout,
+                # `stdin` pipes the text to the program; without it the runner's own stdin is inherited.
+                **({"input": config["stdin"].encode()} if "stdin" in config else {}))
+        finally:
+            if peer is not None:
+                peer.kill()
+                peer.wait()
         (output / f"{name}.stderr").write_bytes(executed.stderr)
         actual = normalized(executed.stdout) + f"exit {executed.returncode}\n"
         (output / f"{name}.stdout").write_text(actual, encoding="utf-8")
@@ -88,6 +162,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("perry", type=Path)
     parser.add_argument("--wasmtime", default=os.environ.get("WASMTIME", "wasmtime"))
+    parser.add_argument("--flavour", choices=sorted(TARGETS), default="p2",
+                        help="p2: component via --target wasi; p1: core module via --target wasip1")
     parser.add_argument("--suite", choices=["smoke", "core", "acceptance", "gap"], default="smoke")
     parser.add_argument("--node", default="node", help="pinned Node oracle for --suite gap")
     parser.add_argument("--filter", action="append", default=[], help="name substring; repeat to select a union")
@@ -98,9 +174,16 @@ def main() -> int:
     args = parser.parse_args()
     if args.keep_intermediates and args.output is None:
         parser.error("--keep-intermediates requires --output")
-    fixtures = ROOT / "scripts" / ("wasi_smoke" if args.suite == "smoke" else "wasi_acceptance")
-    sources = ([ROOT / "test-files" / f"{name}.ts" for name in GAP_SAMPLES]
-               if args.suite == "gap" else sorted(fixtures.glob("*.ts")))
+    if args.flavour == "p1" and args.suite == "core":
+        parser.error("--suite core is a P2 set; use smoke, acceptance or gap with --flavour p1")
+    fixtures = ROOT / "tests/integration/wasi" / ("smoke" if args.suite == "smoke" else "acceptance")
+    if args.flavour == "p1" and args.suite == "acceptance":
+        fixtures /= "p1"
+    try:
+        sources = (gap_sources(ROOT, args.filter) if args.suite == "gap"
+                   else sorted(fixtures.glob("*.ts")))
+    except SourceResolutionError as exc:
+        parser.error(str(exc))
     if args.suite == "core":
         missing = CORE_ACCEPTANCE - {p.stem for p in sources}
         if missing:
@@ -142,7 +225,7 @@ def main() -> int:
                 expected = normalized(oracle.stdout) + "exit 0\n"
                 (case_output / "oracle.stdout").write_text(expected, encoding="utf-8")
             result = run_case(perry, args.wasmtime, source, case_output, args.timeout, expected,
-                              args.keep_intermediates)
+                              args.keep_intermediates, args.flavour)
             results.append(result)
             print(f"{'ok' if result['passed'] else 'FAIL'} {result['name']} ({result['stage']})", flush=True)
             if not result["passed"]:

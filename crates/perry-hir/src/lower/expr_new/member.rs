@@ -71,6 +71,7 @@ pub(crate) fn lower_new_member_native(
                     && !(obj_name == "globalThis" && global_name_has_user_binding(ctx, class_name))
                 {
                     return Ok(Some(Expr::New {
+                        byte_end: 0,
                         class_name: class_name.to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
@@ -84,6 +85,28 @@ pub(crate) fn lower_new_member_native(
                     return Ok(Some(expr));
                 }
             }
+            // `new sd.StringDecoder(enc)` over a `string_decoder` namespace, default
+            // or CommonJS alias constructs the same handle-backed decoder the named
+            // import does. The generic member-callee path built an object with no
+            // decoder state, so `write`/`end` threw ERR_INVALID_THIS.
+            let is_string_decoder_module = ctx.lookup_builtin_module_alias(obj_name)
+                == Some("string_decoder")
+                || ctx
+                    .lookup_native_module(obj_name)
+                    .is_some_and(|(module, export)| {
+                        module == "string_decoder"
+                            && (export.is_none() || export == Some("default"))
+                    });
+            if is_string_decoder_module && prop_ident.sym.as_ref() == "StringDecoder" {
+                return Ok(Some(Expr::New {
+                    byte_end: 0,
+                    class_name: "StringDecoder".to_string(),
+                    args: lower_optional_args(ctx, new_expr.args.as_deref())?,
+                    type_args: Vec::new(),
+                    byte_offset: new_byte_offset,
+                    cap_args_appended: 0,
+                }));
+            }
             if obj_name == "globalThis"
                 && ctx.lookup_local("globalThis").is_none()
                 && is_fetch_constructor_name(prop_ident.sym.as_ref())
@@ -91,6 +114,7 @@ pub(crate) fn lower_new_member_native(
             {
                 ctx.uses_fetch = true;
                 return Ok(Some(Expr::New {
+                    byte_end: 0,
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -202,7 +226,9 @@ pub(crate) fn lower_new_member_native(
             {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Some(Expr::NewDynamic {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: prop_ident.sym.to_string(),
@@ -330,6 +356,7 @@ pub(crate) fn lower_new_member_native(
                     .transpose()?
                     .unwrap_or_default();
                 exprs.push(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::ExternFuncRef {
                         name: "js_vm_module_constructor_error".to_string(),
                         param_types: Vec::new(),
@@ -410,23 +437,19 @@ pub(crate) fn lower_new_member_native(
             if is_worker_threads_module && prop_ident.sym.as_ref() == "Worker" {
                 return lower_worker_new(ctx, new_expr).map(Some);
             }
-            let inspector_session_module =
+            let construct_fold =
                 ctx.lookup_native_module(module_alias)
-                    .and_then(
-                        |(module_name, _)| match (module_name, prop_ident.sym.as_ref()) {
-                            ("inspector" | "inspector/promises", "Session") => {
-                                Some(module_name.to_string())
-                            }
-                            _ => None,
-                        },
-                    );
-            if let Some(module_name) = inspector_session_module {
+                    .and_then(|(module_name, _)| {
+                        crate::folded_call::native_construct_fold(module_name, &prop_ident.sym)
+                            .then(|| module_name.to_string())
+                    });
+            if let Some(module_name) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Some(Expr::NativeMethodCall {
                     module: module_name,
                     class_name: None,
                     object: None,
-                    method: "Session".to_string(),
+                    method: prop_ident.sym.to_string(),
                     args,
                 }));
             }
@@ -443,6 +466,7 @@ pub(crate) fn lower_new_member_native(
                 )
             {
                 return Ok(Some(Expr::New {
+                    byte_end: 0,
                     class_name: prop_ident.sym.to_string(),
                     args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                     type_args: Vec::new(),
@@ -454,6 +478,7 @@ pub(crate) fn lower_new_member_native(
                 let class_name = prop_ident.sym.as_ref();
                 if module_name == "bun:sqlite" && class_name == "Database" {
                     return Ok(Some(Expr::New {
+                        byte_end: 0,
                         class_name: "BunSqliteDatabase".to_string(),
                         args: lower_optional_args(ctx, new_expr.args.as_deref())?,
                         type_args: Vec::new(),
@@ -466,8 +491,20 @@ pub(crate) fn lower_new_member_native(
                     ("events", "EventEmitter")
                         | ("events", "EventEmitterAsyncResource")
                         | ("async_hooks", "AsyncLocalStorage" | "AsyncResource")
-                        | ("sqlite", "DatabaseSync" | "Session" | "StatementSync")
+                        | (
+                            "sqlite",
+                            "Database" | "DatabaseSync" | "Session" | "Statement" | "StatementSync"
+                        )
                 ) {
+                    // node 26: Database and Statement are the same values as
+                    // the *Sync exports.
+                    let class_name = match (module_name, class_name) {
+                        ("sqlite", "Database" | "DatabaseSync") => {
+                            "NodeSqliteDatabaseSync".to_string()
+                        }
+                        ("sqlite", "Statement") => "StatementSync".to_string(),
+                        _ => class_name.to_string(),
+                    };
                     let args = new_expr
                         .args
                         .as_ref()
@@ -479,7 +516,8 @@ pub(crate) fn lower_new_member_native(
                         .transpose()?
                         .unwrap_or_default();
                     return Ok(Some(Expr::New {
-                        class_name: class_name.to_string(),
+                        byte_end: 0,
+                        class_name,
                         args,
                         type_args: Vec::new(),
                         byte_offset: new_byte_offset,

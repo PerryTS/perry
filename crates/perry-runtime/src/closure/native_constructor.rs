@@ -6,54 +6,61 @@
 use super::shape;
 use crate::object::{layout_desc::PerryLayoutDesc, runtime_layouts as layouts};
 
+#[inline(always)]
 fn definition(module: &str, name: &str) -> Option<(*const PerryLayoutDesc, u64)> {
     Some(match (module, name) {
         ("events", "EventEmitter") => (
-            &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+            layouts::NATIVE_CTOR_EVENT_EMITTER::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
         ),
         ("stream", "Stream") => (
-            &raw const layouts::NATIVE_CTOR_STREAM,
+            layouts::NATIVE_CTOR_STREAM::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
         ),
         ("stream", "Readable") => (
-            &raw const layouts::NATIVE_CTOR_READABLE,
+            layouts::NATIVE_CTOR_READABLE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
         ),
         ("stream", "Writable") => (
-            &raw const layouts::NATIVE_CTOR_WRITABLE,
+            layouts::NATIVE_CTOR_WRITABLE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE,
         ),
         ("stream", "Duplex") => (
-            &raw const layouts::NATIVE_CTOR_DUPLEX,
+            layouts::NATIVE_CTOR_DUPLEX::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
         ),
         ("stream", "Transform") => (
-            &raw const layouts::NATIVE_CTOR_TRANSFORM,
+            layouts::NATIVE_CTOR_TRANSFORM::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
         ),
         ("stream", "PassThrough") => (
-            &raw const layouts::NATIVE_CTOR_PASSTHROUGH,
+            layouts::NATIVE_CTOR_PASSTHROUGH::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH,
         ),
         ("http", "OutgoingMessage") => (
-            &raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE,
+            layouts::NATIVE_CTOR_OUTGOING_MESSAGE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE,
         ),
         ("http", "ServerResponse") => (
-            &raw const layouts::NATIVE_CTOR_SERVER_RESPONSE,
+            layouts::NATIVE_CTOR_SERVER_RESPONSE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE,
         ),
         ("http", "IncomingMessage") => (
-            &raw const layouts::NATIVE_CTOR_INCOMING_MESSAGE,
+            layouts::NATIVE_CTOR_INCOMING_MESSAGE::desc(),
             shape::INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE,
         ),
         _ => return None,
     })
 }
 
-/// Complete the runtime's definition before any program code can see it.
+/// Dynamic constructor readers share the definition resolver.
 pub(crate) fn seal(module: &str, name: &str, value: f64) {
+    seal_selected(module, name, value)
+}
+
+/// A selected constructor specializes only its own static layout declaration.
+#[inline(always)]
+pub(crate) fn seal_selected(module: &str, name: &str, value: f64) {
     let Some((desc, serial)) = definition(module, name) else {
         return;
     };
@@ -67,42 +74,20 @@ pub(crate) fn seal(module: &str, name: &str, value: f64) {
     let _no_move = crate::gc::GcSuppressScope::new();
     unsafe {
         let ptr = crate::value::js_nanbox_get_pointer(ctor.get_nanbox_f64()) as usize;
-        let old = super::props::bag_of(ptr);
-        let built = crate::value::js_nanbox_pointer(old as i64);
-        let Some(image) = crate::object::layout_desc::prototype_image(&*desc, built, serial, &[])
-        else {
-            eprintln!("Perry internal error: native constructor bag {module}.{name} differs from its static layout");
-            std::process::abort();
-        };
-        let bag = crate::value::js_nanbox_get_pointer(image) as *mut crate::object::ObjectHeader;
-        // The recorded constructor parent (and other private state) remains
-        // an owned edge. It is never a JS property of this null-prototype bag.
-        if !(*old).meta.is_null() {
-            let state = (*(*old).meta).expando;
-            let meta = (*bag).meta;
-            // GC_STORE_AUDIT(BARRIERED): metadata-record child edge.
-            (*meta).expando = state;
-            crate::gc::runtime_write_barrier_slot(
-                meta as usize,
-                &(*meta).expando as *const _ as usize,
-                state,
-            );
-        }
-        crate::object::builtin_proto::seal_runtime_prototype(bag, serial);
-        super::props::install_bag(ptr, bag);
+        super::props::seal_to_layout(ptr, desc, serial, module, name);
     }
 }
 
 /// The existing identity word names the bag itself, not a cached verdict.
 /// Its live layout word is the fact, including its irreversible shadow bit.
 #[inline(always)]
-unsafe fn ancestor(serial: u64, desc: *const PerryLayoutDesc) -> bool {
+unsafe fn ancestor(serial: u64, word: u32) -> bool {
     crate::object::shapes::identity_word_slot(serial).is_some_and(|slot| {
         let bits = *slot;
         bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
             && (*((bits & crate::value::POINTER_MASK) as *const crate::object::ObjectHeader))
                 .parent_class_id
-                == (*desc).layout_id
+                == word
     })
 }
 
@@ -114,147 +99,144 @@ pub(crate) unsafe fn inherits_function(closure: *const super::ClosureHeader, nam
     if !matches!(name, b"call" | b"apply" | b"bind") {
         return false;
     }
-    let bag = (*closure).props;
-    if bag.is_null() {
+    let ptr = closure as usize;
+    let Some(serial) = super::props::sealed_serial(ptr) else {
         return false;
-    }
-    let meta = (*bag).meta;
-    if meta.is_null() {
-        return false;
-    }
-    let word = (*bag).parent_class_id;
+    };
+    // SAFETY: `ptr` has a sealed store (sealed_serial answered Some).
+    let intact = |word: u32| unsafe { super::props::sealed_intact(ptr, word) };
     // The existing intrinsic identity selects a static definition; only
     // its layout word proves the contents and link. Ordinary function bags
     // have no such identity and leave before loading constructor layouts.
-    match (*meta).proto_serial {
+    match serial {
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER => {
-            word == (*(&raw const layouts::NATIVE_CTOR_EVENT_EMITTER)).layout_id
+            intact(layouts::NATIVE_CTOR_EVENT_EMITTER::WORD)
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM => {
-            word == (*(&raw const layouts::NATIVE_CTOR_STREAM)).layout_id
+            intact(layouts::NATIVE_CTOR_STREAM::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_READABLE)).layout_id
+            intact(layouts::NATIVE_CTOR_READABLE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_WRITABLE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_WRITABLE)).layout_id
+            intact(layouts::NATIVE_CTOR_WRITABLE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX => {
-            word == (*(&raw const layouts::NATIVE_CTOR_DUPLEX)).layout_id
+            intact(layouts::NATIVE_CTOR_DUPLEX::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM => {
-            word == (*(&raw const layouts::NATIVE_CTOR_TRANSFORM)).layout_id
+            intact(layouts::NATIVE_CTOR_TRANSFORM::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
-                    &raw const layouts::NATIVE_CTOR_DUPLEX,
+                    layouts::NATIVE_CTOR_DUPLEX::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_PASSTHROUGH => {
-            word == (*(&raw const layouts::NATIVE_CTOR_PASSTHROUGH)).layout_id
+            intact(layouts::NATIVE_CTOR_PASSTHROUGH::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_TRANSFORM,
-                    &raw const layouts::NATIVE_CTOR_TRANSFORM,
+                    layouts::NATIVE_CTOR_TRANSFORM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_DUPLEX,
-                    &raw const layouts::NATIVE_CTOR_DUPLEX,
+                    layouts::NATIVE_CTOR_DUPLEX::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE)).layout_id
+            intact(layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_SERVER_RESPONSE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_SERVER_RESPONSE)).layout_id
+            intact(layouts::NATIVE_CTOR_SERVER_RESPONSE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_OUTGOING_MESSAGE,
-                    &raw const layouts::NATIVE_CTOR_OUTGOING_MESSAGE,
+                    layouts::NATIVE_CTOR_OUTGOING_MESSAGE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         shape::INTRINSIC_SERIAL_NATIVE_CTOR_INCOMING_MESSAGE => {
-            word == (*(&raw const layouts::NATIVE_CTOR_INCOMING_MESSAGE)).layout_id
+            intact(layouts::NATIVE_CTOR_INCOMING_MESSAGE::WORD)
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_READABLE,
-                    &raw const layouts::NATIVE_CTOR_READABLE,
+                    layouts::NATIVE_CTOR_READABLE::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_STREAM,
-                    &raw const layouts::NATIVE_CTOR_STREAM,
+                    layouts::NATIVE_CTOR_STREAM::WORD,
                 )
                 && ancestor(
                     shape::INTRINSIC_SERIAL_NATIVE_CTOR_EVENT_EMITTER,
-                    &raw const layouts::NATIVE_CTOR_EVENT_EMITTER,
+                    layouts::NATIVE_CTOR_EVENT_EMITTER::WORD,
                 )
         }
         _ => false,

@@ -287,12 +287,12 @@ fn class_inline_keys_birth_keeps_old_backing(stamped: bool) {
             crate::arena::pointer_in_old_gen(before as usize),
             "premise ({label}): I3 class keys array is old"
         );
-        let shape_id = crate::object::shapes::shape_id_for_keys_ensure(before, 2);
+        let shape_id = crate::object::shapes::layout_for_keys_ensure(before, 2);
 
         arm_collection_on_next_block(&trigger);
         let obj = if stamped {
             crate::object::js_object_alloc_class_inline_keys_stamped(
-                class_id, 0, 2, before, shape_id, 0,
+                class_id, 0, 2, before, shape_id.0, 0,
             )
         } else {
             crate::object::js_object_alloc_class_inline_keys(class_id, 0, 2, before)
@@ -589,6 +589,13 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
             .any(|list| list as usize == addr)
     };
 
+    // Keep this allocation class's page live explicitly. Static layout lists
+    // now live in the image, so they no longer accidentally anchor this page;
+    // an entirely empty page may be returned instead of reusing its old address.
+    let anchors = RuntimeHandleScope::new();
+    let _before =
+        anchors.root_raw_mut_ptr(crate::array::js_array_alloc_canonical_keys(1, false, false));
+
     // An old canonical list nothing roots, also remembered as a class's keys
     // (the memo stores canonical lists; `remember_class_keys` is its writer).
     let raw = crate::array::js_array_alloc(1);
@@ -596,11 +603,14 @@ fn a_dead_weak_keys_entry_is_dropped_before_its_storage_is_reused() {
     let list = unsafe { canonical_keys::canonicalize(&SharedLayout::shape_cache_entry(), raw, 1) };
     let addr = list.addr();
     let capacity = unsafe { (*list.as_ptr()).capacity };
+    let _after = anchors.root_raw_mut_ptr(crate::array::js_array_alloc_canonical_keys(
+        capacity, false, false,
+    ));
     crate::state::state()
         .object_hot
         .class_keys_by_id
         .borrow_mut()
-        .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1));
+        .insert(DEAD_MEMO_CLASS_ID, (addr, 1, 1, canonical_keys::NO_NODE));
     assert!(
         crate::arena::pointer_in_old_gen(addr),
         "I3: the list is old"

@@ -282,6 +282,9 @@ fn build_once(
 ) -> Result<()> {
     let args = CompileArgs {
         define: Vec::new(),
+        source_root: None,
+        source_root_target: None,
+        macro_import_stack: Vec::new(),
         input: input.to_path_buf(),
         output: Some(output.to_path_buf()),
         keep_intermediates: false,
@@ -297,6 +300,7 @@ fn build_once(
         output_type: "executable".to_string(),
         bundle_extensions: None,
         embed: Vec::new(),
+        sea: false,
         bunfs_root: None,
         asset_module: Vec::new(),
         module_alias: Vec::new(),

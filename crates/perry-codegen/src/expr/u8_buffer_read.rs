@@ -543,6 +543,7 @@ pub(crate) fn loop_param_is_accessed(body: &[perry_hir::Stmt], id: u32) -> bool 
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().any(|stmt| loop_reads(stmt, id))
                     || catch
@@ -593,6 +594,9 @@ mod byte_loop_proof_tests {
     #[test]
     fn entry_resolution_requires_a_loop_read_of_this_parameter() {
         let read = Stmt::Expr(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(0)),
         });

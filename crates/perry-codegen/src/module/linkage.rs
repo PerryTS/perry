@@ -45,12 +45,23 @@ pub(crate) fn global_symbol_name(line: &str) -> Option<&str> {
     Some(&line[..end])
 }
 
-/// Collect every `@symbol` referenced in a chunk of IR text.
+/// Collect every `@symbol` referenced in a chunk of IR text, quoted names
+/// (`@"\01section$start$__TEXT$__perry_fnrec"`) included, spelled as written.
 pub(crate) fn collect_symbol_refs(text: &str, out: &mut HashSet<String>) {
     let b = text.as_bytes();
     let mut i = 0usize;
     while i < b.len() {
-        if b[i] == b'@' {
+        if b[i] == b'@' && b.get(i + 1) == Some(&b'"') {
+            // LLVM escapes a `"` inside a name as `\22`, so the next quote
+            // closes it. Scanning resumes inside the quotes rather than after
+            // them: a string initializer ending in `@` must not hide the
+            // references that follow it, and a spurious name only misses the
+            // symbol index.
+            if let Some(len) = text[i + 2..].find('"') {
+                out.insert(text[i..i + len + 3].to_string());
+            }
+            i += 2;
+        } else if b[i] == b'@' {
             let start = i;
             i += 1;
             while i < b.len()
@@ -269,6 +280,24 @@ pub(crate) fn make_unique_owner_global(line: &str) -> String {
     }) {
         return line.to_string();
     }
+    // A `linkonce` definition coalesces ACROSS modules: fn_record's image
+    // descriptor and sentinel are one per program, and every module emits
+    // them. The owner keeps it weak, as `weak_odr` (`weak`): non-discardable
+    // like a strong definition, yet still folded with the other modules'
+    // copies. A strong owner put a GLOBAL symbol into a COMDAT group the other
+    // objects define WEAK; GNU ld and ld64 let it win, but lld (Android's
+    // linker) rejects the program: "relocation refers to a symbol in a
+    // discarded section ... Mixing groups with STB_WEAK and STB_GLOBAL
+    // binding signature is not supported".
+    if let Some((lhs, rhs)) = line.split_once(" = ") {
+        let rhs = rhs.trim_start();
+        if let Some(rest) = rhs.strip_prefix("linkonce_odr ") {
+            return format!("{lhs} = weak_odr {rest}");
+        }
+        if let Some(rest) = rhs.strip_prefix("linkonce ") {
+            return format!("{lhs} = weak {rest}");
+        }
+    }
     match line.split_once(" = ") {
         Some((lhs, rhs)) => {
             let definition = format!("{} = {}", lhs, strip_leading_linkage(rhs.trim_start()));
@@ -416,6 +445,49 @@ const COLD_HELPERS: &[&str] = &[
     "js_stack_overflow",
 ];
 
+/// Helpers that exist only as the slow arm of an inline fast path: the loop
+/// poll's call behind the arming word, the outlined element read behind the
+/// plain-array guards, the F64-kind store's note behind its kind test (it
+/// clears the kind, so it runs once per array). Declared `cold` like the
+/// list above, under `PERRY_COLD_PATHS`.
+///
+/// These, and only these, are also marked at their call sites
+/// (`inprocess/cold_paths.rs`). The statepoint rewrite keeps a call site's
+/// attributes and drops the callee's, so `COLD_HELPERS`' `cold` reaches LLVM
+/// only where the call is not a statepoint. Marking those sites as well was
+/// measured and left out: TypeScript compiled from source grew by 725 KB of
+/// code (1.1%) for 0.04% fewer instructions.
+const COLD_ARM_HELPERS: &[&str] = &[
+    "js_array_note_numeric_write_value",
+    "js_gc_loop_safepoint",
+    "perry_array_read_cold_shared",
+];
+
+/// `PERRY_COLD_PATHS` (default on): cold arms are stated to LLVM where the
+/// statement survives the statepoint rewrite (`inprocess/cold_paths.rs`).
+/// `=0`/`off`/`false` restores the previous module exactly.
+pub(crate) fn cold_paths_enabled() -> bool {
+    use std::sync::OnceLock;
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| {
+        cold_paths_enabled_from_env(std::env::var("PERRY_COLD_PATHS").ok().as_deref())
+    })
+}
+
+pub(crate) fn cold_paths_enabled_from_env(value: Option<&str>) -> bool {
+    !matches!(value, Some("0" | "off" | "false"))
+}
+
+/// Whether calls of `name` are marked cold at the call site.
+pub(crate) fn is_cold_arm_helper(name: &str) -> bool {
+    COLD_ARM_HELPERS.contains(&name)
+}
+
+/// Whether `name` is declared `cold`; `cold_arms` is [`cold_paths_enabled`].
+pub(crate) fn is_cold_helper(name: &str, cold_arms: bool) -> bool {
+    COLD_HELPERS.contains(&name) || (cold_arms && COLD_ARM_HELPERS.contains(&name))
+}
+
 // The two memory-contract lists below are audited facts about what a
 // helper's body reads and writes, which no table carries. Whether a call can
 // unwind is not part of them: `nounwind` comes only from the table of the
@@ -514,7 +586,7 @@ const READONLY_HELPERS: &[&str] = &[
 /// `js_value_length_f64` (Buffer/TypedArray registry lookups take locks —
 /// a lock acquisition writes memory).
 fn helper_decl_contract(name: &str) -> HelperDeclContract {
-    if COLD_HELPERS.contains(&name) {
+    if is_cold_helper(name, cold_paths_enabled()) {
         HelperDeclContract::Cold
     } else if PURE_HELPERS.contains(&name) {
         HelperDeclContract::Pure

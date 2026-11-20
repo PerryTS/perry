@@ -47,20 +47,37 @@ fn block_size_for(min_size: usize) -> usize {
 // ---------------------------------------------------------------------------
 
 /// Only empty, arena-owned payload pages may be advised while mapped.
+///
+/// Windows keeps them: an idle block is still registered as heap space, and
+/// address classification reads a candidate header before it consults the
+/// object-start bitmap. Advised pages read back on the other targets, but
+/// decommitted pages fault. Windows decommits a block once it has left the
+/// arena (the pool's reuse window), when no classification admits it.
 pub(super) fn discard_empty_block_pages(block: &ArenaBlock) -> usize {
     debug_assert_eq!(block.offset, 0);
-    unsafe { release_block_pages(block.data, block.size) }
+    #[cfg(windows)]
+    {
+        let _ = block;
+        0
+    }
+    #[cfg(not(windows))]
+    unsafe {
+        release_block_pages(block.data, block.size)
+    }
 }
 
 /// Apple blocks are whole tagged regions released as reusable; they are
-/// reactivated in [`block_pool_take`] and [`Arena::set_current`]. Other
-/// targets advise the interior pages and need no reactivation.
+/// reactivated in [`block_pool_take`] and [`Arena::set_current`]. Windows
+/// blocks are whole reservations whose pages are decommitted; only pooled
+/// blocks are released (see [`discard_empty_block_pages`]), and
+/// [`block_pool_take`] commits them again. Other targets advise the interior
+/// pages and need no reactivation.
 unsafe fn release_block_pages(data: *mut u8, size: usize) -> usize {
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_vendor = "apple", windows))]
     {
         super::region::release(data, size)
     }
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     {
         decommit::release(data, size)
     }
@@ -212,6 +229,7 @@ fn block_pool_cap_bytes() -> usize {
 #[cfg_attr(target_vendor = "apple", allow(dead_code))]
 #[path = "block/decommit.rs"]
 mod decommit;
+pub(crate) use decommit::release as discard_dead_payload_pages;
 
 /// Offer a released block to the pool. Returns false (caller deallocs) when
 /// the pool is full or the block is null.
@@ -237,7 +255,10 @@ pub(crate) fn block_pool_put(data: *mut u8, size: usize) -> bool {
     true
 }
 
-fn block_pool_take(size: usize) -> Option<*mut u8> {
+// Inlined into each caller, as when it had a single caller: the dedicated
+// leaf allocator must not take the ordinary refill's inlining from it.
+#[inline(always)]
+pub(super) fn block_pool_take(size: usize) -> Option<*mut u8> {
     let taken = BLOCK_POOL.with(|p| {
         let mut pool = p.borrow_mut();
         let idx = pool.blocks.iter().rposition(|block| block.size == size)?;
@@ -337,16 +358,14 @@ pub(crate) fn request_block_pool_drain() {
 
 /// Called only from full-cycle publication. A critical-pressure request stays
 /// sticky through unsafe/deferred periods and is retired after the owed full
-/// collection has completed all arena reclamation.
-pub(crate) fn drain_block_pool_if_requested() -> BlockPoolDrainStats {
+/// collection has completed all arena reclamation. `None`: nobody requested
+/// the drain, so nobody is owed the memory back now.
+pub(crate) fn drain_block_pool_if_requested() -> Option<BlockPoolDrainStats> {
     let requested = BLOCK_POOL.with(|pool| {
         let mut pool = pool.borrow_mut();
         std::mem::replace(&mut pool.drain_requested, false)
     });
-    if !requested {
-        return BlockPoolDrainStats::default();
-    }
-    drain_block_pool()
+    requested.then(drain_block_pool)
 }
 
 #[cfg(test)]
@@ -511,6 +530,15 @@ impl ArenaBlock {
         self.object_starts.as_ptr() as *mut u64
     }
 
+    /// May the bump allocator use this block? Never a tombstone, and never a
+    /// dedicated large extent: its one cell owns the block, and a reset or a
+    /// switch that treated it as an ordinary block would rewind its offset or
+    /// pack small cells into its tail.
+    #[inline]
+    pub(crate) fn bump_target(&self) -> bool {
+        !self.data.is_null() && self.extent_kind != super::region::Kind::LargeObject
+    }
+
     /// Reactivate released pages before the block is handed out. Idle discard
     /// never touches the current block, and every block becomes current
     /// before any of its bytes are written, so this is off the bump path.
@@ -567,6 +595,7 @@ impl ArenaBlock {
         let ptr = unsafe { self.data.add(aligned_offset) };
         let next = bumped.checked_add(pad - 1)? & !(pad - 1);
         self.offset = next;
+        crate::snap_census::birth(ptr, size);
         Some(ptr)
     }
 
@@ -610,6 +639,11 @@ pub(crate) struct Arena {
     pub(crate) space: HeapSpace,
     pub(crate) allocated_bytes: usize,
     pub(crate) large_allocated_bytes: usize,
+    /// Bytes in use across this arena's dedicated young leaf extents (exact:
+    /// leaf birth adds, retire/promotion subtracts). Lives in the arena the
+    /// trigger probes already hold, so a program with no leaf pays no extra
+    /// thread-local resolution to learn that.
+    pub(crate) young_large_bytes: usize,
 }
 
 /// The GC kinds whose payload owns native memory released at thread exit.
@@ -694,7 +728,7 @@ impl Drop for Arena {
                     crate::gc::GC_TYPE_SET_STORE => crate::set::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_MAP_STORE => crate::map::finalize_owned_store(user, false),
                     crate::gc::GC_TYPE_ASYNC_RESOURCE_STATE => {
-                        crate::async_hooks::resource_state::finalize(user.cast(), false)
+                        crate::async_hook_slots::resource_state::finalize(user.cast(), false)
                     }
                     crate::gc::GC_TYPE_ASYNC_SNAPSHOT => {
                         crate::async_context::finalize_snapshot_holder(user.cast())
@@ -705,7 +739,7 @@ impl Drop for Arena {
             // #11463: a typed-array cache hit must not survive reuse of this
             // block as another thread's nursery (e.g. a fresh Promise). This
             // only touches atomics, so it is safe during TLS destruction.
-            crate::typedarray::invalidate_caches_in_range(
+            crate::typedarray_hook_slots::invalidate_caches_in_range(
                 block.data as usize,
                 block.data as usize + block.size,
             );
@@ -734,6 +768,7 @@ impl ArenaCell {
             space,
             allocated_bytes: 0,
             large_allocated_bytes: 0,
+            young_large_bytes: 0,
         }))
     }
 
@@ -904,7 +939,7 @@ impl Arena {
                 let block = &self.blocks[self.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
     }
@@ -1011,7 +1046,10 @@ impl Arena {
         // we'd push a fresh block on the very first overflow even
         // though blocks `current+1..n_blocks` are all empty.
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc(i, size, align) {
@@ -1050,7 +1088,10 @@ impl Arena {
             return ptr;
         }
         for i in 0..self.blocks.len() {
-            if i == self.current {
+            // Dedicated large owners are never ordinary bump targets. The
+            // current block is always installed by the ordinary allocator;
+            // only this cold search can encounter a leaf-space block.
+            if i == self.current || self.blocks[i].extent_kind == super::region::Kind::LargeObject {
                 continue;
             }
             if let Some(ptr) = self.try_block_alloc_excluding_pages(i, size, align, excluded_pages)
@@ -1283,7 +1324,6 @@ thread_local! {
     /// `arena_reset_empty_blocks`).
     pub(crate) static ARENA_TOTAL_BYTES: crate::gc::TriggerInput<usize> = const { crate::gc::TriggerInput::new(0) };
 }
-
 crate::perry_thread_local! {
     /// Cached running sum of `block.offset` across the old-gen arena —
     /// the delta-maintained twin of `ARENA_TOTAL_BYTES` above, same

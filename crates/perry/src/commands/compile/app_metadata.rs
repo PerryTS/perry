@@ -9,6 +9,7 @@
 use std::fs;
 use std::path::Path;
 
+use super::wasi_flavour::Flavour;
 use super::{android_target, is_android_target, is_windows_target, windows_target_arch};
 
 pub(super) fn target_bundle_section(target: Option<&str>) -> Option<&'static str> {
@@ -220,7 +221,7 @@ pub(super) fn rust_target_triple(target: Option<&str>) -> Option<&'static str> {
         Some("linux-aarch64-musl") => Some("aarch64-unknown-linux-musl"),
         Some("macos") => Some("aarch64-apple-darwin"),
         // Standalone WASI (#11375): the runtime archive is built for this triple.
-        Some("wasi") => Some("wasm32-wasip2"),
+        Some(t) => Flavour::from_target(t).map(Flavour::triple),
         _ => None,
     }
 }
@@ -458,5 +459,30 @@ app_group = "group.com.example.fallback"
         // Non-Linux target + musl, and unknown libc, are hard errors.
         assert!(apply_libc_to_target(Some("windows".into()), Some("musl")).is_err());
         assert!(apply_libc_to_target(Some("linux".into()), Some("uclibc")).is_err());
+    }
+}
+
+/// Source identity belongs to every module; process and provider setup belongs
+/// only to the program entry.
+pub(super) fn for_module(
+    app: &perry_codegen::AppMetadata,
+    path: &std::path::Path,
+    is_entry: bool,
+    output_type: &str,
+    native_provider_installs: &[String],
+) -> perry_codegen::AppMetadata {
+    perry_codegen::AppMetadata {
+        module_source_path: Some(path.to_string_lossy().into_owned()),
+        entry_source_path: (is_entry && output_type == "executable")
+            .then(|| path.to_string_lossy().into_owned()),
+        entry_declared_esm: is_entry
+            .then(|| super::cjs_wrap::declared_module_format_is_esm(path))
+            .flatten(),
+        native_provider_installs: if is_entry {
+            native_provider_installs.to_vec()
+        } else {
+            Vec::new()
+        },
+        ..app.clone()
     }
 }

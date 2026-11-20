@@ -76,6 +76,8 @@ pub(super) fn trigger_decision(site: &'static str, kind: &'static str) {
     );
 }
 
+// Keep diagnostic HotKey descriptors out of LLVM's merged collector globals.
+// Otherwise Mach-O retains their resolver functions without the installer.
 crate::perry_thread_local! {
     /// Label the arm that is about to run a synchronous full leaves for the
     /// chokepoint (`gc_collect_full_mark_sweep_with_trigger`) to consume.
@@ -94,8 +96,11 @@ pub(super) fn take_full_site() -> &'static str {
 }
 
 crate::perry_thread_local! {
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static FULL_SITE_COUNTS: RefCell<Vec<(&'static str, u32)>> = const { RefCell::new(Vec::new()) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static BUDGETED: RefCell<Option<BudgetedCycleDiag>> = const { RefCell::new(None) };
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static CHARGES: RefCell<HashMap<[usize; CHARGE_DEPTH], Charge>> = RefCell::new(HashMap::new());
 }
 
@@ -388,6 +393,7 @@ pub(super) fn report_charges(label: &str) {
 
 crate::perry_thread_local! {
     /// `"<Builtin>.prototype.<method>" -> (calls, receiver_utf16_chars)`.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_gcdiag")]
     static PRIMITIVE_DISPATCH: RefCell<HashMap<String, (u64, u64)>> =
         RefCell::new(HashMap::new());
 }

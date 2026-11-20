@@ -1,0 +1,1 @@
+Keep Windows atom records in one read-only COFF section so image enumeration includes both generated atoms and the runtime sentinel. Preserve linker retention for constant atom COMDATs and test atom identity, section bounds, and object emission. Writable layout registration remains separate; other targets retain their existing storage classes.

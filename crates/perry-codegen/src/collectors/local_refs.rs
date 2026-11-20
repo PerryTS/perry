@@ -47,13 +47,14 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
         Expr::PropertySet { object, value, .. } => {
             expr_contains_local_get(object, target_id) || expr_contains_local_get(value, target_id)
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_contains_local_get(object, target_id) || expr_contains_local_get(index, target_id)
         }
         Expr::IndexSet {
             object,
             index,
             value,
+            ..
         } => {
             expr_contains_local_get(object, target_id)
                 || expr_contains_local_get(index, target_id)

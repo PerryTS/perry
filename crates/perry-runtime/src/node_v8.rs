@@ -27,7 +27,6 @@
 //!   profiler has been started.
 
 mod serde_prototypes;
-
 use crate::object::ObjectHeader;
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
@@ -146,7 +145,7 @@ fn is_valid_heap_snapshot_options(value: f64) -> bool {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(ptr) }) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
+    crate::gc_type_is_object!(header.obj_type)
 }
 
 fn validate_heap_snapshot_options(value: f64) {
@@ -167,7 +166,7 @@ fn default_heap_snapshot_path() -> String {
         .unwrap_or(0);
     let name = format!(
         "Heap-{}-{}-{}.heapsnapshot",
-        std::process::id(),
+        crate::os::current_process_id(),
         crate::agent::current_thread_native_id(),
         millis
     );
@@ -383,7 +382,7 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
     match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {
-            crate::exception::js_throw(crate::fs::build_fs_error_value(&err, "open", &path))
+            crate::exception::throw_core(crate::io_error::fs_error(&err, "open", &path))
         },
     }
 }
@@ -466,8 +465,7 @@ pub(crate) fn v8_instance_id_from_value(val: f64) -> usize {
 #[no_mangle]
 pub extern "C" fn js_v8_serializer_new(default_flag: f64) -> f64 {
     let id = crate::child_process::v8_class_serializer_new();
-    // `default_flag` is TAG_TRUE for the `DefaultSerializer` subclass.
-    let module = if default_flag.to_bits() == 0x7FFC_0000_0000_0004 {
+    let module = if default_flag.to_bits() == crate::value::TAG_TRUE {
         "v8.DefaultSerializer"
     } else {
         "v8.Serializer"
@@ -595,9 +593,6 @@ pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
 /// Coerce a NaN-boxed JS value to a u32 (int32-tagged fast path + double).
 fn as_u32(value: f64) -> u32 {
     let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        return (bits & 0xFFFF_FFFF) as u32;
-    }
     let jsv = JSValue::from_bits(bits);
     if jsv.is_number() {
         let n = jsv.as_number();
@@ -701,8 +696,8 @@ pub(crate) unsafe fn attach_v8_constructor(
     let prototype =
         crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
     let prototype = scope.root_nanbox_f64(prototype);
-    let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(
-        unwind gc_profiler_dispose_body,
+    let method = crate::closure::js_closure_alloc_singleton(crate::fn_info!(#[realm("node:v8.GCProfiler.prototype[\"@@dispose\"]", constructible = true)] 
+        export unwind crate::node_v8::gc_profiler_dispose_body,
         0
     ));
     let method = scope.root_raw_mut_ptr(method);
@@ -811,7 +806,7 @@ pub extern "C" fn js_v8_gc_profiler_stop(recv: f64) -> f64 {
 /// `(new v8.GCProfiler()).stop()` report object.
 #[no_mangle]
 pub extern "C" fn js_v8_gc_profiler_report() -> f64 {
-    let now = crate::date::js_date_now();
+    let now = crate::clock::wall_millis();
     let statistics = crate::array::js_array_alloc(0);
     let stats_val = f64::from_bits(JSValue::pointer(statistics as *const u8).bits());
     unsafe {

@@ -74,7 +74,7 @@ fn fast_object_get(base: f64, name: &str) -> Option<f64> {
         return None;
     }
     let h = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if h.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(h.obj_type) {
         return None;
     }
     let key = interned_member_key(name);
@@ -144,12 +144,12 @@ pub(crate) fn to_rust_string(v: f64) -> String {
 
 fn throw_error_kind(kind: u32, message: &str) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_kind_with_options(
+    let err = crate::error::CoreError::kind_with_options(
         kind,
         msg,
         f64::from_bits(crate::value::TAG_UNDEFINED),
     );
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 pub(crate) fn throw_type_error(message: &str) -> ! {
@@ -172,20 +172,19 @@ pub(crate) fn throw_eval_error(message: &str) -> ! {
     throw_error_kind(crate::error::ERROR_KIND_EVAL_ERROR, message)
 }
 
-fn wasm_codegen_error(api: &str) -> f64 {
+fn wasm_codegen_error(api: &str) -> crate::error::CoreError {
     let message = format!("{api}(): Wasm code generation disallowed by embedder");
     let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_name_message_bytes(b"CompileError", message);
-    crate::value::js_nanbox_pointer(error as i64)
+    crate::error::CoreError::named_bytes(b"CompileError", message)
 }
 
 pub(crate) fn wasm_codegen_rejection(api: &str) -> f64 {
-    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api));
+    let promise = crate::promise::js_promise_rejected(wasm_codegen_error(api).value());
     crate::value::js_nanbox_pointer(promise as i64)
 }
 
 pub(crate) fn throw_wasm_codegen_error(api: &str) -> ! {
-    crate::exception::js_throw(wasm_codegen_error(api))
+    crate::exception::throw_core(wasm_codegen_error(api))
 }
 
 /// The diagnostic contract of #6559: anything outside the interpreter subset
@@ -294,8 +293,8 @@ pub(crate) fn construct(callee: f64, args: &[f64]) -> f64 {
 
 /// Whether the selected global (including its prototype chain) binds `name`.
 pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
-    let global = if crate::proxy::js_proxy_is_proxy(global) != 0 {
-        crate::proxy::js_proxy_target(global)
+    let global = if crate::proxy_hooks::proxy_is_proxy(global) != 0 {
+        crate::proxy_hooks::proxy_target(global)
     } else {
         global
     };
@@ -310,8 +309,8 @@ pub(crate) fn global_has_property(global: f64, name: &str) -> bool {
 /// intrinsic-global backing. VM contexts pass distinct values; ordinary
 /// dynamic Function calls pass the process global for both.
 pub(crate) fn global_lookup(global_this: f64, intrinsics: f64, name: &str) -> f64 {
-    let lookup_target = if crate::proxy::js_proxy_is_proxy(global_this) != 0 {
-        crate::proxy::js_proxy_target(global_this)
+    let lookup_target = if crate::proxy_hooks::proxy_is_proxy(global_this) != 0 {
+        crate::proxy_hooks::proxy_target(global_this)
     } else {
         global_this
     };
@@ -404,9 +403,7 @@ pub(crate) fn compare(a: f64, b: f64) -> i32 {
     // NaN vs NaN, which would make `NaN <= NaN` true).
     let a_jv = crate::value::JSValue::from_bits(a.to_bits());
     let b_jv = crate::value::JSValue::from_bits(b.to_bits());
-    if (a_jv.is_number() && a.is_nan() && !a_jv.is_int32())
-        || (b_jv.is_number() && b.is_nan() && !b_jv.is_int32())
-    {
+    if (a_jv.is_number() && a.is_nan()) || (b_jv.is_number() && b.is_nan()) {
         return 2;
     }
     crate::value::js_jsvalue_compare(a, b)
@@ -431,9 +428,6 @@ pub(crate) fn to_number(v: f64) -> f64 {
     let jv = crate::value::JSValue::from_bits(v.to_bits());
     if jv.is_number() {
         return v;
-    }
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
     }
     // `x * 1` runs the runtime's own ToNumber coercion for strings/bools/
     // null/undefined/objects without duplicating it here.
@@ -485,7 +479,7 @@ pub(crate) fn is_array_value(v: f64) -> bool {
     }
     match unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
         Some(h) => {
-            h.obj_type == crate::gc::GC_TYPE_ARRAY || h.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_type_is_array!(h.obj_type) || h.obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
         }
         None => false,
     }

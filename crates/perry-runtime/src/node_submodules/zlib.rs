@@ -37,9 +37,7 @@ pub extern "C" fn js_zlib_resolve_level(opts: f64) -> i32 {
         return DEFAULT_LEVEL;
     }
 
-    let level = if lv.is_int32() {
-        lv.as_int32()
-    } else if lv.is_number() {
+    let level = if lv.is_number() {
         f64::from_bits(level_value.to_bits()) as i32
     } else {
         // Non-numeric `level` — fall back to the default rather than throwing
@@ -81,9 +79,7 @@ pub extern "C" fn js_zlib_validate_params(level: f64, strategy: f64) -> i32 {
 
     fn as_number(v: f64, arg: &str) -> f64 {
         let jv = crate::value::JSValue::from_bits(v.to_bits());
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else if jv.is_number() {
+        if jv.is_number() {
             f64::from_bits(v.to_bits())
         } else {
             let received = crate::fs::validate::describe_received(v);
@@ -141,9 +137,6 @@ fn option_number(value: f64, name: &str) -> Option<f64> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
     if jv.is_undefined() || jv.is_null() {
         return None;
-    }
-    if jv.is_int32() {
-        return Some(jv.as_int32() as f64);
     }
     if jv.is_number() {
         return Some(f64::from_bits(value.to_bits()));
@@ -271,23 +264,12 @@ fn validate_codec_options(opts: f64, min_window_bits: i32, warn_dictionary: bool
     validate_option_chunk_size(read_option_field(options_ptr(), b"chunkSize"));
     validate_option_range(options_ptr(), b"flush", "options.flush", 0, 5, false);
 
-    // DEFLATE consumers retain this exact validated read for their backend.
+    // Dictionary-aware consumers retain this exact validated read for their backend.
     // Other consumers keep their existing accepted-but-unapplied warning.
     let dict = scope.root_nanbox_f64(read_option_field(options_ptr(), b"dictionary"));
     let value = dict.get_nanbox_f64();
     if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
-        // Public byte brands, not every cell backed by BufferHeader storage.
-        // Dictionaries accept ArrayBuffer too; CRC32 intentionally does not.
-        if crate::object::view_brand::view_brand(value).is_none()
-            && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
-                != Some(crate::buffer::BufferBrand::ArrayBuffer)
-        {
-            crate::validators::throw_invalid_arg_type(
-                "options.dictionary",
-                "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
-                dict.get_nanbox_f64(),
-            );
-        }
+        validate_dictionary_value(dict.get_nanbox_f64());
         if warn_dictionary {
             crate::stub_diag::perry_stub_warn(
                 "zlib options.dictionary",
@@ -297,6 +279,80 @@ fn validate_codec_options(opts: f64, min_window_bits: i32, warn_dictionary: bool
         }
     }
     dict.get_nanbox_f64()
+}
+
+/// Zstd one-shot calls previously ignored other codec options. Read only the
+/// dictionary here; do not impose DEFLATE ranges or extra property reads.
+#[no_mangle]
+pub extern "C" fn js_zlib_zstd_dictionary(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let dictionary = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"dictionary"));
+    validate_dictionary_value(dictionary.get_nanbox_f64());
+    dictionary.get_nanbox_f64()
+}
+
+/// Capture Brotli's dictionary without applying DEFLATE option ranges.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_dictionary(opts: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let dictionary = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"dictionary"));
+    validate_dictionary_value(dictionary.get_nanbox_f64());
+    dictionary.get_nanbox_f64()
+}
+
+/// Resolve the encoder quality after the caller has copied dictionary bytes.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_quality(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
+    // BROTLI_PARAM_QUALITY is parameter 1. Absent parameters use Node's 11.
+    gzip_range(
+        gzip_read_option(params.get_nanbox_f64(), b"1"),
+        "options.params.1",
+        0,
+        11,
+        11.0,
+    ) as i32
+}
+
+/// Whether a Brotli decoder accepts large-window streams (window up to 1 GiB).
+/// RFC 7932 caps the window at 16 MiB; like Node, only an explicit nonzero
+/// `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]` (parameter 1) opts out of that cap.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_large_window(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let params = scope.root_nanbox_f64(gzip_read_option(opts.get_nanbox_f64(), b"params"));
+    let value =
+        crate::value::JSValue::from_bits(gzip_read_option(params.get_nanbox_f64(), b"1").to_bits());
+    let enabled = if value.is_number() {
+        let n = value.as_number();
+        n != 0.0 && !n.is_nan()
+    } else {
+        value.is_bool() && value.as_bool()
+    };
+    i32::from(enabled)
+}
+
+fn validate_dictionary_value(value: f64) {
+    if crate::value::JSValue::from_bits(value.to_bits()).is_undefined() {
+        return;
+    }
+    // Public byte brands, not every cell backed by BufferHeader storage.
+    // Dictionaries accept ArrayBuffer too; CRC32 intentionally does not.
+    if crate::object::view_brand::view_brand(value).is_none()
+        && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+            != Some(crate::buffer::BufferBrand::ArrayBuffer)
+    {
+        crate::validators::throw_invalid_arg_type(
+            "options.dictionary",
+            "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+            value,
+        );
+    }
 }
 
 // Gzip's constructor phases are separate from the shared one-shot validators.
@@ -329,6 +385,51 @@ fn gzip_range(value: f64, name: &str, min: i64, max: i64, default: f64) -> f64 {
     n
 }
 
+/// Snapshot only the synchronous decoder's completion policy. The caller roots
+/// data/options across these getter reads and copies dictionaries beforehand.
+#[no_mangle]
+pub extern "C" fn js_zlib_decode_completion_options(opts: f64) -> i32 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let finish = gzip_range(
+        gzip_read_option(opts.get_nanbox_f64(), b"finishFlush"),
+        "options.finishFlush",
+        0,
+        5,
+        4.0,
+    );
+    let reject = scope.root_nanbox_f64(gzip_read_option(
+        opts.get_nanbox_f64(),
+        b"rejectGarbageAfterEnd",
+    ));
+    let value = crate::value::JSValue::from_bits(reject.get_nanbox_f64().to_bits());
+    if !value.is_undefined() {
+        crate::validators::validate_boolean(
+            reject.get_nanbox_f64(),
+            "options.rejectGarbageAfterEnd",
+        );
+    }
+    i32::from(value.is_bool() && value.as_bool()) | (i32::from(finish as i32 != 4) << 1)
+}
+
+/// Resolve only Brotli one-shot output policy; do not reorder shared validators.
+#[no_mangle]
+pub extern "C" fn js_zlib_brotli_max_output_length(opts: f64) -> usize {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    gzip_range(
+        gzip_read_option(opts.get_nanbox_f64(), b"maxOutputLength"),
+        "options.maxOutputLength",
+        1,
+        9007199254740991,
+        9007199254740991.0,
+    ) as usize
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_BROTLI_MAX_OUTPUT_LENGTH: extern "C" fn(f64) -> usize =
+    js_zlib_brotli_max_output_length;
 // The bulk birth owns its callback-free allocation window. All heap-valued
 // entries must be rooted by the caller until the returned record is rooted.
 fn gzip_option_record(entries: &[(&str, f64)]) -> f64 {
@@ -344,6 +445,86 @@ fn gzip_option_record(entries: &[(&str, f64)]) -> f64 {
         ) as i64)
     }
 }
+
+/// Sync DEFLATE captures codec values before the real Transform spread.
+/// The caller copies the selected dictionary before any later getter runs.
+#[no_mangle]
+pub extern "C" fn js_zlib_sync_codec_options(opts: f64, min_window_bits: i32) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let read = |key| gzip_read_option(opts.get_nanbox_f64(), key);
+    let first = crate::value::JSValue::from_bits(read(b"windowBits").to_bits());
+    if !first.is_null() && !first.is_undefined() {
+        read(b"windowBits");
+    }
+    let window_value = read(b"windowBits");
+    let window =
+        if min_window_bits == 0 && option_number(window_value, "options.windowBits") == Some(0.0) {
+            0.0
+        } else {
+            gzip_range(window_value, "options.windowBits", 8, 15, 15.0)
+        };
+    let level = gzip_range(read(b"level"), "options.level", -1, 9, -1.0);
+    let mem = gzip_range(read(b"memLevel"), "options.memLevel", 1, 9, 8.0);
+    let strategy = gzip_range(read(b"strategy"), "options.strategy", 0, 4, 0.0);
+    let dict = scope.root_nanbox_f64(read(b"dictionary"));
+    let value = dict.get_nanbox_f64();
+    if !crate::value::JSValue::from_bits(value.to_bits()).is_undefined()
+        && crate::object::view_brand::view_brand(value).is_none()
+        && crate::buffer::buffer_brand(crate::value::addr_class::object_ref_addr(value))
+            != Some(crate::buffer::BufferBrand::ArrayBuffer)
+    {
+        crate::validators::throw_invalid_arg_type(
+            "options.dictionary",
+            "an instance of Buffer, TypedArray, DataView, or ArrayBuffer",
+            dict.get_nanbox_f64(),
+        );
+    }
+    gzip_option_record(&[
+        ("windowBits", window),
+        ("level", level),
+        ("memLevel", mem),
+        ("strategy", strategy),
+        ("dictionary", dict.get_nanbox_f64()),
+    ])
+}
+
+/// Complete the actual option spread, then retain the last info read once.
+/// Internal records contain data fields only; copying them cannot invoke JS.
+#[no_mangle]
+pub extern "C" fn js_zlib_sync_finish_options(opts: f64, codec: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let opts = scope.root_nanbox_f64(opts);
+    let codec = scope.root_nanbox_f64(codec);
+    let base = scope.root_nanbox_f64(js_zlib_gzip_base_options(opts.get_nanbox_f64()));
+    let source = scope.root_nanbox_f64(js_zlib_gzip_transform_options(opts.get_nanbox_f64(), 0));
+    let copy = scope.root_nanbox_f64(js_zlib_gzip_transform_options(source.get_nanbox_f64(), 1));
+    let info = scope.root_nanbox_f64(gzip_read_option(source.get_nanbox_f64(), b"info"));
+    let selected = scope.root_nanbox_f64(gzip_option_record(&[
+        ("info", info.get_nanbox_f64()),
+        (
+            "_syncInfo",
+            f64::from_bits(
+                crate::value::JSValue::bool(crate::value::js_is_truthy(info.get_nanbox_f64()) != 0)
+                    .bits(),
+            ),
+        ),
+    ]));
+    for record in [&codec, &base, &selected] {
+        unsafe {
+            crate::object::js_object_literal_spread(copy.get_nanbox_f64(), record.get_nanbox_f64());
+        }
+    }
+    copy.get_nanbox_f64()
+}
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_SYNC_CODEC_OPTIONS: extern "C" fn(f64, i32) -> f64 = js_zlib_sync_codec_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_ZLIB_SYNC_FINISH_OPTIONS: extern "C" fn(f64, f64) -> f64 =
+    js_zlib_sync_finish_options;
 
 /// Capture FIRST validated codec values before native codec initialization.
 /// The returned traced record also retains the selected dictionary; accepting
@@ -522,7 +703,7 @@ pub extern "C" fn js_zlib_validate_buffer_arg(data_bits: i64) {
     // word must be one the allocator owns; `object_ref_addr` vouches for it.
     let raw = crate::value::addr_class::object_ref_addr(value);
     if raw >= 0x1000 {
-        if crate::typedarray::lookup_typed_array_kind(raw).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some() {
             return;
         }
         if crate::buffer::is_registered_buffer(raw) {
@@ -581,6 +762,10 @@ static KEEP_JS_ZLIB_VALIDATE_PARAMS: extern "C" fn(f64, f64) -> i32 = js_zlib_va
 static KEEP_JS_ZLIB_VALIDATE_OPTIONS: extern "C" fn(f64, i32) = js_zlib_validate_options;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
+static KEEP_JS_ZLIB_DECODE_COMPLETION_OPTIONS: extern "C" fn(f64) -> i32 =
+    js_zlib_decode_completion_options;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
 static KEEP_JS_ZLIB_DEFLATE_OPTIONS: extern "C" fn(f64, i32) -> f64 = js_zlib_deflate_options;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
@@ -633,12 +818,8 @@ pub extern "C" fn js_zlib_stream_option(opts: f64, which: i32) -> usize {
     if jv.is_undefined() || jv.is_null() {
         return default;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    };
-    if !jv.is_number() && !jv.is_int32()
+    let n = v;
+    if !jv.is_number()
         || !n.is_finite()
         || n < (if which == 0 { 64.0 } else { 0.0 })
         || (which != 0 && n.fract() != 0.0)

@@ -1,0 +1,5 @@
+failed to add import node 0 for test case `invalid-import-name`
+
+Caused by:
+    0: import name `NOT_VALID` is not valid
+    1: `NOT_VALID` is not in kebab case

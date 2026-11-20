@@ -31,6 +31,7 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
         } => (object, property),
         other => {
             return Expr::Call {
+                byte_end: 0,
                 callee: Box::new(other),
                 args,
                 type_args: Vec::new(),
@@ -40,7 +41,9 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
     };
     // Helper to rebuild the original Call if we don't want to fold.
     let rebuild = |obj: Box<Expr>, prop: String, args: Vec<Expr>| Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: obj,
             property: prop,
@@ -331,8 +334,8 @@ pub(crate) fn is_known_namespace_static_function(obj_name: &str, prop_name: &str
         // `util.types.isArrayBufferView` predicate at call sites). The bare
         // value-read must report typeof "function".
         "ArrayBuffer" => prop_name == "isView",
-        // #2874: `Iterator.from` is a real static function in Node 22+.
-        "Iterator" => prop_name == "from",
+        // #2874: `Iterator.from` / `Iterator.concat` are real static functions.
+        "Iterator" => matches!(prop_name, "from" | "concat"),
         "Response" => matches!(prop_name, "json" | "redirect" | "error"),
         _ => false,
     }

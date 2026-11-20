@@ -1,0 +1,12 @@
+direct objects 672 0 162323450
+{"id":1,"text":"observed"} get,
+{"visible":1}
+"own-result"
+"proto-result"
+{"id":1,"text":"plain"}
+DEC 250: Cannot add member Object.prototype.toJSON: built-in objects are read-only in a compiled program
+{"id":1,"text":"plain"}
+{"id":1,"text":"plain"} get,own:,proto:,
+{"1":1,"2":2,"a":0}
+{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6}
+{"a":3,"b":{}}

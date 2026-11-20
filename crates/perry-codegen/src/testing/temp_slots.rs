@@ -89,6 +89,8 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
     let defs = defs(fn_ir);
     let mut out: BTreeMap<String, Vec<SlotEvent>> = BTreeMap::new();
     let mut entry_seeds: BTreeMap<String, usize> = BTreeMap::new();
+    // Re-read stem -> (slot, line), for reuse aliases below.
+    let mut reloads: BTreeMap<String, (String, usize)> = BTreeMap::new();
 
     for (line_no, line) in fn_ir.lines().map(str::trim).enumerate() {
         // ---- stores and clears -------------------------------------------
@@ -194,15 +196,135 @@ pub fn slot_traffic(fn_ir: &str) -> BTreeMap<String, Vec<SlotEvent>> {
             // the register the rest of the function uses is the stem.
             let into = dst.strip_suffix(".rs4p").unwrap_or(dst).to_string();
             if slot.starts_with('%') {
+                reloads.insert(into.clone(), (slot.clone(), line_no));
                 out.entry(slot).or_default().push(SlotEvent::Load {
                     into,
                     line: line_no,
                 });
             }
         }
+        // `precise_roots/reload_reuse.rs`: `%r9.rs4o = add i64 %r7.rs4o, 0`
+        // names an earlier re-read of the same slot instead of re-reading it.
+        // It is a re-read at THIS line only if nothing between the two could
+        // have collected; otherwise it is not a load at all, so a reuse across
+        // a safepoint still fails every rooting assertion built on this.
+        if let (Some(stem), Some(prev)) = (
+            dst.strip_suffix(".rs4o"),
+            def.strip_prefix("add i64 ")
+                .and_then(|r| r.strip_suffix(", 0"))
+                .and_then(|r| r.strip_suffix(".rs4o")),
+        ) {
+            if let Some((slot, from)) = reloads.get(prev).cloned() {
+                if no_dirty_path(fn_ir, &slot, from, line_no) {
+                    reloads.insert(stem.to_string(), (slot.clone(), line_no));
+                    out.entry(slot).or_default().push(SlotEvent::Load {
+                        into: stem.to_string(),
+                        line: line_no,
+                    });
+                }
+            }
+        }
     }
 
     out
+}
+
+/// A call RS4GC would turn into a safepoint: anything but a call-site
+/// `"gc-leaf-function"` or inline asm.
+fn line_may_collect(line: &str) -> bool {
+    let t = line.trim();
+    // `call`, with or without a `tail`/`musttail`/`notail` marker, and
+    // `invoke`, at the start or after an assignment.
+    let is_call = t
+        .split_whitespace()
+        .take(4)
+        .any(|w| w == "call" || w == "invoke");
+    is_call && !t.contains("\"gc-leaf-function\"") && !t.contains(" asm ") && !t.contains("@llvm.")
+}
+
+/// Does every CFG path from line `from` to line `to` avoid both a collecting
+/// call and a store to `slot`? Independent of the reuse pass's own analysis:
+/// a forward search that marks a path dirty at the first such line and fails
+/// if it reaches `to` dirty (or never reaches it).
+fn no_dirty_path(fn_ir: &str, slot: &str, from: usize, to: usize) -> bool {
+    let lines: Vec<&str> = fn_ir.lines().collect();
+    let is_label =
+        |l: &str| !l.starts_with(' ') && l.trim_end().ends_with(':') && !l.trim().is_empty();
+    // Block start lines, and label name -> start.
+    let mut starts = vec![0usize];
+    let mut by_name: BTreeMap<String, usize> = BTreeMap::new();
+    for (i, l) in lines.iter().enumerate() {
+        if is_label(l) {
+            starts.push(i);
+            by_name.insert(l.trim_end().trim_end_matches(':').to_string(), i);
+        }
+    }
+    let dirty_line = |l: &str| {
+        line_may_collect(l)
+            || (l.trim_start().starts_with("store ")
+                && l.trim_end().ends_with(&format!(", ptr {slot}")))
+    };
+    let mut seen: std::collections::BTreeSet<(usize, bool)> = Default::default();
+    let mut work = vec![(from + 1, false)];
+    let mut reached = false;
+    while let Some((mut i, mut dirty)) = work.pop() {
+        if !seen.insert((i, dirty)) {
+            continue;
+        }
+        loop {
+            if i >= lines.len() {
+                break;
+            }
+            if i == to {
+                if dirty {
+                    return false;
+                }
+                reached = true;
+                break;
+            }
+            let l = lines[i];
+            if i != from + 1 && is_label(l) {
+                // Fell through into the next block: no implicit fallthrough in
+                // LLVM IR, so this only happens past a terminator.
+                break;
+            }
+            dirty |= dirty_line(l);
+            // A `switch` lists its cases on the following lines up to `]`:
+            // every one of them is a successor.
+            let mut edge_text = l.to_string();
+            if l.trim_start().starts_with("switch ") && l.trim_end().ends_with('[') {
+                let mut j = i + 1;
+                while j < lines.len() {
+                    edge_text.push(' ');
+                    edge_text.push_str(lines[j]);
+                    if lines[j].trim() == "]" {
+                        break;
+                    }
+                    j += 1;
+                }
+            }
+            let mut rest = edge_text.as_str();
+            let mut any_edge = false;
+            while let Some(at) = rest.find("label %") {
+                let tail = &rest[at + "label %".len()..];
+                let name: String = tail
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '$' | '-'))
+                    .collect();
+                if let Some(&start) = by_name.get(&name) {
+                    work.push((start + 1, dirty));
+                    any_edge = true;
+                }
+                rest = tail;
+            }
+            if any_edge {
+                break;
+            }
+            i += 1;
+        }
+    }
+    let _ = starts;
+    reached
 }
 
 /// Does `reg` derive from `ancestor` within `depth` def-use steps?
@@ -613,6 +735,39 @@ pub fn assert_temp_rooting_count(fn_ir: &str, expected: usize, what: &str) {
 
 #[cfg(test)]
 mod tests {
+    use super::{slot_traffic, SlotEvent};
+
+    fn alias_is_load(fn_ir: &str) -> bool {
+        slot_traffic(fn_ir).get("%r1").is_some_and(|events| {
+            events
+                .iter()
+                .any(|e| matches!(e, SlotEvent::Load { into, .. } if into == "%v2"))
+        })
+    }
+
+    const RELOAD: &str = "  %v1.rs4p = load ptr addrspace(1), ptr %r1\n  %v1.rs4o = call i64 asm \"\", \"=r,0\"(ptr addrspace(1) %v1.rs4p) \"gc-leaf-function\"\n";
+    const ALIAS: &str = "  %v2.rs4o = add i64 %v1.rs4o, 0\n";
+
+    #[test]
+    fn a_reuse_alias_is_a_reread_only_without_a_collection_between() {
+        let clean = format!("define void @f() {{\nentry:\n{RELOAD}{ALIAS}  ret void\n}}\n");
+        assert!(alias_is_load(&clean));
+        // Tail markers still make it a call.
+        let notail = format!(
+            "define void @f() {{\nentry:\n{RELOAD}  notail call void @js_gc_loop_safepoint()\n{ALIAS}  ret void\n}}\n"
+        );
+        assert!(!alias_is_load(&notail), "{notail}");
+        let tail = notail.replace("notail call", "%t = tail call i64 @collect() ;");
+        assert!(!alias_is_load(&tail), "{tail}");
+    }
+
+    #[test]
+    fn every_switch_case_is_a_successor_of_the_reuse_scan() {
+        let ir = format!(
+            "define void @f(i32 %k) {{\nentry:\n{RELOAD}  switch i32 %k, label %join [\n    i32 1, label %slow\n  ]\nslow:\n  call void @js_gc_loop_safepoint()\n  br label %join\njoin:\n{ALIAS}  ret void\n}}\n"
+        );
+        assert!(!alias_is_load(&ir), "{ir}");
+    }
     use super::*;
 
     /// The pooled shape, shadow spelling — `console.log("label", {})`.
@@ -676,9 +831,7 @@ entry.0:
     /// This is the sabotage the positive assertion has to catch, and the
     /// spelling-based `ir.contains("…temp_root_push")` catches it only by
     /// accident — it would also "catch" a module that rooted something else.
-    #[test]
-    fn an_unrooted_accumulator_is_caught() {
-        let unrooted = "\
+    const UNROOTED: &str = "\
 define i32 @main() {
 entry.0:
   %r1 = call i64 @js_array_alloc(i32 2)
@@ -687,23 +840,28 @@ entry.0:
   ret i32 0
 }
 ";
-        assert!(
-            std::panic::catch_unwind(|| assert_rooted_across(
-                unrooted,
-                "%r1",
-                "js_array_push_f64",
-                "sabotage"
-            ))
-            .is_err(),
-            "an accumulator that never reaches a slot must fail the assertion"
-        );
-        assert_no_temp_rooting(unrooted, "sabotage control");
+
+    /// The sabotage control really roots nothing.
+    #[test]
+    fn the_unrooted_accumulator_control_roots_nothing() {
+        assert_no_temp_rooting(UNROOTED, "sabotage control");
+    }
+
+    /// An accumulator that never reaches a slot must fail the assertion.
+    #[test]
+    #[should_panic(expected = "sabotage: %r1 is never stored into a rooted slot")]
+    fn an_unrooted_accumulator_is_caught() {
+        assert_rooted_across(UNROOTED, "%r1", "js_array_push_f64", "sabotage");
     }
 
     /// Rooted but not RE-READ — #7114 exactly. The value has liveness and a
     /// rewritten location, and the consuming call still observes the stale
     /// address. The old `contains("…temp_root_push")` passes this happily.
+    /// A consuming call that reuses the pushed register must fail (#7114).
     #[test]
+    #[should_panic(
+        expected = "sabotage: @js_array_push_f64 takes [\"%r1\", \"1.0\"], none of which was re-read from %s"
+    )]
     fn rooted_but_not_re_read_is_caught() {
         let stale = "\
 define i32 @main() {
@@ -716,16 +874,7 @@ entry.0:
   ret i32 0
 }
 ";
-        assert!(
-            std::panic::catch_unwind(|| assert_rooted_across(
-                stale,
-                "%r1",
-                "js_array_push_f64",
-                "sabotage"
-            ))
-            .is_err(),
-            "a consuming call that reuses the pushed register must fail (#7114)"
-        );
+        assert_rooted_across(stale, "%r1", "js_array_push_f64", "sabotage");
     }
 
     /// An `align` suffix on the alloca must not empty the slot set.
@@ -735,32 +884,42 @@ entry.0:
     /// nothing, so every `assert_no_temp_rooting` in the tree passes for a
     /// program that roots. Sabotage: restore the exact compare and this test
     /// fails while none of the positives do.
-    #[test]
-    fn an_aligned_alloca_is_still_recognised_as_a_temp_slot() {
+    fn aligned_shadow() -> String {
         let aligned = SHADOW.replace("%s = alloca i64", "%s = alloca i64, align 8");
         assert_ne!(aligned, SHADOW, "the substitution must actually apply");
+        aligned
+    }
+
+    #[test]
+    fn an_aligned_alloca_is_still_recognised_as_a_temp_slot() {
         assert_eq!(
-            temp_root_slots(&aligned),
+            temp_root_slots(&aligned_shadow()),
             vec!["%s".to_string()],
             "an `align` suffix must not hide the slot — an emptied slot set \
              makes every negative gate vacuous (#7675 review)"
         );
-        assert!(
-            std::panic::catch_unwind(move || assert_no_temp_rooting(&aligned, "sabotage")).is_err()
-        );
     }
 
+    /// …and the negative gate sees the aligned slot's rooting.
     #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
+    fn an_aligned_temp_slot_fails_the_negative_gate() {
+        assert_no_temp_rooting(&aligned_shadow(), "sabotage");
+    }
+
+    /// A program that DOES root must fail `assert_no_temp_rooting` —
+    /// otherwise the negative gates are claims about nothing.
+    #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
     fn the_negative_direction_sees_real_rooting() {
-        assert!(
-            std::panic::catch_unwind(|| assert_no_temp_rooting(SHADOW, "sabotage")).is_err(),
-            "a program that DOES root must fail `assert_no_temp_rooting` — \
-             otherwise the negative gates are claims about nothing"
-        );
-        assert!(
-            std::panic::catch_unwind(|| assert_no_temp_rooting(NATIVE, "sabotage")).is_err(),
-            "…in both lowerings"
-        );
+        assert_no_temp_rooting(SHADOW, "sabotage");
+    }
+
+    /// …in both lowerings.
+    #[test]
+    #[should_panic(expected = "sabotage: a temp root was emitted where none is needed")]
+    fn the_negative_direction_sees_real_native_rooting() {
+        assert_no_temp_rooting(NATIVE, "sabotage");
     }
 
     #[test]
@@ -801,9 +960,7 @@ entry.0:
             "only the registered class-key provenance is exempt; a missing temp-root clear must stay visible"
         );
     }
-    #[test]
-    fn typed_shadow_homes_keep_the_rooting_contract_and_its_teeth() {
-        let typed = r#"define i32 @main() {
+    const TYPED_HOME: &str = r#"define i32 @main() {
 entry.0:
   %s = alloca double
   store double 0.0, ptr %s
@@ -827,6 +984,10 @@ entry.0:
   ret i32 0
 }
 "#;
+
+    #[test]
+    fn typed_shadow_homes_keep_the_rooting_contract_and_its_teeth() {
+        let typed = TYPED_HOME;
         assert_temp_rooting_count(typed, 1, "typed home");
         assert_rooted_across(typed, "%r1", "js_array_push_f64", "typed home");
         assert_rooted_across(typed, "%r32", "js_console_log_spread", "typed home");
@@ -839,13 +1000,16 @@ entry.0:
             temp_root_slot_holding(&unbound, "%r1").is_none(),
             "an ordinary double home is not evidence of a GC root"
         );
-        let stale = typed.replace("i64 %r31, double 1.0", "i64 %r1, double 1.0");
-        assert!(
-            std::panic::catch_unwind(|| {
-                assert_rooted_across(&stale, "%r1", "js_array_push_f64", "stale typed home")
-            })
-            .is_err(),
-            "a tagged store must not hide a missing reload"
-        );
+    }
+
+    /// A tagged store must not hide a missing reload.
+    #[test]
+    #[should_panic(
+        expected = "stale typed home: @js_array_push_f64 takes [\"%r1\", \"1.0\"], none of which was re-read from %s"
+    )]
+    fn a_typed_home_without_its_reload_is_caught() {
+        let stale = TYPED_HOME.replace("i64 %r31, double 1.0", "i64 %r1, double 1.0");
+        assert_ne!(stale, TYPED_HOME, "the substitution must actually apply");
+        assert_rooted_across(&stale, "%r1", "js_array_push_f64", "stale typed home");
     }
 }

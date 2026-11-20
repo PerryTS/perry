@@ -54,13 +54,97 @@ pub(super) fn retype_closure_bodies(ir: &str) -> (String, HashMap<String, Retype
             pending = Some(format!("  {param} = ptrtoint ptr {param}.ptr to i64\n"));
             continue;
         }
+        // Another module's body, reached by a guarded direct call: its
+        // definition is retyped there, so route this module's calls through
+        // the same adapter (`abi_adapt` rewrites the declaration too).
+        if let Some((name, ret, mut params)) = imported_body_declare(line) {
+            params[0] = "ptr".to_string();
+            retyped.insert(name, Retyped { ret, params });
+        }
         out.push_str(line);
     }
     (out, retyped)
 }
 
+/// Give every indirect call of a JS body the body's pointer-width ABI.
+///
+/// [`retype_closure_bodies`] retypes the definitions; the calls built through
+/// `expr::body_call` reach a body by code pointer and still spell the callee
+/// as `i64`. A wasm `call_indirect` must match the callee's signature
+/// exactly, so such a call traps (`indirect call type mismatch`). Rewrite each
+/// indirect `double`-returning call whose first two arguments are the
+/// `(i64 callee, i64 this)` pair to pass the callee as `ptr`; a native
+/// argument-list body (`JsNativeArgsBody`, `(callee, this, *const f64,
+/// usize)`) also takes its length as an `i32`.
+pub(super) fn retype_indirect_body_calls(ir: &str) -> String {
+    let mut out = String::with_capacity(ir.len() + 1024);
+    let mut next = 0usize;
+    for line in ir.split_inclusive('\n') {
+        match adapt_indirect_call(line, &mut next) {
+            Some((prelude, call)) => {
+                out.push_str(&prelude);
+                out.push_str(&call);
+            }
+            None => out.push_str(line),
+        }
+    }
+    out
+}
+
+fn adapt_indirect_call(line: &str, next: &mut usize) -> Option<(String, String)> {
+    let call_at = [" call double %", " invoke double %"]
+        .iter()
+        .find_map(|kw| line.find(kw).map(|at| at + kw.len() - 1))?;
+    let open = call_at + line[call_at..].find('(')?;
+    let close = open + line[open..].find(')')?;
+    let mut args: Vec<&str> = line[open + 1..close].split(", ").collect();
+    let value = |arg: &str, ty: &str| arg.strip_prefix(ty)?.strip_prefix(' ').map(str::to_string);
+    let callee = value(args.first()?, "i64")?;
+    value(args.get(1)?, "i64")?;
+    let native_args = args.len() == 4 && args[2].starts_with("ptr ") && args[3].starts_with("i64 ");
+    if args.len() > 2 && !native_args && !args[2..].iter().all(|a| a.starts_with("double ")) {
+        return None;
+    }
+    let mut prelude = String::new();
+    let id = *next;
+    *next += 1;
+    let callee_ptr = format!("%body.callee.{id}");
+    prelude.push_str(&format!("  {callee_ptr} = inttoptr i64 {callee} to ptr\n"));
+    let first = format!("ptr {callee_ptr}");
+    args[0] = &first;
+    let argc;
+    if native_args {
+        let len = value(args[3], "i64")?;
+        let len_i32 = format!("%body.argc.{id}");
+        prelude.push_str(&format!("  {len_i32} = trunc i64 {len} to i32\n"));
+        argc = format!("i32 {len_i32}");
+        args[3] = &argc;
+    }
+    let rewritten = format!("{}({}{}", &line[..open], args.join(", "), &line[close..]);
+    Some((prelude, rewritten))
+}
+
 /// `define [linkage …] <ret> @name(i64 %this_closure, <ty> %x, …) … {`
 /// → (name, ret, param types).
+/// `declare <ret> @__perry_wrap_perry_fn_…(i64, i64, …)`: a JS body wrapper
+/// another module defines (every such definition takes `i64 %this_closure`).
+fn imported_body_declare(line: &str) -> Option<(String, String, Vec<String>)> {
+    let rest = line.strip_prefix("declare ")?;
+    let at = rest.find(" @__perry_wrap_perry_fn_")?;
+    let after = &rest[at + 2..];
+    let paren = after.find('(')?;
+    let close = after[paren..].find(')')? + paren;
+    let params: Vec<String> = after[paren + 1..close]
+        .split(',')
+        .map(|p| p.trim().to_string())
+        .collect();
+    if params.len() < 2 || params[0] != "i64" || params[1] != "i64" {
+        return None;
+    }
+    let ret = rest[..at].rsplit(' ').next()?.to_string();
+    Some((after[..paren].to_string(), ret, params))
+}
+
 fn closure_define(line: &str) -> Option<(String, String, Vec<String>, String)> {
     let rest = line.strip_prefix("define ")?;
     let at = rest.find(" @")?;
@@ -89,7 +173,32 @@ fn closure_define(line: &str) -> Option<(String, String, Vec<String>, String)> {
 
 #[cfg(test)]
 mod tests {
-    use super::retype_closure_bodies;
+    use super::{retype_closure_bodies, retype_indirect_body_calls};
+
+    #[test]
+    fn indirect_body_calls_pass_the_callee_as_a_pointer() {
+        let ir = "  %r = call double %fp(i64 %c, i64 %t, double %a)\n\
+                  %r2 = invoke double %fp(i64 %c, i64 %t) to label %k unwind label %u\n\
+                  %r3 = call double %fp(i64 %c, i64 %t, ptr %args, i64 %n) \"gc-leaf-function\"\n\
+                  %r4 = call double @direct(i64 %c, i64 %t, double %a)\n\
+                  %r5 = call double %fp(i64 %x, double %a)\n";
+        let out = retype_indirect_body_calls(ir);
+        assert!(out.contains("  %body.callee.0 = inttoptr i64 %c to ptr\n  %r = call double %fp(ptr %body.callee.0, i64 %t, double %a)\n"), "{out}");
+        assert!(
+            out.contains("%r2 = invoke double %fp(ptr %body.callee.1, i64 %t) to label"),
+            "{out}"
+        );
+        assert!(out.contains("%body.argc.2 = trunc i64 %n to i32"), "{out}");
+        assert!(out.contains("call double %fp(ptr %body.callee.2, i64 %t, ptr %args, i32 %body.argc.2) \"gc-leaf-function\""), "{out}");
+        assert!(
+            out.contains("%r4 = call double @direct(i64 %c, i64 %t, double %a)\n"),
+            "{out}"
+        );
+        assert!(
+            out.contains("%r5 = call double %fp(i64 %x, double %a)\n"),
+            "{out}"
+        );
+    }
 
     #[test]
     fn public_class_method_entries_use_the_same_pointer_abi() {

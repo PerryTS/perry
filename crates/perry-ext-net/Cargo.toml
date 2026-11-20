@@ -24,6 +24,8 @@ turnloop-tls.workspace = true
 rustls.workspace = true
 serde_json.workspace = true
 rustls-pemfile.workspace = true
+# Reuse the workspace's DER parser to distinguish self-signed rejection causes.
+x509-cert = { version = "0.3", default-features = false }
 
 [target.'cfg(not(target_os = "wasi"))'.dependencies]
 rustls-native-certs = "0.8"
@@ -54,4 +56,4 @@ perry-ffi = { workspace = true, features = ["runtime-link"] }
 # with the real perry-stdlib, so drop the bundled no-op stdlib_stubs that would
 # otherwise shadow perry-stdlib's real symbols (#6314). `default`: keep the copy
 # feature-identical to the shipped runtime so gated dispatchers behave (#6303).
-perry-runtime = { workspace = true, features = ["default", "stdlib", "native-payload-test-census"] }
+perry-runtime = { workspace = true, features = ["default", "stdlib", "native-payload-test-census", "test-layout-descriptors"] }

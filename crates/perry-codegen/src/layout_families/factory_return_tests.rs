@@ -81,6 +81,7 @@ impl Recursive<'_> {
 
 fn call(callee: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(callee),
         args: vec![],
         type_args: vec![],
@@ -90,6 +91,7 @@ fn call(callee: Expr) -> Expr {
 
 fn method(name: &str) -> Expr {
     call(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::Undefined),
         property: name.into(),
         byte_offset: 0,
@@ -98,6 +100,7 @@ fn method(name: &str) -> Expr {
 
 fn new(class: &str) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: class.into(),
         args: vec![],
         type_args: vec![],
@@ -108,6 +111,7 @@ fn new(class: &str) -> Expr {
 
 fn dynamic(callee: Expr) -> Expr {
     Expr::NewDynamic {
+        byte_end: 0,
         callee: Box::new(callee),
         args: vec![],
         byte_offset: 0,

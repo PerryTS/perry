@@ -27,6 +27,7 @@ impl WasmModuleEmitter {
             "jsvalue_to_template_string",
             "is_truthy",
             "js_strict_eq",
+            "js_loose_eq",
             "math_floor",
             "math_ceil",
             "math_round",
@@ -39,6 +40,8 @@ impl WasmModuleEmitter {
             "js_typeof",
             "math_min",
             "math_max",
+            "math_min_spread",
+            "math_max_spread",
             "parse_int",
             "parse_float",
             "js_mod",
@@ -46,13 +49,22 @@ impl WasmModuleEmitter {
             "object_new",
             "object_set",
             "object_get",
+            "object_literal_define",
+            "object_literal_set_prototype",
+            "object_set_prototype_of",
+            "object_get_prototype_of",
+            "reflect_get_prototype_of",
+            "object_super_get",
             "object_get_dynamic",
             "object_set_dynamic",
             "object_delete",
             "object_delete_dynamic",
+            "for_in_keys",
             "object_keys",
             "object_values",
+            "object_create",
             "object_entries",
+            "object_rest",
             "object_has_property",
             "object_assign",
             "array_new",
@@ -119,12 +131,19 @@ impl WasmModuleEmitter {
             "math_clz32",
             "math_imul",
             "closure_new",
+            "function_value",
+            "function_set_prototype",
+            "closure_this",
             "closure_set_capture",
             "closure_call_0",
             "closure_call_1",
             "closure_call_2",
             "closure_call_3",
+            "closure_call_n",
+            "new_dynamic",
             "closure_call_spread",
+            "method_call_spread",
+            "console_call_spread",
             "array_map",
             "array_filter",
             "array_forEach",
@@ -135,10 +154,48 @@ impl WasmModuleEmitter {
             "array_some",
             "array_every",
             "class_new",
+            "class_new_host",
+            "host_super_init",
+            "tagged_template",
+            "template_raw",
+            "class_ref",
+            "class_fresh",
+            "class_env_refresh",
+            "class_env_get",
+            "class_env_set",
+            "class_env_stamp",
+            "class_env_current",
+            "class_register_captures",
+            "class_capture_value",
+            "class_method_home",
+            "class_extends_null",
+            "class_extends_value",
+            "class_instanceof_value",
+            "class_eval_begin",
+            "class_eval_slot",
+            "class_eval_caps",
+            "class_eval_static",
+            "class_eval_static_computed",
+            "class_eval_block",
+            "class_eval_end",
+            "class_define_computed",
+            "class_static_define",
+            "class_static_this",
+            "class_init_computed_field",
+            "to_property_key",
+            "reflect_apply",
             "class_set_method",
+            "class_set_static_method",
+            "class_static_method_this",
             "class_call_method",
+            "class_super_get",
+            "class_super_call",
             "class_get_field",
             "class_set_field",
+            "generator_new",
+            "box_new",
+            "box_get",
+            "box_set",
             "class_set_static",
             "class_get_static",
             "class_instanceof",
@@ -162,6 +219,12 @@ impl WasmModuleEmitter {
             "set_size",
             "set_clear",
             "set_values",
+            "collection_cursor_next",
+            "collection_cursor_epoch",
+            "collection_cursor_release",
+            "set_value_at",
+            "map_entry_key_at",
+            "map_entry_value_at",
             "date_new_val",
             "date_get_time",
             "date_to_iso_string",
@@ -173,13 +236,50 @@ impl WasmModuleEmitter {
             "date_get_minutes",
             "date_get_seconds",
             "date_get_milliseconds",
+            "date_parse",
+            "date_utc",
+            "date_value_of",
+            "date_get_timezone_offset",
+            "date_get_utc_full_year",
+            "date_get_utc_month",
+            "date_get_utc_date",
+            "date_get_utc_day",
+            "date_get_utc_hours",
+            "date_get_utc_minutes",
+            "date_get_utc_seconds",
+            "date_get_utc_milliseconds",
+            "date_set_utc_full_year",
+            "date_set_utc_month",
+            "date_set_utc_date",
+            "date_set_utc_hours",
+            "date_set_utc_minutes",
+            "date_set_utc_seconds",
+            "date_set_utc_milliseconds",
+            "date_to_date_string",
+            "date_to_time_string",
+            "date_to_locale_string",
+            "date_to_locale_date_string",
+            "date_to_locale_time_string",
+            "date_to_json",
             "error_new",
             "error_message",
+            "error_super_init",
+            "global_property",
+            "global_receiver",
+            "propagate_exception",
             "regexp_new",
             "regexp_test",
             "number_coerce",
             "is_nan",
             "is_finite",
+            "number_is_integer",
+            "number_is_safe_integer",
+            "global_is_nan",
+            "global_is_finite",
+            "encode_uri",
+            "decode_uri",
+            "encode_uri_component",
+            "decode_uri_component",
             "console_log_multi",
             "class_set_parent",
             "try_start",
@@ -251,7 +351,10 @@ impl WasmModuleEmitter {
             "promise_then",
             "await_promise",
         ];
-        for name in &bridge_names {
+        for name in bridge_names
+            .iter()
+            .chain(super::expr::ITERATOR_RECORD_BRIDGES)
+        {
             self.intern_string(name);
         }
 
@@ -346,6 +449,14 @@ impl WasmModuleEmitter {
                 }
                 self.collect_strings_in_stmts(&setter.body);
             }
+            for member in &class.computed_members {
+                for param in &member.function.params {
+                    if let Some(default) = &param.default {
+                        self.collect_strings_in_expr(default);
+                    }
+                }
+                self.collect_strings_in_stmts(&member.function.body);
+            }
             for field in &class.fields {
                 self.intern_string(&field.name);
                 if let Some(init) = &field.init {
@@ -424,6 +535,7 @@ impl WasmModuleEmitter {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.collect_strings_in_stmts(body);
                 if let Some(c) = catch {
@@ -531,6 +643,14 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(e);
                 }
             }
+            Expr::TaggedTemplateStrings { cooked, raw, .. } => {
+                for e in cooked {
+                    self.collect_strings_in_expr(e);
+                }
+                for s in raw {
+                    self.intern_string(s);
+                }
+            }
             Expr::Object(fields) => {
                 for (k, v) in fields {
                     self.intern_string(k);
@@ -553,7 +673,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.intern_string(property);
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
@@ -561,6 +681,7 @@ impl WasmModuleEmitter {
                 object,
                 index,
                 value,
+                ..
             } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
@@ -606,14 +727,18 @@ impl WasmModuleEmitter {
             Expr::StaticFieldGet {
                 class_name,
                 field_name,
-            }
-            | Expr::StaticFieldSet {
-                class_name,
-                field_name,
-                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);
+            }
+            Expr::StaticFieldSet {
+                class_name,
+                field_name,
+                value,
+            } => {
+                self.intern_string(class_name);
+                self.intern_string(field_name);
+                self.collect_strings_in_expr(value);
             }
             Expr::StaticMethodCall {
                 class_name,
@@ -626,9 +751,12 @@ impl WasmModuleEmitter {
                     self.collect_strings_in_expr(a);
                 }
             }
-            Expr::InstanceOf { expr, ty, .. } => {
+            Expr::InstanceOf { expr, ty, ty_expr } => {
                 self.collect_strings_in_expr(expr);
                 self.intern_string(ty);
+                if let Some(ty_expr) = ty_expr {
+                    self.collect_strings_in_expr(ty_expr);
+                }
             }
             Expr::In { property, object } => {
                 self.collect_strings_in_expr(property);
@@ -667,11 +795,13 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(index);
             }
             Expr::ObjectSpread { parts } => {
-                for (key_opt, val) in parts {
-                    if let Some(k) = key_opt {
+                for part in parts {
+                    if let ObjectPart::Define(k, _) = part {
                         self.intern_string(k);
                     }
-                    self.collect_strings_in_expr(val);
+                    for e in part {
+                        self.collect_strings_in_expr(e);
+                    }
                 }
             }
             Expr::ArraySpread(elements) => {
@@ -963,11 +1093,24 @@ impl WasmModuleEmitter {
             Expr::JsonParse(e) | Expr::JsonStringify(e) => {
                 self.collect_strings_in_expr(e);
             }
+            Expr::JsonStringifyFull(val, replacer, space) => {
+                self.collect_strings_in_expr(val);
+                self.collect_strings_in_expr(replacer);
+                self.collect_strings_in_expr(space);
+            }
             Expr::NumberCoerce(e)
             | Expr::IsNaN(e)
             | Expr::IsUndefinedOrBareNan(e)
             | Expr::IsFinite(e)
-            | Expr::BigIntCoerce(e) => {
+            | Expr::NumberIsNaN(e)
+            | Expr::NumberIsFinite(e)
+            | Expr::NumberIsInteger(e)
+            | Expr::NumberIsSafeInteger(e)
+            | Expr::BigIntCoerce(e)
+            | Expr::EncodeURI(e)
+            | Expr::DecodeURI(e)
+            | Expr::EncodeURIComponent(e)
+            | Expr::DecodeURIComponent(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::ParseInt { string, radix } => {
@@ -1045,7 +1188,11 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(auth_header);
                 self.collect_strings_in_expr(body);
             }
-            _ => {}
+            // Every other variant interns the strings under its children, so a
+            // literal under a node without its own arm still has an id.
+            _ => perry_hir::walker::walk_expr_children(expr, &mut |child| {
+                self.collect_strings_in_expr(child)
+            }),
         }
     }
 }

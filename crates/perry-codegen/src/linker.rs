@@ -16,8 +16,12 @@ use std::sync::OnceLock;
 
 use anyhow::{anyhow, bail, Context, Result};
 
+#[path = "linker_partial.rs"]
+mod linker_partial;
 #[path = "linker_temp.rs"]
 mod linker_temp;
+#[cfg(not(target_os = "windows"))]
+use linker_partial::unix_partial_linker;
 use linker_temp::{
     reap_stale_llvm_scratch_once, FailedScratch, FailureRetention, TempPathGuard,
     PROCESS_FAILURE_RETENTION,
@@ -37,6 +41,13 @@ use linker_temp::{
 /// native-roots correctness pipelines cannot drift.
 pub(crate) const STATEPOINT_REWRITE_PASSES: &str =
     "always-inline,function(mem2reg,sccp,dce),rewrite-statepoints-for-gc";
+
+/// [`STATEPOINT_REWRITE_PASSES`] in two runs, for the in-process pass that
+/// works on inlined bodies before their calls become statepoints
+/// (`inprocess/stack_checks.rs`). Same passes, same order.
+pub(crate) const STATEPOINT_INLINE_PASS: &str = "always-inline";
+pub(crate) const STATEPOINT_REWRITE_AFTER_INLINE: &str =
+    "function(mem2reg,sccp,dce),rewrite-statepoints-for-gc";
 
 /// Cached result of the pre-flight clang probe — evaluated once per process.
 /// `Some(default_triple)` if the probe succeeded, `None` if it failed.
@@ -470,8 +481,9 @@ fn build_clang_compile_plan(
         for args in [&mut clang_args, &mut analysis_clang_args] {
             args.extend(
                 [
+                    "-mexception-handling",
                     "-mllvm",
-                    "-wasm-enable-sjlj",
+                    "-wasm-enable-eh",
                     "-mllvm",
                     "-wasm-use-legacy-eh=false",
                 ]
@@ -873,7 +885,7 @@ pub(crate) fn finish_native_pieces(
 ///
 /// The value participates in both the build cache and the object cache keys,
 /// so the backends can never share a cached object.
-fn inprocess_requested(native_roots: bool) -> bool {
+pub(crate) fn inprocess_requested(native_roots: bool) -> bool {
     // Native rooting requires the same LLVM pipeline that publishes frame homes.
     // Transport preferences cannot bypass the linear statepoint lowering.
     if native_roots {
@@ -1144,6 +1156,10 @@ fn compile_input_to_object_in_with_retention(
          PERRY_LLVM_CLANG to the path of clang. Run `perry doctor` to verify the install."
     })?;
     ensure_supported_clang(&clang)?;
+    #[cfg(feature = "target-wasi")]
+    if target_triple.is_some_and(|target| target.starts_with("wasm32")) {
+        crate::wasi_toolchain::check_external(&clang)?;
+    }
 
     // #7131: content-address the `.ll` basename (clang embeds it into the
     // object on ELF). #509: keep the `.o` unique via the per-call counter.
@@ -1457,7 +1473,7 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     #[cfg(target_os = "windows")]
     let tool = env::var("PERRY_LLVM_LIB").unwrap_or_else(|_| "llvm-lib".to_string());
     #[cfg(not(target_os = "windows"))]
-    let tool = env::var("PERRY_LD").unwrap_or_else(|_| "ld".to_string());
+    let (tool, keep_private_externs, hint) = unix_partial_linker(objs);
     let mut cmd = Command::new(&tool);
     #[cfg(target_os = "windows")]
     cmd.arg(format!("/OUT:{}", combined.display()));
@@ -1469,9 +1485,12 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     // object (`_perry_static_shape_seeds.o`) references ConstFn bodies'
     // `$info` records, which are emitted `hidden` for exactly that reason.
     // Without this flag a module split into codegen units links only when it
-    // is not split. GNU ld and lld already keep hidden symbols global.
-    #[cfg(target_os = "macos")]
-    cmd.arg("-keep_private_externs");
+    // is not split. GNU ld and lld already keep hidden symbols global, and
+    // reject the flag.
+    #[cfg(not(target_os = "windows"))]
+    if keep_private_externs {
+        cmd.arg("-keep_private_externs");
+    }
     for p in &obj_paths {
         cmd.arg(p);
     }
@@ -1482,7 +1501,7 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         }
         #[cfg(not(target_os = "windows"))]
         {
-            format!("failed to invoke partial linker `{} -r`", tool)
+            format!("failed to invoke partial linker `{} -r`{}", tool, hint)
         }
     })?;
     let result = if out.status.success() {

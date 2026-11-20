@@ -1,9 +1,12 @@
 // Class constructor/prototype REF values and the prototype-method lookups
 // keyed off them.
 //
-// A "class ref" is an INT32-tagged NaN box carrying a class id (plus a flag bit
-// for the `C.prototype` half), which is how compiled code names a class without
-// materializing an object. Extracted from `native_module.rs` to keep that file
+// A class constructor value is its function object (`class_value`); the
+// `C.prototype` half is a `0x7FFE` word with `CLASS_PROTOTYPE_REF_FLAG` set,
+// which is never an int32 number. Since P3 B2 that word is runtime-internal
+// only (a method's home for super/brand lookup): a `C.prototype` read returns
+// the declaration's prototype object, or `undefined` for an id with no
+// declaration (`get_field_by_name.rs`, `construct.rs`), never this word. Extracted from `native_module.rs` to keep that file
 // under the repository's 2000-line cap. Textually `include!`d (like
 // `class_method_values.rs`), so every item keeps the module path and visibility
 // it had before -- hence line comments, not `//!` inner docs, which are illegal
@@ -22,14 +25,21 @@ pub(crate) fn class_constructor_key_bits(class_id: u32) -> u64 {
     0x7FFE_0000_0000_0000u64 | (class_id as u64 & 0xFFFF_FFFF)
 }
 
-pub(crate) fn class_prototype_ref_value(class_id: u32) -> f64 {
+/// A class method's home word: the capture-0 marker of a method declaration
+/// value (`class_method_declaration_value_bytes`) naming the class whose
+/// prototype is the method's `[[HomeObject]]`. Runtime-internal, in the 0x7FFE
+/// space (DESIGN-p3 §1.2, R4): only `js_class_method_home` and
+/// `class_method_value_target` read it, and it is never a JS value.
+pub(crate) fn class_method_home_word(class_id: u32) -> f64 {
     f64::from_bits(
         0x7FFE_0000_0000_0000u64 | CLASS_PROTOTYPE_REF_FLAG | (class_id as u64 & 0xFFFF_FFFF),
     )
 }
 
+/// The class a [`class_method_home_word`] names. Only for a method's home
+/// capture: a JS value is never this word.
 #[inline]
-pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
+pub(crate) fn class_method_home_id(value: f64) -> Option<u32> {
     let bits = value.to_bits();
     if (bits >> 48) == 0x7FFE && (bits & CLASS_PROTOTYPE_REF_FLAG) != 0 {
         let class_id = (bits & 0xFFFF_FFFF) as u32;
@@ -40,23 +50,27 @@ pub(crate) fn class_prototype_ref_id(value: f64) -> Option<u32> {
     None
 }
 
-/// A class constructor OR its `C.prototype` reference -> the class id. The
-/// constructor half is [`super::class_value::class_value_id`] (both forms);
-/// callers that mean only the constructor ask that directly.
+/// The class whose prototype object `value` is: its declared prototype or one
+/// evaluation's (`class_id_for_decl_prototype_object`, a structural answer
+/// read off the object). A bound method value whose receiver is a class's
+/// prototype is that class's unbound method: dispatch runs the owner's body
+/// with the call-time `this` (P3 B4a: the receiver is the prototype object,
+/// never the 0x7FFE prototype word).
+#[inline]
+pub(crate) fn class_prototype_object_id(value: f64) -> Option<u32> {
+    let value = JSValue::from_bits(value.to_bits());
+    if !value.is_pointer() {
+        return None;
+    }
+    super::class_registry::class_id_for_decl_prototype_object(value.as_pointer::<u8>() as usize)
+}
+
+/// A class constructor -> the class id: `value` is a class function object.
+/// Anything else (an INT32 number, a method's home word, any other value) is
+/// no class.
 #[inline]
 pub(crate) fn class_ref_id(value: f64) -> Option<u32> {
-    let bits = value.to_bits();
-    match bits >> 48 {
-        // The legacy immediates: constructor or `C.prototype` reference.
-        0x7FFE => {
-            super::class_value::class_value_id_bits(bits).or_else(|| class_prototype_ref_id(value))
-        }
-        // A class function object (one pre-filter for any other pointer).
-        0x7FFD => {
-            super::class_value::class_closure_id((bits & crate::value::POINTER_MASK) as usize)
-        }
-        _ => None,
-    }
+    super::class_value::class_value_id(value)
 }
 
 pub(crate) unsafe fn metadata_key_to_string(value: f64) -> Option<String> {
@@ -137,7 +151,18 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
     class_id: u32,
     method_name: &[u8],
 ) -> f64 {
-    if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
+    class_prototype_method_value_at(class_id, method_name, None)
+}
+
+/// [`class_prototype_method_value_for_name_bytes`] for a method declared at
+/// `known` (its declaration index), when the caller holds it: the declaration
+/// is then read at that index, never searched for by name.
+pub(crate) fn class_prototype_method_value_at(
+    class_id: u32,
+    method_name: &[u8],
+    known: Option<u32>,
+) -> f64 {
+    if let Some(bits) = class_kept_method_value(class_id, method_name, known) {
         return f64::from_bits(bits);
     }
     // The class's holder keeps its method values, so a declared class gets
@@ -151,25 +176,32 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
         && !crate::object::class_registry::template_has_class_objects(class_id)
     {
         crate::object::class_value::class_value_ptr(class_id);
-        if let Some(bits) = class_kept_method_value_bytes(class_id, method_name) {
+        if let Some(bits) = class_kept_method_value(class_id, method_name, known) {
             return f64::from_bits(bits);
         }
     }
 
     // The declaration is read only to materialize its function object.
     // Calls and probes subsequently read the holder's slot.
-    let declaration =
-        crate::object::class_registry::declarations::class_method_decl_bytes(class_id, method_name)
-            .map(|m| {
-                (
-                    m.code as usize,
-                    m.param_count,
-                    m.has_synthetic_arguments(),
-                    m.has_rest(),
-                    m.entry as usize,
-                    m.name.is_null(),
-                )
-            });
+    let declared = match known {
+        Some(index) => {
+            crate::object::class_registry::declarations::class_method_decl_at(class_id, index)
+        }
+        None => crate::object::class_registry::declarations::class_method_decl_bytes(
+            class_id,
+            method_name,
+        ),
+    };
+    let declaration = declared.map(|m| {
+        (
+            m.code as usize,
+            m.param_count,
+            m.has_synthetic_arguments(),
+            m.has_rest(),
+            m.entry as usize,
+            m.name.is_null() || m.is_symbol_named(),
+        )
+    });
     let Some((body, params, synthetic, rest, entry, computed_name)) = declaration else {
         if crate::object::native_call_method::class_holder::name_is_not_a_prototype_method(
             method_name,
@@ -183,7 +215,7 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
             .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
     };
     let value = class_method_declaration_value_bytes(
-        class_prototype_ref_value(class_id),
+        class_method_home_word(class_id),
         method_name,
         body,
         params,
@@ -203,10 +235,11 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
     } else {
         ClassDeclarationValueKind::Method
     };
-    crate::object::class_registry::class_declaration_value_store_bytes(
+    crate::object::class_registry::class_declaration_value_store_known(
         class_id,
         kind,
         method_name,
+        known,
         value.to_bits(),
     );
     value
@@ -215,15 +248,15 @@ pub(crate) fn class_prototype_method_value_for_name_bytes(
 /// The method value class `class_id`'s holder keeps for `name`: one name
 /// has one kind (`proto_member_has_no_string_key` decides it, as the store
 /// below does).
-fn class_kept_method_value_bytes(class_id: u32, name: &[u8]) -> Option<u64> {
-    use crate::object::class_registry::{class_declaration_value_bytes, ClassDeclarationValueKind};
+fn class_kept_method_value(class_id: u32, name: &[u8], known: Option<u32>) -> Option<u64> {
+    use crate::object::class_registry::{class_declaration_value_known, ClassDeclarationValueKind};
     let kind =
         if crate::object::class_registry::proto_member_has_no_string_key_bytes(class_id, name) {
             ClassDeclarationValueKind::NonPropertyMethod
         } else {
             ClassDeclarationValueKind::Method
         };
-    class_declaration_value_bytes(class_id, kind, name)
+    class_declaration_value_known(class_id, kind, name, known)
 }
 
 /// A materialized lexical/symbol member, separate from public properties.
@@ -290,19 +323,10 @@ pub(crate) fn class_method_declaration_value_bytes(
     if f.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let entry_code = unsafe { (*f).code() } as usize;
-    if entry != 0
+    let registered = entry != 0
         && !name.is_empty()
-        && crate::builtins::function_name_for_ptr(entry_code).is_none()
-    {
-        unsafe {
-            crate::builtins::js_register_function_name(
-                entry_code as *const u8,
-                name.as_ptr(),
-                name.len() as u32,
-            );
-        }
-    }
+        && !crate::builtins::function_has_registered_name(unsafe { &*info })
+        && crate::builtins::register_function_name(unsafe { &*info }, name);
     // A compiled method whose body already names it (its image name, or the
     // name registered for its entry) answers `name` as the intrinsic of its
     // base Function shape: the same value and attributes (non-writable,
@@ -310,10 +334,15 @@ pub(crate) fn class_method_declaration_value_bytes(
     // and no property bag. The closure then stays on its body's base shape,
     // which every shape-proved function path (bind, call, `.name`) admits.
     // A computed or differing name is defined as an own property.
+    // When this operation just published a legacy entry's name, the
+    // canonical bytes are already known. An image name still takes precedence,
+    // and a refused publication or invalid UTF-8 must use the ordinary read.
     let intrinsic_name = entry != 0
         && !computed_name
-        && unsafe { crate::builtins::function_name_for_closure(f) }
-            .is_some_and(|n| n.as_bytes() == name);
+        && ((registered
+            && unsafe { (*info).flags & crate::codegen_abi::FN_HAS_NAME == 0 }
+            && std::str::from_utf8(name).is_ok())
+            || unsafe { crate::builtins::function_name_matches_closure(f, name) });
     let facts = u64::from(params) | (u64::from(synthetic) << 32) | (u64::from(rest) << 33);
     unsafe {
         crate::closure::closure_install_boxed_captures(
@@ -367,14 +396,21 @@ pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, 
                     m.param_count,
                     m.has_synthetic_arguments(),
                     m.has_rest(),
-                    m.name.is_null(),
+                    m.name.is_null() || m.is_symbol_named(),
                 )
             });
     let Some((name, body, params, synthetic, rest, computed_name)) = declaration else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     class_method_declaration_value_bytes(
-        home, &name, body, params, synthetic, rest, entry, computed_name,
+        home,
+        &name,
+        body,
+        params,
+        synthetic,
+        rest,
+        entry,
+        computed_name,
     )
 }
 
@@ -418,8 +454,7 @@ pub(crate) unsafe fn class_method_value_target(value: u64) -> Option<(usize, u32
         return None;
     }
     let home = f64::from_bits(crate::closure::js_closure_get_capture_bits(closure, 0));
-    if class_prototype_ref_id(home).is_none() && !super::class_registry::is_class_object_value(home)
-    {
+    if class_method_home_id(home).is_none() && !super::class_registry::is_class_object_value(home) {
         return None;
     }
     let low = crate::closure::js_closure_get_capture_bits(closure, 1);
@@ -480,11 +515,14 @@ mod method_birth_tests {
         0.0
     }
 
-    static INFO: crate::closure::JsFunctionInfo = {
-        let mut info = crate::closure::JsFunctionInfo::of_native_args(entry, 1);
-        info.flags |= crate::codegen_abi::FN_COMPILED_BODY;
-        info
-    };
+    static OWNER: crate::codegen_abi::FunctionMetadataOwner =
+        crate::codegen_abi::FunctionMetadataOwner::native();
+    static INFO: crate::codegen_abi::NativeFunctionInfo =
+        crate::codegen_abi::NativeFunctionInfo::new(
+            crate::closure::JsFunctionInfo::of_native_args(entry, 1)
+                .with_flags(crate::codegen_abi::FN_COMPILED_BODY),
+            &OWNER,
+        );
 
     #[test]
     fn compiled_literal_method_preserves_bind_birth_shape() {
@@ -498,7 +536,7 @@ mod method_birth_tests {
                     1,
                     false,
                     false,
-                    &INFO as *const _ as usize,
+                    &INFO.info as *const _ as usize,
                     computed,
                 )
             };

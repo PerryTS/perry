@@ -1,24 +1,7 @@
-//! #8342: a CJS-wrapped module that does a bare top-level
-//! `require("process")` (and other Node.js built-ins) must resolve the
-//! built-in to the real namespace at runtime via the wrap's synthetic
-//! `createRequire`-backed require arm.
-//!
-//! Pre-fix the HIR's destructuring `var`/`let`/`const` pass intercepted
-//! `let node_process = require("process")` BEFORE call lowering and stole it
-//! into a native-module namespace binding (`register_require_namespace_binding`
-//! → `remove_local_binding`), mirroring `import * as node_process from
-//! "process"`. But the codegen does not initialize native-module import
-//! bindings inside CJS-wrapped modules, so `node_process` resolved to nothing
-//! at runtime — `ReferenceError: node_process is not defined` — which blocked
-//! `sdxgen --help` (the rolldown-bundled `@socketsecurity/lib` external-pack.js
-//! starts with `let node_process = require("process"); node_process =
-//! __toESM(node_process, 1)`).
-//!
-//! The fix gates the destructuring native-require fast path on `require` being
-//! the bare global (not shadowed by the wrap's synthetic `function require`),
-//! and the wrap no longer hoists a static `import _req_N from '<builtin>'` for
-//! built-in specs. The body's `require("<builtin>")` call flows through to the
-//! synthetic require, whose per-spec case resolves via `createRequire`.
+//! Literal builtin requires use hoisted ordinary ESM default bindings.
+//! Mutable/reassigned aliases and destructuring retain their runtime locals,
+//! while the synthetic require returns the imported canonical builtin value.
+//! Computed specifiers continue through the createRequire-backed escape.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -137,9 +120,8 @@ module.exports = { platform: node_process.platform };
 
 /// Destructured built-in require: `const { platform } = require("process")`
 /// in a CJS-wrapped module. The destructuring native-require fast path must
-/// also bail when `require` is shadowed by the wrap's synthetic require, so
-/// `platform` binds from the runtime `require("process")` result instead of a
-/// native-module alias that isn't initialized in a CJS-wrapped module.
+/// also respect the wrap's synthetic require, so `platform` binds from its
+/// result and ordinary user-defined require bindings keep their semantics.
 #[test]
 fn cjs_wrap_destructured_builtin_require_resolves() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -273,4 +255,190 @@ console.log("typeof:", typeof mod);
 "#,
     );
     assert_eq!(stdout, "typeof: object\n");
+}
+
+#[test]
+fn cjs_wrap_callable_builtin_defaults_keep_their_commonjs_values() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+console.log(typeof require("assert"));
+console.log(typeof require("assert/strict"));
+console.log(typeof require("events"));
+console.log(typeof require("stream"));
+"#,
+    );
+    assert_eq!(stdout, "function\nfunction\nfunction\nfunction\n");
+}
+
+#[test]
+fn cjs_wrap_destructured_fs_promises_is_available_without_another_import() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let stdout = compile_and_run_cjs(
+        dir.path(),
+        r#"
+const { promises } = require("fs");
+console.log(typeof promises.readFile);
+"#,
+    );
+    assert_eq!(stdout, "function\n");
+}
+
+/// The same sources emitted by tsc as CommonJS and ES2022 must select the
+/// same optional installers, except the explicitly tracked CJS export origin
+/// limitation in 03-todo. This catches collection-time feature leakage,
+/// which merely checking the final loader call sites would miss.
+#[test]
+fn cjs_wrap_closed_samples_select_their_esm_installers() {
+    fn installs(name: &str, source: &str, extension: &str) -> std::collections::BTreeSet<String> {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join(format!("main.{extension}"));
+        std::fs::write(&input, source).unwrap();
+        if name == "03-todo" {
+            let libraries = if extension == "cjs" {
+                [
+                    (
+                        "store",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/store.js"),
+                    ),
+                    (
+                        "format",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/format.js"),
+                    ),
+                    (
+                        "types",
+                        include_str!("fixtures/cjs_closed_support/todo-cjs/types.js"),
+                    ),
+                ]
+            } else {
+                [
+                    (
+                        "store",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/store.js"),
+                    ),
+                    (
+                        "format",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/format.js"),
+                    ),
+                    (
+                        "types",
+                        include_str!("fixtures/cjs_closed_support/todo-esm/types.js"),
+                    ),
+                ]
+            };
+            std::fs::create_dir(dir.path().join("lib")).unwrap();
+            for (module, source) in libraries {
+                std::fs::write(dir.path().join(format!("lib/{module}.js")), source).unwrap();
+            }
+        }
+        if name == "05-csv-stats" {
+            let stats = if extension == "cjs" {
+                include_str!("fixtures/cjs_closed_support/stats.cjs")
+            } else {
+                include_str!("fixtures/cjs_closed_support/stats.mjs")
+            };
+            std::fs::write(dir.path().join("stats.js"), stats).unwrap();
+        }
+        let result = Command::new(perry_bin())
+            .current_dir(dir.path())
+            .arg("compile")
+            .arg(&input)
+            .arg("-v")
+            .arg("--no-cache")
+            .arg("-o")
+            .arg(dir.path().join("app"))
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success(), "{log}");
+        assert!(
+            log.contains("runtime installs:"),
+            "no install evidence: {log}"
+        );
+        log.lines()
+            .filter_map(|line| {
+                line.split_once("runtime installs:")
+                    .or_else(|| line.split_once("stdlib installs:"))
+            })
+            .flat_map(|(_, names)| names.split(','))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_owned)
+            .collect()
+    }
+    let mut differences = Vec::new();
+    for (name, cjs, esm) in [
+        (
+            "02-wc",
+            include_str!("fixtures/cjs_closed_support/02-wc.cjs"),
+            include_str!("fixtures/cjs_closed_support/02-wc.mjs"),
+        ),
+        (
+            "03-todo",
+            include_str!("fixtures/cjs_closed_support/03-todo.cjs"),
+            include_str!("fixtures/cjs_closed_support/03-todo.mjs"),
+        ),
+        (
+            "04-json-query",
+            include_str!("fixtures/cjs_closed_support/04-json-query.cjs"),
+            include_str!("fixtures/cjs_closed_support/04-json-query.mjs"),
+        ),
+        (
+            "05-csv-stats",
+            include_str!("fixtures/cjs_closed_support/05-csv-stats.cjs"),
+            include_str!("fixtures/cjs_closed_support/05-csv-stats.mjs"),
+        ),
+    ] {
+        let cjs = installs(name, cjs, "cjs");
+        let mut expected = installs(name, esm, "mjs");
+        if name == "03-todo" {
+            // Follow-up: CJS export origin. Object.values(types_1.Priority)
+            // reads a mutable export populated by an enum IIFE. Its plain-object
+            // origin is not proven across modules at feature selection yet.
+            // Require exactly this extra installer; remove it when the facts
+            // chain proves the export's origin. Any other difference must fail.
+            assert!(expected.insert("js_runtime_install_temporal".to_owned()));
+        }
+        if cjs != expected {
+            differences.push(format!("{name}: CJS {cjs:?}; expected {expected:?}"));
+        }
+    }
+    assert!(differences.is_empty(), "{}", differences.join("\n"));
+}
+
+#[test]
+fn cjs_wrap_computed_require_and_cache_writer_keep_create_require() {
+    for source in [
+        "const name = process.argv[2] || 'fs'; console.log(typeof require(name).readFileSync);",
+        "require.cache['/a'] = { exports: 42 }; console.log(require.cache['/a'].exports);",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("main.cjs");
+        std::fs::write(&input, source).unwrap();
+        let result = Command::new(perry_bin())
+            .current_dir(dir.path())
+            .env("PERRY_LAYOUT_REPORT", "2")
+            .arg("compile")
+            .arg(&input)
+            .arg("--print-hir")
+            .arg("--no-link")
+            .arg("--no-cache")
+            .arg("-o")
+            .arg(dir.path().join("app.o"))
+            .output()
+            .unwrap();
+        let log = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&result.stdout),
+            String::from_utf8_lossy(&result.stderr)
+        );
+        assert!(result.status.success(), "{log}");
+        assert!(log.contains("CommonJS not closed:"), "{log}");
+        assert!(log.contains("method: \"createRequire\""), "{log}");
+    }
 }

@@ -91,9 +91,11 @@ pub(super) fn build_url_search_params_method_call(
         }
         "toString" => Ok(Expr::UrlSearchParamsToString(Box::new(recv))),
         "sort" => Ok(Expr::UrlSearchParamsSort(Box::new(recv))),
-        "keys" => Ok(Expr::UrlSearchParamsKeys(Box::new(recv))),
-        "values" => Ok(Expr::UrlSearchParamsValues(Box::new(recv))),
-        "entries" => Ok(Expr::UrlSearchParamsEntries(Box::new(recv))),
+        // `keys()` / `values()` / `entries()` return iterators (WHATWG), not
+        // the eager arrays the `UrlSearchParams{Keys,Values,Entries}` nodes
+        // build for the internal for-of lowering: fall through to the
+        // generic method call, whose runtime dispatch returns the iterator.
+        "keys" | "values" | "entries" => Err(args),
         "forEach" if !args.is_empty() => {
             let mut iter = args.into_iter();
             let callback = iter.next().unwrap();

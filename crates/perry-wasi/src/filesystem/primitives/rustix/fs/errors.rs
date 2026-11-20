@@ -1,0 +1,22 @@
+// Adapted from Wasmtime 48.0.5; Apache-2.0 WITH LLVM-exception. See PROVENANCE.md.
+use std::io;
+
+#[cold]
+pub(crate) fn no_such_file_or_directory() -> io::Error {
+    rustix::io::Errno::NOENT.into()
+}
+
+#[cold]
+pub(crate) fn is_directory() -> io::Error {
+    rustix::io::Errno::ISDIR.into()
+}
+
+#[cold]
+pub(crate) fn is_not_directory() -> io::Error {
+    rustix::io::Errno::NOTDIR.into()
+}
+
+#[cold]
+pub(crate) fn too_many_symlinks() -> io::Error {
+    rustix::io::Errno::LOOP.into()
+}

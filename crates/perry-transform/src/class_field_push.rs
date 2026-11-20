@@ -147,8 +147,11 @@ mod tests {
 
     fn call(owner: Expr, args: Vec<Expr>) -> Stmt {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(owner),
                     property: "children".into(),
                     byte_offset: 0,
@@ -170,6 +173,7 @@ mod tests {
             Type::Array(Box::new(Type::Named("DocNode".into()))),
         )]);
         let value = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(7)),
             args: vec![],
             type_args: vec![],

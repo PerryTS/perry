@@ -85,8 +85,8 @@ pub(crate) unsafe fn stringify_buffer(ptr: *const u8, buf: &mut String) {
 /// as `null` and routes a `BigInt64`/`BigUint64` element to the throwing
 /// serializer (Node's "Do not know how to serialize a BigInt" `TypeError`).
 pub(crate) unsafe fn stringify_typed_array(ptr: *const u8, buf: &mut String) {
-    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
-    let len = crate::typedarray::js_typed_array_length(ta);
+    let ta = ptr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+    let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
     buf.push('{');
     for i in 0..len {
         if i > 0 {
@@ -96,7 +96,7 @@ pub(crate) unsafe fn stringify_typed_array(ptr: *const u8, buf: &mut String) {
         buf.push('"');
         buf.push_str(idx_buf.format(i));
         buf.push_str("\":");
-        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+        write_number(buf, crate::typedarray_hook_slots::js_typed_array_get(ta, i));
     }
     buf.push('}');
 }
@@ -109,8 +109,8 @@ pub(crate) unsafe fn stringify_typed_array_pretty(
     indent: &str,
     depth: usize,
 ) {
-    let ta = ptr as *const crate::typedarray::TypedArrayHeader;
-    let len = crate::typedarray::js_typed_array_length(ta);
+    let ta = ptr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+    let len = crate::typedarray_hook_slots::js_typed_array_length(ta);
     if len <= 0 {
         buf.push_str("{}");
         return;
@@ -127,7 +127,7 @@ pub(crate) unsafe fn stringify_typed_array_pretty(
         buf.push('"');
         buf.push_str(idx_buf.format(i));
         buf.push_str("\": ");
-        write_number(buf, crate::typedarray::js_typed_array_get(ta, i));
+        write_number(buf, crate::typedarray_hook_slots::js_typed_array_get(ta, i));
         if i + 1 < len {
             buf.push(',');
         }

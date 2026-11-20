@@ -12,7 +12,10 @@ pub(crate) unsafe fn mark_materialized_iterator(
     }
     let _no_move = crate::gc::GcSuppressScope::new();
     let bag = array_property_bag_ensure(array);
-    let meta = crate::object::object_meta_ensure(bag);
+    let meta = crate::object::object_meta_ensure(
+        crate::meta_obj_runtime_born!(bag),
+        crate::object::MetaReason::ArrayIteratorBrand,
+    );
     // GC_STORE_AUDIT(NONPOINTER): scalar Map/Set brand in an internal bag.
     (*meta).native_state = brand;
     clean_arr_ptr_mut(array)
@@ -23,12 +26,15 @@ pub(crate) fn has_materialized_iterator_brand(addr: usize, brand: u64) -> bool {
         let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
             return false;
         };
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type)
             || (*header.as_ptr()).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return false;
         }
         let bag = array_property_bag(addr as *const ArrayHeader);
-        !bag.is_null() && !(*bag).meta.is_null() && (*(*bag).meta).native_state == brand
+        !bag.is_null()
+            && !crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _)).is_null()
+            && (*crate::meta_read!(crate::meta_obj_runtime_born!(bag as *mut _))).native_state
+                == brand
     }
 }

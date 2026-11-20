@@ -154,8 +154,7 @@ pub(super) unsafe fn js_using_check_disposable(object: f64, want_async: bool) ->
     let throw_not_object = |kind: &str| -> ! {
         let msg = format!("Value used in a `using` declaration is not an object: {kind}");
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+        crate::exception::throw_core(crate::error::CoreError::type_error(s))
     };
     // Non-object primitives (number / boolean / string / bigint) are never
     // disposable. Strings are string-tagged (not pointer-tagged) and fall here.
@@ -177,8 +176,7 @@ pub(super) unsafe fn js_using_check_disposable(object: f64, want_async: bool) ->
         };
         let msg = format!("The value used in a `using` declaration must have a {sym} method");
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(f64::from_bits(JSValue::pointer(err as *const u8).bits()))
+        crate::exception::throw_core(crate::error::CoreError::type_error(s))
     }
     // Pointer-shaped but not a GC heap object (native runtime handle). These
     // dispatch dispose through `js_native_call_method` name handling; accept.

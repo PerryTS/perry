@@ -1,7 +1,6 @@
-//! GTK4 ImageGallery — `GtkScrolledWindow` containing a horizontal `GtkBox`
-//! of fixed-size `GtkPicture` widgets. Issue #553. Page-snap is approximated
-//! via `set_index` calling `hadjustment.set_value(index * page_width)`; the
-//! user's free swipe scrolls smoothly without snap.
+//! ImageGallery: a `GtkScrolledWindow` holding a horizontal `GtkBox` of fixed-size `GtkPicture`s.
+//! Page snap is only approximated by `set_index` (`hadjustment.set_value(index * page_width)`);
+//! a free swipe scrolls without snapping.
 
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -48,9 +47,6 @@ pub fn create(on_index_change: f64) -> i64 {
 
     let handle = super::register_widget(scrolled.clone().upcast());
 
-    // Wire scroll-end-style index update — when the user finishes scrolling,
-    // recompute which page is closest to centered and fire on_index_change
-    // if it changed.
     {
         let h_handle = handle;
         let hadj = scrolled.hadjustment();
@@ -105,11 +101,7 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
         let pic = gtk4::Picture::new();
         pic.set_size_request(PAGE_PX, PAGE_PX);
         pic.set_can_shrink(true);
-        // Picture's default keep-aspect-ratio + can_shrink gives us
-        // ContentFit::Contain semantics on GTK 4.6 (jammy / Ubuntu 22.04).
-        // The explicit set_content_fit call requires v4_8 feature, but the
-        // crate's gtk4-rs feature is pinned to v4_6 to keep CI's Ubuntu 22.04
-        // glibc build working — release-packages.yml uses libgtk-4-dev 4.6.9.
+        // keep-aspect-ratio + can_shrink already behaves as ContentFit::Contain.
 
         if !alt.is_empty() {
             pic.set_tooltip_text(Some(&alt));
@@ -117,9 +109,7 @@ pub fn add_image(handle: i64, url_ptr: *const u8, alt_ptr: *const u8) {
 
         if !url.is_empty() {
             if url.starts_with("http://") || url.starts_with("https://") {
-                // Remote loading via libsoup3 would require an extra dep;
-                // for the GTK4 path we skip remote URLs and document the
-                // gap. Local paths cover the production case.
+                // Remote URLs are not loaded on GTK4 (that would need libsoup3).
             } else {
                 let path = std::path::Path::new(&url);
                 if path.exists() {

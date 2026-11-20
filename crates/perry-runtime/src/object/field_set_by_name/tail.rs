@@ -13,6 +13,7 @@ use super::write_helpers::{
     closure_set_field_by_name, key_to_str_for_diag, mirror_class_object_static_write,
 };
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Bits to publish into an overflow slot for a NEWLY appended key.
 ///
@@ -57,6 +58,11 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
     }
+    // A plain object's index key lives in its elements store (or takes one):
+    // no index key becomes a layout property beside a store.
+    if unsafe { crate::array::plain_elements::set_by_name(obj, key, value) } {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);
@@ -76,7 +82,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(gc_type) {
             if key.is_null() {
                 return;
             }
@@ -175,7 +181,7 @@ pub(crate) fn set_field_by_name_object_tail(
             }
             return;
         }
-        if gc_type != crate::gc::GC_TYPE_OBJECT && gc_type != crate::gc::GC_TYPE_CLOSURE {
+        if crate::gc_type_is_not_object!(gc_type) && gc_type != crate::gc::GC_TYPE_CLOSURE {
             // A RECOGNIZED non-object heap type (Map/Set/Buffer/TypedArray/…)
             // must never fall through to the plain-object write below: their
             // layouts alias ObjectHeader fields. A Map with EXACTLY one entry
@@ -271,10 +277,6 @@ pub(crate) fn set_field_by_name_object_tail(
         let plan_eligible = !key.is_null()
             && obj_class_id != NATIVE_MODULE_CLASS_ID
             && crate::object::object_is_regular(obj)
-            && super::shapes::store_kind::born_null_admits_lane(
-                obj,
-                (*gc_header)._reserved,
-            )
             // Per-key, not per-receiver: a descriptor on some OTHER key cannot
             // intercept this one, and a plan hit skips the own-accessor
             // short-circuit below, so the key must be provably uncovered.
@@ -288,7 +290,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // receiver on another chain can only meet another plan.
         let plan_fast = plan_eligible
             && super::prop_plan::store_plan_check(
-                super::shapes::object_shape_stamp(obj),
+                LayoutWord(super::shapes::object_shape_stamp(obj).0),
                 interned_key as usize,
             );
 
@@ -408,7 +410,7 @@ pub(crate) fn set_field_by_name_object_tail(
         if !plan_fast
             && !key.is_null()
             && (key as usize) > 0x10000
-            && crate::url::is_url_object_shape(obj)
+            && crate::object::url_layout::is_url_object_shape(obj)
         {
             let key_str = key_to_str_for_diag(key);
             let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
@@ -416,43 +418,43 @@ pub(crate) fn set_field_by_name_object_tail(
             match key_str.as_str() {
                 "origin" | "searchParams" => return,
                 "host" => {
-                    crate::url::js_url_set_host(obj, value);
+                    crate::url_hooks::url_set_host(obj, value);
                     return;
                 }
                 "pathname" => {
-                    crate::url::js_url_set_pathname(obj, value);
+                    crate::url_hooks::url_set_pathname(obj, value);
                     return;
                 }
                 "search" => {
-                    crate::url::js_url_set_search(obj, value);
+                    crate::url_hooks::url_set_search(obj, value);
                     return;
                 }
                 "hash" => {
-                    crate::url::js_url_set_hash(obj, value);
+                    crate::url_hooks::url_set_hash(obj, value);
                     return;
                 }
                 "protocol" => {
-                    crate::url::js_url_set_protocol(obj, value);
+                    crate::url_hooks::url_set_protocol(obj, value);
                     return;
                 }
                 "hostname" => {
-                    crate::url::js_url_set_hostname(obj, value);
+                    crate::url_hooks::url_set_hostname(obj, value);
                     return;
                 }
                 "port" => {
-                    crate::url::js_url_set_port(obj, value);
+                    crate::url_hooks::url_set_port(obj, value);
                     return;
                 }
                 "username" => {
-                    crate::url::js_url_set_username(obj, value);
+                    crate::url_hooks::url_set_username(obj, value);
                     return;
                 }
                 "password" => {
-                    crate::url::js_url_set_password(obj, value);
+                    crate::url_hooks::url_set_password(obj, value);
                     return;
                 }
                 "href" => {
-                    crate::url::js_url_set_href(obj, value);
+                    crate::url_hooks::url_set_href(obj, value);
                     return;
                 }
                 _ => {}
@@ -572,13 +574,12 @@ pub(crate) fn set_field_by_name_object_tail(
             // freshly read `obj_flags`, not the pre-vet read.
             let record_plan_eligible = obj_class_id != NATIVE_MODULE_CLASS_ID
                 && crate::object::object_is_regular(obj)
-                && super::shapes::store_kind::born_null_admits_lane(obj, obj_flags)
                 // `desc_gate_ok` above already proved this key is uncovered on
                 // this receiver, which is the per-key half of the old flag.
                 && desc_gate_ok;
             if !plan_fast && record_plan_eligible {
                 super::prop_plan::store_plan_record(
-                    super::shapes::object_shape_stamp(obj),
+                    LayoutWord(super::shapes::object_shape_stamp(obj).0),
                     interned_key as usize,
                 );
             }
@@ -736,8 +737,10 @@ pub(crate) fn set_field_by_name_object_tail(
             // instance gaining its first by-name property is stamped like
             // any other receiver.
             if !crate::object::overflow::has_overflow(obj)
-                && !super::shapes::shape_descriptor_by_id(super::shapes::object_shape_stamp(obj))
-                    .is_some_and(|d| d.special_constfn_mask != 0)
+                && !super::shapes::shape_descriptor_of_receiver(
+                    (super::shapes::object_shape_stamp(obj)).0,
+                )
+                .is_some_and(|d| d.has_constfn_lane())
             {
                 // `publish_key_add_edge` already minted the exact ConstFn
                 // successor after writing the closure. The legacy redundant
@@ -908,7 +911,7 @@ pub(crate) fn set_field_by_name_object_tail(
             let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
                 .expect("an object with an overflow appends through it, never here");
             let canonical_parent =
-                crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+                crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
             refresh_roots_after_alloc!();
             let new_keys =
                 crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();
@@ -1009,7 +1012,7 @@ pub(crate) fn set_field_by_name_object_tail(
         // per-index accessors via `js_array_get`); the original match below
         // still gates the hit, so this cannot widen what is accepted.
         if let Some(i) =
-            crate::object::keys_find_property_slot_by_key_ptr(keys, key_count as u32, key)
+            crate::object::keys_find_property_slot_by_key_ptr(keys_view, key_count as u32, key)
                 .map(|v| v as usize)
         {
             let key_val = crate::array::js_array_get(keys, i as u32);
@@ -1095,8 +1098,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let new_index = key_count;
         let proof = crate::object::canonical_keys::SharedLayout::of_receiver(obj)
             .expect("an object with an overflow appends through it, never here");
-        let canonical_parent =
-            crate::object::canonical_keys::canonicalize(&proof, keys, key_count as u32);
+        let canonical_parent = crate::object::canonical_keys::canonicalize_keys(&proof, keys_view);
         refresh_roots_after_alloc!();
         let new_keys =
             crate::object::canonical_keys::extend_key(&proof, canonical_parent, key).view();

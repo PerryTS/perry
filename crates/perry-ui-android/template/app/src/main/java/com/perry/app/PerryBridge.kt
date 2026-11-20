@@ -380,6 +380,12 @@ object PerryBridge {
                 val bg = ta.getDrawable(0)
                 ta.recycle()
                 view.background = bg
+                // A borderless (link-style) button hugs its label like a plain
+                // UIButton / NSButton. Material's Button keeps an 88dp minimum
+                // width, so a row of short links ("1" … "6") overflowed the
+                // screen. Keep the 48dp minimum height (touch target).
+                view.minWidth = 0
+                view.minimumWidth = 0
             }
         }
     }

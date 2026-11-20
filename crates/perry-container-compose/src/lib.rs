@@ -15,12 +15,11 @@ pub mod types;
 pub mod workload;
 pub mod yaml;
 
-// `commands/` is a legacy/dead module from an earlier `ContainerCommand`
-// trait shape. The functionality is now covered by the per-method
-// orchestration on `ComposeService` (`run_command`/`start_command`/
-// `build_command`/`inspect_command`) plus `orchestrate::orchestrate_service`
-// for the single-service flow. Files are retained on disk as historical
-// reference but are *not* compiled into the crate.
+// An earlier `ContainerCommand` trait shape lived here as a `commands/` tree.
+// The functionality is covered by the per-method orchestration on
+// `ComposeService` (`run_command`/`start_command`/`build_command`/
+// `inspect_command`) plus `orchestrate::orchestrate_service` for the
+// single-service flow; the old tree was never compiled and is in git history.
 
 #[cfg(any(test, feature = "test-utils"))]
 pub mod testing;

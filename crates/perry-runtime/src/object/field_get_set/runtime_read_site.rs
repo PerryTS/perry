@@ -106,6 +106,56 @@ pub(crate) unsafe fn probe(obj: *const ObjectHeader, key: Key<'_>) -> Option<Ans
     crate::object::method_site::read_holder::shape_answer(obj, key)
 }
 
+/// `OrdinaryGet(obj, key, receiver)` in one walk of `obj`'s layouts, for a
+/// receiver that is not `obj` (a function whose [[Prototype]] is `obj`, such as
+/// a callable class instance): a data property's value, `undefined` for a
+/// proven absence, or the getter's result with `receiver` as `this` (a compiled
+/// class getter or a getter closure). `None` when only the complete read can
+/// answer (a key with no property atom, a chain or pair the layouts decline,
+/// a static or setter-only pair); nothing has run then.
+///
+/// `name` is the key text; `key` is null or its header (`name`'s text). It
+/// can run a getter, collect and throw.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` above the handle band (see
+/// [`object_receiver`]); `key` is null or a live string header; `receiver` is
+/// rooted by the caller.
+pub(crate) unsafe fn get_with_receiver(
+    obj: *const ObjectHeader,
+    name: &[u8],
+    key: *const crate::StringHeader,
+    receiver: f64,
+) -> Option<f64> {
+    let atom = if key.is_null() {
+        let hash = crate::object::key_bytes_hash(name.as_ptr(), name.len());
+        crate::string::atom_lookup(name, hash).filter(|a| crate::string::is_property_atom(*a))?
+    } else if crate::string::is_property_atom(key) {
+        key
+    } else {
+        crate::string::existing_property_atom(key)?
+    };
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let hash = crate::string::property_atom_hash(atom);
+    // The caller's receiver is a function whose own read and site probe
+    // missed: an inherited getter is the common answer here, so the
+    // accessor walk goes first (it answers the first holder of the key,
+    // `None` when that holder is data or the layouts cannot say).
+    let Some(acc) = crate::object::layout_probe::probe_accessor_word(obj, key_bits, hash) else {
+        let v = probe_word(obj, key_bits, hash);
+        // A data value does not depend on the receiver.
+        return (v.to_bits() != crate::value::TAG_HOLE).then_some(v);
+    };
+    if acc.static_get != 0 || (acc.raw_get == 0 && acc.get == 0) {
+        // A static pair, a setter-only pair or one this word cannot read
+        // (`Accessor::default()`): the complete read decides.
+        return None;
+    }
+    // Nothing collected since the probe: `acc` names live getters.
+    let (value, _) = crate::object::class_registry::invoke_instance_getter(acc, receiver);
+    Some(f64::from_bits(value.bits()))
+}
+
 /// `Get(obj, key)`: the probe, else the complete read. It can run a getter,
 /// collect and throw.
 ///
@@ -162,22 +212,34 @@ pub(crate) unsafe fn get_with_memo(
     }
 }
 
+/// [`get`] for a key already in hand as its property atom: the probe on the
+/// key word, else the complete read. Nothing is looked up by text. It can
+/// run a getter, collect and throw.
+///
+/// # Safety
+/// As [`probe`]; `atom` is a live property atom.
+pub(crate) unsafe fn get_atom(obj: *mut ObjectHeader, atom: *const crate::StringHeader) -> f64 {
+    debug_assert!(crate::string::is_property_atom(atom));
+    let key_bits = crate::value::STRING_TAG | atom as u64;
+    let v = probe_word(obj, key_bits, crate::string::property_atom_hash(atom));
+    if v.to_bits() != crate::value::TAG_HOLE {
+        return v;
+    }
+    super::js_object_get_field_slow(obj as i64, atom)
+}
+
 /// The integer a Number property key names, when its canonical text is a
 /// plain decimal integer: an INT32-tagged key, or an integral double of
 /// magnitude at most 2^53 (`-0` names `"0"`). Every other Number keeps the
 /// complete `ToPropertyKey` path.
 #[inline]
 pub(crate) fn integer_key(key: f64) -> Option<i64> {
-    let bits = key.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
-        return Some(i64::from(crate::value::JSValue::from_bits(bits).as_int32()));
-    }
     (key.is_finite() && key.fract() == 0.0 && key.abs() <= 9_007_199_254_740_992.0)
         .then_some(key as i64)
 }
 
 /// `ToString(n)` of an integer of magnitude at most 2^53, written into `buf`.
-fn integer_key_text(n: i64, buf: &mut [u8; 24]) -> &[u8] {
+pub(crate) fn integer_key_text(n: i64, buf: &mut [u8; 24]) -> &[u8] {
     let mut i = buf.len();
     let mut m = n.unsigned_abs();
     loop {
@@ -220,15 +282,14 @@ pub(crate) unsafe fn probe_integer_key(
     let text = integer_key_text(n, &mut buf);
     let index = (0..i64::from(u32::MAX)).contains(&n);
     // An index key of an object with an elements store (an Array subclass
-    // instance, an object that took index stores) lives in that store, which
-    // the probe does not read: the complete read answers. Only an ordinary
-    // object is handed an index key (an Array's index is an element read).
+    // instance, a plain object's index store) lives in that store, which the
+    // probe does not read: the complete read answers. Without a store, an
+    // index key an object owns is a layout key (an Array subclass's
+    // shape-carried elements included), which the probe reads as it is.
     if index {
-        let meta = (*obj).meta;
-        let class_id = (*obj).class_id;
-        if (!meta.is_null() && (*meta).elements != 0)
-            || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
-        {
+        // A1_UNPROVEN: record-first: runtime read site (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+        if !meta.is_null() && (*meta).elements != 0 {
             return Err(obj);
         }
     }
@@ -260,6 +321,60 @@ pub(crate) unsafe fn probe_integer_key(
     }
 }
 
+/// `obj[n] = value` for an integral Number key `key` that names an own plain
+/// writable data property of the ordinary object `obj` (not an arguments
+/// object, whose mapped indices alias its parameters): the probe store of the
+/// key's atom, exactly the store the complete `[[Set]]` makes for an own
+/// writable data property. `false` (nothing stored) for every other case,
+/// a key add included: the complete `[[Set]]` then runs. GC leaf.
+///
+/// # Safety
+/// `obj_bits` is any value bits.
+pub(crate) unsafe fn store_integer_key(obj_bits: u64, key: f64, value: f64) -> bool {
+    let Some(obj) = object_receiver(f64::from_bits(obj_bits)) else {
+        return false;
+    };
+    if (*crate::gc::header_from_trusted_user_ptr(obj as *const u8))._reserved
+        & crate::gc::OBJ_FLAG_ARGUMENTS
+        != 0
+    {
+        return false;
+    }
+    // An element of a plain object's index store: its own data property.
+    if crate::array::plain_elements::set_existing_number_key(obj, key, value) {
+        return true;
+    }
+    let Some(n) = integer_key(key) else {
+        return false;
+    };
+    if (0..i64::from(u32::MAX)).contains(&n) {
+        // A1_UNPROVEN: record-first: runtime store site, as the read's index arm.
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+        let class_id = (*obj).class_id;
+        if (!meta.is_null() && (*meta).elements != 0)
+            || (class_id != 0 && crate::array::is_array_subclass_class_id(class_id))
+        {
+            return false;
+        }
+    }
+    let mut buf = [0u8; 24];
+    let text = integer_key_text(n, &mut buf);
+    let hash = crate::object::key_bytes_hash(text.as_ptr(), text.len());
+    let Some(atom) = crate::string::atom_lookup(text, hash) else {
+        return false;
+    };
+    if !crate::string::is_property_atom(atom) {
+        return false;
+    }
+    crate::object::layout_probe::probe_set_existing(
+        crate::object::shapes::ordinary_dir_addr(),
+        crate::value::POINTER_TAG | obj as u64,
+        crate::value::STRING_TAG | atom as u64,
+        crate::string::property_atom_hash(atom),
+        value,
+    )
+}
+
 /// The ordinary-object receiver a read reads from: `value` is a pointer
 /// above the handle band whose validated GC header says `GC_TYPE_OBJECT`.
 /// Every other value (primitives, proxies and handles, arrays, closures,
@@ -275,7 +390,7 @@ pub(crate) fn object_receiver(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr)? };
-    (header.obj_type == crate::gc::GC_TYPE_OBJECT
+    (crate::gc_type_is_object!(header.obj_type)
         && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some(addr as *mut ObjectHeader)
 }

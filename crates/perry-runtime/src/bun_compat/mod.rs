@@ -89,10 +89,7 @@ fn boxed_str(bytes: &[u8]) -> f64 {
     let ptr = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
-
-fn key_ptr(key: &[u8]) -> *mut StringHeader {
-    js_string_from_bytes(key.as_ptr(), key.len() as u32)
-}
+use crate::builtin_value_support::key_ptr;
 
 fn promise_value(value: f64) -> f64 {
     let promise = crate::promise::js_promise_new();
@@ -130,14 +127,14 @@ fn is_string_value(value: f64) -> bool {
     js.is_string() || js.is_short_string()
 }
 
-fn bun_path_from_value(value: f64) -> Result<String, f64> {
+fn bun_path_from_value(value: f64) -> Result<String, crate::error::CoreError> {
     if let Some(path) = unsafe { crate::fs::decode_path_value(value) } {
         return Ok(path);
     }
     let message = b"Expected file path string, Uint8Array, or file: URL";
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_typeerror_new(message);
-    Err(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    let error = crate::error::CoreError::type_error(message);
+    Err(error)
 }
 
 fn heap_ptr_from_value(value: f64) -> Option<usize> {
@@ -185,7 +182,7 @@ fn captured(closure: *const ClosureHeader) -> f64 {
 /// DataView → element bytes, ArrayBuffer → backing bytes, BunFile → the
 /// referenced file's contents (an I/O error surfaces via the `Err`), other
 /// values → their string coercion (lenient, like a JS shim would behave).
-fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
+fn payload_bytes(value: f64) -> Result<Vec<u8>, crate::error::CoreError> {
     if is_string_value(value) {
         return Ok(value_to_string(value).into_bytes());
     }
@@ -200,7 +197,7 @@ fn payload_bytes(value: f64) -> Result<Vec<u8>, f64> {
         if let Some(path_value) = object_field(value, BUN_FILE_PATH_KEY) {
             let path = value_to_string(path_value);
             return std::fs::read(&path)
-                .map_err(|err| unsafe { crate::fs::build_fs_error_value(&err, "open", &path) });
+                .map_err(|err| unsafe { crate::io_error::fs_error(&err, "open", &path) });
         }
     }
     Ok(value_to_string(value).into_bytes())
@@ -242,7 +239,7 @@ pub extern "C" fn js_bun_hash(input: f64, seed: f64) -> f64 {
         Err(_) => Vec::new(),
     };
     let h = wyhash(seed, &bytes);
-    let ptr = crate::bigint::js_bigint_from_u64(h);
+    let ptr = crate::bigint_hooks::js_bigint_from_u64(h);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
@@ -257,10 +254,6 @@ fn hash_seed(seed: f64) -> u64 {
             return unsafe { (*ptr).limbs[0] };
         }
         return 0;
-    }
-    let js = JSValue::from_bits(seed.to_bits());
-    if js.is_int32() {
-        return js.as_int32() as i64 as u64;
     }
     if seed.is_finite() {
         return seed as i64 as u64;
@@ -367,7 +360,7 @@ extern "C" fn bun_file_exists(closure: *const ClosureHeader, _this: crate::closu
 fn json_parse_promise(bytes: &[u8]) -> f64 {
     let text = String::from_utf8_lossy(bytes);
     let text_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-    match unsafe { crate::json::js_json_parse_result(text_ptr) } {
+    match unsafe { crate::json_hooks::parse_result(text_ptr) } {
         Ok(value) => promise_value(f64::from_bits(value.bits())),
         Err(err) => promise_rejected(err),
     }
@@ -386,7 +379,7 @@ fn uint8_array_from_bytes(bytes: &[u8]) -> f64 {
 pub extern "C" fn js_bun_file(path: f64) -> f64 {
     let path_string = match bun_path_from_value(path) {
         Ok(path) => path,
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::throw_core(error),
     };
     let path_value = boxed_str(path_string.as_bytes());
 
@@ -463,7 +456,7 @@ pub extern "C" fn js_bun_file(path: f64) -> f64 {
 pub extern "C" fn js_bun_write(dest: f64, data: f64) -> f64 {
     let bytes = match payload_bytes(data) {
         Ok(bytes) => bytes,
-        Err(err) => return promise_rejected(err),
+        Err(err) => return promise_rejected(err.value()),
     };
 
     // Bun.stdout / Bun.stderr destination.
@@ -600,8 +593,7 @@ pub extern "C-unwind" fn js_bun_unsupported(member: f64) -> f64 {
     let member = value_to_string(member);
     let message = format!("Bun.{member} is not supported by Perry");
     let message = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let error = crate::error::js_error_new_with_message(message);
-    crate::exception::js_throw(f64::from_bits(JSValue::pointer(error as *const u8).bits()))
+    crate::exception::throw_core(crate::error::CoreError::error(message))
 }
 
 #[cfg(test)]

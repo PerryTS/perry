@@ -19,6 +19,12 @@ impl SourceText {
         Some(Self { source, range })
     }
 
+    /// Source coordinates for observational diagnostics. A constructed string
+    /// has a range relative to itself; declaration producers retain real spans.
+    pub fn source_range(&self) -> Range<usize> {
+        self.range.clone()
+    }
+
     pub fn as_str(&self) -> &str {
         &self.source[self.range.clone()]
     }

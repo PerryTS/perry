@@ -310,12 +310,12 @@ pub(super) fn replace(
         // they are produced straight into shadow-stack slots. A proxy replacer's do
         // reach it, through the `apply` trap, and keep the JS array. Sized once:
         // the program's capture count fixes the argument count for every match.
-        let mut native_args = if crate::proxy::js_proxy_is_proxy(replacement.get_nanbox_f64()) == 1
-        {
-            None
-        } else {
-            Some(NativeArgs::new(width / 2 + 2)?)
-        };
+        let mut native_args =
+            if crate::proxy_hooks::proxy_is_proxy(replacement.get_nanbox_f64()) == 1 {
+                None
+            } else {
+                Some(NativeArgs::new(width / 2 + 2)?)
+            };
         let this = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
         for record in spans.values.chunks_exact(width) {
             let local = RuntimeHandleScope::new();

@@ -27,18 +27,8 @@ extern "C" fn method_restricted_store_test_body(
 /// semantics are strict retain the poison-pill throw even from sloppy code.
 #[test]
 fn plain_function_restricted_stores_honor_put_value_throw() {
-    let source = b"function target() {}";
-    let plain_func = non_strict_restricted_store_test_body as *const u8;
-    unsafe {
-        crate::builtins::js_register_function_source(
-            plain_func,
-            source.as_ptr(),
-            source.len() as u32,
-            1,
-        );
-    }
     let plain = crate::closure::js_closure_alloc(
-        crate::fn_info!(non_strict_restricted_store_test_body, 0),
+        crate::fn_info!(non_strict_restricted_store_test_body, 0; with_flags(crate::codegen_abi::FN_NON_STRICT_ORDINARY)),
         0,
     );
     let plain_value = crate::value::js_nanbox_pointer(plain as i64);
@@ -78,15 +68,6 @@ fn plain_function_restricted_stores_honor_put_value_throw() {
         );
     }
 
-    let strict_func = strict_restricted_store_test_body as *const u8;
-    unsafe {
-        crate::builtins::js_register_function_source(
-            strict_func,
-            source.as_ptr(),
-            source.len() as u32,
-            0,
-        );
-    }
     let strict = crate::closure::js_closure_alloc(
         crate::fn_info!(strict_restricted_store_test_body, 0; with_flags(crate::closure::FN_STRICT)),
         0,
@@ -106,16 +87,6 @@ fn plain_function_restricted_stores_honor_put_value_throw() {
         "a strict function's poison-pill setter must throw even in sloppy code"
     );
 
-    let method_func = method_restricted_store_test_body as *const u8;
-    let method_source = b"method() {}";
-    unsafe {
-        crate::builtins::js_register_function_source(
-            method_func,
-            method_source.as_ptr(),
-            method_source.len() as u32,
-            0,
-        );
-    }
     let method =
         crate::closure::js_closure_alloc(crate::fn_info!(method_restricted_store_test_body, 0), 0);
     let method_value = crate::value::js_nanbox_pointer(method as i64);

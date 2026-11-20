@@ -149,6 +149,7 @@ fn deep_recursion_throws_a_catchable_range_error_in_every_frame_kind() {
 }
 
 /// The body of the `define` whose line contains `needle`.
+#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
 fn function_body<'a>(ir: &'a str, needle: &str) -> Option<&'a str> {
     let start = ir
         .match_indices("\ndefine ")

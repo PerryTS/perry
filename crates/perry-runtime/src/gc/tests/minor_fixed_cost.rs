@@ -11,6 +11,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Leaves both tables empty however the test exits, including by the
 /// expected panic of a negative-control test.
@@ -94,7 +95,7 @@ fn array_tail_publish_without_arming_is_caught() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _clear = ClearTablesOnDrop;
     crate::object::array_tail_transition::test_clear();
-    crate::object::array_tail_transition::test_publish_without_arming(3);
+    crate::object::array_tail_transition::test_publish_without_arming(LayoutWord(3));
     crate::object::array_tail_transition::test_prune();
 }
 
@@ -109,7 +110,7 @@ fn array_tail_tables_are_skipped_only_while_unarmed() {
     assert!(!crate::object::array_tail_transition::test_tables_may_hold_entries());
     let _ = gc_collect_minor();
     assert!(!crate::object::array_tail_transition::test_tables_may_hold_entries());
-    crate::object::array_tail_transition::test_arm_and_publish(3);
+    crate::object::array_tail_transition::test_arm_and_publish(LayoutWord(3));
     assert!(crate::object::array_tail_transition::test_tables_may_hold_entries());
     crate::object::array_tail_transition::test_clear();
 }

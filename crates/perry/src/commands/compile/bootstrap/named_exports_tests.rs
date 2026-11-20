@@ -17,6 +17,7 @@ fn fixture(source: &str, name: &str) -> CompilationContext {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -219,6 +220,7 @@ fn typescript_importer_is_held_only_to_names_used_as_values() {
         .unwrap()
         .init
         .push(Stmt::Expr(Expr::New {
+            byte_end: 0,
             class_name: "local_alias".into(),
             args: vec![],
             type_args: vec![],

@@ -247,7 +247,7 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
 
     fn expr_uses_param_safely(expr: &Expr, param_id: LocalId, index_id: LocalId) -> bool {
         match expr {
-            Expr::IndexGet { object, index } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
             {
                 matches!(index.as_ref(), Expr::LocalGet(id) if *id == index_id)
             }
@@ -403,13 +403,14 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
                     || check_expr(else_expr, target_id)
             }
             Expr::Array(elements, _) => elements.iter().any(|e| check_expr(e, target_id)),
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 check_expr(object, target_id) || check_expr(index, target_id)
             }
             Expr::IndexSet {
                 object,
                 index,
                 value,
+                ..
             } => {
                 check_expr(object, target_id)
                     || check_expr(index, target_id)
@@ -694,6 +695,7 @@ pub fn construction_expr_can_affect_method_lookup(
             object,
             property,
             value,
+            ..
         } if matches!(object.as_ref(), Expr::This) => {
             property == method_name
                 || setter_names.contains(property)

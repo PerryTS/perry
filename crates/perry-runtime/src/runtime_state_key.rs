@@ -31,9 +31,11 @@ macro_rules! runtime_state_key {
         const KEY: &[u8] = $key;
         const HASH: u64 = $crate::runtime_state_key::const_key_hash(KEY);
         fn site_memo() -> *mut $crate::object::layout_probe::site_memo::ReadSiteMemo {
+            // Process-shared storage: the primary image's (see
+            // `class_image::process_shared_memo`).
             static MEMO: $crate::object::layout_probe::site_memo::ReadSiteMemo =
                 $crate::object::layout_probe::site_memo::ReadSiteMemo::EMPTY;
-            &MEMO as *const _ as *mut _
+            $crate::object::class_image::process_shared_memo(&MEMO)
         }
         $crate::runtime_state_key::NamedStateKey {
             bytes: KEY,
@@ -95,11 +97,7 @@ impl NamedStateKey {
         if crate::object::layout_desc::family_own_key_hashed(obj, self.bytes, Some(self.hash))
             .is_none()
             && !matches!(
-                crate::node_stream::instance_birth::instance_layout_slot(
-                    obj,
-                    self.bytes,
-                    Some(self.hash),
-                ),
+                crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash),),
                 Some(Some(_))
             )
         {
@@ -164,33 +162,31 @@ impl NamedStateKey {
         ) {
             Some(Some((_, slot))) => slot,
             Some(None) => return false,
-            None => match crate::node_stream::instance_birth::instance_layout_slot(
-                obj,
-                self.bytes,
-                Some(self.hash),
-            ) {
-                // A node instance layout's keys are plain writable data.
-                Some(Some(slot)) => slot,
-                Some(None) => return false,
-                None => {
-                    let Some(position) = crate::object::keys_find_property_slot_by_bytes(
-                        keys,
-                        shape.logical_key_count,
-                        self.bytes,
-                    ) else {
-                        return false;
-                    };
-                    let entry = crate::object::key_attrs::keys_entry(keys, position);
-                    if entry
-                        & (crate::object::key_attrs::ENTRY_NON_WRITABLE
-                            | crate::object::key_attrs::ENTRY_ACCESSOR)
-                        != 0
-                    {
-                        return false;
+            None => {
+                match crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash)) {
+                    // A node instance layout's keys are plain writable data.
+                    Some(Some(slot)) => slot,
+                    Some(None) => return false,
+                    None => {
+                        let Some(position) = crate::object::keys_find_property_slot_by_bytes(
+                            shape.keys_view(),
+                            shape.logical_key_count,
+                            self.bytes,
+                        ) else {
+                            return false;
+                        };
+                        let entry = crate::object::key_attrs::keys_entry(keys, position);
+                        if entry
+                            & (crate::object::key_attrs::ENTRY_NON_WRITABLE
+                                | crate::object::key_attrs::ENTRY_ACCESSOR)
+                            != 0
+                        {
+                            return false;
+                        }
+                        crate::object::key_attrs::key_storage_slot(keys, position)
                     }
-                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
-            },
+            }
         };
         if crate::object::object_field_at_with_live(obj, slot, shape.live_inline_slot_count).bits()
             == crate::value::TAG_HOLE
@@ -258,24 +254,22 @@ impl NamedStateKey {
             Some(self.hash),
         ) {
             Some(found) => found?.1,
-            None => match crate::node_stream::instance_birth::instance_layout_slot(
-                obj,
-                self.bytes,
-                Some(self.hash),
-            ) {
-                Some(found) => found?,
-                None => {
-                    let position = crate::object::keys_find_property_slot_by_bytes(
-                        keys,
-                        shape.logical_key_count,
-                        self.bytes,
-                    )?;
-                    if crate::object::key_attrs::key_is_accessor_at(keys, position) {
-                        return None;
+            None => {
+                match crate::stream_hooks::instance_layout_slot(obj, self.bytes, Some(self.hash)) {
+                    Some(found) => found?,
+                    None => {
+                        let position = crate::object::keys_find_property_slot_by_bytes(
+                            shape.keys_view(),
+                            shape.logical_key_count,
+                            self.bytes,
+                        )?;
+                        if crate::object::key_attrs::key_is_accessor_at(keys, position) {
+                            return None;
+                        }
+                        crate::object::key_attrs::key_storage_slot(keys, position)
                     }
-                    crate::object::key_attrs::key_storage_slot(keys, position)
                 }
-            },
+            }
         };
         let live = crate::object::object_live_slot_count(obj);
         // A slot holding the hole is an absent optional key (`key_view`).

@@ -19,7 +19,7 @@ from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent
-TEST262_COMPAT_DIR = REPO_ROOT / "test-compat" / "test262"
+TEST262_COMPAT_DIR = REPO_ROOT / "tests/compat" / "test262"
 PINNED_SHA = TEST262_COMPAT_DIR / "pinned-sha.txt"
 
 DEFAULT_ROOT = REPO_ROOT / "vendor" / "test262"

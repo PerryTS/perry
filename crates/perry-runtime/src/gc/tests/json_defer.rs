@@ -210,16 +210,20 @@ fn json_deferral_byte_limit_forces_collection_before_poll_allowance_expires() {
     let original = child.get_nanbox_u64();
     let before = gc_total_collection_count();
     // Real occupied space, not a mocked pressure reading. Suppressed windows
-    // may cross the allowance; the very next precise poll must pay the debt.
+    // may cross the allowance: the allocation-point check the window owes runs
+    // as it closes, sees the crossing and spends the allowance, and the very
+    // next precise poll pays the debt with a moving collection.
     {
         let _suppressed = GcSuppressScope::new();
         let text = vec![b'x'; MAX_EXTRA_BYTES];
         crate::js_string_from_bytes(text.as_ptr(), text.len() as u32);
+        assert!(matches!(
+            JSON_DEFERRAL.with(Cell::get),
+            Deferral::Waiting { polls_left: 2, .. }
+        ));
     }
-    assert!(matches!(
-        JSON_DEFERRAL.with(Cell::get),
-        Deferral::Waiting { polls_left: 2, .. }
-    ));
+    assert_eq!(JSON_DEFERRAL.with(Cell::get), Deferral::Spent);
+    assert_eq!(gc_total_collection_count(), before);
     js_gc_loop_safepoint();
     assert!(gc_total_collection_count() > before);
     assert_ne!(child.get_nanbox_u64(), original);

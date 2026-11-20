@@ -90,7 +90,7 @@ fn test_trace_array_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 0);
     clear_marks();
     clear_mark_seeds();
@@ -114,7 +114,7 @@ fn test_trace_array_uses_pointer_layout_mask() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
@@ -134,7 +134,7 @@ fn trace_array_root(arr: *mut crate::array::ArrayHeader) {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
 }
 
 fn assert_array_root_trace_reads(arr: *mut crate::array::ArrayHeader, expected_reads: usize) {
@@ -391,7 +391,7 @@ fn test_numeric_array_push_heap_value_transitions_and_traces() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);
@@ -430,7 +430,7 @@ fn test_numeric_array_layout_metadata_matches_gc_scan_state() {
         &valid_ptrs
     ));
     test_reset_trace_slot_reads();
-    trace_marked_objects(&valid_ptrs);
+    trace_marked_objects::<{ cfg!(test) }>(&valid_ptrs);
     assert_eq!(test_trace_slot_reads(), 4);
     unsafe {
         assert_ne!((*child_header).gc_flags & GC_FLAG_MARKED, 0);

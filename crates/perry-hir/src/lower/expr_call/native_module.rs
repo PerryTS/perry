@@ -113,6 +113,7 @@ fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
     let receiver = it.next().unwrap_or(Expr::Undefined);
     let options = it.next().unwrap_or(Expr::Undefined);
     let mut exprs = vec![Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "js_event_emitter_subclass_init".to_string(),
             param_types: Vec::new(),
@@ -242,7 +243,10 @@ fn receiver_is_node_builtin_module(ctx: &LoweringContext, recv: &ast::Expr) -> b
     match unwrap_ts_wrappers(recv) {
         ast::Expr::Ident(ident) => {
             let name = ident.sym.as_ref();
-            name_is_node_builtin_namespace(ctx, name)
+            // The global `process` is node:process's module object: its
+            // fast paths (`process_module`) read `args` by position too.
+            (name == "process" && !ctx.shadows_unqualified_global("process"))
+                || name_is_node_builtin_namespace(ctx, name)
                 // #1750: `const w = path.win32; w.join(...)`.
                 || ctx
                     .lookup_subns_path_alias(name)
@@ -328,10 +332,28 @@ pub(super) fn named_import_call_needs_esm_binding(
     {
         return false;
     }
-    ctx.native_modules.iter().any(|(_, module, method)| {
-        module.strip_prefix("node:").unwrap_or(module) == "module"
-            && method.as_deref() == Some("syncBuiltinESMExports")
-    })
+    builtin_sync_reachable(ctx)
+}
+
+pub(super) fn builtin_sync_reachable(ctx: &LoweringContext) -> bool {
+    crate::patched_builtins::namespace_member_patched("node:module", "syncBuiltinESMExports")
+        || ctx.native_modules.iter().any(|(_, module, method)| {
+            module.strip_prefix("node:").unwrap_or(module) == "module"
+                && (method.is_none() || method.as_deref() == Some("syncBuiltinESMExports"))
+        })
+}
+
+pub(super) fn namespace_call_needs_esm_binding(ctx: &LoweringContext, callee: &ast::Expr) -> bool {
+    let ast::Expr::Member(member) = unwrap_ts_wrappers(callee) else {
+        return false;
+    };
+    let ast::Expr::Ident(local) = unwrap_ts_wrappers(&member.obj) else {
+        return false;
+    };
+    let Some((module, None)) = ctx.lookup_native_module(local.sym.as_ref()) else {
+        return false;
+    };
+    is_node_core(module) && module != "module" && builtin_sync_reachable(ctx)
 }
 
 pub(super) fn try_native_module_methods(
@@ -406,8 +428,8 @@ pub(super) fn try_native_module_methods(
             };
 
             // Check for tty module methods (#347 Phase 3)
-            let is_tty_module =
-                obj_name == "tty" || ctx.lookup_builtin_module_alias(&obj_name) == Some("tty");
+            let is_tty_module = (obj_name == "tty" && !ctx.shadows_unqualified_global("tty"))
+                || ctx.lookup_builtin_module_alias(&obj_name) == Some("tty");
             if is_tty_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "isatty" && !args.is_empty() {
@@ -433,8 +455,8 @@ pub(super) fn try_native_module_methods(
             // serialize/deserialize, heap-stat helpers, and heap-snapshot
             // helpers lower to a receiver-less NativeMethodCall dispatched in
             // codegen to the `js_v8_*` runtime entry points.
-            let is_v8_module =
-                obj_name == "v8" || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
+            let is_v8_module = (obj_name == "v8" && !ctx.shadows_unqualified_global("v8"))
+                || ctx.lookup_builtin_module_alias(&obj_name) == Some("v8");
             if is_v8_module {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
@@ -483,7 +505,10 @@ pub(super) fn try_native_module_methods(
             // module eval (the safer-buffer/iconv-lite/body-parser/express chain).
             // A spread call declines (here and for `Proxy` / `Array` below):
             // see `call_has_spread_arg`.
-            if obj_name == "Symbol" && !super::call_has_spread_arg(call) {
+            if obj_name == "Symbol"
+                && !ctx.shadows_unqualified_global("Symbol")
+                && !super::call_has_spread_arg(call)
+            {
                 let method_name: Option<&str> = match &member.prop {
                     ast::MemberProp::Ident(method_ident) => Some(method_ident.sym.as_ref()),
                     ast::MemberProp::Computed(c) => match c.expr.as_ref() {
@@ -507,7 +532,7 @@ pub(super) fn try_native_module_methods(
 
             // Check for RegExp static methods: RegExp.escape (#2899).
             // #6677: accept the string-literal computed form too.
-            if obj_name == "RegExp" {
+            if obj_name == "RegExp" && !ctx.shadows_unqualified_global("RegExp") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "escape" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
@@ -517,7 +542,7 @@ pub(super) fn try_native_module_methods(
             }
 
             // Check for Map static methods: Map.groupBy. #6677: computed form too.
-            if obj_name == "Map" {
+            if obj_name == "Map" && !ctx.shadows_unqualified_global("Map") {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "groupBy" && args.len() >= 2 {
                         let mut iter = args.into_iter();
@@ -537,7 +562,10 @@ pub(super) fn try_native_module_methods(
                 Err(rest) => rest,
             };
 
-            if obj_name == "Proxy" && !super::call_has_spread_arg(call) {
+            if obj_name == "Proxy"
+                && !ctx.shadows_unqualified_global("Proxy")
+                && !super::call_has_spread_arg(call)
+            {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "revocable" {
                         let mut it = args.into_iter();
@@ -552,7 +580,10 @@ pub(super) fn try_native_module_methods(
             }
 
             // Check for Array static methods. #6677: computed form too.
-            if obj_name == "Array" && !super::call_has_spread_arg(call) {
+            if obj_name == "Array"
+                && !ctx.shadows_unqualified_global("Array")
+                && !super::call_has_spread_arg(call)
+            {
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     match method_name {
                         "isArray" => {

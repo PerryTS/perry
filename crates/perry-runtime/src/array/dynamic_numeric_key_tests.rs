@@ -19,14 +19,27 @@ fn receiver(state: u8) -> f64 {
     let array = scope
         .root_raw_mut_ptr(unsafe { crate::json_tape::alloc_lazy_array(&tape.entries, 0, 3, text) });
     if state == 2 {
-        array.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
-            crate::json_tape::force_materialize_lazy(lazy)
-        });
+        let lazy_addr =
+            array.with_const_ptr(|lazy: *const crate::json_tape::LazyArrayHeader| lazy as usize);
+        let materialized =
+            array.with_mut_ptr(|lazy: *mut crate::json_tape::LazyArrayHeader| unsafe {
+                crate::json_tape::force_materialize_lazy(lazy)
+            });
+        assert_eq!(
+            materialized as usize, lazy_addr,
+            "materialization is in place"
+        );
     }
     array.with_const_ptr(|raw: *const crate::json_tape::LazyArrayHeader| {
         let header = unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }.unwrap();
-        assert_eq!(header.obj_type, crate::gc::GC_TYPE_LAZY_ARRAY);
-        assert_eq!(unsafe { !(*raw).materialized.is_null() }, state == 2);
+        // The materialized lazy array IS the ordinary array (same address).
+        let expected = if state == 2 {
+            crate::gc::GC_TYPE_ARRAY
+        } else {
+            crate::gc::GC_TYPE_LAZY_ARRAY
+        };
+        assert_eq!(header.obj_type, expected);
+        assert_eq!(unsafe { !crate::json_tape::is_lazy_array(raw) }, state == 2);
         crate::value::js_nanbox_pointer(raw as i64)
     })
 }
@@ -58,12 +71,7 @@ fn non_element_numeric_keys_do_not_truncate_on_regular_lazy_or_materialized_arra
                 "packed state={state}, key={key}"
             );
         }
-        for (key, expected) in [
-            (0.0, 11.0),
-            (-0.0, 11.0),
-            (1.0, 22.0),
-            (f64::from_bits(JSValue::int32(2).bits()), 33.0),
-        ] {
+        for (key, expected) in [(0.0, 11.0), (-0.0, 11.0), (1.0, 22.0), (f64::from(2), 33.0)] {
             assert_eq!(js_dyn_index_get(array.get_nanbox_f64(), key), expected);
             assert_eq!(
                 js_packed_arraylike_index_get(array.get_nanbox_f64(), key),
@@ -119,5 +127,5 @@ fn boxed_integer_keys_keep_their_object_property_semantics() {
         })
     };
     assert_eq!(read(2.0), 42.0);
-    assert_eq!(read(f64::from_bits(JSValue::int32(2).bits())), 42.0);
+    assert_eq!(read(f64::from(2)), 42.0);
 }

@@ -36,6 +36,18 @@
   ],
   "holders": [
     {
+      "file": "crates/perry-ext-ws/src/lib.rs",
+      "name": "WS_PENDING_EVENTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "The queue owns only agent/socket/server handle IDs, status codes, Rust String and Vec<u8> payloads. PendingWsEvent and WsPayload contain no JSValue or GC pointer; close callbacks remain in the separately scanned listener maps and JS values are created only after an event is removed for its owning agent."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/tenuring.rs",
+      "name": "CAP_PHASE_CYCLES",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<CapPhaseCycles> holds only nursery byte/count measurements and booleans: last/before_last come from eden_live_bytes, whole/open totals from those readings, and START resets all counts. No address, handle, JSValue or GC allocation enters any field."
+    },
+    {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "CAP_PHASE_INFLUX_BYTES",
       "verdict": "not_a_gc_pointer",
@@ -66,12 +78,6 @@
       "why": "#12561: cfg(test) thread-local Cell<u32> count of complete immutable birth proofs. Its only writes reset or increment the count; assertions read it to prove validated weak shape relationships do not resolve again per birth. It stores neither a heap pointer nor a NaN-boxed value and is absent from release builds."
     },
     {
-      "file": "crates/perry-runtime/src/turnloop_net/transport.rs",
-      "name": "LINK_RESOURCES",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-thread numeric census of driver resources whose terminal completions still hold a link_ref. Incremented in hold, decremented in release; read only as a live-resource count. It stores neither a cell address nor a JS value; the cell refs themselves are traced and pinned by native_payload::link_ref."
-    },
-    {
       "file": "crates/perry-ext-http/src/lib.rs",
       "name": "CLIENT_REQUESTS_INFLIGHT",
       "verdict": "not_a_gc_pointer",
@@ -84,12 +90,6 @@
       "why": "turnloop P5. `HttpPendingUpgrade` carries only handle ids (i64) and an owned `Vec<u8>` of the bytes that followed the request head — no NaN-boxed value and no heap pointer. Carrying ids rather than closure addresses is deliberate: #8082 showed that a snapshot parked in a queue goes stale across a moving collection, so the dispatcher re-reads the listeners from the server handle, whose side tables scan_http_server_roots does rewrite."
     },
     {
-      "file": "crates/perry-ext-http/src/server/server/in_flight.rs",
-      "name": "IN_FLIGHT",
-      "verdict": "not_a_gc_pointer",
-      "why": "InFlightRequest = three perry-ffi registry handle ids + a deadline Instant. The JS-value-bearing objects behind the ids (IncomingMessage/ServerResponse) are registered handles scanned by scan_http_server_roots via iter_handles_of_mut."
-    },
-    {
       "file": "crates/perry-ext-parcel-watcher/src/lib.rs",
       "name": "PENDING",
       "verdict": "not_a_gc_pointer",
@@ -100,12 +100,6 @@
       "name": "WARNED",
       "verdict": "not_a_gc_pointer",
       "why": "HashSet of perry-ffi registry handle ids already found stale, kept only to log each once. Registry ids are indices into the ffi DashMap, not heap addresses."
-    },
-    {
-      "file": "crates/perry-runtime/src/alloc_census.rs",
-      "name": "CREDIT",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9771: bytes remaining to allocate before the next native-heap sample. A `Cell<i64>` counter, const-initialised so the TLS access itself never allocates."
     },
     {
       "file": "crates/perry-runtime/src/arena/alloc_sample.rs",
@@ -168,24 +162,6 @@
       "why": "Byte offset of the next free slot inside the current pool owner, a plain u32. The pool owner pointer itself (POOL_OWNER) is the rooted holder; this cell never stores a heap address. B3 routed pool placement through store_alloc, which made the file an allocating context for rule T."
     },
     {
-      "file": "crates/perry-runtime/src/bun_compat/self_global.rs",
-      "name": "INSTALLED",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-thread Cell<bool> recording whether Bun realm bootstrap installed its replaceable self accessor. Only false/true are stored; the actual global and accessor closures live in the existing traced global object and descriptor storage."
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/reactor.rs",
-      "name": "CP_LIVE_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Atomic count of spawned children that have not reached close. It is only a lock-free emptiness gate for the reactor and root scanner; the ChildProcess values themselves live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/reactor.rs",
-      "name": "CP_REFED_COUNT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Atomic count of live child-process handles that currently keep the event loop active. It stores only a scalar count; ChildProcess JS values live in CP_LIVE and are visited by cp_reactor_scan_roots_mut."
-    },
-    {
       "file": "crates/perry-runtime/src/closure/alloc.rs",
       "name": "CAPTURED_MISS_STREAK",
       "verdict": "not_a_gc_pointer",
@@ -217,18 +193,6 @@
       "why": "Per-agent (keyed Function ShapeId u32, verdict bits u8) pairs for the Function.prototype bind/call/apply arm. Ids and flag bits, never an address; ShapeIds are never reused, so an entry can go unused but not stale."
     },
     {
-      "file": "crates/perry-runtime/src/dyn_eval/function_owner.rs",
-      "name": "ACTIVE_FUNCTIONS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Rust-owned Rc<InterpFn> AST pins and numeric root-stack indices; ASTs contain no runtime JSValues or GC heap pointers. roots_truncate releases pins on normal return and exception savepoint restoration, avoiding skipped-destructor Rc leaks."
-    },
-    {
-      "file": "crates/perry-runtime/src/dyn_eval/function_owner.rs",
-      "name": "PIN_TOP",
-      "verdict": "not_a_gc_pointer",
-      "why": "Plain root-stack index (one past the newest AST pin); an integer, not an address."
-    },
-    {
       "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
       "name": "AGENT_LOOP",
       "verdict": "not_a_gc_pointer",
@@ -245,18 +209,6 @@
       "name": "PENDING_PATH_WRITES",
       "verdict": "not_a_gc_pointer",
       "why": "#9541: parked-write counts keyed by decoded path. `String` keys are Rust-owned heap, not GC heap, and the values are counts. No field can hold a managed pointer."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "QUEUE",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: per-JS-thread Arc<EventQueue> of fs.watch RawEvents — PathBufs, EventClass tags and WatchError strings from the OS backends. Pure Rust data; no NaN-boxed values or heap object pointers ever enter the queue (events are converted to JS values only in the pump drain, under a fresh handle scope)."
-    },
-    {
-      "file": "crates/perry-runtime/src/fs/dir_glob_watch/watch_backend.rs",
-      "name": "SHARED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9613: RefCell<Option<Option<SharedInstance>>> caching the notify watcher instance (OS watcher handles + channel). Holds no JS-heap pointers; watch registrations are keyed by usize ids, targets are PathBufs."
     },
     {
       "file": "crates/perry-runtime/src/fs/filehandle.rs",
@@ -280,7 +232,7 @@
       "file": "crates/perry-runtime/src/gc/census.rs",
       "name": "PASS1_MARKED",
       "verdict": "non_moving_snapshot",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs and current collection phases. Raw header-address snapshot exists only in a synchronous full run_to_completion: step_mark_propagation records it after tracing, then block persistence and weak/ephemeron processing only mark or clear existing edges. Full finalization skips the relocating minor prelude. step_sweep consumes the snapshot before census reporting and before reclamation; budgeted cycles and minors skip its creation and consumption. No JS callback, object relocation, or mutator window occurs between the boundaries. The added full-sweep honest-pointer verifier only reads heap slots and allocator metadata; it neither calls JS nor relocates. Scanner registration and optional feature installation occur in gc_init before this window. Trigger-watermark admission, promotion-policy estimates and test-only throw sabotage do not change the synchronous mark-to-sweep sequence; the production throw check aborts rather than calling JS or unwinding. Native Rust allocations do not collect. Removing the retired PIC census row changes reporting only. Re-audited b7f3d56fed: policy.rs adds old_gen_growth_since_last_full_bytes, a read-only query of existing pressure and post-full baseline counters for idle-reducer admission. It does not call JS, collect or relocate, and neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited DPA-R: js_gc_init_with_layouts binds immutable image metadata before runtime initialization; the compatibility wrapper and linker keepalive anchor do not touch collection, either snapshot boundary, or the synchronous mark-to-sweep sequence. Re-audited WRT2b: the added image-root scan precedes mark propagation and snapshot creation; image cells are immortal MARKED|PINNED and do not enter the moving arena set. The honest-pointer verifier enumerates those immutable image addresses read-only. The new module declarations change no snapshot boundary, JS callback, relocation, or synchronous mark-to-sweep window. WRT3a re-audit: these source files equal e6e7cc419 and the parent; the synchronous census_pass1_if_armed to census_take_if_armed_at_full_sweep_start window remains inside run_to_completion, before reclamation, with no mutator resumption or relocation. Full runtime tests exercise this current source. Release-readiness re-audit 2026-10-28: census.rs only narrows the proc_pid_rusage reporter to macOS. Current gc_init installs roots and intrinsic layouts before collection; js_gc_init_with_layouts binds image metadata before gc_init. The unchanged run_to_completion, mark-completion capture, and pre-reclamation step_sweep consumption still provide the synchronous non-moving window. Re-audited release CI head: burst_boundary now arms the existing precise-poll flag and records the arena baseline. It does not collect or call JavaScript; collection remains deferred until a later precise poll outside the synchronous mark-to-sweep snapshot window. Re-audited #13405: cycle.rs routes birth-color changes through set_birth_extra_flags; it stores the same flags and refreshes the existing inline allocation bound. The refresh only reads existing TLS/arena state and changes the bound, without allocation, JS callbacks, collection or relocation. The synchronous mark-to-sweep custody window is unchanged. Re-audited 2026-10-29 against #13443 (trace.rs -> mark.rs, AtomicFinalize split out to cycle/atomic_finalize.rs, GC_STATS consolidated into gc/progress.rs), the #13457/#13463/#13479 GC slices, and the #13405/#13471/#13472 pacing changes. Both boundaries and both predicates are unchanged and still name the same condition: pass 1 needs minor.is_none() && !is_budgeted(), pass 2 needs full_trace (= minor.is_none()) && !is_budgeted(). The window now runs BlockPersistence -> AtomicFinalize -> the sweep entry before note_sweep_started, and each phase was read rather than assumed: BlockPersistence only marks; the only relocating subphase of AtomicFinalize, MinorPrelude, is entered solely from the minor branch of the ephemeron clear (cycle/weak_ephemerons.rs), while a full goes WeakProcessing -> DisableBarrier -> Sweep, so a full cycle never evacuates between the boundaries; no phase inside the window invokes JavaScript. The const-generic DIAGNOSTICS split of #13443 gates only trace_phase_* recording and the read-only honest-pointer and minor-unmarked verifiers. The new leaf-escape and in-place-promotion machinery (#13463/#13479, #13439) is reached from allocation, store and copying-minor promotion sites, never from this window. census.rs changed only its diagnostic gate predicate. The rest of the interval was read too: HeapChange::begin(Sweep) only clears the weak intern cache and advances the scope counter, the sweep-entry gap drain only traces seeds the barrier shaded, and finish_full_trace invokes perry-stdlib provider hooks that release native payloads owned by the stdlib rather than GC objects. The snapshot's own Vec is a native Rust allocation, which does not collect. Re-audited #13582 (x86-64 Linux GC walk): arena/inline.rs only puts a naked offering shim in front of js_inline_arena_slow_alloc, which passes its caller's pc/sp/fp to a Rust frame that stores a pointer to that origin in the thread-local walk-origin offer cell for the duration of the unchanged slow-path body and clears it on return. It is an allocation entry, not reached from inside the census window; it calls no JS, relocates nothing and changes neither snapshot boundary nor the synchronous mark-to-sweep sequence. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070. census.rs: the reporter's visit_object now accepts both object kinds (gc_object_type_pat!) and reads the meta word and slots through the A1 header accessors (meta_read!, object_slot_at, meta_form_alloc_bytes); it only reads heap words and counts, allocates nothing on the GC heap and changes neither census_pass1_if_armed nor census_take_if_armed_at_full_sweep_start. cycle.rs, mod.rs and allocation_pacing.rs changed formatting and a cfg-gated re-export of poll_armed only. policy.rs: on x86-64 Linux js_gc_loop_safepoint and js_gc_collect became naked entry shims that pass their caller's frame to the armed body as a WalkOrigin (EntryWalkOrigin::enter), and the leaf trigger arm (leaf_window_due) subtracts survivor bytes before comparing Eden with the Eden window. Both are collection ENTRIES and trigger arithmetic, reached before run_to_completion starts, never inside the synchronous mark-to-sweep window; no JS call, relocation or mutator resumption was added between the boundaries. Re-audited 2026-11-03 (RPX) against the diffs since ab8fc9070: census.rs swaps two sort_unstable calls for cold_sort::sort_by (same ordering of the same address Vec, no callback); barrier/mod.rs switches the rewrite-slot visitor to its shared (non-generic) form, same read-only walk; policy.rs, allocation_pacing.rs and verify_honest.rs gain #[optimize(size)] attributes and one rustfmt wrap. No JS callback, relocation or mutator window enters the synchronous mark-to-sweep sequence. Re-audited 2026-11-03 (handle-id reuse): gc/mod.rs gains thread_gc_initialized, a read-only query of the GC_INIT_DONE thread-local used by perry-ffi to tell a collecting thread from a worker; it is called from handle retirement, not from the census window, and calls no JS, allocates nothing on the GC heap and relocates nothing. full_trace.rs adds the pool liveness hook and release step consulted by an armed full trace and weakref.rs asks the pool liveness predicate for handle-valued weak keys, both outside the snapshot boundaries; the synchronous mark-to-sweep sequence is unchanged. Re-audited 2026-11-03 (RELPREP) policy.rs against 68a93a1478f0/f144e6d3d10d/2a03be364e4d/f134e5b860dd: a trigger check turned away inside a GcSuppressScope is now OWED (GC_FLAG_TRIGGER_OWED) and runs at the outermost scope's drop through gc_check_trigger, which returns while GC_FLAG_IN_ALLOC is held (a synchronous full collection holds it), so no check can collect between the pass-1 snapshot and the sweep; the finalization hunk only removes a post-GC delivery. Neither snapshot boundary nor the synchronous mark-to-sweep sequence changes. Re-audited 2026-11-03 for the SNAP census hooks (instruments builds only; production calls are empty inline stubs): gc/census.rs Census accounting calls snap_census::census_live(header, type, size), which only counts the header against the census's own birth list in a malloc map (no mark, no move, no GC allocation, no JS); arena/inline.rs allocation_limit returns 0 while snap_census closes the inline bump, which routes mutator allocations to the slow path, outside this window; gc/mod.rs re-exports roots::for_each_global_root_slot under the instruments cfg, no code in the window. Re-audited 2026-11-05 (SNAP merge with main) policy.rs: the SNAP census hooks add an early return in gc_unsuppress while snap_census holds collection (a flag clear, no collection) and an early return plus explicit_gc_done bookkeeping in js_gc_collect_body (the manual-collect entry, reached before run_to_completion); all instruments-only stubs in production, no JS, relocation or mutator resumption inside the synchronous mark-to-sweep window, which main left unchanged. Re-audited 2026-11-15 against the diffs since the recorded pins (census.rs since 00fb540ce7, cycle.rs since f648648270, barrier/mod.rs since 71b9dcfe53, allocation_pacing.rs since f4d20d45cb, and arena/inline.rs, gc/mod.rs and gc/policy.rs since 6e5c6e1190, the last commit on which this gate passed, because their recorded pins match no commit on main). census.rs: slot_kind classifies an INTERNAL_WORD_TAG word (I32 slot word or other) instead of INT32_TAG and visit_array matches gc_array_type_pat!; both are read-only reporting, plus a unit test. barrier/mod.rs: one comment. allocation_pacing.rs: test-only (test_throw, this_test_process). arena/inline.rs: ILP32 offset constants with a const assertion, an instruments-only alloc_sample::inline_slow_alloc call on the allocation slow path, and allocation_limit returns 0 while snap_census closes the inline bump; all allocation-side, outside the window. cycle.rs: the one change inside the window is an instruments-only diagnostic_hooks::life_full_marked() call right after census_pass1_if_armed; the installed hook (wpfacts_check life_measure::full_marked and life_regions::full_marked) only reads GC_FLAG_MARKED/PINNED from headers via life::full_alive and edits the measurement's own Rust maps, with no GC allocation, JS call or relocation. Block persistence now runs when roots::collection_point_is_precise() is false instead of the three previous conditions; it still only marks. The other cycle.rs changes are instruments-only phase names, snap_funnel! at cycle construction and step entry, and the post-sweep allocator purge taking a memory_owed argument; none falls between the boundaries. gc/mod.rs: the minor path gains evacuation_veto and life hooks around the copying minor (minor only; pass 1 needs minor.is_none()), snap_funnel! at collection entries, an instruments-only life_collect_full entry, and module/re-export lines. gc/policy.rs: gc_unsuppress returns early while snap_census holds collection, snap_funnel! and the snap_census explicit-gc check at collection entries, evacuation_veto in the budgeted minor fallback, and leaf-service trigger arithmetic (leaf_service_precedes_copying_cap, the quarter-window floor in leaf_window_due); all are entries or trigger decisions reached before run_to_completion. Neither boundary predicate nor the synchronous mark-to-sweep sequence changed, and no JS call, relocation or mutator resumption was added inside it. Re-audited 2026-11-16 gc/mod.rs against c71b7fd958..d666699147 (3c3ed02071): one instruments-only re-export of roots::census_visit_roots, no code in the window.",
       "window": {
         "start": {
           "file": "crates/perry-runtime/src/gc/census.rs",
@@ -295,15 +247,17 @@
           "function": "run_to_completion"
         },
         "sources": {
-          "crates/perry-runtime/src/gc/census.rs": "0cd91052df3a3dd884840e1365aae5e68ca07b20193d2e53049cf08388746fb4",
-          "crates/perry-runtime/src/gc/cycle.rs": "84ef67459e5013ca89ab79a77776837e27323502fd574535e944f43815843209",
-          "crates/perry-runtime/src/gc/mod.rs": "dd133cc4b4ff53115ebc809c818b99cc5dc96949c910a056f47f2e3c0d2c123a",
-          "crates/perry-runtime/src/gc/policy.rs": "1591994044f5ef5e03a5a7922629074da48dfb845262bfbaa293e188cb6b709a",
-          "crates/perry-runtime/src/gc/progress.rs": "acb439ba3c6a100f08ea4aa0ba4b96c30afb8cb5d84264436948524144b9342b",
-          "crates/perry-runtime/src/gc/allocation_pacing.rs": "8457f4987805b2755f6d235e4c22ebbfd549ef011f5edea5ddad15c48daab5ef",
-          "crates/perry-runtime/src/gc/ephemeron.rs": "b6a62662078caf02e5fa716e6bd8089f20e67efca8c9bb55ea234567e81adc06",
-          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "4c2183d3f5bff96acd2df6fbc1b0ad4d47eec23317ef378781e220b4700cf1f4",
-          "crates/perry-runtime/src/gc/verify_honest.rs": "7ce42efcd504e2a00a0ace2cd2df4eb113093c2e6d9710e2c39f6fb2f4d2f488"
+          "crates/perry-runtime/src/gc/census.rs": "a324d9523e30c9550071d06b3da79c369e0578c44c804bc9f0a8e3bf9abbd570",
+          "crates/perry-runtime/src/gc/cycle.rs": "ce5aadb557a6597f10532b78c7818889728b9965e00a8cbd0973e21dfe493b81",
+          "crates/perry-runtime/src/gc/barrier/mod.rs": "ad9ded48b7d339da5651f68bf325023d954348b9e013a6281c1debc73df5abca",
+          "crates/perry-runtime/src/arena/inline.rs": "6b9bb08883891a2e7fce6d278d2f259eac60af5b383f052a19c396addf5160e0",
+          "crates/perry-runtime/src/gc/mod.rs": "80ca38fa596394f8f9b083b8c04ccbf950efbfbfd7e015707c5414494d580c0e",
+          "crates/perry-runtime/src/gc/policy.rs": "bfbd9272172a2c69bb3941d57c926bec1a62f485c121cb26c895695a16263ae0",
+          "crates/perry-runtime/src/gc/progress.rs": "d2cf96a624dff35e405ac15fa37fe6ba31e7e158668581428fb3765f2c7160c3",
+          "crates/perry-runtime/src/gc/allocation_pacing.rs": "bb074b77249c39d1ffb06f94f3d641c6a6afcfa7f89563a4cf3dff202502a7ab",
+          "crates/perry-runtime/src/gc/ephemeron.rs": "fd477a0729117b514c7a41fd0c48ba430afaf40f26f9c85dab6890ef1171f437",
+          "crates/perry-runtime/src/gc/cycle/weak_ephemerons.rs": "895c5b3baf0bc76b30c86edc48e649d2a1f51a8bf2dd4ca86bc15c373c813405",
+          "crates/perry-runtime/src/gc/verify_honest.rs": "b980cf09aa4265f40ff2efc94f86046a06ea0ce28c7fe39ed5f9d9739e301359"
         }
       }
     },
@@ -488,46 +442,10 @@
       "why": "#9794: monotonic per-minor sequence number used to label survival-origin records. A `Cell<u64>`."
     },
     {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "FORWARDED_STUB_MEMBERSHIP_RECOVERIES",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9717: monotonic count of array-growth forwarding stubs a budgeted full cycle admitted through `classifier_valid_object_start`, reported as `forwarded_stub_recoveries=` on the PERRY_GC_DIAG `[gc-incremental]` line. A `Cell<u64>` holding a tally, never an address — the stubs it counts are reached through the worklist, not retained here. Nothing for the collector."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/adopt_census.rs",
-      "name": "ADOPTED_BLOCKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of arena blocks whose census record the census adopted from the in-place promotion walk instead of walking them. A tally, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_BLOCKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of arena blocks this thread's full sweeps reclaimed without visiting. Written only by `note_block_skip_reclaimed` with a block count; holds no address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_BYTES",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` sum of header sizes in blocks reclaimed without a visit. A byte count, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "BLOCK_SKIP_RECLAIMED_OBJECTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of objects in blocks reclaimed without a visit. An object count, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
-      "name": "HOLE_REBUILD_BLOCKS_SKIPPED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10182 live-subject counter: a `Cell<u64>` count of live old blocks a full sweep's hole-list rebuild did not parse because the census proved them hole-free. A tally, never an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace/block_skip.rs",
+      "file": "crates/perry-runtime/src/gc/mark/block_skip.rs",
       "name": "LAST_SKIPPED_BASES",
       "verdict": "test_only",
-      "why": "#[cfg(test)] `RefCell<Vec<usize>>` in `block_skip::sabotage`: the `data` base addresses of the arena BLOCKS the last full sweep skipped, recorded so tests can ask whether a given block was skipped. Block bases, not object pointers; never dereferenced, never traced, absent from shipped binaries."
+      "why": "#[cfg(test)] `RefCell<Vec<usize>>` in `mark::block_skip::sabotage`: the `data` base addresses of the arena BLOCKS the last full sweep skipped, recorded so tests can ask whether a given block was skipped. Block bases, not object pointers; never dereferenced, never traced, absent from shipped binaries."
     },
     {
       "file": "crates/perry-runtime/src/gc/trigger_watermark.rs",
@@ -552,12 +470,6 @@
       "name": "ENUM_DIAG",
       "verdict": "not_a_gc_pointer",
       "why": "#9823 for-in diagnostics (`PERRY_ENUM_DIAG`), off unless armed. Two `Instant`s and a set of u64 counters (`for_in_calls`, `for_in_primitive`, `for_in_levels`, `for_in_key_arrays`, …). No field stores an address."
-    },
-    {
-      "file": "crates/perry-runtime/src/hot_diag.rs",
-      "name": "IC_DIAG",
-      "verdict": "not_a_gc_pointer",
-      "why": "Inline-cache miss diagnostics (`PERRY_IC_DIAG`). `IcDiag` is two `Instant`s, three counters, and `sites: HashMap<usize, SiteStat>` whose KEY is a PIC cache-slot address — malloc'd arena storage from `field_get_set/ic_slot.rs`, never GC heap — and whose value is a `String` plus counters. Nothing here is a managed pointer."
     },
     {
       "file": "crates/perry-runtime/src/intl/segments_view.rs",
@@ -680,27 +592,6 @@
       "why": "Per-thread traversal-evidence score for the lazy-vs-eager JSON.parse route (json/traversal_feedback.rs). A `Cell<u8>` saturating counter: incremented when a lazy array's cold read flips or completes an in-order scan, decremented when a lazy array is created, compared against a constant in `prefer_eager`. It never stores an address, handle, NaN-boxed value or anything derived from one."
     },
     {
-      "file": "crates/perry-runtime/src/map.rs",
-      "name": "MAP_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_api_host/loader.rs",
-      "name": "LEGACY_CAPTURE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Temporary legacy-addon registration state: a canonical Rust PathBuf, a pointer to the addon's static napi_module descriptor in the loaded native library, and counters/flags. It never stores a Perry GC-heap address."
-    },
-    {
-      "file": "crates/perry-runtime/src/node_api_host/metadata.rs",
-      "name": "PENDING_FINALIZERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Queue entries contain a native addon function pointer plus the addon's opaque data and hint pointers. Node-API defines those as embedder-owned native pointers; no field is a Perry GC-heap address."
-    },
-    {
       "file": "crates/perry-runtime/src/node_stream_constructors/birth.rs",
       "name": "SITE",
       "verdict": "not_a_gc_pointer",
@@ -784,12 +675,6 @@
       "why": "The class side tables are declared in state.rs and scanned from gc_roots.rs. Both twins visit it — #7239 diffed all eight budgeted (FULL, STEP) pairs and found no drift."
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_MEMBER_ORDERS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Source order for Symbol-keyed class members: HashMap<(class_id, SymbolHeader::id, is_static), u32>. The u64 is the symbol's stable id (read once at registration in record_class_symbol_member_order), NOT its address, so the table needs no re-key when a Symbol is evacuated; the value is an order index. The member values themselves live in CLASS_SYMBOL_METHODS/CLASS_SYMBOL_ACCESSORS, which scan_class_symbol_member_keys_mut visits and rewrite_class_symbol_method_key_if_forwarded re-keys."
-    },
-    {
       "file": "crates/perry-runtime/src/object/field_get_set/exotic_named_read.rs",
       "name": "ORDINARY_PROBES",
       "verdict": "test_only",
@@ -859,10 +744,22 @@
       "why": "#11886: #[cfg(test)] Cell<u64> incremented by patched_slot_call when a patched function slot reaches the user-call path. Tests read its delta to prove that path fired. Although that function also roots and calls GC closures (rule B), this holder stores only the number of calls, never the callee or receiver. Absent from shipped binaries."
     },
     {
-      "file": "crates/perry-runtime/src/object/native_call_method/namespace_override.rs",
-      "name": "RUNNING",
-      "verdict": "not_a_gc_pointer",
-      "why": "#10848 reentrancy guard: a CatchStack of owned (module, method) name `String` pairs marking which native-namespace user overrides are executing on this thread (truncated by the catch savepoint on a throw). Rust-owned strings only — the override closure and the namespace it runs on are rooted in the caller's RuntimeHandleScope."
+      "file": "crates/perry-runtime/src/object/native_call_method/function_shape.rs",
+      "name": "FUNCTION_SHAPE_HITS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] thread-local Cell<u64> counting calls the function-shape path answered; tests read its delta to prove the path fires. A counter: no address, handle or NaN-boxed value, and it is absent from production builds."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/parent_static/symbol_members.rs",
+      "name": "SETTER_CALL",
+      "verdict": "test_only",
+      "why": "Inside #[cfg(test)] mod static_receiver_tests: a thread-local Cell<Option<(u64,u64)>> that a test setter fills with the raw bits of (this, value) so the test can compare them with the bits it passed. The bits are only compared, never dereferenced, and the cell is cleared per test; it is absent from production builds."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/static_scan.rs",
+      "name": "HITS",
+      "verdict": "test_only",
+      "why": "Inside #[cfg(test)] pub(crate) mod sabotage: a thread-local Cell<u32> liveness counter for the static plan test (gc::tests::static_scan). A counter only; absent from production builds."
     },
     {
       "file": "crates/perry-runtime/src/object/native_get.rs",
@@ -906,12 +803,6 @@
       "name": "TEST_LAYOUT_NOTE_SLOT_CALLS",
       "verdict": "test_only",
       "why": "#[cfg(test)] Cell<usize> counter for asserting spill overwrites skip the full layout-note path when the pointer kind is unchanged. It stores only a call count and is absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/os/os_process_emitter.rs",
-      "name": "PROCESS_EXIT_EVENT_EMITTED",
-      "verdict": "not_a_gc_pointer",
-      "why": "#9403 re-entrancy latch: a bool recording that the process 'exit' event has already been emitted, so a listener that itself calls process.exit() or throws cannot re-run the listeners that already ran (node skips straight out instead). Holds a flag, never a JSValue or heap pointer."
     },
     {
       "file": "crates/perry-runtime/src/perf_hooks.rs",
@@ -985,6 +876,18 @@
     },
     {
       "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "DFA_CAPTURE_ANSWERS",
+      "verdict": "test_only",
+      "why": "Declared inside a `#[cfg(test)] crate::perry_thread_local!` block: a `Cell<usize>` tally of capture passes the lazy automaton answered, asserted by its own tests. Absent from shipped binaries and holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
+      "name": "DFA_CAPTURE_PASSES",
+      "verdict": "test_only",
+      "why": "Declared inside a `#[cfg(test)] crate::perry_thread_local!` block: a `Cell<usize>` tally of capture passes the lazy automaton ran, answered or declined. Sibling of DFA_CAPTURE_ANSWERS; absent from shipped binaries and holds no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/regex/perex_runtime.rs",
       "name": "OWNED_SEARCHES",
       "verdict": "test_only",
       "why": "#[cfg(test)] Cell<usize> counting searches that took the owned-buffer path (search_owned), so a test can assert which path a program took. A count, never a pointer; absent from shipped binaries."
@@ -1012,15 +915,6 @@
       "name": "LAST_FORWARD_WORK",
       "verdict": "test_only",
       "why": "#10164: #[cfg(test)] Cell<usize> holding the Perex work units the last forward split charged, so tests can assert its cost scales linearly. A quantity, never an address, and absent from shipped binaries."
-    },
-    {
-      "file": "crates/perry-runtime/src/set.rs",
-      "name": "SET_FOREACH_STACK",
-      "count": 1,
-      "classification": "not_a_gc_pointer",
-      "verdict": "not_a_gc_pointer",
-      "why": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there.",
-      "reason": "Holds Set/Map header ADDRESSES as identity keys for in-flight forEach walks (#9082); the values are only ever compared (`contains`, `pop` equality) and truncated, never dereferenced, so no collector edge originates here. Correctness across evacuation is maintained by set_header_moved_for_gc / map_header_moved_for_gc, which rewrite every matching entry when a header moves — see the SET_FOREACH_STACK/MAP_FOREACH_STACK rewrite loops there."
     },
     {
       "file": "crates/perry-runtime/src/stack_guard.rs",
@@ -1153,6 +1047,12 @@
       "why": "#340/#341 per-realm `perry/tui` singleton HANDLE (`useApp()` / `useStdout()` / `useFocusManager()` must answer the same object on every call, so the object lives here rather than being re-minted). Real GC address, visited by `tui::handle_object::scan_tui_handle_roots_mut` from the registered `object::scan_object_cache_roots_mut`. Uncovered here only because that scanner is in another file."
     },
     {
+      "file": "crates/perry-runtime/src/tui/run.rs",
+      "name": "CALLBACKS",
+      "verdict": "test_only",
+      "why": "AtomicUsize counting completed callbacks in the #[cfg(test)] TUI run-loop tests. Only zero and fetch_add(1) are stored; it never contains a heap pointer, handle or NaN-boxed value and is absent from production builds."
+    },
+    {
       "file": "crates/perry-runtime/src/turnloop_pool/mod.rs",
       "name": "SCANNER_REGISTERED",
       "verdict": "not_a_gc_pointer",
@@ -1163,6 +1063,12 @@
       "name": "FFI_SSO_RING",
       "verdict": "not_a_gc_pointer",
       "why": "#11430: a per-thread ring of NON-GC StringHeader-shaped slots that js_ffi_arg_ptr copies an SSO argument's inline bytes into for the duration of one native call. The slots are owned Box memory, never GC-allocated, and hold only a length header and the copied ASCII bytes — no pointer into the GC heap."
+    },
+    {
+      "file": "crates/perry-runtime/src/web_storage.rs",
+      "name": "MIRROR_WRITE",
+      "verdict": "not_a_gc_pointer",
+      "why": "A `Cell<bool>` reentrancy flag, set only while `sync_named_property` writes the module's own mirror of a stored key so `storage_set_field` lets that write through. Holds no address or NaN-boxed value."
     },
     {
       "file": "crates/perry-runtime/src/weakref/test_support.rs",
@@ -1213,12 +1119,6 @@
       "name": "OBJECT_URL_REGISTRY",
       "verdict": "not_a_gc_pointer",
       "why": "blob: URL string -> Blob HANDLE ID (a fetch-band small integer), not an address."
-    },
-    {
-      "file": "crates/perry-stdlib/src/nodemailer/turnloop_bridge.rs",
-      "name": "MESSAGE_IDS",
-      "verdict": "not_a_gc_pointer",
-      "why": "The `messageId` promised to JS, held from submission to delivery. The VALUE is a plain `String` — no JS value, nothing for a moving collector to invalidate. Rule T fires on the KEY, a `usize` that is the promise address (`nodemailer.rs`'s `try_send(.., promise as usize)`). That promise is minted by `js_promise_new_cross_thread()` one call earlier in the same function, so it carries the #9356/#9552 contract: pinned at creation in non-moving malloc space and rooted by its native-async token until settlement. It is therefore neither movable nor unrooted, and this map never dereferences it — the key is only ever compared, and it is handed straight back to `common::async_bridge::queue_deferred_resolution`, which holds the SAME address in `PENDING_DEFERRED` behind its own registered scanner. The entry is removed by `settle_send`, on the owning thread, inside the deferred resolution — so it cannot outlive its promise. Newly listed because turnloop replaced nodemailer's lettre/tokio send path with this bridge, which is what put a promise-keyed thread-local in perry-stdlib for rule T to see."
     },
     {
       "file": "crates/perry-stdlib/src/streams.rs",
@@ -1277,24 +1177,6 @@
       "why": "Per-listener handshake inputs for the node:tls server's turnloop accept path, keyed by the TLS server handle id: an Arc<rustls::ServerConfig>, an Option<Arc<DynamicCertResolver>> (rustls CertifiedKeys plus DER bytes) and a bool. Rust-owned state only; no NaN-boxed value and no heap pointer. The server's JS callbacks (SNICallback / ALPNCallback / listeners) live in TLS_SERVERS / TLS_LISTENERS, which the registered scan_tls_roots visits."
     },
     {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "CALLBACKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. A HashMap<usize, PerrySmtpDone> of extern \"C\" fn pointers, keyed by the binding's own ctx (the promise address it will settle). A fn pointer is code, not heap; the promise behind the key is pinned by the binding's JsPromise, exactly as it was across the spawn_blocking this replaced."
-    },
-    {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "DRAFTS",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. Half-built SMTP requests from a separately linked binding, keyed by a draft id. A Draft holds only owned Strings (host, user, pass, envelope addresses, message id) and the rendered message bytes as Vec<u8> — the setters copy every (pointer, length) pair before returning, which is the C seam's documented contract."
-    },
-    {
-      "file": "crates/perry-stdlib/src/turnloop_smtp/ffi.rs",
-      "name": "NEXT_DRAFT",
-      "verdict": "not_a_gc_pointer",
-      "why": "turnloop P6. A monotonic i64 draft-id counter for the SMTP C seam; it contains only a tally."
-    },
-    {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "CURRENT_PARENT_AGENT",
       "verdict": "not_a_gc_pointer",
@@ -1311,12 +1193,6 @@
       "name": "OWN_WORKER_COUNTS",
       "verdict": "not_a_gc_pointer",
       "why": "#12448: this thread's cached handle to its agent's Rust-owned Worker counters (an AgentId plus an Arc of two AtomicUsize counts). It holds counts, never a JS heap address."
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "NEXT_PORT_ID",
-      "verdict": "not_a_gc_pointer",
-      "why": "Monotonic MessagePort id counter."
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
@@ -2621,12 +2497,6 @@
       "why": "Per-agent cache of (ShapeId, inline slot index) u32 pairs. ShapeIds are numbers that are never reused and slot indices are integers; no heap address or NaN-boxed value is stored, so an entry can only go unused, never dangle."
     },
     {
-      "file": "crates/perry-runtime/src/object/arguments.rs",
-      "name": "ARGUMENTS_SHAPES",
-      "verdict": "not_a_gc_pointer",
-      "why": "[u32; 130] of the ShapeId an arguments object of each ARGUMENTS_KEYS slot was last born with. ShapeIds are never-reused numbers re-validated against the live descriptor by try_birth_stamp_preinstalled_shape; no heap pointer is stored."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/decl_prototype_birth.rs",
       "name": "BORN_FINAL_BUILDS",
       "verdict": "test_only",
@@ -2686,12 +2556,6 @@
       "name": "CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only AtomicUsize invocation counter. Its only writes store zero or fetch_add(1); reads compare the numeric callback count. No address or tagged value is ever stored."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "BLOCK_PERSIST_FORCE_MARKS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Numeric diagnostic count of block-persistence forced marks. It holds no pointer; B4 scanner deletions exposed incidental prior call-graph coverage."
     },
     {
       "file": "crates/perry-ext-http/src/client_turnloop/mod.rs",
@@ -2781,12 +2645,12 @@
       "file": "crates/perry-runtime/src/string/intern.rs",
       "name": "INTERN_TABLE",
       "verdict": "weak_heap_change_cache",
-      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation.",
+      "why": "Re-audited 2026-10-23 against the pinned-source diffs. The existing direct-mapped string-reuse cache is weak: every collection HeapChange clears all entries at entry before any free or move. gc_realloc validates the malloc cell and clears before realloc only for GC_TYPE_STRING; unrelated reallocations leave cached string addresses unchanged. Both production insertion funnels still use publish_intern_entry, which refuses publication throughout every open HeapChange, including nested scopes and realloc. Ordinary readers need no per-lookup scope check. New property-atom creation, image seeding, mixed-hash probing and weak metadata rewrite/prune operate on the separate ATOMS table; atom hits published into INTERN_TABLE still use the same guarded publication funnel. The cache itself is not scanned and holds no strong root. Const-initialized malloc bookkeeping only defers native Vec capacity reservation; it does not change string realloc validation or HeapChange ordering. Concat changes isolate numeric test counters and add no publication path. Existing tests cover unrelated/string realloc, nested publication exclusion through both writers, young-string death and live relocation. WRT3a re-audit: these sources equal e6e7cc419 and the parent. INTERN_TABLE publication still passes the HeapChange exclusion funnel; collection and string realloc clear the weak cache before changing heap addresses, and the current runtime suite covers nested scopes, realloc and relocation. Re-audited #13411: concat.rs extracts numeric heap-string construction into concat_formatted_number and reuses formatted digits after the inline-string capacity/ASCII checks decline. The existing INTERN_TABLE lookup in js_string_concat is unchanged. The extracted helper uses the separate concat memo and the same rooted allocation fallback; it adds no INTERN_TABLE writer. All weak-cache publication still goes through publish_intern_entry, and HeapChange exclusion/invalidation is unchanged. Re-audited 2026-10-29 against #13431 and the #13397/#13472 concat and ASCII-region work. INTERN_TABLE still has exactly two production writers: publish_intern_entry, which returns early for the whole duration of every open HeapChange, and discard_weak_interns, a full clear called from HeapChange::begin for every kind except Realloc and from gc_realloc before a GC_TYPE_STRING cell can move or be released. Every other slot site in the crate is a read: the concat fast path, js_string_intern, intern_prehashed_bytes and intern_lookup_bytes only load entries. #13431's new AtomTable::probe_from/seed_if_absent and the weak metadata rewrite/prune sites write ATOMS, the immutable image atom table repaired by scan_property_atoms and pruned before sweep. gc/malloc.rs gained only malloc_object_count(). No new publication path was added. Re-audited 2026-11-02 (RELPREP) against d70032de4..ab8fc9070: concat.rs changed only the line wrapping of two copy_from_nonoverlapping calls in write_decimal. No INTERN_TABLE writer, reader or HeapChange ordering changed. Re-audited 2026-11-03 (RELPREP) intern.rs against 140dd6950359/f134e5b860dd: lookup_from gains a builtin-global-atom answer and js_string_register_property_atom reuses the probe's vacant slot; both act on the separate ATOMS table (image atoms, weak metadata rewritten after tracing) and neither adds an INTERN_TABLE publication path, so the HeapChange exclusion funnel is unchanged. Re-audited 2026-11-15 against intern.rs since f134e5b860 (4d4391a1b0, 5a2a48419f, 1c6eaf58bc) and concat.rs since f648648270: no added or removed line names INTERN_TABLE, with_intern_table, publish_intern_entry or discard_weak_interns. intern.rs adds the keyed probe over ATOMS (probe_slots/probe_mask, sync_probe, short_key_atom*, key_word_atom*, key_first_atom, retract_agent_atoms on drop), property_atom_from_bytes/mint_property_atom (ATOMS publication), replace_from for ATOMS rehash and prune, and a debug assertion; all act on the separate ATOMS table. concat.rs adds the short_pair inline-string fast arm in js_string_concat_box (inline strings, no heap string, no intern access) and deletes the INT32_TAG arm of concat_chain_sized; its INTERN_TABLE read at the concat fast path is unchanged. The two production writers and the HeapChange exclusion and invalidation are unchanged.",
       "sources": {
-        "crates/perry-runtime/src/string/intern.rs": "c1c01e95364e9f1e3fb64f1ef9f00de6a34489238bff7acccafc8281d3f6c29f",
+        "crates/perry-runtime/src/string/intern.rs": "01fdfbeb3866ce9012449a6e8244b0702588d263b300402c230a2df2232e9a5b",
         "crates/perry-runtime/src/gc/heap_generation.rs": "8344c9995c62342714b40a947dd20338a56fcd1cb8f031356e865b9121d6ee2f",
-        "crates/perry-runtime/src/string/concat.rs": "aff51a40e1cf03321ddec88547a7baf0666391598b7289fa8d662f0c19596ed0",
-        "crates/perry-runtime/src/gc/malloc.rs": "5473dff1ad0d1b5e596268b2193e341f823d11a659e66b6fe6537a5e021c9076"
+        "crates/perry-runtime/src/string/concat.rs": "673d231bb80bf1a2ed2c94745add8cd5a40332f756562dfd13d14b4aa8102ddc",
+        "crates/perry-runtime/src/gc/malloc.rs": "507412b031f677b5acdc0a846f3adca4cda39d24a08cf1a07c995dd482044367"
       }
     },
     {
@@ -2806,12 +2670,6 @@
       "name": "CLOSURE_ALLOCS_ON_THREAD",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only closure allocation count; note_closure_alloc increments this u64 once per birth, and tests compare numeric deltas. No object address is stored."
-    },
-    {
-      "file": "crates/perry-runtime/src/dyn_eval_hooks.rs",
-      "name": "INTERP_ACTIVE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Interpreter entry depth. interp_active_enter increments and interp_active_leave decrements this u32; note_proto_write tests it against zero. It never stores a JS value or address."
     },
     {
       "file": "crates/perry-runtime/src/exception.rs",
@@ -2856,19 +2714,13 @@
       "why": "Boolean reporting termination of this agent after a loop interrupt. It stores no exception payload, callback or GC address."
     },
     {
-      "file": "crates/perry-runtime/src/object/builtin_proto.rs",
-      "name": "ACTIVE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean recursion guard local to call_unknown_collection_method. Reset restores it on scope exit; receiver and callable values are not stored here."
-    },
-    {
       "file": "crates/perry-runtime/src/object/global_this/generator_state.rs",
       "name": "BIRTH_SHAPE",
       "verdict": "not_a_gc_pointer",
       "why": "Sync-generator birth ShapeId, stored as an immutable u32 id. It names layout metadata, never a generator object or other GC allocation."
     },
     {
-      "file": "crates/perry-runtime/src/object/layout_desc.rs",
+      "file": "crates/perry-runtime/src/object/layout_desc/diagnostics.rs",
       "name": "INSTALL_CAUSE",
       "verdict": "not_a_gc_pointer",
       "why": "Numeric diagnostic cause code consumed by note_install for INSTALLS_BY_CAUSE counters. The u8 is never an object address or JS value."
@@ -2962,6 +2814,246 @@
       "name": "TEST_PASS_CHEAP_GATES",
       "verdict": "not_a_gc_pointer",
       "why": "Test-only Boolean allowing idle-compaction prediction fixtures to pass the cheap admission gates. It stores no heap state, block address, selected object or callback; compaction state and page selection remain separate."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/image_cells.rs",
+      "name": "IMAGE_REMEMBERED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Header addresses only of immortal linker-image cells, never arena or malloc objects. remember_image_cell is entered only after RememberingParent::Image classification, and reconstruction enumerates the image. The cells themselves cannot move or die; mark_image_roots and the copying image-root visitor trace and rewrite their managed children."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/image_cells.rs",
+      "name": "TEST_IMAGE_HOLDER",
+      "verdict": "test_only",
+      "why": "cfg(test) Boolean ownership flag for the process-wide static fixture; it stores no address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/layout_desc/registration.rs",
+      "name": "RUNTIME_LAYOUT_INSTALLS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Debug/test u32 count of runtime layout installations, reset or incremented for assertions. It stores no layout pointer, JS value or heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/static_shapes.rs",
+      "name": "SEED_BY_NAMES_MINTS",
+      "verdict": "not_a_gc_pointer",
+      "why": "WASI image-selftest/test u32 count of by-names seed mints; the counter carries no key-list address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/asynchronous.rs",
+      "name": "PUMPING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean reentrancy guard for the component Promise pump; contains no managed value or address."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/http/pump.rs",
+      "name": "PUMPING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean reentrancy guard only. Prevents callbacks from recursively entering an active component Store through the auxiliary event pump."
+    },
+    {
+      "file": "crates/perry-runtime/src/component/persistent/poll.rs",
+      "name": "RUNNING",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean guard preventing recursive entry into the persistent driver auxiliary pump; never stores an address or JavaScript value."
+    },
+    {
+      "file": "crates/perry-ext-ws/src/lib.rs",
+      "name": "WS_ACTIVE_SERVERS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-agent listening-server counts: a Vec of numeric agent u64 ids and u32 reference counts. active_servers_add/release only increment, decrement and remove counts; it contains no JS value or GC cell address."
+    },
+    {
+      "file": "crates/perry-runtime/src/error_stack_frames.rs",
+      "name": "FRAME_RESOLUTION_ATTEMPTS",
+      "verdict": "test_only",
+      "why": "Inside cfg(test) per_test_global!: AtomicUsize records resolution attempts by fetch_add and load. No production holder or GC pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/eh.rs",
+      "name": "RAISE_VERDICT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell<u8> contains only VERDICT_NONE/HANDLER_FOUND/PHASE1_ERROR exception-transport status constants. No address or JS value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/allocation_pacing.rs",
+      "name": "ACCOUNT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Account owns numeric Debt counters in a Cell and subtracts its published byte count at drop. note_allocation publishes byte debt; no object address is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/telemetry.rs",
+      "name": "OLD_RECLAIM_WHY",
+      "verdict": "not_a_gc_pointer",
+      "why": "Cell of a static string reason for old-generation reclamation reporting; points only at immutable .rodata strings, never GC memory."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/regex_read_sites.rs",
+      "name": "FLAG_ACCESSORS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Memoized regex flag-accessor proof: (semantic epoch u64, prototype LayoutWord stamp u32, verdict bool). flag_accessors_are_builtin stores only these numeric identities and its proof result, never the prototype or getter closure address."
+    },
+    {
+      "file": "crates/perry-runtime/src/interp_proto_guard.rs",
+      "name": "INTERP_ACTIVE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Interpreter entry depth. interp_active_enter increments and interp_active_leave decrements this u32; note_proto_write tests it against zero. It never stores a JS value or address."
+    },
+    {
+      "file": "crates/perry-runtime/src/module_require/path_registry.rs",
+      "name": "PENDING_PATH_INITS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Deferred generated extern C registrar function pointers, consumed by register_pending_path_inits. These are executable-image code addresses; the functions register initializer addresses, and the queue never stores JS values or heap pointers."
+    },
+    {
+      "file": "crates/perry-runtime/src/process/worker_restrictions.rs",
+      "name": "WORKER_IPC_ENABLED",
+      "verdict": "not_a_gc_pointer",
+      "why": "Boolean bootstrap snapshot of whether this Worker environment enables IPC facade members. WorkerProcessState installs only a bool; no address or NaN-boxed value is stored."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/progress.rs",
+      "name": "GC_STATS",
+      "verdict": "not_a_gc_pointer",
+      "why": "#13443 folded the seven per-counter TLS declarations (FORWARDED_STUB_MEMBERSHIP_RECOVERIES, BLOCK_PERSIST_FORCE_MARKS, ADOPTED_BLOCKS, HOLE_REBUILD_BLOCKS_SKIPPED, BLOCK_SKIP_RECLAIMED_*) into one `GcStats` behind this slot and moved it from gc/telemetry.rs to gc/progress.rs. Every GcStats field is a u64 counter, the [u64; GC_RECENT_PAUSE_WINDOW] duration ring, or a u8 cursor/len into it: no address, never traced, never read as a pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/mark.rs",
+      "name": "CLASSIFIER_VERIFY_SUPPRESSED",
+      "verdict": "not_a_gc_pointer",
+      "why": "#13443 moved the declaration from gc/trace.rs to gc/mark.rs. A `Cell<bool>` latch set by the test-only page-metadata wipes and read only by the differential classifier verifier: a flag, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/field_get_set.rs",
+      "name": "FETCH_SUBCLASS_HANDLE_ELEMENT",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread RuntimePrivateElement naming the hidden __perry_fetch_handle__ element of a Request/Response/Headers/Blob subclass instance. It wraps a PrivateStorageKey: a Rust-owned String spelling and Cell<Option<(ShapeId, slot index, live inline bound, attributes)>>, the same key PRIVATE_STORAGE_CACHE holds. No receiver, StringHeader pointer or NaN-boxed value is retained; get/set take the receiver as an argument, root it in a RuntimeHandleScope, and re-check the cached shape against the current receiver on every hit, so a moving collection needs no scanner."
+    },
+    {
+      "file": "crates/perry-runtime/src/os_hook_slots.rs",
+      "name": "EXIT_SEQUENCE_RAN",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread Cell<bool> recording that the exit sequence ran on this thread in a program with no process installer. A flag only: it holds no address, handle or NaN-boxed value."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/full_trace.rs",
+      "name": "POOL_LIVENESS",
+      "verdict": "not_a_gc_pointer",
+      "why": "Per-thread slot holding the extern \"C\" fn(u64) -> bool liveness predicate the shared-pool provider registers: a code address, never a heap or arena address. The u64 it is asked about is a pool handle id, not a GC pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/construct/site.rs",
+      "name": "ZLIB_INIT_NAME",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] AtomicU64 in the super-into-zlib test module: a 0/1 flag recording that the stub saw module zlib export Gzip. Never read by the collector and absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/construct/site.rs",
+      "name": "ZLIB_INIT_OWNER",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] AtomicU64 in the super-into-zlib test module: the bit pattern of the receiver the stub was handed, compared once for equality after the call; the receiver stays rooted by the test's RuntimeHandleScope and the word is never dereferenced. Never read by the collector and absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/construct/site.rs",
+      "name": "ZLIB_INIT_OPTS",
+      "verdict": "test_only",
+      "why": "#[cfg(test)] AtomicU64 in the super-into-zlib test module: the bit pattern of the numeric option 42.0 passed to the stub. Never read by the collector and absent from shipped binaries."
+    },
+    {
+      "file": "crates/perry-runtime/src/external_family.rs",
+      "name": "INFO",
+      "verdict": "test_only",
+      "why": "Declared inside the #[cfg(test)] fn provide_from_for_tests (7914a82c57, #14397). It stores a *const JsFunctionInfo, which is the address of a Rust static function descriptor, not a GC allocation; it exists only in the unit-test build."
+    },
+    {
+      "file": "crates/perry-runtime/src/node_sea.rs",
+      "name": "SEA_BLOB_FACTORY",
+      "verdict": "not_a_gc_pointer",
+      "why": "A code address (322604f735, #14441): js_sea_install_blob_factory stores the stdlib's js_blob_from_raw_bytes_v1 function pointer (common/dispatch/init.rs), and node_sea.rs transmutes it back to an extern \"C\" fn to call it. It never holds a heap address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/class_registry/construct.rs",
+      "name": "METHOD_CALLS",
+      "verdict": "test_only",
+      "why": "A call counter in the #[cfg(test)] mod callable_probe_tests (fb10bb42b3, #12826): method_body increments it and the test asserts it stays 0. It holds a count, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/arena/alloc_life.rs",
+      "name": "RNG",
+      "verdict": "not_a_gc_pointer",
+      "why": "A u64 xorshift state for the instruments-only allocation census sampler (2d99ce963e). It holds random bits, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/pool.rs",
+      "name": "POOL_BASE",
+      "verdict": "not_a_gc_pointer",
+      "why": "The u32 byte offset where the Buffer pool starts inside its ArrayBuffer (node poolBase, b3122f11ae). An offset, not an address; the pool ArrayBuffer itself is held elsewhere."
+    },
+    {
+      "file": "crates/perry-runtime/src/buffer/pool.rs",
+      "name": "POOL_SIZE",
+      "verdict": "not_a_gc_pointer",
+      "why": "The u32 Buffer.poolSize the current pool was created with (b3122f11ae). A size, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/fs/stream/write_file_input/deferred.rs",
+      "name": "NEXT_OPERATION",
+      "verdict": "not_a_gc_pointer",
+      "why": "A monotonically increasing usize id for the next deferred write operation key in OPERATIONS (e1767e8dce, #13545). An id counter, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "TEST_MIMALLOC_FORCED_PURGES",
+      "verdict": "test_only",
+      "why": "A #[cfg(test)] thread_local count of forced mimalloc purges (777244c494). A count in the test build only."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "LAST_REGION_GROWTH_PURGE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Option<Instant> of the last allocator purge on heap-region growth, used to rate-limit purge_allocator_on_region_growth. A timestamp, never an address."
+    },
+    {
+      "file": "crates/perry-runtime/src/gc/cycle_malloc_trim.rs",
+      "name": "TEST_REGION_GROWTH_PURGE_CHECKS",
+      "verdict": "test_only",
+      "why": "A #[cfg(all(test, ...))] thread_local count of region-growth purge checks. A count in the test build only."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/deferred_namespace.rs",
+      "name": "READY_STACK",
+      "verdict": "not_a_gc_pointer",
+      "why": "The addresses of compiler-generated per-module guard bytes on the current ReadyForSyncExecution walk (e4f004ea70, #14421), used only for cycle detection (contains/push/pop equality). The guards are generated data, not GC allocations, and are never dereferenced through this stack."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/populate.rs",
+      "name": "BIRTHING",
+      "verdict": "not_a_gc_pointer",
+      "why": "The u8 identity of the lazy builtin family this thread is birthing, 0 when none (566938e39d). A family id, never an address."
+    },
+    {
+      "file": "crates/perry-stdlib/src/readline/test_support.rs",
+      "name": "DATA_COUNT",
+      "verdict": "test_only",
+      "why": "readline/test_support.rs is compiled only under #[cfg(test)] (readline/mod.rs). A usize count of data events in the unit tests."
+    },
+    {
+      "file": "crates/perry-stdlib/src/readline/test_support.rs",
+      "name": "KEYPRESS_NAMES",
+      "verdict": "test_only",
+      "why": "readline/test_support.rs is compiled only under #[cfg(test)] (readline/mod.rs). Rust Strings of keypress names recorded by the unit tests; no JS value or GC pointer."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "TEST_TWO_PHASE",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)] (0493f53c6d, #14779). A bool that runs the current test thread as a two-phase realm program; no address."
+    },
+    {
+      "file": "crates/perry-runtime/src/object/global_this/fetch_globals.rs",
+      "name": "TEST_COLLECT_BEFORE_GLOBAL_THIS_ALLOC",
+      "verdict": "test_only",
+      "why": "Declared under #[cfg(test)]. A one-shot bool that arms a collection before the first globalThis allocation in a regression test; no address."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
@@ -3223,18 +3315,6 @@
       "name": "REMEMBERED_SET"
     },
     {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "RECONSTRUCT_CENSUS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "REMEMBERED_SET_RECONSTRUCTED"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/barrier_arming.rs",
-      "name": "TEST_ARMED_OVERRIDE"
-    },
-    {
       "file": "crates/perry-runtime/src/gc/copying.rs",
       "name": "UNTRACED_DECLINE_REASON"
     },
@@ -3340,10 +3420,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/policy.rs",
-      "name": "GC_LAST_OLD_RECLAIM_IN_USE_BYTES"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/policy.rs",
       "name": "GC_MAJOR_PACING_BACKOFF_SHIFT"
     },
     {
@@ -3432,14 +3508,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/roots.rs",
-      "name": "FFI_MUTABLE_ROOT_SCANNERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/roots.rs",
-      "name": "FFI_NAMED_MUTABLE_ROOT_SCANNERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/roots.rs",
       "name": "FFI_ROOT_SCANNERS"
     },
     {
@@ -3496,10 +3564,6 @@
     },
     {
       "file": "crates/perry-runtime/src/gc/telemetry.rs",
-      "name": "GC_STATS"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/telemetry.rs",
       "name": "TEST_LAST_GC_TRACE_JSON"
     },
     {
@@ -3525,10 +3589,6 @@
     {
       "file": "crates/perry-runtime/src/gc/tenuring.rs",
       "name": "UNLOCK_STREAK"
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/trace.rs",
-      "name": "CLASSIFIER_VERIFY_SUPPRESSED"
     },
     {
       "file": "crates/perry-runtime/src/intl/number_format.rs",
@@ -3584,10 +3644,6 @@
     },
     {
       "file": "crates/perry-runtime/src/media_playback.rs",
-      "name": "GC_SCANNER_REGISTERED"
-    },
-    {
-      "file": "crates/perry-runtime/src/messaging.rs",
       "name": "GC_SCANNER_REGISTERED"
     },
     {
@@ -3704,24 +3760,12 @@
       "name": "CLASS_PROTOTYPE_OBJECTS"
     },
     {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_ACCESSORS"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/class_registry/state.rs",
-      "name": "CLASS_SYMBOL_METHODS"
-    },
-    {
       "file": "crates/perry-runtime/src/object/delete_rest.rs",
       "name": "TOMBSTONE_TEST_OVERRIDE"
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/field_ops.rs",
       "name": "WARN_NULL_PTR_STATE"
-    },
-    {
-      "file": "crates/perry-runtime/src/object/field_get_set/for_in_stable.rs",
-      "name": "PROTOTYPE_VERDICT"
     },
     {
       "file": "crates/perry-runtime/src/object/field_get_set/ic_miss/private_member_access.rs",
@@ -3734,7 +3778,8 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "ARRAY_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
@@ -3743,23 +3788,33 @@
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "MAP_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "REGEXP_STRING_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "SET_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
-      "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT"
+      "name": "WRAP_FOR_VALID_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
+    },
+    {
+      "file": "crates/perry-runtime/src/object/iterator_prototypes.rs",
+      "name": "STRING_ITERATOR_PROTOTYPE_PTR_SLOT",
+      "scanner": "scan_object_cache_roots_mut"
     },
     {
       "file": "crates/perry-runtime/src/object/mod.rs",
@@ -3987,18 +4042,6 @@
     },
     {
       "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_DONE"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_VALUE_I1"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
-      "name": "ITER_RESULT_VALUE_I32"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/mod.rs",
       "name": "MICROTASK_PREV_CONTEXTS"
     },
     {
@@ -4008,10 +4051,6 @@
     {
       "file": "crates/perry-runtime/src/promise/rejection.rs",
       "name": "PROCESSING_REJECTIONS"
-    },
-    {
-      "file": "crates/perry-runtime/src/promise/then_probe.rs",
-      "name": "ADMISSIBLE_MEMO"
     },
     {
       "file": "crates/perry-runtime/src/promise/then_probe.rs",
@@ -4218,14 +4257,6 @@
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",
       "name": "STDIN_READER_STARTED"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNCLONEABLE_OBJECTS"
-    },
-    {
-      "file": "crates/perry-stdlib/src/worker_threads.rs",
-      "name": "UNTRANSFERABLE_OBJECTS"
     },
     {
       "file": "crates/perry-stdlib/src/worker_threads.rs",

@@ -87,8 +87,12 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
         );
         assert!(ir.contains(&format!("call i64 @{helper}")), "{helper}");
         assert!(
-            ir.contains("load volatile i8"),
-            "color must be live, not cached"
+            ir.contains("icmp ule i64"),
+            "must consume the live permission bound"
+        );
+        assert!(
+            !fast_body.contains("load volatile i8"),
+            "idle birth needs only its bound proof"
         );
     }
 }
@@ -97,7 +101,9 @@ fn closure_fast_birth_is_leaf_and_retains_collecting_runtime_fallbacks() {
 fn fixed_births_decline_ilp32_and_large_cells() {
     use super::fixed_alloc::eligible;
     assert!(!eligible("armv7-unknown-linux-gnueabihf", 40));
-    assert!(!eligible("wasm32-wasi", 40));
+    // wasm32 WASI writes its own header image (fixed_alloc::eligible).
+    assert_eq!(eligible("wasm32-wasip2", 40), cfg!(feature = "target-wasi"));
+    assert!(!eligible("arm64_32-apple-watchos", 40));
     assert!(!eligible("aarch64_be-unknown-linux-gnu", 40));
     assert!(!eligible("powerpc64-unknown-linux-gnu", 40));
     assert!(!eligible("x86_64-unknown-linux-gnux32", 40));
@@ -132,6 +138,9 @@ fn layout_birth_initializes_exact_capacity_and_checks_registration() {
         assert!(ir.contains("call ptr @perry_alloc_layout"));
         let header = 2u64 | (2 << 8) | (0x200 << 16) | ((24 + u64::from(slots) * 8) << 32);
         assert!(ir.contains(&format!("store i64 {header},")), "{ir}");
+        // This hand-built literal descriptor is OtherStatic, whose plan
+        // entry alone cannot distinguish a carried word from static metadata.
+        // It must retain its checked descriptor load.
         assert!(ir.contains("icmp ne i32") && ir.contains(", -1"));
         assert_eq!(ir.contains("fixed_birth.holes"), slots > 8);
     }

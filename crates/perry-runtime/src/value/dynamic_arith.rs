@@ -15,7 +15,7 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
     if jsval.is_bigint() {
         jsval.as_bigint_ptr() as *mut _
     } else {
-        crate::bigint::js_bigint_from_f64(val)
+        crate::bigint_hooks::js_bigint_from_f64(val)
     }
 }
 
@@ -30,10 +30,8 @@ unsafe fn coerce_to_bigint_ptr(val: f64) -> *mut crate::bigint::BigIntHeader {
 unsafe fn describe_mix_operand(v: f64) -> String {
     let jv = JSValue::from_bits(v.to_bits());
     if jv.is_bigint() {
-        let s = crate::bigint::js_bigint_to_string(jv.as_bigint_ptr());
+        let s = crate::bigint_hooks::js_bigint_to_string(jv.as_bigint_ptr());
         format!("bigint({}n)", crate::exception::string_header_to_string(s))
-    } else if jv.is_int32() {
-        format!("int32({})", jv.as_int32())
     } else if jv.is_bool() {
         format!("bool({})", jv.as_bool())
     } else if jv.is_undefined() {
@@ -77,8 +75,7 @@ unsafe fn throw_mix_bigint(a: f64, b: f64) -> ! {
     }
     let msg = b"Cannot mix BigInt and other types, use explicit conversions";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// `ToNumeric(value)` (ES §7.1.3): `ToPrimitive(value, number)` then, if the
@@ -167,8 +164,7 @@ unsafe fn both_bigint_or_throw(a: f64, b: f64) -> bool {
 #[cold]
 unsafe fn throw_add_type_error(message: &[u8]) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[inline]
@@ -214,14 +210,10 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
         return value;
     }
 
-    // A Proxy is a small registered id, not a heap object — the ToPrimitive
-    // machinery below dereferences the fake pointer and segfaults
-    // (`"" + new Proxy(fn, {})`). A trap-less default ToPrimitive forwards
-    // to the target; a callable target stringifies via
-    // Function.prototype.toString (the NativeFunction form).
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
-        let s = crate::value::js_jsvalue_to_string(value);
-        return crate::value::js_nanbox_string(s as i64);
+    // A Proxy has no fields of its own: ToPrimitive(p, default) reads each
+    // method through its [[Get]] and calls it with this = p (7.1.1).
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return crate::proxy_hooks::proxy_to_primitive(value, 0);
     }
 
     // Buffers / TypedArrays carry NO `ObjectHeader` (a `BufferHeader` /
@@ -238,7 +230,7 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
     // This matches the guards `js_jsvalue_to_string` itself runs before its
     // ordinary-object dispatch.
     if crate::buffer::is_registered_buffer(ptr)
-        || crate::typedarray::lookup_typed_array_kind(ptr).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(ptr).is_some()
     {
         let s = crate::value::js_jsvalue_to_string(value);
         return crate::value::js_nanbox_string(s as i64);
@@ -311,14 +303,14 @@ unsafe fn to_primitive_default_for_add(value: f64) -> f64 {
             let boxed = f64::from_bits(
                 crate::value::POINTER_TAG | ((ptr as u64) & crate::value::POINTER_MASK),
             );
-            let href = crate::url::url_class::js_url_href_if_url(boxed);
+            let href = crate::url_hooks::url_href_if_url(boxed);
             if href.to_bits() != crate::value::TAG_UNDEFINED {
                 let s = js_jsvalue_to_string(href);
                 return crate::value::js_nanbox_string(s as i64);
             }
             let obj = ptr as *mut crate::object::ObjectHeader;
-            if crate::url::try_read_as_search_params(obj).is_some() {
-                let s = crate::url::search_params::js_url_search_params_to_string(obj);
+            if crate::url_hooks::try_read_as_search_params(obj).is_some() {
+                let s = crate::url_hooks::url_search_params_to_string(obj);
                 return crate::value::js_nanbox_string(s as i64);
             }
         }
@@ -388,22 +380,6 @@ unsafe fn dynamic_bigint_binary_op_from_handles<'scope>(
         b_bigint.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
     );
     js_nanbox_bigint(result as i64)
-}
-
-/// Decode an int32-tagged operand to its plain-double value before an f64
-/// arithmetic op. An int32 is NaN-boxed (INT32_TAG = 0x7FFE), so its f64 bits
-/// ARE a NaN; a raw `a OP b` would propagate the tag through the FPU (ARM64
-/// keeps the NaN payload) and hand back the boxed operand instead of the
-/// result — e.g. a better-sqlite3 integer column `n` made `n + 100 === n`.
-/// Plain doubles (and real NaNs from arithmetic) pass through unchanged.
-#[inline]
-fn numify_arith_operand(v: f64) -> f64 {
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        v
-    }
 }
 
 /// True when a NaN-boxed operand is a plain IEEE-754 double — its top 16 bits
@@ -478,19 +454,19 @@ pub unsafe extern "C" fn js_dynamic_mul(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_mul,
+            crate::bigint_hooks::js_bigint_mul,
         );
     }
-    numify_arith_operand(a) * numify_arith_operand(b)
+    a * b
 }
 
 /// Dynamic add: BigInt + BigInt if either operand is BigInt, else f64 + f64.
 #[no_mangle]
 pub unsafe extern "C" fn js_dynamic_add(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
-        return dynamic_bigint_binary_op(a, b, crate::bigint::js_bigint_add);
+        return dynamic_bigint_binary_op(a, b, crate::bigint_hooks::js_bigint_add);
     }
-    numify_arith_operand(a) + numify_arith_operand(b)
+    a + b
 }
 
 /// `ToNumeric(value)` for the `++`/`--` slow path: a BigInt passes through
@@ -524,12 +500,12 @@ pub unsafe extern "C" fn js_numeric_step(numeric: f64, is_increment: i32) -> f64
         // the pre-existing operand is the one at risk.
         let scope = crate::gc::RuntimeHandleScope::new();
         let numeric_handle = scope.root_nanbox_f64(numeric);
-        let one_ptr = crate::bigint::js_bigint_from_i64(1);
+        let one_ptr = crate::bigint_hooks::js_bigint_from_i64(1);
         let one_handle = scope.root_nanbox_f64(js_nanbox_bigint(one_ptr as i64));
         let op = if is_increment != 0 {
-            crate::bigint::js_bigint_add
+            crate::bigint_hooks::js_bigint_add
         } else {
-            crate::bigint::js_bigint_sub
+            crate::bigint_hooks::js_bigint_sub
         };
         dynamic_bigint_binary_op_from_handles(&scope, &numeric_handle, &one_handle, op)
     } else if is_increment != 0 {
@@ -572,6 +548,30 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     {
         return a + b;
     }
+    dynamic_add_tagged(a, b)
+}
+
+// Two short ASCII strings whose join fits inline (`from + to` over
+// `squareName` results): no scope, no ToPrimitive, the same bits the string
+// arm of `dynamic_add_non_plain` builds (see `string::short_pair`). A step of
+// its own so the two-Numbers path above stays without a frame.
+#[inline(never)]
+unsafe extern "C" fn dynamic_add_tagged(a: f64, b: f64) -> f64 {
+    if crate::string::short_pair::short_pairs_enabled() {
+        if let Some(joined) = crate::string::short_pair::concat_short_pair(a, b) {
+            return joined;
+        }
+    }
+    dynamic_add_non_plain(a, b)
+}
+
+// A primitive numeric addition needs no roots or callee-saved registers.
+// Keep the full operation behind a tail-call boundary so its frame is paid
+// only by values that actually need string/BigInt/ToPrimitive dispatch.
+#[inline(never)]
+unsafe extern "C" fn dynamic_add_non_plain(a: f64, b: f64) -> f64 {
+    let abits = a.to_bits();
+    let bbits = b.to_bits();
     // Primitive strings need neither ToPrimitive nor SSO materialization.
     // The shared concat owns rooting only if its allocation can collect.
     if JSValue::from_bits(abits).is_any_string() && JSValue::from_bits(bbits).is_any_string() {
@@ -637,7 +637,7 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
             &scope,
             &a_prim_handle,
             &b_prim_handle,
-            crate::bigint::js_bigint_add,
+            crate::bigint_hooks::js_bigint_add,
         );
     }
 
@@ -649,15 +649,11 @@ pub unsafe extern "C" fn js_dynamic_string_or_number_add(a: f64, b: f64) -> f64 
     // `n + 100 === n`). Plain numbers already hold their value in the f64.
     let a_num = if a_val.is_number() {
         a_prim_handle.get_nanbox_f64()
-    } else if a_val.is_int32() {
-        a_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(a_prim_handle.get_nanbox_f64())
     };
     let b_num = if b_val.is_number() {
         b_prim_handle.get_nanbox_f64()
-    } else if b_val.is_int32() {
-        b_val.as_int32() as f64
     } else {
         crate::builtins::js_number_coerce(b_prim_handle.get_nanbox_f64())
     };
@@ -679,10 +675,10 @@ pub unsafe extern "C" fn js_dynamic_sub(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_sub,
+            crate::bigint_hooks::js_bigint_sub,
         );
     }
-    numify_arith_operand(a) - numify_arith_operand(b)
+    a - b
 }
 
 /// Dynamic divide: BigInt / BigInt if either operand is BigInt, else f64 / f64.
@@ -700,10 +696,10 @@ pub unsafe extern "C" fn js_dynamic_div(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_div,
+            crate::bigint_hooks::js_bigint_div,
         );
     }
-    numify_arith_operand(a) / numify_arith_operand(b)
+    a / b
 }
 
 /// JS `%` on two Numbers (ECMA-262 Number::remainder).
@@ -769,11 +765,9 @@ pub unsafe extern "C" fn js_dynamic_mod(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_mod,
+            crate::bigint_hooks::js_bigint_mod,
         );
     }
-    let a = numify_arith_operand(a);
-    let b = numify_arith_operand(b);
     // JS `%` is C `fmod`: the result takes the *sign of the dividend*, so
     // `-1 % -1` is `-0`, not `+0`. The old `a - (a / b).trunc() * b` closed-form
     // lost that (`-1.0 - 1.0 * -1.0 == +0.0`) and also returned `NaN` for
@@ -797,7 +791,7 @@ pub unsafe extern "C" fn js_dynamic_neg(a: f64) -> f64 {
     if a_val.is_bigint() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
-        let result = crate::bigint::js_bigint_neg(
+        let result = crate::bigint_hooks::js_bigint_neg(
             a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
         );
         return js_nanbox_bigint(result as i64);
@@ -824,7 +818,7 @@ pub unsafe extern "C" fn js_dynamic_bitnot(a: f64) -> f64 {
     if a_val.is_bigint() {
         let scope = crate::gc::RuntimeHandleScope::new();
         let a_handle = scope.root_bigint_ptr(a_val.as_bigint_ptr());
-        let result = crate::bigint::js_bigint_not(
+        let result = crate::bigint_hooks::js_bigint_not(
             a_handle.get_raw_const_ptr::<crate::bigint::BigIntHeader>(),
         );
         return js_nanbox_bigint(result as i64);
@@ -874,6 +868,7 @@ pub(crate) fn dyn_to_int32(v: f64) -> i32 {
 /// its low 32 bits are `mant << e` (mod 2^32) — zero once `e >= 32` — negated
 /// modulo 2^32 for a negative sign.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn to_int32_beyond_i64(v: f64) -> i32 {
     let bits = v.to_bits();
@@ -917,7 +912,7 @@ pub unsafe extern "C" fn js_dynamic_shr(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_shr,
+            crate::bigint_hooks::js_bigint_shr,
         );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
@@ -941,7 +936,7 @@ pub unsafe extern "C" fn js_dynamic_shl(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_shl,
+            crate::bigint_hooks::js_bigint_shl,
         );
     }
     // JS ToInt32(a); ToUint32(b) & 0x1F for the shift count (#6079).
@@ -967,7 +962,7 @@ pub unsafe extern "C" fn js_dynamic_bitand(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_and,
+            crate::bigint_hooks::js_bigint_and,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -989,7 +984,7 @@ pub unsafe extern "C" fn js_dynamic_bitor(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_or,
+            crate::bigint_hooks::js_bigint_or,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -1011,7 +1006,7 @@ pub unsafe extern "C" fn js_dynamic_bitxor(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_xor,
+            crate::bigint_hooks::js_bigint_xor,
         );
     }
     // JS ToInt32 both operands (#6079).
@@ -1036,7 +1031,7 @@ pub unsafe extern "C" fn js_dynamic_pow(a: f64, b: f64) -> f64 {
             &scope,
             &a_handle,
             &b_handle,
-            crate::bigint::js_bigint_pow,
+            crate::bigint_hooks::js_bigint_pow,
         );
     }
     crate::math::js_math_pow(a, b)
@@ -1066,8 +1061,7 @@ pub unsafe extern "C" fn js_dynamic_ushr(a: f64, b: f64) -> f64 {
     if both_bigint_or_throw(a, b) {
         let msg = b"BigInts have no unsigned right shift, use >> instead";
         let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(s);
-        crate::exception::js_throw(js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(s));
     }
     // JS ToUint32(a) then logical shift; ToUint32(b) & 0x1F count (#6079).
     let ai = dyn_to_uint32(a);
@@ -1164,7 +1158,7 @@ mod tests {
         }
     }
     fn int32(n: i32) -> f64 {
-        f64::from_bits(JSValue::int32(n).bits())
+        f64::from(n)
     }
 
     // An int32-tagged operand (e.g. a better-sqlite3 integer column) must be

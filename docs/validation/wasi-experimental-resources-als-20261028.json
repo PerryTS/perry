@@ -1,0 +1,557 @@
+{
+  "date": "2026-10-28",
+  "scope": "Linux qualification of the actual experimental async resource generator and public ALS constructors/methods in runtime-only WASI links",
+  "baseCommit": "c790227a805c57849a857d986ec6a96151d67ea1",
+  "shippingArtifactSource": "456ebaf95d4b9313de0de9e1ef15b9ccdbf4e328",
+  "fixtureSource": "456ebaf95d4b9313de0de9e1ef15b9ccdbf4e328",
+  "changes": [
+    "Remove the experimental resource-only rejection after basic and compound custody qualification. The actual experimental_async_guest entry point now generates every resource fixture; no private resource guard bypass remains.",
+    "Retain the public async CLI and guest future/stream guards.",
+    "Move the existing ALS constructor and methods from stdlib into runtime with compatibility Rust re-exports. Preserve extern context-provider calls for shared-runtime ownership.",
+    "Use scoped forwarded-array borrows without adding raw-handle debt or changing debt ceilings."
+  ],
+  "actualResourceExecution": {
+    "modes": [
+      "ordinary production runtime",
+      "instrumented production runtime with knobs off",
+      "instrumented production runtime with forced and verified evacuation"
+    ],
+    "basic": {
+      "phases": [
+        {
+          "phase": "fixture-build",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "host-build",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "gcWitness": {
+        "copiedObjects": 7055,
+        "evacuationVerified": true
+      }
+    },
+    "scalarCancellation": {
+      "phases": [
+        {
+          "phase": "resource-regression",
+          "exitCode": 0
+        },
+        {
+          "phase": "caller-probes",
+          "exitCode": 0
+        },
+        {
+          "phase": "provider-generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "provider-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "supervisor-generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "supervisor-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "gcWitness": {
+        "copiedObjects": 9594,
+        "evacuationVerified": true,
+        "returnedResultRaceStates": {
+          "2": 8
+        },
+        "unclaimedResultCancelStates": {
+          "4": 8
+        }
+      },
+      "calls": 32,
+      "exactlyOnceDrops": 80
+    },
+    "compound": {
+      "phases": [
+        {
+          "phase": "scalar-regression",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "provider-generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "provider-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "supervisor-generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "supervisor-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "plain-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-link",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-compose",
+          "exitCode": 0
+        },
+        {
+          "phase": "instrumented-execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        }
+      ],
+      "gcWitness": {
+        "copiedObjects": 14943,
+        "evacuationVerified": true,
+        "unclaimedResultCancelStates": {
+          "4": 8
+        }
+      },
+      "calls": 32,
+      "duplicateOwnerRejections": 24,
+      "exactlyOnceDrops": 188,
+      "coverage": "Records/lists/tagged options/tuples/variants/owned result errors/Unicode/payload-free values, pre-start and suspended-borrow cancellation, ready results and deterministic unclaimed responses, live siblings and reusable Store"
+    }
+  },
+  "publicGuestALS": {
+    "link": "Runtime archive alone, without native stdlib archive; constructor and methods are defined in both frozen WASM archives.",
+    "imports": {
+      "phases": [
+        {
+          "phase": "invalidate",
+          "exitCode": 0
+        },
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        },
+        {
+          "phase": "failure",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline",
+          "exitCode": 0
+        },
+        {
+          "phase": "inline-moving",
+          "exitCode": 0
+        }
+      ],
+      "gcWitness": {
+        "copiedObjects": 35371,
+        "evacuationVerified": true
+      },
+      "coverage": "128 overlapping calls in 64 reverse-order pairs set separate stores with enterWith, retain them across suspended native imports and collecting argument/result getters, and leave sibling entry points outside those stores. Delayed, immediate, rejection and cancellation profiles execute."
+    },
+    "exports": {
+      "phases": [
+        {
+          "phase": "invalidate",
+          "exitCode": 0
+        },
+        {
+          "phase": "build",
+          "exitCode": 0
+        },
+        {
+          "phase": "generate",
+          "exitCode": 0
+        },
+        {
+          "phase": "compile",
+          "exitCode": 0
+        },
+        {
+          "phase": "link",
+          "exitCode": 0
+        },
+        {
+          "phase": "execute",
+          "exitCode": 0
+        },
+        {
+          "phase": "moving",
+          "exitCode": 0
+        },
+        {
+          "phase": "cancel",
+          "exitCode": 0
+        }
+      ],
+      "gcWitness": {
+        "copiedObjects": 26615,
+        "evacuationVerified": true
+      },
+      "coverage": "64 reverse wake pairs check nested run scopes across Promise suspension and an extra microtask, outer stores in collecting result getters, empty stores in synchronous wake/status jobs, immediate restoration and Store retirement on cancellation/rejection."
+    }
+  },
+  "unitChecks": {
+    "phases": [
+      {
+        "phase": "wit-tests",
+        "exitCode": 0
+      },
+      {
+        "phase": "runtime-component-tests",
+        "exitCode": 0
+      }
+    ],
+    "witPassed": 28,
+    "runtimeComponentPassed": 109,
+    "runtimeMode": "DEV debug assertions, serial panic-abort libtests, instrumentation enabled"
+  },
+  "nativeCompatibility": {
+    "scope": "Source-identical native fixtures compiled with matched pre-relocation v011 and post-relocation v017 compiler/runtime/stdlib archives; nonempty output matches exactly. This is not a Node oracle run.",
+    "results": [
+      {
+        "fixture": "als-run-exit-callback-validation.ts",
+        "variants": [
+          {
+            "kind": "before",
+            "source": "v011",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "6286322f9a44a63929444be37a2bea59508d7e0cbd53e23edc2340d576580d51"
+          },
+          {
+            "kind": "after",
+            "source": "v017",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "6286322f9a44a63929444be37a2bea59508d7e0cbd53e23edc2340d576580d51"
+          }
+        ],
+        "identicalOutput": true
+      },
+      {
+        "fixture": "storage/run-nesting.ts",
+        "variants": [
+          {
+            "kind": "before",
+            "source": "v011",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "bbf79ad6d4f921d67f4ddab573a4e714114c9be3ff4e21a63a779b9c583ef6fc"
+          },
+          {
+            "kind": "after",
+            "source": "v017",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "bbf79ad6d4f921d67f4ddab573a4e714114c9be3ff4e21a63a779b9c583ef6fc"
+          }
+        ],
+        "identicalOutput": true
+      },
+      {
+        "fixture": "storage/enter-with-promise-boundary.ts",
+        "variants": [
+          {
+            "kind": "before",
+            "source": "v011",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "133cf37afac266c23e5debe5f289a93c3bbd057a9d560629cad6a1ba5eaaeeb0"
+          },
+          {
+            "kind": "after",
+            "source": "v017",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "133cf37afac266c23e5debe5f289a93c3bbd057a9d560629cad6a1ba5eaaeeb0"
+          }
+        ],
+        "identicalOutput": true
+      },
+      {
+        "fixture": "static/snapshot-async.ts",
+        "variants": [
+          {
+            "kind": "before",
+            "source": "v011",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "2d4f507da005f1774af505332c2af1d5f713d25e45a649c68b3c569c7ccb9dfb"
+          },
+          {
+            "kind": "after",
+            "source": "v017",
+            "compileExit": 0,
+            "executeExit": 0,
+            "stdoutSha256": "2d4f507da005f1774af505332c2af1d5f713d25e45a649c68b3c569c7ccb9dfb"
+          }
+        ],
+        "identicalOutput": true
+      }
+    ],
+    "multiImageProviderExecution": "Not covered by these four checks; still requires the shared-provider gate before landing."
+  },
+  "buildPhases": [
+    {
+      "phase": "resource-host-check",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "native-sidecars",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-plain-symbols",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-build",
+      "exitCode": 0
+    },
+    {
+      "phase": "wasi-instrumented-symbols",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-resource-cancel",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-async-cancellation",
+      "exitCode": 0
+    },
+    {
+      "phase": "actual-async-exports",
+      "exitCode": 0
+    }
+  ],
+  "extraPhases": [
+    {
+      "phase": "experimental-compound-resources",
+      "exitCode": 0
+    }
+  ],
+  "toolchainArtifacts": {
+    "native/perry": {
+      "bytes": 340698112,
+      "sha256": "f223bfb4b106034c8ba5369a8b09a4451fff5dd713a312fc7b96c228f85c5a1b"
+    },
+    "native/perry-gc-effects": {
+      "bytes": 44628064,
+      "sha256": "acebd412ccc07062c9b6b59d58366f5c77d09f72c727ef7a8142ad079847268a"
+    },
+    "native/libperry_runtime.a.gc-effects": {
+      "bytes": 331324,
+      "sha256": "6281ca476baf654a0fd27dab000f612db0f02b27c14968a693d23db40bf373bd"
+    },
+    "native/libperry_runtime.a": {
+      "bytes": 394400338,
+      "sha256": "2a648fbc397484b0ab23fd97304d3f1417331a637677c4f9c1a5459d3b5d6a14"
+    },
+    "native/libperry_component_host.a": {
+      "bytes": 595183770,
+      "sha256": "d071f40c652ef74321dc1ec16c0912ae5c9ddf62c18b51cd28e5e24c7a230875"
+    },
+    "native/OWNER": {
+      "bytes": 80,
+      "sha256": "2ab32d5aa5f41dd24df6368364eba5935b62c9543483a2372b60086ae487fcc0"
+    },
+    "native/libperry_stdlib.a": {
+      "bytes": 675145918,
+      "sha256": "60792f4d4653c74e2aed31b76238fd514853dcd989b83c573c5fb8f2c1c47dd1"
+    },
+    "native/perry-wit": {
+      "bytes": 27872408,
+      "sha256": "1425d38683b28e1a5b6fb906d7bffe124ed5e4ceb5eb7ce56ad029079eec018f"
+    },
+    "wasi/plain/libperry_runtime.a": {
+      "bytes": 53598230,
+      "sha256": "9cd4c1ca402842bbe7cc34fdfaa83ecf87c79a551c3f2702f9e32e7b70317f2a"
+    },
+    "wasi/instrumented/libperry_runtime.a": {
+      "bytes": 54464736,
+      "sha256": "a57476a8e9625e473719fa7dc6bc38a069102a0535cc71c11d1edec48f7383e6"
+    }
+  },
+  "resourceArtifacts": {
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/binaries/canonical_c": "94f790a83af00b78ab2b6bec62bcb0a51bcc637c734d5c4ef9eddbaaaee26b3a",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/binaries/async_resource_cancel": "9b4e72d2fcb3e2394282d19e434c5a128670c24dc3ac8b2586fad7c05c989b40",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/provider/provider.component.wasm": "43e89df79911e1026d53c24470459b374a1023f99640a989b7a240aaf100e069",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/supervisor/supervisor.component.wasm": "06633cfae7ee2f26b60807e3df614f0322d0ad2f9299555179313571a3e207ea",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/plain.composed.wasm": "bcd920e17cd15fb0470cde8973021887af608c3b4f9696264298cdc87897c11b",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/resource-cancel/instrumented.composed.wasm": "4a761c59d67153331dbd3477d1deb9cf41cb4c341da08e99d64610b4701c98f3",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-resource-cancel/supervisor.c": "a5738ac29c5288292ed76dad110579998840356731de3151bd650455afa69db1",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-resource-cancel/world.wit": "0b771e08dc875fed47e92e55ccbeea448aa3611b83efa1719fb2930b5461cbf7",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-resource-cancel/provider.c": "c589b8132d0be9ff38274bc56ca786abef470d016a9c6b182f6eef23dfb09b11"
+  },
+  "compoundArtifacts": {
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/scalar/resource-guest/binaries/resource_fixture": "fb8a6e9713e0956902df06f0f19b4acf879121769c590fde821fcfca156e0e1a",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/scalar/binaries/async_resource_cancel": "9b4e72d2fcb3e2394282d19e434c5a128670c24dc3ac8b2586fad7c05c989b40",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/scalar/binaries/canonical_c": "94f790a83af00b78ab2b6bec62bcb0a51bcc637c734d5c4ef9eddbaaaee26b3a",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/native/perry": "f223bfb4b106034c8ba5369a8b09a4451fff5dd713a312fc7b96c228f85c5a1b",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/wasi/instrumented/libperry_runtime.a": "a57476a8e9625e473719fa7dc6bc38a069102a0535cc71c11d1edec48f7383e6",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/wasi/plain/libperry_runtime.a": "9cd4c1ca402842bbe7cc34fdfaa83ecf87c79a551c3f2702f9e32e7b70317f2a",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/libguest.a": "10019de36b3f6c878d4d07ca423683036601ea735be40dd95098359826caf8f2",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/provider/provider.component.wasm": "8f5ce0b17ce6a924530c6cf85b553aaf3ad61c76b1b4f7dc0617cffa083d45fd",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/supervisor/supervisor.component.wasm": "6869a7c138d4a6035300135f841bc73b61c19a1e1c2b68ad3bf3d19c5e5ccc08",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/plain.component.wasm": "cf56ab03d8359379e9c29a792dbf493cc86260897373fd198e0164ebf20c14af",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/plain.composed.wasm": "0142d17af8660b634f3df8f80d317cb7552838ec7cc8a5d18bfaf4a779f9bf03",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/instrumented.component.wasm": "01e0fba6bcc15d4112b773f984b744e319b32dec03075eabc1e4fe62dbaa413e",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/instrumented.composed.wasm": "c4d62b4c119f49fb392de3e6a46ac428c91cb4fa8fd8fd55318ecd968c270ce3",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-compound-resources/supervisor.c": "a3e27263aecf7a24d2d994658a8f66089084694bdcc4bfb619d4445a55d5510f",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-compound-resources/world.wit": "886b933497b38987c4eade6bab47b8e402d8c57f2c5c4bdfa58f21efbcbe72ce",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-compound-resources/provider.c": "39e53c0bffd23a43954e1d88f521dc5ddbd85f6eea5af6bdbe1df23e488e40a2",
+    "/root/codex-components-p2-20261021/wasi-030-v017-src/test-wasi/components/async-compound-resources/guest.ts": "b70fc06d7137d36b7c9fd7906d745eb5a1d44fda18cc2aa62f0d8180bd532199",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/perry_component_frame.h": "9d3529e94ce33d380ba797461ffdf3821214256f39bd2f5965abd694df37ad73",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/plugin.h": "9c3ed55a4c74e8822f10ca8b86297852d3d72fce35d21c6b5fa5ad5d7c08235f",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/plugin.c": "d8d455f4aef4ab7726352d16b6d03906a689336bf083cc07204368435dd144b4",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/guest.ts": "30ba4472025dfc1c09f4af6d3e5ddeea463972b058b71d68f6fee00bba2a0151",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/perry_adapter.c": "219e461624deb435c0953e9ad36f51c743afe95a7325c111f54b9b9b2d36b066",
+    "/root/codex-components-p2-20261021/wasi-030-v017-qualification/compound-resources/guest/generated/plugin_component_type.o": "05d0443e92969abb912ea57d3b57e7d9ea9a80a81f332eb167665f29d3681b3e"
+  },
+  "tokioBan": {
+    "status": "pass",
+    "offlineManifests": 124,
+    "offlineLockfiles": 26,
+    "waiversAdded": false,
+    "dependencyChanges": false
+  },
+  "nativeExportInventory": {
+    "status": "pass",
+    "names": 5599,
+    "crates": 19,
+    "recordedCrossCrateCollisions": 115,
+    "newProvider": false,
+    "scope": "The existing inventory excludes Android UI stubs; those were inspected separately."
+  },
+  "retainedEvidence": {
+    "path": "/root/codex-components-p2-20261021/wasi-030-v017-evidence.tar.gz",
+    "bytes": 55195946,
+    "sha256": "7f1095839694c6e02854dc80bb333c92986b1f13be53ab94e861a08af759ca01",
+    "indexedFiles": 272,
+    "localArchiveAndEveryIndexedFileVerified": true,
+    "exactQualifiedSourceVerified": "456ebaf95d4b9313de0de9e1ef15b9ccdbf4e328"
+  },
+  "subsequentTargetSpecificFix": {
+    "commit": "6e30bd238684c90aed6e1ea1a5d5a8f9e194a389",
+    "change": "Remove six obsolete Android ALS stubs now supplied by unconditional runtime implementations. Source audit finds all seven ALS entry-point definitions only in runtime across runtime/stdlib/Android UI.",
+    "limits": "Android target is not installed on this builder; this is source ownership validation, not Android execution. The change does not alter the measured Linux/WASM package implementations."
+  },
+  "preservedAttempts": [
+    "v015 unit checks passed, then its matched build was deliberately stopped because two inherited raw-handle reads were being replaced.",
+    "v016 unit compile found missing pointed-to types in scoped-borrow closures (E0641). Explicit ArrayHeader pointer annotations fixed it; v017 passes all listed checks."
+  ],
+  "limits": [
+    "This does not establish full WASI 0.3.0 support.",
+    "Guest future/stream adapters and public async CLI generation remain guarded; explicit native 0.3.0 command/runtime output remains unfinished.",
+    "Current macOS/Windows execution, distribution packages, complete provider/interoperability profiles, shared-provider native regression and required CI coverage remain open.",
+    "Later documentation/changelog and Android-only stub edits do not change the qualified Linux/WASM implementation; subsequent shipping implementation changes require matching qualification."
+  ]
+}

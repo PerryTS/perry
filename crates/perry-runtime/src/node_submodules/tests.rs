@@ -277,12 +277,15 @@ fn fs_parent_promises_property_exposes_namespace() {
     let ns_value = boxed_ptr(ns as *const u8);
     assert_fs_promises_namespace_exports(ns_value);
 
-    let direct =
-        unsafe { js_node_submodule_namespace(b"fs_promises".as_ptr(), "fs_promises".len() as u32) };
+    let direct = commonjs_value("fs_promises");
+    let default = unsafe {
+        js_node_submodule_export_as_function(b"fs_promises".as_ptr(), 11, b"default".as_ptr(), 7)
+    };
+    assert_eq!(value.to_bits(), direct.to_bits());
     assert_eq!(
         value.to_bits(),
-        direct.to_bits(),
-        "fs.promises should reuse the direct fs_promises namespace singleton"
+        default.to_bits(),
+        "fs.promises, require and the ESM default must share the existing CommonJS object"
     );
 }
 
@@ -1108,7 +1111,7 @@ extern "C" fn statics2_readable_from_fixture(
 fn statics2_readable_from_installed_on_constructor_shapes() {
     unsafe {
         js_node_submod_install_stream_web();
-        js_install_readable_stream_from(
+        crate::external_family::provide_from_for_tests(
             crate::fn_info!(statics2_readable_from_fixture, 1; with_declared(1)),
         );
         let ctor = js_node_submodule_export_as_function(
@@ -1117,6 +1120,13 @@ fn statics2_readable_from_installed_on_constructor_shapes() {
             b"ReadableStream".as_ptr(),
             14,
         );
+        // Registration writes nothing to the lazy constructor; the first
+        // observation of its own keys births the family, which installs `from`.
+        assert!(crate::closure::closure_get_own_dynamic_prop(
+            crate::value::js_nanbox_get_pointer(ctor) as usize,
+            "from",
+        )
+        .is_some());
         assert_eq!(
             crate::object::get_property_attrs(
                 crate::value::js_nanbox_get_pointer(ctor) as usize,

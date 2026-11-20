@@ -39,6 +39,7 @@ fn preserve_builtin_constructor_value(
     if let Some(name) = global_builtin_constructor_name(ctx, argument) {
         if matches!(&lowered, Expr::GlobalGet(0)) {
             return Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,
@@ -60,7 +61,10 @@ pub(super) fn try_object_statics(
     // computed key does not fall through to generic dispatch (→
     // `TypeError: value is not a function`).
     // A spread call declines: see `call_has_spread_arg`.
-    if obj_name == "Object" && !super::super::call_has_spread_arg(call) {
+    if obj_name == "Object"
+        && !ctx.shadows_unqualified_global("Object")
+        && !super::super::call_has_spread_arg(call)
+    {
         if let Some(method_name) = super::super::static_call_prop_name(&member.prop) {
             match method_name {
                 "keys" => {

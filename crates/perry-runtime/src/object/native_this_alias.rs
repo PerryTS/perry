@@ -76,7 +76,7 @@ fn decode_alias_word(word: u64) -> Option<(f64, bool)> {
     }
     let addr = (word & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let record = addr as *const crate::array::ArrayHeader;
@@ -107,13 +107,14 @@ pub(crate) fn is_alias_word(word: u64) -> bool {
 /// it).
 #[inline]
 pub(crate) unsafe fn object_alias(obj: *const super::ObjectHeader) -> Option<(f64, bool)> {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: caller classification (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if meta.is_null() {
         return None;
     }
     let word = (*meta).native_state;
     decode_alias_word(word)
-        .or_else(|| decode_alias_word(crate::node_stream::record_alias_word(word)))
+        .or_else(|| decode_alias_word(crate::stream_hooks::record_alias_word(word)))
 }
 
 /// Look up the forwarding handle for an arbitrary receiver (NaN-boxed or raw
@@ -126,7 +127,7 @@ pub(crate) fn alias_handle_for_object(receiver: f64) -> Option<(f64, bool)> {
         return None;
     }
     let header = unsafe { crate::value::addr_class::try_read_gc_header(addr) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -145,13 +146,18 @@ fn is_aliasable_native_class(module: &str, method: &str) -> bool {
 /// #10454: native classes whose explicit-`this` construction
 /// (`Base.call(this, …)`, `super(…)`) must run the constructor through the
 /// http dispatcher up front instead of the ordinary call of the bound
-/// export. `https` has no distinct `ServerResponse` in Node.
+/// export. `https` has no distinct `ServerResponse` in Node. `Agent` joins
+/// them: `class HttpAgent extends http.Agent` (agentkeepalive, proxy agents)
+/// reaches `super(options)` with the bound export as its parent, and the
+/// ordinary call built a handle that `new` then returned in place of the
+/// subclass instance, so the subclass lost its own prototype and fields.
 fn is_construct_before_call_native_class(module: &str, method: &str) -> bool {
-    module == "http"
+    (module == "http"
         && matches!(
             method,
             "ServerResponse" | "OutgoingMessage" | "IncomingMessage"
-        )
+        ))
+        || (matches!(module, "http" | "https") && method == "Agent")
 }
 
 /// Alias `this_arg` to `result` using one traced record on the receiver, when
@@ -168,7 +174,13 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(obj_addr as *mut super::ObjectHeader);
     let result = scope.root_nanbox_f64(result);
-    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe { super::object_meta_ensure(obj) });
+    // A1_UNPROVEN: plain_object_addr_of(this_arg): a JS value (kind-A/B question for S0b-S0e).
+    object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
+        super::object_meta_ensure(
+            crate::meta_obj_runtime_born!(obj),
+            super::MetaReason::NativeThisAlias,
+        )
+    });
     let record = crate::array::js_array_alloc_with_length_exact(ALIAS_SLOTS);
     let record = scope.root_raw_mut_ptr(record);
     record.with_mut_ptr(|r| {
@@ -184,14 +196,15 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
         );
     });
     let installed = object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        let meta = (*obj).meta;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
         let word = (*meta).native_state;
         let alias = record
             .with_mut_ptr(|r: *mut crate::array::ArrayHeader| {
                 crate::value::js_nanbox_pointer(r as i64)
             })
             .to_bits();
-        if crate::node_stream::store_record_alias_word(word, alias) {
+        if crate::stream_hooks::store_record_alias_word(word, alias) {
             return true;
         }
         if word != 0 && !is_alias_word(word) {
@@ -212,7 +225,9 @@ pub(crate) fn register_this_to_handle_alias(this_arg: f64, result: f64, composit
     // Pre-alias absence entries cannot survive construction (#11725). Own
     // ordinary slots remain describable; undefined still forwards natively.
     object.with_mut_ptr(|obj: *mut super::ObjectHeader| unsafe {
-        (*(*obj).meta).flags |= super::OBJECT_META_FLAG_NATIVE_ALIAS;
+        // A1_UNPROVEN: record-first: this_arg heap object (kind-A/B question for S0f).
+        (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).flags |=
+            super::OBJECT_META_FLAG_NATIVE_ALIAS;
         super::shapes::restamp_object_proto_id(obj);
     });
 }
@@ -592,7 +607,66 @@ unsafe fn construct_native_http_class_with_this(
     );
     let result = scope.root_nanbox_f64(result);
     register_this_to_handle_alias(this_root.get_nanbox_f64(), result.get_nanbox_f64(), false);
+    if method == "Agent" {
+        install_agent_options(&scope, this_root.get_nanbox_f64(), args.first().copied());
+    }
     result.get_nanbox_f64()
+}
+
+/// Node's `Agent` constructor stores `this.options` (a copy of the
+/// constructor options with `noDelay` defaulting to true and `path` forced to
+/// null) and subclasses read it: agentkeepalive's `HttpsAgent` reads
+/// `this.options.maxCachedSessions`, and its timeouts live there. The native
+/// handle has no such record, so give the subclass instance its own.
+unsafe fn install_agent_options(
+    scope: &crate::gc::RuntimeHandleScope,
+    this_val: f64,
+    options: Option<f64>,
+) {
+    use crate::object::{js_object_alloc, js_object_set_field_by_name, ObjectHeader};
+    let this_root = scope.root_nanbox_f64(this_val);
+    let record = scope.root_raw_mut_ptr(js_object_alloc(0, 4));
+    let record_value = scope.root_nanbox_f64(f64::from_bits(
+        crate::value::POINTER_TAG
+            | (record.with_mut_ptr::<ObjectHeader, _>(|ptr| ptr as u64)
+                & crate::value::POINTER_MASK),
+    ));
+    if let Some(options) = options {
+        super::assign::js_object_assign_one(record_value.get_nanbox_f64(), options);
+    }
+    let set = |name: &[u8], value: f64| {
+        let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+            name.as_ptr(),
+            name.len() as u32,
+        ));
+        key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+            js_object_set_field_by_name(
+                (record_value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                    as *mut ObjectHeader,
+                key,
+                value,
+            )
+        });
+    };
+    let no_delay_key =
+        scope.root_string_ptr(crate::string::js_string_from_bytes(b"noDelay".as_ptr(), 7));
+    let no_delay = no_delay_key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+        crate::object::js_object_get_field_by_name_f64(
+            (record_value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                as *const ObjectHeader,
+            key,
+        )
+    });
+    if no_delay.to_bits() == crate::value::TAG_UNDEFINED {
+        set(b"noDelay", f64::from_bits(crate::value::TAG_TRUE));
+    }
+    set(b"path", f64::from_bits(crate::value::TAG_NULL));
+    let this_obj =
+        (this_root.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(b"options".as_ptr(), 7));
+    key.with_const_ptr::<crate::string::StringHeader, _>(|key| {
+        js_object_set_field_by_name(this_obj, key, record_value.get_nanbox_f64())
+    });
 }
 
 /// Shared implementation for the `js_http(s)_server_construct_with_this`

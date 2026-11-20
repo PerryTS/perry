@@ -23,6 +23,7 @@ pub(crate) use abrupt::{
 };
 pub(crate) use async_step::build_async_step_driver_direct;
 pub(crate) use call_this::generator_body_uses_call_this;
+pub(crate) use private_brand::restore_in_class_closures;
 pub(crate) use resume::{wrap_async_gen_step_body, wrap_generator_resume_body};
 pub(crate) use yield_await::await_async_generator_yield_operands;
 
@@ -245,6 +246,7 @@ fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_iter_result_returns_in_async_step_done(body);
                 if let Some(c) = catch {
@@ -274,7 +276,7 @@ pub fn transform_generator_function(
     func: &mut Function,
     next_local_id: &mut u32,
     next_func_id: &mut u32,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     transform_generator_function_with_extra_captures(
         func,
         next_local_id,
@@ -284,7 +286,7 @@ pub fn transform_generator_function(
         false,
         false,
         None,
-    );
+    )
 }
 
 /// Issue #1021: variant that augments the internally-generated
@@ -307,7 +309,7 @@ pub fn transform_generator_function_with_extra_captures(
     captures_this: bool,
     captures_new_target: bool,
     enclosing_class: Option<String>,
-) {
+) -> (Vec<LocalId>, Vec<LocalId>) {
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
@@ -528,7 +530,7 @@ pub fn transform_generator_function_with_extra_captures(
         .into_iter()
         .filter(|(id, _, _)| !no_hoist_ids.contains(id))
         .collect();
-    if fixed_state {
+    if fixed_state || func.was_plain_async {
         let locals = fixed_state::state_local_ids(
             &states,
             &shared_with_user,
@@ -539,8 +541,19 @@ pub fn transform_generator_function_with_extra_captures(
         hoisted_for_rewrite.retain(|(id, _, _)| !locals.contains(id));
         extra_local_ids.retain(|id| !locals.contains(id));
     }
-    let mut hoisted_ids: std::collections::HashSet<LocalId> =
-        hoisted_for_rewrite.iter().map(|(id, _, _)| *id).collect();
+    // A hoisted user binding keeps its declaration in its state body: the
+    // declarator `const x = e` initializes the binding (it ends the dead zone
+    // with the value); it is not an assignment. Codegen lowers a `Let` whose
+    // id is already bound (the step closure's captured cell) as the store into
+    // that cell, so no shadow slot appears, and every analysis sees the same
+    // declaration a sync body has (`const` stays immutable, the binding keeps
+    // its declared type). The outer wrapper only reserves the storage (the
+    // stubs below). `decl_facts` is what those declarations say.
+    let decl_facts = collect_hoisted_decl_facts(&func.body);
+    // The compiler's own temps (linearization temps, the lifted parameter
+    // prologue) are assigned, not declared, in the state bodies: they are the
+    // ids rewritten from `Let` to `LocalSet` below.
+    let mut hoisted_ids: std::collections::HashSet<LocalId> = Default::default();
     // Linearization allocates additional locals for state-spanning values
     // (including the resume and condition temporaries for a `yield` in a loop
     // condition). They are preallocated and captured below just like ordinary
@@ -595,8 +608,27 @@ pub fn transform_generator_function_with_extra_captures(
     // the inner `let v` and `let i` stay as Lets and create shadow slots that
     // hide the outer captured box. Manifested as `for (const v of arr) sum += v`
     // returning sum=0 inside transformed async functions (test_issue_233).
+    // A hoisted lexical binding the HIR seeds with the TDZ sentinel lives in
+    // the activation's cell, like every hoisted binding: the dead zone is a
+    // fact of that cell. The outer wrapper seeds it, once per activation, and
+    // the state bodies' `PreallocateTdzBoxes` drop the binding: in the step
+    // closure that statement would mint a second, step-local cell that no
+    // capture reads, while the activation's cell started as `undefined`.
+    let tdz_hoisted_ids: std::collections::HashSet<LocalId> = hoisted_for_rewrite
+        .iter()
+        .map(|(id, _, _)| *id)
+        .filter(|id| decl_facts.tdz.contains(id))
+        .filter(|id| !fixed_state || shared_with_user.contains(id))
+        .collect();
     for state in &mut states {
+        strip_tdz_preallocs_in_stmts(&mut state.body, &tdz_hoisted_ids);
         rewrite_hoisted_lets_in_stmts(&mut state.body, &hoisted_ids);
+        // `let x;` of a TDZ-seeded binding ends its dead zone with
+        // `undefined`. In the step closure the binding is a capture whose
+        // cell the activation holds, so the declaration says so: it
+        // initializes the cell with `undefined`. (A `var x;` keeps its value
+        // and is never TDZ-seeded.)
+        initialize_tdz_lets_in_stmts(&mut state.body, &decl_facts.tdz);
     }
 
     // Build the `while (true) { <state dispatch> }` body. #6709: for async
@@ -810,7 +842,21 @@ pub fn transform_generator_function_with_extra_captures(
     if fixed_state {
         prealloc_ids.retain(|id| shared_with_user.contains(id));
     }
+    // The activation's TDZ-seeded cells (`tdz_hoisted`, see the state-body
+    // rewrite above) are allocated by their own statement below.
+    let tdz_hoisted: Vec<LocalId> = prealloc_ids
+        .iter()
+        .copied()
+        .filter(|id| tdz_hoisted_ids.contains(id))
+        .collect();
+    prealloc_ids.retain(|id| !tdz_hoisted_ids.contains(id));
+    let mut preallocated: std::collections::HashSet<LocalId> =
+        prealloc_ids.iter().copied().collect();
+    preallocated.extend(tdz_hoisted.iter().copied());
     new_body.push(Stmt::PreallocateBoxes(prealloc_ids));
+    if !tdz_hoisted.is_empty() {
+        new_body.push(Stmt::PreallocateTdzBoxes(tdz_hoisted));
+    }
 
     // let __state = 0
     new_body.push(Stmt::Let {
@@ -874,10 +920,23 @@ pub fn transform_generator_function_with_extra_captures(
         });
     }
 
-    // Re-emit hoisted Let stubs (prealloc already covered the boxes;
-    // these Lets now route through the prealloc-boxes path and just
-    // set the box value via js_box_set).
+    // Hoisted storage. The binding's declaration stays in its state body and
+    // initializes it; the outer wrapper only reserves the storage.
+    // - A lexical binding the HIR seeds with the TDZ sentinel has its storage
+    //   from that `PreallocateTdzBoxes`. It gets no stub: a `let x;` here would
+    //   run the declaration early and end the dead zone, and a read before the
+    //   real declaration would see `undefined` instead of throwing.
+    // - A preallocated `const` gets no stub either: the box is its storage,
+    //   and its one declaration stays its only binding statement (a `const`
+    //   is never written, so analyses keep it immutable and single-bound).
+    // - Everything else keeps the `let x;` stub, which allocates the box when
+    //   the prealloc above did not.
     for (var_id, var_name, var_ty) in &hoisted {
+        if decl_facts.tdz.contains(var_id)
+            || (decl_facts.immutable.contains(var_id) && preallocated.contains(var_id))
+        {
+            continue;
+        }
         new_body.push(Stmt::Let {
             id: *var_id,
             name: var_name.clone(),
@@ -1173,7 +1232,12 @@ pub fn transform_generator_function_with_extra_captures(
             done_id,
             Box::new(Expr::Bool(true)),
         ))];
-        return_fallback.extend(build_finally_run_stmts(&finallys, state_id, &hoisted_ids));
+        return_fallback.extend(build_finally_run_stmts(
+            &finallys,
+            state_id,
+            true,
+            &hoisted_ids,
+        ));
         return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
@@ -1603,6 +1667,17 @@ pub fn transform_generator_function_with_extra_captures(
                 }]
             };
             fixed_state::record_step_kinds(&mut body, step_id.expect("fixed-state record"));
+            // 27.5.3.3 GeneratorResume: an abrupt completion of the body
+            // completes the generator. The record body carries that itself,
+            // as the source-level `try` lowering does any catch, so a caller
+            // that enters it directly needs no trap of its own.
+            let completion_catch_id = alloc_local(next_local_id);
+            let body = resume::wrap_fixed_state_completion(
+                body,
+                executing_id,
+                done_id,
+                completion_catch_id,
+            );
             Expr::Closure {
                 func_id: next_func_id_val,
                 params,
@@ -1632,6 +1707,9 @@ pub fn transform_generator_function_with_extra_captures(
         // literal is hidden inside the wrapper in return position; escape
         // analysis leaves the unanalyzed allocation on the heap (correct — a
         // generator object always escapes via the return).
+        let live_operation = resume_op_id.is_some_and(|operation| {
+            matches!(&iter_obj, Expr::Closure {params,..} if params.iter().any(|p| p.id == operation))
+        });
         let linked = Expr::LinkGeneratorPrototype {
             obj: Box::new(iter_obj),
             is_async: is_async_generator,
@@ -1640,7 +1718,13 @@ pub fn transform_generator_function_with_extra_captures(
                 // The private protocol ABI supplies only 0/1/2 here; an
                 // abrupt continuation writes 0. This parameter is compiler
                 // machinery, not a value justified by a source annotation.
-                let mut ids = vec![state_id, resume_op_id.unwrap(), step_id.unwrap()];
+                let mut ids = vec![state_id, step_id.unwrap()];
+                // A next-only entry has no operation parameter. Retaining its
+                // unused id could collide with a later cloned local and mark
+                // that unrelated slot as numeric control storage.
+                if live_operation {
+                    ids.push(resume_op_id.unwrap());
+                }
                 if has_yielding_finally {
                     ids.push(pending_type_id);
                 }
@@ -1662,4 +1746,11 @@ pub fn transform_generator_function_with_extra_captures(
     }
     func.body = new_body;
     func.is_generator = false;
+    // Carry exact transform-created control identities, independently of
+    // source names and annotations, into any admitted private async owner.
+    let mut numbers = vec![state_id];
+    if has_yielding_finally {
+        numbers.push(pending_type_id);
+    }
+    (numbers, vec![done_id, executing_id])
 }

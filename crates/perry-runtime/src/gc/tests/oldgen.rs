@@ -618,7 +618,7 @@ fn test_old_page_defrag_copy_avoids_selected_pages_and_rebuilds_remembered_set()
         );
     }
 
-    let sticky = rebuild_evacuated_old_to_young_remembered_set(&new_headers);
+    let sticky = rebuild_evacuated_old_to_young_remembered_set::<{ cfg!(test) }>(&new_headers);
     remembered_set_clear();
     sticky.restore();
     let released = release_evacuated_original_forwarding_stubs(&original_headers);
@@ -872,8 +872,23 @@ fn test_old_page_defrag_target_gate_emits_trace() {
         return;
     }
 
-    let _old_block_filler =
-        crate::arena::arena_alloc_gc_old(2 * 1024 * 1024 - GC_HEADER_SIZE, 8, GC_TYPE_STRING);
+    // The shape's keys arrays are shape-shared and never move, and block
+    // evacuation is all-or-nothing: mint them first, then start a fresh block.
+    let _ = crate::object::shapes::shape_descriptor_ensure(std::ptr::null(), 0, 1);
+    old_free_reset_for_test();
+    let block_of =
+        |user: *mut u8| crate::arena::old_arena_block_for_test(user as usize).map(|b| b.0);
+    let minted_block = block_of(crate::arena::arena_alloc_gc_old(
+        64 - GC_HEADER_SIZE,
+        8,
+        GC_TYPE_STRING,
+    ));
+    while block_of(crate::arena::arena_alloc_gc_old(
+        4096 - GC_HEADER_SIZE,
+        8,
+        GC_TYPE_STRING,
+    )) == minted_block
+    {}
     let (parent, fields) = unsafe { alloc_old_test_object(1) };
     let parent_user = parent as usize;
     let parent_header = unsafe { header_from_user_ptr(parent as *const u8) };

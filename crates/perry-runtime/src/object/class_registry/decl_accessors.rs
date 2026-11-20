@@ -30,10 +30,24 @@ pub(crate) fn install_decl_prototype_accessor_bytes(
     class_id: u32,
     name: &[u8],
 ) {
+    install_decl_prototype_accessor_at(proto, class_id, name, None)
+}
+
+/// [`install_decl_prototype_accessor_bytes`] for an accessor whose halves sit
+/// at `at` in the declaration, when the caller holds it (else found by name).
+pub(crate) fn install_decl_prototype_accessor_at(
+    proto: *mut ObjectHeader,
+    class_id: u32,
+    name: &[u8],
+    at: Option<super::declarations::DeclAt>,
+) {
     if proto.is_null() {
         return;
     }
-    let Some((raw_get, raw_set)) = class_own_accessor_ptrs_bytes(class_id, name) else {
+    let Some((raw_get, raw_set)) = (match at {
+        Some(at) => class_own_accessor_ptrs_at(class_id, at),
+        None => class_own_accessor_ptrs_bytes(class_id, name),
+    }) else {
         return;
     };
     // A half arriving later keeps whatever attributes the accessor has now
@@ -61,7 +75,10 @@ pub(crate) fn install_decl_prototype_accessor_bytes(
             have
         } else {
             let set_length = if is_setter {
-                class_own_setter_length_bytes(class_id, name, false)
+                match at {
+                    Some(at) => class_own_setter_length_at(class_id, at),
+                    None => class_own_setter_length_bytes(class_id, name, false),
+                }
             } else {
                 None
             };
@@ -100,33 +117,6 @@ pub(crate) fn note_instance_accessor_registered(class_id: u32, name: &str, newly
     if !proto.is_null() && (newly_declared || !class_proto_key_deleted(class_id, name)) {
         install_decl_prototype_accessor(proto, class_id, name);
     }
-}
-
-/// The object a `C.prototype` ref value (`class_prototype_ref_value`) reflects
-/// the accessor key `name` through: the decl prototype of `class_id`
-/// (materialized on demand) when the ClassBody declares an accessor `name`
-/// that `delete` has not removed, or the prototype holds one now. `getOwnPropertyDescriptor` / `defineProperty`
-/// / `delete` on the ref then apply to that object's real property — whatever
-/// a `defineProperty` or `delete` has made of it — so the ref and the object
-/// never disagree. `None` for every other key.
-pub(crate) fn decl_prototype_own_accessor(class_id: u32, name: &str) -> Option<f64> {
-    decl_prototype_own_accessor_bytes(class_id, name.as_bytes())
-}
-
-pub(crate) fn decl_prototype_own_accessor_bytes(class_id: u32, name: &[u8]) -> Option<f64> {
-    let proto = class_decl_prototype_value(class_id);
-    let js = crate::JSValue::from_bits(proto.to_bits());
-    if !js.is_pointer() {
-        return None;
-    }
-    let obj = js.as_pointer::<ObjectHeader>();
-    // The live shape alone decides whether the key is an accessor. A
-    // declaration cannot resurrect a deleted or replaced property.
-    let holds = unsafe {
-        crate::object::key_attrs::attrs_live_in_keys(obj as usize)
-            && crate::object::key_attrs::object_key_is_accessor(obj, name)
-    };
-    holds.then_some(proto)
 }
 
 /// The accessor a read or write of `name` on an instance of `class_id` meets
@@ -274,7 +264,7 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
             return true;
         };
         if crate::object::keys_find_slot_by_bytes_resolved(
-            shape.keys() as usize as *const crate::array::ArrayHeader,
+            shape.keys_view(),
             shape.logical_key_count(),
             name,
         )
@@ -288,34 +278,6 @@ unsafe fn accessor_is_shadowed(start: f64, holder: *const ObjectHeader, name: &[
         cur = next;
     }
     true
-}
-
-/// `[[Get]]` of `name` through the class prototype chain.
-/// `None` when no accessor answers (the caller
-/// keeps resolving), otherwise the getter's result — `undefined` for a
-/// setter-only accessor. `this_of` supplies the receiver and is called only
-/// when an accessor answers (it may consume the inherited-read receiver
-/// override). A compiled class getter is called directly; a getter installed
-/// by `defineProperty` runs as a closure.
-///
-/// # Safety
-/// `this_of` returns a live receiver.
-pub(crate) unsafe fn class_chain_getter_value(
-    class_id: u32,
-    name: &str,
-    this_of: impl FnOnce() -> f64,
-) -> Option<(crate::JSValue, usize)> {
-    let acc = class_proto_accessor(class_id, name)?.1;
-    Some(invoke_instance_getter(acc, this_of()))
-}
-
-pub(crate) unsafe fn class_chain_getter_value_bytes(
-    class_id: u32,
-    name: &[u8],
-    this_of: impl FnOnce() -> f64,
-) -> Option<(crate::JSValue, usize)> {
-    let acc = class_proto_accessor_bytes(class_id, name)?.1;
-    Some(invoke_instance_getter(acc, this_of()))
 }
 
 /// Generic instance read, resolved through the receiver's current chain.
@@ -342,7 +304,7 @@ pub(crate) unsafe fn instance_chain_getter_value(
     Some(invoke_instance_getter(acc, this_of()))
 }
 
-unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
+pub(crate) unsafe fn invoke_instance_getter(acc: Accessor, this: f64) -> (crate::JSValue, usize) {
     if acc.raw_get != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let this = scope.root_nanbox_f64(this);

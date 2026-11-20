@@ -16,7 +16,9 @@ use perry_hir::{
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -26,6 +28,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -39,12 +42,12 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -76,6 +79,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -117,6 +124,7 @@ fn counter_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -151,6 +159,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
                 object: Box::new(Expr::This),
                 property: p.name.clone(),
                 value: Box::new(Expr::LocalGet(p.id)),
+                byte_offset: 0,
+                byte_end: 0,
             })
         })
         .collect();
@@ -182,6 +192,7 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         value: Box::new(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(recv_id)),
                 property: "value".to_string(),
                 byte_offset: 0,
@@ -190,6 +201,9 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
         }),
         receiver: Box::new(Expr::LocalGet(recv_id)),
         strict,
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -206,6 +220,7 @@ fn method_calls_module(bound: Expr, extra_init: Vec<Stmt>, strict: bool) -> Modu
         ty: Type::Named("Counter".to_string()),
         mutable: false,
         init: Some(Expr::New {
+            byte_end: 0,
             class_name: "Counter".to_string(),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -246,6 +261,10 @@ fn emit(m: &Module) -> String {
 /// Runtime route/shape/store attribution is checked separately by the isolated
 /// executable. These IR assertions never certify retained-tier cost parity.
 fn assert_versioned_loop_lowered(ir: &str, what: &str) {
+    let blocks: Vec<_> = ir
+        .lines()
+        .filter_map(|line| line.trim().strip_suffix(':'))
+        .collect();
     for label in [
         "rloop.guard.",
         "rloop.fast",
@@ -253,7 +272,7 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "rloop.version.plain",
     ] {
         assert!(
-            ir.contains(label),
+            blocks.iter().any(|block| block.starts_with(label)),
             "{what}: missing generic replacement `{label}`"
         );
     }
@@ -264,7 +283,10 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
         "for.class_field_fast",
         "for.class_field_slow",
     ] {
-        assert!(!ir.contains(label), "{what}: legacy tier remains `{label}`");
+        assert!(
+            !blocks.iter().any(|block| block.starts_with(label)),
+            "{what}: legacy tier remains `{label}`"
+        );
     }
     let fast = ir
         .lines()
@@ -292,8 +314,9 @@ fn assert_versioned_loop_lowered(ir: &str, what: &str) {
     assert!(
         ir.lines()
             .any(|line| line.contains("call i64 @js_region_loop_prime(")
-                && line.contains("i32 1, i32 0, i32 1)")),
-        "{what}: increment must request stored=1, boxed=0 and R=1"
+                && line.contains("i32 1, i32 0, i32 1)"))
+            || ir.contains("rloop.guard.static."),
+        "{what}: numeric stores need either the learned R=1 request or a static shape guard"
     );
 }
 
@@ -351,6 +374,7 @@ fn class_loop_replacement_restores_straight_line_receiver_proof() {
     module.init.push(Stmt::Expr(Expr::Binary {
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "value".to_string(),
             byte_offset: 0,

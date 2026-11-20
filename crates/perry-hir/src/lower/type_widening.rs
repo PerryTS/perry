@@ -193,6 +193,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt(s, out, env);
@@ -284,6 +285,7 @@ fn widen_lets_stmt(stmt: &mut Stmt, sets: &WidenSets) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 widen_lets_stmt(s, sets);
@@ -554,6 +556,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_test".to_string(),
                     args: vec![],
                     type_args: vec![],
@@ -612,6 +615,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::New {
+                    byte_end: 0,
                     class_name: "__AnonShape_test".to_string(),
                     args: vec![],
                     type_args: vec![],

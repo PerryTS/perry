@@ -89,18 +89,6 @@ node-builtin = true
 # its job: bundling the wrappers that *port* perry-stdlib's existing
 # in-tree implementations, not net-new functionality.
 
-[bindings.cheerio]
-crate = "perry-ext-cheerio"
-lib = "perry_ext_cheerio"
-tracking = "#466"
-
-[bindings.cheerio.upstream]
-version = "1.2.0"
-sha256 = "56024eb0f315c373a4be57b26f3d956e9618cd2778ad283960c09cc1d4e820ab"
-repo = "https://github.com/cheeriojs/cheerio"
-ref = "e3c7aaf9ed64fe3cb9a181e58a41c0fdd6dbfbfc"
-ported-at = "1.2.0"
-date = "2026-07-30"
 [bindings.sharp]
 crate = "perry-ext-sharp"
 lib = "perry_ext_sharp"
@@ -112,30 +100,6 @@ sha256 = "53637f5503f81d10b02097eca6f94c44e69d92ba7ef759f268a0c4ea1d06ae54"
 repo = "https://github.com/lovell/sharp"
 ref = "1018449164723ba0203c1beffaba0e21f7829c18"
 ported-at = "0.35.3"
-date = "2026-07-30"
-[bindings.ethers]
-crate = "perry-ext-ethers"
-lib = "perry_ext_ethers"
-tracking = "#466"
-
-[bindings.ethers.upstream]
-version = "6.17.0"
-sha256 = "17355f81284ba8431953c77af803b122baf4670cdbf84907adf7cafcd745052b"
-repo = "https://github.com/ethers-io/ethers.js"
-ref = "b48bfe34b11e059c4418718f9cad4e6cbe4c0680"
-ported-at = "6.17.0"
-date = "2026-07-30"
-[bindings.nodemailer]
-crate = "perry-ext-nodemailer"
-lib = "perry_ext_nodemailer"
-tracking = "#466"
-
-[bindings.nodemailer.upstream]
-version = "9.0.3"
-sha256 = "f3da7499531fec3e8d7c59c9b1f240832c501b7a1e2ac01935c64baa66df52b4"
-repo = "https://github.com/nodemailer/nodemailer"
-ref = "1f61eb49b4316589045576752c721bd89918ef21"
-ported-at = "9.0.3"
 date = "2026-07-30"
 # `node-fetch` and the bare `fetch` alias deliberately have NO row here (P11).
 #
@@ -159,18 +123,18 @@ date = "2026-07-30"
 # row here nothing strips it, so the stdlib copy is required rather than
 # optional. Restoring the two rows is all it takes to put the wrapper back.
 
-[bindings.ws]
+# perry-ext-ws is Perry's own WebSocket engine, not an npm-package binding:
+# it serves the global `WebSocket` client and the WebSocket hand-off of
+# perry-ext-http's server. npm `ws` compiles from source (its row and upstream
+# pin were removed), so the crate sits under a Perry-owned key no npm package
+# can shadow. Nothing imports `perry/websocket`; the codegen symbol registry
+# (`perry_codegen::ext_registry`) flips this row onto the link line whenever
+# a program emits a `js_ws_*` call.
+[bindings."perry/websocket"]
 crate = "perry-ext-ws"
 lib = "perry_ext_ws"
 tracking = "#466"
 
-[bindings.ws.upstream]
-version = "8.21.1"
-sha256 = "bb0f7e58ba1f64746672734d36175fe185f226491e336abc0743e2a8f4472ec1"
-repo = "https://github.com/websockets/ws"
-ref = "ae1de54330cef77e487548890fabfeb9aae1d83d"
-ported-at = "8.21.1"
-date = "2026-07-30"
 [bindings.net]
 crate = "perry-ext-net"
 lib = "perry_ext_net"
@@ -228,34 +192,6 @@ tracking = "#516"
 crate = "perry-ext-ads"
 lib = "perry_ext_ads"
 tracking = "#867"
-
-# `undici` — Node's HTTP client library, served by perry's NATIVE
-# fetch/http stack instead of AOT-compiling undici's ~50k lines of JS.
-# Subset binding: ProxyAgent / Agent / setGlobalDispatcher /
-# getGlobalDispatcher are real; `fetch` re-uses the native Web Fetch
-# lowering; `request` and the pool/mock/stream surface are not
-# implemented. Targets undici's stable dispatcher API (unchanged
-# across 6.x → 7.x).
-[bindings.undici]
-crate = "perry-ext-undici"
-lib = "perry_ext_undici"
-tracking = "#466"
-# PARTIAL (explicit): ProxyAgent / Agent / setGlobalDispatcher /
-# getGlobalDispatcher + native `fetch` are real; `request` and the
-# pool/mock/stream surface are not implemented.
-compat = "partial"
-
-# Upstream provenance pin (see PR #7031 / docs upstream-pins.md). undici's
-# stable dispatcher API (ProxyAgent/Agent/setGlobalDispatcher) is unchanged
-# across the 6.x/7.x/8.x majors this wrapper targets; the pin tracks one
-# release for provenance, not the API-compat range.
-[bindings.undici.upstream]
-version = "8.9.0"
-sha256 = "f554abb3e9352e04bc325208066a25c229163d8408bb1d5161db3d793445d69c"
-repo = "https://github.com/nodejs/undici"
-ref = "21a8e1ed1843e74c3004a2926c12bb0ceaca6b71"
-ported-at = "8.9.0"
-date = "2026-07-30"
 
 # `@parcel/watcher` 2.5.1 ships a pure-JS option wrapper plus one platform
 # package whose `main` is a Node-API `.node` file. Perry serves the binding
@@ -322,19 +258,15 @@ crate = "perry-ext-parcel-watcher"
 lib = "perry_ext_parcel_watcher"
 tracking = "#8513"
 alias-of = "@parcel/watcher"
-# `typescript` — only the runtime transpilation API audited for OpenCode Code
-# Mode. Perry uses SWC to erase TS/TSX syntax and emit JavaScript; it does not
-# compile or embed Microsoft's complete type checker/compiler bundle.
-[bindings.typescript]
-crate = "perry-ext-typescript"
-lib = "perry_ext_typescript"
-tracking = "#8511"
-compat = "partial"
-
-[bindings.typescript.upstream]
-version = "5.8.2"
-sha256 = "ef938a45323df5775664ea5d55e8bc0ab2027a40db1ff857bb957fe7bbaa4434"
-repo = "https://github.com/microsoft/TypeScript"
-ref = "beb69e4cdd61b1a0fd9ae21ae58bd4bd409d7217"
-ported-at = "5.8.2"
-date = "2026-08-21"
+# perry-ext-bun is Perry's own `Bun.Transpiler` / in-memory `Bun.build`
+# (#9602), over the compiler's pinned SWC generation. It is not an npm
+# binding: nothing imports `perry/bun-transpiler`; the codegen symbol registry
+# flips this row onto the link line when a program emits a
+# `js_bun_transpiler_*` / `js_bun_build` call. The crate used to be
+# perry-ext-typescript, which also served a `typescript` subset
+# (`transpileModule`); that binding was removed and npm `typescript` compiles
+# from source.
+[bindings."perry/bun-transpiler"]
+crate = "perry-ext-bun"
+lib = "perry_ext_bun"
+tracking = "#9602"

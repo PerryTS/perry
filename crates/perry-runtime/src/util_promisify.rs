@@ -29,8 +29,7 @@ use std::cell::Cell;
 
 use crate::array::{js_array_alloc, js_array_length, js_array_push_f64, ArrayHeader};
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::promise::{
     js_promise_attach_handlers, js_promise_new, js_promise_reject, js_promise_resolve,
@@ -100,8 +99,7 @@ fn validate_original_function(fn_value: f64) {
 
 fn throw_plain_type_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn validate_deprecate_target(fn_value: f64) {
@@ -140,6 +138,10 @@ fn custom_promisified_value(fn_value: f64) -> Option<f64> {
     Some(custom_handle.get_nanbox_f64())
 }
 
+fn deprecate_info() -> *const crate::closure::JsFunctionInfo {
+    crate::fn_info!(deprecate_outer_thunk, 1; with_rest(0))
+}
+
 fn register_thunks_once() {
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
@@ -157,7 +159,7 @@ fn register_thunks_once() {
         // crypto.generateKeyPair promisify wrapper: outer is a rest function;
         // inner callback takes `(err, publicKey, privateKey)`.
         crate::builtins::register_function_name_if_absent(
-            deprecate_outer_thunk as *const () as usize,
+            unsafe { &*deprecate_info() },
             "deprecated",
         );
         flag.set(true);
@@ -255,7 +257,7 @@ pub extern "C" fn js_util_deprecate(fn_value: f64, msg: f64, code: f64) -> f64 {
     let fn_handle = scope.root_nanbox_f64(fn_value);
     let msg_handle = scope.root_nanbox_f64(msg);
     let code_handle = scope.root_nanbox_f64(code);
-    let closure = js_closure_alloc(crate::fn_info!(deprecate_outer_thunk, 1; with_rest(0)), 4);
+    let closure = js_closure_alloc(deprecate_info(), 4);
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -346,7 +348,7 @@ extern "C" fn outer_thunk(
         return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         cb_handle.get_raw_mut_ptr(),
         0,
         promise_handle.get_raw_const_ptr::<Promise>() as i64,
@@ -439,7 +441,7 @@ extern "C" fn inner_callback_thunk(
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if promise_ptr.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -490,7 +492,7 @@ extern "C" fn gkp_outer_thunk(
         return nanbox_promise(promise_after_alloc);
     }
     let cb_handle = scope.root_raw_mut_ptr(cb_closure);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         cb_handle.get_raw_mut_ptr(),
         0,
         promise_handle.get_raw_const_ptr::<Promise>() as i64,
@@ -578,7 +580,7 @@ extern "C" fn gkp_inner_callback_thunk(
     if closure.is_null() {
         return TAG_UNDEFINED_F64;
     }
-    let promise_ptr = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise_ptr = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if promise_ptr.is_null() {
         return TAG_UNDEFINED_F64;
     }
@@ -865,7 +867,7 @@ fn callable_then_field(value: f64) -> Option<f64> {
     let Some(gc_header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return None;
     };
-    if gc_header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(gc_header.obj_type) {
         return None;
     }
     // #9539: interning `"then"` allocates, so the receiver must be a root

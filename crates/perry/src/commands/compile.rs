@@ -29,17 +29,22 @@ pub(crate) mod sync_program;
 // `pub(crate)` so `commands::deps` can reuse `cjs_wrap::detect`'s
 // comment/string masker for its source scans (D005) instead of duplicating a
 // subtle scanner.
+mod cjs_link;
 pub(crate) mod cjs_wrap;
+mod class_imports;
 mod codegen_steps;
 mod collect_modules;
 mod collect_modules_helpers;
 mod component_host;
 mod compressed_libs;
+mod dynamic_reach;
 mod embed;
 mod env_fold;
 mod export_analysis;
+mod export_demand;
 mod fallback_diag;
 mod fn_infer;
+mod foreign_native_census;
 mod gc_effects_sidecar;
 mod geisterhand;
 mod harmonyos_shim;
@@ -65,6 +70,7 @@ mod reachability;
 mod size_report;
 mod solid_config;
 mod source_need;
+pub(crate) mod target_packages;
 mod tiny_program;
 mod typed_feedback_profile;
 mod update_config;
@@ -78,6 +84,7 @@ mod sandbox_buildrs;
 mod strip_dedup;
 mod targets;
 mod tool_output;
+mod wasi_flavour;
 pub mod well_known;
 pub(crate) mod widget_build;
 use android_target::{android_target, is_android_target};
@@ -86,8 +93,9 @@ use app_metadata::rust_target_triple;
 // compile.rs anymore now that the iOS bundle code moved out).
 pub(crate) use audit_manifest::allowlist_matches;
 use bootstrap::{
-    apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug, maybe_init_type_checker,
-    rerun_collect_with_class_field_types, run_native_instance_fixups, run_post_collect_preflight,
+    admit_open_native_addons, apply_i18n_pass, bundle_extensions_into_ctx, dump_hir_for_debug,
+    maybe_init_type_checker, rerun_collect_with_class_field_types, run_native_instance_fixups,
+    run_post_collect_preflight,
 };
 // HarmonyOS ArkTS harvest only exists when the arkts backend is compiled in.
 #[cfg(feature = "backend-arkts")]
@@ -139,7 +147,7 @@ pub(crate) use runtime_compat::{
 use size_report::emit_size_report;
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    dedup_ui_lib_against_linked_libs, localize_stdlib_stub_symbols,
+    dedup_ui_lib_against_linked_libs, localize_bundled_jni_in_stdlib, localize_stdlib_stub_symbols,
     strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
     strip_duplicate_objects_from_lib_with_evidence, strip_duplicate_objects_from_well_known_lib,
     StdlibEvidence,
@@ -233,3 +241,5 @@ mod windows_link_tests;
 // `lock_integration_tests` module all moved to `compile/lock_scan.rs`.
 
 // (lock_integration_tests body removed — coverage lives in compile/lock_scan.rs)
+
+mod snap_image_emit;

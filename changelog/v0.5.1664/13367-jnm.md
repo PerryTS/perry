@@ -1,0 +1,1 @@
+Typed numeric function, closure, and receiver bodies now use the exact checked-integer remainder helper before falling back to floating remainder. This avoids unconditional libm calls for integer-valued operands while preserving fractional, non-finite, and signed-zero results.

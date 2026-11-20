@@ -39,11 +39,11 @@ pub fn async_context_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) 
 
 /// Root scanner for async_hooks hook callbacks and user resource references.
 pub fn async_hooks_root_scanner(mark: &mut dyn FnMut(f64)) {
-    crate::async_hooks::scan_async_hooks_roots(mark);
+    crate::async_hook_slots::scan_async_hooks_roots(mark);
 }
 
 pub fn async_hooks_mutable_root_scanner(visitor: &mut RuntimeRootVisitor<'_>) {
-    crate::async_hooks::scan_async_hooks_roots_mut(visitor);
+    crate::async_hook_slots::scan_async_hooks_roots_mut(visitor);
 }
 
 /// Root scanner for object shape cache (keys arrays shared across objects with same shape)

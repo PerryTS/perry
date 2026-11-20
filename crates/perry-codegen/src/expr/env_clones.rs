@@ -404,9 +404,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::ProcessPid => Ok(ctx.block().call(DOUBLE, "js_process_pid", &[])),
         Expr::ProcessPpid => Ok(ctx.block().call(DOUBLE, "js_process_ppid", &[])),
         Expr::ProcessArgv => {
-            let blk = ctx.block();
-            let h = blk.call(I64, "js_process_argv", &[]);
-            Ok(nanbox_pointer_inline(blk, &h))
+            super::snap_argv_site::emit(ctx, expr);
+            Ok(ctx.block().call(DOUBLE, "js_process_argv_value", &[]))
         }
 
         // -------- structuredClone(v[, options]) — real deep copy --------

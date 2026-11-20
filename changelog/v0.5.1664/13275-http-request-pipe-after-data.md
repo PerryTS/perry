@@ -1,0 +1,1 @@
+Fixed `req.pipe(dest)` on a server-side `http.IncomingMessage` delivering an empty body when the request already had a `'data'` listener (`req.once('data', f); req.pipe(busboy)`, the shape `@fastify/multipart` uses); the body is now piped as long as no earlier `pipe()` or `read()` took it.

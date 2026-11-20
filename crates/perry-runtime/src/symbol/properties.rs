@@ -159,7 +159,7 @@ pub(crate) unsafe fn reflect_symbol_getter_closure_bits(obj_f64: f64, sym_f64: f
 
 pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);
@@ -167,8 +167,14 @@ pub(crate) unsafe fn js_object_has_own_symbol_property(obj_f64: f64, sym_f64: f6
     if obj_key == 0 || sym_key == 0 {
         return false;
     }
-    if let Some(object) = crate::object::shaped_symbols::owner(obj_key) {
-        return crate::object::shaped_symbols::position(object, sym_key).is_some();
+    match crate::object::shaped_symbols::owner(obj_key) {
+        Some(crate::object::descriptor_state::KeyTarget::Object(object)) => {
+            return crate::object::shaped_symbols::position(object, sym_key).is_some()
+        }
+        Some(crate::object::descriptor_state::KeyTarget::Function(p)) => {
+            return crate::closure::props::fn_sym_has(p, sym_key)
+        }
+        None => {}
     }
     accessors::has_own_symbol_accessor(obj_key, sym_key)
         || object_symbol_data_property_exists(obj_key, sym_key)
@@ -235,7 +241,7 @@ unsafe fn register_closure_name_if_absent(val_bits: u64, name: &str) {
     if func_ptr.is_null() {
         return;
     }
-    crate::builtins::register_function_name_if_absent(func_ptr as usize, name);
+    crate::builtins::register_function_name_if_absent(&*(*closure_ptr).info, name);
 }
 
 unsafe fn infer_symbol_function_name(sym_key: usize, val_bits: u64) {
@@ -282,6 +288,18 @@ fn next_request_meta_sym_key() -> usize {
 }
 
 unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64 {
+    // DEC 243(3): on an ordinary receiver a symbol store is the probe store,
+    // as a string key's is: an own plain entry in place, an absent key by the
+    // canonical key-add transition. Everything else takes the [[Set]] below.
+    if super::js_is_symbol(sym_f64) != 0
+        && crate::object::layout_probe::symbol_store(
+            obj_f64.to_bits(),
+            sym_f64.to_bits(),
+            value_f64,
+        )
+    {
+        return value_f64;
+    }
     if let Some(acc) = accessors::symbol_accessor_property(obj_f64, sym_f64) {
         // #10481: the setter runs with the object written to as `this`.
         return accessors::invoke_symbol_accessor_setter(acc.set, obj_f64, value_f64);
@@ -336,13 +354,15 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
     // #10481: an INHERITED symbol accessor's setter runs even on a
     // non-extensible receiver — [[Set]] through an inherited accessor never
     // creates a new own property, so OBJ_FLAG_NO_EXTEND (checked below) must
-    // not block it. Checked first, ahead of the extensibility gate, using
-    // the same pointer-object condition the class-setter/accessor fallback
-    // below uses.
+    // not block it. Resolve the actual prototype descriptor before the
+    // extensibility gate; declaration metadata cannot supply a setter.
     if !has_own_data {
         let bits = obj_f64.to_bits();
-        if crate::object::class_value::legacy_class_value_word(bits).is_none() {
-            let jsval = crate::value::JSValue::from_bits(bits);
+        {
+            let lookup = crate::object::class_value::class_ref_word(bits)
+                .map(crate::object::class_value::class_value)
+                .unwrap_or(obj_f64);
+            let jsval = crate::value::JSValue::from_bits(lookup.to_bits());
             if jsval.is_pointer() {
                 let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
                 // `is_valid_obj_ptr` is only a floor check and deliberately does
@@ -356,7 +376,7 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                     && accessors::symbol_may_have_accessor(sym_key)
                 {
                     if let Some((_, set_bits)) =
-                        super::get::inherited_symbol_accessor(obj_f64, sym_f64)
+                        super::get::inherited_symbol_accessor(lookup, sym_f64)
                     {
                         return accessors::invoke_symbol_accessor_setter(
                             set_bits, obj_f64, value_f64,
@@ -390,35 +410,6 @@ unsafe fn set_symbol_property(obj_f64: f64, sym_f64: f64, value_f64: f64) -> f64
                 }
             } else if flags & crate::gc::OBJ_FLAG_NO_EXTEND != 0 {
                 return value_f64;
-            }
-        }
-    }
-    if !has_own_data {
-        let bits = obj_f64.to_bits();
-        if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
-            if crate::object::class_symbol_setter_apply(class_id, sym_key, obj_f64, value_f64, true)
-            {
-                return value_f64;
-            }
-        } else {
-            let jsval = crate::value::JSValue::from_bits(bits);
-            if jsval.is_pointer() {
-                let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
-                if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
-                    let class_id = crate::object::js_object_get_class_id(ptr);
-                    if class_id != 0
-                        && crate::object::class_symbol_setter_apply(
-                            class_id, sym_key, obj_f64, value_f64, false,
-                        )
-                    {
-                        return value_f64;
-                    }
-                    // #10481: an inherited accessor (installed by
-                    // `Object.defineProperty(Fn.prototype, sym, …)`, an object
-                    // literal `set [sym](v)` reached through `Object.create`, or a
-                    // declared class prototype) is checked ABOVE, before the
-                    // extensibility gate, so it is never reached from here.
-                }
             }
         }
     }
@@ -469,6 +460,20 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     sym_f64: f64,
     value_f64: f64,
 ) -> f64 {
+    set_symbol_property_with_strictness(obj_f64, sym_f64, value_f64, 0)
+}
+
+/// [`js_object_set_symbol_property`] for a computed assignment that knows its
+/// strictness (`js_dyn_index_set_strict`): a strict write refused by a
+/// getter-only accessor throws. Inlined into both entries, so the exported
+/// one keeps the single body its runtime callers inline.
+#[inline(always)]
+pub(crate) unsafe fn set_symbol_property_with_strictness(
+    obj_f64: f64,
+    sym_f64: f64,
+    value_f64: f64,
+    strict: i32,
+) -> f64 {
     // #6160: a runtime symbol assignment onto a class constructor
     // (`(C as any)[sym] = v`) targets an INT32-tagged class ref, which has no
     // heap address — `set_symbol_property` keys the own-symbol side table by
@@ -480,11 +485,40 @@ pub unsafe extern "C" fn js_object_set_symbol_property(
     if let Some(class_id) = crate::object::class_ref_id(obj_f64) {
         let sym_key = sym_key_from_f64(sym_f64);
         if sym_key != 0 {
-            super::store_class_static_symbol_root(class_id, sym_key, value_f64.to_bits());
+            class_ref_symbol_write(class_id, obj_f64, sym_f64, sym_key, value_f64, strict);
             return value_f64;
         }
     }
     set_symbol_property(obj_f64, sym_f64, value_f64)
+}
+
+/// A symbol-keyed write onto a class constructor (the class arm of
+/// [`set_symbol_property_with_strictness`]). A declared `static get/set [sym]`
+/// is an own accessor property of its class function object, and an
+/// accessor's key carries the symbol's accessor bit. With the bit set and no
+/// own data member, the write is [[Set]]: the walk runs an own or inherited
+/// setter with `this` = the class written to, and a getter-only accessor
+/// stores nothing (strict: TypeError). Otherwise the class's own data member
+/// is stored or updated; the walk updates one through this entry, so it never
+/// re-enters the walk. Out of line: the exported entry stays the small body
+/// its runtime callers inline.
+#[inline(never)]
+unsafe fn class_ref_symbol_write(
+    class_id: u32,
+    obj_f64: f64,
+    sym_f64: f64,
+    sym_key: usize,
+    value_f64: f64,
+    strict: i32,
+) {
+    if (obj_f64.to_bits() >> 48) == 0x7FFD
+        && accessors::symbol_may_have_accessor(sym_key)
+        && !object_symbol_data_property_exists(obj_key_from_f64(obj_f64), sym_key)
+    {
+        crate::proxy::js_put_value_set(obj_f64, sym_f64, value_f64, obj_f64, strict);
+        return;
+    }
+    super::store_class_static_symbol_root(class_id, sym_key, value_f64.to_bits());
 }
 
 /// Computed-key object literal function-name inference. Storage stays on the
@@ -555,10 +589,7 @@ pub unsafe extern "C" fn js_class_register_static_symbol(class_id: u32, sym: f64
         if name == "prototype" {
             let msg = "Classes may not have a static property named 'prototype'";
             let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-            let err = crate::error::js_typeerror_new(s);
-            crate::exception::js_throw(f64::from_bits(
-                crate::value::JSValue::pointer(err as *const u8).bits(),
-            ));
+            crate::exception::throw_core(crate::error::CoreError::type_error(s));
         }
         crate::object::class_dynamic_prop_root_store(class_id, name, value);
         return;
@@ -608,7 +639,7 @@ pub fn class_static_symbol_lookup_in_chain(class_id: u32, sym_f64: f64) -> Optio
     None
 }
 
-/// A class's own static symbol data keys, in creation order.
+/// A class's own static symbol keys, including accessors, in creation order.
 pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
     if class_id == 0 {
         return Vec::new();
@@ -616,7 +647,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
     let Some(owner) = crate::object::class_value::class_value_if_minted(class_id) else {
         return Vec::new();
     };
-    clone_symbol_entries_for_obj_ptr(owner as usize)
+    unsafe { crate::object::shaped_symbols::entries(owner as usize, false) }
         .into_iter()
         .map(|(sym_key, _)| sym_key)
         .collect()
@@ -630,7 +661,7 @@ pub(crate) fn class_static_symbol_keys_for_class(class_id: u32) -> Vec<usize> {
 #[no_mangle]
 pub unsafe extern "C" fn js_object_has_own_symbol(obj_f64: f64, sym_f64: f64) -> bool {
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         return class_static_symbol_lookup(class_id, sym_f64).is_some();
     }
     let obj_key = obj_key_from_f64(obj_f64);

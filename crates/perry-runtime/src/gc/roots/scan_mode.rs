@@ -221,6 +221,69 @@ pub(crate) fn conservative_stack_scan_decision_for(
     }
 }
 
+/// Does a `Scan` decision actually scan? `mark_stack_roots_unchecked` walks the
+/// native stack and captures registers only on x86_64 and aarch64; on every
+/// other target (wasm32-wasip1) it returns at once, so `Scan` pins nothing
+/// there. Anything that treats `Scan` as "register-held objects are already
+/// protected" must also ask this, or it drops its own protection on exactly the
+/// targets where the scan provides none.
+pub(crate) fn conservative_scan_is_effective() -> bool {
+    #[cfg(test)]
+    if let Some(forced) = CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(std::cell::Cell::get) {
+        return forced;
+    }
+    cfg!(any(target_arch = "x86_64", target_arch = "aarch64"))
+}
+
+/// Is a collection starting now at a precise point?
+///
+/// At a precise point every value that can reach a heap object is rooted: a
+/// generated frame through its statepoint map or shadow slot, a runtime helper
+/// through its handle scope. The runtime collects inside an allocation, where a
+/// helper's register or local may hold an unrooted object, only through the
+/// sites that ask for the conservative scan (`ManualGcScanGuard::force_full_scan`,
+/// see `ConservativeScanSite`). So a collection is imprecise exactly when it
+/// asked for that scan and the target cannot run it (wasm32,
+/// [`conservative_scan_is_effective`]). Where the scan runs, it pins what it
+/// finds; where none was asked for, there is nothing to pin.
+///
+/// Two consumers, one predicate: block persistence substitutes for the scan at
+/// an imprecise point, and no collection moves an existing object there.
+pub(crate) fn collection_point_is_precise() -> bool {
+    !(matches!(
+        conservative_stack_scan_decision(),
+        ConservativeStackScanDecision::Scan
+    ) && !conservative_scan_is_effective())
+}
+
+#[cfg(test)]
+thread_local! {
+    static CONSERVATIVE_SCAN_EFFECTIVE_TEST: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Test-only RAII: make [`conservative_scan_is_effective`] answer `effective`
+/// on this thread, so the wasm answer (`false`) can be exercised on a host.
+#[cfg(test)]
+pub(crate) struct ConservativeScanEffectiveTestGuard {
+    previous: Option<bool>,
+}
+
+#[cfg(test)]
+impl ConservativeScanEffectiveTestGuard {
+    pub(crate) fn set(effective: bool) -> Self {
+        let previous = CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(|c| c.replace(Some(effective)));
+        Self { previous }
+    }
+}
+
+#[cfg(test)]
+impl Drop for ConservativeScanEffectiveTestGuard {
+    fn drop(&mut self) {
+        CONSERVATIVE_SCAN_EFFECTIVE_TEST.with(|c| c.set(self.previous));
+    }
+}
+
 pub(crate) fn conservative_stack_scan_decision() -> ConservativeStackScanDecision {
     conservative_stack_scan_decision_for(
         conservative_stack_scan_mode(),

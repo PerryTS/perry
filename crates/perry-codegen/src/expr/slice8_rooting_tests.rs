@@ -241,6 +241,7 @@ fn with_object_local(id: u32, tail: Stmt) -> Vec<Stmt> {
 /// `o.items` — the receiver expression these tests use.
 fn field_receiver(id: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: "items".to_string(),

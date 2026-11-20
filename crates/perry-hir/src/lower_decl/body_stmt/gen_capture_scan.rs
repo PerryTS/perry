@@ -8,12 +8,13 @@
 //! values (`Cannot convert undefined or null to object` when the body indexes
 //! them) — the path-to-regexp `lexer`/`SIMPLE_TOKENS` failure.
 //!
-//! This walker collects every identifier reference in the function body
-//! (over-approximating: collecting an extra name only routes through the
-//! closure path, which is always correct), then asks `ctx.lookup_local` whether
-//! any of them resolves to a live enclosing local. Identifiers bound *inside*
-//! the body (params, inner declarations) are not in the enclosing scope, so
-//! `lookup_local` only returns `Some` for genuine outer captures.
+//! The scan collects every identifier reference in the function's parameter
+//! list and body (over-approximating: collecting an extra name only routes
+//! through the closure path, which is always correct), then asks
+//! `ctx.lookup_local` whether any of them resolves to a live enclosing local.
+//! Identifiers bound *inside* the body (params, inner declarations) are not in
+//! the enclosing scope, so `lookup_local` only returns `Some` for genuine
+//! outer captures.
 
 use super::*;
 
@@ -56,16 +57,18 @@ pub(crate) fn forward_referenced_nested_generators(stmts: &[ast::Stmt]) -> Vec<S
     forward.into_iter().collect()
 }
 
-/// Does this nested generator body reference any identifier bound in an
-/// enclosing (outer) scope?
+/// Does this nested generator reference any identifier bound in an enclosing
+/// (outer) scope? Everything that runs when it is called counts: the body and
+/// the parameter list (a default naming an outer binding, a computed name in
+/// a destructuring pattern), which `function* read(value = C)` relies on.
 pub(super) fn nested_generator_references_outer_locals(
     ctx: &LoweringContext,
     func: &ast::Function,
     own_name: &str,
 ) -> bool {
-    let Some(body) = func.body.as_ref() else {
+    if func.body.is_none() {
         return false;
-    };
+    }
     // The generator's own name (for self-recursion) and its parameters bind
     // inside the function, not the enclosing scope — exclude them so a purely
     // self-recursive generator (e.g. path-to-regexp `flatten`) is NOT treated
@@ -78,10 +81,8 @@ pub(super) fn nested_generator_references_outer_locals(
         collect_pat_bound_names(&p.pat, &mut bound);
     }
 
-    let mut names: Vec<String> = Vec::new();
-    for stmt in &body.stmts {
-        collect_idents_stmt(stmt, &mut names);
-    }
+    let mut names = std::collections::HashSet::new();
+    crate::lower_decl::cic_function(func, &mut names);
     names
         .iter()
         .any(|n| !bound.contains(n) && ctx.lookup_local(n).is_some())

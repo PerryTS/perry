@@ -20,8 +20,7 @@ use super::*;
 fn throw_object_assign_nullish_target() -> ! {
     let message = "Cannot convert undefined or null to object";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 #[no_mangle]
@@ -33,7 +32,7 @@ pub unsafe extern "C" fn js_object_assign_validate_target(target_f64: f64) -> f6
     js_object_coerce(target_f64)
 }
 
-unsafe fn object_assign_set_string_key(
+pub(super) unsafe fn object_assign_set_string_key(
     define: bool,
     target: *mut ObjectHeader,
     target_is_array: bool,
@@ -59,10 +58,32 @@ unsafe fn object_assign_set_string_key(
     if !define {
         // Set(to, key, value, true) must walk inherited descriptors and invoke
         // setters with the target as receiver, including on non-extensible
-        // targets. Use the same strict [[Set]] as property assignment.
+        // targets. Preserve learned inline additions while physical room
+        // remains; dictionaries use keyed assignment's guarded append. This
+        // selects between complete setters, never grants write permission.
         let target_value = crate::value::js_nanbox_pointer(target as i64);
         let key_value = f64::from_bits(JSValue::string_ptr(key_ptr as *mut _).bits());
-        crate::proxy::js_put_value_set(target_value, key_value, value_f64, target_value, 1);
+        let inline_room = !target_is_array
+            && crate::value::addr_class::try_read_gc_header(target as usize).is_some_and(
+                |header| {
+                    crate::gc_type_is_object!(header.obj_type)
+                        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+                },
+            )
+            && !super::overflow::has_overflow(target)
+            && (super::object_keys(target).count() as usize)
+                < super::object_inline_capacity(target) as usize;
+        if inline_room {
+            crate::proxy::js_put_value_set(target_value, key_value, value_f64, target_value, 1);
+        } else {
+            crate::object::property_ops::put_value::js_put_value_set_dynamic(
+                crate::object::shapes::ordinary_dir_addr(),
+                target_value,
+                key_value,
+                value_f64,
+                1,
+            );
+        }
     } else if target_is_array {
         crate::array::js_array_set_string_key(
             target as *mut crate::array::ArrayHeader,
@@ -219,7 +240,7 @@ unsafe fn positional_assign_target_is_safe(
         | crate::gc::OBJ_FLAG_SEALED
         | crate::gc::OBJ_FLAG_NO_EXTEND
         | crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved & BLOCKING != 0
         || target_shape.object_kind != super::shapes::ShapeObjectKind::Ordinary
@@ -250,11 +271,9 @@ unsafe fn positional_assign_target_is_safe(
         };
 
         if !target_keys.is_null() {
-            if let Some(pos) = crate::object::keys_find_slot_by_bytes(
-                target_keys.arr(),
-                target_keys.count(),
-                key_bytes,
-            ) {
+            if let Some(pos) =
+                crate::object::keys_find_slot_by_bytes(target_keys, target_keys.count(), key_bytes)
+            {
                 let entry = super::key_attrs::keys_entry(target_keys.arr(), pos as u32);
                 if !super::key_attrs::entry_is_plain_overwrite(entry) {
                     return false;
@@ -267,8 +286,7 @@ unsafe fn positional_assign_target_is_safe(
             if keys.is_null() {
                 continue;
             }
-            if let Some(pos) =
-                crate::object::keys_find_slot_by_bytes(keys.arr(), keys.count(), key_bytes)
+            if let Some(pos) = crate::object::keys_find_slot_by_bytes(keys, keys.count(), key_bytes)
             {
                 let entry = super::key_attrs::keys_entry(keys.arr(), pos as u32);
                 if !super::key_attrs::entry_is_plain_writable_data(entry) {
@@ -300,7 +318,7 @@ unsafe fn positional_prototype_shape_keys(
         };
         // A hop with an overflow holds keys and attributes its layout does
         // not list (object model step 4): no positional proof.
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
             || super::overflow::has_overflow(addr as *const ObjectHeader)
@@ -344,10 +362,7 @@ unsafe fn positional_prototype_shape_keys(
 /// `getPrototypeOf` machinery: class-implied/per-object identities have no
 /// shape-owned pointer word and therefore refuse this fast path.
 unsafe fn positional_shape_prototype(obj: *const ObjectHeader) -> Option<Option<usize>> {
-    let header = crate::value::addr_class::try_read_gc_header(obj as usize)?;
-    if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-        return Some(None);
-    }
+    crate::value::addr_class::try_read_gc_header(obj as usize)?;
     let shape = super::shapes::object_shape_descriptor(obj)?;
     if shape.proto_id == super::shapes::PROTO_ID_NULL {
         return Some(None);
@@ -384,7 +399,7 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
     let Some(header) = crate::value::addr_class::try_read_gc_header(src_raw) else {
         return PositionalPlan::Refused;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::object_lacks_meta_word!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || header._reserved
             & (crate::gc::OBJ_FLAG_HAS_DESCRIPTORS | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
@@ -393,15 +408,20 @@ unsafe fn positional_source_plan(src: *const ObjectHeader) -> PositionalPlan {
         return PositionalPlan::Refused;
     }
     let class_id = (*src).class_id;
-    if (class_id != 0 && !super::class_registry::is_anon_shape_class_id(class_id))
+    if (class_id != 0 && !super::shapes::object_is_plain_record(src))
         || super::overflow::has_overflow(src)
         || super::string_wrapper::length(src_raw).is_some()
-        || (class_id == 0 && crate::url::is_url_object_shape(src as *mut ObjectHeader))
+        || (class_id == 0
+            && crate::object::url_layout::is_url_object_shape(src as *mut ObjectHeader))
     {
         return PositionalPlan::Refused;
     }
-    let meta = (*src).meta;
-    if !meta.is_null() && (*meta).flags & super::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
+    let meta = crate::meta_read!(crate::meta_obj_from_type!(src as *mut _, header.obj_type));
+    if !meta.is_null()
+        && (*meta).flags
+            & (super::OBJECT_META_FLAG_IS_PROTOTYPE | super::OBJECT_META_FLAG_EXOTIC_READ_RECEIVER)
+            != 0
+    {
         return PositionalPlan::Refused;
     }
     let Some(shape) = super::shapes::object_shape_descriptor(src) else {
@@ -582,20 +602,27 @@ unsafe fn object_assign_enumerated_source(
         let iter_scope = crate::gc::RuntimeHandleScope::new();
         let key_h = iter_scope.root_nanbox_u64(key.bits());
         let key_f64 = f64::from_bits(key.bits());
-        // `[[GetOwnProperty]]` — fires the getOwnPropertyDescriptor trap.
-        let desc = crate::proxy::js_reflect_get_own_property_descriptor(source_f64, key_f64);
-        let desc_h = iter_scope.root_nanbox_f64(desc);
-        let desc_ptr =
-            (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-        if desc.to_bits() == JSValue::undefined().bits() || desc_ptr.is_null() {
-            continue;
-        }
-        let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
-        if crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
-            (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader,
-            ek,
-        )) == 0
-        {
+        // Resolve the live descriptor without materializing ordinary property
+        // facts. Proxy/exotic descriptors keep their public representation and
+        // traps; the subsequent Get must still observe any intervening changes.
+        use super::descriptors::OwnProperty;
+        let enumerable = match super::descriptors::own_property(source_f64, key_f64) {
+            Some(OwnProperty::Data(_, attrs) | OwnProperty::Accessor(_, _, attrs)) => {
+                attrs.enumerable()
+            }
+            Some(OwnProperty::Public(desc)) => {
+                let desc_h = iter_scope.root_nanbox_f64(desc);
+                let ek = crate::string::js_string_from_bytes(b"enumerable".as_ptr(), 10);
+                let desc_ptr = (desc_h.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK)
+                    as *const ObjectHeader;
+                !desc_ptr.is_null()
+                    && crate::value::js_is_truthy(crate::object::js_object_get_field_by_name_f64(
+                        desc_ptr, ek,
+                    )) != 0
+            }
+            None => false,
+        };
+        if !enumerable {
             continue;
         }
         // `[[Get]]` — fires the get trap.
@@ -650,6 +677,26 @@ pub unsafe extern "C" fn js_object_assign_one(target_f64: f64, source_f64: f64) 
     object_assign_one(target_f64, source_f64, false)
 }
 
+/// `Object.assign({}, source, ...)`'s first link, when the target is an empty
+/// object literal written at the call. That object is created here, after
+/// `source` was evaluated (creating `{}` first runs no code and is visible to
+/// nothing), and is born with room for the own keys a plain data source's
+/// shape lists, so the copy fills inline slots instead of spilling. Any other
+/// source (a proxy, an array, a string, a primitive, an accessor or dictionary
+/// object) gets the empty literal's own width. The copy is the unchanged
+/// `Object.assign` of one source.
+#[no_mangle]
+pub unsafe extern "C" fn js_object_assign_fresh(source_f64: f64) -> f64 {
+    let width = super::spread::plain_data_key_count(source_f64);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(source_f64);
+    let target = super::alloc_basic::object_alloc_plain(width);
+    js_object_assign_one(
+        crate::value::js_nanbox_pointer(target as i64),
+        source.get_nanbox_f64(),
+    )
+}
+
 /// `{ ...src }` inside a source-ordered object literal: CopyDataProperties
 /// into the literal's own fresh object. The same enumeration of `src` as
 /// `Object.assign`, but every property is DEFINED on the target
@@ -679,7 +726,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // A proxy has no heap header. Feed it to the same descriptor-driven
     // copy used whenever [[Set]] can run code, before any heap admission.
     // That funnel preserves source key order and target set/define traps.
-    if crate::proxy::js_proxy_is_proxy(target_f64) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(target_f64) != 0 {
         let scope = crate::gc::RuntimeHandleScope::new();
         let target = scope.root_nanbox_f64(target_f64);
         let source = scope.root_nanbox_f64(source_f64);
@@ -717,7 +764,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let target_is_array = {
         let gc_header =
             (target as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY
+        crate::gc_type_is_array!((*gc_header).obj_type)
     };
 
     let source = JSValue::from_bits(source_f64.to_bits());
@@ -741,7 +788,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // (getOwnPropertyDescriptor) for the enumerable test, then `[[Get]]` for
     // each value — with every trap's abrupt completion propagating out (test262
     // Object/assign/source-own-prop-error + source-own-prop-keys-error).
-    if crate::proxy::js_proxy_is_proxy(source_f64) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(source_f64) != 0 {
         // #7200: every proxy trap is user code; the target can be anywhere by
         // the time the last one returns.
         let scope = crate::gc::RuntimeHandleScope::new();
@@ -803,18 +850,28 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // non-enumerable — `exotic_own_keys(.., enumerable_only = true)` encodes
     // exactly that rule, and is the same enumeration `Object.keys` and
     // `JSON.stringify` use, so the three cannot disagree.
-    if src_raw >= 0x10000 && src_raw.is_multiple_of(8) && {
+    //
+    // Every exotic-expando kind (Date, Error, Map, Set, Promise, Temporal)
+    // keeps its own properties in that one store, so one arm copies them all.
+    let exotic_kind = if src_raw >= 0x10000 && src_raw.is_multiple_of(8) {
         let src_gc =
             (src_raw as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        (*src_gc).obj_type == crate::gc::GC_TYPE_ERROR
-    } {
-        use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys, ExoticKind};
+        let obj_type = (*src_gc).obj_type;
+        if crate::gc_type_is_object!(obj_type) || crate::gc_type_is_array!(obj_type) {
+            None
+        } else {
+            crate::object::exotic_expando::exotic_kind_of_gc_type(obj_type)
+        }
+    } else {
+        None
+    };
+    if let Some(exotic_kind) = exotic_kind {
+        use crate::object::exotic_expando::{exotic_get_own_property, exotic_own_keys};
         let scope = crate::gc::RuntimeHandleScope::new();
         let tgt_h = scope.root_raw_mut_ptr(target);
         let receiver = crate::value::js_nanbox_pointer(src_raw as i64);
-        for name in exotic_own_keys(ExoticKind::Error, src_raw, true) {
-            let Some(value) = exotic_get_own_property(src_raw, ExoticKind::Error, &name, receiver)
-            else {
+        for name in exotic_own_keys(exotic_kind, src_raw, true) {
+            let Some(value) = exotic_get_own_property(src_raw, exotic_kind, &name, receiver) else {
                 continue;
             };
             let value_h = scope.root_nanbox_f64(value);
@@ -891,7 +948,7 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
         Some(h) => h.obj_type,
         None => return target_f64,
     };
-    let source_is_array = source_obj_type == crate::gc::GC_TYPE_ARRAY;
+    let source_is_array = crate::gc_type_is_array!(source_obj_type);
 
     // #7341: a RegExp source has no ObjectHeader keys array and must not enter
     // the plain-object copy arm. Its dedicated GC kind makes that decision
@@ -906,19 +963,32 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // Repro: `Object.assign({}, /x/g)` under
     // PERRY_GC_PROTECT_FROMSPACE=1 PERRY_GC_HEAP_LIMIT=8.
 
-    let positional_plan = if source_obj_type == crate::gc::GC_TYPE_OBJECT {
+    // Set once an own accessor's getter ran (string or symbol key): from then
+    // on each later key is checked for own presence first, since the getter
+    // may have deleted it (CopyDataProperties, ECMA-262 7.3.25 step 4.c: the
+    // key's [[GetOwnProperty]] is read before its value). Until a getter runs
+    // nothing can delete a key, and nothing extra runs.
+    let mut getter_ran = false;
+    let positional_plan = if crate::gc_type_is_object!(source_obj_type) {
         positional_source_plan(src)
     } else {
         PositionalPlan::Refused
     };
-    let strict_set_is_shape_equivalent =
-        !define && positional_assign_target_is_safe(target, target_is_array, positional_plan);
+    // An elements-backed source (an Array-subclass instance, an arguments
+    // object) keeps its indices outside its keys: the ownKeys-driven copy
+    // reads them, in order, with the rest.
+    let elements_backed = crate::gc_type_is_object!(source_obj_type)
+        && crate::array::subclass_elements::own_elements(src as usize).is_some();
+    let strict_set_is_shape_equivalent = !define
+        && !elements_backed
+        && positional_assign_target_is_safe(target, target_is_array, positional_plan);
     if (!define
-        || (source_obj_type == crate::gc::GC_TYPE_OBJECT && super::overflow::has_overflow(src)))
+        || elements_backed
+        || (crate::gc_type_is_object!(source_obj_type) && super::overflow::has_overflow(src)))
         && !strict_set_is_shape_equivalent
         && matches!(
             source_obj_type,
-            crate::gc::GC_TYPE_OBJECT | crate::gc::GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!()
         )
     {
         // Assign's [[Set]] can run a setter even for a plain data source, so
@@ -957,6 +1027,10 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     let tgt_h = scope.root_raw_mut_ptr(target);
     let src_h = scope.root_raw_const_ptr(src);
     let source_h = scope.root_nanbox_f64(source_f64);
+    // [[OwnPropertyKeys]] is one snapshot taken before any copy: a source
+    // whose shape proves it has no symbol key has none to copy, whatever a
+    // getter or setter does to it later, and needs no symbol list.
+    let source_has_no_symbols = super::spread::proves_no_symbols(source_f64);
 
     // 1) Copy own string-keyed enumerable properties from source to target,
     //    in source insertion order. Mirrors `js_object_copy_own_fields`.
@@ -1022,12 +1096,25 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
                 })
             });
         }
-    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT
+    } else if crate::gc_type_is_object!(source_obj_type)
         && copy_positional_source(define, positional_plan, &tgt_h, &src_h, target_is_array)
     {
         // Every own string key was an enumerable data property of the
         // source shape, copied by position (`copy_positional_source`).
-    } else if source_obj_type == crate::gc::GC_TYPE_OBJECT {
+    } else if crate::gc_type_is_object!(source_obj_type) {
+        // Virtual reads decline the positional plan. Environment copies take
+        // the descriptor-driven own-key snapshot, which refreshes their backing.
+        if crate::process::is_process_env_object(source_h.get_nanbox_f64()) {
+            object_assign_enumerated_source(
+                define,
+                tgt_h.get_raw_mut_ptr::<ObjectHeader>(),
+                target_is_array,
+                source_h.get_nanbox_f64(),
+            );
+            return tgt_h.with_mut_ptr::<ObjectHeader, _>(|target| {
+                crate::value::js_nanbox_pointer(target as i64)
+            });
+        }
         let src_keys = if super::string_wrapper::length(src as usize).is_some() {
             let names = src_h.with_const_ptr(|src: *const ObjectHeader| {
                 js_object_get_own_property_names(crate::value::js_nanbox_pointer(src as i64))
@@ -1058,72 +1145,35 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             // the shape's own list does.
             let hide_internal = (*src).class_id != 0;
             let holey = crate::object::key_view::object_may_have_holes(src);
+            // Until an own accessor is read no user code runs, so no key can
+            // be deleted: this is the plain loop. It stops at the first
+            // accessor key, before reading it, and the rest are copied with
+            // the re-check.
             for i in 0..key_count {
-                // Re-derive every raw address from its handle at the top of the
-                // iteration: the PREVIOUS iteration's getter may have moved all
-                // of them.
-                let src_keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
-                let src = src_h.get_raw_const_ptr::<ObjectHeader>();
-                let src_raw = src as usize;
-                let key_val = crate::array::js_array_get(src_keys, i as u32);
-                if !key_val.is_any_string() {
-                    continue;
+                if copy_string_key::<false>(
+                    define,
+                    target_is_array,
+                    &tgt_h,
+                    &src_h,
+                    &keys_h,
+                    hide_internal,
+                    holey,
+                    i,
+                ) {
+                    copy_string_keys_rechecking(
+                        define,
+                        target_is_array,
+                        &tgt_h,
+                        &src_h,
+                        &keys_h,
+                        hide_internal,
+                        holey,
+                        i,
+                        key_count,
+                    );
+                    getter_ran = true;
+                    break;
                 }
-                // An optional key whose slot holds the hole is absent.
-                if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
-                    continue;
-                }
-                if crate::object::key_attrs::entry_is_private(crate::object::key_attrs::keys_entry(
-                    src_keys, i as u32,
-                )) {
-                    continue;
-                }
-                if hide_internal {
-                    let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                    if crate::string::js_string_key_bytes(key_val, &mut buf)
-                        .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
-                    {
-                        continue;
-                    }
-                }
-                let key_f64 = f64::from_bits(key_val.bits());
-                let key_ptr = crate::value::js_get_string_pointer_unified(key_f64)
-                    as *const crate::StringHeader;
-                if key_ptr.is_null() {
-                    continue;
-                }
-                let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-                if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf)
-                {
-                    if let Ok(name) = std::str::from_utf8(name_bytes) {
-                        if let Some(attrs) = get_property_attrs(src_raw, name) {
-                            if !attrs.enumerable() {
-                                continue;
-                            }
-                        }
-                    }
-                }
-                // Per-iteration scope so the key/value roots are cut each time
-                // round rather than growing the handle stack by 2 per key.
-                let iter_scope = crate::gc::RuntimeHandleScope::new();
-                let key_h = iter_scope.root_string_ptr(key_ptr);
-                let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
-                // The getter's RETURN VALUE is a fresh heap reference reachable
-                // from nothing else, and the write funnel below allocates (key
-                // interning, keys-array growth, shape transition). Root it and
-                // read it back, exactly like the pointers.
-                let val_h = iter_scope.root_nanbox_f64(field_f64);
-                tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
-                    key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
-                        object_assign_set_string_key(
-                            define,
-                            t,
-                            target_is_array,
-                            k,
-                            val_h.get_nanbox_f64(),
-                        )
-                    })
-                });
             }
         }
     }
@@ -1136,7 +1186,9 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     //    ran during assign (test262 assign/strings-and-symbol-order). Snapshot
     //    the symbol pointers first: the inner `[[Get]]` / set re-acquire
     //    SYMBOL_PROPERTIES, so iterating a held snapshot avoids re-entrancy.
-    let sym_keys: Vec<usize> = {
+    let sym_keys: Vec<usize> = if source_has_no_symbols {
+        Vec::new()
+    } else {
         let arr_raw = crate::symbol::js_object_get_own_property_symbols(source_h.get_nanbox_f64());
         let mut v = Vec::new();
         if arr_raw != 0 {
@@ -1165,6 +1217,12 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
             continue;
         }
         let sym_f64 = f64::from_bits(JSValue::pointer(sym_ptr as *const u8).bits());
+        if getter_ran
+            && !crate::symbol::js_object_has_own_symbol(source_h.get_nanbox_f64(), sym_f64)
+        {
+            continue;
+        }
+        getter_ran |= crate::object::shaped_symbols::accessor(src_raw, sym_ptr).is_some();
         let iter_scope = crate::gc::RuntimeHandleScope::new();
         let sym_h = iter_scope.root_nanbox_f64(sym_f64);
         // Read the source value through `[[Get]]`, not the raw side-table bits,
@@ -1199,4 +1257,138 @@ unsafe fn object_assign_one(target_f64: f64, source_f64: f64, define: bool) -> f
     // chained `Object.assign(t, a, b)` threaded a from-space pointer into the
     // next link.
     tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| crate::value::js_nanbox_pointer(t as i64))
+}
+
+/// One own string key `i` of an ordinary-object spread/assign source:
+/// CopyDataProperties (ECMA-262 7.3.25) step 4 for that key.
+///
+/// `RECHECK = false` is the plain loop's step: it returns `true`, without
+/// reading the key, when the key is an own accessor, since its getter may
+/// delete later keys. `RECHECK = true` (after such a key) first checks the
+/// key's own presence ([[GetOwnProperty]], step 4.c), and always returns
+/// `false`.
+///
+/// # Safety
+/// The handles root a live target, source and source keys array.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_string_key<const RECHECK: bool>(
+    define: bool,
+    target_is_array: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    keys_h: &crate::gc::RuntimeHandle<'_>,
+    hide_internal: bool,
+    holey: bool,
+    i: usize,
+) -> bool {
+    // Re-derive every raw address from its handle at the top of the
+    // iteration: the PREVIOUS iteration's getter may have moved all
+    // of them.
+    let src_keys = keys_h.get_raw_mut_ptr::<crate::array::ArrayHeader>();
+    let src = src_h.get_raw_const_ptr::<ObjectHeader>();
+    let src_raw = src as usize;
+    let key_val = crate::array::js_array_get(src_keys, i as u32);
+    if !key_val.is_any_string() {
+        return false;
+    }
+    // An optional key whose slot holds the hole is absent.
+    if holey && crate::object::key_view::own_key_is_hole(src, key_val) {
+        return false;
+    }
+    // One test of the key's entry covers both rare kinds: a private entry is
+    // skipped; an accessor entry stops the plain loop before it is read.
+    let entry = crate::object::key_attrs::keys_entry(src_keys, i as u32);
+    if entry & (crate::object::key_attrs::ENTRY_PRIVATE | crate::object::key_attrs::ENTRY_ACCESSOR)
+        != 0
+    {
+        if crate::object::key_attrs::entry_is_private(entry) {
+            return false;
+        }
+        if !RECHECK {
+            return true;
+        }
+    }
+    if RECHECK
+        && crate::value::js_is_truthy(js_object_has_own(
+            crate::value::js_nanbox_pointer(src as i64),
+            f64::from_bits(key_val.bits()),
+        )) == 0
+    {
+        return false;
+    }
+    if hide_internal {
+        let mut buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        if crate::string::js_string_key_bytes(key_val, &mut buf)
+            .is_some_and(crate::object::field_get_set::is_internal_runtime_key_bytes)
+        {
+            return false;
+        }
+    }
+    let key_f64 = f64::from_bits(key_val.bits());
+    let key_ptr =
+        crate::value::js_get_string_pointer_unified(key_f64) as *const crate::StringHeader;
+    if key_ptr.is_null() {
+        return false;
+    }
+    let mut sso_buf = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+    if let Some(name_bytes) = crate::string::js_string_key_bytes(key_val, &mut sso_buf) {
+        if let Ok(name) = std::str::from_utf8(name_bytes) {
+            if let Some(attrs) = get_property_attrs(src_raw, name) {
+                if !attrs.enumerable() {
+                    return false;
+                }
+            }
+        }
+    }
+    // Per-iteration scope so the key/value roots are cut each time
+    // round rather than growing the handle stack by 2 per key.
+    let iter_scope = crate::gc::RuntimeHandleScope::new();
+    let key_h = iter_scope.root_string_ptr(key_ptr);
+    let field_f64 = f64::from_bits(js_object_get_field_by_name(src, key_ptr).bits());
+    // The getter's RETURN VALUE is a fresh heap reference reachable
+    // from nothing else, and the write funnel below allocates (key
+    // interning, keys-array growth, shape transition). Root it and
+    // read it back, exactly like the pointers.
+    let val_h = iter_scope.root_nanbox_f64(field_f64);
+    tgt_h.with_mut_ptr::<ObjectHeader, _>(|t| {
+        key_h.with_const_ptr::<crate::StringHeader, _>(|k| {
+            object_assign_set_string_key(define, t, target_is_array, k, val_h.get_nanbox_f64())
+        })
+    });
+    false
+}
+
+/// Keys `from..key_count` of a spread/assign source, from its first own
+/// accessor key on: each key is re-checked for own presence first, since a
+/// getter may have deleted it. Out of line so the plain loop stays main's.
+///
+/// # Safety
+/// As [`copy_string_key`].
+#[cold]
+#[inline(never)]
+#[allow(clippy::too_many_arguments)]
+unsafe fn copy_string_keys_rechecking(
+    define: bool,
+    target_is_array: bool,
+    tgt_h: &crate::gc::RuntimeHandle<'_>,
+    src_h: &crate::gc::RuntimeHandle<'_>,
+    keys_h: &crate::gc::RuntimeHandle<'_>,
+    hide_internal: bool,
+    holey: bool,
+    from: usize,
+    key_count: usize,
+) {
+    for i in from..key_count {
+        copy_string_key::<true>(
+            define,
+            target_is_array,
+            tgt_h,
+            src_h,
+            keys_h,
+            hide_internal,
+            holey,
+            i,
+        );
+    }
 }

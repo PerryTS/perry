@@ -1,5 +1,7 @@
 //! Completed plain-record construction in the JSON suppression window.
+use super::header::meta_form_alloc_bytes;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 /// Build the pointer-free object used by the bounded inline JSON parser.
 ///
@@ -17,7 +19,7 @@ use super::*;
 unsafe fn finish_inline_json_object(
     object: *mut ObjectHeader,
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> *mut ObjectHeader {
     debug_assert!(crate::gc::gc_is_suppressed());
@@ -30,7 +32,7 @@ unsafe fn finish_inline_json_object(
     (*object).class_id = 0;
     (*object).parent_class_id = 0;
     // GC_STORE_AUDIT(INIT): fresh inline JSON objects have no metadata edge.
-    (*object).meta = ptr::null_mut();
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     // Charter step 3: marked plain-ordinary BEFORE the stamp, so the cached
     // `Ordinary` id is the receiver's (`mark_object_plain_ordinary`).
     shapes::store_kind::premark_plain_ordinary(object);
@@ -41,16 +43,13 @@ unsafe fn finish_inline_json_object(
         // array without preserving a manually installed/test shape id. The
         // ordinary canonical cache stays on the single-probe path; recover a
         // matching descriptor only for the stale-id case.
-        let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
+        let id = shapes::layout_for_keys_ensure(keys, count as u32);
         set_object_keys_with_live(object, keys_view, count as u32);
         shapes::birth_stamp_object_shape(object, id, count as u32, super::field_rep::REP_ANY);
     }
     shapes::store_kind::check_store_facts(object);
 
-    let slots = object
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = crate::meta_slots_of!(crate::meta_obj_runtime_born!(object)).cast::<JSValue>();
     for (index, &(_, value)) in fields.iter().enumerate() {
         // GC_STORE_AUDIT(INIT): the bounded decoder accepts pointer-free
         // scalars and short strings only.
@@ -67,7 +66,7 @@ unsafe fn finish_inline_json_object(
 #[inline(always)]
 fn inline_json_object_size(field_count: usize) -> usize {
     let capacity = field_count.max(INLINE_SLOT_FLOOR);
-    std::mem::size_of::<ObjectHeader>() + capacity * std::mem::size_of::<JSValue>()
+    meta_form_alloc_bytes(capacity)
 }
 
 /// Birth the steady-state one-field JSON object from a cache entry whose exact
@@ -79,10 +78,10 @@ fn inline_json_object_size(field_count: usize) -> usize {
 /// edge needs to be reminted after movement.
 #[inline(never)]
 pub(crate) unsafe fn try_object_from_prevalidated_one_field(
-    shape_id: u32,
+    shape_id: LayoutWord,
     value: JSValue,
 ) -> Option<*mut ObjectHeader> {
-    debug_assert_ne!(shape_id, 0);
+    debug_assert_ne!(shape_id, LayoutWord(0));
     debug_assert!(!value.is_pointer() && !value.is_string());
     let raw = crate::arena::arena_alloc_gc_no_collect(
         inline_json_object_size(1),
@@ -94,14 +93,12 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
     }
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
-    (*object).parent_class_id = shape_id;
-    (*object).meta = ptr::null_mut();
+    (*object).parent_class_id = shape_id.0;
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     // Charter step 3: the cached id is an `Ordinary` (marked) record's.
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::store_kind::check_store_facts(object);
-    let slots = raw
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = crate::meta_slots_of!(crate::meta_obj_runtime_born!(raw.cast())).cast::<JSValue>();
     slots.write(value);
     // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
     slots.add(1).write(JSValue::undefined());
@@ -116,9 +113,9 @@ pub(crate) unsafe fn try_object_from_prevalidated_one_field(
 /// collection or old-generation carrier bookkeeping can intervene.
 #[inline(always)]
 pub(crate) unsafe fn try_empty_json_object_preinstalled(
-    shape_id: u32,
+    shape_id: LayoutWord,
 ) -> Option<*mut ObjectHeader> {
-    debug_assert_ne!(shape_id, 0);
+    debug_assert_ne!(shape_id, LayoutWord(0));
     let raw = crate::arena::arena_alloc_gc_no_collect(
         inline_json_object_size(0),
         8,
@@ -129,15 +126,13 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
     }
     let object = raw.cast::<ObjectHeader>();
     (*object).class_id = 0;
-    (*object).parent_class_id = shape_id;
-    (*object).meta = ptr::null_mut();
+    (*object).parent_class_id = shape_id.0;
+    *crate::meta_slot_of!(crate::meta_obj_runtime_born!(object)) = ptr::null_mut();
     // Charter step 3: a keyless JSON object is born marked plain-ordinary,
     // and its cached id (`parse_empty`) is the marked record's.
     shapes::store_kind::premark_plain_ordinary(object);
     shapes::store_kind::check_store_facts(object);
-    let slots = raw
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = crate::meta_slots_of!(crate::meta_obj_runtime_born!(raw.cast())).cast::<JSValue>();
     slots.write(JSValue::undefined());
     // GC_STORE_AUDIT(INIT): freshly allocated JSON object inline slot.
     slots.add(1).write(JSValue::undefined());
@@ -153,7 +148,7 @@ pub(crate) unsafe fn try_empty_json_object_preinstalled(
 #[inline(never)]
 pub(crate) unsafe fn try_object_from_inline_json_fields(
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> Option<*mut ObjectHeader> {
     let raw = crate::arena::arena_alloc_gc_no_collect(
@@ -177,7 +172,7 @@ pub(crate) unsafe fn try_object_from_inline_json_fields(
 #[inline(never)]
 pub(crate) unsafe fn object_from_inline_json_fields(
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     fields: &[(JSValue, JSValue)],
 ) -> *mut ObjectHeader {
     let raw = crate::arena::arena_alloc_gc(
@@ -191,12 +186,12 @@ pub(crate) unsafe fn object_from_inline_json_fields(
 pub(crate) unsafe fn object_from_json_fields_preinstalled(
     batch: &mut Option<crate::arena::ConstructionBatch>,
     keys: *mut ArrayHeader,
-    shape_id: u32,
+    shape_id: LayoutWord,
     values: &[JSValue],
 ) -> *mut ObjectHeader {
     let count = values.len();
     let capacity = count.max(INLINE_SLOT_FLOOR);
-    let size = std::mem::size_of::<ObjectHeader>() + capacity * 8;
+    let size = meta_form_alloc_bytes(capacity);
     let raw = batch.as_mut().map_or(ptr::null_mut(), |b| {
         b.try_alloc(size, crate::gc::GC_TYPE_OBJECT)
     });
@@ -215,12 +210,12 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         (*obj).class_id = 0;
         (*obj).parent_class_id = 0;
         // GC_STORE_AUDIT(INIT): fresh record has no metadata edge.
-        (*obj).meta = ptr::null_mut();
+        *crate::meta_slot_of!(crate::meta_obj_runtime_born!(obj)) = ptr::null_mut();
         shapes::store_kind::premark_plain_ordinary(obj);
         // Keep shape publication in the existing mint-and-stamp funnel.
         let keys_view = super::ObjectKeys::new(keys, count as u32);
         if !shapes::try_birth_stamp_preinstalled_shape(obj, shape_id, keys_view, count as u32) {
-            let id = shapes::shape_id_for_keys_ensure(keys, count as u32);
+            let id = shapes::layout_for_keys_ensure(keys, count as u32);
             set_object_keys_with_live(obj, keys_view, count as u32);
             let rep = super::field_rep::REP_ANY;
             shapes::birth_stamp_object_shape(obj, id, count as u32, rep);
@@ -229,10 +224,7 @@ pub(crate) unsafe fn object_from_json_fields_preinstalled(
         obj
     };
     shapes::store_kind::check_store_facts(obj);
-    let slots = obj
-        .cast::<u8>()
-        .add(std::mem::size_of::<ObjectHeader>())
-        .cast::<JSValue>();
+    let slots = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj)).cast::<JSValue>();
     let mut saw_pointer = false;
     for (index, &value) in values.iter().enumerate() {
         if batch.is_none() {

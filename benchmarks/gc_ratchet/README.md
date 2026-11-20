@@ -69,9 +69,13 @@ sessions x 7 repeats (21 runs per probe), plus 5 traced runs per probe:
 | timing | `wall_ms` | <=0.75% (medians) | **no** | yes |
 
 The GC accounting family is parsed from `PERRY_GC_DIAG=1` output in a separate,
-untimed pass; enabling the trace was verified not to change `heap_used_bytes`,
-so the traced pass observes the same collector the untimed pass measures. The
-harness records two traced runs on every invocation. `check` fails if a gated
+untimed pass. Timing and retention use the ordinary runtime; trace executables
+select the instrumented archives with `PERRY_GC_INSTRUMENTS=1` while compiling.
+Build both variants before measuring (`scripts/build_instr_runtime.sh` supplies
+the instrumented archives). Both archive variants are fingerprinted, and traced
+output must match the ordinary executable. An empty post-collection live heap
+may report zero used bytes; reserved capacity and RSS must remain positive.
+The harness records two traced runs on every invocation. `check` fails if a gated
 counter disagrees, even within its tolerance band. Documented probe overrides
 apply here too; the measurement keeps both samples and runs every later probe.
 
@@ -360,7 +364,7 @@ Deliberate properties, each of them a refusal:
 
 The bit-identity rule itself now lives in `validate_artifact`, so an artifact
 carrying a non-deterministic gating cell cannot be *pinned*. Before #7554 the
-rule existed only in `tests/test_gc_ratchet.py`, which is why a bad pin could
+rule existed only in `tests/tooling/infrastructure/test_gc_ratchet.py`, which is why a bad pin could
 be committed and only wedge CI afterwards.
 
 The former `12_large_live_set.heap_used_bytes` entry was deleted by #7558,
@@ -522,7 +526,7 @@ per cell, fail-closed on the verdict.
 The CI preflight runs `validate --scope structural`, which fails only on the
 fatal kind. That is not a hole: `check` re-derives the same defect list and fails
 on every entry, and
-`tests/test_gc_ratchet.py::FailOpenPerCellTests::test_structural_preflight_defers_every_defect_it_waves_through`
+`tests/tooling/infrastructure/test_gc_ratchet.py::FailOpenPerCellTests::test_structural_preflight_defers_every_defect_it_waves_through`
 asserts that coupling one planted defect shape at a time. Without it the flag
 would be indistinguishable from suppression.
 
@@ -721,7 +725,7 @@ failure this suite has paid for most often.
 | `tolerances.json` | every band, with the variance it was derived from |
 | `baseline/gc-ratchet-v1.json` | the pinned artifact |
 | `run_gc_ratchet_baseline.sh` | quiet-host driver (`--check` / `--pin`) |
-| `../../tests/test_gc_ratchet.py` | proves the gate fails on each failure mode |
+| `../../tests/tooling/infrastructure/test_gc_ratchet.py` | proves the gate fails on each failure mode |
 | `../../.github/workflows/gc-ratchet.yml` | CI wiring |
 
 

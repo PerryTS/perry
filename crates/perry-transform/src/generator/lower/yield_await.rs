@@ -47,6 +47,7 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 await_async_generator_yield_operands(body, next_id);
                 if let Some(c) = catch {

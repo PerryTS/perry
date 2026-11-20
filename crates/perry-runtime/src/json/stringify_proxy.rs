@@ -30,7 +30,7 @@ pub(super) unsafe fn try_stringify(
     replacer: Replacer<'_>,
     prepared: bool,
 ) -> bool {
-    if crate::proxy::js_proxy_is_proxy(value) == 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 0 {
         return false;
     }
     check_stringify_nesting_depth(depth);
@@ -49,7 +49,7 @@ pub(super) unsafe fn try_stringify(
             return true;
         }
     }
-    if crate::proxy::proxy_wraps_callable(value) {
+    if crate::proxy_hooks::proxy_wraps_callable(value) {
         buf.push_str("null");
         return true;
     }
@@ -57,8 +57,7 @@ pub(super) unsafe fn try_stringify(
     if STRINGIFY_STACK.with(|s| s.borrow().contains(&id)) {
         let msg = "Converting circular structure to JSON";
         let key = crate::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let error = crate::error::js_typeerror_new(key);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+        crate::exception::throw_core(crate::error::CoreError::type_error(key));
     }
     STRINGIFY_STACK.with(|s| s.borrow_mut().push(id));
 
@@ -84,7 +83,7 @@ pub(super) unsafe fn try_stringify(
             _ => {
                 // EnumerableOwnProperties snapshots keys and descriptors before
                 // any value Get; this also validates ownKeys trap invariants.
-                let names = crate::proxy::proxy_enum_own_keys(value);
+                let names = crate::proxy_hooks::proxy_enum_own_keys(value);
                 let names = scope.root_nanbox_f64(names);
                 let arr =
                     (names.get_nanbox_f64().to_bits() & POINTER_MASK) as *const crate::ArrayHeader;
@@ -109,7 +108,7 @@ pub(super) unsafe fn try_stringify(
             keys.get(i as usize)
         };
         let key = member_scope.root_nanbox_f64(key);
-        let member = crate::proxy::js_proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
+        let member = crate::proxy_hooks::proxy_get(receiver.get_nanbox_f64(), key.get_nanbox_f64());
         let member = super::replacer::apply_to_json_keyed(member, key.get_nanbox_f64());
         let member = member_scope.root_nanbox_f64(member);
         let member = match replacer_root.as_ref() {

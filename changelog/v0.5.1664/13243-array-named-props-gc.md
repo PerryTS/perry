@@ -1,0 +1,1 @@
+Fixed GC tracing of an array's named-property holder on 32-bit targets (wasm32): the holder pointer was read as an eight-byte value slot, so `arr.prop`, tagged-template `raw` arrays and regexp match results could be freed or left stale after a collection.

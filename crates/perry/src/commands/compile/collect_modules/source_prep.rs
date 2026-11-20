@@ -26,7 +26,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use anyhow::{anyhow, Result};
 
@@ -100,8 +100,8 @@ pub(super) fn route(canonical: &Path, inputs: &RouteInputs) -> Route {
         // that places the package inside the project root, as in #209 "file:./vendor/bloom/")
         // must still be compiled natively, not handed to the JS runtime.
         // Guard with !is_in_node_modules so this branch never fires for the standard
-        // node_modules/ethers, node_modules/ws etc. paths that already have their
-        // own handling (is_perry_native above).
+        // node_modules/<pkg> paths that already have their own handling
+        // (is_perry_native above).
         || (!is_in_node_modules && is_in_perry_native_package(canonical));
     // #668 / node-core (#800): a *user* `.js`/`.cjs`/`.mjs` file (entry or a
     // project source, i.e. NOT under node_modules) is fed through the native
@@ -130,6 +130,7 @@ pub(super) struct PrepInputs<'a> {
     pub(super) native_addon_paths: &'a BTreeMap<PathBuf, String>,
     pub(super) bunfs_root: Option<&'a Path>,
     pub(super) debug_symbols: bool,
+    pub(super) cjs_demanded_exports: &'a BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl<'a> PrepInputs<'a> {
@@ -140,6 +141,7 @@ impl<'a> PrepInputs<'a> {
             native_addon_paths: &ctx.native_addon_paths,
             bunfs_root: ctx.bunfs_root.as_deref(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: &ctx.cjs_demanded_exports,
         }
     }
 }
@@ -152,6 +154,7 @@ struct PrepConfig {
     compile_packages: HashSet<String>,
     native_addon_paths: BTreeMap<PathBuf, String>,
     debug_symbols: bool,
+    cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
 }
 
 impl PrepConfig {
@@ -164,7 +167,17 @@ impl PrepConfig {
             compile_packages: ctx.compile_packages.clone(),
             native_addon_paths: ctx.native_addon_paths.clone(),
             debug_symbols: ctx.debug_symbols,
+            cjs_demanded_exports: ctx.cjs_demanded_exports.clone(),
         })
+    }
+
+    /// Same settings except, possibly, the demanded CommonJS exports, which
+    /// change only the modules they name.
+    fn same_except_demand(&self, other: &Self) -> bool {
+        self.target == other.target
+            && self.compile_packages == other.compile_packages
+            && self.native_addon_paths == other.native_addon_paths
+            && self.debug_symbols == other.debug_symbols
     }
 
     fn inputs(&self) -> PrepInputs<'_> {
@@ -174,6 +187,7 @@ impl PrepConfig {
             native_addon_paths: &self.native_addon_paths,
             bunfs_root: None,
             debug_symbols: self.debug_symbols,
+            cjs_demanded_exports: &self.cjs_demanded_exports,
         }
     }
 }
@@ -198,6 +212,7 @@ pub(super) struct PreparedSource {
     pub(super) class_family_syntax: Option<perry_hir::ir::ClassFamilySyntax>,
     pub(super) source: String,
     pub(super) was_cjs_wrapped: bool,
+    pub(super) cjs_worker_filenames: Vec<String>,
     /// Recoverable parse warnings from the CommonJS wrap, printed by the walk.
     pub(super) messages: Vec<String>,
     /// Computed-`require` warnings from the CommonJS wrap, printed by the
@@ -223,6 +238,7 @@ impl PreparedSource {
                 .messages
                 .iter()
                 .chain(&self.computed_require_warnings)
+                .chain(&self.cjs_worker_filenames)
                 .chain(&self.wrap_dump)
                 .map(String::len)
                 .sum::<usize>()
@@ -269,7 +285,19 @@ pub(super) fn prepare_from_raw(
     // import and flows through the normal resolution + init-order + codegen
     // path. A file that already has top-level `import`/`export` is not
     // CommonJS (`is_commonjs` returns false) and is left untouched.
-    let was_cjs_wrapped = class.wrap_eligible && is_commonjs(&raw_source);
+    // The explicit CommonJS entry format supplies its wrapper bindings even
+    // when the body only reads them and has no heuristic CJS source tokens.
+    let is_cjs_entry = class.is_entry
+        && canonical
+            .extension()
+            .and_then(|extension| extension.to_str())
+            == Some("cjs");
+    let was_cjs_wrapped = class.wrap_eligible && (is_cjs_entry || is_commonjs(&raw_source));
+    let cjs_worker_filenames = if was_cjs_wrapped {
+        super::worker_url::cjs_filenames(&raw_source, canonical)
+    } else {
+        Vec::new()
+    };
     let class_family_syntax = Some(super::super::cjs_wrap::family_syntax::analyze(&raw_source));
     let mut messages = Vec::new();
     let mut computed_require_warnings = Vec::new();
@@ -287,6 +315,7 @@ pub(super) fn prepare_from_raw(
             class.is_entry,
             Some(inputs.compile_packages),
             Some(inputs.native_addon_paths),
+            inputs.cjs_demanded_exports.get(canonical),
             &mut messages,
             Some(&mut computed_require_warnings),
         );
@@ -297,7 +326,7 @@ pub(super) fn prepare_from_raw(
                 wrapped
             ));
         }
-        if inputs.debug_symbols {
+        if capture_wrap_offsets(inputs.debug_symbols) {
             // Preserve original-source locations after injecting the wrapper.
             body_prefix_lines = body_off.map(|off| {
                 wrapped.as_bytes()[..off]
@@ -320,6 +349,7 @@ pub(super) fn prepare_from_raw(
         &source,
         inputs.compile_packages,
         canonical.parent().unwrap_or_else(|| Path::new(".")),
+        &canonical,
         inputs.bunfs_root,
         !was_cjs_wrapped,
     );
@@ -350,7 +380,7 @@ pub(super) fn prepare_from_raw(
         }
     }
     let debug_prefix_line_count = match body_prefix_lines {
-        Some(prefix_lines) if was_cjs_wrapped && inputs.debug_symbols => {
+        Some(prefix_lines) if was_cjs_wrapped && capture_wrap_offsets(inputs.debug_symbols) => {
             let lines_after_transform = source.bytes().filter(|&b| b == b'\n').count();
             let added_lines = lines_after_transform.saturating_sub(lines_before_transform) as u32;
             Some(prefix_lines + added_lines)
@@ -361,12 +391,21 @@ pub(super) fn prepare_from_raw(
         class_family_syntax,
         source,
         was_cjs_wrapped,
+        cjs_worker_filenames,
         messages,
         computed_require_warnings,
         wrap_dump,
         stdlib_modules,
         debug_prefix_line_count,
     })
+}
+
+/// Whether to keep where each CommonJS module body lands in its wrapped text:
+/// for source locations (`--debug-symbols`), and with the facts dump on, so
+/// the ledger maps its wrapped-coordinate sites back to the source
+/// (`W` records of the dump; nothing is emitted without the dump).
+fn capture_wrap_offsets(debug_symbols: bool) -> bool {
+    debug_symbols || std::env::var_os("PERRY_FACTS_DUMP").is_some()
 }
 
 /// A plain source file (not an addon, Wasm or file-loader asset) read and,
@@ -521,10 +560,18 @@ impl PrepSettings {
 }
 
 /// A plain module's prepared source as a walk consumed it.
-struct KeptSource {
-    class: PrepClass,
-    read: KeptRead,
-    prepared: PreparedSource,
+enum KeptSource {
+    Prepared {
+        class: PrepClass,
+        read: KeptRead,
+        prepared: PreparedSource,
+    },
+    // The module's semantic syntax, before context-dependent re-lowering.
+    // Its build-time effects have already happened in this compilation.
+    Normalized {
+        prepared_source: String,
+        module: Arc<swc_ecma_ast::Module>,
+    },
 }
 
 enum KeptRead {
@@ -569,7 +616,7 @@ impl PreparedSources {
         {
             self.modules.insert(
                 canonical.to_path_buf(),
-                KeptSource {
+                KeptSource::Prepared {
                     class,
                     read: KeptRead::Plain {
                         require_specs: require_specs.clone(),
@@ -595,7 +642,7 @@ impl PreparedSources {
         }
         self.modules.insert(
             canonical.to_path_buf(),
-            KeptSource {
+            KeptSource::Prepared {
                 class,
                 read: KeptRead::AfterRewrite { raw_source },
                 prepared: prepared.clone(),
@@ -608,24 +655,31 @@ impl PreparedSources {
     /// started). A source prepared after the rewrite stays for
     /// [`Self::take_after_rewrite`].
     pub(super) fn take(&mut self, canonical: &Path, class: PrepClass) -> Option<ReadSource> {
-        if matches!(
-            self.modules.get(canonical)?.read,
-            KeptRead::AfterRewrite { .. }
+        if !matches!(
+            self.modules.get(canonical)?,
+            KeptSource::Prepared {
+                read: KeptRead::Plain { .. },
+                ..
+            }
         ) {
             return None;
         }
-        let kept = self.modules.remove(canonical)?;
-        let KeptRead::Plain {
-            require_specs,
-            node_targets,
-        } = kept.read
+        let KeptSource::Prepared {
+            class: kept_class,
+            read:
+                KeptRead::Plain {
+                    require_specs,
+                    node_targets,
+                },
+            prepared,
+        } = self.modules.remove(canonical)?
         else {
             unreachable!("checked above");
         };
-        (kept.class == class).then(|| ReadSource::Prepared {
+        (kept_class == class).then(|| ReadSource::Prepared {
             require_specs,
             node_targets,
-            prepared: Ok(kept.prepared),
+            prepared: Ok(prepared),
         })
     }
 
@@ -638,13 +692,59 @@ impl PreparedSources {
         class: PrepClass,
         raw_source: &str,
     ) -> Option<PreparedSource> {
-        let kept = self.modules.remove(canonical)?;
-        match kept.read {
-            KeptRead::AfterRewrite {
-                raw_source: kept_raw,
-            } if kept.class == class && kept_raw == raw_source => Some(kept.prepared),
+        if matches!(self.modules.get(canonical)?, KeptSource::Normalized { .. }) {
+            return None;
+        }
+        match self.modules.remove(canonical)? {
+            KeptSource::Prepared {
+                class: kept_class,
+                read:
+                    KeptRead::AfterRewrite {
+                        raw_source: kept_raw,
+                    },
+                prepared,
+            } if kept_class == class && kept_raw == raw_source => Some(prepared),
             _ => None,
         }
+    }
+
+    pub(super) fn keep_normalized(
+        &mut self,
+        canonical: &Path,
+        source: &str,
+        module: Arc<swc_ecma_ast::Module>,
+    ) {
+        self.modules.insert(
+            canonical.to_path_buf(),
+            KeptSource::Normalized {
+                prepared_source: source.to_owned(),
+                module,
+            },
+        );
+    }
+
+    pub(super) fn take_normalized(
+        &mut self,
+        canonical: &Path,
+        source: &str,
+    ) -> Result<Option<Arc<swc_ecma_ast::Module>>> {
+        if !matches!(
+            self.modules.get(canonical),
+            Some(KeptSource::Normalized { .. })
+        ) {
+            return Ok(None);
+        }
+        let Some(KeptSource::Normalized {
+            prepared_source,
+            module,
+        }) = self.modules.remove(canonical)
+        else {
+            unreachable!("checked above")
+        };
+        if prepared_source != source {
+            return Err(anyhow!("prepared source of {} changed after macro expansion; build-time effects cannot be repeated", canonical.display()));
+        }
+        Ok(Some(module))
     }
 }
 
@@ -667,15 +767,29 @@ impl WalkSources<'_> {
             WalkSources::Keep(sources) => {
                 let config = PrepConfig::of(ctx, target);
                 if sources.config != config {
-                    sources.modules.clear();
+                    sources
+                        .modules
+                        .retain(|_, phase| matches!(phase, KeptSource::Normalized { .. }));
                     sources.config = config;
                 }
             }
             WalkSources::Reuse(sources) => {
                 let config = PrepConfig::of(ctx, target);
-                if config.is_none() || sources.config != config {
-                    sources.modules.clear();
+                match (&config, &sources.config) {
+                    (Some(new), Some(old)) if new.same_except_demand(old) => {
+                        // Re-prepare only the modules whose demanded exports
+                        // changed; every other kept source still applies.
+                        sources.modules.retain(|path, phase| {
+                            matches!(phase, KeptSource::Normalized { .. })
+                                || new.cjs_demanded_exports.get(path)
+                                    == old.cjs_demanded_exports.get(path)
+                        });
+                    }
+                    _ => sources
+                        .modules
+                        .retain(|_, phase| matches!(phase, KeptSource::Normalized { .. })),
                 }
+                sources.config = config;
             }
         }
     }

@@ -115,12 +115,15 @@ pub(super) fn try_compile(
     if args.target.as_deref() == Some("macos") {
         command.arg("-mmacosx-version-min=15.0");
     }
-    command.arg(&object_path).arg("-o").arg(&absolute_output);
+    command.arg(&object_path);
+    command.args(super::link::link_pad_args());
+    command.arg("-o").arg(&absolute_output);
     if cfg!(target_os = "macos") {
         command.arg("-Wl,-dead_strip");
     } else {
         command.arg("-Wl,--gc-sections");
     }
+    command.args(super::link::extra_link_args());
     if verbose > 0 && matches!(format, OutputFormat::Text) {
         println!(
             "  using proven tiny program: {} constant output calls; no managed runtime",
@@ -295,7 +298,6 @@ fn build_eligibility(
         "PERRY_NATIVEINST_DIAG",
         "PERRY_SEGVIEW_DIAG",
         "PERRY_OUTLINE_ENTRY_REPORT",
-        "PERRY_EXTRA_LINK_ARGS",
     ] {
         if has_env(name) {
             return Err("compiler instrumentation requires the normal pipeline");
@@ -336,6 +338,9 @@ mod tests {
         args.keep_intermediates = true;
         args.report_size = true;
         assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_KEEP_SYMBOLS").is_ok());
+        // Extra link inputs reach the tiny link like every other final link;
+        // they must not switch the program to the normal pipeline.
+        assert!(build_eligibility(&args, &ctx, |name| name == "PERRY_EXTRA_LINK_ARGS").is_ok());
     }
 
     #[test]
@@ -372,7 +377,6 @@ mod tests {
         for env in [
             "PERRY_NO_AUTO_OPTIMIZE",
             "PERRY_DEBUG_SYMBOLS",
-            "PERRY_EXTRA_LINK_ARGS",
             "PERRY_SAVE_LL",
             "PERRY_OPT_REPORT",
         ] {

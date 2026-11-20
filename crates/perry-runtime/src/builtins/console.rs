@@ -30,10 +30,6 @@ pub extern "C" fn js_console_log(value: JSValue) {
         } else {
             println!("{}", format_finite_number_js(n));
         }
-    } else if value.is_int32() {
-        // #9415: a class reference shares the INT32 tag, so this arm printed
-        // the raw class id (`console.log(class K {})` -> `49`).
-        println!("{}", int32_or_class_repr(f64::from_bits(value.bits())));
     } else if is_array_hole(f64::from_bits(value.bits())) {
         println!("undefined");
     } else {
@@ -73,8 +69,6 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
         // `NaN` for every single-arg `console.log(x)` where x is a
         // bigint (refs GH #33).
         println!("{}{}", p, format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        println!("{}{}", p, int32_or_class_repr(value));
     } else if is_array_hole(value) {
         println!("{}undefined", p);
     } else {
@@ -88,7 +82,7 @@ pub extern "C" fn js_console_log_dynamic(value: f64) {
             && (raw_bits >> 48) == 0
             // #10694: allocator-owned before the brand probes read the header.
             && crate::buffer::header_is_owned(raw_bits as usize)
-            && (crate::typedarray::lookup_typed_array_kind(raw_bits as usize).is_some()
+            && (crate::typedarray_hook_slots::lookup_typed_array_kind(raw_bits as usize).is_some()
                 || crate::buffer::is_registered_buffer(raw_bits as usize))
         {
             println!("{}{}", p, format_jsvalue(value, 0));
@@ -280,8 +274,6 @@ pub extern "C" fn js_console_error_dynamic(value: f64) {
     } else if jsval.is_reference() {
         // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        eprintln!("{}", int32_or_class_repr(value));
     } else if is_array_hole(value) {
         eprintln!("undefined");
     } else {
@@ -341,8 +333,6 @@ pub extern "C" fn js_console_warn_dynamic(value: f64) {
     } else if jsval.is_reference() {
         // Object/array pointer or native handle (#12540) - format as JSON
         eprintln!("{}", format_jsvalue(value, 0));
-    } else if jsval.is_int32() {
-        eprintln!("{}", int32_or_class_repr(value));
     } else if is_array_hole(value) {
         eprintln!("undefined");
     } else {
@@ -483,15 +473,13 @@ fn console_undefined() -> f64 {
 
 fn throw_plain_console_error(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 fn throw_console_symbol_to_string_type_error() -> ! {
     let message = b"Cannot convert a Symbol value to a string";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn console_is_callable(value: f64) -> bool {
@@ -718,10 +706,12 @@ pub(crate) fn is_console_instance_value(value: f64) -> bool {
 unsafe fn console_instance_state(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<*mut crate::array::ArrayHeader> {
-    if (*obj).meta.is_null() {
+    // A1_UNPROVEN: record-first: console instance layout word (kind-A/B question for S0f).
+    if crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null() {
         return None;
     }
-    let word = (*(*obj).meta).native_state;
+    // A1_UNPROVEN: record-first: console instance layout word (kind-A/B question for S0f).
+    let word = (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state;
     (word & crate::value::TAG_MASK == crate::value::POINTER_TAG)
         .then_some((word & crate::value::POINTER_MASK) as *mut crate::array::ArrayHeader)
 }
@@ -748,7 +738,11 @@ unsafe fn install_console_instance_state(
     ] {
         crate::array::js_array_push_f64(state, word);
     }
-    let meta = crate::object::object_meta_ensure(obj);
+    // A1_UNPROVEN: install_console_instance_state(obj) parameter, no type test (record-first: the receiver layout word; kind-A/B question for S0f).
+    let meta = crate::object::object_meta_ensure(
+        crate::meta_obj_runtime_born!(obj),
+        crate::object::MetaReason::RuntimeHandle,
+    );
     (*meta).native_state = crate::value::JSValue::pointer(state.cast()).bits();
     crate::gc::runtime_write_barrier_slot(
         meta as usize,
@@ -793,6 +787,8 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
     // Capture wall-clock start before any string decoding or TLS overhead
     // so the stored Instant reflects the call site, not the bookkeeping cost.
     let start = Instant::now();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.console_time", 0);
     let label = unsafe { label_from_str_ptr(label_ptr) };
     CONSOLE_TIMERS.with(
         #[inline(never)]
@@ -813,9 +809,7 @@ pub extern "C" fn js_console_time(label_ptr: *const StringHeader) {
 fn console_type_error_for_symbol_label() -> ! {
     let msg = "Cannot convert a Symbol value to a string";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 fn console_label_from_value(value: f64) -> *const StringHeader {
@@ -873,7 +867,7 @@ fn value_gc_type(value: f64) -> Option<u8> {
 }
 
 fn is_plain_object(value: f64) -> bool {
-    value_gc_type(value) == Some(crate::gc::GC_TYPE_OBJECT)
+    matches!(value_gc_type(value), Some(crate::gc_object_type_pat!()))
 }
 
 #[cold]
@@ -884,8 +878,7 @@ fn throw_console_writable_stream(stream_name: &str) -> ! {
     let bytes = msg.as_bytes();
     let s = crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_CONSOLE_WRITABLE_STREAM");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// True when `value` is callable, matching Node's `typeof x === "function"`.
@@ -922,9 +915,6 @@ fn color_mode_received(value: f64) -> String {
     }
     if jsval.is_bool() {
         return jsval.as_bool().to_string();
-    }
-    if jsval.is_int32() {
-        return int32_or_class_repr(value);
     }
     if jsval.is_number() {
         let n = jsval.as_number();
@@ -1620,7 +1610,7 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
     }
     // Confirm this is a regular object before dereferencing as ObjectHeader.
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header).obj_type) {
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
@@ -1649,10 +1639,6 @@ pub(crate) unsafe fn decode_dir_depth_option(options_value: f64) -> Option<usize
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_null() {
             return Some(usize::MAX);
-        }
-        if v.is_int32() {
-            let n = v.as_int32();
-            return Some(if n < 0 { 0 } else { n as usize });
         }
         if v.is_number() {
             let n = v.as_number();
@@ -1697,7 +1683,7 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         return None;
     }
     let gc_header = (ptr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!((*gc_header).obj_type) {
         return None;
     }
     let obj_ptr = ptr as *const crate::object::ObjectHeader;
@@ -1727,9 +1713,6 @@ pub(crate) unsafe fn decode_dir_bool_option(options_value: f64, option_name: &st
         let v = JSValue::from_bits(raw.to_bits());
         if v.is_bool() {
             return Some(v.as_bool());
-        }
-        if v.is_int32() {
-            return Some(v.as_int32() != 0);
         }
         if v.is_number() {
             let n = v.as_number();

@@ -1,5 +1,6 @@
 // Read-only gate before the irreversible wrapper publication. A publish exit
 // status is insufficient: npm can hold a successful upload in scanning limbo.
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -73,7 +74,13 @@ export async function waitForPlatforms(packages, {
   }
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Compare resolved paths: argv[1] keeps a symlinked prefix that import.meta.url
+// has resolved away.
+const isMainModule =
+  process.argv[1] !== undefined &&
+  pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url
+
+if (isMainModule) {
   try {
     const manifest = JSON.parse(await readFile(process.argv[2], "utf8"));
     await waitForPlatforms(platformPackages(manifest), {

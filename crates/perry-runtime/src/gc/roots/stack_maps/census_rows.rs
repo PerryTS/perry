@@ -23,8 +23,8 @@ pub(crate) fn stack_map_index_census() -> Vec<crate::gc::census::SideTableRow> {
     ));
     rows.push((
         "stackmap.records(file-backed)",
-        ix.records.len(),
-        ix.records.iter().map(|s| s.len()).sum(),
+        ix.functions.len(),
+        ix.functions.iter().map(|f| f.records_len as usize).sum(),
     ));
     rows.push((
         "stackmap.functions",

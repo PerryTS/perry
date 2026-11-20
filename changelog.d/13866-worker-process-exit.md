@@ -1,0 +1,1 @@
+Fix Worker-local process exit: `process.exit()` now stops only the calling Worker, natural completion honors its `process.exitCode`, and Worker exit listeners can update the final code. Reuse the existing controlled-stop handoff; external termination remains code1 without invoking those listeners.

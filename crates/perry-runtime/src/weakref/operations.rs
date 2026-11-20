@@ -19,6 +19,7 @@ impl Receiver {
     }
 
     #[cold]
+    #[optimize(size)]
     #[inline(never)]
     fn reject(self, receiver: f64, method: &str, args: &[f64]) -> f64 {
         match self {
@@ -49,15 +50,15 @@ impl View {
         let addr = js_nanbox_get_pointer(receiver) as usize;
         unsafe {
             let header = crate::value::addr_class::try_read_gc_header(addr)?;
-            if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+            if crate::gc_type_is_not_object!(header.obj_type) {
                 return None;
             }
             let object = addr as *mut ObjectHeader;
             // A collection still on its birth layout is its own brand proof
             // (one compare); any other word asks its layout record.
             let brand = match (*object).parent_class_id {
-                crate::object::shapes::WEAKMAP_BIRTH_LAYOUT => CLASS_ID_WEAKMAP,
-                crate::object::shapes::WEAKSET_BIRTH_LAYOUT => CLASS_ID_WEAKSET,
+                crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD => CLASS_ID_WEAKMAP,
+                crate::codegen_abi::WEAKSET_BIRTH_LAYOUT_WORD => CLASS_ID_WEAKSET,
                 _ => storage::collection_brand(object)?,
             };
             if expected != 0 && brand != expected {
@@ -141,6 +142,31 @@ pub(crate) fn get(map: f64, key: f64, receiver: Receiver) -> f64 {
     let Some(view) = View::prove(map, receiver.brand()) else {
         return receiver.reject(map, "get", &[key]);
     };
+    get_in(view, key)
+}
+
+/// [`get`] for a WeakMap whose header word is its birth layout, which the
+/// caller has read (`builtin_method::weak_ok`): that word is the brand proof
+/// [`View::prove`] would make again.
+///
+/// # Safety
+/// `map` is a live, unforwarded WeakMap on its birth layout.
+pub(crate) unsafe fn get_birth_layout(map: f64, key: f64) -> f64 {
+    let object = js_nanbox_get_pointer(map) as *mut ObjectHeader;
+    debug_assert_eq!(
+        (*object).parent_class_id,
+        crate::codegen_abi::WEAKMAP_BIRTH_LAYOUT_WORD
+    );
+    get_in(
+        View {
+            storage: storage::owned_storage(object),
+        },
+        key,
+    )
+}
+
+#[inline(always)]
+fn get_in(view: View, key: f64) -> f64 {
     if is_valid_weak_target(key) {
         unsafe {
             if let Some((_, entry)) = view.find(key.to_bits()) {

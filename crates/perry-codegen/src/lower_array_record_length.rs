@@ -12,6 +12,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, source: &Expr) -> Result<String> {
     let result = lower_expr(
         ctx,
         &Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(source.clone()),
             property: "length".into(),
             byte_offset: 0,

@@ -26,7 +26,7 @@ pub(crate) fn fact_for_index(
 
 /// Whether an `IndexGet` is covered by an active string-window proof.
 pub(crate) fn proves_index_string(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let Expr::IndexGet { object, index } = expr else {
+    let Expr::IndexGet { object, index, .. } = expr else {
         return false;
     };
     let Expr::LocalGet(array_local_id) = object.as_ref() else {

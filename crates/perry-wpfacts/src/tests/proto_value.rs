@@ -1,0 +1,257 @@
+//! DECISIONS 217: a prototype taken as a value is the runtime's prototype,
+//! and a computed key carries its values. `__proto__` is Object.prototype's
+//! accessor, found on every chain: under it (named, or the string literal
+//! key `"__proto__"`) a read returns the receiver's prototype, as
+//! `Object.getPrototypeOf` does. A computed key is never taken to be
+//! `"__proto__"` (owner: no program reaches a prototype through an unknown
+//! string key). A literal's prototype is
+//! `Object.prototype` (its `__AnonShape` class is a layout, no object). A
+//! number key names no member of an intrinsic prototype and not
+//! `__proto__`, but it does name a program prototype's numeric member.
+
+use super::*;
+
+/// The facts see what `p.y = new E()` stored, at `q.y` of a fresh literal:
+/// the read site `r.z` has `E` as a receiver (or ⊤).
+fn sees_e_on_literals(get: &str, key: &str) -> bool {
+    let pf = facts(&format!(
+        "class E {{ z = 3; }}
+        const k = String(Math.random());
+        const o: any = {{ a: 1 }};
+        const p: any = {get};
+        try {{ p.{key} = new E(); }} catch (e) {{}}
+        const q: any = {{}};
+        const r = q.{key};
+        if (r) console.log(r.z);"
+    ));
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
+}
+
+#[test]
+fn a_literals_prototype_as_a_value_is_object_prototype() {
+    // DEC 250 refuses adding y; the exempt constructor store still identifies the prototype.
+    assert!(!sees_e_on_literals("Object.prototype", "y"));
+    assert!(sees_e_on_literals("Object.prototype", "constructor"));
+    for get in [
+        "o.__proto__",
+        "o['__proto__']",
+        "Object.getPrototypeOf(o)",
+        "Reflect.getPrototypeOf(o)",
+        "Reflect.get(o, '__proto__')",
+        // An array's prototype's prototype.
+        "Object.getPrototypeOf(Object.getPrototypeOf([1]))",
+    ] {
+        assert!(sees_e_on_literals(get, "constructor"), "{get}");
+    }
+}
+
+/// What `C`'s instances read under `y` after a store through the prototype
+/// value `get` (of `c`, an instance of `C`).
+fn sees_e_on_instances(get: &str) -> bool {
+    let pf = facts(&format!(
+        "class E {{ z = 3; }}
+        class C {{ a = 1; }}
+        const k = String(Math.random());
+        const c: any = new C();
+        const p: any = {get};
+        p.y = new E();
+        const q: any = new C();
+        const r = q.y;
+        if (r) console.log(r.z);"
+    ));
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    s[0].top || s[0].receivers.iter().any(|r| r.ends_with(":E"))
+}
+
+#[test]
+fn a_computed_key_is_never_proto() {
+    // DECISIONS 217 (owner): an unknown string key does not reach the
+    // prototype, so no store through it is seen on other objects.
+    for get in ["o[k]", "Reflect.get(o, k)"] {
+        assert!(!sees_e_on_literals(get, "constructor"), "{get}");
+    }
+}
+
+#[test]
+fn a_class_instances_prototype_as_a_value_is_its_class_prototype() {
+    for get in ["c.__proto__", "Object.getPrototypeOf(c)", "C.prototype"] {
+        assert!(sees_e_on_instances(get), "{get}");
+    }
+}
+
+#[test]
+fn a_functions_prototype_as_a_value_is_add_locked() {
+    let pf = facts(
+        "class E { z = 3; }
+        const f: any = function () {};
+        f.__proto__.y = new E();
+        const g: any = () => 1;
+        const r = g.y;
+        if (r) console.log(r.z);",
+    );
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    // DEC 250 / NMA3: Function.prototype is add-locked, so the store through
+    // f.__proto__ is refused at run time and no function chain reads y:
+    // the read r.z sees no E and is not top.
+    assert!(
+        !s[0].top && !s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+/// The receivers of the read `r.z` after `const g = <read>; const r = g();`.
+fn called_receivers(read: &str) -> Vec<String> {
+    let pf = facts(&format!(
+        "class E {{ z = 3; }}
+        class C {{ 0() {{ return new E(); }} }}
+        class D extends C {{}}
+        const n = Math.random() > 0.5 ? 0 : 1;
+        const o: any = {{ 0() {{ return new E(); }} }};
+        const d: any = new D();
+        const g: any = {read};
+        const r = g();
+        console.log(r.z);"
+    ));
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    s[0].receivers.clone()
+}
+
+#[test]
+fn a_number_key_reads_the_program_prototype_chain() {
+    // `D.prototype` inherits `0` from `C.prototype`: main read own fields
+    // only, so `d[n]` was nothing.
+    for read in ["d[n]", "o[n]", "Reflect.get(d, n)"] {
+        let r = called_receivers(read);
+        assert!(r.iter().any(|r| r.ends_with(":E")), "{read}: {r:?}");
+    }
+}
+
+#[test]
+fn a_number_key_names_no_class_member_by_name() {
+    // `constructor` is no number: `d[n]` never reads a class object.
+    let pf = facts(
+        "class C { 0() { return 1; } }
+        const n = Math.random() > 0.5 ? 0 : 1;
+        const d: any = new C();
+        const g: any = d[n];
+        console.log(g.zz);",
+    );
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "zz").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    assert!(
+        !s[0].receivers.iter().any(|r| r.starts_with("class:")),
+        "{:?}",
+        s[0].receivers
+    );
+}
+
+/// `d` escapes from `table[n](...)`'s arguments.
+fn call_escapes(setup: &str, call: &str) -> bool {
+    let pf = facts(&format!(
+        "class D {{ y = 2; }}
+        const d = new D();
+        const n = Math.random() > 0.5 ? 0 : 1;
+        const k = String(Math.random());
+        {setup}
+        {call};
+        console.log(d.y);"
+    ));
+    tmpl(&pf, "D").escape.is_some()
+}
+
+#[test]
+fn a_number_key_calls_no_object_prototype_method() {
+    let table =
+        "const table: any = { 0(a: any, b: any) { return 1; }, 1(a: any, b: any) { return 2; } };";
+    // `__defineGetter__('y', () => d)` would install an accessor of `d`.
+    assert!(!call_escapes(table, "table[n]('y', () => d)"));
+    let arr = "const table: any = [(a: any, b: any) => 1];";
+    assert!(!call_escapes(arr, "table[n]('y', () => d)"));
+    let inst = "class T { 0(a: any, b: any) { return 1; } } const table: any = new T();";
+    assert!(!call_escapes(inst, "table[n]('y', () => d)"));
+    // A string key may name `__defineGetter__`, which retains the getter
+    // on the table; installing alone does not expose its result `d`.
+    assert!(!call_escapes(table, "table[k]('y', () => d)"));
+}
+
+#[test]
+fn a_number_key_reads_what_a_store_into_an_intrinsic_wrote() {
+    // A store under a computed key onto Object.prototype may write "0".
+    let pf = facts(
+        "class E { z = 3; }
+        const k = String(Math.random());
+        const n = Math.random() > 0.5 ? 0 : 1;
+        (Object.prototype as any)[k] = new E();
+        const table: any = { a: 1 };
+        const r = table[n];
+        if (r) console.log(r.z);",
+    );
+    let s: Vec<_> = pf.sites.iter().filter(|s| s.key == "z").collect();
+    assert_eq!(s.len(), 1, "{}", pf.dump_text());
+    // DEC 250: the runtime refuses an add on `Object.prototype`, so `table[n]`
+    // reads only the table's own fields.
+    assert!(
+        !s[0].top && !s[0].receivers.iter().any(|r| r.ends_with(":E")),
+        "{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn a_number_key_calls_what_a_store_into_an_intrinsic_wrote() {
+    // A store under a computed key onto Object.prototype may write "0".
+    let table = "const table: any = { a: 1 };
+        (Object.prototype as any)[k] = (x: any) => (globalThis as any).sink = x;";
+    // DEC 250: refused (an add on the locked chain), so nothing is called.
+    assert!(!call_escapes(table, "table[n](d)"));
+}
+
+/// `f` escapes from the callbacks an empty array's elements give, after
+/// the store `w` into ⊤ (tsc's `forEach(nodeFactoryPatchers, fn =>
+/// fn(factory))`, where no patcher is ever added).
+fn element_callee_escapes(w: &str) -> bool {
+    let pf = facts(&format!(
+        "declare const unknown: any;
+        class F {{ y = 2; make() {{ return 1; }} }}
+        const f = new F();
+        const t: any = unknown.reach(0);
+        const n = Math.random() > 0.5 ? 0 : 1;
+        const k = String(Math.random());
+        {w}
+        const fns: any[] = [];
+        function each(a: any[], cb: (x: any) => void) {{
+            for (let i = 0; i < a.length; i++) cb(a[i]);
+        }}
+        each(fns, (fn: any) => fn(f));
+        console.log(f.make());"
+    ));
+    tmpl(&pf, "F").escape.is_some()
+}
+
+#[test]
+fn a_number_key_reads_no_named_key_a_store_into_top_wrote() {
+    // `"elided"` is no ToPropertyKey of a number: `a[i]` of an array reads
+    // nothing it stored on Array.prototype. (Was: any key a store into ⊤
+    // wrote, so `fn` held ⊤ and `f` escaped: tsc's `factory` singleton,
+    // after checker's `msg.elidedInCompatabilityPyramid = originalValue`.)
+    let fun = "(x: any) => ((globalThis as any).sink = x)";
+    assert!(!element_callee_escapes(""));
+    assert!(!element_callee_escapes(&format!("t.elided = {fun};")));
+    // DEC 250: a store into ⊤ under a number key is an index add on a locked
+    // chain (`Array.prototype`, `Object.prototype`), refused: `fns` holds no
+    // element a store could have written.
+    for w in [
+        format!("t[n] = {fun};"),
+        format!("t[0] = {fun};"),
+        format!("t['1'] = {fun};"),
+        format!("t[k] = {fun};"),
+    ] {
+        assert!(!element_callee_escapes(&w), "{w}");
+    }
+}

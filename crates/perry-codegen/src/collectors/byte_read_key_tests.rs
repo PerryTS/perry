@@ -1,7 +1,7 @@
 //! #7700: the key-kind condition on `Expr::Uint8ArrayGet`.
 //!
 //! These are unit tests on purpose. The acceptance case is
-//! `test-files/test_gap_uint8array_nonnumeric_key_7700.ts`, and the gap suite
+//! `tests/parity/language/typed-array/test_gap_uint8array_nonnumeric_key_7700.ts`, and the gap suite
 //! is TAG-gated — a regression there would sit red for days (#5960). The
 //! predicate is `--lib`-visible, so this file runs on every PR.
 
@@ -175,6 +175,7 @@ fn lengths_and_math_are_numeric_keys() {
 #[test]
 fn an_unenumerated_key_kind_is_rejected() {
     assert!(!structural(&Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(0)),
         property: "k".to_string(),

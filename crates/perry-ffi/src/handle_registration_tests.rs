@@ -2,9 +2,7 @@ use super::*;
 
 #[test]
 fn payload_retirement_preserves_leased_identity_and_kind() {
-    let _serial = super::tests::RECYCLE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _serial = super::tests::recycle_serial();
     let id = register_handle(41_u64);
     let identity = handle_registration(id).unwrap();
     assert_eq!(identity.domain(), handle_registry_domain());
@@ -15,13 +13,13 @@ fn payload_retirement_preserves_leased_identity_and_kind() {
     assert_eq!(take_handle::<u64>(id), Some(41));
     assert!(!handle_exists(id));
     assert!(handle_registration(id).is_none());
-    drain_quarantined_handles();
+    super::tests::collect_unobserved();
     assert_eq!(
         REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Payload),
         Err(crate::NativeRegistrationError::Occupied)
     );
     drop(wrapper);
-    drain_quarantined_handles();
+    super::tests::collect_unobserved();
     assert_eq!(
         REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Payload),
         Err(crate::NativeRegistrationError::Occupied)
@@ -31,16 +29,13 @@ fn payload_retirement_preserves_leased_identity_and_kind() {
 
 #[test]
 fn worker_retirement_uses_native_state_and_type_mismatch_still_removes() {
-    let _serial = super::tests::RECYCLE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _serial = super::tests::recycle_serial();
     let id = register_handle(17_u64);
     let identity = handle_registration(id).unwrap();
     let lease = acquire_handle_registration(identity, NativeLeaseKind::Operation).unwrap();
     std::thread::spawn(move || {
         assert!(take_handle::<String>(id).is_none());
         assert!(!handle_exists(id));
-        drain_quarantined_handles();
     })
     .join()
     .unwrap();
@@ -53,7 +48,16 @@ fn worker_retirement_uses_native_state_and_type_mismatch_still_removes() {
         Err(crate::NativeRegistrationError::Occupied)
     );
     drop(lease);
-    drain_quarantined_handles();
+    // The worker has no heap to decide the id: it is orphaned, adopted by the
+    // next trace here, and released only by two later traces that name nothing.
+    crate::handle_lifecycle::trace_phase_for_tests(0);
+    crate::handle_lifecycle::trace_phase_for_tests(1);
+    assert_eq!(
+        REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Reserved),
+        Err(crate::NativeRegistrationError::Occupied),
+        "the adopting trace decides nothing"
+    );
+    super::tests::collect_unobserved();
     let replacement = REGISTRATIONS
         .begin_registration_with_id(id, NativeRegistrationKind::Reserved)
         .expect("worker retirement must complete quarantine before reuse");
@@ -64,9 +68,7 @@ fn worker_retirement_uses_native_state_and_type_mismatch_still_removes() {
 
 #[test]
 fn payload_destructor_can_reenter_registration() {
-    let _serial = super::tests::RECYCLE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _serial = super::tests::recycle_serial();
     struct Reenter(std::sync::mpsc::Sender<()>);
     impl Drop for Reenter {
         fn drop(&mut self) {
@@ -85,9 +87,7 @@ fn payload_destructor_can_reenter_registration() {
 
 #[test]
 fn duplicate_reserved_free_preserves_one_retirement() {
-    let _serial = super::tests::RECYCLE_TEST_LOCK
-        .lock()
-        .unwrap_or_else(|p| p.into_inner());
+    let _serial = super::tests::recycle_serial();
     let domain = NativeRegistryDomain::new().unwrap();
     let id = reserve_handle_id_in_domain(domain);
     let identity = handle_registration(id).expect("reservation must create a native registration");
@@ -96,7 +96,7 @@ fn duplicate_reserved_free_preserves_one_retirement() {
     free_handle_id(id);
     free_handle_id_until(id, Instant::now());
     assert!(handle_registration(id).is_none());
-    drain_quarantined_handles();
+    super::tests::collect_unobserved();
     assert_eq!(
         REGISTRATIONS.begin_registration_with_id(id, NativeRegistrationKind::Reserved),
         Err(crate::NativeRegistrationError::Occupied)

@@ -65,7 +65,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&crate::fn_info::closure_body_symbol(
                     prefix, *func_id,
                 )),
@@ -83,7 +83,7 @@ pub(crate) fn literal_final(
             }
             rep |= 3 << (slot * 2);
             constfn.push(ConstFnBirth {
-                slot: slot as u8,
+                slot: slot as u32,
                 symbol: crate::fn_info::info_symbol(&body),
             });
         }
@@ -292,11 +292,13 @@ pub(crate) fn collect_literal_finals(
                         object,
                         property,
                         value,
+                        ..
                     } => Some((object.as_ref(), property.as_str(), value.as_ref())),
                     Expr::IndexSet {
                         object,
                         index,
                         value,
+                        ..
                     } => match index.as_ref() {
                         Expr::String(key) => Some((object.as_ref(), key.as_str(), value.as_ref())),
                         _ => None,
@@ -371,6 +373,7 @@ pub(crate) fn collect_literal_finals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     stmts(body, m, p, r, w, out);
                     if let Some(c) = catch {
@@ -648,7 +651,7 @@ fn construction_final(
     }) {
         rep |= 3u64 << (2 * last.field_index);
         constfn.push(ConstFnBirth {
-            slot: last.field_index as u8,
+            slot: last.field_index,
             symbol: crate::fn_info::info_symbol(&last.target),
         });
     }
@@ -924,11 +927,12 @@ pub(crate) fn static_method_lanes(
     ) else {
         return Vec::new();
     };
-    let Some(birth) = super::static_shape_ids::static_shape_id_for_keys_global(keys_global) else {
+    let Some(birth) = super::static_shape_ids::static_layout_word_for_keys_global(keys_global)
+    else {
         return Vec::new();
     };
     let mut lanes = Vec::new();
-    for (id, shape) in super::compatible_final_shapes(&birth.to_string(), &[]) {
+    for (id, shape) in super::compatible_final_layouts(&birth.to_string(), &[]) {
         let Some(slot) = shape
             .keys
             .split(|&b| b == 0)
@@ -971,12 +975,15 @@ pub(crate) fn birth_literal(
 ) -> Option<anyhow::Result<String>> {
     if !super::static_shape_ids::has_static_final_shapes()
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
+        // I32 at rest (PR C): this birth stores raw value words; a class with
+        // I32 lanes takes its constructor birth, whose stores encode.
+        || crate::expr::rest_fields::lanes_of_rep(base_rep) != 0
     {
         return None;
     }
     let mut shape = literal_final(ctx.strings.module_prefix(), props, base_rep)?;
     shape.live = live;
-    let id = super::static_shape_ids::static_final_shape_id(&shape)?;
+    let id = super::static_shape_ids::static_final_shape_identity(&shape)?;
     let desc = format!(
         "@{}",
         crate::layout_desc::literal_desc_symbol(ctx.strings.module_prefix(), id)
@@ -1007,13 +1014,23 @@ pub(crate) fn birth_literal(
     Some(crate::rooting::with_operands_rooted_across_call(
         ctx,
         &exprs,
-        |ctx| Ok(crate::expr::inline_birth::layout(ctx, &desc, shape.live, 0)),
+        |ctx| {
+            Ok(crate::expr::inline_birth::layout(
+                ctx,
+                shape.form(),
+                &desc,
+                shape.live,
+                0,
+            ))
+        },
         |ctx, values, object| {
             use crate::types::{I32, I64, I8};
             let raw = ctx.block().inttoptr(I64, &object);
             // The literal's synthetic class identity is independent of its layout.
+            // GC_STORE_AUDIT(POINTER_FREE): The i32 store writes the synthetic class ID at ObjectHeader offset0, not a pointer or JSValue; rooted operands survive the surrounding inline_birth allocation.
             ctx.block().store(I32, &class_id.to_string(), &raw);
-            let header = crate::target_layout::object_header_size_bytes(ctx.target_triple);
+            let header =
+                crate::target_layout::object_slot_base_bytes(ctx.target_triple, shape.form());
             let fields = ctx.block().gep(I8, &raw, &[(I64, &header.to_string())]);
             for (slot, value) in values.iter().enumerate() {
                 // A chunked literal slot (`Expr::LiteralChunks`) stays a hole
@@ -1094,6 +1111,13 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
         let rep = *ctx
             .class_birth_reps
             .get(ctx.class_keys_globals.get(name)?)?;
+        // I32 at rest (PR C): a ConstFn final of a class with I32 lanes would
+        // drop them (`rest_fields`); such a class keeps its birth shape.
+        if crate::expr::rest_fields::lanes_of_rep(rep) != 0
+            || crate::expr::rest_fields::lanes_of(ctx, name) != 0
+        {
+            return None;
+        }
         let cid = *ctx.class_ids.get(name)?;
         super::static_constfn_class::class_final(
             ctx.strings.module_prefix(),
@@ -1107,7 +1131,7 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
     let Some(shape) = shape else {
         return boxed.to_string();
     };
-    if super::static_shape_ids::static_final_shape_id(&shape).is_none() {
+    if super::static_shape_ids::static_final_shape_identity(&shape).is_none() {
         return boxed.to_string();
     }
     // `boxed` is the completed receiver, including constructor return override.
@@ -1122,7 +1146,7 @@ pub(crate) fn finalize_class(ctx: &mut crate::expr::FnCtx<'_>, name: &str, boxed
 }
 
 fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: &str) -> String {
-    let Some(id) = super::static_shape_ids::static_final_shape_id(&shape) else {
+    let Some(id) = super::static_shape_ids::static_final_shape_identity(&shape) else {
         return object.to_string();
     };
     let entries = format!("@{}", entries_symbol(ctx.strings.module_prefix(), id));
@@ -1134,7 +1158,7 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
         "js_object_finalize_constfn_static",
         &[
             (I64, object),
-            (I32, &id.to_string()),
+            (I32, &crate::layout_ordinals::static_word(id).to_string()),
             (PTR, &global),
             (I32, &len),
             (I32, &shape.key_count.to_string()),
@@ -1160,3 +1184,55 @@ fn finalize_shape(ctx: &mut crate::expr::FnCtx<'_>, shape: &BirthShape, object: 
 #[cfg(test)]
 #[path = "static_constfn_tests.rs"]
 mod tests;
+
+impl super::static_shape_ids::BirthShape {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+impl ConstructedObject {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        self.shape.form()
+    }
+}
+
+impl StaticMethodLane {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_constructions: HashMap<u32, ConstructedObject>,
+    module_body_arities: HashMap<String, usize>,
+    module_function_values: HashMap<u32, (String, usize)>,
+    module_object_create_protos: crate::collectors::ObjectCreateProtos,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_constructions: MODULE_CONSTRUCTIONS.with(|s| s.borrow().clone()),
+        module_body_arities: MODULE_BODY_ARITIES.with(|s| s.borrow().clone()),
+        module_function_values: MODULE_FUNCTION_VALUES.with(|s| s.borrow().clone()),
+        module_object_create_protos: MODULE_OBJECT_CREATE_PROTOS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONSTRUCTIONS.with(|s| *s.borrow_mut() = self.module_constructions.clone());
+        MODULE_BODY_ARITIES.with(|s| *s.borrow_mut() = self.module_body_arities.clone());
+        MODULE_FUNCTION_VALUES.with(|s| *s.borrow_mut() = self.module_function_values.clone());
+        MODULE_OBJECT_CREATE_PROTOS
+            .with(|s| *s.borrow_mut() = self.module_object_create_protos.clone());
+    }
+}

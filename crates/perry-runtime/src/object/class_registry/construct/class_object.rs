@@ -1,3 +1,4 @@
+use crate::codegen_abi::LayoutWord;
 /// Construct an exact class evaluation, before the unrelated builtin tower.
 unsafe fn construct_class_object(
     func_value: f64,
@@ -153,8 +154,9 @@ fn construct_class_object_instance(
     let prototype = scope.root_nanbox_u64(prototype.bits());
     // The evaluation's brand and prototype are one transition (one shape
     // minted per evaluation); the stamp below then has nothing to do.
-    let holder_brand =
-        unsafe { crate::object::shapes::prepare_evaluation_holder(class.get_nanbox_f64().to_bits()) };
+    let holder_brand = unsafe {
+        crate::object::shapes::prepare_evaluation_holder(class.get_nanbox_f64().to_bits())
+    };
     let birth = instance.with_mut_ptr::<ObjectHeader, _>(|instance| unsafe {
         crate::object::shapes::object_shape_stamp(instance)
     });
@@ -213,14 +215,17 @@ fn born_on_evaluation_layout(
     args: &[f64],
 ) -> Option<*mut ObjectHeader> {
     let cell = cell?;
-    let class = crate::value::JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
+    let class =
+        crate::value::JSValue::from_bits(class_value.to_bits()).as_pointer::<ObjectHeader>();
     let copy = unsafe { super::super::field_get_set::evaluation_instance_layout(cell, class) }?;
     let desc = crate::object::layout_desc::family_birth_desc(class_cid, args)?;
     let family = crate::object::layout_desc::registered_layout_id(unsafe {
         crate::object::layout_desc::load_layout_id(desc)
     })?;
-    let (prototype, holder) = crate::object::shapes::evaluation_copy_birth_edges(copy, family)?;
-    let inst = unsafe { crate::object::layout_desc::alloc_family_layout_copy(desc, copy) };
+    let (prototype, holder) =
+        crate::object::shapes::evaluation_copy_birth_edges(LayoutWord(copy), family)?;
+    let inst =
+        unsafe { crate::object::layout_desc::alloc_family_layout_copy(desc, LayoutWord(copy)) };
     // As the ordinary link and brand stamp do: the edges live in the record.
     crate::gc::runtime_shade_external_edge(prototype);
     crate::gc::runtime_shade_external_edge(holder);
@@ -231,7 +236,8 @@ fn born_on_evaluation_layout(
 /// branded onto, for its class object to name: meta-less, so the copy is
 /// everything the birth was given.
 unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> {
-    if !(*inst).meta.is_null()
+    // A1_UNPROVEN: record-first: inst layout word (kind-A/B question for S0f).
+    if !crate::meta_read!(crate::meta_obj_runtime_born!(inst as *mut _)).is_null()
         || crate::object::layout_desc::family_of_class((*inst).class_id).is_none()
     {
         return None;
@@ -241,9 +247,9 @@ unsafe fn evaluation_layout_to_record(inst: *const ObjectHeader) -> Option<u32> 
         return None;
     }
     let copy = crate::object::shapes::object_shape_stamp(inst);
-    (crate::object::shapes::evaluation_layout_family(copy) != 0
+    (crate::object::shapes::evaluation_family_desc_index_plus_one(copy) != 0
         && crate::object::shapes::object_evaluation_brand(inst) != 0)
-        .then_some(copy)
+        .then_some(copy.0)
 }
 
 /// Reserve declared/learned capacity; constructor stores and field definitions
@@ -272,12 +278,20 @@ fn allocate_class_instance(class_cid: u32, args: &[f64]) -> (*mut ObjectHeader, 
 unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let new_target = scope.root_nanbox_f64(new_target);
+    let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
+        .or_else(global_object_prototype_bits);
+    ordinary_object_from_new_target(new_target.get_nanbox_f64(), prototype)
+}
+
+/// An ordinary object born from `new_target` (its class id and evaluation
+/// brand) whose [[Prototype]] is `prototype`, already read from `new_target`.
+unsafe fn ordinary_object_from_new_target(new_target: f64, prototype: Option<u64>) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let new_target = scope.root_nanbox_f64(new_target);
+    let prototype = prototype.map(|bits| scope.root_nanbox_u64(bits));
     let instance_cid = new_target_class_id(new_target.get_nanbox_f64()).unwrap_or(0);
     let instance = allocate_class_instance(instance_cid, &[]).0;
     let instance = scope.root_raw_mut_ptr(instance);
-    let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
-        .or_else(global_object_prototype_bits)
-        .map(|bits| scope.root_nanbox_u64(bits));
     if let Some(prototype) = prototype {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
             super::super::prototype_chain::object_set_static_prototype(

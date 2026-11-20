@@ -76,6 +76,11 @@ pub(crate) fn dirty_external_slot_span(
     if parent_addr < GC_HEADER_SIZE || first_slot_addr == 0 || slot_count == 0 {
         return;
     }
+    if crate::value::addr_class::realm::is_image_object(parent_addr) {
+        // An image parent's coverage is its cell (`gc::image_cells`).
+        super::super::image_cells::remember_image_cell(parent_addr);
+        return;
+    }
     if !barrier_parent_needs_remembering(parent_addr) {
         return;
     }

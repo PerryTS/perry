@@ -31,9 +31,12 @@ pub(crate) struct ClientError {
     pub(crate) code: &'static str,
     pub(crate) message: String,
     pub(crate) syscall: Option<&'static str>,
-    /// Set for an `AbortSignal` cancellation, which rejects with `AbortError`
-    /// rather than a `TypeError` with a cause.
+    /// Set for an `AbortSignal` cancellation, which rejects with the
+    /// signal's reason rather than a `TypeError` with a cause.
     pub(crate) aborted: bool,
+    /// The abort bridge's handle of that reason (`abort_bridge`); 0: none
+    /// (a cancellation posted from another thread), an `AbortError`.
+    pub(crate) abort_reason: usize,
 }
 
 impl ClientError {
@@ -43,15 +46,17 @@ impl ClientError {
             message: message.into(),
             syscall: None,
             aborted: false,
+            abort_reason: 0,
         }
     }
 
-    fn aborted() -> Self {
+    fn aborted(abort_reason: usize) -> Self {
         Self {
             code: "ABORT_ERR",
             message: "This operation was aborted".into(),
             syscall: None,
             aborted: true,
+            abort_reason,
         }
     }
 }
@@ -1533,8 +1538,8 @@ fn fail_request(engine: &mut Engine, req_id: u64, reused: bool, mut error: Clien
 
 /// Cancel one request. The socket is closed so the in-flight operation is
 /// cancelled on the loop exactly once; the request is then delivered as
-/// aborted.
-pub(super) fn abort(req_id: u64) {
+/// aborted, with the abort bridge's reason handle (0: none).
+pub(super) fn abort(req_id: u64, abort_reason: usize) {
     ENGINE.with(|e| {
         let mut engine = e.borrow_mut();
         let conn = engine.requests.get(&req_id).and_then(|req| req.conn);
@@ -1553,7 +1558,11 @@ pub(super) fn abort(req_id: u64) {
             }
             engine.waiting.retain(|_, queue| !queue.is_empty());
         }
-        deliver(&mut engine, req_id, Outcome::Err(ClientError::aborted()));
+        deliver(
+            &mut engine,
+            req_id,
+            Outcome::Err(ClientError::aborted(abort_reason)),
+        );
     });
 }
 
@@ -1567,6 +1576,7 @@ fn from_node_error(code: &'static str, syscall: &'static str) -> ClientError {
         },
         syscall: (!syscall.is_empty()).then_some(syscall),
         aborted: false,
+        abort_reason: 0,
     }
 }
 

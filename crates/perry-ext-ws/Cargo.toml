@@ -61,4 +61,4 @@ perry-ffi = { workspace = true, features = ["runtime-link"] }
 # they don't shadow perry-stdlib's real symbols when this staticlib is linked
 # before stdlib (#6314). `external-ws-symbols` additionally suppresses the ws
 # stubs (redundant under `stdlib`, kept to document intent).
-perry-runtime = { workspace = true, features = ["default", "external-ws-symbols", "stdlib"] }
+perry-runtime = { workspace = true, features = ["default", "external-ws-symbols", "stdlib", "test-layout-descriptors"] }

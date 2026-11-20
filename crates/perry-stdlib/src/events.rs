@@ -59,7 +59,7 @@ unsafe fn event_target_ptr(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     let ptr = addr as *mut ObjectHeader;
-    if perry_runtime::event_target::js_event_target_is_event_target(ptr) != 0 {
+    if perry_runtime::event_target_hook_slots::js_event_target_is_event_target(ptr) != 0 {
         Some(ptr)
     } else {
         None
@@ -140,15 +140,15 @@ fn result_array(value: f64) -> *mut ArrayHeader {
     }
 }
 
-fn invalid_arg_type_error(message: &str) -> f64 {
+fn invalid_arg_type_error(message: &str) -> perry_runtime::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
-    let err = perry_runtime::error::js_typeerror_new(msg);
-    perry_runtime::value::js_nanbox_pointer(err as i64)
+    let err = perry_runtime::error::CoreError::type_error(msg);
+    err
 }
 
 fn throw_invalid_arg_type(message: &str) -> ! {
-    perry_runtime::exception::js_throw(invalid_arg_type_error(message))
+    perry_runtime::exception::throw_core(invalid_arg_type_error(message))
 }
 
 fn received(value: f64) -> String {
@@ -186,7 +186,10 @@ fn throw_invalid_emitter(value: f64) -> ! {
 
 fn event_target_array_len(target: *mut ObjectHeader, event_name_ptr: *const StringHeader) -> f64 {
     let arr = unsafe {
-        perry_runtime::event_target::js_event_target_get_event_listeners(target, event_name_ptr)
+        perry_runtime::event_target_hook_slots::js_event_target_get_event_listeners(
+            target,
+            event_name_ptr,
+        )
     };
     js_array_length(arr) as f64
 }
@@ -232,11 +235,7 @@ fn validate_max_listeners(value: f64) -> f64 {
     if !perry_runtime::fs::validate::is_numeric(js_value) {
         throw_max_listeners_invalid_type(value);
     }
-    let n = if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else {
-        js_value.as_number()
-    };
+    let n = js_value.as_number();
     if n.is_nan() || n < 0.0 {
         throw_max_listeners_out_of_range(n);
     }
@@ -320,7 +319,9 @@ fn validate_listener_arg(value: f64, name: &str) -> i64 {
     })
 }
 
-unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
+unsafe fn options_signal_result(
+    options: f64,
+) -> Result<Option<f64>, perry_runtime::error::CoreError> {
     let jsval = JSValue::from_bits(options.to_bits());
     if jsval.is_undefined() {
         return Ok(None);
@@ -347,7 +348,7 @@ unsafe fn options_signal_result(options: f64) -> Result<Option<f64>, f64> {
 unsafe fn options_signal_or_throw(options: f64) -> Option<f64> {
     match options_signal_result(options) {
         Ok(signal) => signal,
-        Err(error) => perry_runtime::exception::js_throw(error),
+        Err(error) => perry_runtime::exception::throw_core(error),
     }
 }
 
@@ -355,7 +356,7 @@ fn signal_is_aborted(signal: f64) -> bool {
     let Some(signal_ptr) = object_ptr_from_value(signal) else {
         return false;
     };
-    perry_runtime::url::js_abort_signal_is_aborted(signal_ptr) != 0
+    perry_runtime::event_target_hook_slots::js_abort_signal_is_aborted(signal_ptr) != 0
 }
 
 unsafe fn abort_event_value() -> f64 {
@@ -367,5 +368,9 @@ unsafe fn remove_abort_listener(signal: f64, listener: f64) {
     let Some(signal_ptr) = object_ptr_from_value(signal) else {
         return;
     };
-    perry_runtime::url::js_abort_signal_remove_listener(signal_ptr, abort_event_value(), listener);
+    perry_runtime::event_target_hook_slots::js_abort_signal_remove_listener(
+        signal_ptr,
+        abort_event_value(),
+        listener,
+    );
 }

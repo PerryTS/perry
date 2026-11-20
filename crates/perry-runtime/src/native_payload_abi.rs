@@ -101,12 +101,7 @@ unsafe fn family_cell(
     value: f64,
     family: &PerryPayloadFamily,
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
-    let obj = crate::native_payload::any_object(value)?;
-    let meta = (*obj).meta;
-    if meta.is_null() {
-        return None;
-    }
-    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
+    let cell = crate::native_payload::payload_cell_of_value(value)?;
     // The attached cell brands subclasses as well as direct instances.
     ((*cell).type_id == family_type_id(family)
         && crate::native_handle::cell_vtable(cell)? as *const _ == family.vtable)
@@ -169,8 +164,14 @@ pub unsafe extern "C" fn js_perry_payload_attach(
     let Some(obj) = crate::native_payload::any_object(value) else {
         return -1;
     };
-    if !(*obj).meta.is_null()
-        && crate::native_payload::is_payload_state_word((*(*obj).meta).native_state)
+    if crate::native_payload::payload_cell_of_object(obj).is_some() {
+        return -1;
+    }
+    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
+    if !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
+        && crate::native_payload::is_payload_state_word(
+            (*crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _))).native_state,
+        )
     {
         return -1;
     }
@@ -273,9 +274,11 @@ pub unsafe extern "C" fn js_perry_bytes_borrow(value: f64, out: *mut PerryBytes)
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(POINTER_FREE): PerryBytes::default initializes null ptr,len0,pin0 output; no child pointer written.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::span(value, false) {
         Ok(span) => {
+            // GC_STORE_AUDIT(STACK): FFI bytes::borrow passes &mut local PerryBytes::default at bytes.rs69-70, under NoGc scope; borrow expires at safepoint. Result is native ABI output, not GC heap slot.
             out.write(PerryBytes {
                 ptr: span.ptr,
                 len: span.len,
@@ -293,10 +296,12 @@ pub unsafe extern "C" fn js_perry_bytes_pin(value: f64, out: *mut PerryBytes) ->
     if out.is_null() {
         return -1;
     }
+    // GC_STORE_AUDIT(POINTER_FREE): PerryBytes::default initializes null ptr,len0,pin0 output; no child pointer written.
     out.write(PerryBytes::default());
     match crate::buffer::bytes::pin(value) {
         Ok(pin) => {
             let ticket = Box::new(pin);
+            // GC_STORE_AUDIT(STACK): FFI bytes::pin passes &mut local PerryBytes at bytes.rs106-107. Out pointer refers to native pin-owned byte span, ticket owns Pinned and unpin releases it exactly once; no GC-heap destination.
             out.write(PerryBytes {
                 ptr: ticket.ptr,
                 len: ticket.len,
@@ -327,6 +332,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
     if out.is_null() {
         return bytes_undefined();
     }
+    // GC_STORE_AUDIT(POINTER_FREE): PerryBytes::default initializes null ptr,len0,pin0 output; no child pointer written.
     out.write(PerryBytes::default());
     let Some(brand) = byte_brand(brand) else {
         return bytes_undefined();
@@ -337,6 +343,7 @@ pub unsafe extern "C" fn js_perry_bytes_new(
         _ => return bytes_undefined(),
     };
     let (value, pin) = crate::buffer::bytes::new_bytes(brand, len, init);
+    // GC_STORE_AUDIT(STACK): FFI bytes::new_uninit passes &mut local PerryBytes at bytes.rs131-132, result transferred to native Pinned struct; pin ticket owns backing across callbacks, no GC-heap destination.
     out.write(PerryBytes {
         ptr: pin.ptr,
         len: pin.len,
@@ -491,6 +498,34 @@ mod tests {
         drop: drop_bytes,
         stream: None,
     };
+    /// Once a family adopted its prototype, the realm slot names it: the
+    /// constructor is not resolved by module/export name again (a module
+    /// span that is not even UTF-8 is never read).
+    #[test]
+    fn an_adopted_family_prototype_comes_from_its_realm_slot() {
+        crate::native_payload::reset_payload_prototypes_for_tests();
+        let family = PerryPayloadFamily {
+            abi: payload_abi_layout(),
+            class_id: crate::native_class_ids::CRYPTO_HASH,
+            links_owner: 0,
+            constructor_length: 0,
+            _reserved: 0,
+            name: b"Probe".as_ptr(),
+            name_len: 5,
+            install_prototype: None,
+            vtable: &VTABLE,
+            payload_size: std::mem::size_of::<Vec<u8>>(),
+            payload_align: std::mem::align_of::<Vec<u8>>(),
+        };
+        let _no_move = crate::gc::GcSuppressScope::new();
+        let first = unsafe { js_perry_payload_prototype(&family, b"".as_ptr(), 0) };
+        assert!(crate::native_payload::any_object(first).is_some());
+        let bad = [0xffu8, 0xfe];
+        let again = unsafe { js_perry_payload_prototype(&family, bad.as_ptr(), bad.len()) };
+        assert_eq!(again.to_bits(), first.to_bits());
+        crate::native_payload::reset_payload_prototypes_for_tests();
+    }
+
     #[test]
     fn external_family_uses_the_shared_cell_and_close_never_reopens() {
         DROPS.store(0, Ordering::SeqCst);
@@ -554,6 +589,12 @@ pub unsafe extern "C" fn js_perry_payload_prototype(
     let Some(family) = checked_family(family) else {
         return bytes_undefined();
     };
+    // The family's realm slot names its prototype once it is adopted: the
+    // constructor is resolved by name only for that first adoption.
+    let adopted = crate::native_payload::adopted_prototype(family.class_id);
+    if !adopted.is_null() {
+        return crate::value::js_nanbox_pointer(adopted as i64);
+    }
     let Ok(module) = std::str::from_utf8(std::slice::from_raw_parts(module, module_len)) else {
         return bytes_undefined();
     };
@@ -628,12 +669,7 @@ unsafe fn attached_cell(
     value: f64,
     vtable: *const crate::native_payload::PayloadVTable,
 ) -> Option<*mut crate::native_handle::NativeHandleHeader> {
-    let obj = crate::native_payload::any_object(value)?;
-    let meta = (*obj).meta;
-    if meta.is_null() {
-        return None;
-    }
-    let cell = crate::native_payload::payload_cell_of_word((*meta).native_state)?;
+    let cell = crate::native_payload::payload_cell_of_value(value)?;
     (crate::native_handle::cell_vtable(cell)? as *const _ == vtable).then_some(cell)
 }
 /// # Safety

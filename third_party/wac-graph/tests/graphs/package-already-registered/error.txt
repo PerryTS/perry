@@ -1,0 +1,4 @@
+failed to register package `tests/graphs/package-already-registered/foo.wat` for test case `package-already-registered`
+
+Caused by:
+    package `test:foo` has already been registered in the graph

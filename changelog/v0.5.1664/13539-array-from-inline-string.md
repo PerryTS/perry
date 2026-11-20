@@ -1,0 +1,1 @@
+Report short-string `Array.from` mapper arguments as strings, matching heap strings instead of misclassifying their inline representation as numbers. The runtime regression compares the actual `TypeError` messages for empty, one-byte and five-byte mappers in both representations.

@@ -1,0 +1,1 @@
+Fix malformed TLS records aborting DEBUG stdlib tests and TLS servers by stopping terminal alert draining when rustls has no queued output. Retain fatal alerts for TLS peers and close initial plaintext peers without sending alerts.

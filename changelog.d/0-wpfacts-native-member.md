@@ -1,0 +1,1 @@
+Whole-program facts now prove builtin members (String, exact Array, Map/Set/WeakMap/WeakSet methods and data members) on builtin receivers as native, and a read of a private field holds only the field's values; proven site counts rise on the chess witness (main.ts 522 to 560) and are unchanged on tssrc.

@@ -140,7 +140,7 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
         // BigInt == BigInt → compare by mathematical value.
         if a.is_bigint() && b.is_bigint() {
             return JSValue::bool(
-                crate::bigint::js_bigint_cmp(a.as_bigint_ptr(), b.as_bigint_ptr()) == 0,
+                crate::bigint_hooks::js_bigint_cmp(a.as_bigint_ptr(), b.as_bigint_ptr()) == 0,
             );
         }
         let (big, other) = if a.is_bigint() { (a, b) } else { (b, a) };
@@ -154,16 +154,16 @@ pub extern "C" fn js_loose_eq(a: JSValue, b: JSValue) -> JSValue {
         // are never equal). `bigint_cmp_f64` returns 0 only on exact equality.
         if other.is_number() {
             return JSValue::bool(
-                crate::bigint::bigint_cmp_f64(big.as_bigint_ptr(), other.as_number()) == 0,
+                crate::bigint_hooks::bigint_cmp_f64(big.as_bigint_ptr(), other.as_number()) == 0,
             );
         }
         // BigInt == String → StringToBigInt(string); a non-numeric string makes
         // the result `false` (StringToBigInt is undefined → not equal).
         if other.is_any_string() {
             let s = unsafe { string_content_for_bigint(f64::from_bits(other.bits())) };
-            return match crate::bigint::string_to_bigint(&s) {
+            return match crate::bigint_hooks::string_to_bigint(&s) {
                 Some(ny) => {
-                    JSValue::bool(crate::bigint::js_bigint_cmp(big.as_bigint_ptr(), ny) == 0)
+                    JSValue::bool(crate::bigint_hooks::js_bigint_cmp(big.as_bigint_ptr(), ny) == 0)
                 }
                 None => JSValue::bool(false),
             };
@@ -238,7 +238,7 @@ unsafe fn rel_to_primitive(value: f64) -> f64 {
     if crate::date::is_date_value(value) {
         // ToPrimitive(date, number) → Date.prototype.valueOf → the ms timestamp,
         // which is itself a Number (a plain `f64` is its own NaN-box).
-        return crate::date::js_date_coerce_number(value);
+        return crate::date_hook_slots::js_date_coerce_number(value);
     }
     // ToPrimitive(temporal, NUMBER) → the type's `valueOf`, which is a hard
     // `TypeError` for every `Temporal.*` value (the spec bans relational ordering
@@ -323,12 +323,12 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         // `string_to_bigint` allocates the parsed BigInt, so re-derive the `x`
         // pointer from its handle *after* that call — the snapshot in `vx` may
         // name a forwarded address by now (#6655).
-        return match crate::bigint::string_to_bigint(&s) {
+        return match crate::bigint_hooks::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(ny) => {
                 let px_ptr =
                     JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-                if crate::bigint::js_bigint_cmp(px_ptr, ny) < 0 {
+                if crate::bigint_hooks::js_bigint_cmp(px_ptr, ny) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -338,12 +338,12 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     }
     if vx.is_any_string() && y_big {
         let s = string_content_for_bigint(px_handle.get_nanbox_f64());
-        return match crate::bigint::string_to_bigint(&s) {
+        return match crate::bigint_hooks::string_to_bigint(&s) {
             None => REL_UNDEFINED,
             Some(nx) => {
                 let py_ptr =
                     JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-                if crate::bigint::js_bigint_cmp(nx, py_ptr) < 0 {
+                if crate::bigint_hooks::js_bigint_cmp(nx, py_ptr) < 0 {
                     REL_TRUE
                 } else {
                     REL_FALSE
@@ -358,7 +358,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
     if x_big && y_big {
         let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
         let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-        return if crate::bigint::js_bigint_cmp(px_ptr, py_ptr) < 0 {
+        return if crate::bigint_hooks::js_bigint_cmp(px_ptr, py_ptr) < 0 {
             REL_TRUE
         } else {
             REL_FALSE
@@ -372,7 +372,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         // BigInt pointer from its handle after the coercion (#6655).
         let yn = js_number_coerce(py_handle.get_nanbox_f64());
         let px_ptr = JSValue::from_bits(px_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
-        return match crate::bigint::bigint_cmp_f64(px_ptr, yn) {
+        return match crate::bigint_hooks::bigint_cmp_f64(px_ptr, yn) {
             2 => REL_UNDEFINED,
             c if c < 0 => REL_TRUE,
             _ => REL_FALSE,
@@ -382,7 +382,7 @@ unsafe fn abstract_relational(x: f64, y: f64, x_first: bool) -> i32 {
         let xn = js_number_coerce(px_handle.get_nanbox_f64());
         let py_ptr = JSValue::from_bits(py_handle.get_nanbox_f64().to_bits()).as_bigint_ptr();
         // `bigint_cmp_f64(y, xn)` is the sign of (y − x); x < y ⇔ that is positive.
-        return match crate::bigint::bigint_cmp_f64(py_ptr, xn) {
+        return match crate::bigint_hooks::bigint_cmp_f64(py_ptr, xn) {
             2 => REL_UNDEFINED,
             c if c > 0 => REL_TRUE,
             _ => REL_FALSE,
@@ -435,16 +435,44 @@ fn rel_numeric_operand(v: f64) -> Option<f64> {
     if (v.to_bits() & 0x7FFF_0000_0000_0000) < TAG_BAND_FLOOR {
         return Some(v);
     }
-    let jv = crate::value::JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        return Some(jv.as_int32() as f64);
-    }
     match v.to_bits() {
         crate::value::TAG_UNDEFINED => Some(f64::NAN),
         crate::value::TAG_NULL | crate::value::TAG_FALSE => Some(0.0),
         crate::value::TAG_TRUE => Some(1.0),
         _ => None,
     }
+}
+
+/// Is `ToPrimitive(value, number)` the String `%Object.prototype.toString%`
+/// returns, reached with no user code? For an instance of a declared class
+/// while `%Object.prototype%` is pristine: no object of its chain before
+/// `%Object.prototype%` owns a symbol key (so `@@toPrimitive` and
+/// `@@toStringTag` are absent) or a `valueOf` or `toString`, so both resolve
+/// to `%Object.prototype%`'s builtins. OrdinaryToPrimitive then calls
+/// `valueOf`, which returns the object, and `toString`, which returns
+/// `"[object " + builtinTag + "]"`. Read from shapes; allocates nothing.
+fn object_to_primitive_is_default_string(value: f64) -> bool {
+    let v = JSValue::from_bits(value.to_bits());
+    v.is_pointer()
+        && crate::object::builtin_proto::pristine(
+            crate::object::builtin_proto::BuiltinProto::Object,
+        )
+        && unsafe {
+            crate::object::native_call_method::class_holder::class_instance_chain_lacks(
+                v,
+                &[b"valueOf", b"toString"],
+            )
+        }
+}
+
+/// A relational comparison of a number-like primitive with an object whose
+/// `ToPrimitive` is the default String ([`object_to_primitive_is_default_string`]):
+/// that String's `ToNumber` is NaN, so `IsLessThan` is undefined and every
+/// relational operator answers `false`.
+#[inline]
+fn rel_object_with_number(x: f64, y: f64) -> bool {
+    (rel_numeric_operand(x).is_some() && object_to_primitive_is_default_string(y))
+        || (rel_numeric_operand(y).is_some() && object_to_primitive_is_default_string(x))
 }
 
 /// `x < y` — codegen routes here for any relational `<` whose operands are not
@@ -456,6 +484,9 @@ pub extern "C" fn js_rel_lt(x: f64, y: f64) -> f64 {
     }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a < b);
+    }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
     }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_TRUE)
 }
@@ -469,6 +500,9 @@ pub extern "C" fn js_rel_gt(x: f64, y: f64) -> f64 {
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a > b);
     }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_TRUE)
 }
 
@@ -481,6 +515,9 @@ pub extern "C" fn js_rel_le(x: f64, y: f64) -> f64 {
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a <= b);
     }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
+    }
     rel_bool_f64(unsafe { abstract_relational(y, x, false) } == REL_FALSE)
 }
 
@@ -492,6 +529,9 @@ pub extern "C" fn js_rel_ge(x: f64, y: f64) -> f64 {
     }
     if let (Some(a), Some(b)) = (rel_numeric_operand(x), rel_numeric_operand(y)) {
         return rel_bool_f64(a >= b);
+    }
+    if rel_object_with_number(x, y) {
+        return rel_bool_f64(false);
     }
     rel_bool_f64(unsafe { abstract_relational(x, y, true) } == REL_FALSE)
 }
@@ -687,9 +727,8 @@ pub(crate) enum ValueTypeofTag {
 /// helpers. A `POINTER_TAG` word names a GC-headed object (honest pointers),
 /// so its header alone separates the symbol cells (primitives) from every
 /// object kind. `HANDLE_TAG` ids (Web Fetch, streams, native registry
-/// objects) and V8 handles are objects. Class refs share INT32's encoding, so
-/// callers that admit them say so themselves; raw untagged words are not
-/// values here.
+/// objects) and V8 handles are objects. Class constructors are function
+/// objects; INT32 words are numbers. Raw untagged words are not values here.
 #[inline]
 pub(crate) fn js_value_is_object(value: f64) -> bool {
     let bits = value.to_bits();
@@ -776,19 +815,6 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         ValueTypeofTag::Object
     } else if jsval.is_bigint() {
         ValueTypeofTag::BigInt
-    } else if jsval.is_int32() {
-        // Refs #618 / #420 followup: class refs share INT32_TAG storage
-        // shape (codegen emits `INT32_TAG | class_id` as the value form
-        // for `Expr::ClassRef`). Distinguish a class id from a real int32
-        // by checking the vtable registry — registered class ids return
-        // "function" per JS spec; everything else is "number".
-        let raw = jsval.bits() & 0xFFFF_FFFF;
-        let class_id = raw as u32;
-        if crate::object::is_class_id_registered(class_id) {
-            ValueTypeofTag::Function
-        } else {
-            ValueTypeofTag::Number
-        }
     } else {
         // Issue #654: typed-array pointers arrive as a raw `i64 → f64`
         // bitcast (no NaN-box tag) per the codegen for `new Float64Array(...)`
@@ -802,7 +828,7 @@ pub(crate) fn classify_value_typeof(value: f64) -> ValueTypeofTag {
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && bits >= 0x10000 && crate::buffer::header_is_owned(bits as usize) {
             let addr = bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
                 return ValueTypeofTag::Object;
             }
         }
@@ -938,12 +964,12 @@ mod rel_numeric_fastpath_tests {
             let fn_shape = crate::closure::shape::function_base_shape(
                 crate::closure::shape::FunctionProtoKind::Function,
             );
-            assert!(crate::object::shapes::is_exotic_shape_id(fn_shape));
+            assert!(crate::object::shapes::is_exotic_layout_word(fn_shape.0));
             let err = crate::error::js_error_new() as *mut u8;
             let word = err.add(crate::closure::CLOSURE_SHAPE_OFFSET) as *mut u32;
             let saved = word.read();
             // GC_STORE_AUDIT(POINTER_FREE): plants a u32 ShapeId in a non-pointer word.
-            word.write(fn_shape);
+            word.write(fn_shape.0);
             assert!(!crate::closure::is_closure_ptr(err as usize));
             let err_v = crate::value::js_nanbox_pointer(err as i64);
             assert_eq!(classify_value_typeof(err_v), ValueTypeofTag::Object);
@@ -968,8 +994,8 @@ mod rel_numeric_fastpath_tests {
         assert!(rel_numeric_operand(f64::INFINITY).is_some());
         assert!(rel_numeric_operand(f64::NEG_INFINITY).is_some());
         assert!(rel_numeric_operand(f64::NAN).is_some());
-        assert_eq!(rel_numeric_operand(i32v(7)), Some(7.0));
-        assert_eq!(rel_numeric_operand(i32v(-7)), Some(-7.0));
+        // A 0x7FFE word is no Number (P3 B4b): it takes the full comparison.
+        assert_eq!(rel_numeric_operand(i32v(7)), None);
         assert!(rel_numeric_operand(f64::from_bits(UNDEF)).unwrap().is_nan());
         assert_eq!(rel_numeric_operand(f64::from_bits(NULLV)), Some(0.0));
         assert_eq!(rel_numeric_operand(f64::from_bits(FALSEV)), Some(0.0));
@@ -1058,10 +1084,10 @@ mod rel_numeric_fastpath_tests {
         assert!(is_true(js_rel_le(2.0, 2.0)));
         assert!(is_true(js_rel_gt(f64::INFINITY, 1e308)));
         assert!(is_true(js_rel_lt(f64::NEG_INFINITY, 0.0)));
-        assert!(is_true(js_rel_lt(i32v(3), i32v(9))));
-        assert!(!is_true(js_rel_gt(i32v(3), i32v(9))));
-        assert!(is_true(js_rel_lt(i32v(3), 3.5)));
-        assert!(is_true(js_rel_gt(3.5, i32v(3))));
+        assert!(is_true(js_rel_lt(3.0, 9.0)));
+        assert!(!is_true(js_rel_gt(3.0, 9.0)));
+        assert!(is_true(js_rel_lt(3.0, 3.5)));
+        assert!(is_true(js_rel_gt(3.5, 3.0)));
     }
 }
 
@@ -1155,7 +1181,7 @@ mod qstypeof_tests {
                 perry_abi::gc_header_word_is_callable(u32::from_ne_bytes(bytes)),
                 matches!(
                     kind,
-                    crate::gc::GC_TYPE_OBJECT
+                    crate::gc_object_type_pat!()
                         | crate::gc::GC_TYPE_PROXY
                         | crate::gc::GC_TYPE_CLOSURE
                 )

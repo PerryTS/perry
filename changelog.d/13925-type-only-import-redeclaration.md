@@ -1,0 +1,1 @@
+A TypeScript import that names only an interface or type alias no longer counts as a binding, so a local declaration of the same name (TypeScript's own `function Symbol` beside the imported `Symbol` interface) compiles instead of failing with "Identifier has already been declared". Duplicate imports, namespace imports and JavaScript modules keep the error.

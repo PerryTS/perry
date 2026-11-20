@@ -276,6 +276,7 @@ impl PrefixContainedParamUse {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(catch) = catch {
@@ -370,6 +371,7 @@ mod tests {
 
     fn field_read(param_id: u32) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(param_id)),
             property: "id".to_string(),
             byte_offset: 0,
@@ -397,6 +399,7 @@ mod tests {
                     // the publication below.
                     Stmt::Expr(field_read(param_id)),
                     Stmt::Expr(Expr::Call {
+                        byte_end: 0,
                         callee: Box::new(Expr::LocalGet(99)),
                         args: vec![Expr::LocalGet(param_id)],
                         type_args: Vec::new(),

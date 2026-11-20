@@ -74,7 +74,9 @@ impl DelegationRoute {
         let mut call_args = vec![Expr::LocalGet(self.iter_id)];
         call_args.extend(args);
         let call = Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(method)),
                 property: "call".to_string(),
@@ -105,6 +107,7 @@ const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
     Expr::Yield {
         value: Some(Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: YIELD_RESULT_MARKER.to_string(),
                 param_types: vec![Type::Any, Type::Number],
@@ -235,7 +238,9 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
     // stepped through its intrinsic `next` resumes its record directly.
     let captured_call = if linearize_async_generator() {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_next_id)),
                 property: "call".to_string(),
@@ -246,6 +251,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }
     } else {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_iterator_delegate_step".to_string(),
                 param_types: vec![Type::Any, Type::Any, Type::Any],
@@ -268,7 +274,9 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }),
         then_expr: Box::new(captured_call),
         else_expr: Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_iter_id)),
                 property: "next".to_string(),
@@ -287,6 +295,7 @@ fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalI
     Stmt::Expr(Expr::LocalSet(
         kind_id,
         Box::new(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_iterator_delegate_kind".to_string(),
                 param_types: vec![Type::Any, Type::Any],
@@ -345,21 +354,34 @@ fn emit_yield_star_loop(
     current.push(Stmt::Expr(Expr::LocalSet(
         del_next_id,
         Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_iter_id)),
             property: "next".to_string(),
         }),
     )));
     // Initial pull: `received` starts as `NormalCompletion(undefined)`, so the
-    // first inner `next()` gets an explicit `undefined` argument.
-    current.push(Stmt::Expr(Expr::LocalSet(
-        del_result_id,
-        Box::new(delegate_await(delegate_next_call(
-            del_next_id,
-            del_iter_id,
-            Expr::Undefined,
-        ))),
-    )));
+    // first inner `next()` gets an explicit `undefined` argument. In an async
+    // generator the pull is awaited: linearize it so the await is a suspend
+    // point (a state of its own), not an inline await.
+    linearize_body(
+        &[Stmt::Expr(Expr::LocalSet(
+            del_result_id,
+            Box::new(delegate_await(delegate_next_call(
+                del_next_id,
+                del_iter_id,
+                Expr::Undefined,
+            ))),
+        ))],
+        states,
+        current,
+        state_num,
+        state_id,
+        next_local_id,
+        sent_id,
+        catches,
+        finallys,
+    );
     current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
@@ -370,6 +392,7 @@ fn emit_yield_star_loop(
     let reyield = match del_kind_id {
         None => Stmt::Expr(Expr::Yield {
             value: Some(Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "value".to_string(),
@@ -403,6 +426,7 @@ fn emit_yield_star_loop(
     let not_done = Expr::Unary {
         op: UnaryOp::Not,
         operand: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(del_result_id)),
             property: "done".to_string(),
@@ -464,6 +488,7 @@ fn emit_yield_star_loop(
     // `yield* e`, where the value is otherwise discarded.
     let del_value_id = alloc_local(next_local_id);
     let inner_value = Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::LocalGet(del_result_id)),
         property: "value".to_string(),
@@ -576,6 +601,12 @@ pub struct FinallyRoute {
     pub completion_check_state: Option<u32>,
     /// Shared handler order with [`CatchRoute::seq`]: smaller is inner.
     pub seq: u32,
+    /// The completion local of the synchronous `for...of` whose close this
+    /// finally is (carried from the HIR `Try`). A `.return()` injected while
+    /// suspended inside the loop is a return completion: it sets the local to
+    /// 1 before this finally runs, so the loop closes its iterator
+    /// (ECMA-262 27.5.3.4 GeneratorResumeAbrupt, 14.7.5.7 IteratorClose).
+    pub forof_completion: Option<LocalId>,
 }
 
 /// The next handler sequence number. `catches` and `finallys` only ever grow
@@ -695,6 +726,33 @@ pub fn linearize_body(
                     },
                 });
                 // Bare `await x;` — result discarded, no continuation binding.
+            }
+            // `x = await e;` — the shape the `yield *` desugar emits for each
+            // awaited delegated pull (`__del_result = await next.call(..)`).
+            // Generated after the await-hoisting pass, so it must split here
+            // too; left inline it lowered to the busy-wait await, which never
+            // settles under an embedder's event loop.
+            Stmt::Expr(Expr::LocalSet(id, value))
+                if linearize_async_generator() && matches!(value.as_ref(), Expr::Await(_)) =>
+            {
+                let Expr::Await(inner) = value.as_ref() else {
+                    unreachable!()
+                };
+                let await_val = (**inner).clone();
+                let this_state = *state_num;
+                *state_num += 1;
+                states.push(State {
+                    num: this_state,
+                    body: std::mem::take(current),
+                    exit: StateExit::Await {
+                        value: await_val,
+                        next_state: *state_num,
+                    },
+                });
+                current.push(Stmt::Expr(Expr::LocalSet(
+                    *id,
+                    Box::new(Expr::LocalGet(sent_id)),
+                )));
             }
             Stmt::Let {
                 id,
@@ -1351,6 +1409,7 @@ pub fn linearize_body(
                 body,
                 catch,
                 finally,
+                forof_completion,
             } if body_contains_yield(body)
                 || finally.as_ref().is_some_and(|f| body_contains_yield(f))
                 || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
@@ -1554,6 +1613,7 @@ pub fn linearize_body(
                             finally_entry_state: Some(finally_entry_state),
                             protected_end_state: finally_protected_end,
                             completion_check_state: Some(completion_state),
+                            forof_completion: *forof_completion,
                         });
                     } else {
                         // #4374: a non-yielding finally is inlined into the
@@ -1569,6 +1629,7 @@ pub fn linearize_body(
                             finally_entry_state: None,
                             protected_end_state: post_catch_state,
                             completion_check_state: None,
+                            forof_completion: *forof_completion,
                         });
                         for s in fin {
                             current.push(s.clone());
@@ -1943,192 +2004,7 @@ pub fn linearize_body(
     }
 }
 
-/// Rewrite completions targeting a source label in one branch of the
-/// `ArrayIterationPatched` for-of guard. Each branch consists of setup
-/// statements followed by the generated loop; nested loops in the user's body
-/// remain boundaries inside [`rewrite_labeled_bc_in_stmts`].
-fn rewrite_labeled_bc_in_lowered_for_of_arm(
-    stmts: &mut [Stmt],
-    label: &str,
-    next_local_id: &mut u32,
-) {
-    for stmt in stmts.iter_mut() {
-        match stmt {
-            Stmt::For { body, .. } | Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                super::break_continue::desugar_labeled_escape_across_nested_loops(
-                    body,
-                    label,
-                    next_local_id,
-                );
-                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Within a labeled loop's body, rewrite `break label` / `continue label`
-/// that target THIS label into plain `break` / `continue`, so the loop's own
-/// For/While linearization (which only knows about plain break/continue) maps
-/// them to the loop's state targets. Descends through `if` / `try`, which do
-/// not capture either completion. Nested loops remain a boundary because a
-/// plain break/continue there would bind to the nested loop.
-///
-/// A switch is also a boundary for a plain `break`, but not for a labeled
-/// break targeting the enclosing loop. When such a break is present, desugar
-/// the switch first: its own plain breaks become the switch done-flag, while
-/// the still-named outer break lands in the resulting `if` chain and can then
-/// safely become the enclosing loop's plain break. This is especially
-/// important for source `label: switch (...)` statements: HIR represents the
-/// non-loop label as a labeled run-once do-while, and generator linearization
-/// otherwise drops that label target while splitting an awaited case (#9186).
-fn rewrite_labeled_bc_in_stmts(stmts: &mut Vec<Stmt>, label: &str, next_local_id: &mut u32) {
-    let mut i = 0;
-    while i < stmts.len() {
-        let desugared_switch = match &stmts[i] {
-            Stmt::Switch {
-                discriminant,
-                cases,
-            } if cases
-                .iter()
-                .any(|case| stmts_have_labeled_break_for(&case.body, label)) =>
-            {
-                Some(super::break_continue::desugar_switch_to_ifs(
-                    discriminant,
-                    cases,
-                    next_local_id,
-                ))
-            }
-            _ => None,
-        };
-        if let Some(desugared) = desugared_switch {
-            stmts.splice(i..=i, desugared);
-            // Reprocess at the same position. The replacement consists of
-            // lets/ifs, so recursion below rewrites the preserved named break.
-            continue;
-        }
-
-        let s = &mut stmts[i];
-        match s {
-            Stmt::LabeledBreak(l) if l == label => *s = Stmt::Break,
-            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                rewrite_labeled_bc_in_stmts(then_branch, label, next_local_id);
-                if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(eb, label, next_local_id);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                rewrite_labeled_bc_in_stmts(body, label, next_local_id);
-                if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_bc_in_stmts(&mut c.body, label, next_local_id);
-                }
-                if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_bc_in_stmts(f, label, next_local_id);
-                }
-            }
-            // #5975: a `continue <label>` that targets THIS enclosing labeled
-            // loop from inside a nested `switch` case. A switch never captures
-            // `continue`, so it continues the loop — rewrite it to a plain
-            // `continue` here so the loop's linearization (and the #5868
-            // yielding-switch desugar) map it to the loop's re-entry sentinel.
-            Stmt::Switch { cases, .. } => {
-                for case in cases.iter_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-}
-
-/// Whether a statement list can reach `break label` without crossing a loop
-/// or another labeled statement. Switches do not capture named breaks, so they
-/// are traversed and individually desugared by the caller when necessary.
-fn stmts_have_labeled_break_for(stmts: &[Stmt], label: &str) -> bool {
-    stmts.iter().any(|stmt| match stmt {
-        Stmt::LabeledBreak(found) => found == label,
-        Stmt::If {
-            then_branch,
-            else_branch,
-            ..
-        } => {
-            stmts_have_labeled_break_for(then_branch, label)
-                || else_branch
-                    .as_ref()
-                    .is_some_and(|branch| stmts_have_labeled_break_for(branch, label))
-        }
-        Stmt::Try {
-            body,
-            catch,
-            finally,
-        } => {
-            stmts_have_labeled_break_for(body, label)
-                || catch
-                    .as_ref()
-                    .is_some_and(|clause| stmts_have_labeled_break_for(&clause.body, label))
-                || finally
-                    .as_ref()
-                    .is_some_and(|body| stmts_have_labeled_break_for(body, label))
-        }
-        Stmt::Switch { cases, .. } => cases
-            .iter()
-            .any(|case| stmts_have_labeled_break_for(&case.body, label)),
-        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } | Stmt::Labeled { .. } => {
-            false
-        }
-        _ => false,
-    })
-}
-
-/// Rewrite `continue <label>` → plain `continue` for `label`, descending
-/// through `if` / `try` / `switch` (none of which capture `continue`) but
-/// stopping at nested loops (which bind their own `continue`). Unlike
-/// [`rewrite_labeled_bc_in_stmts`] this does NOT touch `break <label>`: it is
-/// used only when recursing into a nested `switch`, where a plain `break`
-/// would be captured by the switch rather than escaping to the loop (#5975).
-fn rewrite_labeled_continue_in_stmts(stmts: &mut [Stmt], label: &str) {
-    for s in stmts.iter_mut() {
-        match s {
-            Stmt::LabeledContinue(l) if l == label => *s = Stmt::Continue,
-            Stmt::If {
-                then_branch,
-                else_branch,
-                ..
-            } => {
-                rewrite_labeled_continue_in_stmts(then_branch, label);
-                if let Some(eb) = else_branch.as_mut() {
-                    rewrite_labeled_continue_in_stmts(eb, label);
-                }
-            }
-            Stmt::Try {
-                body,
-                catch,
-                finally,
-            } => {
-                rewrite_labeled_continue_in_stmts(body, label);
-                if let Some(c) = catch.as_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut c.body, label);
-                }
-                if let Some(f) = finally.as_mut() {
-                    rewrite_labeled_continue_in_stmts(f, label);
-                }
-            }
-            Stmt::Switch { cases, .. } => {
-                for case in cases.iter_mut() {
-                    rewrite_labeled_continue_in_stmts(&mut case.body, label);
-                }
-            }
-            _ => {}
-        }
-    }
-}
+#[path = "linearize/labeled.rs"]
+mod labeled;
+use labeled::rewrite_labeled_bc_in_lowered_for_of_arm;
+use labeled::rewrite_labeled_bc_in_stmts;

@@ -13,6 +13,7 @@
 
 use super::*;
 use p256::ecdsa::signature::hazmat::{PrehashSigner, PrehashVerifier, RandomizedPrehashSigner};
+use p256::elliptic_curve::Generate;
 use p256::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePublicKey};
 
 /// `asymmetric_key_meta` type ids for EC keys: 2 keeps its historical P-256
@@ -114,7 +115,7 @@ impl EcSigningKey {
             EcSigningKey::P521(k) => {
                 let signer = p521::ecdsa::SigningKey::from_bytes(&k.to_bytes()).ok()?;
                 let sig: p521::ecdsa::Signature = signer
-                    .sign_prehash_with_rng(&mut rand_core_06::OsRng, &prehash)
+                    .sign_prehash_with_rng(&mut rand::rng(), &prehash)
                     .ok()?;
                 encode_signature(sig.to_bytes().as_slice(), sig.to_der().as_bytes(), p1363)
             }
@@ -200,14 +201,14 @@ impl EcPublicKey {
                 })
             }
             EcPublicKey::P521(k) => {
-                use p521::elliptic_curve::sec1::ToEncodedPoint as _;
+                use p521::elliptic_curve::sec1::ToSec1Point as _;
                 let sig = if p1363 {
                     p521::ecdsa::Signature::from_slice(sig)
                 } else {
                     p521::ecdsa::Signature::from_der(sig)
                 };
                 let Ok(verifier) =
-                    p521::ecdsa::VerifyingKey::from_encoded_point(&k.to_encoded_point(false))
+                    p521::ecdsa::VerifyingKey::from_sec1_point(&k.to_sec1_point(false))
                 else {
                     return false;
                 };
@@ -231,17 +232,17 @@ pub(crate) fn ec_curve_asym_type(name: &str) -> Option<u8> {
 /// P-256 keeps its existing generator (it also serves the JWK encodings).
 pub(crate) fn generate_ec_pem_pair(asym_type: u8) -> Option<(String, String)> {
     use p256::pkcs8::EncodePrivateKey;
-    let mut rng = rand_core_06::OsRng;
+    let mut rng = rand::rng();
     let (private, public) = match asym_type {
         ASYM_EC_P384 => {
-            let k = p384::SecretKey::random(&mut rng);
+            let k = p384::SecretKey::generate_from_rng(&mut rng);
             (
                 k.to_pkcs8_pem(Default::default()).ok()?.to_string(),
                 k.public_key().to_public_key_pem(Default::default()).ok()?,
             )
         }
         ASYM_EC_P521 => {
-            let k = p521::SecretKey::random(&mut rng);
+            let k = p521::SecretKey::generate_from_rng(&mut rng);
             (
                 k.to_pkcs8_pem(Default::default()).ok()?.to_string(),
                 k.public_key().to_public_key_pem(Default::default()).ok()?,
@@ -284,10 +285,10 @@ mod tests {
     #[test]
     fn every_nist_curve_signs_and_verifies_with_every_digest() {
         use p256::pkcs8::EncodePrivateKey as _;
-        let mut rng = rand_core_06::OsRng;
-        let k256 = p256::SecretKey::random(&mut rng);
-        let k384 = p384::SecretKey::random(&mut rng);
-        let k521 = p521::SecretKey::random(&mut rng);
+        let mut rng = rand::rng();
+        let k256 = p256::SecretKey::generate_from_rng(&mut rng);
+        let k384 = p384::SecretKey::generate_from_rng(&mut rng);
+        let k521 = p521::SecretKey::generate_from_rng(&mut rng);
         let pem256 = k256.to_pkcs8_pem(Default::default()).unwrap();
         let pem384 = k384.to_sec1_pem(Default::default()).unwrap();
         let pem521 = k521.to_pkcs8_pem(Default::default()).unwrap();
@@ -306,9 +307,9 @@ mod tests {
 
     #[test]
     fn a_curve_mismatch_does_not_verify() {
-        let mut rng = rand_core_06::OsRng;
-        let signer = EcSigningKey::P384(p384::SecretKey::random(&mut rng));
-        let other = EcSigningKey::P384(p384::SecretKey::random(&mut rng)).public_key();
+        let mut rng = rand::rng();
+        let signer = EcSigningKey::P384(p384::SecretKey::generate_from_rng(&mut rng));
+        let other = EcSigningKey::P384(p384::SecretKey::generate_from_rng(&mut rng)).public_key();
         let sig = signer.sign(RsaDigestKind::Sha384, DATA, false).unwrap();
         assert!(!other.verify(RsaDigestKind::Sha384, DATA, &sig, false));
     }

@@ -42,6 +42,7 @@ pub(super) fn cannot_run_js(gc: &crate::gc_call_effects::GcEffects, callee: &str
                 | "js_gc_note_slot_layout"
                 | "js_gc_note_slot_layout_aware"
                 | "js_write_barrier_slot_validated_parent"
+                | "js_slot_store_obligations"
                 | "js_write_barrier_birth_slots"
                 | "js_write_barrier_slot"
                 | "js_write_barrier_root_nanbox"
@@ -86,7 +87,7 @@ pub(super) fn inst_may_run_js(
 pub(super) fn successors(block: &crate::block::LlBlock) -> Vec<String> {
     use crate::inst::LlInst;
     match block.insts().last() {
-        Some(LlInst::Br { label }) => vec![label.clone()],
+        Some(LlInst::Br { label, .. }) => vec![label.clone()],
         Some(LlInst::CondBr { t, f, .. }) => vec![t.clone(), f.clone()],
         Some(LlInst::Raw(s)) => s
             .split("label %")

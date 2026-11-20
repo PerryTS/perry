@@ -21,9 +21,7 @@ module.exports.path = require("node:path");
     let wrapped = wrap_commonjs(source, &PathBuf::from("/tmp/classes.cjs"));
     assert!(wrapped.contains("export default First;"), "{wrapped}");
     assert!(!wrapped.contains("const _cjs = (function()"));
-    for name in [
-        "Second", "shared", "helper", "extra", "marker", "other", "path",
-    ] {
+    for name in ["Second", "shared", "helper", "extra", "marker", "other"] {
         assert!(
             wrapped.contains(&format!("const __cjsexp_{name} = _cjs.{name};")),
             "flat exports must not redeclare {name}:\n{wrapped}"
@@ -31,6 +29,10 @@ module.exports.path = require("node:path");
         assert!(wrapped.contains(&format!("export {{ __cjsexp_{name} as {name} }};")));
         assert!(!wrapped.contains(&format!("export const {name} =")));
     }
+    // A require re-export forwards its hoisted binding and introduces no
+    // second local named path beside the flat body's `const path = 1`.
+    assert!(wrapped.contains("export { _req_0 as path };"), "{wrapped}");
+    assert!(!wrapped.contains("export const path ="), "{wrapped}");
     let ast = perry_parser::parse_typescript(&wrapped, "classes.cjs").unwrap();
     perry_hir::lower_module(&ast, "classes", "/tmp/classes.cjs").unwrap();
 }

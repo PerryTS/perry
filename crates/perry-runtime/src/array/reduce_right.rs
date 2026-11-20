@@ -46,9 +46,9 @@ pub extern "C" fn js_array_reduce_right(
         throw_reduce_of_empty();
     }
     // Typed-array receiver: read elements per element-kind. Issue #2799.
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        return crate::typedarray::js_typed_array_reduce_right(
-            arr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_reduce_right(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
             has_initial,
             initial,

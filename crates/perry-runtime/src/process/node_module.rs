@@ -126,7 +126,7 @@ pub extern "C" fn js_module_module_new(id: f64, parent: f64) -> f64 {
     }
     let exports = scope.root_nanbox_f64(module_object_value(unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_PCHECKED031),
+            crate::object::runtime_layouts::RECORD_PCHECKED031::desc(),
             std::ptr::NonNull::<f64>::dangling().as_ptr(),
         )
     }));
@@ -241,7 +241,7 @@ fn module_cjs_array_strings(value: f64) -> Option<Vec<String>> {
         return None;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    if gc_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(gc_header.obj_type) {
         return None;
     }
     let arr = ptr as *const crate::array::ArrayHeader;
@@ -582,7 +582,7 @@ pub extern "C" fn js_module_find_package_json(specifier: f64, base: f64, arg_cou
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default()
     } else {
-        match crate::url::node_compat::module_base_to_path(base) {
+        match crate::module_require::file_url_text::module_base_to_path(base) {
             Some(p) => p,
             None => {
                 let message = format!(
@@ -1679,9 +1679,6 @@ fn module_invalid_option_received(value: f64) -> String {
     if let Some(value) = module_value_to_string(value) {
         return format!("'{}'", value.replace('\\', "\\\\").replace('\'', "\\'"));
     }
-    if jv.is_int32() {
-        return jv.as_int32().to_string();
-    }
     if jv.is_number() {
         let number = jv.as_number();
         if number.fract() == 0.0 {
@@ -1694,7 +1691,7 @@ fn module_invalid_option_received(value: f64) -> String {
         if !ptr.is_null() && (ptr as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-            return if gc_header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            return if crate::gc_type_is_array!(gc_header.obj_type) {
                 "[]".to_string()
             } else {
                 "{}".to_string()
@@ -1774,7 +1771,7 @@ mod static_record_layout_tests {
         unsafe {
             assert_eq!(
                 (*pointer).parent_class_id,
-                (*std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_Q452_0)).layout_id
+                (*crate::object::runtime_layouts::RECORD_Q452_0::desc()).layout_id
             );
         }
     }

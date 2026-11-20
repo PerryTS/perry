@@ -102,7 +102,7 @@ pub(crate) fn class_field_subclass_arms(
         }
         // A class with computed runtime members has keys the packed layout
         // does not describe; its sets route through the by-name path anyway.
-        if super::property_set::class_has_computed_runtime_members(ctx, sub_name) {
+        if super::property_get::class_has_evaluated_accessor(ctx, sub_name) {
             continue;
         }
         // The layout algorithm SHOULD put an inherited field at the same index
@@ -205,7 +205,7 @@ pub(crate) fn class_instances_have_constructor_reservations(
             if class
                 .fields
                 .iter()
-                .any(|field| field.origin == perry_hir::ClassFieldOrigin::ConstructorStore)
+                .any(|field| field.origin.is_reservation())
             {
                 return true;
             }
@@ -278,7 +278,7 @@ pub(crate) fn class_field_predicted_shape(
     let keys_global = ctx.class_keys_globals.get(class_name)?.clone();
     if !class_instances_keep_birth_shape(ctx, class_name)
         || !transitive_subclasses(ctx, class_name).is_empty()
-        || super::property_set::class_has_computed_runtime_members(ctx, class_name)
+        || super::property_get::class_has_evaluated_accessor(ctx, class_name)
     {
         return None;
     }
@@ -427,6 +427,10 @@ pub(crate) fn emit_proven_shape_recheck(
     expected_shape_id: &str,
     proven_label: &str,
     generic_label: &str,
+    // The class's family layout id (an i32 value) when its births carry the
+    // family word instead of the birth id: the other word the receiver may
+    // legitimately carry. 0 is an unregistered layout and never matches.
+    family_id: Option<&str>,
 ) {
     let blk = ctx.block();
 
@@ -450,6 +454,15 @@ pub(crate) fn emit_proven_shape_recheck(
     let shape_id = blk.load(I32, &sid_ptr);
     let shape_ok =
         crate::typed_shape::emit_compatible_shape_eq(blk, &shape_id, expected_shape_id, &[]);
+    let shape_ok = match family_id {
+        Some(family) => {
+            let is_family = blk.icmp_eq(I32, &shape_id, family);
+            let registered = blk.icmp_ne(I32, family, "0");
+            let is_family = blk.and(I1, &is_family, &registered);
+            blk.or(I1, &shape_ok, &is_family)
+        }
+        None => shape_ok,
+    };
 
     let mut acc = not_fwd;
     acc = blk.and(I1, &acc, &unlatched);
@@ -511,13 +524,13 @@ pub(crate) fn emit_proven_shape_recheck(
 /// this read gives: a class instance carries every declared field as an OWN
 /// data property from birth (the canonical keys array), and an own data
 /// property shadows any prototype accessor (scenario 3 of
-/// `test-files/test_gap_5654_class_field_inline_descriptor.ts`; the generic
+/// `tests/parity/language/class/test_gap_5654_class_field_inline_descriptor.ts`; the generic
 /// IC, which never had a switch, gives the same answer for the same ShapeId
 /// and slot). The other three are diagnostics that only decided whether the
 /// guard CALL observed the access.
 /// * **raw-f64 sites: the class id.** A class whose layout has no pointer
 ///   slot mints its ShapeId from the key list alone
-///   (`js_object_shape_id_for_keys`, `codegen/string_pool.rs`), so an object
+///   (`js_object_layout_for_keys`, `codegen/string_pool.rs`), so an object
 ///   literal or another class with the same keys in the same order shares
 ///   it — and may hold a string where this class declares `number`. Only the
 ///   class id tells the raw-f64 read that the declared type is the one that
@@ -525,7 +538,7 @@ pub(crate) fn emit_proven_shape_recheck(
 ///   number }`, `class BoolPt { x: boolean; y: number }` and `class SubPt
 ///   extends Pt {}` instances all carry `Pt`'s ShapeId, each with its own
 ///   class id (scenario 1 of
-///   `test-files/test_gap_class_field_read_guard_shape_authority.ts`).
+///   `tests/parity/language/class/test_gap_class_field_read_guard_shape_authority.ts`).
 /// * **raw-f64 sites: exact ShapeId birth rep.** The compared id carries
 ///   the F64 lane fact; a contradictory store moves to a sibling id.
 ///
@@ -649,4 +662,13 @@ fn expected_class_identity(
     let shape_bits = blk.zext(I32, shape_id, I64);
     let shape_high = blk.shl(I64, &shape_bits, "32");
     blk.or(I64, &shape_high, &class_bits)
+}
+
+impl PredictedShape {
+    /// The header form predicted for the objects this record describes (`HeaderForm`:
+    /// every ordinary object has the meta word today). Sites take their slot base
+    /// from here, never from the type byte.
+    pub(crate) fn form(&self) -> crate::target_layout::HeaderForm {
+        crate::target_layout::HeaderForm::Meta
+    }
 }

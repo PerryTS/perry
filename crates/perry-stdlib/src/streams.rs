@@ -21,10 +21,11 @@
 //! into `desiredSize`) live in `streams/byob.rs` and the queue helpers on
 //! `ReadableStreamData` (#4915).
 
+mod errors;
 mod statics;
+use errors::{stream_range_error_with_code, stream_type_error, stream_type_error_with_code};
 use perry_runtime::closure::{JsFunctionInfo, JsThis};
 use perry_runtime::{ArrayHeader, ClosureHeader, JSValue, ObjectHeader, Promise, StringHeader};
-pub(crate) use statics::install_readable_stream_from_static;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Mutex;
 // Calls that allocate or mutate runtime-owned values must cross the stable C ABI. A shared stdlib still contains fallback Rust runtime glue for generic
@@ -350,6 +351,7 @@ mod pipe;
 pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,
 };
+mod prototypes;
 mod strategy;
 mod subclass;
 mod tee;
@@ -382,6 +384,7 @@ pub(crate) use self::expando::stream_expando_get;
 #[cfg(test)]
 pub(crate) use self::expando::stream_expando_set_hook;
 use self::pipe::js_readable_stream_pipe_to;
+pub(crate) use self::prototypes::install_stream_prototypes;
 use self::subclass::{box_promise, js_stream_unwrap_handle};
 pub(crate) use self::subclass::{dispatch_stream_method, dispatch_stream_property};
 pub use self::subclass::{
@@ -578,6 +581,69 @@ unsafe impl Send for WriterData {}
 pub(crate) const STREAM_HANDLE_ID_START: usize =
     perry_runtime::value::addr_class::STREAM_ID_BAND_START;
 pub(crate) const STREAM_HANDLE_ID_END: usize = perry_runtime::value::addr_class::STREAM_ID_BAND_END;
+
+/// RSTREAM R1: a ReadableStream's controller is its own value, not the stream
+/// handle. Its id is the stream id with this bit set, so the controller needs
+/// no registry: stream/reader/writer/transform ids are allocated below
+/// `STREAM_ALLOC_END`, and `id | STREAM_CONTROLLER_BIT` fills the top half.
+pub(crate) const STREAM_CONTROLLER_BIT: usize = (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 2;
+/// A byte stream's BYOB request is its own value the same way (no object, no
+/// registry): `id | STREAM_BYOB_REQUEST_BIT` fills the second quarter.
+pub(crate) const STREAM_BYOB_REQUEST_BIT: usize =
+    (STREAM_HANDLE_ID_END - STREAM_HANDLE_ID_START) / 4;
+/// End of the allocator's range: the first quarter of the stream band.
+pub(crate) const STREAM_ALLOC_END: usize = STREAM_HANDLE_ID_START + STREAM_BYOB_REQUEST_BIT;
+const _: () = assert!(STREAM_CONTROLLER_BIT.is_power_of_two());
+const _: () = assert!(STREAM_BYOB_REQUEST_BIT.is_power_of_two());
+const _: () =
+    assert!(STREAM_HANDLE_ID_START & (STREAM_CONTROLLER_BIT | STREAM_BYOB_REQUEST_BIT) == 0);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_CONTROLLER_BIT
+        == STREAM_HANDLE_ID_END - STREAM_BYOB_REQUEST_BIT - 1
+);
+const _: () = assert!(
+    (STREAM_ALLOC_END - 1) | STREAM_BYOB_REQUEST_BIT
+        == STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT - 1
+);
+
+/// The controller value of readable stream `id`.
+#[inline]
+pub(crate) fn controller_value(id: usize) -> f64 {
+    stream_value(id | STREAM_CONTROLLER_BIT)
+}
+
+/// The readable stream id a controller value controls; 0 (a registry miss)
+/// for every other value, a stream handle included.
+#[inline]
+pub(crate) fn controller_stream_id(value: f64) -> usize {
+    controller_id_stream(stream_id(value))
+}
+
+/// The readable stream id of controller id `id`, else 0.
+#[inline]
+pub(crate) fn controller_id_stream(id: usize) -> usize {
+    if (STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT..STREAM_HANDLE_ID_END).contains(&id) {
+        id & !STREAM_CONTROLLER_BIT
+    } else {
+        0
+    }
+}
+
+/// The BYOB request value of byte stream `id`.
+#[inline]
+pub(crate) fn byob_request_value(id: usize) -> f64 {
+    stream_value(id | STREAM_BYOB_REQUEST_BIT)
+}
+
+/// The byte stream id of BYOB request id `id`, else 0.
+#[inline]
+pub(crate) fn byob_request_id_stream(id: usize) -> usize {
+    if (STREAM_ALLOC_END..STREAM_HANDLE_ID_START + STREAM_CONTROLLER_BIT).contains(&id) {
+        id & !STREAM_BYOB_REQUEST_BIT
+    } else {
+        0
+    }
+}
 
 /// The JS value of a stream-family registry id (stream, reader, writer,
 /// transform): a `POINTER_TAG` handle in the stream band, like every other
@@ -919,7 +985,7 @@ unsafe fn is_byte_stream_enqueue_chunk(chunk_bits: u64) -> bool {
     let Some(addr) = raw_pointer_addr(chunk_bits) else {
         return false;
     };
-    perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some()
+    perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
         || perry_runtime::buffer::is_data_view(addr)
         || perry_runtime::buffer::is_uint8array_buffer(addr)
         || (perry_runtime::buffer::is_registered_buffer(addr)
@@ -933,38 +999,26 @@ unsafe fn make_error_with_message(msg: &str) -> u64 {
 }
 
 unsafe fn make_type_error_with_message(msg: &str) -> u64 {
-    let s = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = perry_runtime::error::js_typeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
+    stream_type_error(msg).value().to_bits()
 }
 
 unsafe fn make_type_error_with_code(message: &str, code: &'static str) -> u64 {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::js_typeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
-}
-
-unsafe fn make_range_error_with_code(message: &str, code: &'static str) -> u64 {
-    let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    perry_runtime::node_submodules::register_error_code_pub(s, code);
-    let err = perry_runtime::error::js_rangeerror_new(s);
-    JSValue::pointer(err as *const u8).bits()
+    stream_type_error_with_code(message, code).value().to_bits()
 }
 
 unsafe fn throw_type_error(message: &str) -> ! {
-    let err = make_type_error_with_message(message);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_type_error(message);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
-    let err = make_type_error_with_code(message, code);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_type_error_with_code(message, code);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn throw_range_error_with_code(message: &str, code: &'static str) -> ! {
-    let err = make_range_error_with_code(message, code);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_range_error_with_code(message, code);
+    perry_runtime::exception::throw_core(err)
 }
 
 unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
@@ -975,8 +1029,8 @@ unsafe fn reject_type_error(promise: *mut Promise, message: &str) {
 unsafe fn throw_invalid_arg_type(message: &str) -> ! {
     let s = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE");
-    let err = perry_runtime::error::js_typeerror_new(s);
-    perry_runtime::exception::js_throw(perry_runtime::value::js_nanbox_pointer(err as i64))
+    let err = perry_runtime::error::CoreError::type_error(s);
+    perry_runtime::exception::throw_core(err)
 }
 
 fn alloc_readable(start_cb: i64, pull_cb: i64, cancel_cb: i64, hwm: f64) -> usize {
@@ -1094,7 +1148,7 @@ unsafe fn invoke_start(stream_id: usize) {
         match g.get_mut(&stream_id) {
             Some(s) if !s.started => {
                 s.started = true;
-                (s.start_cb, stream_value(stream_id))
+                (s.start_cb, controller_value(stream_id))
             }
             _ => return,
         }
@@ -1115,7 +1169,7 @@ extern "C" fn readable_pull_microtask(
     unsafe {
         let stream_bits = js_closure_get_capture_ptr(closure, 0) as u64;
         let stream_id = f64::from_bits(stream_bits) as usize;
-        let cb = js_closure_get_capture_ptr(closure, 1);
+        let cb = perry_runtime::closure::closure_capture_ref(closure, 1);
         let pull_returns_byte_chunk = js_closure_get_capture_ptr(closure, 2) != 0;
         let should_pull = {
             let mut g = READABLE_STREAMS.lock().unwrap();
@@ -1145,7 +1199,7 @@ extern "C" fn readable_pull_microtask(
                     js_closure_call1(
                         cb as *const ClosureHeader,
                         perry_runtime::closure::plain_call_receiver(),
-                        stream_value(stream_id),
+                        controller_value(stream_id),
                     )
                 }
             });
@@ -1196,7 +1250,7 @@ fn readable_pull_settled_closure(
     stream_id: usize,
 ) -> *mut ClosureHeader {
     let closure = js_closure_alloc(info, 1);
-    js_closure_set_capture_ptr(closure, 0, stream_id as i64);
+    perry_runtime::closure::closure_set_capture_word(closure, 0, stream_id as i64);
     closure
 }
 
@@ -1307,8 +1361,12 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
         3,
     );
     js_closure_set_capture_ptr(pull, 0, controller.to_bits() as i64);
-    js_closure_set_capture_ptr(pull, 1, cb);
-    js_closure_set_capture_ptr(pull, 2, if pull_returns_byte_chunk { 1 } else { 0 });
+    perry_runtime::closure::closure_set_capture_ref(pull, 1, cb);
+    perry_runtime::closure::closure_set_capture_word(
+        pull,
+        2,
+        if pull_returns_byte_chunk { 1 } else { 0 },
+    );
     perry_runtime::builtins::js_queue_microtask(pull as i64);
 }
 
@@ -1318,9 +1376,9 @@ unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
         perry_runtime::closure::plain_call_receiver(),
     );
     if chunk.to_bits() == TAG_UNDEFINED {
-        let _ = js_readable_stream_controller_close(stream_value(stream_id));
+        let _ = js_readable_stream_controller_close(controller_value(stream_id));
     } else {
-        let _ = js_readable_stream_controller_enqueue(stream_value(stream_id), chunk);
+        let _ = js_readable_stream_controller_enqueue(controller_value(stream_id), chunk);
     }
 }
 
@@ -1958,11 +2016,11 @@ pub unsafe extern "C" fn js_readable_stream_from_iterable(value: f64) -> f64 {
         let arr_ptr = ptr_addr.unwrap_or(0) as *const perry_runtime::ArrayHeader;
         ReadableFromSource::closed(chunks_from_array_ptr(arr_ptr))
     } else if let Some(addr) = ptr_addr {
-        if perry_runtime::typedarray::lookup_typed_array_kind(addr).is_some() {
-            let ta = addr as *const perry_runtime::typedarray::TypedArrayHeader;
-            let len = perry_runtime::typedarray::js_typed_array_length(ta).max(0);
+        if perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+            let ta = addr as *const perry_runtime::typedarray_hook_slots::TypedArrayHeader;
+            let len = perry_runtime::typedarray_hook_slots::js_typed_array_length(ta).max(0);
             let chunks = (0..len)
-                .map(|i| perry_runtime::typedarray::js_typed_array_get(ta, i).to_bits())
+                .map(|i| perry_runtime::typedarray_hook_slots::js_typed_array_get(ta, i).to_bits())
                 .collect();
             ReadableFromSource::closed(chunks)
         } else if perry_runtime::buffer::is_registered_buffer(addr)
@@ -2067,9 +2125,9 @@ unsafe fn error_readable_stream(stream_id: usize, reason_bits: u64) {
 
 unsafe fn throw_invalid_readable_strategy_size(stream_id: usize, size: f64) -> ! {
     let message = invalid_size_message(size);
-    let err = make_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
-    error_readable_stream(stream_id, err);
-    perry_runtime::exception::js_throw(f64::from_bits(err))
+    let err = stream_range_error_with_code(&message, "ERR_INVALID_ARG_VALUE");
+    error_readable_stream(stream_id, err.value().to_bits());
+    perry_runtime::exception::throw_core(err)
 }
 
 fn readable_controller_enqueue_error(stream_id: usize) -> Option<&'static str> {
@@ -2081,7 +2139,7 @@ fn readable_controller_enqueue_error(stream_id: usize) -> Option<&'static str> {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// ReadableStreamDefaultController FFI (controller is the stream handle)
+// ReadableStreamDefaultController FFI (receiver: a controller value, R1)
 // ─────────────────────────────────────────────────────────────────────
 
 #[no_mangle]
@@ -2100,7 +2158,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
             );
         }
     }
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     if let Some(message) = readable_controller_enqueue_error(id) {
         throw_type_error_with_code(message, "ERR_INVALID_STATE");
     }
@@ -2176,7 +2234,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_close(stream_handle: f64) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     if std::env::var("PERRY_JSON_PATH").as_deref() == Ok("1") {
         use std::sync::atomic::{AtomicUsize, Ordering};
         static N: AtomicUsize = AtomicUsize::new(0);
@@ -2234,7 +2292,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
     stream_handle: f64,
     reason: f64,
 ) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     // #5989: erroring a tee'd source errors both branches.
     if tee_branches_of(id).is_some() {
         tee_error_branches(id, reason.to_bits());
@@ -2246,7 +2304,7 @@ pub unsafe extern "C" fn js_readable_stream_controller_error(
 
 #[no_mangle]
 pub unsafe extern "C" fn js_readable_stream_controller_desired_size(stream_handle: f64) -> f64 {
-    let id = stream_id(stream_handle);
+    let id = controller_stream_id(stream_handle);
     let g = READABLE_STREAMS.lock().unwrap();
     match g.get(&id) {
         Some(s) if s.state == ReadableState::Readable => s.high_water_mark - s.queue_total_size,
@@ -2267,7 +2325,7 @@ extern "C" fn readable_from_chunk_fulfilled(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     unsafe {
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let promise = scope.root_raw_mut_ptr(promise);
@@ -2285,7 +2343,7 @@ extern "C" fn readable_from_chunk_rejected(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
     js_promise_reject(promise, reason);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -2335,12 +2393,12 @@ unsafe fn resolve_reader_read_value(promise: *mut Promise, value_bits: u64) {
             let reject =
                 js_closure_alloc(perry_runtime::fn_info!(readable_from_chunk_rejected, 1), 1);
             let reject = scope.root_raw_mut_ptr(reject);
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 fulfill.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,
             );
-            js_closure_set_capture_ptr(
+            perry_runtime::closure::closure_set_capture_ref(
                 reject.get_raw_mut_ptr(),
                 0,
                 promise.get_raw_mut_ptr::<Promise>() as i64,
@@ -2645,7 +2703,7 @@ unsafe fn pipe_through_options_error(options: f64) -> Option<&'static str> {
 
 fn pipe_through_signal_error(signal: f64) -> Option<&'static str> {
     (signal.to_bits() != TAG_UNDEFINED
-        && perry_runtime::url::js_abort_signal_resolve_ptr(signal).is_null())
+        && perry_runtime::event_target_hook_slots::js_abort_signal_resolve_ptr(signal).is_null())
     .then_some("The options.signal property must be an AbortSignal")
 }
 

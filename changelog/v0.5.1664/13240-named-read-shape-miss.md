@@ -1,0 +1,1 @@
+Faster named property reads of an absent key on plain objects and object literals: a definite miss is answered from the shape without walking the accessor and brand surfaces. Getters, setters, proxies, prototype changes, deletes, symbol and numeric-string keys keep the generic path.

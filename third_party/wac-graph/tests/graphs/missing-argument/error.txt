@@ -1,0 +1,4 @@
+failed to add argument edge from source node 0 to target node 1 referenced in argument 0 for test case `missing-argument`
+
+Caused by:
+    argument name `foo` is not an import of package `test:foo`

@@ -54,6 +54,8 @@ fn this_store(property: &str, value: Expr) -> Stmt {
         object: Box::new(Expr::This),
         property: property.to_string(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -98,6 +100,7 @@ fn class_p() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -130,6 +133,7 @@ fn class_q() -> Class {
 
 fn new_of(class_name: &str, args: Vec<Expr>) -> Expr {
     Expr::New {
+        byte_end: 0,
         class_name: class_name.to_string(),
         args,
         type_args: Vec::new(),
@@ -183,6 +187,7 @@ fn counted_loop(idx: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 
 fn arr_len(arr: u32) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
         property: "length".to_string(),
         byte_offset: 0,
@@ -197,6 +202,9 @@ fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
         ty: Type::Named(class_name.to_string()),
         mutable: false,
         init: Some(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(arr)),
             index: Box::new(Expr::LocalGet(idx)),
         }),
@@ -205,6 +213,7 @@ fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
 
 fn read_field(id: u32, property: &str) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(id)),
         property: property.to_string(),
         byte_offset: 0,
@@ -216,6 +225,8 @@ fn store_field(id: u32, property: &str, value: Expr) -> Stmt {
         object: Box::new(Expr::LocalGet(id)),
         property: property.to_string(),
         value: Box::new(value),
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -298,7 +309,11 @@ fn promote_with_element_fields_and_numeric_params(
 
 fn read_direct_field(array_id: u32, index_id: u32, property: &str) -> Stmt {
     Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(array_id)),
             index: Box::new(Expr::LocalGet(index_id)),
         }),
@@ -588,7 +603,9 @@ fn method_site_string_arg_drops_the_field() {
     let classes = classes_of(&cs);
     let call_set_x = |recv: u32, arg: Expr| {
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(recv)),
                 property: "setX".to_string(),
                 byte_offset: 0,
@@ -854,10 +871,10 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
                 mutable: false,
                 init: Some(Expr::Binary {
                     op: BinaryOp::Add,
-                    left: Box::new(Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(view_id)),
-                        index: Box::new(Expr::Integer(0)),
-                    }),
+                    left: Box::new(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(view_id)),
+                        Box::new(Expr::Integer(0)),
+                    )),
                     right: Box::new(Expr::Integer(1)),
                 }),
             },
@@ -1003,5 +1020,67 @@ fn update_value_resolves_via_not_bigint() {
     assert!(
         !without_fact.contains(&22),
         "without the not-BigInt fact the update's value is unproven"
+    );
+}
+
+/// `t = t + a[i]` over `const a = [1, 2, 3]`: the literal is numeric storage
+/// while only element and `length` reads use it; one element store (or any
+/// other use) voids the accumulator's proof.
+#[test]
+fn literal_array_sum_loses_its_proof_to_an_element_store() {
+    let program = |store: bool| {
+        let mut stmts = vec![
+            Stmt::Let {
+                id: 40,
+                name: "a".to_string(),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(Expr::Array(
+                    vec![Expr::Integer(1), Expr::Integer(2), Expr::Integer(3)],
+                    None,
+                )),
+            },
+            Stmt::Let {
+                id: 41,
+                name: "t".to_string(),
+                ty: Type::Any,
+                mutable: true,
+                init: Some(Expr::Number(0.0)),
+            },
+        ];
+        if store {
+            stmts.push(Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(40)),
+                index: Box::new(Expr::Integer(1)),
+                value: Box::new(Expr::String("two".to_string())),
+                byte_offset: 0,
+                byte_end: 0,
+                element_offset: 0,
+            }));
+        }
+        stmts.push(counted_loop(
+            42,
+            arr_len(40),
+            vec![Stmt::Expr(Expr::LocalSet(
+                41,
+                Box::new(Expr::Binary {
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(41)),
+                    right: Box::new(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(40)),
+                        index: Box::new(Expr::LocalGet(42)),
+                    }),
+                }),
+            ))],
+        ));
+        stmts
+    };
+    assert!(numeric_locals_of(&program(false)).contains(&41));
+    assert!(
+        !numeric_locals_of(&program(true)).contains(&41),
+        "a string stored into the literal makes `t + a[i]` a concatenation"
     );
 }

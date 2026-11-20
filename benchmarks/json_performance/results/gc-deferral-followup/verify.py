@@ -20,7 +20,7 @@ stamp = read('../gc-deferral/source-stamp.json')
 assert len(stamp) == 90
 assert all(hashlib.sha256((repo / file).read_bytes()).hexdigest() == sha
            for file, sha in stamp.items())
-fixture = repo / 'test-files/test_gap_json_root_record.ts'
+fixture = repo / 'tests/fixtures/programs/test_gap_json_root_record.ts'
 fixture_sha = hashlib.sha256(fixture.read_bytes()).hexdigest()
 retained = read('defer2-root-record-validation.json')
 assert len(retained) == 9

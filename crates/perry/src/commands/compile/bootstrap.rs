@@ -161,6 +161,45 @@ pub(super) fn bundle_extensions_into_ctx(
     Ok(bundled_extensions)
 }
 
+/// A native addon reaches what its Node-API imports reach
+/// (`NativeAddonModule::reach`). An open one (`napi_get_global`, a property
+/// or prototype read, a script, a call result) reaches `Function` through
+/// `.constructor` and every built-in through the global object: it is a
+/// dynamic-code site with global reach, and it reaches every module as
+/// `process.getBuiltinModule` does. Records each open addon once; returns
+/// whether one was new.
+pub(super) fn admit_open_native_addons(ctx: &mut CompilationContext) -> bool {
+    let open = ctx
+        .native_addons
+        .values()
+        .filter(|addon| {
+            addon
+                .reach
+                .contains(&perry_runtime_manifest::NodeApiReach::World)
+        })
+        .map(|addon| {
+            format!(
+                "Node-API addon {} (its imports reach the world)",
+                addon.logical_id
+            )
+        })
+        .collect::<Vec<_>>();
+    let mut recorded = false;
+    for site in open {
+        let reach = &mut ctx.patched_builtins.dynamic_code_reach;
+        if reach.sites.contains(&site) {
+            continue;
+        }
+        reach.record_global(site);
+        recorded = true;
+    }
+    if ctx.native_addons_reach(perry_runtime_manifest::NodeApiReach::World) {
+        perry_hir::eval_classifier::note_dynamic_function_reachable();
+        ctx.uses_get_builtin_module = true;
+    }
+    recorded
+}
+
 /// Cross-module class field type propagation pass. Pass 1 lowered every
 /// native module without knowledge of imported classes' field types, so
 /// for-of loops over fields like `someLocal.removes` (where `someLocal:
@@ -189,6 +228,19 @@ pub(super) fn rerun_collect_with_class_field_types(
     format: OutputFormat,
     mut prepared_sources: PreparedSources,
 ) -> Result<()> {
+    // An open addon is a dynamic-code site with global reach: lower every
+    // module against it.
+    let global_before = ctx.patched_builtins.dynamic_code_reach.globals;
+    if admit_open_native_addons(ctx) && !global_before && ctx.patched_builtins_lowered_modules > 0 {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
+    // The last collected graph member can be an addon, after every source
+    // module was lowered. Its definitions withdraw earlier create-add folds.
+    if perry_hir::install_lowering_proto_census(&super::foreign_native_census::census(ctx))
+        && ctx.patched_builtins_lowered_modules > 0
+    {
+        ctx.patched_builtins_grew_after_lower = true;
+    }
     // Backstop for the pre-lowering scan: a source site that lowering left to
     // the interpreter but the scan did not record has the same reach.
     for site in perry_hir::interpreted_source_sites() {
@@ -263,10 +315,29 @@ pub(super) fn rerun_collect_with_class_field_types(
     // were lowered. The set is kept (it is already the program-wide union), so
     // the re-walk lowers every module against the final set and cannot grow it.
     let patched_builtins_rerun = ctx.patched_builtins_grew_after_lower;
+    // Layer-1 DCE: the export demand of the first walk's graph; the second
+    // walk lowers each module without what nothing demands.
+    let mut demand_roots = vec![args
+        .input
+        .canonicalize()
+        .unwrap_or_else(|_| args.input.clone())];
+    if let Some(ext_dir) = &args.bundle_extensions {
+        for (entry_path, _) in discover_extension_entries(ext_dir)? {
+            demand_roots.push(entry_path.canonicalize().unwrap_or(entry_path));
+        }
+    }
+    let export_prunes = super::export_demand::make_plan(ctx, &demand_roots)?;
+    // A named import of an opaque CommonJS module is exported by the module's
+    // wrap, which the first walk prepared before every importer was known.
+    let demand = named_exports::opaque_cjs_demand(ctx);
+    let demand_rerun = demand != ctx.cjs_demanded_exports;
+    ctx.cjs_demanded_exports = demand;
     if field_map.is_empty()
+        && !export_prunes
         && accessor_map.is_empty()
         && !ctx.solid_client_recollect
         && !patched_builtins_rerun
+        && !demand_rerun
     {
         return Ok(());
     }
@@ -316,6 +387,7 @@ pub(super) fn rerun_collect_with_class_field_types(
         }
     }
     ctx.cjs_require_diagnostics = cjs_require_diagnostics;
+    super::export_demand::check_walks(ctx)?;
     Ok(())
 }
 
@@ -620,6 +692,7 @@ mod js_runtime_gate_tests {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,

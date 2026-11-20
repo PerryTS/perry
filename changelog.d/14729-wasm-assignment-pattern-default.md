@@ -1,0 +1,1 @@
+On the web target an assignment-pattern default applies when the value is `undefined`: `let x; [x = 5] = []` sets `x` to 5, as do `({ a: x = 5 } = {})`, nested patterns and `for ([x = 5] of ...)`, instead of leaving `x` undefined.

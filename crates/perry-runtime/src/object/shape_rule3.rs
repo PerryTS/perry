@@ -253,6 +253,12 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "high half of word_count (< 2^30)",
         Rule3Word::NotPointerTagged,
     ),
+    (
+        gc::GC_TYPE_REGEX_CACHE,
+        "RegexCache",
+        "perex::dfa header word 1: zero before the first build, then the layout number (2)",
+        Rule3Word::NotPointerTagged,
+    ),
     // Cells are compiler-private raw addresses, never JavaScript receivers.
     (
         gc::GC_TYPE_BOX,
@@ -276,6 +282,20 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         gc::GC_TYPE_SCOPE,
         "ScopeSlots",
         "high half of slot 0's NaN-box payload",
+        Rule3Word::NotPointerTagged,
+    ),
+    (
+        gc::GC_TYPE_RECORD_ARRAY,
+        "RecordArrayHeader",
+        "capacity: u32 (records) — `record_array::grown_capacity_or_throw` at the \
+         one growth funnel; `RangeError: Invalid array length`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // Reached only through its head's raw `elems` edge, never a JavaScript value.
+    (
+        gc::GC_TYPE_RECORD_ELEMS,
+        "record elements",
+        "high half of the first record word (any double or immediate)",
         Rule3Word::NotPointerTagged,
     ), // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
     (
@@ -346,7 +366,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
     (
         gc::GC_TYPE_WEAK_STORAGE,
         "WeakStorage",
-        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 28",
+        "len: u32 <= capacity; storage::grow bounds capacity by the u32 allocation size / 32",
         Rule3Word::BoundedBelowRange,
     ),
     (
@@ -379,7 +399,7 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
 #[inline]
 pub(crate) fn debug_assert_not_shape_id_word(kind: &'static str, word: u32) {
     debug_assert!(
-        !crate::object::shapes::is_shape_id(word),
+        !crate::object::shapes::is_layout_word(word),
         "rule 3: {kind} stored {word:#x} at payload +4, which the emitted read \
          path cannot distinguish from a live ShapeId"
     );
@@ -424,17 +444,17 @@ pub(crate) fn clamp_plus_four_word(kind: &'static str, word: u32) -> u32 {
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn throw_plus_four_range_error(message: &'static [u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::object::shapes::{is_shape_id, SHAPE_ID_END};
+    use crate::object::shapes::{is_layout_word, SHAPE_ID_END};
 
     /// The message of a thrown `RangeError`, read straight out of the
     /// `ErrorHeader` (the pattern `global_this_webassembly`'s tests use).
@@ -546,20 +566,22 @@ mod tests {
             let word_at = |addr: usize| -> u32 { *((addr + 4) as *const u32) };
 
             let arr = crate::array::js_array_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(arr)), "array capacity");
+            assert!(!is_layout_word(word_at(arr)), "array capacity");
 
             let buf = crate::buffer::js_buffer_alloc(64, 0) as usize;
-            assert!(!is_shape_id(word_at(buf)), "buffer capacity");
+            assert!(!is_layout_word(word_at(buf)), "buffer capacity");
 
             let map = crate::map::js_map_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(map)), "map capacity");
+            assert!(!is_layout_word(word_at(map)), "map capacity");
 
             let set = crate::set::js_set_alloc(8) as usize;
-            assert!(!is_shape_id(word_at(set)), "set capacity");
+            assert!(!is_layout_word(word_at(set)), "set capacity");
 
-            let ta =
-                crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT8, 32) as usize;
-            assert!(!is_shape_id(word_at(ta)), "typed array capacity");
+            let ta = crate::typedarray_hook_slots::typed_array_alloc(
+                crate::typedarray_hook_slots::KIND_INT8,
+                32,
+            ) as usize;
+            assert!(!is_layout_word(word_at(ta)), "typed array capacity");
 
             // A Promise's +4 is struct padding: `arena_alloc_gc` hands back
             // reused, non-zeroed memory, so without an explicit zero field a
@@ -585,10 +607,10 @@ mod tests {
             (i32::MAX as u32) < SHAPE_ID_BASE,
             "the typed-array element cap must stay below the ShapeId floor"
         );
-        assert!(!is_shape_id(i32::MAX as u32));
+        assert!(!is_layout_word(i32::MAX as u32));
         assert_eq!(MAX_PLUS_FOUR_WORD, i32::MAX as u32);
-        assert!(!is_shape_id(MAX_PLUS_FOUR_WORD));
-        assert!(is_shape_id(MAX_PLUS_FOUR_WORD + 1));
+        assert!(!is_layout_word(MAX_PLUS_FOUR_WORD));
+        assert!(is_layout_word(MAX_PLUS_FOUR_WORD + 1));
     }
 
     /// `SHAPE_ID_BASE` is the first capacity every count-carrying kind must
@@ -684,7 +706,10 @@ mod tests {
         let _lock = crate::gc::global_side_table_test_lock();
         assert_eq!(
             expect_throw(|| {
-                crate::typedarray::typed_array_alloc(crate::typedarray::KIND_INT8, SHAPE_ID_BASE);
+                crate::typedarray_hook_slots::typed_array_alloc(
+                    crate::typedarray_hook_slots::KIND_INT8,
+                    SHAPE_ID_BASE,
+                );
             }),
             "Array buffer allocation failed"
         );
@@ -703,7 +728,7 @@ mod tests {
             expect_throw(|| {
                 crate::native_arena::js_native_arena_view(
                     owner as u64,
-                    crate::typedarray::KIND_INT8 as i32,
+                    crate::typedarray_hook_slots::KIND_INT8 as i32,
                     0,
                     SHAPE_ID_BASE as i64,
                 );
@@ -715,8 +740,8 @@ mod tests {
 
     /// `DateCell`'s relayout, with the value that motivated it.
     ///
-    /// `-1.0` is `0xBFF0_0000_0000_0000`: with the timestamp at `+0` its high
-    /// word landed at `+4` as `0xBFF0_0000`, a live-looking ShapeId. The
+    /// `-0.0` is `0x8000_0000_0000_0000`: with the timestamp at `+0` its high
+    /// word landed at `+4` as `0x8000_0000`, a live-looking layout word. The
     /// first assertion pins that the witness is real, so this test cannot
     /// quietly stop testing anything; the rest check every date the JS spec
     /// admits and that the value still round-trips through the new layout.
@@ -724,9 +749,9 @@ mod tests {
     fn rule3_date_cell_never_carries_a_shape_id_at_plus_four() {
         let _lock = crate::gc::global_side_table_test_lock();
         assert!(
-            is_shape_id((f64::to_bits(-1.0) >> 32) as u32),
-            "the witness must still be a witness: the high word of -1.0 is \
-             inside the ShapeId range, which is why the timestamp cannot live \
+            is_layout_word((f64::to_bits(-0.0) >> 32) as u32),
+            "the witness must still be a witness: the high word of -0.0 is \
+             a valid layout word, which is why the timestamp cannot live \
              at payload +0"
         );
 
@@ -743,12 +768,12 @@ mod tests {
             -1234.5e10,
         ];
         for ts in timestamps {
-            let value = crate::date::alloc_date_cell(ts);
+            let value = crate::date_hook_slots::alloc_date_cell(ts);
             let addr = crate::value::js_nanbox_get_pointer(value) as usize;
             assert!(addr != 0, "a Date is a NaN-boxed cell pointer");
             let word = unsafe { *((addr + 4) as *const u32) };
             assert!(
-                !is_shape_id(word),
+                !is_layout_word(word),
                 "DateCell for ts {ts} put {word:#x} at payload +4"
             );
             let read_back = crate::date::date_cell_timestamp(value);
@@ -767,6 +792,7 @@ mod tests {
     /// The pointer-high-half rows are only sound while the collector's
     /// address ceiling stays where `value::addr_class` puts it.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn rule3_heap_pointer_high_half_cannot_reach_the_shape_id_range() {
         assert!(((MAX_HEAP_ADDR_EXCLUSIVE - 1) >> 32) < SHAPE_ID_BASE as u64);
         let arr = crate::array::js_array_alloc(1) as usize;
@@ -775,6 +801,6 @@ mod tests {
             "a real GC address must sit under the ceiling the \
              StructurallySmall pointer rows appeal to"
         );
-        assert!(!is_shape_id((arr >> 32) as u32));
+        assert!(!is_layout_word((arr >> 32) as u32));
     }
 }

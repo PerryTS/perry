@@ -5,6 +5,8 @@
 
 #[path = "lower_conditional_array_record.rs"]
 pub(crate) mod array_record;
+#[path = "lower_conditional_numeric_schedule.rs"]
+mod numeric_schedule;
 use anyhow::Result;
 use perry_hir::{Expr, LogicalOp};
 
@@ -39,6 +41,11 @@ const QNAN_PREFIX_I64: &str = "9221120237041090560";
 /// a function call but produces correct results across the entire JS
 /// truthiness table.
 pub(crate) fn lower_truthy(ctx: &mut FnCtx<'_>, cond_val: &str, cond_expr: &Expr) -> String {
+    // A local or a field read the whole-program facts prove a Boolean
+    // (`expr::booleans`): a proof about the values, not the annotation.
+    if let Some(truthy) = crate::expr::booleans::truthy(ctx, cond_val, cond_expr) {
+        return truthy;
+    }
     if is_numeric_expr(ctx, cond_expr)
         && !expr_may_return_boxed_value_from_raw_f64_fallback(ctx, cond_expr)
         // Keep bare binding truthiness independent of binding-level type
@@ -220,6 +227,17 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
         }
     }
+    // N1: a test of two exact int32 chains is one integer compare.
+    if let Some(bit) = crate::expr::i32_temps::try_lower_compare(ctx, expr)? {
+        return Ok(bit);
+    }
+    // An integer product, sum or difference the intervals bound is compared
+    // as integers.
+    if let Expr::Compare { op, left, right } = expr {
+        if let Some(bit) = crate::expr::int_product::try_lower_compare(ctx, *op, left, right)? {
+            return Ok(bit);
+        }
+    }
     if let Some(bit) = crate::expr::try_lower_compare_chain(ctx, expr)? {
         return Ok(bit);
     }
@@ -229,6 +247,19 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         right,
     } = expr
     {
+        // Only total primitive comparisons can move across this branch.
+        let (left, right) = if matches!(
+            expr,
+            Expr::Logical {
+                op: LogicalOp::And,
+                ..
+            }
+        ) && numeric_schedule::cheap_guard_first(ctx, left, right)
+        {
+            (right, left)
+        } else {
+            (left, right)
+        };
         let l = lower_test(ctx, left)?;
         let pred = ctx.block().label.clone();
         let rhs = ctx.new_block("test.right");
@@ -431,6 +462,13 @@ pub(crate) fn lower_logical(
     // value is "nullish" and we return the right side; otherwise return
     // the left.
     if matches!(op, LogicalOp::Coalesce) {
+        // An element read below a dense floor that is a proven Number is
+        // never nullish (`proven_array`, PR-C2): the right side never runs.
+        if crate::expr::index_get::proven_array::number_in_floor(ctx, left) {
+            let l = lower_expr(ctx, left)?;
+            crate::expr::index_get::proven_array::coalesce_is_left(ctx, &l)?;
+            return Ok(l);
+        }
         let l = lower_expr(ctx, left)?;
         let l_block_label = ctx.block().label.clone();
         let blk = ctx.block();

@@ -1,0 +1,21 @@
+import fsDefault, * as fs from "node:fs";
+import { readFileSync, promises } from "node:fs";
+import { EventEmitter } from "node:events";
+import { createRequire, syncBuiltinESMExports } from "node:module";
+const require = createRequire(import.meta.url);
+const dynamicPromises = await import("node:fs/promises");
+console.log("read identity", readFileSync === fs.readFileSync, readFileSync === fsDefault.readFileSync);
+console.log("promise identity", promises === fs.promises, promises === dynamicPromises, promises === dynamicPromises.default);
+console.log("event identity", EventEmitter === require("node:events"));
+let rejected = false;
+try { fs.readFileSync = () => "namespace patch"; } catch (e) { rejected = e instanceof TypeError; }
+console.log("namespace write", rejected);
+const original = readFileSync;
+const patched = () => "patched";
+fsDefault.readFileSync = patched;
+console.log("before sync", readFileSync === original, fs.readFileSync === original, readFileSync === fsDefault.readFileSync);
+syncBuiltinESMExports();
+console.log("after sync", readFileSync === patched, fs.readFileSync === patched, readFileSync("ignored"), fs.readFileSync("ignored"));
+fsDefault.readFileSync = original;
+syncBuiltinESMExports();
+console.log("restored", readFileSync === original, fs.readFileSync === original);

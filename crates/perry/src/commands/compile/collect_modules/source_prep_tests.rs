@@ -253,12 +253,13 @@ fn second_walk_with_first_walk_sources_collects_identical_modules() {
     let dir = tempfile::tempdir().expect("tempdir");
     fixture(dir.path());
     let (fresh, kept, _) = collect_twice(dir.path(), 0, false);
-    // main, a, c, b, point, shared, meta, data.json, note.txt.
-    assert_eq!(kept, 9, "the first walk keeps every plain module source");
+    // main, a, c, b, point, shared, meta, data.json, note.txt, and the
+    // CommonJS support module the wrapped ones import.
+    assert_eq!(kept, 10, "the first walk keeps every plain module source");
     assert!(fresh.join("\n").contains("__perry_cjs_factory"));
     for workers in [0, 4, 1] {
         let (reused, kept, left) = collect_twice(dir.path(), workers, true);
-        assert_eq!(kept, 9);
+        assert_eq!(kept, 10);
         assert_eq!(left, 0, "the second walk takes every kept source");
         assert_eq!(reused, fresh, "workers {workers}");
     }
@@ -353,4 +354,85 @@ fn source_prepared_after_the_rewrite_is_reused_only_for_the_same_rewrite_output(
         .take_after_rewrite(&path, class, &raw)
         .expect("same rewrite output");
     assert_eq!(taken.source, prepared.source);
+}
+
+#[test]
+fn explicit_commonjs_entry_gets_bindings_without_source_tokens() {
+    let dir = tempfile::tempdir().unwrap();
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let class = PrepClass {
+        wrap_eligible: true,
+        is_json: false,
+        is_text: false,
+        is_entry: true,
+    };
+    for (filename, wrapped) in [("entry.cjs", true), ("entry.mjs", false)] {
+        let path = dir.path().join(filename);
+        let prepared = super::source_prep::prepare_from_raw(
+            "console.log(typeof module, typeof require, typeof exports);".to_string(),
+            &path,
+            class,
+            &super::source_prep::PrepInputs::of(&ctx, None),
+        )
+        .unwrap();
+        assert_eq!(prepared.was_cjs_wrapped, wrapped, "{filename}");
+    }
+}
+
+#[test]
+fn commonjs_worker_entries_survive_preparation_and_reuse() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().canonicalize().unwrap();
+    write(
+        &root,
+        "main.js",
+        "const { Worker } = require('node:worker_threads'); new Worker('./a.cjs');",
+    );
+    write(
+        &root,
+        "a.cjs",
+        "const { Worker: Child } = require('worker_threads'); new Child('./b.cjs');",
+    );
+    write(
+        &root,
+        "b.cjs",
+        "require('node:worker_threads').parentPort.postMessage('leaf');",
+    );
+    let mut ctx = fixture_ctx(&root, 0);
+    collect_modules(
+        &root.join("main.js"),
+        &mut ctx,
+        &mut HashSet::new(),
+        OutputFormat::Text,
+        None,
+        &mut 1,
+        false,
+        &VerboseProgress::new(OutputFormat::Text, 0),
+        None,
+    )
+    .unwrap();
+    for (importer, target) in [("main.js", "a.cjs"), ("a.cjs", "b.cjs")] {
+        let target = root.join(target);
+        assert!(
+            ctx.native_modules.contains_key(&target),
+            "missing {}",
+            target.display()
+        );
+        assert!(ctx
+            .worker_url_entries
+            .iter()
+            .any(|(_, path)| path == &target));
+        let module = &ctx.native_modules[&root.join(importer)];
+        assert!(module
+            .imports
+            .iter()
+            .any(|edge| { edge.resolved_path.as_deref() == target.to_str() && edge.is_dynamic }));
+        assert!(format!("{module:?}").contains("NewDynamic"));
+    }
+    let (fresh, _, _) = collect_twice(&root, 0, false);
+    for workers in [0, 1, 4] {
+        let (reused, _, left) = collect_twice(&root, workers, true);
+        assert_eq!(reused, fresh);
+        assert_eq!(left, 0);
+    }
 }

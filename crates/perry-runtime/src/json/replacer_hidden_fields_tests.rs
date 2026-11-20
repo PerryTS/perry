@@ -29,8 +29,10 @@ unsafe fn check_hidden_fields(mode: u8) {
     .into_iter()
     .map(String::from)
     .collect();
-    // Identical physical slots: runtime-only names are hidden on class instances,
-    // while ordinary objects keep even an exact reserved-looking spelling.
+    // Identical physical slots: on class instances only the compiler's exact
+    // salted capture spelling `__perry_cap_<digits>m<12 hex>` is hidden (the
+    // one predicate, `is_class_capture_key`); digits-only `__perry_cap_7` and
+    // `__perry_cap_user` are user keys. Ordinary objects keep every spelling.
     for class_id in [0, 11232] {
         object.with_mut_ptr(|obj: *mut crate::ObjectHeader| (*obj).class_id = class_id);
         let mut output = String::new();
@@ -44,7 +46,7 @@ unsafe fn check_hidden_fields(mode: u8) {
         let expected = if class_id == 0 {
             std::str::from_utf8(input).unwrap()
         } else {
-            r#"{"visible":1,"__perry_cap_user":4}"#
+            r#"{"visible":1,"__perry_cap_7":3,"__perry_cap_user":4}"#
         };
         assert_eq!(
             output.replace(['\n', ' '], ""),

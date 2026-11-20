@@ -1,7 +1,7 @@
 //! Per-module native-module method-dispatch registry (devirtualization).
 //! GENERATED scaffolding (native-module devirtualization, #5256). Each `js_nm_install_<m>()` is
-//! the SOLE static reference to its `nm_dispatch_<m>` bucket fn; codegen emits a
-//! call per statically-imported native module so the linker dead-strips the rest.
+//! dynamic dispatch owner of its `nm_dispatch_<m>` bucket fn. Statically selected
+//! exports instead reference their own specialized bodies, so unused exports strip.
 //! NOTHING here names all buckets together (that would re-pin everything).
 use super::native_module_dispatch::{
     nm_dispatch_assert, nm_dispatch_async_hooks, nm_dispatch_bigint, nm_dispatch_buffer,
@@ -17,53 +17,12 @@ use super::native_module_dispatch::{
 };
 use std::sync::atomic::{AtomicPtr, Ordering};
 
+use perry_dispatch::native_module_bucket::{
+    native_module_bucket as nm_module_index, NativeModuleBucket as NmBucket,
+};
+
 type NmDispatchFn = unsafe fn(&NmCtx, &str, &str) -> f64;
 
-#[derive(Copy, Clone)]
-#[repr(usize)]
-enum NmBucket {
-    Assert,
-    AsyncHooks,
-    Bigint,
-    Buffer,
-    Bun,
-    BunFfi,
-    ChildProcess,
-    Cluster,
-    Console,
-    Crypto,
-    Dgram,
-    Dns,
-    Domain,
-    Events,
-    Fs,
-    Http,
-    Inspector,
-    Module,
-    Net,
-    NodePty,
-    Os,
-    Path,
-    Perf,
-    Process,
-    Punycode,
-    Querystring,
-    Readline,
-    Repl,
-    Sea,
-    Sqlite,
-    Stream,
-    Timers,
-    Tls,
-    Tty,
-    Url,
-    Util,
-    V8,
-    Vm,
-    Wasi,
-    Zlib,
-    WorkerThreads,
-}
 const NM_BUCKET_COUNT: usize = 41;
 // #6580 merge: inserting BunFfi shifted every later NmBucket up one; keep this array
 // big enough to index every variant (WorkerThreads is the last). Guard against silent overflow.
@@ -71,74 +30,6 @@ const _: () = assert!((NmBucket::WorkerThreads as usize) < NM_BUCKET_COUNT);
 
 static NM_DISPATCH_REGISTRY: [AtomicPtr<()>; NM_BUCKET_COUNT] =
     [const { AtomicPtr::new(std::ptr::null_mut()) }; NM_BUCKET_COUNT];
-
-/// Map a (normalized) module tag to its bucket. Pure string match — references
-/// no bucket fn, so it pins nothing.
-fn nm_module_index(name: &str) -> Option<NmBucket> {
-    match name {
-        "assert" | "assert/strict" => Some(NmBucket::Assert),
-        "async_hooks" => Some(NmBucket::AsyncHooks),
-        "bigint" => Some(NmBucket::Bigint),
-        "buffer" | "buffer.Buffer" => Some(NmBucket::Buffer),
-        "bun" | "bun.ant" | "bun:jsc" => Some(NmBucket::Bun),
-        // #6562: the `bun:` prefix is part of the name (not stripped like
-        // `node:`).
-        "bun:ffi" | "ffi" | "ffi.default" => Some(NmBucket::BunFfi),
-        "child_process" => Some(NmBucket::ChildProcess),
-        "cluster" => Some(NmBucket::Cluster),
-        "console" => Some(NmBucket::Console),
-        "crypto" | "crypto.Certificate" | "crypto.KeyObject" | "crypto.subtle"
-        | "crypto.webcrypto" => Some(NmBucket::Crypto),
-        "dgram" => Some(NmBucket::Dgram),
-        "dns" | "dns/promises" => Some(NmBucket::Dns),
-        "domain" => Some(NmBucket::Domain),
-        "events" => Some(NmBucket::Events),
-        "fs" => Some(NmBucket::Fs),
-        "http" | "http2" | "https" => Some(NmBucket::Http),
-        "inspector"
-        | "inspector.Network"
-        | "inspector.NetworkResources"
-        | "inspector.DOMStorage"
-        | "inspector.Session"
-        | "inspector/promises"
-        | "inspector/promises.Session" => Some(NmBucket::Inspector),
-        "module" => Some(NmBucket::Module),
-        "net" => Some(NmBucket::Net),
-        // #6563: node-pty + the API-identical @lydell fork, one bucket.
-        "node-pty" | "@lydell/node-pty" | "bun-pty" => Some(NmBucket::NodePty),
-        "os" => Some(NmBucket::Os),
-        "path" | "path.posix" | "path.win32" => Some(NmBucket::Path),
-        "perf_histogram" | "perf_hooks" | "perf_observer" | "perf_observer_list" => {
-            Some(NmBucket::Perf)
-        }
-        "process" => Some(NmBucket::Process),
-        "punycode" | "punycode.ucs2" | "punycode.default" => Some(NmBucket::Punycode),
-        "querystring" => Some(NmBucket::Querystring),
-        "readline" => Some(NmBucket::Readline),
-        "repl" => Some(NmBucket::Repl),
-        "sea" => Some(NmBucket::Sea),
-        "sqlite" => Some(NmBucket::Sqlite),
-        "stream" => Some(NmBucket::Stream),
-        "timers" => Some(NmBucket::Timers),
-        "tls" => Some(NmBucket::Tls),
-        "tty" => Some(NmBucket::Tty),
-        "url" => Some(NmBucket::Url),
-        "util" | "util.types" | "util/types" => Some(NmBucket::Util),
-        "v8"
-        | "v8.Deserializer"
-        | "v8.GCProfiler"
-        | "v8.Serializer"
-        | "v8.promiseHooks"
-        | "v8.startupSnapshot"
-        | "v8.DefaultSerializer"
-        | "v8.DefaultDeserializer" => Some(NmBucket::V8),
-        "vm" => Some(NmBucket::Vm),
-        "worker_threads" => Some(NmBucket::WorkerThreads),
-        "wasi" => Some(NmBucket::Wasi),
-        "zlib" => Some(NmBucket::Zlib),
-        _ => None,
-    }
-}
 
 per_test_global! {
     /// Test-only: suppress the `cfg(test)` lazy `js_nm_install_all()` fallback in
@@ -182,6 +73,7 @@ pub(crate) fn nm_dispatch_lookup(name: &str) -> Option<NmDispatchFn> {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_assert() {
+    super::native_module::constant_getters::assert();
     nm_register_attach(
         NmBucket::Assert,
         super::native_module::callable_exports::nm_attach_assert,
@@ -235,6 +127,8 @@ pub extern "C" fn js_globalthis_seed_async_local_storage() {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_async_hooks() {
+    super::native_module::constant_getters::async_hooks();
+    crate::async_hook_slots::install();
     nm_register_attach(
         NmBucket::AsyncHooks,
         super::native_module::callable_exports::nm_attach_async_hooks,
@@ -253,6 +147,7 @@ pub extern "C" fn js_nm_install_bigint() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_buffer() {
+    super::native_module::constant_getters::buffer();
     NM_DISPATCH_REGISTRY[NmBucket::Buffer as usize].store(
         nm_dispatch_buffer as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -261,6 +156,7 @@ pub extern "C" fn js_nm_install_buffer() {
 /// bun:ffi (#6562).
 #[no_mangle]
 pub extern "C" fn js_nm_install_bun_ffi() {
+    super::native_module::constant_getters::bun_ffi();
     NM_DISPATCH_REGISTRY[NmBucket::BunFfi as usize].store(
         nm_dispatch_bun_ffi as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -275,6 +171,7 @@ pub extern "C" fn js_nm_install_bun() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_child_process() {
+    crate::feature_hooks::install_json_engine();
     js_nm_install_events();
     nm_register_attach(
         NmBucket::ChildProcess,
@@ -288,6 +185,8 @@ pub extern "C" fn js_nm_install_child_process() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_cluster() {
+    crate::cluster::install_default_value();
+    crate::feature_hooks::install_json_engine();
     js_nm_install_events();
     nm_register_const(
         NmBucket::Cluster,
@@ -312,6 +211,7 @@ pub extern "C" fn js_nm_install_console() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_crypto() {
+    super::native_module::constant_getters::crypto();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Crypto,
@@ -336,6 +236,7 @@ pub extern "C" fn js_nm_install_dgram() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_dns() {
+    super::native_module::constant_getters::dns();
     NM_DISPATCH_REGISTRY[NmBucket::Dns as usize].store(
         nm_dispatch_dns as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -343,6 +244,7 @@ pub extern "C" fn js_nm_install_dns() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_domain() {
+    super::native_module::constant_getters::domain();
     js_nm_install_events();
     nm_register_attach(
         NmBucket::Domain,
@@ -355,6 +257,9 @@ pub extern "C" fn js_nm_install_domain() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_events() {
+    super::native_module::constant_getters::events();
+    js_nm_install_async_hooks();
+    crate::stream_hooks::install_emitter();
     super::native_module::install_nm_ee_ops();
     nm_register_ctor(NmBucket::Events, nm_ctor_events);
     nm_register_attach(
@@ -368,6 +273,8 @@ pub extern "C" fn js_nm_install_events() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_fs() {
+    super::native_module::constant_getters::fs();
+    crate::fs::install_roots();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Fs,
@@ -413,6 +320,9 @@ pub extern "C" fn js_nm_install_inspector() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_module() {
+    super::native_module::constant_getters::module();
+    crate::feature_hooks::install_url_values();
+    crate::feature_hooks::install_json_engine();
     nm_register_attach(
         NmBucket::Module,
         super::native_module::callable_exports::nm_attach_module,
@@ -424,6 +334,9 @@ pub extern "C" fn js_nm_install_module() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_net() {
+    super::native_module::constant_getters::net();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     js_nm_install_stream();
     nm_register_attach(
         NmBucket::Net,
@@ -444,11 +357,13 @@ pub extern "C" fn js_nm_install_node_pty() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_os() {
+    super::native_module::constant_getters::os();
     NM_DISPATCH_REGISTRY[NmBucket::Os as usize]
         .store(nm_dispatch_os as NmDispatchFn as *mut (), Ordering::Relaxed);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_path() {
+    super::native_module::constant_getters::path();
     NM_DISPATCH_REGISTRY[NmBucket::Path as usize].store(
         nm_dispatch_path as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -456,6 +371,7 @@ pub extern "C" fn js_nm_install_path() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_perf() {
+    super::native_module::constant_getters::perf();
     nm_register_attach(
         NmBucket::Perf,
         super::native_module::callable_exports::nm_attach_perf_hooks,
@@ -478,21 +394,24 @@ pub extern "C" fn js_nm_install_process() {
     );
 }
 
-/// Install the dispatch surface behind the `process` / `console` VALUES
-/// (binary size). Both namespaces exist from realm bootstrap, but their
+/// Install the dispatch surface behind the `process` / `console` / `performance`
+/// VALUES (binary size). The namespaces exist from realm bootstrap, but their
 /// runtime dispatch buckets are only needed once a program holds one as a
-/// value — `const p = process; p.exit()`, `console[m](…)`, `globalThis.process`
-/// — because direct `process.x` / `console.log(…)` member forms lower to
-/// intrinsics. Codegen emits this (or the per-module installer) at every such
-/// value site; the dyn-eval and `node:vm` entry points call it because
-/// interpreted code can reach either global by name.
+/// value — `const p = process; p.exit()`, `console[m](…)`, `globalThis.process`,
+/// `const t = performance; t.now()` — because direct `process.x` /
+/// `console.log(…)` member forms lower to intrinsics. Codegen emits this (or
+/// the per-module installer) at every such value site; the dyn-eval and
+/// `node:vm` entry points call it because interpreted code can reach either
+/// global by name.
 #[no_mangle]
 pub extern "C" fn js_install_global_value_surfaces() {
     js_nm_install_process();
     js_nm_install_console();
+    js_nm_install_perf();
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_punycode() {
+    super::native_module::constant_getters::punycode();
     NM_DISPATCH_REGISTRY[NmBucket::Punycode as usize].store(
         nm_dispatch_punycode as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -500,13 +419,27 @@ pub extern "C" fn js_nm_install_punycode() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_querystring() {
+    super::native_module::constant_getters::querystring();
     NM_DISPATCH_REGISTRY[NmBucket::Querystring as usize].store(
         nm_dispatch_querystring as NmDispatchFn as *mut (),
         Ordering::Relaxed,
     );
 }
+/// Promise interfaces own their constructor decoration without retaining the
+/// callback module's dispatcher and unrelated exports.
+pub(crate) fn install_readline_constructor_metadata() {
+    crate::stream_hooks::install();
+    super::native_module::install_nm_ee_ops();
+    nm_register_attach(
+        NmBucket::Readline,
+        super::native_module::constructor_shapes::nm_attach_readline,
+    );
+    nm_register_ctor(NmBucket::Readline, nm_ctor_readline);
+}
+
 #[no_mangle]
 pub extern "C" fn js_nm_install_readline() {
+    super::native_module::constant_getters::readline();
     js_nm_install_events();
     nm_register_attach(
         NmBucket::Readline,
@@ -517,9 +450,12 @@ pub extern "C" fn js_nm_install_readline() {
         Ordering::Relaxed,
     );
     nm_register_ctor(NmBucket::Readline, nm_ctor_readline);
+    // `readline.promises` resolves through the readline/promises registry.
+    crate::node_submodules::arm_readline_promises();
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_repl() {
+    super::native_module::constant_getters::repl();
     js_nm_install_events();
     js_nm_install_readline();
     nm_register_attach(
@@ -541,6 +477,7 @@ pub extern "C" fn js_nm_install_sea() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_sqlite() {
+    super::native_module::constant_getters::sqlite();
     nm_register_attach(
         NmBucket::Sqlite,
         super::native_module::callable_exports::nm_attach_sqlite,
@@ -552,7 +489,9 @@ pub extern "C" fn js_nm_install_sqlite() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_stream() {
+    super::native_module::constant_getters::stream();
     js_nm_install_events();
+    crate::stream_hooks::install();
     super::native_module::install_nm_ee_ops();
     nm_register_attach(
         NmBucket::Stream,
@@ -563,6 +502,12 @@ pub extern "C" fn js_nm_install_stream() {
         Ordering::Relaxed,
     );
     nm_register_ctor(NmBucket::Stream, nm_ctor_stream);
+    install_stream_constructor_metadata();
+}
+
+/// Explicit-this construction belongs to each stream constructor, including
+/// a statically selected export that has no containing module dispatcher.
+pub(crate) fn install_stream_constructor_metadata() {
     // `black_box` for the reason `js_nm_enable_install_all` gives: this is the
     // only value ever stored to the single-pointer slot, and without it
     // whole-program optimization devirtualizes the load in
@@ -574,6 +519,9 @@ pub extern "C" fn js_nm_install_stream() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_timers() {
+    super::native_module::constant_getters::timers();
+    // `timers.promises` resolves through the timers/promises registry.
+    crate::node_submodules::js_node_submod_install_timers_promises();
     NM_DISPATCH_REGISTRY[NmBucket::Timers as usize].store(
         nm_dispatch_timers as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -610,6 +558,10 @@ pub extern "C" fn js_nm_install_tty() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_url() {
+    super::native_module::constant_getters::url();
+    crate::feature_hooks::install_url_values();
+    crate::feature_hooks::js_runtime_install_global_url();
+    crate::feature_hooks::install_json_engine();
     NM_DISPATCH_REGISTRY[NmBucket::Url as usize].store(
         nm_dispatch_url as NmDispatchFn as *mut (),
         Ordering::Relaxed,
@@ -617,6 +569,7 @@ pub extern "C" fn js_nm_install_url() {
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_util() {
+    super::native_module::constant_getters::util();
     nm_register_attach(
         NmBucket::Util,
         super::native_module::callable_exports::nm_attach_util,
@@ -629,18 +582,23 @@ pub extern "C" fn js_nm_install_util() {
 #[no_mangle]
 pub extern "C" fn js_nm_install_v8() {
     nm_register_ctor(NmBucket::V8, crate::node_v8::serde_constructor);
+    super::native_module::constant_getters::v8();
+    crate::feature_hooks::install_json_engine();
     nm_register_attach(NmBucket::V8, crate::node_v8::attach_v8_constructor);
     NM_DISPATCH_REGISTRY[NmBucket::V8 as usize]
         .store(nm_dispatch_v8 as NmDispatchFn as *mut (), Ordering::Relaxed);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_vm() {
+    super::native_module::constant_getters::vm();
     NM_DISPATCH_REGISTRY[NmBucket::Vm as usize]
         .store(nm_dispatch_vm as NmDispatchFn as *mut (), Ordering::Relaxed);
     nm_register_ctor(NmBucket::Vm, nm_ctor_vm);
 }
 #[no_mangle]
 pub extern "C" fn js_nm_install_wasi() {
+    super::native_module::constant_getters::wasi();
+    crate::wasi_hook_slots::install();
     nm_register_attach(
         NmBucket::Wasi,
         super::native_module::callable_exports::nm_attach_wasi,
@@ -670,7 +628,12 @@ pub extern "C" fn js_nm_install_zlib() {
 
 #[no_mangle]
 pub extern "C" fn js_nm_install_worker_threads() {
+    super::native_module::constant_getters::worker_threads();
     js_nm_install_events();
+    NM_DISPATCH_REGISTRY[NmBucket::WorkerThreads as usize].store(
+        super::native_module::worker_environment::dispatch as NmDispatchFn as *mut (),
+        Ordering::Relaxed,
+    );
     nm_register_attach(
         NmBucket::WorkerThreads,
         super::native_module::constructor_shapes::nm_attach_worker,
@@ -681,6 +644,7 @@ pub extern "C" fn js_nm_install_worker_threads() {
 /// a native module is imported under an unanalyzable (dynamic) name.
 #[no_mangle]
 pub extern "C" fn js_nm_install_all() {
+    js_nm_install_constants();
     js_nm_install_assert();
     js_nm_install_async_hooks();
     js_nm_install_bigint();
@@ -1050,4 +1014,10 @@ mod tests {
              node:test emits no js_nm_install_stream of its own"
         );
     }
+}
+
+/// The legacy aggregate constants module has no method-dispatch bucket.
+#[no_mangle]
+pub extern "C" fn js_nm_install_constants() {
+    super::native_module::constant_getters::constants();
 }

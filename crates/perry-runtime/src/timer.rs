@@ -32,6 +32,12 @@ mod async_lifecycle;
 mod mock;
 mod phases;
 mod store;
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(unused_imports)
+)]
+pub(crate) use store::snap_pending_timers;
 
 use crate::promise::{js_promise_new, Promise};
 use async_lifecycle::enqueue_destroy_ids;
@@ -73,12 +79,11 @@ pub static PROFILE_PROMISE_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 pub static PROFILE_CALLBACK_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 pub static PROFILE_INTERVAL_TIMERS_FIRED: AtomicU64 = AtomicU64::new(0);
 
-/// Initialize the timer system (called once at startup)
-fn ensure_initialized() {
+/// Initialize the timer system (called once at startup). Returns the timer
+/// origin (the program start this clock counts from).
+fn ensure_initialized() -> Instant {
     let mut st = START_TIME.lock().unwrap();
-    if st.is_none() {
-        *st = Some(Instant::now());
-    }
+    *st.get_or_insert_with(Instant::now)
 }
 
 /// Get current time in milliseconds since program start
@@ -261,6 +266,12 @@ pub extern "C" fn js_interval_timer_has_pending() -> i32 {
 /// a check callback runs on the very next turn instead of after a park.
 #[no_mangle]
 pub extern "C" fn js_immediate_has_pending() -> i32 {
+    // A parked EOF is check-phase work too: it is delivered when the next
+    // check phase ends, so the loop must not park ahead of it.
+    #[cfg(not(target_arch = "wasm32"))]
+    if crate::turnloop_net::eof_parked() {
+        return 1;
+    }
     i32::from(store::check_pending())
 }
 
@@ -301,7 +312,11 @@ fn whole_ms_until(at: Option<Instant>, now: Instant) -> f64 {
 /// Get the time until the next timer fires (in ms), or -1 if none.
 #[no_mangle]
 pub extern "C" fn js_timer_next_deadline() -> f64 {
-    whole_ms_until(next_timer_deadline(), Instant::now())
+    // The clock is read only when there is a deadline to measure against.
+    match next_timer_deadline() {
+        None => -1.0,
+        at => whole_ms_until(at, Instant::now()),
+    }
 }
 
 /// Same value as `js_timer_next_deadline`; kept so `js_wait_for_event` and
@@ -456,7 +471,7 @@ fn with_timer_uncaught_trap<F: FnOnce()>(f: F) {
             } else {
                 let exc = crate::exception::js_get_exception();
                 crate::exception::js_clear_exception();
-                crate::os::emit_process_uncaught_exception(exc);
+                crate::os_hook_slots::emit_process_uncaught_exception(exc);
             }
         });
         if completed.is_some() {
@@ -779,6 +794,7 @@ pub extern "C" fn js_set_timeout_callback(callback: i64, delay_ms: f64) -> i64 {
 
 #[no_mangle]
 pub extern "C" fn js_set_immediate_callback(callback: i64) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,
@@ -854,14 +870,23 @@ fn schedule_callback_timer_inner(
     {
         return mocked(id);
     }
-    ensure_initialized();
+    let origin = ensure_initialized();
 
     let scope = crate::gc::RuntimeHandleScope::new();
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
     let delay_ms = normalize_timer_delay(delay_ms);
-    let deadline = Instant::now() + Duration::from_millis(delay_ms);
+    // Only a timer has a start time: Node's `insert` reads the loop clock
+    // (`getLibuvNow`, which updates libuv's time) once per timer, and an
+    // Immediate has none. A check- or poll-phase entry runs in queue order and
+    // nothing reads its deadline (the heap and `refresh` are timer-only), so it
+    // carries the timer origin and scheduling it reads no clock.
+    let deadline = if class.is_timer() {
+        Instant::now() + Duration::from_millis(delay_ms)
+    } else {
+        origin
+    };
 
     let id = next_timer_id();
     // #10447: registering PINS this id in the handle registry — it marks the id
@@ -884,10 +909,10 @@ fn schedule_callback_timer_inner(
     let mut context = crate::async_context::capture_context();
     let context_roots = crate::async_context::root_snapshot(&scope, &context);
     let (ids, callback) = callback_handle.across_const::<crate::closure::ClosureHeader, _>(|| {
-        crate::async_hooks::init_scheduled_resource(type_name, resource(), trigger_async_id)
+        crate::async_hook_slots::init_scheduled_resource(type_name, resource(), trigger_async_id)
     });
     // The queue entry owns the timer's state; keep it reachable until queued.
-    if let Some(state) = crate::async_hooks::resource_state::get(ids.async_id) {
+    if let Some(state) = crate::async_hook_slots::resource_state::get(ids.async_id) {
         scope.root_raw_mut_ptr(state);
     }
     crate::async_context::refresh_snapshot_from_roots(&mut context, &context_roots);
@@ -952,6 +977,7 @@ pub unsafe extern "C" fn js_set_immediate_callback_args(
     args_ptr: *const f64,
     n_args: i32,
 ) -> i64 {
+    crate::effect!(host_write, timer);
     schedule_js_timer(
         callback,
         0.0,
@@ -988,6 +1014,44 @@ pub fn schedule_native_callback(callback: i64, args: &[f64], provider_type: &'st
     )
 }
 
+/// Internal runtime scheduling never goes through a JS-visible builder. The
+/// `js_set_*_callback` entry points build the `Timeout` / `Immediate` handle a
+/// program holds; a runtime-owned job (a zlib one-shot completion, an fs turn,
+/// a deferred emit) has no JS holder, so it schedules here: the same loop
+/// phase and keep-alive as the JS builder of that phase, its own async_hooks
+/// provider type, and no handle object. The async_hooks `resource` it hands
+/// `init` is the boxed timer id. Returns the timer id (`js_timer_unref` and
+/// `clearTimeout` take it).
+pub fn schedule_native_immediate(callback: i64, args: &[f64], provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        0.0,
+        args.to_vec(),
+        provider_type,
+        Class::Immediate,
+        None,
+    )
+}
+
+/// The timers-phase sibling of [`schedule_native_immediate`].
+pub fn schedule_native_timeout(callback: i64, delay_ms: f64, provider_type: &'static str) -> i64 {
+    schedule_callback_timer(
+        callback,
+        delay_ms,
+        Vec::new(),
+        provider_type,
+        Class::Timeout,
+        None,
+    )
+}
+
+/// [`schedule_native_timeout`] for extension crates (an http client request
+/// timeout: node arms the socket's internal `Timeout`). Returns the timer id.
+#[no_mangle]
+pub extern "C" fn js_perry_schedule_native_timeout(callback: i64, delay_ms: f64) -> i64 {
+    schedule_native_timeout(callback, delay_ms, "Timeout")
+}
+
 /// Schedule the final callback in a provider chain while emitting the eager
 /// native preparation stages ahead of it. Node's `fs.readFile` is implemented
 /// as four chained FSREQCALLBACK operations (open, stat, read, close); Perry
@@ -999,18 +1063,18 @@ pub fn schedule_native_callback_chain(
     provider_type: &'static str,
     resource_count: usize,
 ) -> i64 {
-    let mut trigger = crate::async_hooks::execution_async_id_u64();
+    let mut trigger = crate::async_hook_slots::execution_async_id_u64();
     for _ in 1..resource_count {
         let resource = crate::object::js_object_alloc_null_proto(0, 0);
-        let ids = crate::async_hooks::init_resource_with_trigger(
+        let ids = crate::async_hook_slots::init_resource_with_trigger(
             provider_type,
             crate::value::js_nanbox_pointer(resource as i64),
             true,
             trigger,
         );
-        crate::async_hooks::before(ids.async_id, ids.trigger_async_id);
-        crate::async_hooks::after(ids.async_id);
-        crate::async_hooks::destroy(ids.async_id);
+        crate::async_hook_slots::before(ids.async_id, ids.trigger_async_id);
+        crate::async_hook_slots::after(ids.async_id);
+        crate::async_hook_slots::destroy(ids.async_id);
         trigger = ids.async_id;
     }
     schedule_callback_timer(
@@ -1134,9 +1198,7 @@ fn arg_to_timer_id(arg: f64) -> Option<i64> {
         return Some(id);
     }
     let v = crate::value::JSValue::from_bits(arg.to_bits());
-    if v.is_int32() {
-        Some(v.as_int32() as i64)
-    } else if v.is_number() {
+    if v.is_number() {
         let n = v.as_number();
         n.is_finite().then_some(n as i64)
     } else if let Some(s) = crate::node_submodules::diagnostics::decode_string_value(arg) {

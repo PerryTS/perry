@@ -1,0 +1,1 @@
+Keep the fractional-enum fixture executable as a behavioral check when Node strip-only mode rejects enum syntax. Use independently generated TypeScript 5.8.2 → Node 26.12.1 expected stdout through the existing parity harness, with version and source/output hash provenance. The original enum source and all assertions remain unchanged.

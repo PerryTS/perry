@@ -16,8 +16,8 @@
 //!     other half of the ratchet: it fails if the fast path stops firing.
 //!
 //! Byte-for-byte behaviour against node lives in
-//! `test-parity/node-suite/path/{join,resolve}/spread.ts` and
-//! `test-parity/node-suite/util/format/spread.ts`.
+//! `tests/parity/node-suite/path/{join,resolve}/spread.ts` and
+//! `tests/parity/node-suite/util/format/spread.ts`.
 
 #![cfg(test)]
 
@@ -208,23 +208,35 @@ fn sub_namespace_allowlist_is_the_runtime_bucket_set() {
 fn bucketless_sub_namespaces_keep_their_lowering() {
     // `dns.promises.lookup(...)` had a fast path (it threw
     // `ERR_INVALID_ARG_TYPE`); diverting it produced a silent `undefined`.
-    // `import { promises } from 'node:fs'` registers under the `fs/promises`
-    // slash tag, and diverting it turned a rejected promise into a synchronous
-    // `TypeError: value is not a function`. Both must stay put.
+    // It must stay put.
     //
     // (`fs.promises.readFile(...args)` is deliberately absent: it already
     // reached the generic tail before this change, so a `CallSpread` there is
     // pre-existing and asserting on it would test nothing.)
-    for src in [
-        "import dns from 'node:dns'; const a = ['localhost']; dns.promises.lookup(...a);",
-        "import { promises } from 'node:fs'; const a = ['/x','utf8']; promises.readFile(...a);",
-    ] {
-        let h = hir(src);
-        assert!(
-            !h.contains("CallSpread"),
-            "bucket-less sub-namespace was diverted: {src}"
-        );
-    }
+    let src = "import dns from 'node:dns'; const a = ['localhost']; dns.promises.lookup(...a);";
+    assert!(
+        !hir(src).contains("CallSpread"),
+        "bucket-less sub-namespace was diverted: {src}"
+    );
+    // `import { promises } from 'node:fs'` registers under the `fs/promises`
+    // slash tag. Diverting it to the namespace dispatcher turned a rejected
+    // promise into a synchronous `TypeError: value is not a function`. The
+    // named import reads its ESM export cell, so the spread call is the
+    // generic tail over that binding (which rejects with `ENOENT`, as Node
+    // does), never a dispatch on the module namespace.
+    let src =
+        "import { promises } from 'node:fs'; const a = ['/x','utf8']; promises.readFile(...a);";
+    let h = hir(src);
+    assert!(
+        h.contains(
+            r#"CallSpread { callee: PropertyGet { object: Call { callee: ExternFuncRef { name: "js_native_module_named_esm_export_value""#
+        ),
+        "the named promises import must spread through its export binding: {h}"
+    );
+    assert!(
+        !h.contains("NativeModuleRef"),
+        "the named promises import was diverted to the namespace: {h}"
+    );
 }
 
 #[test]
@@ -278,7 +290,7 @@ fn mixed_fixed_and_spread_math_calls_keep_the_spread_marker() {
 // and `prettier.format` threw `Unexpected type undefined`. The same
 // positional folding hit `JSON.stringify(...)`, `Number.isInteger(...)`,
 // `Array.of(...)`, `parseInt(...)` and the rest of those arms.
-// Behaviour against node: `test-files/test_gap_builtin_static_spread_args.ts`.
+// Behaviour against node: `tests/parity/language/spread/test_gap_builtin_static_spread_args.ts`.
 
 #[test]
 fn object_assign_with_spread_declines_the_static_fast_path() {
@@ -388,7 +400,7 @@ fn builtin_static_spread_call_keeps_its_namespace_receiver() {
 // `new Date(...[2020, 0, 2])` handed the Date the one array (NaN) and
 // `new Set(...[[1]])` built an empty set. `BigInt(...xs)` / `Symbol(...xs)`
 // coerced / described the array itself. Behaviour against node:
-// `test-files/test_gap_builtin_ctor_spread_args.ts`.
+// `tests/parity/language/spread/test_gap_builtin_ctor_spread_args.ts`.
 
 #[test]
 fn builtin_constructors_with_spread_construct_the_global_by_value() {

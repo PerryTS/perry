@@ -40,6 +40,9 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         op,
         prefix,
         strict: true,
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     };
     module.functions.push(Function {
         id: 1,

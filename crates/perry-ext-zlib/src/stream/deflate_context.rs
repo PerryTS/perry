@@ -2,7 +2,7 @@
 //! The stream and all C working allocations use the payload's stable ledger.
 use super::allocation::{out_of_memory, Placed};
 use super::inflate_context::{allocate, release};
-use libz_ng_sys as z;
+use super::zsys as z;
 use perry_ffi::native_payload::buffer::BufferOwner;
 use perry_ffi::native_stream::{StepIn, StepStatus, StreamOp};
 use std::io::{self, ErrorKind};

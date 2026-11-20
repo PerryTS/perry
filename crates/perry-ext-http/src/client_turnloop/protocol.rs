@@ -432,9 +432,16 @@ fn process(conn: &mut Conn, fx: &mut Vec<Effect>) {
             Decoded::Body(chunk) => on_body(conn, chunk, fx),
             Decoded::Trailers(trailers) => {
                 if let Some(ex) = conn.exchange.as_mut() {
+                    // The decoder keeps the wire spelling; `res.trailers` keys
+                    // are lowercase, as in Node (only `rawTrailers` keeps it).
                     ex.trailers = trailers
                         .into_iter()
-                        .map(|h| (h.name, String::from_utf8_lossy(&h.value).into_owned()))
+                        .map(|h| {
+                            (
+                                h.name.to_ascii_lowercase(),
+                                String::from_utf8_lossy(&h.value).into_owned(),
+                            )
+                        })
                         .collect();
                 }
             }

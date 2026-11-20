@@ -78,7 +78,8 @@ while (ni < N) {
 const dst = Buffer.alloc(N);
 
 // ---- blur ----
-for (let y = 0; y < H; y++) {
+// The label names the blur loop for the compiler-output proofs.
+blur: for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
     let rAcc = 0;
     let gAcc = 0;

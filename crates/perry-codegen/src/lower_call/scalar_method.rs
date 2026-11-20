@@ -172,7 +172,11 @@ fn lower_guarded_numeric_arg_fast(
                 BinaryOp::Sub => ctx.block().fsub(&left, &right),
                 BinaryOp::Mul => ctx.block().fmul(&left, &right),
                 BinaryOp::Div => ctx.block().fdiv(&left, &right),
-                BinaryOp::Mod => ctx.block().frem(&left, &right),
+                BinaryOp::Mod => ctx.block().call_gc_leaf(
+                    DOUBLE,
+                    crate::codegen::numeric_remainder::CHECKED_NUMBER_REMAINDER,
+                    &[(DOUBLE, &left), (DOUBLE, &right)],
+                ),
                 _ => bail!("unsupported guarded scalar method binary arg"),
             })
         }
@@ -313,6 +317,7 @@ fn lower_scalar_method_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();
@@ -325,7 +330,9 @@ fn lower_scalar_method_inline_body(
         ctx.block().store(DOUBLE, value, &slot);
         ctx.locals.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -416,6 +423,7 @@ fn lower_scalar_method_int32_inline_body(
     fact_detail: &'static str,
     extra_notes: Vec<String>,
 ) -> Result<String> {
+    crate::verify_facts::body_entry(ctx, method.id, "");
     let saved_locals = ctx.locals.clone();
     let saved_local_types = ctx.local_types.clone();
     let saved_proven_local_types = ctx.proven_local_types.clone();
@@ -429,7 +437,9 @@ fn lower_scalar_method_int32_inline_body(
         ctx.block().store(I32, value, &slot);
         ctx.i32_counter_slots.insert(param.id, slot);
         ctx.local_types.insert(param.id, param.ty.clone());
-        ctx.proven_local_types.insert(param.id, param.ty.clone());
+        if ctx.admits_contents_proof(param.id, &param.ty) {
+            ctx.proven_local_types.insert(param.id, param.ty.clone());
+        }
     }
 
     ctx.scalar_ctor_target.push(receiver_id);
@@ -688,7 +698,11 @@ fn emit_materialized_scalar_receiver_direct_field_store(
     value: &str,
 ) {
     let field_idx_str = field_index.to_string();
-    let header_skip = crate::target_layout::object_header_size_bytes(ctx.target_triple).to_string();
+    let header_skip = crate::target_layout::object_slot_base_bytes(
+        ctx.target_triple,
+        crate::target_layout::class_instance_form(class_name),
+    )
+    .to_string();
     let field_ptr = {
         let blk = ctx.block();
         let obj_ptr = blk.inttoptr(I64, obj_handle);
@@ -1149,10 +1163,8 @@ pub(super) fn try_lower_scalar_replaced_method_call(
     ctx.current_block = fast_idx;
     let mut raw_locals = HashMap::new();
     for (id, value) in &guard_values {
-        raw_locals.insert(
-            *id,
-            crate::codegen::emit_typed_f64_to_raw_guarded(ctx.block(), value.as_str()),
-        );
+        // The guard admitted a plain double, the raw value itself.
+        raw_locals.insert(*id, value.clone());
     }
     let mut fast_args = Vec::with_capacity(args.len());
     for arg in args {

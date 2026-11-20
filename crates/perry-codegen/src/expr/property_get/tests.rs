@@ -22,7 +22,9 @@ use front_contract::{front_call_block, verify_front_directory};
 
 fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -32,6 +34,7 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -45,12 +48,12 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -82,6 +85,10 @@ fn ir_opts(debug_locations: bool, module_source: Option<&str>) -> CompileOptions
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations,
@@ -108,6 +115,7 @@ fn module_with_nullish_read() -> Module {
             init: Some(Expr::Undefined),
         },
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: "foo".to_string(),
             // BytePos 8 → source index 7 ('o' on line 2) → line 2.
@@ -127,6 +135,7 @@ fn emit(debug: bool, source: Option<&str>) -> String {
 fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() {
     let mut module = Module::new("imported_class_9366.ts");
     module.init.push(Stmt::Expr(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::ExternFuncRef {
             name: "Renamed".to_string(),
             param_types: vec![],
@@ -171,7 +180,7 @@ fn imported_variable_read_preserves_class_tags_and_calls_the_live_getter_once() 
     // would lose the 0x7FFE tag and the class would dispatch as an object.
     assert!(
         ir.lines().any(|line| {
-            line.contains("call double @js_object_get_field_value_site(")
+            line.contains("call double @js_object_get_field_value(")
                 && bits.iter().any(|b| line.contains(&format!("(i64 {b},")))
         }),
         "class dispatch must receive the getter's unmasked value bits:\n{ir}"
@@ -192,6 +201,7 @@ fn emit_guarded_length_read() -> String {
             init: None,
         },
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(11)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -224,10 +234,10 @@ fn no_call_location_without_debug_symbols() {
 }
 
 /// The generic property read's hit is ONE leaf call of the receiver layout's
-/// probe (`perry_probe_get_memo`) over the agent's shape directory, the key,
-/// the receiver's handle and the site's five integer shape/slot pairs. There
-/// is no inline ShapeId compare, no way token and no epoch; the receiver's
-/// own shape is the authority.
+/// probe (`perry_probe_get`) over the agent's shape directory, the receiver's
+/// handle, the key and the key's atom hash. The site owns no storage: there is
+/// no inline ShapeId compare, no shape/slot memo, no way token and no epoch;
+/// the receiver's own shape is the authority (an accessor included).
 #[test]
 fn generic_property_get_hit_path_is_shape_id_only() {
     let ir = emit(false, None);
@@ -235,7 +245,7 @@ fn generic_property_get_hit_path_is_shape_id_only() {
     let (_, ok) = tower_block(&blocks, "pget.recv_ok");
     let probes: Vec<&String> = ok
         .iter()
-        .filter(|l| l.contains("call double @perry_probe_get_memo("))
+        .filter(|l| l.contains("call double @perry_probe_get("))
         .collect();
     assert_eq!(probes.len(), 1, "the hit is one probe call: {ok:?}");
     assert!(
@@ -244,12 +254,14 @@ fn generic_property_get_hit_path_is_shape_id_only() {
         "the hit block makes no other call and compares no site-cached \
          ShapeId: {ok:?}"
     );
+    assert_eq!(
+        front_contract::verify_front_site_hash(&blocks).unwrap(),
+        (crate::layout_desc::atom_hash("foo") as i64).to_string(),
+        "the probe must receive the key's atom hash"
+    );
     assert!(
-        ir.contains(&format!(
-            "{} = private global [5 x i64] zeroinitializer, align 8",
-            front_contract::verify_front_site_memo(&blocks).unwrap()
-        )),
-        "the read must own exactly five zero-initialized shape/slot pairs:\n{ir}"
+        !ir.contains("_read_shape_slots") && !ir.contains("[5 x i64] zeroinitializer"),
+        "a named read owns no shape/slot storage:\n{ir}"
     );
     assert!(
         !ir.contains("4611686018427387904"),
@@ -312,6 +324,7 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
             Box::new(Expr::Object(vec![])),
         )),
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(20)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -337,6 +350,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
             init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(3.0))))),
         },
         Stmt::Return(Some(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(21)),
             property: "length".to_string(),
             byte_offset: 0,
@@ -353,9 +367,10 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
 }
 
 #[test]
-fn fs_parent_promises_property_installs_before_resolution() {
+fn fs_parent_promises_property_initializes_only_its_child_before_export_read() {
     let mut module = Module::new("fs_parent_promises_property.ts");
     module.init = vec![Stmt::Return(Some(Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::NativeModuleRef("fs".to_string())),
         property: "promises".to_string(),
         byte_offset: 0,
@@ -367,10 +382,16 @@ fn fs_parent_promises_property_installs_before_resolution() {
         .find("call void @js_node_submod_install_fs_promises()")
         .unwrap_or_else(|| panic!("fs.promises must emit its submodule installer:\n{ir}"));
     let resolve = ir
-        .find("call double @js_native_module_property_by_name")
-        .unwrap_or_else(|| {
-            panic!("fs.promises must use the native-module property resolver:\n{ir}")
-        });
+        .find("call double @js_native_module_esm_export_value")
+        .unwrap_or_else(|| panic!("fs.promises must read its selected export cell:\n{ir}"));
+    assert!(
+        !ir.contains("call void @js_nm_install_fs("),
+        "a selected child must not install the parent fs bucket:\n{ir}"
+    );
+    assert!(
+        !ir.contains("call double @js_native_module_property_by_name"),
+        "a selected child must not read through the whole module object:\n{ir}"
+    );
     assert!(
         install < resolve,
         "fs.promises submodule installation must precede property resolution:\n{ir}"
@@ -455,13 +476,13 @@ fn generic_property_get_tries_ways_before_calling_the_miss_handler() {
     assert!(
         probe_block
             .iter()
-            .any(|l| l.contains("call double @perry_probe_get_memo(")),
+            .any(|l| l.contains("call double @perry_probe_get(")),
         "{probe_block:?}"
     );
     assert!(
         !probe_block
             .iter()
-            .any(|l| l.contains("@js_object_get_field_value_site(")),
+            .any(|l| l.contains("@js_object_get_field_value(")),
         "the slow call must not sit inside the probe block: {probe_block:?}"
     );
     let (_, served, declined) = tower_cond_br(probe_block);
@@ -498,7 +519,7 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
     assert_eq!(slow.iter().filter(|l| l.contains(" call ")).count(), 1);
     let call = slow
         .iter()
-        .find(|l| l.contains("@js_object_get_field_value_site("))
+        .find(|l| l.contains("@js_object_get_field_value("))
         .unwrap();
     let bits = call
         .split_once("(i64 ")
@@ -526,10 +547,8 @@ fn generic_refusal_keeps_boxed_receiver_and_reloads_key_on_the_join() {
         !all.iter().any(|l| l.contains("@PERRY_IC_EPOCH")),
         "the removed keys-pointer epoch global must not appear"
     );
-    assert!(
-        front_contract::verify_front_site_memo(&blocks).is_ok(),
-        "the refusal must pass the leaf's own shape/slot storage"
-    );
+    front_contract::verify_front_site_hash(&blocks)
+        .unwrap_or_else(|e| panic!("the refusal passes no site storage: {e}"));
 }
 
 /// A SPILL-located key is served by the runtime probe, not by site code: the
@@ -544,7 +563,7 @@ fn a_spill_entry_is_served_by_the_leaf_front_before_the_slow_call() {
     let (probe_label, probe_block) = front_call_block(&blocks);
     let call = probe_block
         .iter()
-        .find(|l| l.contains("@perry_probe_get_memo("))
+        .find(|l| l.contains("@perry_probe_get("))
         .unwrap_or_else(|| panic!("the probe call: {probe_block:?}"));
     let answer = call.split_once(" = ").map(|(r, _)| r).unwrap();
     let (_, merge) = tower_block(&blocks, "pget.recv_merge");
@@ -592,6 +611,7 @@ mod nested_namespace_members {
     fn module_reading(member: &str) -> Module {
         let mut m = Module::new("nsmain.ts");
         m.init = vec![Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ExternFuncRef {
                 name: "B".to_string(),
                 param_types: Vec::new(),
@@ -674,6 +694,7 @@ fn module_reading(property: &str) -> Module {
             init: Some(Expr::Undefined),
         },
         Stmt::Expr(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             property: property.to_string(),
             byte_offset: 0,
@@ -727,7 +748,7 @@ fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
     for (target, inline_form) in [
         (
             "x86_64-unknown-linux-gnu",
-            Some("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
+            Some("call ptr @llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)"),
         ),
         (
             "x86_64-pc-windows-msvc",
@@ -801,13 +822,13 @@ fn the_generic_tower_is_one_leaf_call_one_exit_and_a_bounded_number_of_blocks() 
     sorted.sort();
     assert_eq!(
         sorted,
-        vec!["js_object_get_field_value_site", "perry_probe_get_memo"],
+        vec!["js_object_get_field_value", "perry_probe_get"],
         "the read must expand the probe and exactly one collecting exit:\n{func}"
     );
     // The probe is nounwind and GC-leaf: a plain call, never an invoke.
     let probes: Vec<&str> = func
         .lines()
-        .filter(|l| l.contains("@perry_probe_get_memo("))
+        .filter(|l| l.contains("@perry_probe_get("))
         .collect();
     assert_eq!(probes.len(), 1, "one probe call per read:\n{func}");
     assert!(
@@ -868,7 +889,7 @@ fn the_generic_shared_read_receives_boxed_receiver_key_and_feedback() {
         .iter()
         .flat_map(|(l, body)| {
             body.iter()
-                .filter(|t| t.contains("@js_object_get_field_value_site("))
+                .filter(|t| t.contains("@js_object_get_field_value("))
                 .map(move |t| (l.as_str(), t))
         })
         .collect();
@@ -920,8 +941,30 @@ fn guarded_length_reads_admit_byte_views_and_use_a_pooled_cold_key() {
     );
 }
 
-#[path = "computed_admission_tests.rs"]
-mod computed_admission;
-
 #[path = "refusal_join_tests.rs"]
 mod refusal_join;
+
+#[test]
+fn guarded_private_accessor_reads_bypass_public_property_lookup() {
+    let mut module = Module::new("private_accessor.ts");
+    module.init_kind = ModuleInitKind::Eager;
+    module.init.push(Stmt::Expr(Expr::PropertyGet {
+        object: Box::new(Expr::PrivateGuard {
+            class_name: "C".into(),
+            class_id: 1,
+            field_name: "#a".into(),
+            kind: 2,
+            op: 0,
+            receiver_is_brand_owner: false,
+            object: Box::new(Expr::Undefined),
+        }),
+        property: "#<perry:private-member:1:#a>".into(),
+        byte_offset: 0,
+        byte_end: 0,
+    }));
+    let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap()).unwrap();
+    assert!(ir.contains("call double @js_private_guard("));
+    assert!(ir.contains("call double @js_object_get_field_by_name_f64("));
+    assert!(!ir.contains("call double @perry_probe_get_binding("));
+    assert!(!ir.contains("call double @js_object_get_field_value("));
+}

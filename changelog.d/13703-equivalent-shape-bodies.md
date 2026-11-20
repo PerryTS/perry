@@ -1,0 +1,1 @@
+Share exact retained ordinary and `$pshape` method implementations in the LLVM backend after useful inlining, preserving callable entries, native call ABI and GC metadata without forwarding calls or runtime lookup state.

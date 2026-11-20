@@ -6,6 +6,7 @@
  *        pnpm run check
  *        pnpm run update --actions-only | --deps-only
  */
+import { realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 import process from 'node:process'
@@ -45,7 +46,11 @@ export function runUpdate(argv = process.argv.slice(2)): number {
   return statuses.reduce((status, next) => status || next, 0)
 }
 
-const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+// Compare resolved paths: argv[1] keeps a symlinked prefix that import.meta.url
+// has resolved away.
+const isMain =
+  process.argv[1] !== undefined &&
+  pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url
 if (isMain) {
   try {
     process.exitCode = runUpdate()

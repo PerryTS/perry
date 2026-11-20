@@ -29,9 +29,7 @@ fn throw_utf8_invalid_arg_value(name: &str, value: impl std::fmt::Display, reaso
 
 fn js_number_value(value: f64) -> Option<f64> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        Some(js.as_int32() as f64)
-    } else if js.is_number() || value.is_finite() {
+    if js.is_number() || value.is_finite() {
         Some(value)
     } else {
         None
@@ -278,7 +276,7 @@ fn utf8_open_path_result(
     append: bool,
     mkdir: bool,
     custom_fs: f64,
-) -> Result<i32, f64> {
+) -> Result<i32, crate::error::CoreError> {
     let scope = RuntimeHandleScope::new();
     let path_value = scope.root_nanbox_f64(path_value);
     let custom_fs = scope.root_nanbox_f64(custom_fs);
@@ -332,22 +330,22 @@ fn utf8_open_path_result(
     match unsafe { fs_open_sync_result(path_value.get_nanbox_f64(), flags_value.get_nanbox_f64()) }
     {
         Ok(fd) => Ok(fd),
-        Err((err, path)) => Err(unsafe { build_fs_error_value(&err, "open", &path) }),
+        Err((err, path)) => Err(unsafe { fs_error(&err, "open", &path) }),
     }
 }
 
 fn utf8_open_path(path_value: f64, file: &str, append: bool, mkdir: bool, custom_fs: f64) -> i32 {
     match utf8_open_path_result(path_value, file, append, mkdir, custom_fs) {
         Ok(fd) => fd,
-        Err(err) => crate::exception::js_throw(err),
+        Err(err) => crate::exception::throw_core(err),
     }
 }
 
-fn utf8_native_mkdir_result(file: &str) -> Result<(), f64> {
+fn utf8_native_mkdir_result(file: &str) -> Result<(), crate::error::CoreError> {
     if let Some(parent) = utf8_stream_parent_dir(file) {
         if let Err(err) = std::fs::create_dir_all(parent) {
             let path = parent.to_string_lossy();
-            return Err(unsafe { build_fs_error_value(&err, "mkdir", &path) });
+            return Err(unsafe { fs_error(&err, "mkdir", &path) });
         }
     }
     Ok(())
@@ -358,7 +356,7 @@ fn utf8_native_async_open_path_result(
     file: &str,
     append: bool,
     mkdir: bool,
-) -> Result<i32, f64> {
+) -> Result<i32, crate::error::CoreError> {
     validate::validate_path("path", path_value);
     if mkdir {
         utf8_native_mkdir_result(file)?;
@@ -372,7 +370,7 @@ fn utf8_native_async_open_path_result(
     }
     match options.open(file) {
         Ok(file_handle) => Ok(utf8_register_native_fd(file_handle, file, append)),
-        Err(err) => Err(unsafe { build_fs_error_value(&err, "open", file) }),
+        Err(err) => Err(unsafe { fs_error(&err, "open", file) }),
     }
 }
 
@@ -433,6 +431,7 @@ pub(crate) fn utf8_initial_state(options_value: f64) -> Utf8StreamState {
         max_write,
         periodic_flush,
         periodic_flush_timer: None,
+        drain_scheduled: false,
         mkdir,
         mode_value,
         retry_eagain,
@@ -581,14 +580,14 @@ fn utf8_buffered_chunk_value(mode: Utf8ContentMode, bytes: &[u8]) -> f64 {
     }
 }
 
-fn utf8_native_write_fd(fd: i32, bytes: &[u8]) -> Result<usize, f64> {
+fn utf8_native_write_fd(fd: i32, bytes: &[u8]) -> Result<usize, crate::error::CoreError> {
     if bytes.is_empty() {
         return Ok(0);
     }
     write_fd_chunk_result(fd, bytes, false).map(|_| bytes.len())
 }
 
-fn utf8_write_chunk(id: usize, bytes: &[u8]) -> Result<usize, f64> {
+fn utf8_write_chunk(id: usize, bytes: &[u8]) -> Result<usize, crate::error::CoreError> {
     let (fd, mode, custom_fs) = UTF8_STREAM_REGISTRY.with(|registry| {
         let registry = registry.borrow();
         let Some(state) = registry.get(&id) else {
@@ -597,7 +596,7 @@ fn utf8_write_chunk(id: usize, bytes: &[u8]) -> Result<usize, f64> {
         (state.fd, state.content_mode, state.custom_fs)
     });
     if fd < 0 {
-        return Err(crate::fs::validate::build_ebadf_error_value("write"));
+        return Err(crate::fs::validate::ebadf_error("write"));
     }
     let scope = RuntimeHandleScope::new();
     let custom_fs = scope.root_nanbox_f64(custom_fs);
@@ -685,7 +684,7 @@ fn utf8_close_fd(id: usize) {
     }
 }
 
-fn utf8_drain_buffers(id: usize) -> Result<(), f64> {
+fn utf8_drain_buffers(id: usize) -> Result<(), crate::error::CoreError> {
     loop {
         let next = with_utf8_props_mut(id, |state| {
             if state.destroyed || state.buffers.is_empty() {
@@ -730,9 +729,57 @@ fn utf8_maybe_drain_after_write(id: usize) {
     });
     if should_write {
         match utf8_drain_buffers(id) {
-            Ok(()) => utf8_emit_event0(id, "drain"),
-            Err(err) => utf8_emit_event1(id, "error", err),
+            Ok(()) => utf8_schedule_drain(id),
+            Err(err) => utf8_emit_event1(id, "error", err.value()),
         }
+    }
+}
+
+fn utf8_deliver_drain(id: usize) {
+    let emit = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let Some(state) = registry.get_mut(&id) else {
+            return false;
+        };
+        state.drain_scheduled = false;
+        !state.writing && !state.destroyed
+    });
+    if emit {
+        utf8_emit_event0(id, "drain");
+    }
+}
+
+extern "C" fn utf8_drain_tick_impl(
+    closure: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    utf8_deliver_drain(stream_id_of(closure));
+    undefined_value()
+}
+
+fn utf8_schedule_drain(id: usize) {
+    let deferred = UTF8_STREAM_REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let state = registry.get_mut(&id)?;
+        if state.destroyed || state.drain_scheduled {
+            return None;
+        }
+        if state.sync {
+            state.drain_scheduled = true;
+        }
+        Some(state.sync)
+    });
+    match deferred {
+        Some(true) => {
+            let closure = js_closure_alloc(
+                crate::fn_info!(utf8_drain_tick_impl, 0; with_declared(0)),
+                1,
+            );
+            crate::closure::closure_set_capture_word(closure, 0, id as i64);
+            crate::builtins::js_queue_next_tick(closure as i64);
+        }
+        Some(false) => utf8_deliver_drain(id),
+        None => {}
     }
 }
 
@@ -857,18 +904,22 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
             })
     });
     if destroyed {
-        let err = crate::fs::validate::build_type_error_with_code_value(
+        let err = crate::fs::validate::type_error_with_registered_code(
             "Invalid state: Utf8Stream is destroyed",
             "ERR_INVALID_STATE",
         );
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
+                crate::closure::js_closure_call1(
+                    cb,
+                    crate::closure::plain_call_receiver(),
+                    err.value(),
+                );
             }
             return undefined_value();
         }
-        crate::exception::js_throw(err);
+        crate::exception::throw_core(err);
     }
     if min_length == 0 {
         if is_callable_value(callback) {
@@ -887,11 +938,15 @@ fn utf8_stream_flush_by_id(id: usize, callback: f64) -> f64 {
     }
     let result = utf8_drain_buffers(id);
     if let Err(err) = result {
-        utf8_emit_event1(id, "error", err);
+        utf8_emit_event1(id, "error", err.value());
         if is_callable_value(callback) {
             let cb = extract_closure_ptr(callback);
             if !cb.is_null() {
-                crate::closure::js_closure_call1(cb, crate::closure::plain_call_receiver(), err);
+                crate::closure::js_closure_call1(
+                    cb,
+                    crate::closure::plain_call_receiver(),
+                    err.value(),
+                );
             }
         }
     } else if is_callable_value(callback) {
@@ -940,7 +995,7 @@ fn utf8_stream_flush_sync_by_id(id: usize) -> f64 {
         );
     }
     if let Err(err) = utf8_drain_buffers(id) {
-        crate::exception::js_throw(err);
+        crate::exception::throw_core(err);
     }
     utf8_fsync(id);
     undefined_value()
@@ -983,8 +1038,8 @@ fn utf8_schedule_close_events(id: usize, emit_finish: bool) {
         crate::fn_info!(utf8_close_events_impl, 0; with_declared(0)),
         2,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
-    js_closure_set_capture_ptr(closure, 1, if emit_finish { 1 } else { 0 });
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 1, if emit_finish { 1 } else { 0 });
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1036,7 +1091,7 @@ fn utf8_stream_end_by_id(id: usize) -> f64 {
         return undefined_value();
     }
     if let Err(err) = utf8_drain_buffers(id) {
-        utf8_emit_event1(id, "error", err);
+        utf8_emit_event1(id, "error", err.value());
     }
     utf8_finish_and_close(id, true);
     undefined_value()
@@ -1425,8 +1480,8 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
             crate::fs::validate::describe_received(fd_value)
         );
         let err =
-            crate::fs::validate::build_type_error_with_code_value(&message, "ERR_INVALID_ARG_TYPE");
-        utf8_async_open_error(id, err);
+            crate::fs::validate::type_error_with_registered_code(&message, "ERR_INVALID_ARG_TYPE");
+        utf8_async_open_error(id, err.value());
         return undefined_value();
     };
     let result = with_utf8_props_mut(id, |state| {
@@ -1471,7 +1526,7 @@ fn utf8_async_open_finish(id: usize, err: f64, fd_value: f64) -> f64 {
     }
     if should_drain || should_end {
         if let Err(err) = utf8_drain_buffers(id) {
-            utf8_emit_event1(id, "error", err);
+            utf8_emit_event1(id, "error", err.value());
         }
     }
     if should_end {
@@ -1516,7 +1571,7 @@ fn utf8_custom_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_open_done_impl, 2; with_declared(2)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let flags_value = scope.root_nanbox_f64(string_value_str(if append { "a" } else { "w" }));
     let path_value = scope.root_nanbox_f64(string_value_str(&file));
@@ -1587,7 +1642,7 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
         crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(cb, 0, id as i64);
+    crate::closure::closure_set_capture_word(cb, 0, id as i64);
     let cb_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cb as i64));
     let parent_value = scope.root_nanbox_f64(string_value_str(parent_str));
     let _ = utf8_call_custom_method(
@@ -1623,7 +1678,7 @@ fn utf8_schedule_native_mkdir_then_custom_open(id: usize) {
         crate::fn_info!(utf8_async_native_mkdir_then_custom_open_impl, 0),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1632,7 +1687,7 @@ fn utf8_schedule_native_open(id: usize) {
         crate::fn_info!(utf8_async_open_impl, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(closure, 0, id as i64);
+    crate::closure::closure_set_capture_word(closure, 0, id as i64);
     crate::builtins::js_queue_microtask(closure as i64);
 }
 
@@ -1664,7 +1719,7 @@ extern "C" fn utf8_async_native_mkdir_then_custom_open_impl(
         return undefined_value();
     };
     if let Err(err) = utf8_native_mkdir_result(&file) {
-        utf8_async_open_error(id, err);
+        utf8_async_open_error(id, err.value());
         return undefined_value();
     }
     if !utf8_custom_open(id) {
@@ -1696,6 +1751,6 @@ pub(crate) extern "C" fn utf8_async_open_impl(
     let path_value = string_value_str(&file);
     match utf8_native_async_open_path_result(path_value, &file, append, mkdir) {
         Ok(fd) => utf8_async_open_finish(id, null_value(), fd as f64),
-        Err(err) => utf8_async_open_finish(id, err, undefined_value()),
+        Err(err) => utf8_async_open_finish(id, err.value(), undefined_value()),
     }
 }

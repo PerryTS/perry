@@ -1,0 +1,1 @@
+Add deterministic empty and single-eligible macOS system CA inventory fixtures through the production selection path. Fixed fixture time and balanced native references avoid host keychain dependencies; a filter-all mutation now fails instead of passing vacuously.

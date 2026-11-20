@@ -140,12 +140,7 @@ unsafe fn construct_function_impl(
     // primitive callees, silently fell through to the empty-object fallback.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
-        if jv.is_undefined()
-            || jv.is_null()
-            || jv.is_bool()
-            || (jv.is_int32() && constructor_class_ref_id(func_value).is_none())
-            || jv.is_any_string()
-            || jv.is_bigint()
+        if jv.is_undefined() || jv.is_null() || jv.is_bool() || jv.is_any_string() || jv.is_bigint()
         {
             let desc =
                 unsafe { super::super::object_ops::describe_value_for_type_error(func_value) };
@@ -179,7 +174,7 @@ unsafe fn construct_function_impl(
     // trap (or forwards to the target). Reached when the compiler can't prove
     // the callee is a proxy statically (e.g. `new record.proxy()`). newTarget
     // for a plain `new` is the constructor being invoked — the proxy itself.
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -188,7 +183,7 @@ unsafe fn construct_function_impl(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, func_value);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, func_value);
     }
     if is_non_constructable_builtin_function_value(func_value) {
         throw_non_constructable_builtin_function();
@@ -207,9 +202,14 @@ unsafe fn construct_function_impl(
         if !super::super::native_module::is_native_module_constructor_export(&module, &method) {
             super::super::object_ops::throw_object_type_error(b"is not a constructor");
         }
+        if let Some(value) =
+            super::super::native_module::static_export_construct(func_value, args_ptr, args_len)
+        {
+            return value;
+        }
         if module == "perf_hooks" {
             if let Some(result) =
-                crate::perf_hooks::construct_perf_hooks_class(&method, args_ptr, args_len)
+                crate::perf_hook_slots::construct_perf_hooks_class(&method, args_ptr, args_len)
             {
                 return result;
             }
@@ -217,7 +217,7 @@ unsafe fn construct_function_impl(
         if module == "perf_histogram"
             && matches!(method.as_str(), "RecordableHistogram" | "ELDHistogram")
         {
-            return crate::perf_hooks::js_perf_illegal_constructor();
+            return crate::perf_hook_slots::js_perf_illegal_constructor();
         }
         if module == "sqlite"
             && matches!(
@@ -289,8 +289,9 @@ unsafe fn construct_function_impl(
         // this the instance was a class_id=0 empty object whose `.getStore` read
         // back `undefined` -> "getStore is not a function" at server startup.
         // Route to the stdlib handle constructor via the registered dispatcher.
-        if module == "async_hooks"
-            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource")
+        if (module == "async_hooks"
+            && matches!(method.as_str(), "AsyncLocalStorage" | "AsyncResource"))
+            || (module == "string_decoder" && method == "StringDecoder")
         {
             let ptr = crate::value::JS_NATIVE_ASYNC_HOOKS_CONSTRUCT
                 .load(std::sync::atomic::Ordering::SeqCst);
@@ -302,6 +303,21 @@ unsafe fn construct_function_impl(
         // `new ns.Worker(...)` on the worker_threads namespace as a value.
         if let Some(worker) = worker_threads_construct(&module, &method, args_ptr, args_len) {
             return worker;
+        }
+        // `new dns.Resolver()` / `new dp.Resolver()` where the constructor was read
+        // off the namespace as a value (`const dp = require("dns/promises")`).
+        if matches!(module.as_str(), "dns" | "dns/promises") && method == "Resolver" {
+            let mut arr = crate::array::js_array_alloc(args_len as u32);
+            if !args_ptr.is_null() {
+                for i in 0..args_len {
+                    arr = crate::array::js_array_push_f64(arr, *args_ptr.add(i));
+                }
+            }
+            if let Some(resolver) =
+                crate::dns::dispatch_export(module == "dns/promises", "Resolver", arr as i64)
+            {
+                return resolver;
+            }
         }
         if module == "zlib"
             && matches!(
@@ -444,7 +460,7 @@ pub(crate) fn js_value_is_constructor(value: f64) -> bool {
     if constructor_class_ref_id(value).is_some() || is_class_object_value(value) {
         return true;
     }
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
         return true;
     }
     if !is_callable_function_value(value) {
@@ -494,8 +510,8 @@ pub(crate) fn extends_target_must_throw(value: f64) -> bool {
         return false;
     }
     // A Proxy is a constructor iff its `[[ProxyTarget]]` is — recurse.
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
-        return extends_target_must_throw(crate::proxy::js_proxy_target(value));
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
+        return extends_target_must_throw(crate::proxy_hooks::proxy_target(value));
     }
     // Non-object primitives (number, string, boolean, undefined, symbol, bigint)
     // can never be a superclass.
@@ -697,6 +713,16 @@ unsafe fn construct_registered_class_ref_entry(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // GetPrototypeFromConstructor(newTarget) (ECMA-262 10.1.13) for a
+    // newTarget that is no class (`Reflect.construct(C, [], function F() {})`):
+    // the instance's [[Prototype]] is `F.prototype`, read before the birth
+    // (the read may allocate) and installed before the constructor body runs.
+    let custom_proto = new_target_class_id(new_target)
+        .is_none()
+        .then(|| constructor_prototype_bits(new_target))
+        .flatten()
+        .map(|bits| scope.root_nanbox_u64(bits));
     let inst = allocate_class_instance(instance_cid, birth_args).0;
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
@@ -736,8 +762,16 @@ unsafe fn construct_registered_class_ref_entry(
     // doc-comment at the top of this file called for. Reading back through the
     // handles is not bookkeeping: an evacuating cycle rewrites the slot in
     // place, so the pre-call value is stale by construction.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_raw_mut_ptr(inst);
+    if let Some(proto) = custom_proto {
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            super::super::prototype_chain::object_set_static_prototype(
+                inst as usize,
+                proto.get_nanbox_u64(),
+            )
+        });
+    }
+    let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
     let prev_new_target = crate::object::js_new_target_get();
     let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(new_target);
@@ -769,13 +803,20 @@ unsafe fn construct_registered_class_ref_entry(
 /// it is an object" rule: returns `newTarget.prototype`'s bits when that value
 /// is an object (so a typed-array view should adopt it as its `[[Prototype]]`),
 /// or `None` when it is a primitive (so the default per-kind prototype applies).
+// One out-of-line copy for its three construct paths: P3 B2 made the body
+// small enough for LLVM to inline it into each, which grew `.text` by
+// ~1.2 KB (CWN: binaries must not grow).
+#[inline(never)]
 fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
     if let Some(class_id) = constructor_class_ref_id(new_target) {
         let declared = super::class_decl_prototype_value(class_id);
         if unsafe { super::super::value_is_object_like(declared) } {
             return Some(declared.to_bits());
         }
-        return Some(super::super::class_prototype_ref_value(class_id).to_bits());
+        // P3 B2 (REVIEW-p3 D3): `newTarget.prototype` is not an object (an id
+        // with no declaration reads `undefined`, the same answer as the
+        // `prototype` read), so the default per-kind prototype applies.
+        return None;
     }
     let proto = new_target_prototype_get(new_target)?;
     if unsafe { super::super::value_is_object_like(proto) }
@@ -790,7 +831,7 @@ fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
 /// `Get(newTarget, "prototype")` for an object or Proxy `newTarget`.
 fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let bits = new_target.to_bits();
-    let proxy = crate::proxy::js_proxy_is_proxy(new_target) != 0;
+    let proxy = crate::proxy_hooks::proxy_is_proxy(new_target) != 0;
     if !proxy && (bits >> 48) != 0x7FFD {
         return None;
     }
@@ -801,7 +842,7 @@ fn new_target_prototype_get(new_target: f64) -> Option<f64> {
     let key = crate::string::js_string_from_bytes(b"prototype".as_ptr(), b"prototype".len() as u32);
     if proxy {
         let key = crate::value::js_nanbox_string(key as i64);
-        return Some(crate::proxy::js_proxy_get(new_target, key));
+        return Some(crate::proxy_hooks::proxy_get(new_target, key));
     }
     Some(js_object_get_field_by_name_f64(
         raw as *const ObjectHeader,
@@ -855,7 +896,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
     if nt.to_bits() == func_value.to_bits() {
         return js_new_function_construct(func_value, args_ptr, args_len);
     }
-    if crate::proxy::js_proxy_is_proxy(func_value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(func_value) == 1 {
         let arr = crate::array::js_array_alloc(0);
         let mut a = arr;
         if !args_ptr.is_null() {
@@ -864,7 +905,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             }
         }
         let arr_box = f64::from_bits(0x7FFD_0000_0000_0000 | (a as u64 & 0x0000_FFFF_FFFF_FFFF));
-        return crate::proxy::js_proxy_construct(func_value, arr_box, nt);
+        return crate::proxy_hooks::proxy_construct(func_value, arr_box, nt);
     }
     if let Some(target_cid) = constructor_class_ref_id(func_value) {
         let instance_cid = new_target_class_id(nt).unwrap_or(target_cid);
@@ -886,6 +927,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
         if identity == BuiltinConstructorIdentity::Object {
             return construct_object_with_new_target(nt);
         }
+        // Abstract (§27.1.3.1): a subclass's `super()` creates an ordinary
+        // object from new.target; `new.target === Iterator` throws.
+        if identity == BuiltinConstructorIdentity::Iterator {
+            if nt.to_bits() == func_value.to_bits() {
+                return crate::object::iterator_ctor::throw_abstract_iterator();
+            }
+            return construct_object_with_new_target(nt);
+        }
         // These factories throw or return a proxy of the caller's target;
         // they do not allocate an ordinary instance with new.target.prototype.
         if matches!(
@@ -897,6 +946,11 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | BuiltinConstructorIdentity::CryptoKey
                 | BuiltinConstructorIdentity::SubtleCrypto
                 | BuiltinConstructorIdentity::Navigator
+                | BuiltinConstructorIdentity::ReadableStreamDefaultController
+                | BuiltinConstructorIdentity::ReadableStreamDefaultReader
+                | BuiltinConstructorIdentity::ReadableByteStreamController
+                | BuiltinConstructorIdentity::ReadableStreamBYOBReader
+                | BuiltinConstructorIdentity::ReadableStreamBYOBRequest
                 | BuiltinConstructorIdentity::MessagePort
                 | BuiltinConstructorIdentity::Storage
         ) {
@@ -925,7 +979,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                     | BuiltinConstructorIdentity::BigInt64Array
                     | BuiltinConstructorIdentity::BigUint64Array
             );
-            let proto = if typed {
+            let deferred = typed || identity == BuiltinConstructorIdentity::MessageEvent;
+            let proto = if deferred {
                 None
             } else {
                 new_target_custom_object_prototype(nt.get_nanbox_f64())
@@ -934,7 +989,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let values: Vec<_> = args.iter().map(|h| h.get_nanbox_f64()).collect();
             if let Some(result) = builtin::construct(identity, func.get_nanbox_f64(), &values) {
                 let result = scope.root_nanbox_f64(result);
-                let proto = if typed {
+                let proto = if deferred {
                     new_target_custom_object_prototype(nt.get_nanbox_f64())
                         .map(|bits| scope.root_nanbox_u64(bits))
                 } else {
@@ -947,6 +1002,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                         &nt,
                         proto,
                     );
+                }
+                if let Some(object) = native_receiver::fetch_backed_object(
+                    &scope,
+                    result.get_nanbox_f64(),
+                    &nt,
+                    proto,
+                ) {
+                    return object;
                 }
                 native_receiver::apply_prototype(result.get_nanbox_f64(), proto);
                 return result.get_nanbox_f64();
@@ -1075,6 +1138,47 @@ mod callable_probe_tests {
     static ARROW_INFO: JsFunctionInfo =
         JsFunctionInfo::of(test_body as crate::codegen_abi::JsBody0<ClosureHeader>)
             .with_flags(crate::closure::FN_ARROW);
+
+    static METHOD_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn method_body(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        METHOD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        0.0
+    }
+
+    static METHOD_INFO: JsFunctionInfo =
+        JsFunctionInfo::of(method_body as crate::codegen_abi::JsBody0<ClosureHeader>)
+            .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
+    #[test]
+    fn distinct_new_target_rejects_method_before_invoking_body() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let method = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&METHOD_INFO, 0) as usize,
+            ));
+        let new_target = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&ORDINARY_INFO, 0) as usize,
+            ));
+        METHOD_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            js_new_function_construct_with_new_target(
+                method.get_nanbox_f64(),
+                std::ptr::null(),
+                0,
+                new_target.get_nanbox_f64(),
+            )
+        });
+        assert!(result.is_err(), "a method has no [[Construct]] slot");
+        assert_eq!(METHOD_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 
     fn pointer_value(ptr: usize) -> f64 {
         f64::from_bits(crate::value::POINTER_TAG | ptr as u64)

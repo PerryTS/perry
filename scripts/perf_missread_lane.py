@@ -63,8 +63,6 @@ def compile_arm(root, arm, names, diag=False, check_only=False):
     src, target, env = environment(root, arm)
     out = root / "measure" / (arm + ("-diag" if diag else ""))
     out.mkdir(parents=True, exist_ok=True)
-    if diag:
-        env["PERRY_IC_DIAG"] = "stderr"
     status_file = out / "status.json"
     status = json.loads(status_file.read_text()) if status_file.exists() else {}
     if not check_only:
@@ -86,8 +84,6 @@ def compile_arm(root, arm, names, diag=False, check_only=False):
             expected = run([*NODE, relative, *args], cwd, environment(root, arm)[2], out / f"{name}.node")
             runtime_env = environment(root, arm)[2]
             runtime_env["PERRY_METHOD_SITE_STATS"] = "1"
-            if diag:
-                runtime_env["PERRY_IC_DIAG"] = str(out / f"{name}.ic.txt")
             actual = run([str(binary), *args], cwd, runtime_env, out / f"{name}.perry")
             status[name] = "PASS" if output_result(name, actual) == output_result(name, expected) else "OUTPUT MISMATCH"
         except Exception as exc:

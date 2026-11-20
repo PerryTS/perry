@@ -25,6 +25,7 @@ fn function(id: u32, name: &str, body: Vec<Stmt>) -> Function {
 
 fn module(constructor: bool) -> Module {
     let read = Expr::PropertyGet {
+        byte_end: 0,
         object: Box::new(Expr::This),
         property: "m".to_string(),
         byte_offset: 0,
@@ -66,6 +67,7 @@ fn module(constructor: bool) -> Module {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });
@@ -85,7 +87,7 @@ fn assert_shape_read(constructor: bool) {
         !ir.contains("call double @js_class_method_bind_by_id("),
         "a public declared method read must not resolve by class/name: {ir}"
     );
-    // The site probes the live receiver's shape with the leaf `perry_probe_get`
+    // The site probes the live receiver's shape with the leaf shape probe
     // (a sentinel result means "not served by the shape"), and only a miss
     // reaches the ordinary Get, which can run a getter.
     assert!(
@@ -93,7 +95,7 @@ fn assert_shape_read(constructor: bool) {
         "the site must probe the live receiver's shape and test for a miss: {ir}"
     );
     assert!(
-        ir.contains("call double @js_object_get_field_slow("),
+        ir.contains("call double @js_object_get_field_value("),
         "a shape miss must retain the ordinary Get, which can run a getter: {ir}"
     );
     let start = ir.find("\npget.recv_ok.").expect("probe block is emitted");
@@ -108,7 +110,7 @@ fn assert_shape_read(constructor: bool) {
     let slow = &ir[slow + 1..];
     let slow = &slow[..slow.find("\n\n").expect("end of miss block")];
     assert!(
-        slow.contains("@js_object_get_field_slow("),
+        slow.contains("@js_object_get_field_value("),
         "the miss block must hold the ordinary Get: {slow}"
     );
 }

@@ -1,0 +1,39 @@
+cold_intrinsic_after_global_reassignment: [true,true,null,"(?:)",""]
+DEC 250: Cannot add member Object.prototype.lastIndex: built-in objects are read-only in a compiled program
+cold_lastIndex_define: [0,0,["lastIndex"]]
+proto_test_patched_untyped: throw TypeError
+proto_test_patched_literal: throw TypeError
+own_exec_override: false
+proto_exec_override: throw TypeError
+global_getter_override: throw TypeError
+subclass_field: [true,1,1,["x"],"a",true]
+lastIndex_desc: {"value":0,"writable":true,"enumerable":false,"configurable":false}
+own_names: ["lastIndex"]
+lastIndex_nonwritable_test: throw TypeError
+lastIndex_roundtrip_obj: true
+own_test_shadow: "own"
+symbol_replace_patched: throw TypeError
+global_on_proto: undefined
+global_getter_plain_this: throw TypeError
+literal_fresh: [false,0]
+literal_state: [1,0]
+compile: ["b",true,true]
+structuredClone: [true,"gi","a"]
+in_operator: [true,true,false]
+proto_test_patched_local: throw TypeError
+subclass_exec: [false,true,true,"[object RegExp]"]
+expando: [1,["foo"],"{\"foo\":1}"]
+setPrototypeOf: "p"
+delete_lastIndex: throw TypeError
+exec_brand: throw TypeError
+private_spelling: [true,7,["lastIndex","#<perry:private-value:0:@0:[[RegExpMatcher]]>"]]
+private_spelling_reflection: [true,7,7,7,["lastIndex","#<perry:private-value:0:@0:[[RegExpMatcher]]>"],"{\"#<perry:private-value:0:@0:[[RegExpMatcher]]>\":7}",true,true,["lastIndex"]]
+compile_shared_cell: ["b","i",4,"a","g",0,true]
+clone_original: ["a\\/b\\n","gi",0,[]]
+compile_nonwritable: ["TypeError","b","g",0]
+subclass_private: [42,true,1,true,true,["lastIndex"]]
+intrinsic_prototype_after_global_reassignment: true
+subclass_flags_nested_gets: ["g","g","g",true,"-+-",["a","a"]]
+regexp_as_function_prototype: [true,true,[],"TypeError"]
+dictionary_exec_shadow: [true,false,1]
+flags_reads_getters: throw TypeError

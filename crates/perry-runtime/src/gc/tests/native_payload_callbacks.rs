@@ -100,7 +100,7 @@ extern "C" fn throws(
     err: f64,
 ) -> f64 {
     CALLS.fetch_add(1, Ordering::SeqCst);
-    crate::exception::js_throw(err)
+    crate::exception::test_throw(err)
 }
 extern "C" fn returns(_: *const crate::closure::ClosureHeader, _: crate::closure::JsThis) -> f64 {
     CALLS.fetch_add(1, Ordering::SeqCst);
@@ -223,12 +223,12 @@ fn t3_owner_store_has_a_remembered_barrier() {
     let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     // Arm remembering before the store: lazy reconstruction must not hide a
     // dropped barrier by discovering the edge afterwards.
-    let _ = barrier::remembered_dirty_snapshot();
+    let _ = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     reset_remembered_set();
     let value = owner();
     let link = np::owner_link(value, &FAMILY).unwrap();
     let header = unsafe { header_from_user_ptr(cell(link) as *const u8) } as usize;
-    let snapshot = barrier::remembered_dirty_snapshot();
+    let snapshot = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     assert!(
         snapshot
             .external_dirty_entries
@@ -496,10 +496,10 @@ extern "C" fn nested(_: *const crate::closure::ClosureHeader, this: crate::closu
         );
         // Planted conversion throw inside the span: finish is skipped.
         if np::callback_sabotage("conversion") {
-            crate::exception::js_throw(43.0);
+            crate::exception::test_throw(43.0);
         }
         if let Err(CallEnd::Threw(err)) = guard.finish() {
-            crate::exception::js_throw(err);
+            crate::exception::test_throw(err);
         }
     });
     assert_eq!(caught, Err(43.0));
@@ -633,12 +633,12 @@ fn callback_cell_slot_barrier_is_exact_for_malloc_parent() {
     let cb = closure(crate::fn_info!(returns, 0));
     np::set_callback(value.get_nanbox_f64(), &FAMILY, 0, cb);
     let link = np::owner_link(value.get_nanbox_f64(), &FAMILY).unwrap();
-    let _ = barrier::remembered_dirty_snapshot();
+    let _ = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     reset_remembered_set();
     let replacement = crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64);
     np::state_set(value.get_nanbox_f64(), &FAMILY, b"callbacks", replacement);
     let header = unsafe { header_from_user_ptr(cell(link) as *const u8) } as usize;
-    let snapshot = barrier::remembered_dirty_snapshot();
+    let snapshot = barrier::remembered_dirty_snapshot::<{ cfg!(test) }>();
     assert!(
         snapshot
             .external_dirty_entries
@@ -703,7 +703,7 @@ extern "C" fn clears_new_target_and_throws(
     crate::object::js_new_target_enter(f64::from_bits(TAG_UNDEFINED));
     let trace = collect_minor_trace(GcTriggerKind::MallocCount);
     assert!(trace.copying_nursery.eligible);
-    crate::exception::js_throw(43.0)
+    crate::exception::test_throw(43.0)
 }
 
 #[test]

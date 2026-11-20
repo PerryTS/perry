@@ -123,6 +123,11 @@ impl<'s> RootedArrayElems<'s> {
     }
 }
 
+/// The proof [`crate::buffer::store::store_alloc_scratch`] asks for. Only this
+/// module can build one, so the two workspaces below stay the only cells born
+/// without the family claim.
+pub(crate) struct ScratchWorkspace(());
+
 /// Sort indices into the rooted source instead of moving GC values during
 /// comparisons. The source is private to this sort, so callbacks can move its
 /// objects but cannot mutate its slots. No copied heap value survives a call.
@@ -147,20 +152,26 @@ unsafe fn with_sorted_indices<R>(
     // slices remain valid across arbitrary callbacks and copying collections.
     // Keep both allocations rooted, including across allocation of the second.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let order_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
-        crate::typedarray::KIND_UINT32,
+    #[cfg(perry_gc_instruments)]
+    let scratch_cells = crate::wpfacts_check::family::Scratch::enter();
+    let order_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
+        crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
-    let scratch_handle = scope.root_raw_mut_ptr(crate::typedarray::typed_array_alloc(
-        crate::typedarray::KIND_UINT32,
+    let scratch_handle = scope.root_raw_mut_ptr(crate::buffer::store::store_alloc_scratch(
+        ScratchWorkspace(()),
+        crate::typedarray_hook_slots::KIND_UINT32,
         n as u32,
     ));
+    #[cfg(perry_gc_instruments)]
+    drop(scratch_cells);
     let order = std::slice::from_raw_parts_mut(
-        order_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        order_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,
     );
     let scratch = std::slice::from_raw_parts_mut(
-        scratch_handle.with_mut_ptr(crate::typedarray::data_ptr_mut) as *mut u32,
+        scratch_handle.with_mut_ptr(crate::typedarray_hook_slots::data_ptr_mut) as *mut u32,
         n,
     );
     sort_permutation(data, order, scratch, c, cmp_handle);
@@ -302,13 +313,7 @@ pub(crate) unsafe fn sort_rooted_values(
 // ---------------------------------------------------------------------------
 
 fn object_prototype_value() -> Option<f64> {
-    let ctor = crate::object::js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
-    let ctor_v = crate::value::JSValue::from_bits(ctor.to_bits());
-    if !ctor_v.is_pointer() {
-        return None;
-    }
-    let proto =
-        crate::closure::closure_get_dynamic_prop(ctor_v.as_pointer::<u8>() as usize, "prototype");
+    let proto = crate::object::builtin_prototype_value("Object");
     let proto_v = crate::value::JSValue::from_bits(proto.to_bits());
     if proto_v.is_pointer() {
         Some(proto)
@@ -625,6 +630,13 @@ unsafe fn array_sort_spec_path(
 /// `Object.prototype` numeric-key pollution case that only matters when the
 /// array actually has holes for an inherited element to show through.
 unsafe fn sort_needs_spec_path(arr: *const ArrayHeader, objproto_keys: &[u32]) -> bool {
+    // Frozen indexed properties must go through strict Set/Delete, even when
+    // their storage is dense. Preserve the trivial-array early return: Node
+    // does not attempt indexed writes when the receiver has fewer than two
+    // elements. All-hole arrays still succeed via deletion of absent keys.
+    if (*arr).length > 1 && crate::array::array_is_frozen(arr) {
+        return true;
+    }
     if crate::array::array_iteration_is_exotic(arr) {
         return true;
     }
@@ -666,7 +678,8 @@ pub extern "C" fn js_array_sort_default(arr: *mut ArrayHeader) -> *mut ArrayHead
         // `GC_TYPE_TYPED_ARRAY` one — so `ta.sort()` returned the null'd
         // pointer having sorted nothing, with no error and no diagnostic.
         if let Some(ta) = crate::array::typed_array_receiver(arr) {
-            return crate::typedarray::js_typed_array_sort_default(ta) as *mut ArrayHeader;
+            return crate::typedarray_hook_slots::js_typed_array_sort_default(ta)
+                as *mut ArrayHeader;
         }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;
         if arr.is_null() {
@@ -705,8 +718,8 @@ pub extern "C" fn js_validate_array_comparator(cmp_boxed: f64) -> i64 {
         // this bare proxy id, which then performs the Proxy [[Call]]. Check
         // callability here so a Proxy of a non-callable still throws before
         // sorting starts.
-        if crate::proxy::js_proxy_is_proxy(cmp_boxed) == 1
-            && crate::proxy::proxy_wraps_callable(cmp_boxed)
+        if crate::proxy_hooks::proxy_is_proxy(cmp_boxed) == 1
+            && crate::proxy_hooks::proxy_wraps_callable(cmp_boxed)
         {
             return ptr as i64;
         }
@@ -751,8 +764,7 @@ fn throw_invalid_comparator(cmp_boxed: f64) -> ! {
         value_str
     );
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// sort - sort array in-place using a comparator closure
@@ -781,7 +793,7 @@ pub extern "C" fn js_array_sort_with_comparator(
         // asked at the same point — before `clean_arr_ptr` rejects the
         // receiver — for the same reason.
         if let Some(ta) = crate::array::typed_array_receiver(arr) {
-            return crate::typedarray::js_typed_array_sort_with_comparator(ta, comparator)
+            return crate::typedarray_hook_slots::js_typed_array_sort_with_comparator(ta, comparator)
                 as *mut ArrayHeader;
         }
         let arr = clean_arr_ptr(arr as *const ArrayHeader) as *mut ArrayHeader;

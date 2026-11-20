@@ -154,6 +154,7 @@ pub(crate) fn try_dynamic_require(
         byte_offset: call.span.lo.0,
         deferred_error: None,
         synchronous: true,
+        deferred: false,
     }))
 }
 
@@ -215,7 +216,7 @@ pub(crate) fn try_import_meta_require(
             args: vec![
                 specifier,
                 parent,
-                Expr::String(ctx.source_file_path.clone()),
+                Expr::String(ctx.baked_source_path().into_owned()),
             ],
         }));
     }
@@ -250,5 +251,6 @@ pub(crate) fn try_import_meta_require(
         byte_offset: call.span.lo.0,
         deferred_error: None,
         synchronous: true,
+        deferred: false,
     }))
 }

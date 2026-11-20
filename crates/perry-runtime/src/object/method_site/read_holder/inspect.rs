@@ -10,7 +10,7 @@ unsafe fn position(obj: *const ObjectHeader, key: Key<'_>) -> Option<u32> {
     let keys = crate::object::object_keys(obj);
     match key {
         Key::Name(name) => {
-            crate::object::keys_find_property_slot_by_bytes(keys.arr(), keys.count(), name)
+            crate::object::keys_find_property_slot_by_bytes(keys, keys.count(), name)
         }
         Key::Symbol(symbol) => crate::object::shaped_symbols::position(obj, symbol),
     }
@@ -23,7 +23,7 @@ unsafe fn valid_pair(lane: u64) -> Option<usize> {
     }
     let pair = (lane & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(pair)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || (*(pair as *const crate::array::ArrayHeader)).length < 2
     {
         return None;

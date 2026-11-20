@@ -12,7 +12,7 @@ use super::*;
 pub struct InlineArenaState {
     pub data: *mut u8, // offset  0  — current block's data pointer
     pub offset: usize, // offset  8  — bump pointer (mutated inline)
-    pub size: usize,   // offset 16 — current block's size
+    pub size: usize,   // offset 16 — permitted inline bump bound (0 during black births)
     /// Stable address of THIS thread's live birth flags, never a cached value.
     /// Generated code reads the byte again after every raw allocation merge.
     pub birth_flags: *const u8, // offset 24 on the 64-bit inline-allocation ABI
@@ -21,6 +21,21 @@ pub struct InlineArenaState {
     pub birth_seeds: *mut std::ffi::c_void, // offset 32 on LP64
 }
 
+/// The same cell on 32-bit pointers (wasm32): codegen's
+/// `target_layout::inline_arena_layout` reads these words as i32.
+pub const INLINE_OFFSET_OFFSET_ILP32: usize = 4;
+pub const INLINE_SIZE_OFFSET_ILP32: usize = 8;
+pub const INLINE_FLAGS_OFFSET_ILP32: usize = 12;
+pub const INLINE_SEEDS_OFFSET_ILP32: usize = 16;
+// Evaluated on every host, so the four constants are referenced at every
+// pointer width; the comparison binds only where pointers are 32 bits.
+const _: () = assert!(
+    cfg!(not(target_pointer_width = "32"))
+        || (std::mem::offset_of!(InlineArenaState, offset) == INLINE_OFFSET_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, size) == INLINE_SIZE_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, birth_flags) == INLINE_FLAGS_OFFSET_ILP32
+            && std::mem::offset_of!(InlineArenaState, birth_seeds) == INLINE_SEEDS_OFFSET_ILP32)
+);
 pub const INLINE_BIRTH_FLAGS_OFFSET_LP64: usize = 24;
 pub const INLINE_BIRTH_SEEDS_OFFSET_LP64: usize = 32;
 #[cfg(target_pointer_width = "64")]
@@ -56,7 +71,7 @@ pub extern "C" fn js_inline_arena_state() -> *mut InlineArenaState {
             let block = &arena.blocks[arena.current];
             state.data = block.data;
             state.offset = block.offset;
-            state.size = super::alloc_sample::inline_limit(block.offset, block.size);
+            state.size = super::inline::allocation_limit(block.offset, block.size);
         }
         state as *mut InlineArenaState
     }
@@ -86,8 +101,46 @@ pub(crate) unsafe fn prove_inline_arena_state(state: *const InlineArenaState) ->
 /// Returns the raw pointer (the codegen writes the GcHeader at this
 /// address and the ObjectHeader at +8 — same layout the inline path
 /// produces).
+#[cfg(not(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu")))]
 #[no_mangle]
 pub extern "C" fn js_inline_arena_slow_alloc(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    js_inline_arena_slow_alloc_body(state, size, align)
+}
+
+/// x86-64 Linux: an allocation slow path JS calls directly, entered through a
+/// shim that hands its caller's frame to the collections it can run
+/// (`gc::roots::walk_origin`). Allocation runs no JS, which is what lets it
+/// offer.
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+#[unsafe(naked)]
+#[no_mangle]
+pub extern "C" fn js_inline_arena_slow_alloc(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+) -> *mut u8 {
+    crate::gc::offering_entry_asm!(3, js_inline_arena_slow_alloc_from)
+}
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux", target_env = "gnu"))]
+extern "C" fn js_inline_arena_slow_alloc_from(
+    state: *mut InlineArenaState,
+    size: usize,
+    align: usize,
+    pc: usize,
+    sp: usize,
+    fp: usize,
+) -> *mut u8 {
+    let origin = crate::gc::WalkOrigin { pc, sp, fp };
+    let _origin = crate::gc::EntryWalkOrigin::enter(&origin);
+    js_inline_arena_slow_alloc_body(state, size, align)
+}
+
+fn js_inline_arena_slow_alloc_body(
     state: *mut InlineArenaState,
     size: usize,
     align: usize,
@@ -114,6 +167,8 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         }
         // Allocate via existing path (may push a new block + run GC).
         let ptr = crate::arena::arena_cell_alloc(arena_ptr, size, align);
+        #[cfg(perry_gc_instruments)]
+        super::alloc_sample::inline_slow_alloc(ptr, size);
         // Resync inline state to the (possibly new) current block.
         let (data, block_offset, block_size) = {
             let arena = &*arena_ptr;
@@ -123,7 +178,7 @@ pub extern "C" fn js_inline_arena_slow_alloc(
         let state_ref = &mut *state;
         state_ref.data = data;
         state_ref.offset = block_offset;
-        state_ref.size = super::alloc_sample::inline_limit(block_offset, block_size);
+        state_ref.size = super::inline::allocation_limit(block_offset, block_size);
         ptr
     }
 }
@@ -185,8 +240,37 @@ pub fn arena_start_fresh_general_block() {
                 let block = &arena.blocks[arena.current];
                 inline.data = block.data;
                 inline.offset = block.offset;
-                inline.size = super::alloc_sample::inline_limit(block.offset, block.size);
+                inline.size = super::inline::allocation_limit(block.offset, block.size);
             }
         });
+    });
+}
+
+/// The canonical permission bound, not the physical block extent. Complete
+/// generated births may omit their color test because no positive-size bump
+/// fits during allocate-black. Runtime refills retain the physical ArenaBlock
+/// extent and the existing coloring/seeding path.
+#[inline(always)]
+pub(crate) fn allocation_limit(offset: usize, block_size: usize) -> usize {
+    if crate::gc::gc_birth_extra_flags() != 0 || crate::snap_census::inline_bump_closed() {
+        0
+    } else {
+        super::alloc_sample::inline_limit(offset, block_size)
+    }
+}
+
+/// Update the existing bump bound at a birth-color transition. Never
+/// initialize an unused arena here, allocate, or synchronize a stale offset.
+pub(crate) fn refresh_inline_allocation_limit() {
+    // A dropped incremental cycle can run during TLS teardown, after the
+    // arena has gone. There is no mutator then and no bound to reopen.
+    let _ = INLINE_STATE.try_with(|s| unsafe {
+        let state = &mut *s.get();
+        if !state.data.is_null() {
+            let _ = ARENA.try_with(|a| {
+                let arena = &*(*a).get();
+                state.size = allocation_limit(state.offset, arena.blocks[arena.current].size);
+            });
+        }
     });
 }

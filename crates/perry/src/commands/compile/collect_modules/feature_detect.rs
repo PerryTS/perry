@@ -7,8 +7,21 @@
 //! actually reach. Over-matching only over-includes a subsystem (a size,
 //! not a correctness, cost); the rule throughout is zero false negatives.
 
+mod global_object;
+mod native_constants;
+mod process_ipc;
+mod regex_members;
+mod regex_unicode;
+mod usage;
+
+#[cfg(test)]
+mod pruning_tests;
+
 use super::crypto_ns::module_uses_global_crypto_namespace;
 use crate::commands::compile::CompilationContext;
+
+#[path = "feature_detect/computed_members.rs"]
+mod computed_members;
 
 fn debug_hir_uses_regex(hir_debug: &str) -> bool {
     hir_debug.contains("RegExp") // RegExp / RegExpDynamic / RegExpEscape / RegExpExec{Index,Groups}
@@ -22,9 +35,6 @@ fn debug_hir_uses_regex(hir_debug: &str) -> bool {
         // itself: a false positive only links the optional engine, whereas a
         // false negative makes `matchesGlob` silently return false.
         || hir_debug.contains("matchesGlob")
-        || hir_debug.contains("property: \"search\"")
-        || hir_debug.contains("property: \"match\"")
-        || hir_debug.contains("property: \"matchAll\"")
         || hir_debug.contains("property: \"glob\"")
         || hir_debug.contains("property: \"globSync\"")
         || hir_debug.contains("method: \"Glob\"")
@@ -83,25 +93,6 @@ fn debug_hir_uses_string_normalization(hir_debug: &str) -> bool {
         || hir_debug.contains("property: \"Collator\"")
 }
 
-fn debug_hir_uses_global_math_member(hir_debug: &str) -> bool {
-    // Value-form reads such as `const cos = Math.cos` lose the `Math`
-    // receiver during lowering and reach final HIR as a property read from
-    // the shared GlobalGet(0) builtin sentinel. Match every member reified by
-    // `install_math_namespace`. A same-named property on another object is a
-    // benign false positive (a slightly larger runtime), while a false
-    // negative leaves the extracted function undefined.
-    const MEMBERS: &[&str] = &[
-        "abs", "acos", "acosh", "asin", "asinh", "atan", "atan2", "atanh", "cbrt", "ceil", "clz32",
-        "cos", "cosh", "exp", "expm1", "f16round", "floor", "fround", "hypot", "imul", "log",
-        "log1p", "log2", "log10", "max", "min", "pow", "random", "round", "sign", "sin", "sinh",
-        "sqrt", "tan", "tanh", "trunc",
-    ];
-
-    MEMBERS
-        .iter()
-        .any(|member| hir_debug.contains(&format!(r#"property: "{member}""#)))
-}
-
 /// `perry-runtime/url-engine` gate. Despite the name it is not only the host
 /// parser: `String(url)`, JSON and the setter paths recognize a URL object only
 /// under it, so it is needed wherever a URL object can exist.
@@ -127,9 +118,19 @@ fn debug_hir_uses_url_engine(hir_debug: &str) -> bool {
         // namespace at run time; its members are then reached dynamically.
         || hir_debug.contains("String(\"node:url\")")
         || hir_debug.contains("String(\"url\")")
+        // A default or namespace import (`import url from "node:url"`) reaches
+        // helpers through that object, so no `module: "url"` marker survives
+        // (#12864 follow-up: `url.domainToASCII` alone linked no engine).
+        || hir_debug.contains("NativeModuleRef(\"url\")")
         // A TypeScript `require("node:url")` keeps no specifier in the HIR, so
         // the factory name is the only surviving signal (#11560).
         || hir_debug.contains("pathToFileURL")
+        // node:module's createRequire accepts file URLs without a named URL
+        // constructor; its native installer reaches the URL value operations.
+        || hir_debug.contains(r#"module: "module""#)
+        || hir_debug.contains(r#"NativeModuleRef("module")"#)
+        || hir_debug.contains(r#"String("node:module")"#)
+        || hir_debug.contains(r#"String("module")"#)
 }
 
 fn imports_fs_promises_glob(hir_module: &perry_hir::Module) -> bool {
@@ -160,9 +161,194 @@ fn module_hir_debug(hir_module: &perry_hir::Module) -> String {
     )
 }
 
+/// Whether `found` holds for one of the expression roots of `module`'s
+/// lowered code: statements of the init, functions and class bodies,
+/// parameter defaults, decorators, field initializers and computed keys.
+/// `found` descends into an expression itself (closure bodies included,
+/// through [`stmts_any_expr`]).
+fn module_any_expr(
+    module: &perry_hir::Module,
+    found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
+) -> bool {
+    usage::module(module, &mut |expr, _discarded| found(expr))
+}
+
+fn stmts_any_expr(
+    stmts: &[perry_hir::Stmt],
+    found: &mut dyn FnMut(&perry_hir::Expr) -> bool,
+) -> bool {
+    stmts
+        .iter()
+        .any(|stmt| perry_hir::walker::stmt_any_expr(stmt, &mut |e| found(e)))
+}
+
+/// A BigInt64/BigUint64 view lowers to a numeric `kind` that the HIR debug
+/// text never spells by name, yet every element read produces a BigInt.
+fn module_uses_bigint_typed_array(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
+    use perry_hir::{TYPED_ARRAY_KIND_BIGINT64, TYPED_ARRAY_KIND_BIGUINT64};
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::TypedArrayNew { kind, .. } | Expr::NativeArenaView { kind, .. }
+                if matches!(
+                    *kind,
+                    TYPED_ARRAY_KIND_BIGINT64 | TYPED_ARRAY_KIND_BIGUINT64
+                ) =>
+            {
+                return true
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| found = found || uses(child));
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
+/// `global-math`: does the program evaluate the `Math` namespace object?
+///
+/// Direct calls (`Math.max(a, b)`) lower to intrinsics and never read it. A
+/// value read keeps the namespace receiver (`PropertyGet { PropertyGet {
+/// GlobalGet(0), "Math" }, "cos" }`), as do `Math` itself, `globalThis.Math`
+/// and `globalThis["Math"]`: every one names `Math` as a property. A member
+/// read off the bare `GlobalGet(0)` receiver is counted too, except as a
+/// call's callee: that shape is the collapsed intrinsic surface
+/// (`console.log(…)`, a declined `Math.f()`), dispatched by name and never
+/// through the namespace object. A `"Math"` string that is no property key
+/// is not a use.
+fn module_uses_global_math(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
+
+    fn is_math_member(name: &str) -> bool {
+        matches!(
+            name,
+            "abs"
+                | "acos"
+                | "acosh"
+                | "asin"
+                | "asinh"
+                | "atan"
+                | "atan2"
+                | "atanh"
+                | "cbrt"
+                | "ceil"
+                | "clz32"
+                | "cos"
+                | "cosh"
+                | "exp"
+                | "expm1"
+                | "f16round"
+                | "floor"
+                | "fround"
+                | "hypot"
+                | "imul"
+                | "log"
+                | "log1p"
+                | "log2"
+                | "log10"
+                | "max"
+                | "min"
+                | "pow"
+                | "random"
+                | "round"
+                | "sign"
+                | "sin"
+                | "sinh"
+                | "sqrt"
+                | "tan"
+                | "tanh"
+                | "trunc"
+        )
+    }
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            Expr::PropertyGet { property, .. } if property == "Math" => return true,
+            Expr::PropertyGet {
+                object, property, ..
+            } if matches!(object.as_ref(), Expr::GlobalGet(0)) && is_math_member(property) => {
+                return true
+            }
+            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(s) if s == "Math") => {
+                return true
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let collapsed_callee = match expr {
+            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+                matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
+                    if matches!(object.as_ref(), Expr::GlobalGet(0)))
+                .then_some(callee.as_ref() as *const Expr)
+            }
+            _ => None,
+        };
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            if !found && collapsed_callee != Some(child as *const Expr) {
+                found = uses(child);
+            }
+        });
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
+/// A materialized process object can escape through aliases, arguments or
+/// computed member access. Select its optional hooks at that source, rather
+/// than treating every unrelated `on`/`emit` property as a process operation.
+/// Dedicated process intrinsics and explicit imports are handled separately.
+fn module_uses_process_object(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
+
+    fn uses(expr: &Expr) -> bool {
+        match expr {
+            // `process.dlopen` loads an authenticated addon; the call itself
+            // touches no process state. What the addon reaches is its own
+            // fact: an open one installs every subsystem (`addon_world`).
+            Expr::NativeMethodCall {
+                module,
+                method,
+                object: None,
+                ..
+            } if module == "process" && method == "dlopen" => {}
+            Expr::NativeModuleRef(module) | Expr::NativeMethodCall { module, .. }
+                if matches!(
+                    module.as_str(),
+                    "process" | "process.default" | "process.namespace"
+                ) =>
+            {
+                return true;
+            }
+            // This also covers globalThis.process and a computed literal key.
+            // Unknown global keys are covered by global_object::may_escape.
+            Expr::PropertyGet { property, .. } if property == "process" => return true,
+            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
+            {
+                return true;
+            }
+            Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
+            _ => {}
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| found |= uses(child));
+        found
+    }
+
+    module_any_expr(module, &mut uses)
+}
+
 fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
-    use perry_hir::walker::{stmt_any_expr, walk_expr_children};
-    use perry_hir::{Expr, Function, Stmt};
+    use perry_hir::walker::walk_expr_children;
+    use perry_hir::Expr;
 
     fn is_global_object_value(expr: &Expr) -> bool {
         matches!(expr, Expr::GlobalThisExpr)
@@ -197,7 +383,7 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         }
         // Expression descent visits closure defaults, but not closure bodies.
         if let Expr::Closure { body, .. } = expr {
-            if stmts_use_namespace(body) {
+            if stmts_any_expr(body, &mut expr_uses_namespace) {
                 return true;
             }
         }
@@ -208,33 +394,141 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         found
     }
 
-    fn stmts_use_namespace(stmts: &[Stmt]) -> bool {
+    module_any_expr(module, &mut expr_uses_namespace)
+}
+
+fn module_uses_json_format(module: &perry_hir::Module) -> bool {
+    use perry_hir::walker::{stmt_any_expr, walk_expr_children};
+    use perry_hir::{Expr, Function, Stmt};
+
+    fn formatter_offset(name: &str) -> Option<usize> {
+        match name {
+            "formatWithOptions" | "assert" | "timeLog" => Some(1),
+            "log" | "info" | "warn" | "error" | "debug" | "trace" | "dirxml" | "group"
+            | "groupCollapsed" | "format" => Some(0),
+            _ => None,
+        }
+    }
+    fn format_args_need_json(args: &[Expr], offset: usize) -> bool {
+        if args.len() <= offset + 1 {
+            return false;
+        }
+        match &args[offset] {
+            Expr::String(fmt) => {
+                let bytes = fmt.as_bytes();
+                let mut i = 0;
+                while i + 1 < bytes.len() {
+                    if bytes[i] == b'%' {
+                        if bytes[i + 1] == b'j' {
+                            return true;
+                        }
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                false
+            }
+            Expr::New { .. }
+            | Expr::NewDynamic { .. }
+            | Expr::NewDynamicSpread { .. }
+            | Expr::Object(_)
+            | Expr::Array(..)
+            | Expr::ArraySpread(_) => false,
+            Expr::Number(_)
+            | Expr::Integer(_)
+            | Expr::BigInt(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Undefined => false,
+            // Runtime strings may contain %j, including through parameters.
+            _ => true,
+        }
+    }
+    fn namespace_value(expr: &Expr) -> bool {
+        matches!(expr, Expr::NativeModuleRef(name)
+            if matches!(name.trim_start_matches("node:"), "util" | "console"))
+            || matches!(expr, Expr::PropertyGet { property, .. } if property == "console")
+    }
+    fn expr_uses_json_format(expr: &Expr) -> bool {
+        if let Expr::Call { callee, args, .. } = expr {
+            if let Expr::PropertyGet {
+                object, property, ..
+            } = callee.as_ref()
+            {
+                if let Some(offset) = formatter_offset(property) {
+                    // The callee is consumed here, rather than escaping as a
+                    // function value. A single argument cannot substitute %j.
+                    return format_args_need_json(args, offset)
+                        || (!namespace_value(object) && expr_uses_json_format(object))
+                        || args.iter().any(expr_uses_json_format);
+                }
+            }
+        }
+        if let Expr::NativeMethodCall {
+            module,
+            method,
+            args,
+            object,
+            ..
+        } = expr
+        {
+            if matches!(module.trim_start_matches("node:"), "util" | "console") {
+                if let Some(offset) = formatter_offset(method) {
+                    return format_args_need_json(args, offset)
+                        || object.as_deref().is_some_and(expr_uses_json_format)
+                        || args.iter().any(expr_uses_json_format);
+                }
+            }
+        }
+        // Extracted formatters and namespaces may be called with runtime
+        // strings later. A computed global lookup can obtain console too.
+        if namespace_value(expr)
+            || matches!(expr, Expr::PropertyGet { property, .. }
+                if formatter_offset(property).is_some())
+            || matches!(expr, Expr::IndexGet { object, .. }
+                if matches!(object.as_ref(), Expr::GlobalGet(0) | Expr::GlobalThisExpr))
+        {
+            return true;
+        }
+        if let Expr::Closure { body, .. } = expr {
+            if stmts_use_json_format(body) {
+                return true;
+            }
+        }
+        let mut found = false;
+        walk_expr_children(expr, &mut |child| {
+            found = found || expr_uses_json_format(child);
+        });
+        found
+    }
+    fn stmts_use_json_format(stmts: &[Stmt]) -> bool {
         stmts
             .iter()
-            .any(|stmt| stmt_any_expr(stmt, &mut expr_uses_namespace))
+            .any(|stmt| stmt_any_expr(stmt, &mut expr_uses_json_format))
     }
 
-    fn decorators_use_namespace(decorators: &[perry_hir::Decorator]) -> bool {
+    fn decorators_use_json_format(decorators: &[perry_hir::Decorator]) -> bool {
         decorators
             .iter()
-            .any(|decorator| decorator.args.iter().any(expr_uses_namespace))
+            .any(|decorator| decorator.args.iter().any(expr_uses_json_format))
     }
 
-    fn function_uses_namespace(function: &Function) -> bool {
+    fn function_uses_json_format(function: &Function) -> bool {
         function.params.iter().any(|param| {
-            param.default.as_ref().is_some_and(expr_uses_namespace)
-                || decorators_use_namespace(&param.decorators)
-        }) || stmts_use_namespace(&function.body)
-            || decorators_use_namespace(&function.decorators)
+            param.default.as_ref().is_some_and(expr_uses_json_format)
+                || decorators_use_json_format(&param.decorators)
+        }) || stmts_use_json_format(&function.body)
+            || decorators_use_json_format(&function.decorators)
     }
 
-    stmts_use_namespace(&module.init)
-        || module.functions.iter().any(function_uses_namespace)
+    stmts_use_json_format(&module.init)
+        || module.functions.iter().any(function_uses_json_format)
         || module.classes.iter().any(|class| {
             class
                 .extends_expr
                 .as_deref()
-                .is_some_and(expr_uses_namespace)
+                .is_some_and(expr_uses_json_format)
                 || class
                     .constructor
                     .iter()
@@ -242,28 +536,103 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
                     .chain(&class.static_methods)
                     .chain(class.getters.iter().map(|(_, function)| function))
                     .chain(class.setters.iter().map(|(_, function)| function))
-                    .any(function_uses_namespace)
+                    .any(function_uses_json_format)
                 || class
                     .fields
                     .iter()
                     .chain(&class.static_fields)
                     .any(|field| {
-                        field.init.as_ref().is_some_and(expr_uses_namespace)
-                            || field.key_expr.as_ref().is_some_and(expr_uses_namespace)
-                            || decorators_use_namespace(&field.decorators)
+                        field.init.as_ref().is_some_and(expr_uses_json_format)
+                            || field.key_expr.as_ref().is_some_and(expr_uses_json_format)
+                            || decorators_use_json_format(&field.decorators)
                     })
                 || class.computed_members.iter().any(|member| {
-                    expr_uses_namespace(&member.key_expr)
-                        || function_uses_namespace(&member.function)
+                    expr_uses_json_format(&member.key_expr)
+                        || function_uses_json_format(&member.function)
                 })
-                || decorators_use_namespace(&class.decorators)
+                || decorators_use_json_format(&class.decorators)
         })
 }
 
-/// Inspect a lowered module and set the optional-feature gates it needs.
+/// Select features after CJS open arms have been resolved, retaining the full
+/// graph for the detector's imported-enum and other producer facts.
+///
+/// A namespace pair (`NamespacePatched(ns) ? globalThis.<ns>.<m>(..) :
+/// <intrinsic>`, the facts lowering of a direct namespace call) is read as
+/// its intrinsic arm, the HIR the call has without the pair: the generic arm
+/// exists only until the pick, and its `globalThis.<ns>` member read would
+/// select the Proxy / JSON / Reflect namespaces for every program. Where the
+/// pick keeps a generic call, [`detect_kept_generic_calls`] scans the picked
+/// module again, so the selected features are those of the final HIR.
+pub(crate) fn detect_program_optional_feature_usage(ctx: &mut CompilationContext) {
+    let modules = std::mem::take(&mut ctx.native_modules);
+    for module in modules.values() {
+        let view = intrinsic_view(module);
+        let module = view.as_ref().unwrap_or(module);
+        let computed = computed_members::scan(module, &modules);
+        detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+    }
+    ctx.native_modules = modules;
+}
+
+/// `module` with every namespace pair replaced by its intrinsic arm, or None
+/// when it holds no pair.
+fn intrinsic_view(module: &perry_hir::Module) -> Option<perry_hir::Module> {
+    fn pair(expr: &perry_hir::Expr) -> bool {
+        match expr {
+            perry_hir::Expr::NamespacePatched(_) => return true,
+            perry_hir::Expr::Closure { body, .. } if stmts_any_expr(body, &mut pair) => {
+                return true
+            }
+            _ => {}
+        }
+        let mut found = false;
+        perry_hir::walker::walk_expr_children(expr, &mut |child| found = found || pair(child));
+        found
+    }
+    if !module_any_expr(module, &mut pair) {
+        return None;
+    }
+    let mut view = module.clone();
+    perry_hir::namespace_pairs::take_intrinsic_arms(&mut view);
+    Some(view)
+}
+
+/// After the namespace pairs are picked: scan again each module of `paths`
+/// (those whose pick kept a generic call, or that still hold pairs), adding
+/// the features its final HIR selects. Every gate only turns a feature on,
+/// so the result is the union of the pre-pick view and the final HIR.
+pub(crate) fn detect_kept_generic_calls(
+    ctx: &mut CompilationContext,
+    paths: &[std::path::PathBuf],
+) {
+    if paths.is_empty() {
+        return;
+    }
+    let modules = std::mem::take(&mut ctx.native_modules);
+    for path in paths {
+        if let Some(module) = modules.get(path) {
+            let computed = computed_members::scan(module, &modules);
+            detect_optional_feature_usage_with_capabilities(ctx, module, computed);
+        }
+    }
+    ctx.native_modules = modules;
+}
+
+/// Inspect one lowered module using the producers already collected in ctx.
+#[cfg(test)]
 pub(super) fn detect_optional_feature_usage(
     ctx: &mut CompilationContext,
     hir_module: &perry_hir::Module,
+) {
+    let computed = computed_members::scan(hir_module, &ctx.native_modules);
+    detect_optional_feature_usage_with_capabilities(ctx, hir_module, computed);
+}
+
+fn detect_optional_feature_usage_with_capabilities(
+    ctx: &mut CompilationContext,
+    hir_module: &perry_hir::Module,
+    computed: computed_members::Capabilities,
 ) {
     // #11121: ONE token corpus for every text-grep gate below, and it covers
     // all three places lowered code lives. Class methods, accessors, static
@@ -278,19 +647,290 @@ pub(super) fn detect_optional_feature_usage(
     // false-negative class for every gate at once (the rule is zero false
     // negatives; including more HIR can only over-include a feature).
     let hir_debug = module_hir_debug(hir_module);
+    let unicode_producer = regex_unicode::needed(hir_module);
+    log::debug!(
+        "regex Unicode selection in {}: producer={unicode_producer}, opaque_members={}",
+        hir_module.name,
+        computed.opaque_members
+    );
+    ctx.uses_regex_unicode |= unicode_producer;
+    ctx.uses_temporal |= global_object::may_escape(hir_module);
+    ctx.uses_diagnostics |= global_object::may_escape(hir_module);
+    ctx.uses_typedarray |= global_object::may_escape(hir_module)
+        || [
+            "TypedArray",
+            "Uint8Array",
+            "Uint8ClampedArray",
+            "Int8Array",
+            "Uint16Array",
+            "Int16Array",
+            "Uint32Array",
+            "Int32Array",
+            "Float16Array",
+            "Float32Array",
+            "Float64Array",
+            "BigInt64Array",
+            "BigUint64Array",
+            "ArrayBuffer",
+            "DataView",
+            "Buffer",
+            "TextEncoder",
+            "NativeMemory",
+            "ProcessStdin",
+            // The embedded-file read of `perry` returns a Buffer.
+            "readEmbedded",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name))
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "buffer"
+                        | "fs"
+                        | "fs/promises"
+                        | "crypto"
+                        | "v8"
+                        | "http"
+                        | "http2"
+                        | "https"
+                        | "net"
+                        | "tls"
+                        | "dgram"
+                        | "worker_threads"
+                        | "child_process"
+                        | "process"
+                        | "os"
+                        | "bun"
+                        | "bun:jsc"
+                        | "bun:ffi"
+                        | "sqlite"
+                        | "perry/thread"
+                        // Modules whose results are Buffers without the program
+                        // naming one: compressed output, byte-mode stream chunks,
+                        // StringDecoder lastChar, WebSocket messages, BLOB columns.
+                        | "zlib"
+                        | "stream"
+                        | "stream/consumers"
+                        | "string_decoder"
+                        | "ws"
+                        | "better-sqlite3"
+                        | "bun:sqlite"
+                        // Well-known providers whose code is not in this repo.
+                        | "pg"
+                        | "mysql2"
+                        | "mysql2/promise"
+                        | "tursodb"
+                        | "iroh"
+                        // tty.ReadStream reads hand out Buffers.
+                        | "tty"
+                )
+        });
+    ctx.uses_event_target |= global_object::may_escape(hir_module)
+        || [
+            "Event",
+            "CustomEvent",
+            "EventTarget",
+            "DOMException",
+            "AbortSignal",
+            "AbortController",
+            "MessageEvent",
+            "CloseEvent",
+            "ProgressEvent",
+            "ErrorEvent",
+            "WebSocket",
+            "EventSource",
+            "Request",
+            "Worker",
+            "navigator",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(&format!("\"{name}\"")))
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "perf_hooks" | "crypto" | "worker_threads" | "undici" | "bun" | "perry/thread"
+                )
+        });
+    ctx.uses_navigator |= global_object::may_escape(hir_module)
+        || ["navigator", "Navigator"]
+            .iter()
+            .any(|name| hir_debug.contains(&format!("\"{name}\"")));
+    ctx.uses_messaging |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""worker_threads""#)
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && import
+                    .source
+                    .strip_prefix("node:")
+                    .unwrap_or(&import.source)
+                    == "worker_threads"
+        })
+        || ["MessageChannel", "MessagePort", "BroadcastChannel"]
+            .iter()
+            .any(|name| hir_debug.contains(name));
+    // The global `BroadcastChannel` reaches other channels of its name only
+    // through the stdlib's channel registry (`worker_threads::broadcast_channel`,
+    // registered by the stdlib's init): without the stdlib its runtime object
+    // has no transport, and `postMessage` delivered nothing.
+    ctx.needs_stdlib |= hir_debug.contains(r#""BroadcastChannel""#);
+    ctx.uses_os |= global_object::may_escape(hir_module)
+        || hir_debug
+            .as_bytes()
+            .windows(3)
+            .any(|word| &word[..2] == b"Os" && word[2].is_ascii_uppercase())
+        || hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "os" | "process"
+                        | "tty"
+                        | "readline"
+                        | "readline/promises"
+                        | "repl"
+                        | "node-pty"
+                        | "@lydell/node-pty"
+                        | "bun-pty"
+                )
+        })
+        || [
+            "ProcessOn",
+            "ProcessOnce",
+            "ProcessStdin",
+            "ProcessStdout",
+            "ProcessStderr",
+            "ProcessKill",
+            "ProcessEmit",
+            "ProcessFinalization",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name))
+        || module_uses_process_object(hir_module);
+    ctx.uses_perf_hooks |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""performance""#)
+        || hir_debug.contains(r#""perf_hooks""#);
+    // The legacy locale-string node also represents ordinary numbers.
+    let date_debug = hir_debug.replace("DateToLocaleString(", "ToLocaleString(");
+    ctx.uses_date |= global_object::may_escape(hir_module)
+        || hir_debug.contains(r#""Date""#)
+        || date_debug
+            .as_bytes()
+            .windows(5)
+            .any(|w| &w[..4] == b"Date" && w[4].is_ascii_uppercase());
+    ctx.uses_turnloop |= hir_debug.contains(r#""perry/thread""#);
+    ctx.uses_thread_codec |= global_object::may_escape(hir_module)
+        || [
+            r#""performance""#,
+            "AtomicsWaitAsync",
+            "StructuredClone",
+            "structuredClone",
+            "perry/thread",
+            "MessageChannel",
+            "MessagePort",
+            "BroadcastChannel",
+        ]
+        .iter()
+        .any(|name| hir_debug.contains(name));
+    ctx.uses_json_format |= module_uses_json_format(hir_module);
+    ctx.uses_dynamic_native_constants |= native_constants::may_escape(hir_module);
+    if global_object::may_escape(hir_module) {
+        ctx.uses_global_json = true;
+        ctx.uses_url = true;
+        ctx.uses_global_url = true;
+    }
+    if hir_debug.contains("Proxy")
+        || hir_debug.contains("GlobalThisExpr")
+        || hir_debug.contains("property: \"globalThis\"")
+    {
+        ctx.uses_proxy = true;
+    }
+    // Literals, constructors, BigInt views and value-form builtin references.
+    // An escaped global object can obtain the constructor through a runtime key.
+    if hir_debug.contains("BigInt")
+        || hir_debug.contains("Bigint")
+        || hir_debug.contains("bigint")
+        || hir_debug.contains("Buffer")
+        || hir_debug.contains("BigUint64")
+        || hir_debug.contains("GlobalThisExpr")
+        || module_uses_bigint_typed_array(hir_module)
+        || hir_debug.contains("property: \"globalThis\"")
+    {
+        ctx.uses_bigint = true;
+    }
+    if hir_module.imports.iter().any(|import| {
+        !import.type_only
+            && !import.runtime_erased
+            && matches!(
+                import
+                    .source
+                    .strip_prefix("node:")
+                    .unwrap_or(&import.source),
+                "v8" | "worker_threads"
+                    | "child_process"
+                    | "fs"
+                    | "fs/promises"
+                    | "os"
+                    | "perf_hooks"
+                    | "bun"
+                    | "bun:ffi"
+            )
+    }) || [
+        "v8",
+        "worker_threads",
+        "child_process",
+        "fs",
+        "fs/promises",
+        "os",
+        "perf_hooks",
+        "bun",
+        "bun:ffi",
+    ]
+    .iter()
+    .any(|name| {
+        hir_debug.contains(&format!(r#"module: "{name}""#))
+            || hir_debug.contains(&format!(r#"NativeModuleRef("{name}")"#))
+    }) {
+        ctx.uses_bigint = true;
+    }
+    ctx.uses_diagnostics |= computed.opaque_members
+        && (ctx.native_module_imports.contains("process")
+            || hir_debug.contains(r#"property: "process""#)
+            || hir_debug.contains(r#"NativeModuleRef("process")"#)
+            || hir_debug.contains(r#"module: "process""#));
+    ctx.uses_date_computed_member_keys |= computed.date_members;
+    ctx.uses_temporal |= ctx.uses_date && ctx.uses_date_computed_member_keys;
+    ctx.uses_computed_member_keys |= computed.opaque_members;
+    ctx.uses_file_handle_capability |= computed.file_handles;
+    ctx.uses_bun_file_capability |= computed.bun_files;
+    if computed.json_members || (ctx.uses_bun_file_capability && ctx.uses_computed_member_keys) {
+        ctx.uses_json_engine = true;
+    }
 
-    // #11125: these global constructors call stdlib stream FFIs without an
-    // import or a NativeMethodCall. Discover them before entry codegen emits
-    // dispatcher initialization; link-time symbol discovery is too late.
-    // Include value-form constructors and uses nested in class/function bodies.
+    // Web Streams constructors and FileHandle.readableWebStream call the
+    // stdlib factories. Select them when an API is named, including extracted
+    // methods and uses in class/function bodies, rather than for every
+    // fs/promises import. The FileHandle reaches the factory through its slot.
     if [
         "CompressionStream",
         "DecompressionStream",
         "TextEncoderStream",
         "TextDecoderStream",
+        "readableWebStream",
     ]
     .iter()
     .any(|name| hir_debug.contains(name))
+        || (ctx.uses_file_handle_capability && ctx.uses_computed_member_keys)
     {
         ctx.needs_stdlib = true;
         ctx.native_module_imports.insert("stream/web".to_string());
@@ -410,7 +1050,7 @@ pub(super) fn detect_optional_feature_usage(
     }
 
     // Detect whether this module needs the regex engine. The engine
-    // (`regex`/`fancy-regex`, ~1.2 MB) is gated behind `perry-runtime/
+    // (Perex) is gated behind `perry-runtime/
     // regex-engine` and the RegExp object's identity/display layer stays
     // always-compiled, so a program that can never produce a RegExp at
     // runtime links none of the matching machinery. A regex value can only
@@ -418,10 +1058,10 @@ pub(super) fn detect_optional_feature_usage(
     // string method (`.match`/`.matchAll`/`.search`, which build a RegExp from
     // even a string arg per spec) ran, OR a glob API was used (the runtime
     // compiles globs to regexes internally). We grep the serialized Debug form
-    // for the unambiguous HIR variant tokens and the generic-dispatch method
-    // names. Over-matching only over-includes the engine (a size, not a
-    // correctness, cost); the goal is zero false negatives. `eval` is
-    // non-functional in Perry so it can't create a regex at runtime.
+    // for the unambiguous HIR variant tokens and inspect receivers for
+    // generic string-method property reads. Over-matching only over-includes
+    // the engine (a size, not a correctness, cost). Deferred dynamic code
+    // separately retains the engine and Unicode tables in optimized_libs.
     {
         // Class methods and static initializers live under `classes`, not in
         // `functions`; `hir_debug` includes them so a regex/glob use there
@@ -430,7 +1070,22 @@ pub(super) fn detect_optional_feature_usage(
         // local binding name. Use the structured import record for provenance
         // instead of treating every unrelated external named `glob` as
         // `node:fs/promises.glob`.
-        if debug_hir_uses_regex(&hir_debug) || imports_fs_promises_glob(hir_module) {
+        let receives_regexp = hir_module.imports.iter().any(|import| {
+            !import.type_only
+                && !import.runtime_erased
+                && matches!(
+                    import
+                        .source
+                        .strip_prefix("node:")
+                        .unwrap_or(&import.source),
+                    "v8" | "worker_threads"
+                )
+        });
+        if debug_hir_uses_regex(&hir_debug)
+            || regex_members::needed(hir_module)
+            || imports_fs_promises_glob(hir_module)
+            || receives_regexp
+        {
             ctx.uses_regex = true;
         }
     }
@@ -446,7 +1101,9 @@ pub(super) fn detect_optional_feature_usage(
     // user identifiers like `myTemporal` / `temporalLog`, spuriously enabling
     // the engine and undercutting the size win. JS `Date` is a separate impl.
     {
-        if hir_debug.contains("property: \"Temporal\"") {
+        if hir_debug.contains("property: \"Temporal\"")
+            || hir_debug.contains("\"toTemporalInstant\"")
+        {
             ctx.uses_temporal = true;
         }
     }
@@ -488,6 +1145,46 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("module: \"bun\"") || hir_debug.contains("NativeModuleRef(\"bun\")") {
             ctx.native_module_imports.insert("bun".to_string());
         }
+    }
+
+    // A timer, abort deadline or agent can wait without a native-module import.
+    if [
+        "setTimeout",
+        "setInterval",
+        "setImmediate",
+        "timeout",
+        "Worker",
+        "MessageChannel",
+        "MessagePort",
+    ]
+    .iter()
+    .any(|name| hir_debug.contains(name))
+    {
+        ctx.uses_turnloop = true;
+    }
+    // Runtime-only imports do not enter native_module_imports.
+    if [
+        "net",
+        "tls",
+        "http",
+        "https",
+        "http2",
+        "dgram",
+        "dns",
+        "fs",
+        "fs/promises",
+        "child_process",
+        "worker_threads",
+        "bun",
+        "crypto",
+        "zlib",
+    ]
+    .iter()
+    .any(|name| {
+        hir_debug.contains(&format!(r#"module: "{name}""#))
+            || hir_debug.contains(&format!(r#"NativeModuleRef("{name}")"#))
+    }) {
+        ctx.uses_turnloop = true;
     }
 
     // Detect WHATWG URL API usage. The `url`+`idna` host-canonicalization
@@ -556,10 +1253,28 @@ pub(super) fn detect_optional_feature_usage(
         // bodies, so an extracted method in a constructor, method, accessor,
         // or field initializer cannot be pruned.) Bare matching stays
         // over-approximate on purpose (a false positive only costs size).
-        if hir_debug.contains("\"Math\"") || debug_hir_uses_global_math_member(&hir_debug) {
+        if module_uses_global_math(hir_module) {
             ctx.uses_global_math = true;
         }
-        if hir_debug.contains("\"JSON\"") {
+        // Direct serialization needs its cache roots, but cannot create a
+        // parsed value or lazy tape. Namespace values still select the engine.
+        ctx.uses_json_format |=
+            hir_debug.contains("JsonStringify") || hir_debug.contains("JsonIsRawJson");
+        if hir_debug.contains("JsonParse")
+            || hir_debug.contains("requireJsonDisk")
+            || hir_debug.contains("JsonRawJson")
+            || hir_debug.contains("property: \"json\"")
+            || hir_debug.contains("method: \"json\"")
+        {
+            ctx.uses_json_engine = true;
+        }
+        if hir_debug.contains("\"JSON\"")
+            || ["parse", "stringify", "rawJSON", "isRawJSON"]
+                .iter()
+                .any(|name| {
+                    hir_debug.contains(&format!("object: GlobalGet(0), property: \"{name}\""))
+                })
+        {
             ctx.uses_global_json = true;
         }
         if hir_debug.contains("\"Reflect\"") {
@@ -635,6 +1350,10 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("\"fetch\"")
         {
             ctx.uses_global_webfetch = true;
+            // Installing the global surface also installs what the runtime
+            // calls through it: the constructors register from perry-stdlib
+            // web-fetch (install_fetch), so the stdlib must be linked.
+            ctx.needs_stdlib = true;
         }
         // `process` IPC channel properties. Bare-token matching on purpose:
         // the property name reaches the runtime as a string, so any `send` /
@@ -646,6 +1365,12 @@ pub(super) fn detect_optional_feature_usage(
             || hir_debug.contains("\"connected\"")
             || hir_debug.contains("\"channel\"")
         {
+            ctx.uses_proc_ipc = true;
+        }
+        // A discarded, statically isolated signal/exit arrow registration
+        // cannot expose an IPC channel. Unknown callbacks/events and escaping
+        // listener results still select the full process namespace (#13659).
+        if process_ipc::needed(hir_module) {
             ctx.uses_proc_ipc = true;
         }
         // `Intl.Locale`, `Intl.getCanonicalLocales(...)`, and
@@ -687,7 +1412,7 @@ pub(super) fn detect_optional_feature_usage(
         if hir_debug.contains("method: \"getHeapSnapshot\"")
             || hir_debug.contains("method: \"writeHeapSnapshot\"")
             || hir_debug.contains("method: \"generateHeapSnapshot\"")
-            || hir_debug.contains("property: \"report\"")
+            || hir_debug.contains(r#""report""#)
         {
             ctx.uses_diagnostics = true;
         }
@@ -717,6 +1442,31 @@ pub(super) fn detect_optional_feature_usage(
         {
             ctx.uses_dgram = true;
         }
+        // child_process the same way: its stdio pipes are net sockets.
+        let imports_child_process_or_create_require = hir_module.imports.iter().any(|import| {
+            if import.type_only || import.runtime_erased {
+                return false;
+            }
+            let bare = import
+                .source
+                .strip_prefix("node:")
+                .unwrap_or(&import.source);
+            bare == "child_process"
+                || (bare == "module"
+                    && import.specifiers.iter().any(|specifier| {
+                        matches!(
+                            specifier,
+                            perry_hir::ImportSpecifier::Named { imported, .. }
+                                if imported == "createRequire"
+                        )
+                    }))
+        });
+        if imports_child_process_or_create_require
+            || hir_debug.contains("module: \"child_process\"")
+            || hir_debug.contains("NativeModuleRef(\"child_process\")")
+        {
+            ctx.uses_child_process = true;
+        }
         // `node:test` → gates `perry-runtime/mod-node-test` (the runner, and
         // with it the JSON serializer its snapshot assertions call). Like
         // dgram it is runtime-only, so `requires_stdlib` is false for it and
@@ -739,6 +1489,9 @@ pub(super) fn detect_optional_feature_usage(
         if debug_hir_uses_get_builtin_module(&hir_debug) {
             ctx.uses_get_builtin_module = true;
         }
+        if hir_debug.contains("\"upgradeToTLS\"") {
+            ctx.uses_upgrade_to_tls = true;
+        }
     }
 
     // Detect readline usage via process.stdin raw/lifecycle methods. These
@@ -759,7 +1512,7 @@ pub(super) fn detect_optional_feature_usage(
 #[cfg(test)]
 mod tests {
     use super::{
-        debug_hir_uses_get_builtin_module, debug_hir_uses_global_math_member, debug_hir_uses_regex,
+        debug_hir_uses_get_builtin_module, debug_hir_uses_regex,
         debug_hir_uses_string_normalization, debug_hir_uses_web_compression_stream,
         debug_hir_uses_zlib_brotli, debug_hir_uses_zlib_zstd, imports_fs_promises_glob,
     };
@@ -859,23 +1612,27 @@ mod tests {
     }
 
     #[test]
-    fn global_math_gate_detects_extracted_members_but_not_direct_intrinsics() {
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "cos", optional: false }"#
-        ));
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "imul", optional: false }"#
-        ));
-        assert!(debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "f16round", optional: false }"#
-        ));
-        assert!(!debug_hir_uses_global_math_member("MathCos(Number(0.0))"));
-        assert!(!debug_hir_uses_global_math_member(
-            r#"PropertyGet { object: GlobalGet(0), property: "stringify", optional: false }"#
-        ));
+    fn global_math_gate_needs_the_namespace_not_its_name() {
+        for source in [
+            "const cos = Math.cos; console.log(cos(0));",
+            "const m = Math; console.log(m.max(1, 2));",
+            "const { imul } = Math; console.log(imul(2, 3));",
+            "console.log(Object.keys(Math).length);",
+            "console.log((globalThis as any)[\"Math\"].PI);",
+            "class C { f() { return Math.f16round; } } console.log(new C().f());",
+        ] {
+            assert!(detect_for_source(source).uses_global_math, "{source}");
+        }
+        for source in [
+            "console.log(\"Math\");",
+            "const name: string = process.argv[2] ?? \"world\"; console.log(`Hello, ${name}!`);",
+            "console.log(Math.max(1, 2), Math.cos(0), Math.PI);",
+        ] {
+            assert!(!detect_for_source(source).uses_global_math, "{source}");
+        }
     }
 
-    fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
+    pub(super) fn detect_for_source(source: &str) -> crate::commands::compile::CompilationContext {
         let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
         let hir =
             perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");
@@ -883,6 +1640,52 @@ mod tests {
             crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
         super::detect_optional_feature_usage(&mut ctx, &hir);
         ctx
+    }
+
+    #[test]
+    fn bigint_views_select_the_bigint_producer() {
+        for source in [
+            "const b = new BigUint64Array(new Float64Array([-4]).buffer)[0]; console.log(String(b));",
+            "const b = new BigInt64Array(2)[0]; console.log(String(b));",
+            "const b = BigUint64Array.from([]); console.log(b.length);",
+            "const v = new DataView(new ArrayBuffer(8)); console.log(String(v.getBigUint64(0)));",
+        ] {
+            assert!(detect_for_source(source).uses_bigint, "{source}");
+        }
+        assert!(!detect_for_source("console.log(new Float64Array(2)[0]);").uses_bigint);
+    }
+
+    #[test]
+    fn emitter_members_do_not_select_process_hooks() {
+        for source in [
+            r#"import { EventEmitter } from "events"; const e = new EventEmitter(); e.on("x", () => {}); e.emit("x");"#,
+            r#"const e = { on() {}, emit() {} }; e.on(); e.emit();"#,
+            r#"console.log("stdin", "on", "emit", "kill");"#,
+            r#"console.log(process.argv[2], process.env.HOME, process.pid);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, "addon.node");"#,
+        ] {
+            assert!(!detect_for_source(source).uses_os, "{source}");
+        }
+    }
+
+    #[test]
+    fn process_objects_and_operations_keep_process_hooks() {
+        for source in [
+            r#"process.on("beforeExit", () => {});"#,
+            r#"const p = process; p.on("beforeExit", () => {});"#,
+            r#"const p = process; p[process.argv[2]]("beforeExit", () => {});"#,
+            r#"function subscribe(p: any) { p.on("beforeExit", () => {}); } subscribe(process);"#,
+            r#"globalThis.process.on("beforeExit", () => {});"#,
+            r#"const p = globalThis["process"]; p.on("beforeExit", () => {});"#,
+            r#"import p from "node:process"; p.on("beforeExit", () => {});"#,
+            r#"import { stdin } from "node:process"; console.log(stdin);"#,
+            r#"const callback = () => { const p = process; p.on("beforeExit", () => {}); }; callback();"#,
+            r#"class C { subscribe(p: any = process) { p.on("beforeExit", () => {}); } } new C().subscribe();"#,
+            r#"console.log(process.stdin, process.stdout, process.stderr);"#,
+            r#"const m = { exports: {} }; process.dlopen(m, String(process.stdin));"#,
+        ] {
+            assert!(detect_for_source(source).uses_os, "{source}");
+        }
     }
 
     #[test]
@@ -1007,6 +1810,7 @@ class C {
             type_only: false,
             runtime_erased: false,
             is_dynamic: false,
+            is_deferred: false,
             is_dynamic_target: false,
             is_deferred_require: false,
             is_adopted_require: false,
@@ -1018,5 +1822,257 @@ class C {
             !imports_fs_promises_glob(&module),
             "an unrelated named glob import must not retain the regex engine"
         );
+    }
+    #[test]
+    fn json_format_keeps_namespace_selection_independent() {
+        let format = detect_for_source(
+            r#"
+            class Printer { static print(pattern: string, value: any) {
+                console.log(pattern, value);
+            } }
+            Printer.print(process.argv[2], {x: 1});
+        "#,
+        );
+        assert!(format.uses_json_format);
+        assert!(!format.uses_global_json);
+        let direct = detect_for_source("console.log(JSON.stringify({x:1}));");
+        assert!(direct.uses_json_format);
+        assert!(!direct.uses_json_engine);
+        assert!(!direct.uses_global_json);
+        let namespace = detect_for_source("const j = JSON; console.log(j.stringify({x: 1}));");
+        assert!(namespace.uses_global_json);
+        let literal = detect_for_source("console.log(\"literal %j\");");
+        assert!(!literal.uses_json_format && !literal.uses_global_json);
+    }
+    #[test]
+    fn json_parser_selection_covers_producers_and_excludes_serialization() {
+        for source in [
+            "JSON.stringify({x:1}, null, 2);",
+            "JSON.stringify({x:1}, (key, value) => value);",
+            "JSON.isRawJSON({});",
+        ] {
+            let ctx = detect_for_source(source);
+            assert!(ctx.uses_json_format, "{source}");
+            assert!(!ctx.uses_json_engine && !ctx.uses_global_json, "{source}");
+        }
+        for source in [
+            "JSON.parse('[1]');",
+            "JSON.rawJSON('1');",
+            "__perry_require_json_disk(process.argv[2]);",
+        ] {
+            assert!(detect_for_source(source).uses_json_engine, "{source}");
+        }
+        for source in [
+            "JSON[process.argv[2]]('[1]');",
+            "const parse = JSON.parse; parse('[1]');",
+            "const j = JSON; function f(key) { return j[key]('[1]'); }",
+        ] {
+            assert!(detect_for_source(source).uses_global_json, "{source}");
+        }
+    }
+    #[test]
+    fn escaped_globals_keep_json_namespace_available() {
+        for source in [
+            "const host = globalThis; const j = host[process.argv[2]]; console.log(j.stringify({x:1}));",
+            "function host() { return this; } const j = host()[process.argv[2]]; console.log(j.stringify({x:1}));",
+            "const host = function () { return this; }; console.log(host()[process.argv[2]]);",
+        ] {
+            assert!(detect_for_source(source).uses_global_json, "{source}");
+        }
+        assert!(
+            detect_for_source(
+                "const j = globalThis[process.argv[2]]; console.log(j.stringify({x:1}));"
+            )
+            .uses_global_json
+        );
+        assert!(
+            !detect_for_source("const max = Math.max; console.log(max(1,2));").uses_global_json
+        );
+        let strict_receiver = detect_for_source("class C { identity() { return this; } } console.log(new C().identity().constructor.name);");
+        assert!(!strict_receiver.uses_global_json);
+    }
+    #[test]
+    fn program_feature_detection_retains_imported_enum_producers() {
+        use std::path::PathBuf;
+        for producer_present in [false, true] {
+            let consumer_path = "/tmp/a-consumer.ts";
+            let producer_path = "/tmp/z-producer.ts";
+            let ast = perry_parser::parse_typescript(
+                "import { Priority } from './z-producer'; console.log(new Date(0).getTime()); function read(key: string) { return Priority[key]; }",
+                consumer_path,
+            ).unwrap();
+            let mut consumer = perry_hir::lower_module(&ast, "consumer", consumer_path).unwrap();
+            consumer
+                .imports
+                .iter_mut()
+                .find(|i| i.source == "./z-producer")
+                .unwrap()
+                .resolved_path = Some(producer_path.into());
+            let mut ctx = crate::commands::compile::CompilationContext::new(PathBuf::from("/tmp"));
+            ctx.native_modules
+                .insert(PathBuf::from(consumer_path), consumer);
+            if producer_present {
+                let ast = perry_parser::parse_typescript(
+                    "export enum Priority { Low = 0, High = 1 }",
+                    producer_path,
+                )
+                .unwrap();
+                let producer = perry_hir::lower_module(&ast, "producer", producer_path).unwrap();
+                ctx.native_modules
+                    .insert(PathBuf::from(producer_path), producer);
+            }
+            super::detect_program_optional_feature_usage(&mut ctx);
+            assert!(ctx.uses_date);
+            assert_eq!(ctx.uses_computed_member_keys, !producer_present);
+            assert_eq!(ctx.uses_temporal, !producer_present);
+            assert_eq!(
+                ctx.native_modules.len(),
+                if producer_present { 2 } else { 1 }
+            );
+        }
+    }
+
+    /// MATHC4: the runtime features selected through the pre-pick view plus
+    /// the re-scan of a module whose pick kept generic calls equal the
+    /// features of the final HIR, and no gate of the final HIR is missing, at both ends of the pick (every pair generic, every
+    /// pair intrinsic), on the namespace-verdict fixtures.
+    #[test]
+    fn mathc4_pair_features_equal_the_final_hir() {
+        fn flags(ctx: &crate::commands::compile::CompilationContext) -> Vec<(&'static str, bool)> {
+            vec![
+                ("needs_wasm_runtime", ctx.needs_wasm_runtime),
+                ("needs_ui", ctx.needs_ui),
+                ("needs_plugins", ctx.needs_plugins),
+                ("needs_stdlib", ctx.needs_stdlib),
+                ("needs_geisterhand", ctx.needs_geisterhand),
+                (
+                    "uses_data_url_dynamic_import",
+                    ctx.uses_data_url_dynamic_import,
+                ),
+                (
+                    "uses_dynamic_import_options",
+                    ctx.uses_dynamic_import_options,
+                ),
+                ("uses_fetch", ctx.uses_fetch),
+                ("uses_crypto_builtins", ctx.uses_crypto_builtins),
+                ("uses_zlib_brotli", ctx.uses_zlib_brotli),
+                ("uses_zlib_zstd", ctx.uses_zlib_zstd),
+                (
+                    "uses_web_compression_stream",
+                    ctx.uses_web_compression_stream,
+                ),
+                ("uses_regex", ctx.uses_regex),
+                ("uses_temporal", ctx.uses_temporal),
+                ("uses_event_emitter", ctx.uses_event_emitter),
+                ("uses_url", ctx.uses_url),
+                ("uses_string_normalize", ctx.uses_string_normalize),
+                ("uses_intl_segmenter", ctx.uses_intl_segmenter),
+                ("uses_intl_namespace", ctx.uses_intl_namespace),
+                ("uses_global_math", ctx.uses_global_math),
+                ("uses_global_json", ctx.uses_global_json),
+                ("uses_json_format", ctx.uses_json_format),
+                ("uses_json_engine", ctx.uses_json_engine),
+                ("uses_computed_member_keys", ctx.uses_computed_member_keys),
+                (
+                    "uses_date_computed_member_keys",
+                    ctx.uses_date_computed_member_keys,
+                ),
+                (
+                    "uses_file_handle_capability",
+                    ctx.uses_file_handle_capability,
+                ),
+                ("uses_bun_file_capability", ctx.uses_bun_file_capability),
+                ("uses_turnloop", ctx.uses_turnloop),
+                ("uses_bigint", ctx.uses_bigint),
+                ("uses_proxy", ctx.uses_proxy),
+                ("uses_global_reflect", ctx.uses_global_reflect),
+                ("uses_global_atomics", ctx.uses_global_atomics),
+                ("uses_global_url", ctx.uses_global_url),
+                ("uses_global_text", ctx.uses_global_text),
+                ("uses_global_websocket", ctx.uses_global_websocket),
+                ("uses_global_webcrypto", ctx.uses_global_webcrypto),
+                ("uses_global_webfetch", ctx.uses_global_webfetch),
+                ("uses_proc_ipc", ctx.uses_proc_ipc),
+                ("uses_intl_locale", ctx.uses_intl_locale),
+                ("uses_intl_datetime", ctx.uses_intl_datetime),
+                ("uses_diagnostics", ctx.uses_diagnostics),
+                ("uses_dgram", ctx.uses_dgram),
+                ("uses_child_process", ctx.uses_child_process),
+                ("uses_node_test", ctx.uses_node_test),
+                ("uses_get_builtin_module", ctx.uses_get_builtin_module),
+                ("uses_upgrade_to_tls", ctx.uses_upgrade_to_tls),
+                ("uses_dns", ctx.uses_dns),
+                ("needs_thread", ctx.needs_thread),
+            ]
+        }
+        fn imports(ctx: &crate::commands::compile::CompilationContext) -> Vec<String> {
+            ctx.native_module_imports
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        }
+        let mut set = perry_hir::PatchedBuiltins::default();
+        set.namespace_pairs = true;
+        perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+        for source in [
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_after.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_chain.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_defprop.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_globalkey.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_global.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_local.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_k_nowrite.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_alias.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_assign.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_computed.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_escape_alias.ts"),
+            include_str!("../../../../../../tests/parity/language/math/test_gap_ns_verdict_r_escape.ts"),
+            "console.log(globalThis.JSON.parse(process.argv[2] ?? \"1\"), Reflect.ownKeys(new Proxy({}, {})), Math.cos(0));",
+        ] {
+            let ast = perry_parser::parse_typescript(source, "entry.ts").expect("parse");
+            let lowered =
+                perry_hir::lower_module(&ast, "entry", "/tmp/feature-detect/entry.ts").expect("lower");
+            assert!(super::intrinsic_view(&lowered).is_some(), "no pair: {source}");
+            let path = std::path::PathBuf::from("/tmp/feature-detect/entry.ts");
+            for all_generic in [true, false] {
+                let mut ctx =
+                    crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
+                ctx.native_modules.insert(path.clone(), lowered.clone());
+                super::detect_program_optional_feature_usage(&mut ctx);
+                let module = ctx.native_modules.get_mut(&path).unwrap();
+                let kept = if all_generic {
+                    perry_hir::namespace_pairs::pick_namespace_pair_arms(
+                        module,
+                        &Default::default(),
+                        &Default::default(),
+                        &Default::default(),
+                    )
+                } else {
+                    perry_hir::namespace_pairs::take_intrinsic_arms(module);
+                    0
+                };
+                assert_eq!(kept > 0, all_generic, "{source}");
+                super::detect_kept_generic_calls(&mut ctx, &if kept > 0 { vec![path.clone()] } else { vec![] });
+                let mut fin =
+                    crate::commands::compile::CompilationContext::new(std::path::PathBuf::from("/tmp"));
+                fin.native_modules.insert(path.clone(), ctx.native_modules[&path].clone());
+                super::detect_program_optional_feature_usage(&mut fin);
+                // No gate the final HIR turns on is missing.
+                let dropped: Vec<_> =
+                    flags(&ctx).into_iter().zip(flags(&fin)).filter(|(a, b)| b.1 && !a.1).collect();
+                assert!(dropped.is_empty(), "all_generic={all_generic}: {dropped:?}: {source}");
+                // The runtime features selected are those of the final HIR (a
+                // gate the view adds, `uses_json_format` of an intrinsic
+                // `JSON.stringify` kept generic, is subsumed by the JSON
+                // namespace its generic call selects).
+                let none = std::collections::BTreeSet::new();
+                let runtime = |c: &crate::commands::compile::CompilationContext| {
+                    crate::commands::compile::optimized_libs::auto_optimized_cross_features(c, &none, &[])
+                };
+                assert_eq!(runtime(&ctx), runtime(&fin), "all_generic={all_generic}: {source}");
+                assert_eq!(imports(&ctx), imports(&fin), "all_generic={all_generic}: {source}");
+            }
+        }
+        perry_hir::set_patched_builtins(std::sync::Arc::new(perry_hir::PatchedBuiltins::default()));
     }
 }

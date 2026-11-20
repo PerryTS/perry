@@ -1,12 +1,6 @@
-//! WebView widget — `WebKitGTK 6.0` (webkit6 crate) for issue #658
-//! Phase 4 / Linux. Mirrors the WKWebView impl on macOS / iOS / visionOS
-//! one-for-one: `decide-policy::navigation-action` is the sync intercept
-//! point for `onShouldNavigate` (return `false` from the user closure
-//! → `policy_decision.ignore()`); `load-changed` fires `onLoaded` when
-//! the load completes; `load-failed` fires `onError`.
-//!
-//! Build dep: `libwebkitgtk-6.0-dev` (Ubuntu 22.10+ / Debian 12+).
-//! WebKitNetworkSession::new_ephemeral isolates per-WebView storage.
+//! WebView on WebKitGTK 6.0, mirroring the WKWebView backends: `decide-policy::navigation-action`
+//! is the synchronous intercept for `onShouldNavigate` (a `false` return ignores the navigation),
+//! `load-changed` fires `onLoaded` on `Finished`, and `load-failed` fires `onError`.
 
 use gtk4::prelude::*;
 use std::cell::RefCell;
@@ -51,42 +45,15 @@ fn nanbox_str(s: &str) -> f64 {
     unsafe { js_nanbox_string(p as i64) }
 }
 
-fn host_of_url(s: &str) -> String {
-    let after_scheme = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => return String::new(),
-    };
-    let host_end = after_scheme
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_scheme.len());
-    let host_with_port = &after_scheme[..host_end];
-    match host_with_port.find(':') {
-        Some(i) => host_with_port[..i].to_string(),
-        None => host_with_port.to_string(),
-    }
-}
-
-fn host_in_allowlist(host: &str, allowlist: &[String]) -> bool {
-    if allowlist.is_empty() {
-        return true;
-    }
-    allowlist
-        .iter()
-        .any(|d| host == d || host.ends_with(&format!(".{}", d)))
-}
-
 pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) -> i64 {
     crate::app::ensure_gtk_init();
     let url = unsafe { str_from_header(url_ptr) }.to_string();
 
-    // v2-B: ephemeral_hint chooses ephemeral vs persistent NetworkSession
-    // at construction time. WebKitNetworkSession can't be replaced after
-    // the WebKitWebView is built, so this must happen here.
+    // The NetworkSession cannot be replaced once the WebView exists, so it is chosen here.
     let session = if ephemeral_hint > 0.5 {
         webkit6::NetworkSession::new_ephemeral()
     } else {
-        // Persistent session under XDG_DATA_HOME/perry-webview so cookies
-        // survive across app launches.
+        // Persistent under XDG data/cache dirs so cookies survive restarts.
         let mut data = dirs::data_dir().unwrap_or_else(std::env::temp_dir);
         data.push("perry-webview");
         let mut cache = dirs::cache_dir().unwrap_or_else(std::env::temp_dir);
@@ -135,7 +102,6 @@ pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) 
 }
 
 fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
-    // decide-policy::navigation-action — sync intercept.
     webview.connect_decide_policy(move |_wv, decision, decision_type| {
         if decision_type != webkit6::PolicyDecisionType::NavigationAction {
             return false; // let WebKit handle it
@@ -144,7 +110,7 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
             Some(d) => d,
             None => return false,
         };
-        let mut action = match action_decision.navigation_action() {
+        let action = match action_decision.navigation_action() {
             Some(a) => a,
             None => return false,
         };
@@ -161,13 +127,9 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
                 .unwrap_or((0.0, Vec::new()))
         });
 
-        // Allowlist gate.
-        if !allowed.is_empty() {
-            let host = host_of_url(&url);
-            if !host_in_allowlist(&host, &allowed) {
-                decision.ignore();
-                return true;
-            }
+        if !perry_ui::webview_navigation::navigation_allowed(&url, &allowed) {
+            decision.ignore();
+            return true;
         }
 
         if on_should != 0.0 {
@@ -188,7 +150,6 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
         false // let WebKit proceed
     });
 
-    // load-changed → onLoaded when the load reaches `Finished`.
     webview.connect_load_changed(move |wv, event| {
         if event != webkit6::LoadEvent::Finished {
             return;
@@ -212,9 +173,7 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
         }
     });
 
-    // load-failed → onError. Returning `true` prevents WebKit's default
-    // error page from rendering; we return `false` so the user sees the
-    // standard WebKit error page if they want.
+    // Returning `false` keeps WebKit's default error page.
     webview.connect_load_failed(move |_wv, _event, _failing_uri, error| {
         let on_error =
             WEBVIEW_STATES.with(|s| s.borrow().get(&handle).map(|st| st.on_error).unwrap_or(0.0));
@@ -355,9 +314,7 @@ pub fn set_allowed_domains(handle: i64, domains_arr_handle: i64) {
 }
 
 pub fn set_ephemeral(_handle: i64, _ephemeral: i64) {
-    // WebKitNetworkSession is set at WebView construction time. Per the
-    // design doc this is documented as a v1 limitation matching the
-    // Windows backend; deferred-init opt-out lands as a follow-up.
+    // The NetworkSession is fixed at construction (same limitation as the Windows backend).
 }
 
 pub fn set_on_should_navigate(handle: i64, closure: f64) {

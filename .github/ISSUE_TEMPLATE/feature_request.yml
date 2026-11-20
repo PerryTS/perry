@@ -1,0 +1,82 @@
+name: Feature request
+description: Suggest a new capability, API, or platform target
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: |
+        What are you trying to do that Perry doesn't do well today? A concrete example of code you wish you
+        could write, or a workflow you're stuck on, helps far more than an abstract wishlist.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: |
+        What would the API, CLI flag or perry.toml field look like? A sketch is fine; we don't need a full RFC.
+        If you have two plausible designs, describe both.
+    validations:
+      required: true
+
+  - type: textarea
+    id: usage
+    attributes:
+      label: TypeScript usage
+      description: If relevant, what the code using it would look like.
+      render: typescript
+
+  - type: dropdown
+    id: platforms
+    attributes:
+      label: Platforms it matters for
+      multiple: true
+      options:
+        - "All platforms"
+        - "macos"
+        - "linux"
+        - "windows"
+        - "ios"
+        - "ios-simulator"
+        - "android"
+        - "web"
+        - "wasm"
+        - "tvos"
+        - "watchos"
+        - "visionos"
+        - "wearos"
+        - "harmonyos"
+        - "a widget target (ios-widget, android-widget, watchos-widget, wearos-tile)"
+        - "other (say which below)"
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Rough size
+      description: Your best guess; we re-estimate during triage.
+      options:
+        - "Small: a CLI flag, a stdlib function, a doc page"
+        - "Medium: a new widget, a codegen pass, a new perry.toml field"
+        - "Large: a new platform target, a new backend, a cross-cutting compiler change"
+        - "I don't know"
+
+  - type: input
+    id: version
+    attributes:
+      label: Perry version you use
+      description: Output of `perry --version`.
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why they didn't fit. "None" is a valid answer.
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Prior art in other ecosystems (Bun, Deno, Swift…), benchmarks, related issues.

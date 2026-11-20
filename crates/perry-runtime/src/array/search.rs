@@ -51,6 +51,11 @@ pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i
     }
     unsafe {
         let length = (*arr).length;
+        if length > (*arr).capacity {
+            // A sparse Array: the complete search reads past the store by
+            // HasProperty / Get.
+            return js_array_indexOf_jsvalue(arr, value, 0.0, 0) as i32;
+        }
         let elements_ptr = array_elements_ptr(arr);
 
         for i in 0..length as usize {
@@ -72,10 +77,10 @@ pub extern "C" fn js_array_indexOf_f64(arr: *const ArrayHeader, value: f64) -> i
 #[inline]
 fn as_typed_array(
     arr: *const ArrayHeader,
-) -> Option<(*const crate::typedarray::TypedArrayHeader, i32)> {
-    if crate::typedarray::lookup_typed_array_kind(arr as usize).is_some() {
-        let ta = arr as *const crate::typedarray::TypedArrayHeader;
-        Some((ta, crate::typedarray::js_typed_array_length(ta)))
+) -> Option<(*const crate::typedarray_hook_slots::TypedArrayHeader, i32)> {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some() {
+        let ta = arr as *const crate::typedarray_hook_slots::TypedArrayHeader;
+        Some((ta, crate::typedarray_hook_slots::js_typed_array_length(ta)))
     } else {
         None
     }
@@ -235,8 +240,10 @@ pub extern "C" fn js_array_indexOf_jsvalue(
             None => return -1,
         };
         for i in start..len {
-            if crate::value::js_jsvalue_equals(crate::typedarray::js_typed_array_get(ta, i), value)
-                == 1
+            if crate::value::js_jsvalue_equals(
+                crate::typedarray_hook_slots::js_typed_array_get(ta, i),
+                value,
+            ) == 1
             {
                 return i as i64;
             }
@@ -324,7 +331,7 @@ pub extern "C" fn js_array_last_index_of_jsvalue(
         let mut i = start;
         while i >= 0 {
             if crate::value::js_jsvalue_equals(
-                crate::typedarray::js_typed_array_get(ta, i as i32),
+                crate::typedarray_hook_slots::js_typed_array_get(ta, i as i32),
                 value,
             ) == 1
             {
@@ -427,7 +434,7 @@ pub extern "C" fn js_array_includes_jsvalue(
             None => return 0,
         };
         for i in start..len {
-            let e = crate::typedarray::js_typed_array_get(ta, i);
+            let e = crate::typedarray_hook_slots::js_typed_array_get(ta, i);
             if crate::value::js_jsvalue_same_value_zero(e, value) == 1 {
                 return 1;
             }
@@ -454,8 +461,14 @@ pub extern "C" fn js_array_includes_jsvalue(
         // which differs from === in one place: NaN equals NaN. Routing
         // through `js_jsvalue_same_value_zero` preserves the `indexOf(NaN) ===
         // -1` / `includes(NaN) === true` split.
+        // A sparse store, an index accessor or an inherited index: `Get`.
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in start..length {
-            let element = array_element_get_value(elements_ptr, i as usize);
+            let element = if exotic {
+                crate::array::array_spec_get(arr, i as u32)
+            } else {
+                array_element_get_value(elements_ptr, i as usize)
+            };
             if crate::value::js_jsvalue_same_value_zero(element, value) == 1 {
                 return 1;
             }
@@ -467,7 +480,7 @@ pub extern "C" fn js_array_includes_jsvalue(
 #[cfg(test)]
 mod typed_search_tests {
     use super::*;
-    use crate::typedarray::{
+    use crate::typedarray_hook_slots::{
         js_typed_array_new_empty, js_typed_array_set, KIND_FLOAT64, KIND_INT32,
     };
 

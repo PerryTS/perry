@@ -73,6 +73,16 @@ pub(crate) fn class_field_global_index(
     class_name: &str,
     property: &str,
 ) -> Option<u32> {
+    class_field_slot(ctx, class_name, property).ok()
+}
+
+/// [`class_field_global_index`] with the reason it has no slot (the
+/// `PERRY_FALLBACK_DIAG` refusal detail; compile time only).
+pub(crate) fn class_field_slot(
+    ctx: &FnCtx<'_>,
+    class_name: &str,
+    property: &str,
+) -> Result<u32, &'static str> {
     // Walk parent chain to find the field. Parent fields come first in
     // the slot layout, so we sum parent counts as we descend.
     //
@@ -87,9 +97,11 @@ pub(crate) fn class_field_global_index(
     // shape — where the `config;` declaration sits among method-ref class
     // fields — surfaces this as `column.config = 0` for every column
     // builder when read from the importing module.
+    // The packed layout lists the chain's public keys only; a private field's
+    // entry is claimed at its declaration (#11791), so a public field defined
+    // after one is not at its packed index on any instance (#8969,
+    // `perry_hir::private_names::construction_entries`): it has no slot here.
     fn count_keyable(fields: &[perry_hir::ClassField]) -> u32 {
-        // Private fields are not slots of the class layout either: their
-        // entries are claimed at construction, after every packed key (#11791).
         fields
             .iter()
             .filter(|f| f.key_expr.is_none() && !f.is_private)
@@ -121,19 +133,32 @@ pub(crate) fn class_field_global_index(
     // for normal JS semantics. Do not emit direct packed-field access even if
     // HIR inferred a same-named field on a subclass assignment.
     if accessor_in_chain(ctx, class_name, property) {
-        return None;
+        return Err("an accessor of the name is on the chain");
     }
-    // Case 2c: a static family whose coloured layout moves a key off its
-    // constructor-order position (a hole before it) has no compile-time slot
-    // codegen may assume: an instance is at the family layout or, when it
-    // could not adopt it, at the constructor-order one.
-    if ctx
-        .class_ids
-        .get(class_name)
-        .is_some_and(|cid| ctx.program_layouts.slots_moved(*cid))
-    {
-        return None;
-    }
+    // Case 2c: an instance of a static family is at the family layout or,
+    // when it could not adopt it, at the constructor-order one. A slot is
+    // codegen's only when the key sits there on both: a constructor key the
+    // family keeps at its constructor-order slot, even when the colouring
+    // moved other keys of the family. Any other key of a family whose layout
+    // moved a key has no compile-time slot.
+    let cid = ctx.class_ids.get(class_name).copied();
+    let on_both = |idx: u32| -> Result<u32, &'static str> {
+        let Some(cid) = cid else { return Ok(idx) };
+        let Some(fam) = ctx.program_layouts.families.get(&cid) else {
+            return Ok(idx);
+        };
+        let own = &fam.keys[..fam.own_count as usize];
+        match own.iter().find(|(k, _)| k.name() == Some(property)) {
+            Some((_, slot)) if *slot == idx => Ok(idx),
+            Some(_) => {
+                Err("the family layout moved this constructor key off its constructor-order slot")
+            }
+            None if ctx.program_layouts.slots_moved(cid) => {
+                Err("the family layout moved a constructor key off its constructor-order slot")
+            }
+            None => Ok(idx),
+        }
+    };
     // Issue #26 / #321 (via #5654): prefer the authoritative, source-prefix-
     // disambiguated ancestor chain — the SAME data the packed-keys global and
     // constructor field-init are built from — so the returned index matches
@@ -159,7 +184,13 @@ pub(crate) fn class_field_global_index(
                     continue;
                 }
                 if f.name == property {
-                    return Some(prefix_counts[i] + own_idx);
+                    if perry_hir::private_names::private_entry_precedes(
+                        chain[..=i].iter().map(|(_, fields)| fields.as_slice()),
+                        f,
+                    ) {
+                        return Err("a private entry precedes the field");
+                    }
+                    return on_both(prefix_counts[i] + own_idx);
                 }
                 own_idx += 1;
             }
@@ -167,7 +198,7 @@ pub(crate) fn class_field_global_index(
         // The chain is authoritative for this class's layout: absent means the
         // property is not an inline slot. Do NOT fall through to the name-keyed
         // walk — it could "find" the field on a wrong same-named stub.
-        return None;
+        return Err("the key is not in the class init chain");
     }
     fn walk(
         ctx: &FnCtx<'_>,
@@ -186,7 +217,9 @@ pub(crate) fn class_field_global_index(
             return None;
         }
         let class = ctx.classes.get(class_name)?;
-        // Compute the byte-offset contribution from this class's parent.
+        // Compute the byte-offset contribution from this class's parent, and
+        // its fields, leaf first (the construction order is their reverse).
+        let mut ancestor_fields: Vec<&[perry_hir::ClassField]> = Vec::new();
         let parent_count = if let Some(parent_name) = class.extends_name.as_deref() {
             let mut p_count = 0u32;
             let mut p = Some(parent_name.to_string());
@@ -200,6 +233,7 @@ pub(crate) fn class_field_global_index(
                 }
                 if let Some(parent) = ctx.classes.get(&name) {
                     p_count += count_keyable(&parent.fields);
+                    ancestor_fields.push(&parent.fields);
                     p = parent.extends_name.clone();
                 } else {
                     return None; // unresolvable parent — no inline path
@@ -219,6 +253,11 @@ pub(crate) fn class_field_global_index(
                 continue;
             }
             if f.name == property {
+                ancestor_fields.reverse();
+                ancestor_fields.push(&class.fields);
+                if perry_hir::private_names::private_entry_precedes(ancestor_fields, f) {
+                    return None;
+                }
                 return Some(offset + parent_count + own_idx);
             }
             own_idx += 1;
@@ -238,6 +277,8 @@ pub(crate) fn class_field_global_index(
     }
     let mut seen_class_names = std::collections::HashSet::new();
     walk(ctx, class_name, property, 0, &mut seen_class_names, 0)
+        .ok_or("no class init chain; the name walk finds no slot")
+        .and_then(on_both)
 }
 
 pub(crate) fn class_field_declared_type(

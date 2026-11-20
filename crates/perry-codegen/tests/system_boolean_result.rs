@@ -17,6 +17,7 @@ fn dark_mode_ir(target: Option<&str>) -> String {
         type_only: false,
         runtime_erased: false,
         is_dynamic: false,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -28,6 +29,7 @@ fn dark_mode_ir(target: Option<&str>) -> String {
         params: vec![],
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "isDarkMode".into(),
                 param_types: vec![],

@@ -4,62 +4,6 @@
 use super::*;
 use crate::string::js_string_from_bytes;
 
-/// #5128: map a well-known-symbol key to the synthetic class-method name used
-/// for a symbol-keyed instance *method* (`*[Symbol.iterator]()` →
-/// `@@iterator`, `[Symbol.asyncIterator]()` → `@@asyncIterator`). Returns
-/// `None` for any other symbol. Used by `js_object_get_symbol_property` to
-/// resolve a user class's iterator method off its prototype.
-fn well_known_symbol_method_name(sym_key: usize) -> Option<&'static str> {
-    for (wk, method) in [
-        ("iterator", "@@iterator"),
-        ("asyncIterator", "@@asyncIterator"),
-    ] {
-        let s = well_known_symbol(wk);
-        if !s.is_null() {
-            let f = f64::from_bits(crate::value::JSValue::pointer(s as *const u8).bits());
-            if sym_key == unsafe { sym_key_from_f64(f) } {
-                return Some(method);
-            }
-        }
-    }
-    None
-}
-
-/// An iterator dispatch alias is a fallback for the method declared in source.
-/// Check writes on the intervening prototypes first, but stop at the nearest
-/// declaration so a subclass method still shadows a replaced base method.
-unsafe fn class_iterator_prototype_override(
-    receiver: f64,
-    sym: f64,
-    mut class_id: u32,
-    method_owner: u32,
-) -> Option<f64> {
-    for _ in 0..32 {
-        let declared = crate::object::class_decl_prototype_object(class_id);
-        let dynamic = crate::object::class_prototype_object(class_id);
-        for proto in [declared, dynamic] {
-            if proto.is_null() {
-                continue;
-            }
-            let proto_value = crate::value::js_nanbox_pointer(proto as i64);
-            if let Some(acc) = accessors::symbol_accessor_property(proto_value, sym) {
-                return Some(accessors::invoke_symbol_accessor_getter(acc.get, receiver));
-            }
-            if let Some(value) = own_symbol_property(proto_value, sym) {
-                return Some(value);
-            }
-        }
-        if class_id == method_owner {
-            break;
-        }
-        match crate::object::get_parent_class_id(class_id) {
-            Some(parent) if parent != 0 && parent != class_id => class_id = parent,
-            _ => break,
-        }
-    }
-    None
-}
-
 /// Does `obj` carry an OWN symbol-keyed property under `sym`, **without
 /// invoking** an accessor for it?
 ///
@@ -135,70 +79,12 @@ impl OwnSymbolSlot {
     }
 }
 
-mod generator;
 mod own;
 pub(crate) use own::own_symbol_slot;
 
-/// #5437: resolve a symbol-keyed read against the underlying native handle a
-/// request wrapper aliases via its `_req` field. Returns `None` unless the
-/// receiver is a heap object whose `_req` is a small handle (POINTER-tagged,
-/// not a heap object) that holds the requested symbol in the side table.
-unsafe fn req_handle_symbol_fallback(obj_f64: f64, sym_f64: f64) -> Option<f64> {
-    // #10510: the tail below only ever returns what a small native handle
-    // holds in the symbol side tables. Until one has ever been given a
-    // symbol-keyed property, skip the `"_req"` intern + by-name prototype-chain
-    // walk — it dominated every implicit `ToPrimitive` on a plain object.
-    if !crate::symbol::small_handle_symbol_owner_ever() {
-        return None;
-    }
-    let bits = obj_f64.to_bits();
-    if (bits >> 48) != 0x7FFD {
-        return None;
-    }
-    let raw = (bits & POINTER_MASK) as usize;
-    // Only heap-object wrappers carry a `_req` field; skip handle receivers.
-    // `is_valid_obj_ptr` already rejects small native handles (it validates the
-    // GcHeader) and accepts a genuine heap object even at a low address, so the
-    // extra `is_small_handle` pre-check would have wrongly rejected a real heap
-    // wrapper that happens to live in the low band.
-    if !crate::object::is_valid_obj_ptr(raw as *const u8) {
-        return None;
-    }
-    // #7498: THIS IS THE STALE DEREF `PERRY_GC_PROTECT_FROMSPACE=1` REPORTS
-    // for `[...obj.arr]`. `js_string_from_bytes` below ALLOCATES, so a copying
-    // minor can relocate the receiver while it exists only in the bare `raw`
-    // usize — which the collector cannot see and therefore never rewrites.
-    // `js_object_get_field_by_name` then reads that pre-move copy's
-    // `keys_array` field out of retired from-space, and the fault lands on a
-    // 40-byte `GC_TYPE_ARRAY` two frames down.
-    //
-    // This helper runs on EVERY heap-object symbol read whose own-symbol
-    // lookup missed — including every `[Symbol.iterator]` resolution behind an
-    // array or object spread — so the window is unconditional, which is why
-    // the reproducer faults 5/5 rather than intermittently.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let recv_h = scope.root_nanbox_f64(obj_f64);
-    let key = b"_req";
-    let kh = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let req = crate::object::js_object_get_field_by_name_f64(
-        crate::value::js_nanbox_get_pointer(recv_h.get_nanbox_f64())
-            as *const crate::object::ObjectHeader,
-        kh as *const crate::StringHeader,
-    );
-    // The `_req` must be a native handle, never another heap object — a
-    // heap `_req` would be served by its own normal symbol path, and recursing
-    // into it risks loops.
-    if !crate::value::JSValue::from_bits(req.to_bits()).is_handle() {
-        return None;
-    }
-    // Read only what the handle actually holds in the side table (no deref of
-    // the handle id as a heap object).
-    own_symbol_property(req, sym_f64)
-}
-
 unsafe fn object_header_ptr_from_value_bits(bits: u64) -> Option<usize> {
     let (raw, obj_type) = heap_ptr_and_type_from_value_bits(bits)?;
-    if obj_type == crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_object!(obj_type) {
         Some(raw)
     } else {
         None
@@ -219,8 +105,12 @@ unsafe fn receiver_ptr_from_value_bits(bits: u64) -> Option<usize> {
     }
 }
 
-/// Validate a value's bits as a live tracked heap allocation and report its
-/// address together with its GC type byte.
+/// Validate an object WORD as a live tracked heap allocation and report its
+/// address together with its GC type byte. The callers pass runtime-internal
+/// words, not user values: an owner address and stored `[[Prototype]]` words,
+/// which are kept raw (top 16 bits clear) as well as POINTER_TAG'd. The
+/// value entry (`js_object_get_symbol_property_with_receiver`) has already
+/// taken a Number receiver out before any of them runs.
 unsafe fn heap_ptr_and_type_from_value_bits(bits: u64) -> Option<(usize, u8)> {
     let top16 = bits >> 48;
     let raw = if top16 == 0x7FFD {
@@ -250,7 +140,7 @@ unsafe fn resolve_explicit_object_prototype_symbol(
     explicit_prototype_symbol_lookup(obj_f64, sym_f64).map(|lookup| match lookup {
         PrototypeSymbolLookup::Slot(slot) => slot.read(receiver),
         PrototypeSymbolLookup::Proxy(proxy) => {
-            crate::proxy::proxy_get_from_prototype(proxy, sym_f64, receiver)
+            crate::proxy_hooks::proxy_get_from_prototype(proxy, sym_f64, receiver)
         }
     })
 }
@@ -284,7 +174,7 @@ unsafe fn explicit_prototype_symbol_lookup(
             Some(bits) => bits,
             None => {
                 let (_, kind) = heap_ptr_and_type_from_value_bits(owner as u64)?;
-                if kind != crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_not_array!(kind) {
                     return None;
                 }
                 // Resolving an intrinsic can allocate; keep the current
@@ -308,7 +198,7 @@ unsafe fn explicit_prototype_symbol_lookup(
             return None;
         }
         let proto = f64::from_bits(proto_bits);
-        if crate::proxy::js_proxy_is_proxy(proto) != 0 {
+        if crate::proxy_hooks::proxy_is_proxy(proto) != 0 {
             return Some(PrototypeSymbolLookup::Proxy(proto));
         }
         if let Some(slot) = own_symbol_slot(f64::from_bits(proto_bits), sym_f64) {
@@ -413,13 +303,12 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let async_iterator_f64 =
             f64::from_bits(crate::value::JSValue::pointer(async_iterator as *const u8).bits());
         if sym_key == sym_key_from_f64(async_iterator_f64) {
+            // RSTREAM R5: the prototype's own member (`=== P.values`).
             if kind == 1 {
-                let mname = b"values";
-                return Some(crate::object::js_class_method_bind(
-                    obj_f64,
-                    mname.as_ptr(),
-                    mname.len(),
-                ));
+                let proto = crate::object::builtin_prototype_value("ReadableStream");
+                if crate::value::JSValue::from_bits(proto.to_bits()).is_pointer() {
+                    return Some(js_object_get_symbol_property(proto, sym_f64));
+                }
             }
             return Some(f64::from_bits(TAG_UNDEFINED));
         }
@@ -430,11 +319,8 @@ unsafe fn web_stream_symbol_property(obj_f64: f64, sym_f64: f64) -> Option<f64> 
         let to_string_tag_f64 =
             f64::from_bits(crate::value::JSValue::pointer(to_string_tag as *const u8).bits());
         if sym_key == sym_key_from_f64(to_string_tag_f64) {
-            let tag = match kind {
-                1 => "ReadableStream",
-                2 => "WritableStream",
-                5 => "TransformStream",
-                _ => return Some(f64::from_bits(TAG_UNDEFINED)),
+            let Some(tag) = crate::object::web_stream_interface_name(id) else {
+                return Some(f64::from_bits(TAG_UNDEFINED));
             };
             let str_ptr = js_string_from_bytes(tag.as_ptr(), tag.len() as u32);
             return Some(f64::from_bits(STRING_TAG | (str_ptr as u64 & POINTER_MASK)));
@@ -531,14 +417,18 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     sym_f64: f64,
     receiver_f64: f64,
 ) -> f64 {
+    // A Number holder with clear top 16 bits (a denormal, or +0) is not a
+    // raw object pointer: see `number_receiver_for_dispatch`. `receiver_f64`
+    // keeps the Number itself.
+    let obj_f64 = crate::value::addr_class::number_receiver_for_dispatch(obj_f64);
     // A Proxy is a small registered id (its band overlaps the small-handle
     // band); dereferencing it as a heap object to read a symbol-keyed property
     // is an EXC_BAD_ACCESS. Route a SYMBOL-keyed read through the proxy `get`
     // trap (which forwards to the target). drizzle's aliased-column proxies are
     // read with symbol keys (`col[entityKind]`, `col[Table.Symbol.*]`) while
     // building a relational query.
-    if crate::proxy::js_proxy_is_proxy(obj_f64) != 0 {
-        return crate::proxy::proxy_get_with_receiver(obj_f64, sym_f64, receiver_f64);
+    if crate::proxy_hooks::proxy_is_proxy(obj_f64) != 0 {
+        return crate::proxy_hooks::proxy_get_with_receiver(obj_f64, sym_f64, receiver_f64);
     }
     // A `Date` is a `DateCell` (NaN-boxed pointer, NOT an `ObjectHeader`). A
     // symbol-keyed read (`d[Symbol.toPrimitive]`, `d[Symbol.iterator]`) must
@@ -565,10 +455,10 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
-    // Check the class's static symbols first when receiver is a class ref
-    // (top16 == 0x7FFE, INT32_TAG).
+    // Check the class's static symbols first when receiver is a class
+    // constructor.
     let bits = obj_f64.to_bits();
-    if let Some(class_id) = crate::object::class_value::legacy_class_value_word(bits) {
+    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
         // A legacy class word names the same function object as its minted
         // pointer. Resolve its own bag through the ordinary symbol slot
         // evaluator before consulting declaration metadata.
@@ -577,84 +467,22 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             if let Some(value) = own_symbol_property_for_receiver(owner, sym_f64, receiver_f64) {
                 return value;
             }
-        }
-        let sym_key = sym_key_from_f64(sym_f64);
-        if sym_key != 0 {
-            if let Some(v) =
-                crate::object::class_symbol_getter_value(class_id, sym_key, receiver_f64, true)
+            if let Some(value) =
+                resolve_explicit_object_prototype_symbol(owner, sym_f64, receiver_f64)
             {
-                return v;
+                return value;
             }
         }
-        let static_lookup = if crate::object::class_prototype_ref_id(obj_f64).is_some() {
-            class_static_symbol_lookup(class_id, sym_f64)
-        } else {
-            super::class_static_symbol_lookup_in_chain(class_id, sym_f64)
-        };
-        if let Some(vb) = static_lookup {
+        if let Some(vb) = super::class_static_symbol_lookup_in_chain(class_id, sym_f64) {
             return f64::from_bits(vb);
-        }
-        // #9101: statically-known well-known-symbol METHODS are registered
-        // under synthetic names (`@@toPrimitive`, etc.), rather than in the
-        // class-static-symbol data-property table above. Reify a static method
-        // value with the constructor ClassRef as its receiver. This also makes
-        // an explicit `C[Symbol.toPrimitive]` read agree with the ToPrimitive
-        // consumer instead of returning undefined.
-        if let Some(method_name) = well_known_symbol_method_key(sym_f64) {
-            if crate::object::lookup_static_method_in_chain(class_id, method_name).is_some() {
-                return crate::object::js_class_method_bind(
-                    obj_f64,
-                    method_name.as_ptr(),
-                    method_name.len(),
-                );
-            }
-        }
-        // #6173: a `static [S]() {}` (and, through a prototype ref, an
-        // instance `[S]() {}`) registers in CLASS_SYMBOL_METHODS, which this
-        // resolver never consulted — so reading `D[S]` as a VALUE returned
-        // undefined even though the direct call `D[S]()` dispatched fine via
-        // `js_native_call_method_value`'s independent lookup. Materialize a
-        // bound-method closure carrying the resolved target. Runs after the
-        // accessor branch (getter priority) and the static symbol-FIELD
-        // lookup (a `static [S] = v` initializer runs after method
-        // installation and shadows the method, matching class-init order).
-        // USER symbols only: well-known symbol methods (`[Symbol.iterator]`,
-        // `[Symbol.toPrimitive]`, …) are lowered to synthetic `@@name`
-        // members with dedicated consumers (GetIterator, `js_to_primitive`,
-        // the using-block desugar) and established name-based resolution —
-        // keep them on those paths rather than changing their behavior here.
-        //
-        // A STATIC well-known-symbol method with no synthetic `@@name` slot
-        // (`static *[Symbol.iterator]() {}` — the alias above is instance-only)
-        // lives only in this table; the `@@name` probe just above already
-        // missed, so consult it too (#11170). Prototype refs keep the
-        // user-symbol-only rule.
-        let is_proto_ref_receiver = crate::object::class_prototype_ref_id(obj_f64).is_some();
-        if sym_key != 0 && (!crate::symbol::is_well_known_symbol(sym_key) || !is_proto_ref_receiver)
-        {
-            let is_proto_ref = is_proto_ref_receiver;
-            if let Some((func_ptr, param_count, has_rest, _entry)) =
-                crate::object::lookup_class_symbol_method_in_chain(class_id, sym_key, !is_proto_ref)
-            {
-                return crate::object::build_symbol_bound_method_closure(
-                    obj_f64,
-                    func_ptr,
-                    param_count,
-                    has_rest,
-                    !is_proto_ref,
-                    &crate::symbol::symbol_function_name(sym_key),
-                );
-            }
         }
         // A constructor whose heritage was a runtime value inherits from that
         // exact value, the same edge `Object.getPrototypeOf(C)` reports. A
         // fresh class evaluation is not reachable through the template-id
         // tables below, so continue the ordinary [[Get]] on the actual parent.
-        if !is_proto_ref_receiver {
-            let parent = crate::object::js_get_dynamic_parent_value(class_id);
-            if crate::object::is_class_object_value(parent) {
-                return js_object_get_symbol_property_with_receiver(parent, sym_f64, receiver_f64);
-            }
+        let parent = crate::object::js_get_dynamic_parent_value(class_id);
+        if crate::object::is_class_object_value(parent) {
+            return js_object_get_symbol_property_with_receiver(parent, sym_f64, receiver_f64);
         }
         // #1758: a class ref whose own static symbols miss may inherit the
         // symbol from a class-expression parent (`class Sub extends make(...) {}`
@@ -687,16 +515,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // `get [Symbol.species]` accessor — live on its constructor closure,
         // which the chain edge (a reserved class id) does not reach. Read it
         // there with the original receiver, so the inherited species getter
-        // answers `X`, not `Array`. Statics only: a prototype ref shares this
-        // tag, and `X.prototype` must not see the constructor's symbols.
-        if !is_proto_ref_receiver {
-            if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(class_id) {
-                return js_object_get_symbol_property_with_receiver(
-                    parent_ctor,
-                    sym_f64,
-                    receiver_f64,
-                );
-            }
+        // answers `X`, not `Array`.
+        if let Some(parent_ctor) = crate::object::builtin_parent_ctor_in_chain(class_id) {
+            return js_object_get_symbol_property_with_receiver(parent_ctor, sym_f64, receiver_f64);
         }
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -830,7 +651,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
         // undefined. Proxies (registered small ids) keep their own semantics.
         if crate::value::addr_class::is_small_handle(id)
             && !crate::object::is_valid_obj_ptr(id as *const u8)
-            && crate::proxy::js_proxy_is_proxy(obj_f64) == 0
+            && crate::proxy_hooks::proxy_is_proxy(obj_f64) == 0
         {
             // A user-stored symbol property (set via the symbol side table,
             // keyed by the handle pointer — e.g. @hono/node-server's
@@ -850,34 +671,12 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     if let Some(v) = own_symbol_property(obj_f64, sym_f64) {
         return v;
     }
-    // #5437 (Next.js): a heap request *wrapper* whose own symbol entry misses
-    // may be one of several `NodeNextRequest`s wrapping the SAME underlying
-    // native IncomingMessage handle (stored in its `_req` field). Node shares
-    // one per-request metadata object by reference across every such wrapper —
-    // the wrapper's ctor does `this[SYM] = this._req[SYM] || {}`. When that
-    // share didn't land on this particular wrapper (a late SSR-bundled copy
-    // never had its `[SYM]` seeded), fall through to the underlying handle's
-    // symbol meta so the read still observes the shared object, matching Node.
-    // Gated tightly: only fires on a side-table MISS, only when `_req` resolves
-    // to a small native handle (POINTER-tagged, below HANDLE_BAND_MAX, not a
-    // real heap object), and only returns a value the handle actually holds —
-    // so ordinary objects (no `_req`, or a heap `_req`) are unaffected.
-    // #7498: `req_handle_symbol_fallback` interns a `"_req"` key, so it is the
-    // first unconditional allocation on this resolver's path — every
-    // `[Symbol.iterator]` read behind a spread reaches it. Root the receiver
-    // and the symbol across it and rebind BOTH `obj_f64` and the derived
-    // `bits` from the roots afterwards, so no line below can name a
-    // pre-collection address.
+    // Later hops allocate (`Function.prototype`, the reflected toStringTag):
+    // root the receiver, the symbol and the receiver value across them.
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_nanbox_f64(obj_f64);
     let sym_h = scope.root_nanbox_f64(sym_f64);
     let receiver_h = scope.root_nanbox_f64(receiver_f64);
-    if let Some(v) = req_handle_symbol_fallback(obj_h.get_nanbox_f64(), sym_h.get_nanbox_f64()) {
-        return v;
-    }
-    let obj_f64 = obj_h.get_nanbox_f64();
-    let sym_f64 = sym_h.get_nanbox_f64();
-    let receiver_f64 = receiver_h.get_nanbox_f64();
     let bits = obj_f64.to_bits();
     let sym_key = sym_key_from_f64(sym_f64);
     if sym_key != 0 {
@@ -886,109 +685,26 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             let ptr = jsval.as_pointer::<crate::object::ObjectHeader>();
             if !ptr.is_null() && crate::object::is_valid_obj_ptr(ptr as *const u8) {
                 let class_id = crate::object::js_object_get_class_id(ptr);
-                if class_id != 0 {
-                    // Computed Symbol ClassBody members are real properties of
-                    // the declared prototype shape. Materialize that shape and
-                    // resolve it before the compiled dispatch registries: an
-                    // absent entry can then mean the configurable property was
-                    // deleted, rather than being silently resurrected here.
-                    if crate::object::class_has_symbol_member_in_chain(class_id, sym_key, false) {
-                        if let Some(value) = generator::explicit_generator_method(
+                if class_id != 0 && crate::object::shapes::receiver_has_class_identity(ptr) {
+                    // An evaluation's recorded prototype is its complete surface.
+                    if let Some(value) = resolve_explicit_object_prototype_symbol(
+                        obj_h.get_nanbox_f64(),
+                        sym_h.get_nanbox_f64(),
+                        receiver_h.get_nanbox_f64(),
+                    ) {
+                        return value;
+                    }
+                    if !crate::object::prototype_chain::object_prototype_is_foreign(
+                        crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize,
+                    ) {
+                        let _ = crate::object::class_decl_prototype_value(class_id);
+                        if let Some(value) = declared_prototype_chain_symbol(
+                            obj_h.get_nanbox_f64(),
+                            sym_h.get_nanbox_f64(),
                             class_id,
-                            sym_key,
-                            obj_f64,
-                            sym_f64,
-                            receiver_f64,
+                            receiver_h.get_nanbox_f64(),
                         ) {
                             return value;
-                        }
-                        let _ = crate::object::class_decl_prototype_value(class_id);
-                        if let Some(v) = declared_prototype_chain_symbol(
-                            obj_f64,
-                            sym_f64,
-                            class_id,
-                            receiver_f64,
-                        ) {
-                            return v;
-                        }
-                        if let Some(v) =
-                            resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64)
-                        {
-                            return v;
-                        }
-                        return f64::from_bits(TAG_UNDEFINED);
-                    }
-                    if let Some(v) = crate::object::class_symbol_getter_value(
-                        class_id,
-                        sym_key,
-                        receiver_f64,
-                        false,
-                    ) {
-                        return v;
-                    }
-                    // #5128: a symbol-keyed instance METHOD — `*[Symbol.iterator]()`
-                    // (and `[Symbol.asyncIterator]()`) are registered on the class
-                    // under the synthetic names `@@iterator` / `@@asyncIterator`.
-                    // Read the method off the class and return a bound method so
-                    // iteration-protocol consumers (`[...x]`, `for…of`,
-                    // `Math.max(...x)`, destructuring) can drive `.next()`. Guard
-                    // on `class_method_slot_owner` first: `js_class_method_bind`
-                    // otherwise mints a bound closure for a non-existent method.
-                    if let Some(method_name) = well_known_symbol_method_name(sym_key) {
-                        if let Some(owner) =
-                            crate::object::class_method_slot_owner(class_id, method_name)
-                        {
-                            if let Some(value) = class_iterator_prototype_override(
-                                receiver_f64,
-                                sym_f64,
-                                class_id,
-                                owner,
-                            ) {
-                                return value;
-                            }
-                            return crate::object::js_class_method_bind(
-                                obj_f64,
-                                method_name.as_ptr(),
-                                method_name.len(),
-                            );
-                        }
-                    }
-                    // #6173: a USER symbol-keyed instance method (`[S]() {}`)
-                    // lives in CLASS_SYMBOL_METHODS — the table the direct
-                    // call path resolves through — not in the accessor /
-                    // well-known tables checked above, so a bare `obj[S]`
-                    // read returned undefined while `obj[S]()` worked.
-                    // Materialize the resolved target as a bound method. Own
-                    // symbol props (checked earlier) still shadow it, and the
-                    // accessor branch above keeps getter priority. This also
-                    // fixes instance-side `S in obj`, whose presence check
-                    // (`js_object_has_property`) delegates to this resolver.
-                    // USER symbols only: a well-known computed method (e.g.
-                    // `[Symbol.toPrimitive]() {}`) is lowered to a synthetic
-                    // `@@name` vtable member and keeps resolving through the
-                    // name-based #1838 tail below, preserving the existing
-                    // behavior for every well-known symbol that HAS one.
-                    // A well-known symbol with no synthetic slot
-                    // (`[Symbol.hasInstance]() {}` on an instance,
-                    // `[Symbol.split]() {}`, …) lives only in this table, so
-                    // skipping it made `obj[Symbol.hasInstance]` undefined and
-                    // the call return undefined (#11170).
-                    if !crate::symbol::is_well_known_symbol(sym_key)
-                        || !well_known_symbol_has_instance_method_slot(sym_key)
-                    {
-                        if let Some((func_ptr, param_count, has_rest, _entry)) =
-                            crate::object::lookup_class_symbol_method_in_chain(
-                                class_id, sym_key, false,
-                            )
-                        {
-                            return crate::object::build_symbol_bound_method_closure(
-                                obj_f64,
-                                func_ptr,
-                                param_count,
-                                has_rest,
-                                false,
-                                &crate::symbol::symbol_function_name(sym_key),
-                            );
                         }
                     }
                 }
@@ -997,6 +713,27 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     }
     if let Some(v) = resolve_explicit_object_prototype_symbol(obj_f64, sym_f64, receiver_f64) {
         return v;
+    }
+    // An `ArrayBuffer` / `SharedArrayBuffer` / `DataView` has no symbol
+    // members of its own beyond the ones read above, and none of the
+    // built-in arms below describe it: the read continues on its
+    // [[Prototype]] (the intrinsic buffer prototype, or the newTarget
+    // prototype it was constructed with), so a member the program wrote
+    // there (`ArrayBuffer.prototype[Symbol.iterator] = function* () {}`)
+    // is found, with the original receiver.
+    let raw_view = crate::value::js_nanbox_get_pointer(obj_h.get_nanbox_f64()) as usize;
+    if raw_view >= 0x10000 && crate::buffer::is_non_indexed_buffer_view(raw_view) {
+        // Materializing the intrinsic prototype can allocate; `obj_h`,
+        // `sym_h` and `receiver_h` keep the operands rooted across it.
+        let proto = crate::object::js_object_get_prototype_of(obj_h.get_nanbox_f64());
+        if crate::value::JSValue::from_bits(proto.to_bits()).is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        return js_object_get_symbol_property_with_receiver(
+            proto,
+            sym_h.get_nanbox_f64(),
+            receiver_h.get_nanbox_f64(),
+        );
     }
     // `class X extends Map | Set` instance — its default `[Symbol.iterator]`
     // is inherited from Map/Set.prototype, so it is NOT an own symbol prop.
@@ -1056,7 +793,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
     // materialize through array-clone fast paths, but runtime-produced
     // Buffers can reach generic iterator lookup first.
     let raw_ptr = crate::value::js_nanbox_get_pointer(obj_f64) as usize;
-    if raw_ptr >= 0x10000 && crate::buffer::is_registered_buffer(raw_ptr) {
+    if raw_ptr >= 0x10000 && crate::buffer::is_byte_indexed_buffer(raw_ptr) {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
@@ -1123,7 +860,7 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             }
         }
     }
-    if raw_addr >= 0x1000 && crate::buffer::is_registered_buffer(raw_addr) {
+    if raw_addr >= 0x1000 && crate::buffer::is_byte_indexed_buffer(raw_addr) {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
@@ -1136,7 +873,9 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
             }
         }
     }
-    if raw_addr >= 0x1000 && crate::typedarray::lookup_typed_array_kind(raw_addr).is_some() {
+    if raw_addr >= 0x1000
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(raw_addr).is_some()
+    {
         let iter_wk = well_known_symbol("iterator");
         if !iter_wk.is_null() {
             let iter_f64 =
@@ -1272,24 +1011,6 @@ pub(crate) unsafe fn js_object_get_symbol_property_with_receiver(
                 {
                     return v;
                 }
-                // #1838: a class can define a computed well-known-symbol METHOD
-                // (`[Symbol.iterator]() {}`) — class lowering names it
-                // `@@iterator` in the vtable (class_members.rs), NOT as a symbol
-                // property, so the proto-chain symbol walk above misses it. Map
-                // the well-known symbol back to its `@@name`, and if the class
-                // (or an ancestor) has that method, return it bound to the
-                // instance. This is how effect's `EffectPrimitive` exposes
-                // `Symbol.iterator` (→ `SingleShotGen`), so `yield* effectValue`
-                // / `Symbol.iterator in effectValue` resolve.
-                if let Some(at_name) = well_known_symbol_method_key(sym_f64) {
-                    if class_chain_has_method(cid, at_name) {
-                        return crate::object::js_class_method_bind(
-                            obj_f64,
-                            at_name.as_ptr(),
-                            at_name.len(),
-                        );
-                    }
-                }
             }
         }
     }
@@ -1316,6 +1037,78 @@ unsafe fn declared_prototype_chain_symbol(
 ) -> Option<f64> {
     let holder = declared_prototype_symbol_holder(obj, sym, class_id)?;
     own_symbol_property_for_receiver(holder, sym, receiver)
+}
+
+/// `[[Get]](obj, sym)` of a compiled class instance when it is a data
+/// property holding a compiled generator function, read without running
+/// anything: the same answer [`js_object_get_symbol_property_with_receiver`]
+/// gives, by the same walk, for exactly these receivers. `obj` is a live,
+/// unforwarded `GC_TYPE_OBJECT` (no proxy, Date, handle, byte cell or class
+/// object) with a class identity and no recorded [[Prototype]] (its
+/// class-implied link, so the recorded walk answers nothing), and no own
+/// property under `sym` (its canonical keys are its own-key authority);
+/// [`declared_prototype_symbol_holder`]'s walk then finds the holder on the
+/// declared prototype chain, and its own slot is a data property whose value
+/// is a generator function. `None` (nothing run, nothing allocated) for
+/// every other receiver or answer: an accessor, a native function, a
+/// prototype not yet materialized, or a key found nowhere on that chain.
+pub(crate) unsafe fn class_instance_generator_symbol_method(
+    obj_f64: f64,
+    sym_f64: f64,
+) -> Option<f64> {
+    let bits = obj_f64.to_bits();
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    {
+        return None;
+    }
+    let raw = (bits & POINTER_MASK) as usize;
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+        || crate::object::is_class_object_ptr(raw as *const u8)
+    {
+        return None;
+    }
+    let obj = raw as *const crate::object::ObjectHeader;
+    let class_id = (*obj).class_id;
+    if class_id == 0
+        || !crate::object::shapes::receiver_has_class_identity(obj)
+        || crate::object::shapes::object_prototype_word(obj) != 0
+        || own_symbol_slot(obj_f64, sym_f64).is_some()
+    {
+        return None;
+    }
+    // [`declared_prototype_symbol_holder`]'s walk, reading each hop's own
+    // slot once: its presence test (`has_own_symbol_property`) and the
+    // slot read answer from the same own-key storage.
+    if crate::object::prototype_chain::object_prototype_is_foreign(raw) {
+        return None;
+    }
+    let mut declared = crate::object::class_decl_prototype_object(class_id);
+    let mut found = None;
+    for _ in 0..32 {
+        if declared.is_null() {
+            return None;
+        }
+        let proto_value = crate::value::js_nanbox_pointer(declared as i64);
+        if let Some(slot) = own_symbol_slot(proto_value, sym_f64) {
+            found = Some(slot);
+            break;
+        }
+        let bits = crate::object::prototype_chain::object_static_prototype(declared as usize)?;
+        declared = object_header_ptr_from_value_bits(bits)? as *mut crate::object::ObjectHeader;
+    }
+    let OwnSymbolSlot::Data(method) = found? else {
+        return None;
+    };
+    let value = crate::value::JSValue::from_bits(method);
+    if !value.is_pointer() {
+        return None;
+    }
+    let closure = value.as_pointer::<crate::closure::ClosureHeader>();
+    (crate::closure::is_closure_ptr(closure as usize)
+        && crate::closure::props::closure_has_generator_body(closure))
+    .then_some(f64::from_bits(method))
 }
 
 /// Locate a declared prototype property without invoking its getter. An
@@ -1388,89 +1181,13 @@ pub(crate) unsafe fn has_declared_prototype_symbol_property(receiver: f64, sym: 
         return false;
     };
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return false;
     }
     let class_id = (*ptr).class_id;
     class_id != 0 && declared_prototype_symbol_holder(receiver, sym, class_id).is_some()
-}
-
-/// #1838: map a well-known symbol value to the synthetic `@@<name>` vtable key
-/// that class lowering assigns to a computed `[Symbol.X]() {}` method (see
-/// `lower_decl/class_members.rs`). Returns `None` for symbols that don't name a
-/// class method (or non-symbol values). `dispose`/`asyncDispose` use distinct
-/// `__perry_*__` names and are dispatched via the using-block desugarer, so
-/// they're deliberately excluded here.
-unsafe fn well_known_symbol_method_key(sym_f64: f64) -> Option<&'static str> {
-    let sk = sym_key_from_f64(sym_f64);
-    if sk == 0 {
-        return None;
-    }
-    for (short, at_name) in [
-        ("iterator", "@@iterator"),
-        ("asyncIterator", "@@asyncIterator"),
-        ("hasInstance", "@@hasInstance"),
-        ("toPrimitive", "@@toPrimitive"),
-        ("toStringTag", "@@toStringTag"),
-    ] {
-        let wk = well_known_symbol(short);
-        if !wk.is_null() {
-            let wk_f64 = f64::from_bits(crate::value::JSValue::pointer(wk as *const u8).bits());
-            if sym_key_from_f64(wk_f64) == sk {
-                return Some(at_name);
-            }
-        }
-    }
-    None
-}
-
-/// Does a computed INSTANCE method keyed by this well-known symbol also get a
-/// synthetic vtable slot that the name-based resolvers read? Keep in sync with
-/// the alias list in `js_register_class_computed_method` (and the static
-/// lowering's renames): `iterator`, `asyncIterator`, `toPrimitive`, `dispose`,
-/// `asyncDispose`. Every other well-known symbol's instance method is
-/// reachable ONLY through `CLASS_SYMBOL_METHODS` (#11170).
-fn well_known_symbol_has_instance_method_slot(sym_key: usize) -> bool {
-    [
-        "iterator",
-        "asyncIterator",
-        "toPrimitive",
-        "dispose",
-        "asyncDispose",
-    ]
-    .iter()
-    .any(|wk| {
-        let s = well_known_symbol(wk);
-        // SAFETY: `s` is a live well-known symbol from the process-lifetime
-        // cache; `sym_key_from_f64` only decodes its NaN-boxed pointer.
-        !s.is_null()
-            && unsafe {
-                sym_key_from_f64(f64::from_bits(
-                    crate::value::JSValue::pointer(s as *const u8).bits(),
-                ))
-            } == sym_key
-    })
-}
-
-/// #1838: does `class_id` or any ancestor define a vtable method named `name`?
-fn class_chain_has_method(class_id: u32, name: &str) -> bool {
-    let mut cid = class_id;
-    let mut depth = 0usize;
-    while depth < 32 && cid != 0 {
-        if crate::object::class_has_own_method(cid, name) {
-            return true;
-        }
-        match crate::object::get_parent_class_id(cid) {
-            Some(p) if p != 0 && p != cid => {
-                cid = p;
-                depth += 1;
-            }
-            _ => break,
-        }
-    }
-    false
 }
 
 #[cfg(test)]
@@ -1502,7 +1219,7 @@ mod handle_meta_share_tests {
 
     // An IMMOVABLE metadata value: a plain NaN-boxed number. Unlike a heap
     // object, a number is never a pointer, so no GC move rewrites it — its
-    // bits are invariant across any collection. The #5437 fix logic (no-op on undefined, `_req` fallthrough)
+    // bits are invariant across any collection. The #5437 no-op-on-undefined logic
     // is value-agnostic, so a number tests it faithfully without depending on
     // GC suppression to keep a heap `meta` from moving.
     fn immovable_meta() -> f64 {
@@ -1512,48 +1229,53 @@ mod handle_meta_share_tests {
 
     #[test]
     fn wrapper_reads_share_underlying_handle_meta() {
+        // Node semantics (DEC 243(3)): a wrapper whose `_req` is the handle
+        // reads only its OWN `[SYM]`. The wrapper ctor's
+        // `this[SYM] = this._req[SYM] || {}` is what shares the handle's
+        // object; an unseeded wrapper reads undefined, never the handle's
+        // value through `_req`.
         unsafe {
-            // Compact the arena up front with a full GC so the few small
-            // allocations this test makes can't trip a mid-test block-alloc GC
-            // (which bypasses `gc_suppress`). `gc_suppress` is kept as belt-and-
-            // braces; the immovable number `meta` makes the assertion itself
-            // GC-invariant regardless.
             crate::gc::js_gc_collect();
             crate::gc::gc_suppress();
             let sym = next_request_meta_symbol();
-            // Pick a handle id well inside the small-handle band but unlikely to
-            // collide with another test's side-table entry.
             let owner =
                 crate::object::handle_expando::test_support::TestSmallHandleOwner::new(0x321);
             let handle = owner.value();
-
-            // The per-request metadata value lives on the handle. Use an
-            // immovable number so a GC can't invalidate the comparison.
-            let meta = immovable_meta();
+            let meta_obj = crate::object::js_object_alloc(0, 0);
+            let meta = crate::value::js_nanbox_pointer(meta_obj as i64);
             super::properties::js_object_set_symbol_property(handle, sym, meta);
-            // #10510: the install on a handle owner arms the `_req` fallback,
-            // which is skipped entirely until then.
-            assert!(crate::symbol::small_handle_symbol_owner_ever());
-
-            // A heap wrapper that aliases the handle via `_req` but never had
-            // its own `[sym]` seeded.
-            let wrapper_obj = crate::object::js_object_alloc(0, 1);
-            assert!(!wrapper_obj.is_null());
             let req_key = js_string_from_bytes(b"_req".as_ptr(), 4);
-            crate::object::js_object_set_field_by_name(wrapper_obj, req_key, handle);
-            let wrapper = crate::value::js_nanbox_pointer(wrapper_obj as i64);
 
-            // Reading the symbol off the wrapper falls through to the handle's
-            // shared meta — the exact Node-by-reference semantics.
-            let got = js_object_get_symbol_property(wrapper, sym);
-            // Unsuppress before asserting so a panic can't leave GC suppressed
-            // for sibling tests on this thread.
+            let unseeded_obj = crate::object::js_object_alloc(0, 1);
+            crate::object::js_object_set_field_by_name(unseeded_obj, req_key, handle);
+            let unseeded = crate::value::js_nanbox_pointer(unseeded_obj as i64);
+            let unseeded_got = js_object_get_symbol_property(unseeded, sym);
+
+            let seeded_obj = crate::object::js_object_alloc(0, 1);
+            crate::object::js_object_set_field_by_name(seeded_obj, req_key, handle);
+            let seeded = crate::value::js_nanbox_pointer(seeded_obj as i64);
+            let shared = js_object_get_symbol_property(handle, sym);
+            super::properties::js_object_set_symbol_property(seeded, sym, shared);
+            let seeded_got = js_object_get_symbol_property(seeded, sym);
+            let handle_got = js_object_get_symbol_property(handle, sym);
             crate::gc::gc_unsuppress();
+
             assert_eq!(
-                got.to_bits(),
-                meta.to_bits(),
-                "wrapper symbol read should share the handle's meta value"
+                unseeded_got.to_bits(),
+                TAG_UNDEFINED,
+                "an unseeded wrapper reads undefined, as in node"
             );
+            assert_eq!(
+                shared.to_bits(),
+                meta.to_bits(),
+                "the handle holds the meta object"
+            );
+            assert_eq!(
+                seeded_got.to_bits(),
+                meta.to_bits(),
+                "a seeded wrapper shares the handle's object"
+            );
+            assert_eq!(handle_got.to_bits(), meta.to_bits(), "the handle keeps it");
         }
     }
 

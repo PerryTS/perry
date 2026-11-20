@@ -276,6 +276,16 @@ pub(crate) extern "C" fn array_of_thunk(
     crate::array::array_of_full(c, &vals)
 }
 
+pub(crate) extern "C" fn array_from_async_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    input: f64,
+    map_fn: f64,
+    this_arg: f64,
+) -> f64 {
+    crate::promise::async_step::array_from_async_full(this.as_f64(), input, map_fn, this_arg)
+}
+
 pub(crate) extern "C" fn number_is_nan_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -309,11 +319,18 @@ pub(crate) extern "C" fn number_is_integer_thunk(
 /// passes through; Boolean → 0n/1n; String → StringToBigInt; an object is first
 /// reduced through ToPrimitive("number") (running its `valueOf`/`toString`) and
 /// re-coerced; a Number/undefined/null/Symbol throws a TypeError. The
-/// primitive cases reuse the same `to_bigint_for_store` helper that backs
-/// `BigInt64Array` element writes.
+/// primitive cases go through `bigint_coerce::to_bigint`, which needs no
+/// typed-array group (only a typed array as the value takes the group's arm).
 fn bigint_to_bigint_arg(value: f64) -> f64 {
     let jv = JSValue::from_bits(value.to_bits());
     if jv.is_pointer() && !jv.is_bigint() {
+        // A typed array: its own patched `valueOf` / `toString` runs first
+        // (the group's arm of `bigint_coerce::to_bigint`), as for an element
+        // store.
+        let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
+        if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+            return crate::bigint_coerce::to_bigint(value);
+        }
         // Array → ToPrimitive finds no `valueOf` override and falls to
         // `Array.prototype.toString` = `join(",")`, then ToBigInt on that string
         // (`[] => "" => 0n`, `[10n] => "10" => 10n`, `[1,2] => "1,2" => throws`).
@@ -329,7 +346,7 @@ fn bigint_to_bigint_arg(value: f64) -> f64 {
         // Object: ToPrimitive("number") then re-coerce. Try a custom
         // [Symbol.toPrimitive] first, then OrdinaryToPrimitive
         // (valueOf-before-toString). A primitive result recurses; anything
-        // unconvertible falls through to the TypeError in `to_bigint_for_store`.
+        // unconvertible falls through to the TypeError in `bigint_coerce`.
         let prim = unsafe { crate::symbol::js_to_primitive(value, 1) };
         if prim.to_bits() != value.to_bits() {
             return bigint_to_bigint_arg(prim);
@@ -342,7 +359,7 @@ fn bigint_to_bigint_arg(value: f64) -> f64 {
             }
         }
     }
-    crate::typedarray::bigint::to_bigint_for_store(value)
+    crate::bigint_coerce::to_bigint(value)
 }
 
 pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) -> f64 {
@@ -370,9 +387,9 @@ pub(crate) fn bigint_as_n_dispatch(bits_arg: f64, value_arg: f64, signed: bool) 
     let bits = bits_int as u32;
     let ptr = jv.as_bigint_ptr() as *const crate::bigint::BigIntHeader;
     let r = if signed {
-        crate::bigint::js_bigint_as_int_n(bits, ptr)
+        crate::bigint_hooks::js_bigint_as_int_n(bits, ptr)
     } else {
-        crate::bigint::js_bigint_as_uint_n(bits, ptr)
+        crate::bigint_hooks::js_bigint_as_uint_n(bits, ptr)
     };
     f64::from_bits(crate::value::js_nanbox_bigint(r as i64).to_bits())
 }
@@ -775,7 +792,7 @@ pub(crate) extern "C" fn typed_array_from_thunk(
     // Read the source's RAW kValues — its `@@iterator` invoked, or its
     // `ToLength(length)` + indexed elements evaluated — any throwing user
     // iterator/getter propagates (test262 from/arylk-*-error).
-    let raw = unsafe { crate::typedarray::typed_array_from_source_raw_values(source) };
+    let raw = unsafe { crate::typedarray_hook_slots::typed_array_from_source_raw_values(source) };
     // Per-element `mappedValue = Call(mapfn, T, «kValue, k»)` then
     // `Set(target, k, mappedValue)` — the map call and the (observable,
     // possibly throwing) element coercion INTERLEAVE per spec, so an abrupt
@@ -797,7 +814,7 @@ pub(crate) extern "C" fn typed_array_from_thunk(
         )
     };
     if let Some(kind) = kind_opt {
-        let out = crate::typedarray::typed_array_alloc(kind, raw.len() as u32);
+        let out = crate::typedarray_hook_slots::typed_array_alloc(kind, raw.len() as u32);
         for (k, &v) in raw.iter().enumerate() {
             let m = map_at(k, v);
             unsafe { crate::typedarray_props::species_result_store(out as usize, k, m) };
@@ -817,8 +834,8 @@ pub(crate) extern "C" fn typed_array_from_thunk(
             b"TypedArray.from/of constructor did not return a TypedArray",
         )
     });
-    let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
-    let target_len = crate::typedarray::js_typed_array_length(ta_ptr) as usize;
+    let ta_ptr = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
+    let target_len = crate::typedarray_hook_slots::js_typed_array_length(ta_ptr) as usize;
     if target_len < len {
         super::super::object_ops::throw_object_type_error(
             b"Derived TypedArray constructor created an array which was too small",
@@ -848,10 +865,10 @@ fn require_typed_array_from_of_constructor(this: crate::closure::JsThis) {
 /// non-constructable builtin.
 fn value_is_constructor(value: f64) -> bool {
     let bits = value.to_bits();
-    if crate::object::class_value::legacy_class_value_word(bits).is_some() {
+    if crate::object::class_value::class_ref_word(bits).is_some() {
         return true; // class-ref constructor
     }
-    if crate::proxy::js_proxy_is_proxy(value) == 1 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 1 {
         return true;
     }
     if (bits >> 48) == 0x7FFD {
@@ -882,7 +899,7 @@ fn typed_array_create_from_values(
     arr: *mut crate::array::ArrayHeader,
 ) -> f64 {
     if let Some(kind) = kind_opt {
-        let ta = crate::typedarray::js_typed_array_new_from_array(kind as i32, arr);
+        let ta = crate::typedarray_hook_slots::js_typed_array_new_from_array(kind as i32, arr);
         return crate::value::js_nanbox_pointer(ta as i64);
     }
     let ctor = this.as_f64();
@@ -898,8 +915,8 @@ fn typed_array_create_from_values(
             b"TypedArray.from/of constructor did not return a TypedArray",
         )
     });
-    let ta_ptr = addr as *mut crate::typedarray::TypedArrayHeader;
-    let target_len = crate::typedarray::js_typed_array_length(ta_ptr) as usize;
+    let ta_ptr = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
+    let target_len = crate::typedarray_hook_slots::js_typed_array_length(ta_ptr) as usize;
     if target_len < len {
         // `TypedArrayCreate(C, «len»)` throws a *TypeError* (not RangeError)
         // when the constructed typed array is shorter than the requested length
@@ -910,7 +927,11 @@ fn typed_array_create_from_values(
     }
     for k in 0..len {
         let v = crate::array::js_array_get(arr, k as u32);
-        crate::typedarray::js_typed_array_set(ta_ptr, k as i32, f64::from_bits(v.bits()));
+        crate::typedarray_hook_slots::js_typed_array_set(
+            ta_ptr,
+            k as i32,
+            f64::from_bits(v.bits()),
+        );
     }
     target
 }
@@ -943,17 +964,17 @@ pub(crate) fn promise_static_function_info(
 ) -> Option<(*const crate::closure::JsFunctionInfo, u32)> {
     use crate::fn_info;
     Some(match name {
-        "resolve" => (fn_info!(promise_resolve_static, 1; with_declared(1)), 1),
-        "reject" => (fn_info!(promise_reject_static, 1; with_declared(1)), 1),
-        "all" => (fn_info!(promise_all_static, 1; with_declared(1)), 1),
-        "race" => (fn_info!(promise_race_static, 1; with_declared(1)), 1),
-        "allSettled" => (fn_info!(promise_all_settled_static, 1; with_declared(1)), 1),
-        "any" => (fn_info!(promise_any_static, 1; with_declared(1)), 1),
+        "resolve" => (fn_info!(#[realm(Promise.resolve)] export crate::object::global_this::bigint_promise::promise_resolve_static, 1; with_declared(1)), 1),
+        "reject" => (fn_info!(#[realm(Promise.reject)] export crate::object::global_this::bigint_promise::promise_reject_static, 1; with_declared(1)), 1),
+        "all" => (fn_info!(#[realm(Promise.all)] export crate::object::global_this::bigint_promise::promise_all_static, 1; with_declared(1)), 1),
+        "race" => (fn_info!(#[realm(Promise.race)] export crate::object::global_this::bigint_promise::promise_race_static, 1; with_declared(1)), 1),
+        "allSettled" => (fn_info!(#[realm(Promise.allSettled)] export crate::object::global_this::bigint_promise::promise_all_settled_static, 1; with_declared(1)), 1),
+        "any" => (fn_info!(#[realm(Promise.any)] export crate::object::global_this::bigint_promise::promise_any_static, 1; with_declared(1)), 1),
         "withResolvers" => (
-            fn_info!(promise_with_resolvers_static, 0; with_declared(0)),
+            fn_info!(#[realm(Promise.withResolvers)] export crate::object::global_this::bigint_promise::promise_with_resolvers_static, 0; with_declared(0)),
             0,
         ),
-        "try" => (fn_info!(promise_try_static, 2; with_rest(1)), 1),
+        "try" => (fn_info!(#[realm(Promise.try)] export crate::object::global_this::bigint_promise::promise_try_static, 2; with_rest(1)), 1),
         _ => return None,
     })
 }

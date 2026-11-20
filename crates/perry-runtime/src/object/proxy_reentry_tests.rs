@@ -42,7 +42,7 @@ fn protowalk_proxy_reflect_getter_allows_nested_inherited_read() {
         key("get"),
         crate::value::js_nanbox_pointer(trap as i64),
     );
-    let proxy = crate::proxy::js_proxy_new(
+    let proxy = crate::proxy_hooks::proxy_new(
         crate::value::js_nanbox_pointer(target as i64),
         crate::value::js_nanbox_pointer(handler as i64),
     );
@@ -90,7 +90,7 @@ fn protowalk_proxy_trap_allows_a_new_get_on_its_receiver() {
         key("get"),
         crate::value::js_nanbox_pointer(trap as i64),
     );
-    let proxy = crate::proxy::js_proxy_new(
+    let proxy = crate::proxy_hooks::proxy_new(
         crate::value::js_nanbox_pointer(target as i64),
         crate::value::js_nanbox_pointer(handler as i64),
     );
@@ -114,13 +114,13 @@ fn proxy_reentry_transparent_target_preserves_resolution_mode_and_receiver() {
         key("get"),
         crate::value::js_nanbox_pointer(trap as i64),
     );
-    let proxy = crate::proxy::js_proxy_new(
+    let proxy = crate::proxy_hooks::proxy_new(
         crate::value::js_nanbox_pointer(target as i64),
         crate::value::js_nanbox_pointer(handler as i64),
     );
     let empty = js_object_alloc(0, 0);
     let transparent =
-        crate::proxy::js_proxy_new(proxy, crate::value::js_nanbox_pointer(empty as i64));
+        crate::proxy_hooks::proxy_new(proxy, crate::value::js_nanbox_pointer(empty as i64));
     for holder in [proxy, transparent] {
         let receiver = js_object_alloc(0, 0);
         object_set_static_prototype(receiver as usize, holder.to_bits());

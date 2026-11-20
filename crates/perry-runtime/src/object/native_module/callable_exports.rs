@@ -5,16 +5,16 @@ mod buffer_species;
 pub(crate) use buffer_constructor::{
     buffer_constructor_value, buffer_intrinsic_prototype_parent, buffer_intrinsic_prototype_value,
     buffer_original_prototype_value, cached_buffer_intrinsic_prototype_value,
-    is_buffer_constructor_value,
+    install_buffer_prototype_members, is_buffer_constructor_value,
 };
 mod builtin_closure_metadata;
 mod module_cjs;
 pub(crate) use builtin_closure_metadata::*;
 use module_cjs::attach_module_cjs_constructor_statics;
 pub(crate) use module_cjs::{
-    module_builtin_modules_value, module_cjs_cache_value, module_cjs_extensions_value,
-    module_cjs_global_paths_value, module_cjs_path_cache_value, module_cjs_prototype_for_instance,
-    module_constants_value,
+    install_module_cjs_cache_value, module_builtin_modules_value, module_cjs_cache_value,
+    module_cjs_extensions_value, module_cjs_global_paths_value, module_cjs_path_cache_value,
+    module_cjs_prototype_for_instance, module_constants_value,
 };
 
 #[cfg(test)]
@@ -37,6 +37,9 @@ pub(crate) fn minted_native_callable_export(canonical_key: &str) -> Option<f64> 
 }
 
 pub fn bound_native_callable_export_value(module_name: &str, property_name: &str) -> f64 {
+    if super::native_namespace_member_absent(module_name, property_name) {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
     // Bound-native closures carry (module, method) metadata that the
     // generic property/call paths resolve through the vtable — and they
     // can be minted via the codegen NativeModuleRef fast path without any
@@ -69,15 +72,26 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
+    // A module the submodule registry implements (`stream/promises`,
+    // `timers/promises`, `stream/web`, ...) has no dispatch bucket: a
+    // BOUND_METHOD closure minted below would dispatch through a module with no
+    // bucket and resolve `undefined` without running anything. The module value
+    // is the registry namespace, so hand out its own export.
+    if let Some(value) =
+        crate::node_submodules::registry_backed_module_callable(module_name, property_name)
+    {
+        return value;
+    }
     // node:inspector/promises is the callback namespace with Session replaced.
     if module_name == "inspector/promises" && property_name != "Session" {
         return bound_native_callable_export_value("inspector", property_name);
     }
-    let export_module_name = if property_name == "Assert" && module_name == "assert/strict" {
-        "assert"
-    } else {
-        module_name
-    };
+    let export_module_name =
+        if matches!(property_name, "Assert" | "AssertionError") && module_name == "assert/strict" {
+            "assert"
+        } else {
+            module_name
+        };
     let callable_module_name = if export_module_name == "util.types" {
         "util/types"
     } else {
@@ -96,6 +110,9 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     if let Some(bits) = NATIVE_CALLABLE_EXPORTS.with(|c| c.borrow().get(&key).copied()) {
         return f64::from_bits(bits);
     }
+    // The export's one callable, minted on its first read whichever init
+    // reads it first: the SNAP census counts it as the runtime's.
+    let _census = crate::snap_census::first_use();
 
     let method_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -125,14 +142,21 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         crate::closure::js_closure_set_capture_f64(c, 0, ns.get_nanbox_f64());
     });
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_ptr(c, 1, method_bytes.as_ptr() as i64);
+        crate::closure::closure_set_capture_word(c, 1, method_bytes.as_ptr() as i64);
     });
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
-        crate::closure::js_closure_set_capture_ptr(c, 2, method_bytes.len() as i64);
+        crate::closure::closure_set_capture_word(c, 2, method_bytes.len() as i64);
     });
     if let Some(class) = constructor_class {
         closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
             crate::closure::js_closure_set_capture_f64(c, 3, class as f64);
+        });
+    }
+    // A bound export declared `constructable = false` is born with the
+    // per-instance bit; every other export's birth word has no bit to add.
+    if bound_export_is_non_constructable(export_module_name, property_name) {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            builtin_closure_metadata::publish_bound_export_birth(c as usize, false)
         });
     }
     #[cfg(test)]
@@ -141,16 +165,16 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::gc::gc_collect_minor();
         }
     });
-    let exposed_name = if export_module_name == "fs" {
+    let exposed_name = if export_module_name == "fs" || export_module_name == "sqlite" {
         native_callable_export_display_name(export_module_name, property_name)
     } else if export_module_name == "url" && property_name == "resolveObject" {
-        "urlResolveObject"
+        realm_native_url_resolveObject_metadata!(name)
     } else if export_module_name == "http" && property_name == "_connectionListener" {
-        "connectionListener"
+        realm_native_http_connectionListener_metadata!(name)
     } else if export_module_name == "module" && property_name == "runMain" {
-        "executeUserEntryPoint"
+        realm_native_module_runMain_metadata!(name)
     } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
-        "toUnixTimestamp"
+        realm_native_fs_toUnixTimestamp_metadata!(name)
     } else {
         property_name
     };
@@ -167,6 +191,20 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     let value = scope.root_nanbox_f64(closure.with_mut_ptr(
         |c: *mut crate::closure::ClosureHeader| crate::value::js_nanbox_pointer(c as i64),
     ));
+
+    if crate::process::worker_restrictions::worker_process_callable_disabled(
+        module_name,
+        property_name,
+    ) {
+        closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
+            crate::closure::closure_define_data_with_attrs(
+                c as usize,
+                "disabled",
+                f64::from_bits(crate::value::TAG_TRUE),
+                crate::object::PropertyAttrs::new(true, true, true),
+            );
+        });
+    }
 
     // Publish the rooted constructor before resolving its children/parent.
     // Stream.Readable forms a cycle with its constructor parent;
@@ -187,7 +225,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
         // optional module hook. Their prototypes are intrinsic constructor
         // state, so install them at this common callable-creation seam.
         unsafe {
-            crate::perf_hooks::attach_perf_hooks_constructor(
+            crate::perf_hook_slots::attach_perf_hooks_constructor(
                 property_name,
                 value.get_nanbox_f64(),
                 crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as usize,
@@ -196,7 +234,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
     } else if export_module_name == "bun" && property_name == "plugin" {
         // Decorate once at creation so named imports, namespaces, and saved
         // Bun.plugin values share the same callable and clearAll property.
-        crate::bun_compat::decorate_bun_plugin(value.get_nanbox_f64());
+        crate::bun_hook_slots::decorate_bun_plugin(value.get_nanbox_f64());
     } else if let Some(attach) =
         super::super::native_module_registry::nm_attach_lookup(export_module_name)
     {
@@ -290,7 +328,9 @@ extern "C" fn fs_namespace_descriptor_getter_thunk(
     unsafe {
         let property_ptr = crate::closure::js_closure_get_capture_ptr(closure, 0) as *const u8;
         let property_len = crate::closure::js_closure_get_capture_ptr(closure, 1) as usize;
-        js_native_module_property_by_name(b"fs".as_ptr(), 2, property_ptr, property_len)
+        // A restored descriptor must resolve the builtin value, not consult its
+        // own accessor override and recursively invoke this getter again.
+        native_module_property_by_name_impl(b"fs".as_ptr(), 2, property_ptr, property_len, false)
     }
 }
 
@@ -309,12 +349,12 @@ pub(crate) fn fs_namespace_descriptor_getter_value(property_name: &str) -> f64 {
     }
 
     let property_bytes: &'static [u8] = property_name.as_bytes().to_vec().leak();
-    let func_ptr = crate::fn_info!(fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.FileWriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.ReadStream.<get>", capture = property_key, constructible = true; "node:fs.default.Utf8Stream.<get>", capture = property_key, constructible = true; "node:fs.default.WriteStream.<get>", capture = property_key, constructible = true; "node:fs.default.promises.<get>", capture = property_key, constructible = true, spec = {name = "get"}, emit = metadata(realm_fs_promises_get_name); })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_getter_thunk, 0; with_declared(0));
     let closure = crate::closure::js_closure_alloc(func_ptr, 2);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, property_bytes.as_ptr() as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, property_bytes.len() as i64);
+    crate::closure::closure_set_capture_word(closure, 0, property_bytes.as_ptr() as i64);
+    crate::closure::closure_set_capture_word(closure, 1, property_bytes.len() as i64);
     let name = if property_name == "promises" {
-        "get".to_string()
+        realm_fs_promises_get_name!(name).to_string()
     } else {
         format!("get {property_name}")
     };
@@ -334,7 +374,7 @@ pub(crate) fn fs_namespace_descriptor_setter_value(property_name: &str) -> f64 {
         return f64::from_bits(bits);
     }
 
-    let func_ptr = crate::fn_info!(fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
+    let func_ptr = crate::fn_info!(#[realm(realm_decl! { "node:fs.default.FileReadStream.<set>", constructible = true; "node:fs.default.FileWriteStream.<set>", constructible = true; "node:fs.default.ReadStream.<set>", constructible = true; "node:fs.default.WriteStream.<set>", constructible = true; })] export crate::object::native_module::callable_exports::fs_namespace_descriptor_setter_thunk, 1; with_declared(1));
     let closure = crate::closure::js_closure_alloc(func_ptr, 0);
     let name = format!("set {property_name}");
     set_bound_native_closure_name(closure, &name);
@@ -369,11 +409,19 @@ pub(crate) fn is_cluster_emitter_method(prop: &str) -> bool {
     )
 }
 
-fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
+pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a str) -> &'a str {
     if module == "fs" {
         match prop {
-            "_toUnixTimestamp" => "toUnixTimestamp",
-            "Stats" => "deprecated",
+            "_toUnixTimestamp" => realm_native_fs_toUnixTimestamp_metadata!(name),
+            "Stats" => realm_native_fs_Stats_metadata!(name),
+            _ => prop,
+        }
+    } else if module == "sqlite" {
+        // node 26: the classes are `Database` / `Statement`; `DatabaseSync`
+        // and `StatementSync` are aliases of them.
+        match prop {
+            "DatabaseSync" => "Database",
+            "StatementSync" => "Statement",
             _ => prop,
         }
     } else {
@@ -391,12 +439,8 @@ extern "C" fn buffer_constructor_thunk(
     let value_js = crate::value::JSValue::from_bits(value.to_bits());
     let buf = if value_js.is_undefined() || value_js.is_null() {
         crate::buffer::js_buffer_alloc(0, 0)
-    } else if value_js.is_int32() || value_js.is_number() {
-        let size = if value_js.is_int32() {
-            value_js.as_int32()
-        } else {
-            value as i32
-        };
+    } else if value_js.is_number() {
+        let size = value as i32;
         crate::buffer::js_buffer_alloc_unsafe(size)
     } else {
         let second = crate::value::JSValue::from_bits(encoding_or_offset.to_bits());
@@ -406,16 +450,10 @@ extern "C" fn buffer_constructor_thunk(
         if !third.is_undefined() || second_is_offset {
             let len = if third.is_undefined() {
                 -1
-            } else if third.is_int32() {
-                third.as_int32()
             } else {
                 length as i32
             };
-            let offset = if second.is_int32() {
-                second.as_int32()
-            } else {
-                encoding_or_offset as i32
-            };
+            let offset = encoding_or_offset as i32;
             crate::buffer::js_buffer_from_arraybuffer_slice(value.to_bits() as i64, offset, len)
         } else {
             let enc = if second.is_undefined() {
@@ -429,11 +467,70 @@ extern "C" fn buffer_constructor_thunk(
     crate::value::js_nanbox_pointer(buf as i64)
 }
 
-extern "C" fn buffer_prototype_method_thunk(
+/// `Buffer.prototype.toString(encoding, start, end)` as a value
+/// (`Buffer.prototype.toString.call(buf, ..)`): the decode `buf.toString(..)`
+/// runs, on a Buffer or a plain `Uint8Array` (Node decodes any Uint8Array
+/// receiver's bytes). Any other receiver throws Node's TypeError
+/// (`argument must be a buffer`). Node also decodes the other typed arrays
+/// and (without arguments) a DataView; perry throws there.
+pub(crate) extern "C" fn buffer_prototype_to_string(
     _closure: *const crate::closure::ClosureHeader,
-    _this: crate::closure::JsThis,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
 ) -> f64 {
-    f64::from_bits(crate::value::TAG_UNDEFINED)
+    let this_bits = this.bits();
+    let addr = (this_bits & crate::value::POINTER_MASK) as usize;
+    if !(crate::value::JSValue::from_bits(this_bits).is_pointer()
+        && addr != 0
+        && crate::buffer::is_uint8_view_buffer(addr))
+    {
+        crate::collection_iter::throw_type_error("argument must be a buffer");
+    }
+    let args = if args.is_null() || argc == 0 {
+        &[][..]
+    } else {
+        unsafe { std::slice::from_raw_parts(args, argc) }
+    };
+    unsafe {
+        crate::object::buffer_dispatch::buffer_to_string_call(
+            addr as *mut crate::buffer::BufferHeader,
+            args,
+        )
+    }
+}
+
+/// A builtin `Buffer.prototype` member called with an explicit `this`
+/// (`Buffer.prototype.copy.call(src, dst)`, `.apply`, `.bind`,
+/// `Reflect.apply`): the member's name is its closure's capture 0 (its index
+/// in `BUFFER_PROTOTYPE_METHODS`), the receiver must be a `Uint8Array` view
+/// (a Buffer, a plain `Uint8Array` or a subclass instance; anything else is
+/// Node's TypeError), and the body is the builtin method of that name. The
+/// member was chosen by the caller, so the receiver's prototype chain is not
+/// consulted again.
+extern "C" fn buffer_prototype_method_thunk(
+    closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
+) -> f64 {
+    let index = crate::closure::js_closure_get_capture_f64(closure, 0) as usize;
+    let Some(method) = BUFFER_PROTOTYPE_METHODS.get(index) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    };
+    let this_bits = this.bits();
+    let addr = (this_bits & crate::value::POINTER_MASK) as usize;
+    if !(crate::value::JSValue::from_bits(this_bits).is_pointer()
+        && addr != 0
+        && crate::buffer::is_uint8_view_buffer(addr))
+    {
+        crate::collection_iter::throw_type_error(
+            "The \"this\" argument must be an instance of Buffer or Uint8Array.",
+        );
+    }
+    unsafe {
+        crate::object::buffer_dispatch::dispatch_builtin_buffer_method(addr, method, args, argc)
+    }
 }
 
 /// `this` for a `Buffer.prototype.offset`/`.parent` accessor read, resolved
@@ -657,6 +754,29 @@ const BUFFER_PROTOTYPE_METHODS: &[&str] = &[
     "utf8Write",
 ];
 
+/// Is `name` an own builtin member of `Buffer.prototype`
+/// (`BUFFER_PROTOTYPE_METHODS`)?
+pub(crate) fn is_buffer_prototype_member(name: &str) -> bool {
+    BUFFER_PROTOTYPE_METHODS.contains(&name)
+}
+
+/// Is `value` a builtin method member of `Buffer.prototype` that shares
+/// [`buffer_prototype_method_thunk`]? That thunk has no behaviour of its own:
+/// the member's body is the receiver's name dispatch
+/// (`buffer_dispatch::dispatch_buffer_method`). Decided by the closure's body.
+pub(crate) fn is_buffer_prototype_method_thunk(value: crate::value::JSValue) -> bool {
+    if !value.is_pointer() {
+        return false;
+    }
+    let addr = value.as_pointer::<u8>() as usize;
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
+        return false;
+    };
+    header.obj_type == crate::gc::GC_TYPE_CLOSURE
+        && crate::closure::js_closure_get_func(addr as *const crate::closure::ClosureHeader)
+            == buffer_prototype_method_thunk as *const u8
+}
+
 const ASSERT_PROTOTYPE_METHODS: &[&str] = &[
     "fail",
     "ok",
@@ -707,7 +827,104 @@ pub(crate) fn assert_cjs_export_value(module_name: &str) -> f64 {
         .as_pointer::<crate::closure::ClosureHeader>() as usize;
     crate::closure::closure_set_dynamic_prop(closure, "strict", strict);
     crate::closure::closure_set_dynamic_prop(closure, "default", callable.get_nanbox_f64());
+    // The constructors are the `assert` module's own, shared by `assert/strict`.
+    let constructors: [(&str, extern "C" fn(i32) -> f64); 2] = [
+        ("AssertionError", super::assert_assertion_error_export),
+        ("Assert", super::assert_assert_export),
+    ];
+    for (constructor, export) in constructors {
+        let value = export(0);
+        let closure = crate::value::JSValue::from_bits(callable.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::closure::ClosureHeader>() as usize;
+        crate::closure::closure_set_dynamic_prop(closure, constructor, value);
+    }
     callable.get_nanbox_f64()
+}
+
+/// `assert.AssertionError.prototype`: `constructor`, and `Error.prototype` as
+/// its [[Prototype]] (node: `class AssertionError extends Error`). Every
+/// AssertionError, thrown by an assert helper or constructed, is born linked
+/// to this object, so `instanceof Error` / `instanceof AssertionError` are
+/// answered by the prototype chain.
+fn attach_assertion_error_prototype(constructor_value: f64) {
+    let constructor_js = JSValue::from_bits(constructor_value.to_bits());
+    if !constructor_js.is_pointer() {
+        return;
+    }
+    let closure = constructor_js.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    if closure == 0 {
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = scope.root_nanbox_f64(constructor_value);
+    let error = {
+        let name = "Error";
+        scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+            name.as_ptr(),
+            name.len(),
+        ))
+    };
+    let error_prototype = {
+        scope.root_nanbox_f64(unsafe {
+            crate::value::js_dynamic_object_get_property(
+                error.get_nanbox_f64(),
+                b"prototype".as_ptr().cast(),
+                9,
+            )
+        })
+    };
+    let proto = scope.root_raw_mut_ptr(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:assert.AssertionError.prototype", members = { constructor; toString; }; } });
+    if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
+        return;
+    }
+    if JSValue::from_bits(error_prototype.get_nanbox_f64().to_bits()).is_pointer() {
+        crate::object::prototype_chain::object_set_static_prototype(
+            proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            error_prototype.get_nanbox_u64(),
+        );
+    }
+    let key = "constructor";
+    let constructor_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    super::define_builtin_data_property(
+        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        constructor_key,
+        constructor.get_nanbox_f64(),
+        key.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    // node: `AssertionError.prototype.toString()` is
+    // `${this.name} [${this.code}]: ${this.message}`.
+    let to_string = scope.root_nanbox_f64(async_hooks_static_method_value(
+        crate::fn_info!(#[realm("node:assert.AssertionError.prototype.toString")] export crate::object::assert::js_assert_assertion_error_to_string, 0),
+        "toString",
+        0,
+    ));
+    let key = "toString";
+    let to_string_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
+    super::define_builtin_data_property(
+        proto.get_raw_mut_ptr::<ObjectHeader>(),
+        to_string_key,
+        to_string.get_nanbox_f64(),
+        key.to_string(),
+        super::PropertyAttrs::new(true, false, true),
+    );
+    let proto_value =
+        crate::value::js_nanbox_pointer(proto.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    let closure = JSValue::from_bits(constructor.get_nanbox_f64().to_bits())
+        .as_pointer::<crate::closure::ClosureHeader>() as usize;
+    crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
+    super::set_builtin_property_attrs(
+        closure,
+        "prototype".to_string(),
+        super::PropertyAttrs::new(false, false, false),
+    );
+    // The constructor's own [[Prototype]] is `Error` (statics and
+    // `Object.getPrototypeOf(AssertionError) === Error`).
+    if JSValue::from_bits(error.get_nanbox_f64().to_bits()).is_pointer() {
+        let closure = JSValue::from_bits(constructor.get_nanbox_f64().to_bits())
+            .as_pointer::<crate::closure::ClosureHeader>() as usize;
+        crate::closure::closure_set_static_prototype(closure, error.get_nanbox_u64());
+    }
 }
 
 fn attach_assert_prototype(constructor_value: f64) {
@@ -720,7 +937,7 @@ fn attach_assert_prototype(constructor_value: f64) {
         return;
     }
 
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:assert.Assert.prototype", members = { constructor; fail = ref("node:assert.fail"); ok = ref("node:assert.default"); equal = ref("node:assert.equal"); notEqual = ref("node:assert.notEqual"); deepEqual = ref("node:assert.deepEqual"); notDeepEqual = ref("node:assert.notDeepEqual"); deepStrictEqual = ref("node:assert.deepStrictEqual"); notDeepStrictEqual = ref("node:assert.notDeepStrictEqual"); strictEqual = ref("node:assert.strictEqual"); notStrictEqual = ref("node:assert.notStrictEqual"); partialDeepStrictEqual = ref("node:assert.partialDeepStrictEqual"); throws = ref("node:assert.throws"); rejects = ref("node:assert.rejects"); doesNotThrow = ref("node:assert.doesNotThrow"); doesNotReject = ref("node:assert.doesNotReject"); ifError = ref("node:assert.ifError"); match = ref("node:assert.match"); doesNotMatch = ref("node:assert.doesNotMatch"); }; } };
     if proto.is_null() {
         return;
     }
@@ -766,7 +983,7 @@ fn attach_crypto_key_object_shape(closure_addr: usize, constructor_value: f64) {
         super::PropertyAttrs::new(true, false, true),
     );
 
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.KeyObject.prototype", members = { constructor; }; } };
     if proto.is_null() {
         return;
     }
@@ -798,7 +1015,7 @@ extern "C" fn x509_issuer_certificate_getter_thunk(
 }
 
 fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: f64) {
-    let proto = js_object_alloc(0, 0);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:crypto.X509Certificate.prototype", members = { constructor; issuerCertificate = accessor(get = "node:crypto.X509Certificate.prototype.issuerCertificate.<get>"); }; } };
     if proto.is_null() {
         return;
     }
@@ -815,7 +1032,7 @@ fn attach_crypto_x509_certificate_shape(closure_addr: usize, constructor_value: 
 
     unsafe {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(x509_issuer_certificate_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("node:crypto.X509Certificate.prototype.issuerCertificate.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::native_module::callable_exports::x509_issuer_certificate_getter_thunk, 0; with_name("get issuerCertificate"), with_declared(0)),
             0,
         );
         if !getter.is_null() {
@@ -876,19 +1093,19 @@ pub(crate) fn util_inspect_default_options_value() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let obj = js_object_alloc(0, 0);
-        native_set_field(obj, "showHidden", native_bool_value(false));
-        native_set_field(obj, "depth", 2.0);
-        native_set_field(obj, "colors", native_bool_value(false));
-        native_set_field(obj, "customInspect", native_bool_value(true));
-        native_set_field(obj, "showProxy", native_bool_value(false));
-        native_set_field(obj, "maxArrayLength", 100.0);
-        native_set_field(obj, "maxStringLength", 10000.0);
-        native_set_field(obj, "breakLength", 80.0);
-        native_set_field(obj, "compact", 3.0);
-        native_set_field(obj, "sorted", native_bool_value(false));
-        native_set_field(obj, "getters", native_bool_value(false));
-        native_set_field(obj, "numericSeparator", native_bool_value(false));
+        crate::realm_decl! { object "node:sys.inspect.defaultOptions", obj;
+        "showHidden" => boolean(false);
+        "depth" => number(2.0);
+        "colors" => boolean(false);
+        "customInspect" => boolean(true);
+        "showProxy" => boolean(false);
+        "maxArrayLength" => number(100.0);
+        "maxStringLength" => number(10000.0);
+        "breakLength" => number(80.0);
+        "compact" => number(3.0);
+        "sorted" => boolean(false);
+        "getters" => boolean(false);
+        "numericSeparator" => boolean(false); }
 
         let value = native_object_value(obj);
         slot.set(value.to_bits());
@@ -904,18 +1121,18 @@ fn util_inspect_styles() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let obj = js_object_alloc(0, 0);
-        native_set_field(obj, "special", native_string_value("cyan"));
-        native_set_field(obj, "number", native_string_value("yellow"));
-        native_set_field(obj, "bigint", native_string_value("yellow"));
-        native_set_field(obj, "boolean", native_string_value("yellow"));
-        native_set_field(obj, "undefined", native_string_value("grey"));
-        native_set_field(obj, "null", native_string_value("bold"));
-        native_set_field(obj, "string", native_string_value("green"));
-        native_set_field(obj, "symbol", native_string_value("green"));
-        native_set_field(obj, "date", native_string_value("magenta"));
-        native_set_field(obj, "regexp", native_string_value("red"));
-        native_set_field(obj, "module", native_string_value("underline"));
+        crate::realm_decl! { object "node:sys.inspect.styles", obj;
+        "special" => string("cyan");
+        "number" => string("yellow");
+        "bigint" => string("yellow");
+        "boolean" => string("yellow");
+        "undefined" => string("grey");
+        "null" => string("bold");
+        "string" => string("green");
+        "symbol" => string("green");
+        "date" => string("magenta");
+        "regexp" => string("red");
+        "module" => string("underline"); }
 
         let value = native_object_value(obj);
         slot.set(value.to_bits());
@@ -930,7 +1147,7 @@ fn util_inspect_colors() -> f64 {
         if bits != 0 {
             return f64::from_bits(bits);
         }
-
+        crate::realm_decl! { "node:sys.inspect.colors", provider = ansi_colors; }
         let obj = js_object_alloc(0, 0);
         for style in crate::util_style_text::INSPECT_COLOR_STYLES {
             native_set_field(obj, style.name, native_color_tuple(style.open, style.close));
@@ -944,16 +1161,34 @@ fn util_inspect_colors() -> f64 {
 }
 
 pub(crate) fn zlib_codes_object() -> f64 {
-    const ZLIB_RETURN_CODES: &[(&str, i32)] = &[
-        ("Z_OK", 0),
-        ("Z_STREAM_END", 1),
-        ("Z_NEED_DICT", 2),
-        ("Z_ERRNO", -1),
-        ("Z_STREAM_ERROR", -2),
-        ("Z_DATA_ERROR", -3),
-        ("Z_MEM_ERROR", -4),
-        ("Z_BUF_ERROR", -5),
-        ("Z_VERSION_ERROR", -6),
+    /// A `zlib.codes` member: a return code by its name, or a code's name.
+    #[derive(Clone, Copy)]
+    enum ZlibCode {
+        Code(f64),
+        Name(&'static str),
+    }
+    /// `zlib.codes` in Node's order: each code's name by its value for the
+    /// index keys (which enumerate first), each return code by name, then
+    /// the names of the negative codes. The birth writes these rows in order.
+    const ZLIB_CODES: &[(&str, ZlibCode)] = &[
+        ("0", ZlibCode::Name("Z_OK")),
+        ("1", ZlibCode::Name("Z_STREAM_END")),
+        ("2", ZlibCode::Name("Z_NEED_DICT")),
+        ("Z_OK", ZlibCode::Code(0.0)),
+        ("Z_STREAM_END", ZlibCode::Code(1.0)),
+        ("Z_NEED_DICT", ZlibCode::Code(2.0)),
+        ("Z_ERRNO", ZlibCode::Code(-1.0)),
+        ("Z_STREAM_ERROR", ZlibCode::Code(-2.0)),
+        ("Z_DATA_ERROR", ZlibCode::Code(-3.0)),
+        ("Z_MEM_ERROR", ZlibCode::Code(-4.0)),
+        ("Z_BUF_ERROR", ZlibCode::Code(-5.0)),
+        ("Z_VERSION_ERROR", ZlibCode::Code(-6.0)),
+        ("-1", ZlibCode::Name("Z_ERRNO")),
+        ("-2", ZlibCode::Name("Z_STREAM_ERROR")),
+        ("-3", ZlibCode::Name("Z_DATA_ERROR")),
+        ("-4", ZlibCode::Name("Z_MEM_ERROR")),
+        ("-5", ZlibCode::Name("Z_BUF_ERROR")),
+        ("-6", ZlibCode::Name("Z_VERSION_ERROR")),
     ];
 
     ZLIB_CODES_OBJECT.with(|slot| {
@@ -963,19 +1198,15 @@ pub(crate) fn zlib_codes_object() -> f64 {
         }
 
         let scope = crate::gc::RuntimeHandleScope::new();
-        let obj = scope.root_nanbox_f64(native_object_value(js_object_alloc(0, 0)));
+        let obj = scope.root_nanbox_f64(native_object_value(crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:zlib.codes", kind = namespace, members_source = ZLIB_CODES, integrity = frozen } }));
         let current_object =
             || crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader;
-        for (name, value) in ZLIB_RETURN_CODES.iter().take(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
-        }
-        for (name, value) in ZLIB_RETURN_CODES {
-            native_set_field(current_object(), name, *value as f64);
-        }
-        for (name, value) in ZLIB_RETURN_CODES.iter().skip(3) {
-            let name_value = native_string_value(name);
-            native_set_field(current_object(), &value.to_string(), name_value);
+        for &(key, value) in ZLIB_CODES {
+            let value = match value {
+                ZlibCode::Code(code) => code,
+                ZlibCode::Name(name) => native_string_value(name),
+            };
+            native_set_field(current_object(), key, value);
         }
 
         // Freeze actual properties, not only the namespace's descriptor view.
@@ -994,8 +1225,7 @@ pub(crate) fn timers_promises_parent_namespace() -> f64 {
             return f64::from_bits(bits);
         }
 
-        let module_name = "timers/promises";
-        let value = js_create_native_module_namespace(module_name.as_ptr(), module_name.len());
+        let value = crate::node_submodules::commonjs_value("timers_promises");
         slot.set(value.to_bits());
         crate::gc::runtime_write_barrier_root_nanbox(value.to_bits());
         value
@@ -1011,7 +1241,7 @@ fn attach_tls_secure_context_prototype(constructor_value: f64) {
 }
 
 pub(super) const TLS_SOCKET_PROTOTYPE_METHODS: &[(&str, u32)] = &[
-    ("setKeyCert", 1),
+    ("setKeyCert", realm_tls_setkey_public!(length)),
     ("getSharedSigalgs", 0),
     ("getX509Certificate", 0),
     ("getPeerX509Certificate", 0),
@@ -1068,7 +1298,7 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor_handle =
         scope.root_raw_mut_ptr(constructor as *mut crate::closure::ClosureHeader);
-    let prototype = js_object_alloc(0, 0);
+    let prototype = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:tls.TLSSocket.prototype", extends = "node:net.Socket.prototype", members = { constructor; setKeyCert; getSharedSigalgs; getX509Certificate; getPeerX509Certificate; }; } };
     if prototype.is_null() {
         return crate::value::js_nanbox_pointer(
             constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
@@ -1091,19 +1321,19 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         super::super::PropertyAttrs::new(true, false, true),
     );
 
-    let thunk = crate::fn_info!(tls_prototype_method_thunk, 1; with_rest(0));
+    let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] export crate::object::native_module::callable_exports::tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
         let method = crate::closure::js_closure_alloc(thunk, 2);
         if method.is_null() {
             continue;
         }
         let method_handle = scope.root_raw_mut_ptr(method);
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             0,
             name.as_ptr() as i64,
         );
-        crate::closure::js_closure_set_capture_ptr(
+        crate::closure::closure_set_capture_word(
             method_handle.get_raw_mut_ptr(),
             1,
             name.len() as i64,
@@ -1230,8 +1460,18 @@ unsafe fn bound_native_callable_closure(
     // heap floor lets a `0xf0000`-band id through on Linux — the #5592 sweep
     // host) before probing `CLOSURE_MAGIC`. Refs test262
     // class/subclass/superclass-{arrow,async,generator,async-generator}-function.
+    // Every closure user code can reach carries an info record; only a heap
+    // walker can see a header whose info is not written yet.
+    #[cfg(debug_assertions)]
+    if crate::closure::is_closure_ptr(closure as usize) {
+        assert!(
+            !(*closure).info.is_null(),
+            "a reachable closure carries an info record"
+        );
+    }
     if !crate::closure::is_closure_ptr(closure as usize)
-        || (*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
+        || ((*closure).code() != crate::closure::BOUND_METHOD_FUNC_PTR
+            && (*(*closure).info).flags & crate::codegen_abi::FN_NATIVE_EXPORT == 0)
     {
         return None;
     }
@@ -1254,16 +1494,39 @@ unsafe fn bound_native_export_metadata(
     Some((module, method))
 }
 
-pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
+#[rustfmt::skip] pub(crate) unsafe fn bound_native_callable_value_arity(value: f64) -> Option<u32> {
     let (module, method) = bound_native_callable_module_and_method(value)?;
     let module = normalize_native_module_alias(&module);
     match (module, method.as_str()) {
-        ("console", "Console") => Some(1),
-        ("util", "isArray") => Some(1),
-        ("module", "isBuiltin") => Some(1),
-        ("process", "getBuiltinModule") => Some(1),
+        ("console", "Console") => Some(realm_native_console_Console_metadata!(length)),
+        ("util", "isArray") => Some(realm_native_util_isArray_metadata!(length)),
+        ("module", "isBuiltin") => Some(realm_native_module_isBuiltin_metadata!(length)),
+        ("process", "getBuiltinModule") => Some(realm_native_process_getBuiltinModule_metadata!(length)),
         _ => native_callable_export_arity(module, method.as_str()),
     }
+}
+
+/// A runtime-native non-constructor closure: a reified builtin (the GC header
+/// bit) or a body whose info is a runtime builtin without `[[Construct]]`.
+/// Compiled user bodies never carry `FN_BUILTIN`, so a user method (also a
+/// non-constructor) is not one: a slot holding it can never be a borrowed
+/// intrinsic such as `Array.prototype[method]`.
+pub(crate) fn builtin_closure_is_native_non_constructor_value(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_pointer() {
+        return false;
+    }
+    let closure = jv.as_pointer::<crate::closure::ClosureHeader>() as usize;
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(closure) }) else {
+        return false;
+    };
+    if header.obj_type != crate::gc::GC_TYPE_CLOSURE {
+        return false;
+    }
+    const NATIVE: u32 = crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR;
+    header._reserved & crate::gc::GC_CLOSURE_NON_CONSTRUCTABLE != 0
+        || crate::closure::closure_info(closure as *const crate::closure::ClosureHeader)
+            .is_some_and(|info| info.flags & NATIVE == NATIVE)
 }
 
 pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
@@ -1285,6 +1548,7 @@ pub(crate) fn builtin_closure_is_non_constructable_value(value: f64) -> bool {
 // ---------------------------------------------------------------------------
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_module(
     property_name: &str,
     mut value: f64,
@@ -1300,13 +1564,24 @@ pub(crate) unsafe fn nm_attach_module(
             value,
         ) as usize);
     }
-    if matches!(property_name, "flushCompileCache" | "isBuiltin") {
-        set_builtin_closure_non_constructable(crate::value::js_nanbox_get_pointer(value) as usize);
-    }
+    // Born non-constructable (`publish_bound_export_birth`).
+    debug_assert!(
+        !bound_export_is_non_constructable("module", property_name)
+            || builtin_closure_is_non_constructable(
+                crate::value::js_nanbox_get_pointer(value) as usize
+            )
+    );
     value
 }
 
+/// The bound exports declared `constructable = false` (the per-instance bit;
+/// `closure/registry.rs` declares the same facts).
+fn bound_export_is_non_constructable(module: &str, property: &str) -> bool {
+    module == "module" && matches!(property, "flushCompileCache" | "isBuiltin")
+}
+
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_tty(
     property_name: &str,
     mut value: f64,
@@ -1319,6 +1594,7 @@ pub(crate) unsafe fn nm_attach_tty(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_tls(
     property_name: &str,
     mut value: f64,
@@ -1336,6 +1612,7 @@ pub(crate) unsafe fn nm_attach_tls(
 /// prototypes, born on their static layouts (`object::node_http_prototypes`),
 /// so `util.inherits` / `setPrototypeOf` / `extends` subclasses inherit node's
 /// surface (#10454).
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_addr: usize) -> f64 {
     let module = bound_native_callable_module_and_method(value).map(|(module, _)| module);
     if module.as_deref() == Some("http") {
@@ -1345,18 +1622,20 @@ pub(crate) unsafe fn nm_attach_http(property_name: &str, value: f64, _closure_ad
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_wasi(
     property_name: &str,
     mut value: f64,
     _closure_addr: usize,
 ) -> f64 {
     if property_name == "WASI" {
-        crate::wasi::attach_wasi_constructor_prototype(value);
+        crate::wasi_hook_slots::attach_wasi_constructor_prototype(value);
     }
     value
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_stream(
     property_name: &str,
     mut value: f64,
@@ -1404,12 +1683,12 @@ pub(crate) unsafe fn ensure_child_process_prototype(value: f64) -> f64 {
     {
         return constructor.get_nanbox_f64();
     }
-    let proto = js_object_alloc_with_shape(
+    let proto = crate::realm_decl! { birth js_object_alloc_with_shape(
         0x7FFF_FDA0,
         1,
         b"constructor\0".as_ptr(),
         b"constructor\0".len() as u32,
-    );
+    ); realm { "node:child_process.ChildProcess.prototype", extends = "node:events.EventEmitter.prototype", members = { constructor; }; } };
     js_object_set_field(
         proto,
         0,
@@ -1427,6 +1706,7 @@ pub(crate) unsafe fn ensure_child_process_prototype(value: f64) -> f64 {
 
 /// Attach the public `ChildProcess.prototype` so low-level constructed
 /// instances participate in ordinary `instanceof ChildProcess` checks.
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_child_process(
     property_name: &str,
     value: f64,
@@ -1439,6 +1719,7 @@ pub(crate) unsafe fn nm_attach_child_process(
     }
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_cluster(
     property_name: &str,
     value: f64,
@@ -1452,6 +1733,7 @@ pub(crate) unsafe fn nm_attach_cluster(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_sqlite(
     property_name: &str,
     mut value: f64,
@@ -1478,6 +1760,7 @@ pub(crate) unsafe fn nm_attach_sqlite(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_assert(
     property_name: &str,
     mut value: f64,
@@ -1486,10 +1769,14 @@ pub(crate) unsafe fn nm_attach_assert(
     if property_name == "Assert" {
         attach_assert_prototype(value);
     }
+    if property_name == "AssertionError" {
+        attach_assertion_error_prototype(value);
+    }
     value
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_crypto(
     property_name: &str,
     mut value: f64,
@@ -1501,10 +1788,22 @@ pub(crate) unsafe fn nm_attach_crypto(
     if property_name == "X509Certificate" {
         attach_crypto_x509_certificate_shape(closure_addr, value);
     }
+    if property_name == "Certificate" {
+        for method in ["verifySpkac", "exportPublicKey", "exportChallenge"] {
+            let method_value = bound_native_callable_export_value("crypto.Certificate", method);
+            crate::closure::closure_set_dynamic_prop(closure_addr, method, method_value);
+            super::set_builtin_property_attrs(
+                closure_addr,
+                method.to_string(),
+                super::PropertyAttrs::new(true, false, true),
+            );
+        }
+    }
     value
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
     _property_name: &str,
     value: f64,
@@ -1514,6 +1813,7 @@ pub(crate) unsafe fn nm_attach_perf_hooks(
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_async_hooks(
     property_name: &str,
     mut value: f64,
@@ -1528,7 +1828,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_bind_method, 2; with_rest(1)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.bind")] export crate::async_hook_slots::js_async_local_storage_static_bind_method, 2; with_rest(1)),
             "bind",
             1,
         ));
@@ -1543,7 +1843,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             super::PropertyAttrs::new(true, false, true),
         );
         let snapshot = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncLocalStorage.snapshot")] export crate::async_hook_slots::js_async_local_storage_static_snapshot_method, 1; with_rest(0)),
             "snapshot",
             0,
         ));
@@ -1566,7 +1866,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
             ),
         );
         let bind = scope.root_nanbox_f64(async_hooks_static_method_value(
-            crate::fn_info!(crate::async_hooks::js_async_resource_static_bind_method, 4; with_rest(3)),
+            crate::fn_info!(#[realm("node:async_hooks.AsyncResource.bind")] export crate::async_hook_slots::js_async_resource_static_bind_method, 4; with_rest(3)),
             "bind",
             3,
         ));
@@ -1585,6 +1885,7 @@ pub(crate) unsafe fn nm_attach_async_hooks(
     value
 }
 
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_events(name: &str, value: f64, _addr: usize) -> f64 {
     if name == "EventEmitter" {
         super::constructor_shapes::install_event_emitter_statics(value)
@@ -1594,6 +1895,7 @@ pub(crate) unsafe fn nm_attach_events(name: &str, value: f64, _addr: usize) -> f
 }
 
 #[allow(unused_mut)]
+#[inline(always)]
 pub(crate) unsafe fn nm_attach_util(
     property_name: &str,
     mut value: f64,
@@ -1622,3 +1924,7 @@ pub(crate) unsafe fn nm_attach_util(
     }
     value
 }
+
+#[cfg(test)]
+#[path = "buffer_proto_call_tests.rs"]
+mod buffer_proto_call_tests;

@@ -31,7 +31,7 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
@@ -58,6 +58,51 @@ struct Claim {
     fixed_layout: bool,
     ancestors: Vec<u32>,
     keys: Vec<KeyClaim>,
+}
+
+impl Claim {
+    /// Several records describe one class id (structurally identical literal
+    /// classes of several modules share it; per-unit facts describe a class
+    /// once per unit that declares it, each for its own instances): every
+    /// instance is checked against what all of them claim, the weakest.
+    fn meet(&mut self, o: Claim) {
+        self.prefix_stable &= o.prefix_stable;
+        let same_keys = self.keys.len() == o.keys.len()
+            && self
+                .keys
+                .iter()
+                .all(|k| o.keys.iter().any(|ok| ok.key == k.key));
+        self.fixed_layout &= o.fixed_layout && same_keys;
+        for a in o.ancestors {
+            if !self.ancestors.contains(&a) {
+                self.ancestors.push(a);
+            }
+        }
+        for k in self.keys.iter_mut() {
+            match o.keys.iter().find(|ok| ok.key == k.key) {
+                Some(ok) => {
+                    k.readonly &= ok.readonly;
+                    k.birth &= ok.birth;
+                    k.kind |= ok.kind;
+                }
+                None => {
+                    k.readonly = false;
+                    k.birth = false;
+                    k.kind = 0xFFFF;
+                }
+            }
+        }
+        for ok in o.keys {
+            if !self.keys.iter().any(|k| k.key == ok.key) {
+                self.keys.push(KeyClaim {
+                    key: ok.key,
+                    readonly: false,
+                    birth: false,
+                    kind: 0xFFFF,
+                });
+            }
+        }
+    }
 }
 
 /// Every contract build references this symbol from its `.perry_facts`
@@ -171,16 +216,19 @@ fn parse_blob(b: &[u8], at: &mut usize, out: &mut HashMap<u32, Claim>) -> Option
                 kind,
             });
         }
-        out.insert(
-            cid,
-            Claim {
-                name,
-                prefix_stable: flags & 1 != 0,
-                fixed_layout: flags & 2 != 0,
-                ancestors,
-                keys,
-            },
-        );
+        let claim = Claim {
+            name,
+            prefix_stable: flags & 1 != 0,
+            fixed_layout: flags & 2 != 0,
+            ancestors,
+            keys,
+        };
+        match out.entry(cid) {
+            std::collections::hash_map::Entry::Vacant(v) => {
+                v.insert(claim);
+            }
+            std::collections::hash_map::Entry::Occupied(mut o) => o.get_mut().meet(claim),
+        }
     }
     Some(*at)
 }
@@ -310,7 +358,11 @@ fn kind_of(v: f64) -> u16 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG => K_NUM,
+        // A slot word of an I32 lane or an at-rest Array (`layout_slot`): the
+        // Number it stores. No JS value is in the `0x7FFE` band (P3 B4b).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => K_NUM,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -324,13 +376,13 @@ fn kind_of(v: f64) -> u16 {
 /// The class id of an ordinary object behind `addr`, proven by the
 /// allocator (never an unchecked header read).
 fn class_id_at(addr: usize) -> Option<u32> {
-    if addr < 0x1000 {
+    if crate::value::addr_class::is_handle_band(addr) {
         return None;
     }
     unsafe {
         crate::value::addr_class::try_read_tracked_gc_header_of_type(
             addr,
-            crate::gc::GC_TYPE_OBJECT,
+            crate::gc_object_type_pat!(),
         )?;
         Some((*(addr as *const crate::object::ObjectHeader)).class_id)
     }
@@ -356,7 +408,7 @@ fn violate(fact: &str, c: &Claim, cid: u32, op: &str, detail: &str) -> ! {
 /// The class whose prototype `v` is: a `C.prototype` reference immediate or
 /// the declared prototype object itself.
 fn proto_class_id(v: f64) -> Option<u32> {
-    if let Some(cid) = crate::object::class_prototype_ref_id(v) {
+    if let Some(cid) = crate::object::class_method_home_id(v) {
         return Some(cid);
     }
     let bits = v.to_bits();
@@ -549,7 +601,7 @@ fn set_is_intercepted(target: f64, key: f64, name: &[u8]) -> bool {
     unsafe {
         if crate::value::addr_class::try_read_tracked_gc_header_of_type(
             addr,
-            crate::gc::GC_TYPE_OBJECT,
+            crate::gc_object_type_pat!(),
         )
         .is_none()
         {
@@ -613,7 +665,7 @@ fn key_bytes(v: f64) -> Option<Vec<u8>> {
         return None;
     }
     let ptr = crate::value::js_get_string_pointer_unified(v) as *const crate::StringHeader;
-    if ptr.is_null() || (ptr as usize) < 0x10000 {
+    if !crate::value::addr_class::is_above_handle_band(ptr as usize) {
         return None;
     }
     unsafe {
@@ -630,12 +682,17 @@ mod tests {
     /// A blob in the compiler's `.perry_facts` v2 layout
     /// (`perry-wpfacts` `dump::contract_section`).
     fn blob() -> Vec<u8> {
+        blob_with(3, 0b111, K_NUM)
+    }
+
+    /// Class 7 with key `x`: class flags, key flags and kind given.
+    fn blob_with(flags: u32, key_flags: u8, kind: u16) -> Vec<u8> {
         let mut r = Vec::new();
         r.extend_from_slice(b"PFCT");
         r.extend_from_slice(&2u32.to_le_bytes());
         r.extend_from_slice(&1u32.to_le_bytes());
         r.extend_from_slice(&7u32.to_le_bytes()); // class id
-        r.extend_from_slice(&3u32.to_le_bytes()); // prefix_stable | fixed_layout
+        r.extend_from_slice(&flags.to_le_bytes()); // prefix_stable | fixed_layout
         r.extend_from_slice(&1u16.to_le_bytes()); // one ancestor
         r.extend_from_slice(&5u32.to_le_bytes());
         r.extend_from_slice(&3u16.to_le_bytes());
@@ -643,12 +700,33 @@ mod tests {
         r.extend_from_slice(&1u16.to_le_bytes());
         r.extend_from_slice(&1u16.to_le_bytes());
         r.extend_from_slice(b"x");
-        r.push(0b111);
-        r.extend_from_slice(&K_NUM.to_le_bytes());
+        r.push(key_flags);
+        r.extend_from_slice(&kind.to_le_bytes());
         while r.len() % 8 != 0 {
             r.push(0);
         }
         r
+    }
+
+    /// Two records of one class id (two units' copies of a literal class):
+    /// the instances are checked against the weakest claim, whichever record
+    /// the linker placed last. One copy holds no instance (kind none, every
+    /// claim vacuous), the other's are written with strings.
+    #[test]
+    fn records_of_one_class_meet() {
+        let vacuous = blob_with(3, 0b111, 0);
+        let written = blob_with(0, 0b010, K_STR);
+        for (a, b) in [(&vacuous, &written), (&written, &vacuous)] {
+            let mut sec = a.clone();
+            sec.extend(b.iter().copied());
+            let mut out = HashMap::new();
+            parse_into(&sec, &mut out);
+            let c = out.get(&7).expect("claim for class 7");
+            assert!(!c.prefix_stable && !c.fixed_layout);
+            assert_eq!(c.keys.len(), 1);
+            assert!(!c.keys[0].readonly && !c.keys[0].birth);
+            assert_eq!(c.keys[0].kind, K_STR);
+        }
     }
 
     #[test]
@@ -668,11 +746,23 @@ mod tests {
     #[test]
     fn value_kinds_match_the_compiler_mask() {
         assert_eq!(kind_of(1.5), K_NUM);
-        assert_eq!(kind_of(f64::from_bits(INT32_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 1)), K_UNDEF);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 2)), K_NULL);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 4)), K_BOOL);
         assert_eq!(kind_of(f64::from_bits(STRING_TAG | 0x1000)), K_STR);
         assert_eq!(kind_of(f64::from_bits(BIGINT_TAG | 0x1000)), K_BIGINT);
+    }
+    /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+    /// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+    /// Number, and a top-16-only test reads both as one.
+    const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+    const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_k_num() {
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(PROTO_REF_5)), K_OBJ);
+        assert_eq!(kind_of(f64::from_bits(HIGH_BITS)), K_OBJ);
     }
 }

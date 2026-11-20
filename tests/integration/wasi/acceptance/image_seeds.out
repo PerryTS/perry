@@ -1,0 +1,5 @@
+42
+wrt2cSharedKey,localOnly
+wrt2cSharedKey,peerOnly
+local peer
+exit 0

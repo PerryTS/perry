@@ -144,6 +144,10 @@ pub fn weak_class_id_from_receiver(receiver: f64) -> Option<u32> {
 /// `Set`/`Map` pointer (different `obj_type`) or a primitive
 /// (`js_nanbox_get_pointer` yields 0) safely resolves to `None`.
 pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
+    if receiver.to_bits() >> 48 == 0 {
+        // A Number (a denormal, or +0), not a raw object pointer.
+        return None;
+    }
     let addr = crate::value::js_nanbox_get_pointer(receiver) as usize;
     // #4004: reject the small-handle band (Web Fetch / node:http / timer ids
     // are NaN-boxed POINTER_TAG values, not heap addresses) before
@@ -151,7 +155,7 @@ pub fn weak_wrapper_class_id(receiver: f64) -> Option<u32> {
     // allocations above the cutoff. See `value::addr_class` for the band map.
     unsafe {
         match crate::value::addr_class::try_read_gc_header(addr) {
-            Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {}
+            Some(header) if crate::gc_type_is_object!(header.obj_type) => {}
             _ => return None,
         }
         let obj = addr as *const ObjectHeader;
@@ -219,10 +223,7 @@ pub fn dispatch_foreign_weak_receiver(receiver: f64, method_name: &str, args: &[
 fn throw_incompatible(proto: &str, method: &str) -> ! {
     let msg = format!("Method {proto}.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Resolve the `this` receiver to a receiver of the expected weak-wrapper class id,
@@ -281,9 +282,8 @@ pub(super) extern "C" fn finreg_proto_unregister_thunk(
 }
 
 /// Install the brand-checking `.prototype` methods for `WeakRef` /
-/// `FinalizationRegistry`. Returns `true` when `builtin_name` is one of those —
-/// the caller then adds the shared `OBJECT_PROTO_METHODS` — and `false`
-/// otherwise. Called from `global_this::populate_builtin_prototype_methods`.
+/// `FinalizationRegistry`. Returns `true` when `builtin_name` is one of those
+/// and `false` otherwise. Called from `global_this::populate_builtin_prototype_methods`.
 ///
 /// Arities are the spec `.length` values: `deref` 0, `register` 2 (the
 /// unregister token is optional and does not count), `unregister` 1.
@@ -297,7 +297,7 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "deref",
-                crate::fn_info!(weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(WeakRef.prototype.deref)] export crate::object::weakref_proto_thunks::weakref_proto_deref_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -305,13 +305,13 @@ pub(super) fn install_weakref_proto_methods(
             ipm(
                 proto_obj,
                 "register",
-                crate::fn_info!(finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.register)] export crate::object::weakref_proto_thunks::finreg_proto_register_thunk, 3; with_declared(2), with_flags(crate::closure::FN_BUILTIN)),
                 2,
             );
             ipm(
                 proto_obj,
                 "unregister",
-                crate::fn_info!(finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(FinalizationRegistry.prototype.unregister)] export crate::object::weakref_proto_thunks::finreg_proto_unregister_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
         }
@@ -363,7 +363,7 @@ mod tests {
         _c: *const crate::closure::ClosureHeader,
         _this: crate::closure::JsThis,
     ) -> f64 {
-        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+        f64::from(FOREIGN_SENTINEL)
     }
 
     extern "C" fn foreign_method_thunk_1(
@@ -371,7 +371,7 @@ mod tests {
         _this: crate::closure::JsThis,
         _a: f64,
     ) -> f64 {
-        f64::from_bits(JSValue::int32(FOREIGN_SENTINEL).bits())
+        f64::from(FOREIGN_SENTINEL)
     }
 
     /// A plain object carrying its own `method_name` function property — the
@@ -403,7 +403,7 @@ mod tests {
     /// Removing the brand check makes every one of these return `undefined`.
     #[test]
     fn folded_weak_helpers_delegate_a_foreign_receiver_to_its_own_method() {
-        let sentinel = JSValue::int32(FOREIGN_SENTINEL).bits();
+        let sentinel = f64::from(FOREIGN_SENTINEL).to_bits();
 
         let deref_recv = plain_object_with_method(
             "deref",
@@ -415,7 +415,7 @@ mod tests {
             "a foreign receiver's own `deref` must run, not the WeakRef intrinsic"
         );
 
-        let key = f64::from_bits(JSValue::int32(1).bits());
+        let key = f64::from(1);
         for name in ["get", "has", "delete"] {
             let recv = plain_object_with_method(
                 name,
@@ -469,7 +469,7 @@ mod tests {
             delegate_if_not_weak_collection(wm_val, "get", &[]).is_none(),
             "a real WeakMap must NOT be delegated away"
         );
-        let v = f64::from_bits(JSValue::int32(42).bits());
+        let v = f64::from(42);
         crate::weakref::js_weakmap_set(wm_val, target_val, v);
         assert_eq!(
             crate::weakref::js_weakmap_get(wm_val, target_val).to_bits(),

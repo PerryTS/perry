@@ -33,6 +33,18 @@ pub(super) unsafe fn dispatch_string(
     } else if crate::builtins::boxed_primitive_to_string_tag(object_handle.get_nanbox_f64())
         == Some("String")
     {
+        // A String wrapper is an ordinary object: its own keys and its own
+        // `[[Prototype]]` decide the method (`Call(Get(w, name), w, args)`),
+        // so only the builtin itself continues to the native arms below.
+        let args = refreshed_args();
+        if let Some(value) = crate::object::builtin_proto::redirect_call(
+            object_handle.get_nanbox_f64(),
+            method_name.as_bytes(),
+            args.as_ptr(),
+            args.len(),
+        ) {
+            return Some(value);
+        }
         crate::builtins::boxed_primitive_payload(object_handle.get_nanbox_f64())
             .map(|(_, payload)| payload)
     } else {
@@ -93,13 +105,50 @@ pub(super) unsafe fn dispatch_string(
                         dispatch_args.len(),
                     ));
                 }
+                "export"
+                    if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some()
+                        && arg_at(0).is_some_and(|options| {
+                            super::super::buffer_dispatch::buffer_secret_export_format(options)
+                                .as_deref()
+                                == Some("jwk")
+                        }) =>
+                {
+                    // `format: "jwk"` builds a plain JWK object; the PEM-backed
+                    // surrogate cannot express it, so the stdlib encoder owns it.
+                    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH
+                        .load(std::sync::atomic::Ordering::SeqCst);
+                    if ptr.is_null() {
+                        return Some(f64::from_bits(JSValue::undefined().bits()));
+                    }
+                    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+                        std::mem::transmute(ptr);
+                    // Reading `options.format` can run a getter, so take the
+                    // rooted receiver rather than the pre-call `s_ptr`.
+                    let key_value =
+                        f64::from_bits(JSValue::string_ptr(receiver_string() as *mut _).bits());
+                    let dispatch_args = [key_value];
+                    return Some(dispatch(
+                        b"keyObjectExportJwk".as_ptr(),
+                        "keyObjectExportJwk".len(),
+                        dispatch_args.as_ptr(),
+                        dispatch_args.len(),
+                    ));
+                }
                 "export" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     // Minimal asymmetric KeyObject-surrogate export surface.
                     // The native crypto layer stores PEM-backed RSA/EC keys
                     // and internal Ed/X surrogates as heap strings. For the
                     // high-value Node parity shape (`format: "pem"`), the
                     // stored string is already the exported representation.
-                    return Some(object);
+                    // Export ordinary bytes, not the marked key receiver. Own
+                    // the rooted string's payload across the fresh allocation
+                    // so GC cannot invalidate a borrowed heap slice.
+                    let bytes =
+                        crate::string::OwnedStringBytes::copy_from_header(receiver_string());
+                    let bytes = bytes.as_bytes();
+                    let exported =
+                        crate::string::js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                    return Some(f64::from_bits(JSValue::string_ptr(exported).bits()));
                 }
                 "equals" if crate::buffer::asymmetric_key_meta(s_ptr as usize).is_some() => {
                     if args_len == 0 || args_ptr.is_null() {
@@ -200,12 +249,12 @@ pub(super) unsafe fn dispatch_string(
                     {
                         let pattern_val = _pattern_val;
                         if method_name == "matchAll" {
-                            return Some(crate::regex::js_string_match_all_js(
+                            return Some(crate::regex::hooked::js_string_match_all_js(
                                 object_handle.get_nanbox_f64(),
                                 pattern_val,
                             ));
                         }
-                        return Some(crate::regex::js_string_match_js(
+                        return Some(crate::regex::hooked::js_string_match_js(
                             object_handle.get_nanbox_f64(),
                             pattern_val,
                         ));
@@ -221,7 +270,7 @@ pub(super) unsafe fn dispatch_string(
                         arg_at(0).unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()));
                     #[cfg(feature = "regex-engine")]
                     {
-                        return Some(crate::regex::js_string_search_js(
+                        return Some(crate::regex::hooked::js_string_search_js(
                             object_handle.get_nanbox_f64(),
                             _regex_val,
                         ));
@@ -334,7 +383,7 @@ pub(super) unsafe fn dispatch_string(
                         .unwrap_or(std::ptr::null());
                     let s_ptr = receiver_string();
                     // Integer-returning methods MUST return raw `i as f64` (not
-                    // NaN-boxed INT32_TAG) — otherwise downstream comparisons
+                    // NaN-boxed INTERNAL_WORD_TAG) — otherwise downstream comparisons
                     // like `idx < url.length` fail because NaN-boxed values
                     // are NaN and any comparison with NaN returns false. The
                     // typed string-method path in `lower_string_method.rs`
@@ -457,9 +506,13 @@ pub(super) unsafe fn dispatch_string(
                     let search = arg_at(0).unwrap_or(undefined);
                     let replacement = arg_at(1).unwrap_or(undefined);
                     return Some(if method_name == "replaceAll" {
-                        crate::regex::js_string_replace_all_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_all_js(
+                            receiver,
+                            search,
+                            replacement,
+                        )
                     } else {
-                        crate::regex::js_string_replace_js(receiver, search, replacement)
+                        crate::regex::hooked::js_string_replace_js(receiver, search, replacement)
                     });
                 }
                 // Methods with only a codegen fast path (no native arm) — needed

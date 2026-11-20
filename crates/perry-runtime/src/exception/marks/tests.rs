@@ -1,10 +1,10 @@
 use super::frame_mark;
-use crate::exception::{catch_js_throw, js_has_exception, js_throw};
+use crate::exception::{catch_js_throw, js_has_exception, test_throw};
 
 /// Every managed stack must supply a witness that pushes a real entry owned
 /// by the frame `mark` names. Tests both nested landings with a nonempty
 /// outer scope, through the production `js_throw` + trap shim pad (the
-/// setjmp trampoline on WASI), never a test-only replay of the restore.
+/// wasm catch shim on WASI), never a test-only replay of the restore.
 pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u32, usize)) {
     let _lock = crate::gc::global_side_table_test_lock();
     let base = depth();
@@ -28,7 +28,7 @@ pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u
                 depth() > inner,
                 "{name}: fixture must push inside the inner trap"
             );
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -36,7 +36,7 @@ pub(super) fn assert_nested_restore(name: &str, depth: fn() -> usize, push: fn(u
             inner,
             "{name}: the inner pad must keep the entries of the frames still live"
         );
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(
@@ -104,7 +104,7 @@ fn new_target_restores_the_oldest_abandoned_save() {
             js_new_target_enter(4.0);
             save(5.0);
             assert_eq!(js_new_target_get(), 5.0);
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -112,7 +112,7 @@ fn new_target_restores_the_oldest_abandoned_save() {
             3.0,
             "the inner pad restores the oldest abandoned save"
         );
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(
@@ -151,7 +151,7 @@ fn runtime_handles_restore_to_the_trap_height() {
         let nested: Result<(), f64> = catch_js_throw(|| {
             leak(3);
             assert!(depth() > inner, "fixture must push inside the inner trap");
-            js_throw(31.0)
+            test_throw(31.0)
         });
         assert_eq!(nested, Err(31.0));
         assert_eq!(
@@ -161,7 +161,7 @@ fn runtime_handles_restore_to_the_trap_height() {
         );
         leak(4);
         std::mem::forget(inner_scope);
-        js_throw(47.0)
+        test_throw(47.0)
     });
     assert_eq!(outcome, Err(47.0));
     assert_eq!(
@@ -393,4 +393,219 @@ fn each_skipped_unwind_turns_its_witness_red() {
         );
         eprintln!("eh sabotage {fault}: RED ({})", output.status);
     }
+}
+
+/// Exercise the production wasm checkpoint restore with real subsystem
+/// entries. Equal frame marks deliberately prevent native mark unwinding from
+/// distinguishing the prefix; the lexical depths must make that distinction.
+#[cfg(not(windows))]
+pub(super) fn assert_wasm_depth_restore(name: &str, depth: fn() -> usize, push: fn(u32, usize)) {
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    use perry_abi::WasmEhCheckpoint;
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut base = WasmEhCheckpoint::default();
+    let mut outer = WasmEhCheckpoint::default();
+    let mut inner = WasmEhCheckpoint::default();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        let before = depth();
+        push(1, 1);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        assert_eq!(depth(), before + 1, "{name}: establish surviving scope");
+        for _ in 0..100 {
+            push(2, 1);
+            js_wasm_eh_checkpoint_save(&mut inner);
+            push(3, 1);
+            js_wasm_eh_pad_enter(&inner);
+            assert_eq!(depth(), before + 2, "{name}: nested prefix survives");
+            js_wasm_eh_pad_enter(&outer);
+            js_wasm_eh_pad_enter(&outer);
+            assert_eq!(
+                depth(),
+                before + 1,
+                "{name}: restore is idempotent, no growth"
+            );
+        }
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(depth(), before, "{name}: outer prefix restored");
+    }
+}
+
+#[test]
+#[cfg(not(windows))]
+fn wasm_checkpoint_restores_new_target_and_shadow_without_an_own_frame() {
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    use crate::gc::{js_shadow_frame_push, shadow_stack_depth};
+    use crate::object::{js_new_target_enter, js_new_target_get};
+    let _lock = crate::gc::global_side_table_test_lock();
+    let mut base = perry_abi::WasmEhCheckpoint::default();
+    let mut outer = perry_abi::WasmEhCheckpoint::default();
+    let original = js_new_target_get().to_bits();
+    let shadow = shadow_stack_depth();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        js_new_target_enter(7.0);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        js_new_target_enter(8.0);
+        js_new_target_enter(9.0);
+        js_shadow_frame_push(2);
+        js_shadow_frame_push(1);
+        js_wasm_eh_pad_enter(&outer);
+        assert_eq!(js_new_target_get(), 7.0);
+        assert_eq!(shadow_stack_depth(), shadow);
+        js_wasm_eh_pad_enter(&outer);
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(js_new_target_get().to_bits(), original);
+        assert_eq!(shadow_stack_depth(), shadow);
+    }
+}
+
+/// Nonempty contexts prove that restoring a depth applies its displaced
+/// actions in reverse order rather than simply truncating their stack.
+#[test]
+#[cfg(not(windows))]
+fn wasm_checkpoint_restores_nonempty_async_contexts() {
+    use crate::async_context::{
+        capture_context, context_guard_depth, enter_context, get_store,
+        js_async_context_als_exit_enter, js_async_context_als_run_enter, push_context_guard,
+        restore_context, set_store, AsyncLocalStoragePayload, ContextGuardAction,
+    };
+    use crate::exception::wasm::{js_wasm_eh_checkpoint_save, js_wasm_eh_pad_enter};
+    let _lock = crate::gc::global_side_table_test_lock();
+    let original = capture_context();
+    let payload = AsyncLocalStoragePayload::default();
+    let token = payload.token();
+    let guards = context_guard_depth();
+    let mut base = perry_abi::WasmEhCheckpoint::default();
+    let mut outer = perry_abi::WasmEhCheckpoint::default();
+    let mut inner = perry_abi::WasmEhCheckpoint::default();
+    unsafe {
+        js_wasm_eh_checkpoint_save(&mut base);
+        js_async_context_als_run_enter(token, 7.0);
+        js_wasm_eh_checkpoint_save(&mut outer);
+        for _ in 0..100 {
+            js_async_context_als_run_enter(token, 8.0);
+            js_wasm_eh_checkpoint_save(&mut inner);
+            js_async_context_als_exit_enter(token);
+            assert_eq!(get_store(token), None);
+            js_async_context_als_run_enter(token, 9.0);
+            let displaced = enter_context(&original);
+            push_context_guard(ContextGuardAction::RestoreSnapshot(displaced));
+            assert_eq!(get_store(token), None);
+            js_wasm_eh_pad_enter(&inner);
+            assert_eq!(get_store(token), Some(8.0), "restore inner async context");
+            assert_eq!(context_guard_depth(), guards + 2);
+            js_wasm_eh_pad_enter(&outer);
+            js_wasm_eh_pad_enter(&outer);
+            assert_eq!(get_store(token), Some(7.0), "preserve outer async context");
+            assert_eq!(context_guard_depth(), guards + 1);
+        }
+        // A checkpoint contains depths only: a surviving store stays mutable.
+        set_store(token, 70.0);
+        js_wasm_eh_pad_enter(&outer);
+        assert_eq!(get_store(token), Some(70.0));
+        js_wasm_eh_pad_enter(&base);
+        assert_eq!(get_store(token), None);
+        assert_eq!(context_guard_depth(), guards);
+    }
+    restore_context(original);
+}
+
+/// The checkpoint reads every frame-marked stack through the one per-thread
+/// record: each field is its own stack depth, and a push moves exactly that
+/// field.
+#[test]
+#[cfg(not(windows))]
+fn catch_stack_record_reads_each_stack_depth() {
+    type Field = fn(&super::CatchStackDepths) -> usize;
+    let stacks: [(&str, fn() -> usize, fn(u32, usize), Field); 11] = [
+        (
+            "async_context",
+            async_context::depth,
+            async_context::push,
+            |d| d.context_guards,
+        ),
+        ("call_method", call_method::depth, call_method::push, |d| {
+            d.call_method
+        }),
+        ("pump", pump::depth, pump::push, |d| d.pump),
+        ("set_foreach", set_foreach::depth, set_foreach::push, |d| {
+            d.set_foreach
+        }),
+        ("map_foreach", map_foreach::depth, map_foreach::push, |d| {
+            d.map_foreach
+        }),
+        (
+            "prototype_resolution",
+            prototype_resolution::depth,
+            prototype_resolution::push,
+            |d| d.prototype_resolution,
+        ),
+        (
+            "static_private_owner",
+            static_private_owner::depth,
+            static_private_owner::push,
+            |d| d.static_private_owner,
+        ),
+        (
+            "private_lexical_brand",
+            private_lexical_brand::depth,
+            private_lexical_brand::push,
+            |d| d.private_lexical_brand,
+        ),
+        (
+            "derived_super_binding",
+            derived_super_binding::depth,
+            derived_super_binding::push,
+            |d| d.derived_super_binding,
+        ),
+        (
+            "private_member_access_hints",
+            private_member_access_hints::depth,
+            private_member_access_hints::push,
+            |d| d.private_member_access_hints,
+        ),
+        (
+            "namespace_override",
+            namespace_override::depth,
+            namespace_override::push,
+            |d| d.namespace_override,
+        ),
+    ];
+    let _lock = crate::gc::global_side_table_test_lock();
+    let base = super::catch_stack_depths();
+    for (name, depth, _, field) in stacks {
+        assert_eq!(
+            field(&base),
+            depth(),
+            "{name}: record field is the stack depth"
+        );
+    }
+    for (index, (name, depth, push, field)) in stacks.into_iter().enumerate() {
+        let before = super::catch_stack_depths();
+        push(7, 1);
+        let after = super::catch_stack_depths();
+        assert_eq!(
+            field(&after),
+            depth(),
+            "{name}: record field follows the push"
+        );
+        assert_eq!(
+            field(&after),
+            field(&before) + 1,
+            "{name}: one entry pushed"
+        );
+        for (other_index, (other, _, _, other_field)) in stacks.into_iter().enumerate() {
+            if other_index != index {
+                assert_eq!(
+                    other_field(&after),
+                    other_field(&before),
+                    "{name} push moved {other}"
+                );
+            }
+        }
+    }
+    // Every entry pushed here carries mark 1: a pad at 2 pops them all.
+    super::unwind_managed_stacks(2, usize::MAX);
+    assert_eq!(super::catch_stack_depths(), base);
 }

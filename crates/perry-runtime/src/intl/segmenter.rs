@@ -149,7 +149,7 @@ crate::perry_thread_local! {
     /// `ITER_RESULT_KEYS` (#7564): `set_field`-by-name clones an object's key
     /// list before writing, so building a record property-by-property gave
     /// EVERY record its own keys array — a fresh array address per record,
-    /// therefore a fresh ShapeId per record (`shape_id_for_keys_ensure` keys
+    /// therefore a fresh ShapeId per record (`layout_for_keys_ensure` keys
     /// the shape table on the array's address), therefore a guaranteed inline
     /// -cache miss on every `.segment` / `.index` / `.input` read and one more
     /// descriptor in the shape table per segment. On the claude-code TUI,

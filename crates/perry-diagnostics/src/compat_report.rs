@@ -30,7 +30,7 @@ use std::sync::{Mutex, OnceLock};
 pub const MAX_SNIPPET_LEN: usize = 200;
 
 /// Compile pipeline stages a report can originate from. Mirrors the buckets
-/// the maintainers use when triaging `known_failures.json`.
+/// the maintainers use when triaging parity snapshot entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReportStage {
@@ -51,13 +51,14 @@ impl ReportStage {
     }
 }
 
-/// Maps to the `category` field of `test-parity/known_failures.json` so
+/// Maps to the `category` field of a parity snapshot entry
+/// (`tests/parity/README.md`, "Category definitions") so
 /// user-reported gaps and maintainer-curated gaps are comparable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum ReportCategory {
     /// A known TypeScript construct Perry doesn't handle yet (decorators,
-    /// lookbehind regex, ...). Maps to `gap-categorical` in known_failures.
+    /// lookbehind regex, ...). Maps to `gap-categorical`.
     GapCategorical,
     /// A bug discovered by bisection — likely a regression in a specific
     /// pass that used to work.

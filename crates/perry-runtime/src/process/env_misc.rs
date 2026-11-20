@@ -4,7 +4,6 @@
 //! get/set/remove, CPU/memory/resource usage, `emitWarning`, `exitCode`,
 //! `title`, `umask`, `chdir`, `execve`, `loadEnvFile`, the ref/unref timer
 //! shims, and the small stub entry points. Split out of the `process` trunk.
-//! Pure code move — no behavior change.
 
 use super::*;
 use crate::closure::{
@@ -82,12 +81,13 @@ pub extern "C" fn js_process_add_uncaught_exception_capture_callback(callback: f
     undefined_value()
 }
 
-/// Exit the process with the given exit code.
+/// Exit the calling Worker, or the process when called on the main thread.
 /// process.exit(code?: number | string | null) -> never
 /// Uses libc::_exit() to bypass cleanup handlers that can cause SIGILL
 /// during async event loop drain and V8 isolate destruction.
 #[no_mangle]
 pub extern "C" fn js_process_exit(code: f64) {
+    crate::effect!(host_write, exit);
     // #3041 — match Node's `parseAndValidateExitCode`:
     //   * `undefined` / `null`  → exit with the stored `process.exitCode`
     //     (0 when it was never set / was reset to nullish — #6666).
@@ -108,7 +108,11 @@ pub extern "C" fn js_process_exit(code: f64) {
     // returns `None` for exactly the nullish (no-argument) case.
     let published = validate_exit_code(code);
     let exit_code = run_process_exit_sequence(published);
-    js_process_run_finalization_exit();
+    crate::loop_interrupt::exit_current_worker();
+    // Node's `reallyExit` ends the process without `FreeEnvironment`: no
+    // Node-API cleanup hooks or finalizers run here. An addon finalizer may
+    // join a thread that only ends with the process.
+    super::finalization::run_process_finalization_exit_callbacks();
     crate::node_submodules::flush_trace_events_output();
     crate::gc::js_gc_release_current_thread_collection_side_allocations();
     terminate_without_atexit(exit_code)
@@ -135,13 +139,13 @@ pub extern "C" fn js_process_exit(code: f64) {
 ///    `process.exit(3)` and an uncaught throw into status 9).
 ///
 /// Only SYNCHRONOUS work inside a listener is honoured; see
-/// `crate::os::js_process_emit_exit` for why that needs no suppression.
+/// `crate::os_hook_slots::js_process_emit_exit` for why that needs no suppression.
 pub(crate) fn run_process_exit_sequence(publish: Option<i32>) -> i32 {
     if let Some(code) = publish {
         PROCESS_EXIT_CODE.with(|c| c.set(JSValue::number(code as f64).bits()));
     }
     let code = js_process_pending_exit_code();
-    crate::os::js_process_emit_exit(code as f64);
+    crate::os_hook_slots::js_process_emit_exit(code as f64);
     js_process_pending_exit_code()
 }
 
@@ -165,6 +169,7 @@ static KEEP_PROCESS_RUN_EXIT_SEQUENCE: extern "C" fn() = js_process_run_exit_seq
 fn terminate_without_atexit(exit_code: i32) -> ! {
     #[cfg(any(unix, windows))]
     crate::source_read_count::report_before_immediate_exit();
+    crate::object::layout_desc::family_diag_report_before_immediate_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -217,11 +222,7 @@ fn validate_exit_code(code: f64) -> Option<i32> {
     // NaN-producing strings rejected as TypeError; everything that is not
     // already a number is a TypeError too.
     let n = if crate::fs::validate::is_numeric(jv) {
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        }
+        jv.as_number()
     } else if jv.is_any_string() {
         match coerce_exit_code_string(code) {
             Some(num) => num,
@@ -317,6 +318,7 @@ fn throw_exit_code_range_error(n: f64) -> ! {
 /// Node's behavior — atexit handlers and other shutdown logic are skipped.
 #[no_mangle]
 pub extern "C" fn js_process_abort() {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("abort");
     #[cfg(unix)]
     unsafe {
         libc::abort();
@@ -373,11 +375,13 @@ pub extern "C" fn js_process_raw_debug() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_process() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugProcess");
     undefined_value()
 }
 
 #[no_mangle]
 pub extern "C" fn js_process_debug_end() -> f64 {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("_debugEnd");
     undefined_value()
 }
 
@@ -508,11 +512,7 @@ fn throw_cpu_prior_invalid_type(value: f64) -> ! {
 }
 
 fn numeric_value(jv: JSValue) -> f64 {
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    }
+    jv.as_number()
 }
 
 fn format_node_number(value: f64) -> String {
@@ -636,12 +636,12 @@ extern "C" fn process_warning_callback(
         let _ = writeln!(stderr, "{hint}");
     }
 
-    crate::os::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
+    crate::os_hook_slots::emit_process_event("warning", &[warning_handle.get_nanbox_f64()]);
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 pub(crate) fn schedule_warning(warning: f64, label: &str, code: &str, msg: &str, detail: &str) {
-    let pid = std::process::id();
+    let pid = crate::os::current_process_id();
     let line = if code.is_empty() {
         format!("(node:{pid}) {label}: {msg}")
     } else {
@@ -847,19 +847,26 @@ pub extern "C" fn js_process_constrained_memory() -> f64 {
 /// Returns a string pointer, or null (0) if not found
 #[no_mangle]
 pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader {
+    // Reads the env: the census records a cell or a guard member
+    // (`snap_census::env_var`, design §2.10), not a host read.
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
             None => return std::ptr::null_mut(),
         };
 
-        match std::env::var(&name) {
-            Ok(value) => {
+        match super::environment::get(&name) {
+            Some(value) => {
                 // Create a JS string from the value
                 let bytes = value.as_bytes();
-                js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32)
+                let s = js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32);
+                crate::snap_census::env_var(&name, Some(&value), s as usize);
+                s
             }
-            Err(_) => std::ptr::null_mut(), // Not found, return null
+            None => {
+                crate::snap_census::env_var(&name, None, 0);
+                std::ptr::null_mut() // Not found, return null
+            }
         }
     }
 }
@@ -880,6 +887,7 @@ pub extern "C" fn js_getenv(name_ptr: *const StringHeader) -> *mut StringHeader 
 /// Node, so `??` won't clobber a legitimately empty value.
 #[no_mangle]
 pub extern "C" fn js_getenv_value(name_ptr: *const StringHeader) -> f64 {
+    // The env read is `js_getenv`'s (`snap_census::env_var`).
     let ptr = js_getenv(name_ptr);
     let val = if ptr.is_null() {
         JSValue::undefined()
@@ -952,11 +960,7 @@ pub extern "C" fn js_process_pending_exit_code() -> i32 {
     if jv.is_undefined() || jv.is_null() {
         return 0;
     }
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
+    jv.as_number() as i32
 }
 
 // The natural-exit epilogue emits a call to `js_process_pending_exit_code`
@@ -970,12 +974,9 @@ static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pendi
 
 /// Set an environment variable. Backs `process.env.X = v` (#1344).
 ///
-/// Reads via `js_getenv_value` already hit `std::env::var`, so writing
-/// through `std::env::set_var` round-trips with no caching layer to
-/// keep in sync. Non-string values are coerced via the same
-/// `js_jsvalue_to_string` Perry uses for `String(x)` / template
-/// concat — matching Node, which coerces `process.env.PORT = 8080` to
-/// `"8080"` before storing.
+/// Reads use the current agent's native backing. Coerce once, then mirror
+/// only the changed field so retained aliases observe local writes without
+/// rebuilding unrelated environment strings.
 ///
 /// On unset (calling code routes `delete process.env.X` here too if
 /// it lowers the delete to `process.env.X = undefined` — the empty
@@ -983,6 +984,7 @@ static KEEP_PROCESS_PENDING_EXIT_CODE: extern "C" fn() -> i32 = js_process_pendi
 /// `js_removeenv` below, which the delete path can call directly).
 #[no_mangle]
 pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
+    crate::effect!(host_write, env);
     use crate::value::js_jsvalue_to_string;
     unsafe {
         let name = match env_name_from_header(name_ptr) {
@@ -1003,6 +1005,9 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
             return;
         }
 
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let rooted_value = scope.root_string_ptr(value_str_hdr);
+
         // Read the string bytes back into a Rust &str directly off the
         // StringHeader payload — same layout as `js_getenv` uses for the
         // name above.
@@ -1018,21 +1023,26 @@ pub extern "C" fn js_setenv(name_ptr: *const StringHeader, value: f64) {
         // spelling instead of appending an enumerable alias such as both
         // `Path` and `PATH`.
         let cache_name = env_cache_name_for_set(&name);
-        std::env::set_var(&name, v_str);
-        // Keep the cached `process.env` object in step so enumeration
-        // (`Object.keys(process.env)`, `for…in`, spread) sees the new key —
-        // reads go through `js_getenv`, but enumeration walks this object.
+        super::environment::set(&name, v_str);
         let cached = CACHED_ENV.with(|c| c.get());
         if cached != 0.0 {
-            let obj = crate::value::js_nanbox_get_pointer(cached) as *mut crate::ObjectHeader;
-            if !obj.is_null() {
-                let key = js_string_from_bytes(cache_name.as_ptr(), cache_name.len() as u32);
-                let val = js_string_from_bytes(v_str.as_ptr(), v_str.len() as u32);
-                let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
-                with_env_cache_mutation(|| {
-                    crate::object::js_object_set_field_by_name(obj, key, val_f64);
+            let object = scope.root_nanbox_f64(cached);
+            let key = scope.root_string_ptr(js_string_from_bytes(
+                cache_name.as_ptr(),
+                cache_name.len() as u32,
+            ));
+            with_env_cache_mutation(|| {
+                key.with_const_ptr(|key| {
+                    rooted_value.with_const_ptr::<StringHeader, _>(|value| {
+                        crate::object::js_object_set_field_by_name(
+                            crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                                as *mut crate::ObjectHeader,
+                            key,
+                            crate::value::js_nanbox_string(value as i64),
+                        )
+                    })
                 });
-            }
+            });
         }
     }
 }
@@ -1124,6 +1134,7 @@ static KEEP_JS_MODULE_RESOLVE_LOOKUP_PATHS: extern "C" fn(f64, f64) -> f64 =
 /// Unset an environment variable. Backs `delete process.env.X` (#1344).
 #[no_mangle]
 pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
+    crate::effect!(host_write, env);
     unsafe {
         let name = match env_name_from_header(name_ptr) {
             Some(name) => name,
@@ -1133,33 +1144,52 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
             return;
         }
         let cache_name = env_cache_name_for_remove(&name);
-        std::env::remove_var(&name);
-
+        super::environment::remove(&name);
         let cached = CACHED_ENV.with(|c| c.get());
         if cached != 0.0 {
-            let obj = crate::value::js_nanbox_get_pointer(cached) as *mut crate::ObjectHeader;
-            if !obj.is_null() {
-                let key = js_string_from_bytes(cache_name.as_ptr(), cache_name.len() as u32);
-                with_env_cache_mutation(|| {
-                    crate::object::js_object_delete_field(obj, key);
-                });
-            }
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let object = scope.root_nanbox_f64(cached);
+            let key = scope.root_string_ptr(js_string_from_bytes(
+                cache_name.as_ptr(),
+                cache_name.len() as u32,
+            ));
+            with_env_cache_mutation(|| {
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_delete_field(
+                        crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                            as *mut crate::ObjectHeader,
+                        key,
+                    )
+                })
+            });
         }
     }
 }
 
 /// `process.env` as a materialized JS object.
 ///
-/// Built lazily on first access from `std::env::vars()` so the object
-/// reflects the inherited OS environment (matching Node/Bun semantics).
-/// Subsequent calls return the same cached pointer — user mutations to
-/// keys stay visible, which is Node's spec too (`process.env` is a live
-/// object, not a snapshot rebuilt on every read).
+/// Built empty and lazily: taking the object reads no variable. The rooted
+/// cache preserves object identity; every enumeration fills the field mirror
+/// from the current agent's effective environment (`refresh_process_env`),
+/// which also observes mutations made by agents sharing the native backing.
 ///
 /// Returns an f64 NaN-boxed POINTER_TAG value so the codegen can hand
 /// it straight to subsequent PropertyGet dispatch.
 #[no_mangle]
 pub extern "C" fn js_process_env() -> f64 {
+    // SNAP census: the env object and the IPC probe are the runtime's own
+    // population (init 0); the program taking the object is
+    // `snap_census::env_object`, not a host read (design §2.10.3).
+    #[cfg(perry_gc_instruments)]
+    {
+        let boxed = {
+            let _census = crate::snap_census::runtime_scope();
+            js_process_env_impl()
+        };
+        crate::snap_census::env_object(boxed);
+        return boxed;
+    }
+    #[cfg(not(perry_gc_instruments))]
     js_process_env_impl()
 }
 
@@ -1252,13 +1282,21 @@ fn windows_env_key_identity(name: &str) -> String {
 #[cfg(windows)]
 fn existing_windows_env_name(name: &str) -> Option<String> {
     let identity = windows_env_key_identity(name);
-    std::env::vars()
+    super::environment::current()
+        .entries()
+        .into_iter()
         .find(|(candidate, _)| windows_env_key_identity(candidate) == identity)
         .map(|(candidate, _)| candidate)
 }
 
 #[cfg(windows)]
 fn env_cache_name_for_set(name: &str) -> String {
+    if !matches!(
+        super::environment::current(),
+        super::environment::Environment::Os
+    ) {
+        return name.to_string();
+    }
     let identity = windows_env_key_identity(name);
     ENV_KEY_CASING.with(|casing| {
         let mut casing = casing.borrow_mut();
@@ -1278,6 +1316,12 @@ fn env_cache_name_for_set(name: &str) -> String {
 
 #[cfg(windows)]
 fn env_cache_name_for_remove(name: &str) -> String {
+    if !matches!(
+        super::environment::current(),
+        super::environment::Environment::Os
+    ) {
+        return name.to_string();
+    }
     let identity = windows_env_key_identity(name);
     ENV_KEY_CASING.with(|casing| {
         casing
@@ -1348,7 +1392,7 @@ pub fn is_process_env_ptr(addr: usize) -> bool {
 ///
 /// Direct `process.env.KEY` reads are lowered to `js_getenv_value`, but reads
 /// through `const env = process.env` use the ordinary object getter. Routing
-/// both through the OS is what supplies Windows' case-insensitive semantics.
+/// both through the effective backing preserves private Worker state.
 pub(crate) fn process_env_get_field(
     obj: *const crate::ObjectHeader,
     key: *const StringHeader,
@@ -1358,9 +1402,11 @@ pub(crate) fn process_env_get_field(
     }
     let value = js_getenv(key);
     if value.is_null() {
-        // Node's environment interceptor declines an absent key so inherited
-        // Object.prototype properties (for example `env.toString`) can still
-        // resolve through the ordinary path.
+        // Remove a stale mirror slot before declining to the prototype path.
+        // Deleting this ordinary field runs no JS or GC allocation.
+        if unsafe { crate::object::own_data_field_by_name(obj, key) }.is_some() {
+            with_env_cache_mutation(|| crate::object::js_object_delete_field(obj.cast_mut(), key));
+        }
         None
     } else {
         Some(JSValue::string_ptr(value))
@@ -1392,9 +1438,7 @@ pub(crate) fn process_env_delete_field(
     Some(1)
 }
 
-/// Query an environment key without consulting the case-sensitive materialized
-/// object. `std::env` delegates to the case-insensitive OS environment block on
-/// Windows and remains byte/case-sensitive on Unix.
+/// Presence comes from the effective backing, not stale mirror slots.
 pub(crate) fn process_env_has_field(
     obj: *const crate::ObjectHeader,
     key: *const StringHeader,
@@ -1403,7 +1447,11 @@ pub(crate) fn process_env_has_field(
         return None;
     }
     let name = unsafe { env_name_from_header(key) };
-    Some(name.is_some_and(|name| std::env::var_os(name).is_some()))
+    #[cfg(perry_gc_instruments)]
+    if let Some(name) = &name {
+        crate::snap_census::env_has(name, super::environment::contains(name));
+    }
+    Some(name.is_some_and(|name| super::environment::contains(&name)))
 }
 
 /// `std::env::set_var` PANICS — and, being called from an `extern "C"` frame,
@@ -1416,37 +1464,127 @@ fn env_name_is_settable(name: &str) -> bool {
     !name.is_empty() && !name.contains('=') && !name.contains('\0')
 }
 
+/// Refresh only the current agent's cached mirror. Native strings are copied
+/// before any allocation; neither the backing lock nor a TLS borrow spans GC.
+#[inline]
+pub(crate) fn refresh_process_env(value: f64) -> f64 {
+    if env_cache_mutation_active() || !is_process_env_object(value) {
+        return value;
+    }
+    refresh_process_env_object(value)
+}
+
+/// [`refresh_process_env`] of the `process.env` object itself.
+#[inline(never)]
+fn refresh_process_env_object(value: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let object = scope.root_nanbox_f64(value);
+    let vars: Vec<_> = super::environment::current()
+        .entries()
+        .into_iter()
+        .map(|(name, value)| (env_cache_name_for_set(&name), value))
+        .collect();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if crate::snap_census::runner_on_for_inputs() {
+        crate::snap_census::record_input_value("env_block", &vars);
+    }
+    let names: std::collections::HashSet<_> = vars.iter().map(|(name, _)| name.as_str()).collect();
+    with_env_cache_mutation(|| {
+        let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(
+            crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                as *const crate::ObjectHeader,
+        ));
+        let len = keys.with_const_ptr::<crate::array::ArrayHeader, _>(|array| {
+            crate::array::js_array_length(array)
+        });
+        let mut reorder = len as usize != vars.len();
+        for index in 0..len {
+            let key = keys.with_const_ptr::<crate::array::ArrayHeader, _>(|keys| {
+                crate::array::js_array_get_f64(keys, index)
+            });
+            let key = scope.root_nanbox_f64(key);
+            let name = crate::validators::received::read_js_string_pub(key.get_nanbox_f64());
+            reorder |= vars
+                .get(index as usize)
+                .is_none_or(|(native, _)| native != &name);
+            if !names.contains(name.as_str()) {
+                let key = scope.root_string_ptr(crate::value::js_get_string_pointer_unified(
+                    key.get_nanbox_f64(),
+                ) as *const StringHeader);
+                key.with_const_ptr(|key| {
+                    crate::object::js_object_delete_field(
+                        crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                            as *mut crate::ObjectHeader,
+                        key,
+                    )
+                });
+            }
+        }
+        for (name, value) in &vars {
+            let stored = unsafe {
+                crate::object::js_object_record_get_by_bytes(
+                    crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                        as *const crate::ObjectHeader,
+                    name.as_ptr(),
+                    name.len(),
+                )
+            };
+            let unchanged =
+                unsafe { crate::string::js_string_key_matches_bytes(stored, value.as_bytes()) };
+            if unchanged && !reorder {
+                continue;
+            }
+            // A native delete/reinsert can change order without changing the
+            // mirror's membership. Retain its actual string across rebuilding.
+            let stored = unchanged.then(|| scope.root_nanbox_f64(f64::from_bits(stored.bits())));
+            let key = scope.root_string_ptr(js_string_from_bytes(name.as_ptr(), name.len() as u32));
+            let val = stored.map_or_else(
+                || {
+                    crate::value::js_nanbox_string(js_string_from_bytes(
+                        value.as_ptr(),
+                        value.len() as u32,
+                    ) as i64)
+                },
+                |stored| stored.get_nanbox_f64(),
+            );
+            let val = scope.root_nanbox_f64(val);
+            key.with_const_ptr(|key| unsafe {
+                let obj = crate::value::js_nanbox_get_pointer(object.get_nanbox_f64())
+                    as *mut crate::ObjectHeader;
+                if reorder {
+                    crate::object::js_object_delete_field(obj, key);
+                    // The mirror owns native data fields. Re-appending one
+                    // must not invoke an inherited JavaScript setter.
+                    crate::object::object_ops::define_property_force_store_value(
+                        obj,
+                        key,
+                        val.get_nanbox_f64(),
+                    );
+                } else {
+                    crate::object::js_object_set_field_by_name(obj, key, val.get_nanbox_f64());
+                }
+            });
+        }
+    });
+    object.get_nanbox_f64()
+}
+
 fn js_process_env_impl() -> f64 {
-    ipc::process_ipc_ensure_initialized();
+    super::ipc_hooks::ensure_initialized();
     let cached = CACHED_ENV.with(|c| c.get());
     if cached != 0.0 {
         return cached;
     }
-
-    let vars: Vec<(String, String)> = std::env::vars().collect();
-    // Pad alloc_limit so small env sets still have headroom; large
-    // environments (CI runners) spill to the overflow Vec path.
-    let alloc_limit = std::cmp::max(vars.len() as u32, crate::object::INLINE_SLOT_FLOOR as u32);
-    let obj = crate::object::js_object_alloc(0, alloc_limit);
-    for (k, v) in &vars {
-        #[cfg(windows)]
-        ENV_KEY_CASING.with(|casing| {
-            casing
-                .borrow_mut()
-                .entry(windows_env_key_identity(k))
-                .or_insert_with(|| k.clone());
-        });
-        let key = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-        let val = js_string_from_bytes(v.as_ptr(), v.len() as u32);
-        let val_f64 = f64::from_bits(JSValue::string_ptr(val).bits());
-        crate::object::js_object_set_field_by_name(obj, key, val_f64);
-    }
+    let census_mark = crate::snap_census::env_storage_begin();
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, crate::object::INLINE_SLOT_FLOOR as u32); realm { process.env, kind = exotic, members = { }, values = string; } };
+    crate::snap_census::env_storage_end(census_mark, obj as usize);
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
-    // The per-OBJECT half of `ANY_PROCESS_ENV_OBJECT`, for the same reason the
-    // arguments registry sets it beside its insert.
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
+    // Node's `process.env` is an interceptor object: getting it reads no
+    // variable. Host data enters only through the observing funnels (by-name
+    // reads, and `refresh_process_env` at enumeration).
     boxed
 }
 
@@ -1571,12 +1709,17 @@ mod env_object_tests {
     }
 
     #[test]
-    fn env_cache_mutation_flag_is_restored_after_unwind() {
+    fn env_cache_mutation_flag_is_set_inside_and_restored_after_return() {
         assert!(!env_cache_mutation_active());
-        let result = std::panic::catch_unwind(|| {
-            with_env_cache_mutation(|| panic!("simulated JS exception"));
+        let inner = with_env_cache_mutation(|| {
+            let nested = with_env_cache_mutation(env_cache_mutation_active);
+            assert!(
+                env_cache_mutation_active(),
+                "nesting restores the outer state"
+            );
+            nested
         });
-        assert!(result.is_err());
+        assert!(inner);
         assert!(!env_cache_mutation_active());
     }
 

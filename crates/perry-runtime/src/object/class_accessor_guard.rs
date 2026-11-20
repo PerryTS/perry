@@ -37,13 +37,13 @@ pub unsafe extern "C" fn js_class_accessor_shape_guard(
     let Some(header) = crate::value::addr_class::try_read_gc_header_known_plausible(addr) else {
         return 0;
     };
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return 0;
     }
     let word = (*obj).parent_class_id;
-    let birth = super::shapes::is_shape_id(expected) && word == expected;
+    let birth = super::shapes::is_layout_word(expected) && word == expected;
     let family_birth =
         family >> 32 != 0 && u64::from((*obj).class_id) | (u64::from(word) << 32) == family;
     if !birth && !family_birth {

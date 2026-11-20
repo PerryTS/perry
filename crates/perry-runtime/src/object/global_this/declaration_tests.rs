@@ -91,7 +91,9 @@ fn objops_instance_identity_is_declared_and_body_checked() {
         crate::closure::js_closure_set_capture_bits(
             ordinary,
             0,
-            crate::JSValue::int32(index as i32 + 1).bits(),
+            super::super::super::global_this_tables::builtin_constructor_identity_word(
+                index as u32 + 1,
+            ),
         );
         let ordinary_info = crate::closure::closure_info(ordinary).unwrap();
         assert!(unsafe {

@@ -81,6 +81,9 @@ pub(crate) fn lower_expr_assignment(
                             value,
                             receiver: object,
                             strict: ctx.current_strict,
+                            element_offset: member.span.lo.0,
+                            byte_offset: 0,
+                            byte_end: 0,
                         }
                     }
                 }
@@ -92,6 +95,9 @@ pub(crate) fn lower_expr_assignment(
                         value,
                         receiver: object,
                         strict: ctx.current_strict,
+                        element_offset: member.span.lo.0,
+                        byte_offset: 0,
+                        byte_end: 0,
                     }
                 }
                 ast::MemberProp::PrivateName(private) => {
@@ -107,6 +113,8 @@ pub(crate) fn lower_expr_assignment(
                         object,
                         property,
                         value,
+                        byte_offset: 0,
+                        byte_end: 0,
                     }
                 }
             };

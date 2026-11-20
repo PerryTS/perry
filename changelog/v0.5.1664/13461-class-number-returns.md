@@ -1,0 +1,1 @@
+Class methods the whole-program facts prove to return a Number, and field reads they prove hold only Number, Boolean, null or undefined, now lower `+` and arithmetic as a plain `fadd` instead of the dynamic helper, and stores into proven slots write the raw value directly; the finite-number test stays on F64 lanes. 40-classes executes 27.2% fewer instructions.

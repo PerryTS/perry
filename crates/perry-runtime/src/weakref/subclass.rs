@@ -9,7 +9,7 @@ pub extern "C" fn js_weak_collection_subclass_init(this: f64, kind: i32, iterabl
     let raw = crate::value::js_nanbox_get_pointer(this.get_nanbox_f64()) as usize;
     let is_object = unsafe {
         crate::value::addr_class::try_read_gc_header(raw)
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_OBJECT)
+            .is_some_and(|header| crate::gc_type_is_object!(header.obj_type))
     };
     if !is_object {
         return this.get_nanbox_f64();

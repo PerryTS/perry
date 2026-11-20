@@ -2,6 +2,7 @@
 //! first is born in them, and what it is born with is its own.
 
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 fn register(cid: u32) {
     let mut guard = crate::object::REGISTERED_CLASS_IDS.write().unwrap();
@@ -105,7 +106,7 @@ fn later_evaluations_are_born_in_the_template_shapes() {
     );
     unsafe {
         let shape = |h: &crate::gc::RuntimeHandle<'_>| {
-            h.with_mut_ptr::<ObjectHeader, _>(|o| crate::object::shapes::object_shape_id(o))
+            h.with_mut_ptr::<ObjectHeader, _>(|o| crate::object::shapes::object_layout_stamp(o))
         };
         let addr =
             |h: &crate::gc::RuntimeHandle<'_>| h.with_mut_ptr::<ObjectHeader, _>(|o| o as usize);
@@ -324,7 +325,7 @@ fn instances_of_one_evaluation_are_born_linked_to_its_prototype() {
         let c = TemplateCell::from_ptr(cell).unwrap();
         assert_ne!(c.get(W_INSTANCE_LINKED), 0, "the template recorded a link");
         assert_eq!(
-            c.get(W_INSTANCE_LINKED) as u32,
+            LayoutWord(c.get(W_INSTANCE_LINKED) as u32),
             shape(5),
             "the last link recorded is b's"
         );

@@ -20,6 +20,9 @@ fn string_array_param() -> Param {
 
 fn sum_lengths() -> Function {
     let indexed_string = Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(STRINGS)),
         index: Box::new(Expr::Binary {
             op: BinaryOp::BitAnd,
@@ -65,6 +68,7 @@ fn sum_lengths() -> Function {
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(TOTAL)),
                         right: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(indexed_string),
                             property: "length".to_string(),
                             byte_offset: 0,
@@ -89,6 +93,7 @@ fn compile_ir() -> String {
     let mut module = Module::new("string_array_length_9160.ts");
     module.functions.push(sum_lengths());
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Array(
             vec![

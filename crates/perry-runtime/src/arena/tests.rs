@@ -114,109 +114,8 @@ fn reset_single_reclaimable_nursery_block(
     (candidate, base, size, before_offset, stats)
 }
 
-#[test]
-fn object_start_bitmap_stamps_only_maps_and_clears_on_reset() {
-    run_with_fresh_arenas(|| {
-        let unstamped_array = arena_alloc_gc(64, 8, GC_TYPE_ARRAY) as usize;
-        let (_, array_base, array_bitmap) = classify_heap_space_in_range(unstamped_array)
-            .expect("allocation must be in an arena range");
-        assert!(
-            !arena_header_is_object_start(
-                unstamped_array - GC_HEADER_SIZE,
-                array_base,
-                array_bitmap,
-            ),
-            "ordinary arena allocations must not pay to stamp exact starts"
-        );
-
-        let user = arena_alloc_gc(16, 8, GC_TYPE_MAP) as usize;
-        let header = user - GC_HEADER_SIZE;
-        let (_, range_base, bitmap) =
-            classify_heap_space_in_range(user).expect("allocation must be in an arena range");
-
-        assert!(arena_header_is_object_start(header, range_base, bitmap));
-        assert!(
-            !arena_header_is_object_start(header + 8, range_base, bitmap),
-            "an aligned payload word must not be recorded as an object start"
-        );
-
-        arena_reset_all_blocks_to_zero();
-        let (_, reset_base, reset_bitmap) =
-            classify_heap_space_in_range(user).expect("reset retains the arena block registration");
-        assert!(
-            !arena_header_is_object_start(header, reset_base, reset_bitmap),
-            "reset must clear stale object boundaries before block reuse"
-        );
-    });
-}
-
-#[test]
-fn survivor_reclaim_resets_dead_blocks() {
-    run_with_fresh_arenas(|| {
-        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
-            crate::gc::heap_generation::HeapChangeKind::Sweep,
-        );
-        let baseline = arena_telemetry_snapshot();
-        let _dead = arena_alloc_gc_survivor(2 * 1024 * 1024, 8, GC_TYPE_STRING);
-        let after_alloc = arena_telemetry_snapshot();
-        let survivor_in_use = after_alloc
-            .survivor0
-            .in_use_bytes
-            .saturating_add(after_alloc.survivor1.in_use_bytes);
-        assert!(
-            survivor_in_use > baseline.survivor0.in_use_bytes + baseline.survivor1.in_use_bytes,
-            "test allocation should occupy a survivor semispace"
-        );
-
-        let block_has_live = vec![false; arena_block_count()];
-        let stats = survivor_arena_reclaim_dead_blocks(&block_has_live);
-        let after_reclaim = arena_telemetry_snapshot();
-        let survivor_after = after_reclaim
-            .survivor0
-            .in_use_bytes
-            .saturating_add(after_reclaim.survivor1.in_use_bytes);
-
-        assert_eq!(survivor_after, 0);
-        assert!(stats.reset_blocks > 0);
-        assert!(stats.reusable_bytes > 0 || stats.removed_bytes > 0);
-        assert!(
-            after_reclaim.total_reserved_bytes <= after_alloc.total_reserved_bytes,
-            "dead survivor blocks should become reusable or be returned"
-        );
-    });
-}
-
-#[test]
-fn budgeted_survivor_reclaim_accumulates_release_stats_across_slices() {
-    run_with_fresh_arenas(|| {
-        let _heap_change = crate::gc::heap_generation::HeapChange::begin(
-            crate::gc::heap_generation::HeapChangeKind::Sweep,
-        );
-        for _ in 0..3 {
-            let ptr = arena_alloc_gc_survivor(BLOCK_SIZE, 8, GC_TYPE_STRING);
-            assert!(!ptr.is_null());
-        }
-
-        let snapshots = arena_block_snapshots();
-        let block_has_live = vec![false; snapshots.len()];
-        let mut reclaim = SurvivorArenaReclaimDeadBlocksState::new(&block_has_live, &snapshots);
-        let mut slices = 0;
-        while !reclaim.step(1) {
-            slices += 1;
-            assert!(slices < 32, "one-unit survivor reclaim must converge");
-        }
-
-        let stats = reclaim.stats();
-        assert!(slices > 3, "the test must span multiple reclamation slices");
-        assert_eq!(stats.reset_blocks, 3);
-        assert_eq!(stats.removed_blocks, 2);
-        assert!(stats.removed_bytes >= 2 * BLOCK_SIZE);
-        assert_eq!(stats.pooled_blocks, 2);
-        assert_eq!(stats.pooled_bytes, stats.removed_bytes);
-        assert_eq!(stats.deallocated_blocks, 0);
-        assert_eq!(stats.deallocated_bytes, 0);
-    });
-}
+#[path = "tests/reclaim.rs"]
+mod reclaim;
 
 fn page_range_for(base: usize, size: usize) -> std::ops::RangeInclusive<usize> {
     generation_page_for_addr(base)..=generation_page_for_addr(base + size - 1)
@@ -241,6 +140,7 @@ fn assert_seen_headers(label: &str, seen: &[usize], expected: &[usize]) {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 fn synthetic_old_block_range() -> (usize, usize) {
     (0x4000_0000_0000usize, GENERATION_PAGE_SIZE * 3)
 }
@@ -321,6 +221,7 @@ fn old_page_metadata_snapshot_is_sorted_by_page() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn old_page_metadata_reregisters_after_block_metadata_removal() {
     run_with_fresh_arenas(|| {
@@ -391,6 +292,7 @@ fn old_page_metadata_distributes_multi_page_object_bytes_and_indexes_pages() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn old_page_metadata_removes_object_and_block_metadata() {
     run_with_fresh_arenas(|| {
@@ -447,6 +349,7 @@ fn generation_metadata_classifies_arena_regions() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn generation_metadata_bucket_keeps_exact_range_boundaries() {
     run_with_fresh_arenas(|| {
@@ -497,31 +400,21 @@ fn generation_metadata_bucket_keeps_exact_range_boundaries() {
 }
 
 #[test]
-fn large_object_arena_alloc_gc_is_old_tenured_and_indexed() {
+fn large_leaf_arena_birth_is_young_in_dedicated_storage() {
     run_with_fresh_arenas(|| {
-        let payload = crate::gc::LARGE_OBJECT_THRESHOLD_BYTES;
-        let ptr = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
-        let header_addr = ptr - GC_HEADER_SIZE;
-        let total = unsafe { (*(header_addr as *const GcHeader)).size as usize };
-
-        assert!(
-            crate::gc::is_large_object_total_size(total),
-            "test allocation should exceed the large-object threshold"
-        );
-        assert_eq!(classify_heap_generation(ptr), HeapGeneration::Old);
-        assert!(pointer_in_old_gen(ptr));
-        assert!(!pointer_in_nursery(ptr));
+        let ptr =
+            arena_alloc_gc(crate::gc::LARGE_OBJECT_THRESHOLD_BYTES, 8, GC_TYPE_STRING) as usize;
+        assert_eq!(classify_heap_generation(ptr), HeapGeneration::Nursery);
+        assert!(is_large_storage(ptr));
+        assert!(pointer_in_nursery(ptr));
+        assert!(!pointer_in_old_gen(ptr));
         unsafe {
-            let header = header_addr as *const GcHeader;
-            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+            assert_eq!(
+                (*((ptr - GC_HEADER_SIZE) as *const GcHeader)).gc_flags & GC_FLAG_TENURED,
+                0
+            );
         }
-
-        let overlaps = old_object_page_overlaps(header_addr, total);
-        assert!(!overlaps.is_empty());
-        for &(page, _) in &overlaps {
-            let meta = old_page_meta(page);
-            assert_eq!(meta.object_count, 1);
-        }
+        assert_eq!(old_page_summary().pages, 0);
     });
 }
 
@@ -564,19 +457,23 @@ fn pointer_bearing_objects_get_a_wider_born_tenured_threshold_than_pointer_free_
 
         // Same size, pointer-free: unchanged, still born tenured in old-gen.
         let string = arena_alloc_gc(payload, 8, GC_TYPE_STRING) as usize;
-        assert!(pointer_in_old_gen(string));
-        assert!(!pointer_in_nursery(string));
+        assert!(!pointer_in_old_gen(string));
+        assert!(pointer_in_nursery(string));
+        assert!(is_large_storage(string));
 
-        // Above the wider line, a pointer-bearing object is born tenured again.
+        // Above the wider line, a pointer-bearing object takes young large
+        // storage: still young and untenured, but non-moving.
         let huge = arena_alloc_gc(
             crate::gc::LARGE_POINTER_BEARING_OBJECT_THRESHOLD_BYTES + 64,
             8,
             GC_TYPE_ARRAY,
         ) as usize;
-        assert!(pointer_in_old_gen(huge));
+        assert!(!pointer_in_old_gen(huge));
+        assert!(pointer_in_nursery(huge));
+        assert!(is_large_storage(huge));
         unsafe {
             let header = (huge - GC_HEADER_SIZE) as *const GcHeader;
-            assert_ne!((*header).gc_flags & GC_FLAG_TENURED, 0);
+            assert_eq!((*header).gc_flags & GC_FLAG_TENURED, 0);
         }
     });
 }
@@ -1663,6 +1560,7 @@ fn deferred_registration_flush_sites() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A synthetic old-gen block plus `count` distinct in-range header addresses.
 /// Registration never dereferences a header, so fabricated addresses exercise
 /// the bookkeeping exactly as real ones do — and keep the test independent of
@@ -1743,6 +1641,7 @@ fn every_cycle_constructor_routes_through_the_flush_point() {
     }
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn deferral_buffer_flushes_at_its_size_cap() {
     run_with_fresh_arenas(|| {
@@ -1761,6 +1660,7 @@ fn deferral_buffer_flushes_at_its_size_cap() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// Each reader of the two tables, one obligation per assertion. Delete any one
 /// `flush_deferred_old_page_registrations()` in `page_meta.rs` and exactly one
 /// of these goes red.
@@ -1816,6 +1716,7 @@ fn every_index_reader_flushes_before_reading() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The remover obligation, and the one that is easiest to get wrong: a removal
 /// that runs while the object is still only DEFERRED is a no-op, and the later
 /// flush then puts the dead object back. Registration ORDER, not just eventual
@@ -1823,7 +1724,7 @@ fn every_index_reader_flushes_before_reading() {
 #[test]
 fn removing_a_deferred_object_does_not_resurrect_it() {
     run_with_fresh_arenas(|| {
-        let headers = synthetic_old_headers(3);
+        let headers = synthetic_old_headers(4);
         let mut pages = crate::fast_hash::new_ptr_hash_set();
         pages.insert(generation_page_for_addr(headers[0]));
 
@@ -1858,9 +1759,18 @@ fn removing_a_deferred_object_does_not_resurrect_it() {
             !visited_now(&pages).contains(&headers[2]),
             "unregister_old_block_pages must flush first (#7624)"
         );
+        // 4. The contiguous block-span remover has the same flush obligation.
+        defer_old_object_page_registration(headers[3], 64);
+        let page = generation_page_for_addr(headers[3]);
+        unregister_old_block_range(page, page);
+        assert!(
+            !visited_now(&pages).contains(&headers[3]),
+            "unregister_old_block_range must flush before retirement"
+        );
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// A copying minor's promotion owes its pages the live (and pinned) accounting
 /// as well as the registration; both ride one deferred entry. The flush must
 /// count every promoted object live on every page it overlaps — a
@@ -1907,6 +1817,7 @@ fn promoted_deferral_applies_live_and_pinned_page_accounting() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 /// The batched flush skips the dedup scan over entries added within the same
 /// batch. That is only sound if it still catches the case the dedup exists for:
 /// hole reuse handing back an address registered BEFORE the batch.
@@ -2021,3 +1932,5 @@ fn no_collect_alloc_refuses_an_oversized_request() {
         assert_eq!(gc_trigger_arena_calls(), 0);
     });
 }
+
+// ---------------------------------------------------------------------------

@@ -62,7 +62,7 @@ mod tests;
 // named constant for documentation + external tooling but not re-exported
 // since no in-crate consumer references it directly.
 pub(crate) use tags::{
-    BIGINT_TAG, INT32_MASK, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
+    BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
     SHORT_STRING_DATA_MASK, SHORT_STRING_LEN_MASK, SHORT_STRING_LEN_SHIFT, SHORT_STRING_TAG,
     STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MARKER, TAG_MASK, TAG_NULL, TAG_TDZ, TAG_TRUE,
     TAG_UNDEFINED,
@@ -72,9 +72,9 @@ pub use tags::{
     JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT, JS_NATIVE_BUN_TCP_DISPATCH,
     JS_NATIVE_CRYPTO_DISPATCH, JS_NATIVE_DOMAIN_DISPATCH, JS_NATIVE_EVENTS_DISPATCH,
     JS_NATIVE_HTTP_DISPATCH, JS_NATIVE_MODULE_JS_LOADER, JS_NATIVE_NET_DISPATCH,
-    JS_NATIVE_QUERYSTRING_DISPATCH, JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_TLS_DISPATCH,
-    JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH, JS_NEW_FROM_HANDLE_V8,
-    SHORT_STRING_MAX_LEN,
+    JS_NATIVE_QUERYSTRING_DISPATCH, JS_NATIVE_SQLITE_DISPATCH, JS_NATIVE_SUBCLASS_INIT,
+    JS_NATIVE_TLS_DISPATCH, JS_NATIVE_WEBCRYPTO_DISPATCH, JS_NATIVE_ZLIB_DISPATCH,
+    JS_NEW_FROM_HANDLE_V8, SHORT_STRING_MAX_LEN,
 };
 // The canonical "heap object or native handle" test (#12540).
 pub use tags::is_reference_bits;
@@ -87,8 +87,8 @@ pub(crate) use tags::{
     JsNativeBunTcpDispatchFn, JsNativeCryptoDispatchFn, JsNativeDomainDispatchFn,
     JsNativeEventsConstructFn, JsNativeHttpDispatchFn, JsNativeModuleJsLoaderFn,
     JsNativeNetDispatchFn, JsNativeQuerystringDispatchFn, JsNativeSqliteDispatchFn,
-    JsNativeTlsDispatchFn, JsNativeWebCryptoDispatchFn, JsNativeZlibDispatchFn,
-    JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
+    JsNativeSubclassInitFn, JsNativeTlsDispatchFn, JsNativeWebCryptoDispatchFn,
+    JsNativeZlibDispatchFn, JsNewFromHandleV8Fn, JS_HANDLE_ARRAY_GET, JS_HANDLE_ARRAY_LENGTH,
     JS_HANDLE_OBJECT_GET_PROPERTY, JS_HANDLE_TO_STRING,
 };
 
@@ -104,9 +104,9 @@ pub use handle::{
     js_set_native_async_local_storage_subclass_init, js_set_native_bun_tcp_dispatch,
     js_set_native_crypto_dispatch, js_set_native_domain_dispatch, js_set_native_events_dispatch,
     js_set_native_http_dispatch, js_set_native_module_js_loader, js_set_native_net_dispatch,
-    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_tls_dispatch,
-    js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch, js_set_new_from_handle_v8,
-    native_module_try_js_property, NATIVE_SQLITE_DISPATCH_PROTOTYPE,
+    js_set_native_querystring_dispatch, js_set_native_sqlite_dispatch, js_set_native_subclass_init,
+    js_set_native_tls_dispatch, js_set_native_webcrypto_dispatch, js_set_native_zlib_dispatch,
+    js_set_new_from_handle_v8, native_module_try_js_property, NATIVE_SQLITE_DISPATCH_PROTOTYPE,
 };
 
 // ----- Basic NaN-box pack / unpack FFI -----
@@ -119,6 +119,7 @@ pub use nanbox::{
 };
 
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----
+pub(crate) use dynamic_arith::dyn_to_int32;
 pub use dynamic_arith::{
     js_add_throw_if_symbol, js_dynamic_add, js_dynamic_bitand, js_dynamic_bitor, js_dynamic_bitxor,
     js_dynamic_div, js_dynamic_mod, js_dynamic_mul, js_dynamic_neg, js_dynamic_pos, js_dynamic_pow,
@@ -169,3 +170,5 @@ pub use dynamic_object::{
     js_get_property, js_value_length_f64, js_value_length_property_f64,
     js_value_length_property_key_f64,
 };
+
+pub(crate) mod boxed_text;

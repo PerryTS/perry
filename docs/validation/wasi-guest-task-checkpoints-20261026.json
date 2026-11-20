@@ -1,0 +1,152 @@
+{
+  "date": "2026-10-26",
+  "scope": "Internal canonical guest task ownership and rooted C checkpoints; public async guest generation remains rejected",
+  "baseCommit": "5b0cd7cab2675b00b048319411a10e81ee3d74c9",
+  "snapshot": "v397",
+  "platform": "Linux x86_64",
+  "abi": {
+    "componentHost": 12,
+    "canonicalGuest": 2,
+    "guestOpsLayoutChanged": false
+  },
+  "runtimeTests": {
+    "development": {
+      "component": 84,
+      "asyncContext": 8,
+      "promise": 59,
+      "asyncHooks": 12,
+      "weakref": 6,
+      "finregFilter": 6,
+      "diagnostics": 10
+    },
+    "productionPanicAbort": {
+      "component": 84,
+      "asyncContext": 8,
+      "promise": 59,
+      "asyncHooks": 12,
+      "weakref": 6,
+      "finregFilter": 6,
+      "diagnostics": 10,
+      "uid": 65534,
+      "gid": 65534,
+      "panicAbort": true,
+      "closureAbi": 1,
+      "nativeClass": 1
+    }
+  },
+  "witTests": 22,
+  "qualifiedSourceSha256": {
+    "crates/perry-runtime/src/async_context.rs": "d0f6ea44bded138afd164d465358217ac019d73c94e5bcc3bcbf786a24c5590f",
+    "crates/perry-runtime/src/async_context/job_domain.rs": "096c839dcebbc8698fb347ebe29999f6f890a3af05c789732a3716ef8ac7d937",
+    "crates/perry-runtime/src/async_context/job_domain/tests.rs": "f3d2c1480a37437f82a6ca13912ceb58cce78570d666dcb7308c6db0971d822b",
+    "crates/perry-runtime/src/async_hooks.rs": "303375d31f74b63327a34a5e8e005bd882fc6143589b55bee57843de25f3624d",
+    "crates/perry-runtime/src/async_hooks/resource_state.rs": "f49a0f16ef325fa1ae0ae8795aa40eacad94b9e6983ca28b7c79b9b2f15f52a4",
+    "crates/perry-runtime/src/builtins/globals.rs": "96e78cebc132a1ef2f1e86f12bf0e6ceac23caccc6038a86b1cafc6aa0934c73",
+    "crates/perry-runtime/src/component/guest/frame.rs": "caed3f2f53983c8bbbdebb4a6f97fc8c5d68ce6b4653e83000c33c52fb58a618",
+    "crates/perry-runtime/src/component/guest/frame/task.rs": "b43f5b63ff9beaa344d87afb8868eaf224740bbb3cc158879659d990b2dd7641",
+    "crates/perry-runtime/src/component/guest/frame/task/tests.rs": "00c8f7345661d2747253e1895fd8d035f775552fa90e5486960be7263046a66c",
+    "crates/perry-runtime/src/component/guest/frame_tests.rs": "8e10b8f38d6c607df1978c64629508d9ea41cb21f10c7f30475cc8d9011fe8d2",
+    "crates/perry-runtime/src/node_submodules/diagnostics.rs": "76726a65fea98cfaf2e8d7ed2f4c800d13199a8ec8b6db5ce3e0d51f9c8721d7",
+    "crates/perry-runtime/src/node_submodules/mod.rs": "7b42f33835016cdf5bbed0229f1adf7a5b92cd358a708ce9c0414a2585f4f254",
+    "crates/perry-runtime/src/promise/assimilate.rs": "97a0305c78205ffa7232f2436c0b0bc215389fe025f828e6dc2760f75daa9e8c",
+    "crates/perry-runtime/src/promise/async_step.rs": "cf7462176442e87deaeb386490c4e174458e4c91e460925c773a4c2106345841",
+    "crates/perry-runtime/src/promise/combinators.rs": "8f87b4475352350414ca535a32d58b324e49b0d0333e39d4355f1fea080cac37",
+    "crates/perry-runtime/src/promise/job_queue.rs": "85987957296205b3486edf7ac1102680f7810c7b530a86f06bf18b74580bcb43",
+    "crates/perry-runtime/src/promise/microtasks.rs": "748b8e9fc64eaf83f71e2d6bcc059e5c456f4ecabf8130801d15ff1d62b329ee",
+    "crates/perry-runtime/src/promise/mod.rs": "0d5318e057e6f37de4ee6c98b25800d43da6fdf2c0997988a92e30cb5b515bf7",
+    "crates/perry-runtime/src/promise/reactions.rs": "d4d9e82a608550b85c42a8cd74a96659ac2d75b19dc581f9e71620794df2c339",
+    "crates/perry-runtime/src/promise/scanners.rs": "1ec9f20718634c05433c8ad5f02da341eb6bb604d10ddbab2130e3c9df5c480b",
+    "crates/perry-runtime/src/promise/then.rs": "bad97b676e8b6f52f1d7a00def91f5de6659d2e75ecf965f8dbc790728e588f7",
+    "crates/perry-runtime/src/weakref.rs": "187e5d8198f678dc438abc87ae06b31b21134e5c63684b4583bca659f4443d6c",
+    "crates/perry-runtime/src/weakref/test_support.rs": "03045580b22b17d9015181dbea9ec405f1f3b197ff5e15dae6f20827731818c6",
+    "crates/perry-wit/src/guest_frame.h": "5edeec24f1eba3c4d4d3310e96538385255a4597a623db29aed6650f7157ff18"
+  },
+  "artifacts": {
+    "runtime-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-jobs-v397-artifacts/runtime-dev",
+      "sha256": "14ef791ccfc0d32662e64cb9744837f1cc533fdec26a2ad826cf273de268595a"
+    },
+    "wit-dev": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-jobs-v397-artifacts/wit-dev",
+      "sha256": "6e9823b9d2732877df2d1ae18910e0f272e56810c9e11846d5ed136d2e05a1d7"
+    },
+    "runtime-prod": {
+      "path": "/root/codex-components-p2-20261021/perry-guest-jobs-v397-artifacts/perry-runtime-tests",
+      "sha256": "b7122139eb91b3ebb445909c51f655e2c9dce5bece5af8fca0809e6577a6ac67"
+    }
+  },
+  "wasmCheck": {
+    "target": "wasm32-wasip2",
+    "profile": "prod",
+    "exitCode": 0,
+    "wasiSdk": "34.0",
+    "newStaticArchive": false,
+    "newPerryGuestExecution": false
+  },
+  "localChecks": {
+    "diffCheck": 0,
+    "c11HeaderSyntaxWithWarningsAsErrors": 0,
+    "rustfmtNewModulesAndChangedPump": 0
+  },
+  "lint": [
+    {
+      "gate": "address",
+      "exitCode": 1,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "holders",
+      "exitCode": 1,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "tokio",
+      "exitCode": 0,
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "byteIdenticalToQualifiedParent": true
+    },
+    {
+      "gate": "node",
+      "exitCode": 0,
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "byteIdenticalToQualifiedParent": false
+    },
+    {
+      "gate": "size",
+      "exitCode": 1,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "byteIdenticalToQualifiedParent": true
+    }
+  ],
+  "evidenceArchive": {
+    "file": "perry-guest-jobs-v397-evidence.tar.gz",
+    "sha256": "a92bd82c2b240a0052c19676f67ee24bf5dc09158e9b229c39b2ea81cfdb7f82",
+    "bytes": 3729360,
+    "verifiedMembers": 65,
+    "allMembersVerifiedLocally": true
+  },
+  "qualificationNotes": [
+    "The stronger uncaught-error regression fails against the pre-fix checkpoint and passes with native runner-depth and activation-boundary restoration. It also verifies that a sibling processes a newly queued job after the failure.",
+    "Development diagnostics includes four nested isolated child runs and ten selected tests; the optimized panic-abort runner selects the same ten tests.",
+    "All 24 changed runtime/header paths exactly match qualified snapshot v397. Separate canonical C wake proof sources remain byte-identical to v395. Only documentation and receipts changed after qualification."
+  ],
+  "limitations": [
+    "No generated canonical suspension, stable async import frames, future/stream guest values, cooperative cancellation or async guest adapters are enabled.",
+    "Task checkpoints exclude timers and foreign native I/O. Readiness is a queue query and hint, not a canonical wakeup or EXIT acknowledgement.",
+    "Dropping the native task lease permits later job adoption; it does not establish safe cancellation. Generated adapter errors must retire the Store until cancellation is implemented.",
+    "Linux tests and a wasm32 type check do not qualify new matching static archives, actual Perry WASI guests, macOS, Windows or final packages.",
+    "Address, root-holder and file-size gates retain byte-identical inherited failures; no new waiver was added."
+  ],
+  "negativeControl": {
+    "snapshot": "v396",
+    "selectedTests": 1,
+    "passed": 0,
+    "failed": 1,
+    "subject": "uncaught_task_jobs_preserve_the_original_error_without_exiting_the_host_or_failing_a_sibling",
+    "failure": "microtask_drain_active remains true after the original guest job error is caught",
+    "fixedSnapshot": "v397",
+    "fixedDevelopmentAndPanicAbortPassed": true
+  }
+}

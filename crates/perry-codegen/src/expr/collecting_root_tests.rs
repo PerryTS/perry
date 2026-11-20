@@ -583,6 +583,7 @@ fn imported_constructor_ir(
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         });
@@ -590,6 +591,7 @@ fn imported_constructor_ir(
     module.functions.push(probe(
         vec![Type::Any],
         Expr::New {
+            byte_end: 0,
             class_name: if walk_ancestor { "Leaf" } else { "WorkerMade" }.to_string(),
             // A real pointer-bearing argument, not an undefined padding value.
             args: vec![Expr::LocalGet(1), Expr::Object(Vec::new())],

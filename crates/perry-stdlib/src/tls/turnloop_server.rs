@@ -53,8 +53,8 @@ use super::{
 
 /// This module's completion-sink slot. perry-ext-net owns 0, perry-ext-http
 /// 1 and 6, this crate's HTTP client 2, SMTP client 3 and framework server 5,
-/// perry-ext-ws 7 and 8, the database bindings 9..=12
-/// (`perry-db-turnloop::subsystem`), and perry-runtime's own tests use 13.
+/// perry-ext-ws 7 and 8, the reserved database band 9..=12 (its bindings no
+/// longer exist in this workspace), and perry-runtime's own tests use 13.
 pub(super) const SUBSYSTEM: u8 = 14;
 
 /// Base of the turnloop id band for listeners and connections: `ID_BAND +
@@ -343,6 +343,15 @@ fn pump_and_flush(socket_id: i64, conn: &mut Conn) {
     conn.session.pump();
     if conn.session.has_output() {
         let bytes = conn.session.take_output();
+        // Node closes an initial plaintext peer without sending a TLS alert.
+        // Otherwise an unread alert keeps a paused net.Socket from observing
+        // EOF. Once a ClientHello selected a protocol, retain normal alerts.
+        if conn.phase == Phase::Handshaking
+            && conn.session.protocol_version().is_none()
+            && conn.session.failed_with_invalid_content_type()
+        {
+            return;
+        }
         // A failed submission is also reported by the handle's own error or
         // close completion, which is where the socket is torn down.
         let _ = tl::write(tl_id(socket_id), bytes, 0);

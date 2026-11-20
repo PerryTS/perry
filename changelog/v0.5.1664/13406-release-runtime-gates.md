@@ -1,0 +1,1 @@
+Refresh rooted array addresses across collecting operations and scope non-collecting reads, removing 40 raw-handle audit sites. Keep the runtime TLS teardown visible to optimized GC-effects analysis, classify compact page-offset stores, and split archive cleanup tests to restore the file-size gate.

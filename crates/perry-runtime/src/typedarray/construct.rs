@@ -17,7 +17,6 @@ pub extern "C" fn js_typed_array_new_empty(kind: i32, length: i32) -> *mut Typed
 
 /// Allocate a typed array from a NaN-boxed JS value. Dispatches at runtime:
 /// - POINTER_TAG (0x7FFD) → create from the pointed-to array's elements
-/// - INT32_TAG  (0x7FFE) → use the tagged integer as the element count
 /// - plain f64 / NaN    → use the numeric value as the element count
 /// - anything else      → empty typed array
 ///
@@ -49,12 +48,6 @@ pub extern "C" fn js_typed_array_new(kind: i32, val: f64) -> *mut TypedArrayHead
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = scope.root_nanbox_f64(val);
         return typed_array_new_from_heap_source(kind, &rooted);
-    }
-    if top16 == 0x7FFE {
-        // INT32_TAG — lower 32 bits are the signed length.
-        let n = (bits & 0xFFFF_FFFF) as i32;
-        let len = typed_array_length_or_throw(n as f64);
-        return typed_array_alloc(kind as u8, len);
     }
     if !(0x7FFC..=0x7FFF).contains(&top16) {
         // Issue #654: typed-array sources (`new Float64Array(otherTA)`)
@@ -107,25 +100,28 @@ fn typed_array_new_from_heap_source(
 ) -> *mut TypedArrayHeader {
     // Re-read the (possibly rewritten) box; never cache the address across a
     // potentially-allocating probe.
-    let cur = || {
-        let val = rooted.get_nanbox_f64();
-        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-        (val, addr)
-    };
 
     // Issue #654: a NaN-boxed pointer can also point at a registered
     // typed array (e.g. when the source flowed through a path that
     // re-applied POINTER_TAG). Detect via the registry and copy
     // through `typed_array_to_typed_array` so element values stay
     // numeric instead of being read as f64-NaN-boxed bits.
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if lookup_typed_array_kind(raw_addr).is_some() {
         return typed_array_copy_from_typed_array(kind as u8, raw_addr as *const TypedArrayHeader);
     }
     if crate::buffer::is_registered_buffer(raw_addr) {
         if crate::buffer::is_any_array_buffer(raw_addr) {
             let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
-            let (val, _) = cur();
+            let (val, _) = {
+                let val = rooted.get_nanbox_f64();
+                let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                (val, addr)
+            };
             return crate::typedarray_view::js_typed_array_view(kind, val, undefined, undefined);
         }
         return bigint::copy_from_uint8_buffer(
@@ -142,7 +138,11 @@ fn typed_array_new_from_heap_source(
     // materialization (their `@@iterator` is native, not a stored symbol
     // property). Functions are valid array-like/iterable sources too —
     // previously they were reinterpreted as an `ArrayHeader` (crash).
-    let (val, raw_addr) = cur();
+    let (val, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if crate::map::is_registered_map(raw_addr)
         || crate::set::is_registered_set(raw_addr)
         || crate::array::is_builtin_iterator_class_id(raw_addr)
@@ -153,26 +153,50 @@ fn typed_array_new_from_heap_source(
         // generator objects (Perry generators carry own `next`/`return`
         // closures and no `@@iterator` symbol prop). The shared
         // `Array.from` materialization drives these correctly.
-        let (val, _) = cur();
+        let (val, _) = {
+            let val = rooted.get_nanbox_f64();
+            let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            (val, addr)
+        };
         let materialized = crate::array::js_array_from_value(val);
         return js_typed_array_new_from_array(kind, materialized);
     }
     // `js_util_types_is_generator_object` above walks own properties and can
     // collect, so re-derive before every remaining dereference.
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if crate::closure::is_closure_ptr(raw_addr) {
-        let (val, _) = cur();
+        let (val, _) = {
+            let val = rooted.get_nanbox_f64();
+            let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+            (val, addr)
+        };
         return unsafe { typed_array_from_plain_object(kind as u8, val) };
     }
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
         let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if unsafe { (*gc_hdr).obj_type } == crate::gc::GC_TYPE_OBJECT {
-            let (val, _) = cur();
+        if crate::gc_type_is_object!(unsafe { (*gc_hdr).obj_type }) {
+            let (val, _) = {
+                let val = rooted.get_nanbox_f64();
+                let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+                (val, addr)
+            };
             return unsafe { typed_array_from_plain_object(kind as u8, val) };
         }
     }
-    let (_, raw_addr) = cur();
+    let (_, raw_addr) = {
+        let val = rooted.get_nanbox_f64();
+        let addr = (val.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
+        (val, addr)
+    };
     js_typed_array_new_from_array(kind, raw_addr as *const crate::array::ArrayHeader)
 }
 
@@ -228,15 +252,17 @@ unsafe fn typed_array_plain_object_values(val: f64) -> Vec<f64> {
         let bound_rooted = scope.root_nanbox_u64(bound);
         let iter = crate::closure::js_native_call_value(
             bound_rooted.get_nanbox_f64(),
-            crate::closure::plain_call_receiver(),
+            crate::closure::JsThis::from_f64(rooted.get_nanbox_f64()),
             ptr::null(),
             0,
         );
         let iter_rooted = scope.root_nanbox_f64(iter);
+        let next_rooted = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
         let mut raw = Vec::new();
-        while let Some(v) =
-            crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
-        {
+        while let Some(v) = crate::collection_iter::iterator_next_value(
+            iter_rooted.get_nanbox_f64(),
+            next_rooted.get_nanbox_f64(),
+        ) {
             raw.push(scope.root_nanbox_f64(v));
         }
         return crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&raw);
@@ -297,7 +323,7 @@ pub(crate) unsafe fn typed_array_from_source_raw_values(val: f64) -> Vec<f64> {
             let raw_addr = cur_addr();
             if raw_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
                 let gc_hdr = (raw_addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_hdr).obj_type == crate::gc::GC_TYPE_OBJECT {
+                if crate::gc_type_is_object!((*gc_hdr).obj_type) {
                     return typed_array_plain_object_values(rooted.get_nanbox_f64());
                 }
             }
@@ -495,12 +521,14 @@ pub extern "C" fn js_typed_array_new_from_array(
             &[],
         ) {
             Ok(iter) => iter,
-            Err(error) => crate::exception::js_throw(error),
+            Err(error) => crate::exception::rethrow_caught(error),
         };
         let iter_rooted = scope.root_nanbox_f64(iter);
-        while let Some(value) =
-            crate::collection_iter::iterator_next_value(iter_rooted.get_nanbox_f64())
-        {
+        let next_rooted = scope.root_nanbox_f64(crate::collection_iter::iterator_next_method(iter));
+        while let Some(value) = crate::collection_iter::iterator_next_value(
+            iter_rooted.get_nanbox_f64(),
+            next_rooted.get_nanbox_f64(),
+        ) {
             raw.push(scope.root_nanbox_f64(value));
         }
     }

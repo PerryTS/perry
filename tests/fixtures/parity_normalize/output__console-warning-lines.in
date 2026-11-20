@@ -1,0 +1,4 @@
+(node:5) Warning: Count for label 'x' does not exist
+Warning: No such label 'y' for console.timeEnd()
+(node:5) Warning: Label 'z' already exists for console.time()
+kept

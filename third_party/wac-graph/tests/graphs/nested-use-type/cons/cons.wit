@@ -1,0 +1,8 @@
+package test:cons;
+
+world cons {
+  import test:prod/defs;
+  use test:prod/defs.{region};
+  import make: func() -> region;
+  export run: func() -> s32;
+}

@@ -1,0 +1,12 @@
+package test:foo;
+
+world my-world {
+    use my-interface.{my-resource};
+    type my-resource2 = my-resource;
+
+    export my-func: func(r: my-resource2);
+}
+
+interface my-interface {
+    resource my-resource {}
+}

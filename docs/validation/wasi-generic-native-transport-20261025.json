@@ -1,0 +1,744 @@
+{
+  "scope": "Production Rust generic future/stream composition, owned native descriptors, reads, transfer and cancellation disposal",
+  "baseRevision": "a4c39014507876d0467af4151ad103b1ca2ba52a",
+  "qualifiedSnapshot": "v230",
+  "sourceFilesVerifiedExceptValidationLock": 38643,
+  "turnloopSourceFilesVerified": 1529,
+  "shippingCargoLockSha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+  "shippingLockUnchanged": false,
+  "shippingLockDelta": "Eight WAC composition packages added without changing existing package versions; seven-day minimum publication age preserved. Validation-only Turnloop path overrides remain separate.",
+  "wasmtime": "48.0.7",
+  "componentHostAbi": 8,
+  "componentGuestAbi": 2,
+  "tests": {
+    "engineDevelopment": 119,
+    "engineProductionPanicAbort": 119,
+    "witDevelopment": 22,
+    "witProductionPanicAbort": 22,
+    "allTargetsClippy": true,
+    "strictTypescript": true,
+    "typescript": "5.9.3",
+    "productionExecution": "unprivileged uid/gid 65534, one test thread",
+    "tokioGate": "0 root edges/packages/source lines and standalone fixtures clean",
+    "normalDependencyTreeTokioFree": true,
+    "closeRaceNegativeControl": "omitting the close submission intent makes the exact post-return test fail by publishing an owned payload instead of cancellation"
+  },
+  "developmentPhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "engine-tests",
+      "exitCode": 0
+    },
+    {
+      "phase": "clippy",
+      "exitCode": 0
+    },
+    {
+      "phase": "wit-cli",
+      "exitCode": 0
+    },
+    {
+      "phase": "bindings",
+      "exitCode": 0
+    },
+    {
+      "phase": "typecheck",
+      "exitCode": 0
+    }
+  ],
+  "productionPhases": [
+    {
+      "phase": "invalidate-engine-wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "build",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_wit",
+      "exitCode": 0
+    },
+    {
+      "phase": "perry_component_host",
+      "exitCode": 0
+    },
+    {
+      "phase": "tree",
+      "exitCode": 0
+    }
+  ],
+  "negativePhases": [
+    {
+      "phase": "invalidate",
+      "exitCode": 0
+    },
+    {
+      "phase": "negative",
+      "exitCode": 101
+    }
+  ],
+  "productionArtifacts": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/96c241177e06800f/out/perry_component_host-96c241177e06800f",
+      "sha256": "9b427e3eddcdd2eac13435b0f9ff75a97d9dce1d85d20e80a0d3e2ab1e947a0f",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-generic-transport-v230-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "frozenPath": "/root/codex-components-p2-20261021/perry-generic-transport-v230-artifacts/perry_wit-tests"
+    }
+  },
+  "productionIntegrationSubjects": [
+    "composed_native_future_reads_preserve_guest_resource_identity_and_destructor",
+    "foreign_future_tokens_fail_before_entering_the_engine_and_owner_can_still_read",
+    "composed_native_stream_returns_owned_chunk_before_eof_and_closes_unread_values",
+    "composition_aggregates_imported_host_resource_types_and_preserves_generations",
+    "pruned_provider_resource_names_do_not_create_phantom_helper_imports",
+    "private_control_import_names_do_not_collide_with_application_imports",
+    "production_future_transport_preserves_unicode_large_bytes_and_nested_resources",
+    "payload_free_futures_and_streams_preserve_void_and_unit_counts",
+    "composed_nested_future_payloads_remain_owned_after_outer_read_cleanup",
+    "pending_read_close_wakes_control_and_reuses_store_after_producer_finishes",
+    "queued_close_cannot_be_cancelled_by_dropping_its_observer",
+    "close_submitted_from_producer_completion_discards_a_copied_owned_payload_once",
+    "close_from_post_return_cleanup_wins_before_read_commit_and_drops_payload_once",
+    "rejected_close_at_mailbox_quota_does_not_cancel_a_pending_read",
+    "future_transfer_checks_types_duplicates_and_aggregate_rollback_before_entering_guest"
+  ],
+  "behavior": {
+    "composition": "Validate original first; compose whole original and canonical helpers using wac-graph 0.12.0; actual imports/exports preserve nominal resource identities and pruned provider names.",
+    "nativeApi": "DriverClient::read_async_value and close_async_value; future/stream descriptors can transfer as export arguments and imported results; exact instantiated type metadata retained at every nested payload.",
+    "ownership": "Store-local nonce plus checked monotonic tokens; preflight kind, type, busy state, foreign and duplicate transfers before commit; no FutureReader<Val> assumption.",
+    "quotas": "1024 live descriptors, 64 outstanding commands, stream capacity 1..65536 and future capacity 1; helper memory/instances share Store limits.",
+    "cancellation": "Reserve native signal before Wasm; submission intent wins before semantic result commit even after helper returns; dispose copied owned values through original nominal resource types; close continuation; accepted close survives observer drop.",
+    "memory": "Shared maintained canonical layout DAG; cleanup skips scalar-only list elements while still freeing each buffer; 3,145,865 bytes plus Unicode and owned resource passes at unchanged 100-million fuel.",
+    "stream": "Preserve final partial chunks and unit counts; next read reports EOF; nested futures survive outer canonical cleanup.",
+    "legacy": "Components with generic async values require the persistent Rust driver; legacy call/call_async reject before executing guest exports. TypeScript read methods are still declarations only."
+  },
+  "security": {
+    "auditExitCode": 1,
+    "denyExitCode": 0,
+    "outstandingAdvisory": "RUSTSEC-2026-0387",
+    "versions": [
+      "crypto-bigint 0.5.5",
+      "crypto-bigint 0.7.5"
+    ],
+    "baselineAlsoFails": true,
+    "cryptoDependencyEntriesUnchanged": [
+      "crypto-bigint",
+      "elliptic-curve",
+      "p256",
+      "p384",
+      "p521",
+      "ed448-goldilocks",
+      "x448"
+    ],
+    "componentEngineNormalTreeAffected": false,
+    "newAuditIgnoreAdded": false,
+    "status": "Workspace security-audit remains failing; this milestone is not final integration readiness."
+  },
+  "validationDependencyOverride": "Only validation locks/config use immutable Turnloop paths. No released registry dependency or shipping package claim.",
+  "notQualified": [
+    "native producer factories and writer APIs",
+    "TypeScript per-invocation ABI frames, ALS and error routing",
+    "owned traced TypeScript future/stream wrappers and GC deferred close",
+    "maintained C async guest adapter and cross-language async composition",
+    "new compiler/runtime or moving-GC acceptance",
+    "macOS/Windows current providers and final packaging",
+    "workspace security-audit readiness"
+  ],
+  "developmentFailuresRetained": [
+    "v218 destructor assertion before background producer exit; corrected bounded drain to quiescence",
+    "v220 ambiguous inferred String conversion",
+    "v222 Clippy read-intent map type complexity",
+    "v225/v226 large byte cleanup exhausted unchanged fuel; skipped no-op scalar visits",
+    "v226/v227 nested and unit stream fixtures mishandled unwritten cancellation and partial writes",
+    "v228 unit writer continuation boolean mask; fixed positive remaining-count test"
+  ],
+  "postQualificationAdditions": [
+    "This validation receipt and pending changeset only."
+  ],
+  "evidenceMembers": {
+    "development/v218/engine-tests.log": {
+      "sha256": "c408c993d4d85c1890c24ab80fbc3ea062d69247e8453c17d951ff488051ea7e",
+      "bytes": 16833
+    },
+    "development/v218/invalidate.log": {
+      "sha256": "e383a43c487b82cf3aa8860c4e3baf6257534d8e9e6bf2bc622254198334b3a1",
+      "bytes": 84
+    },
+    "development/v218/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v218/wit-tests.log": {
+      "sha256": "e02da98bcb059a42f37d9a4ffa97834627dab47465c4ccc703c14e932b171a3d",
+      "bytes": 6603
+    },
+    "development/v220/engine-tests.log": {
+      "sha256": "ac9842be36758e09211dfa1636e961b8ba5e23fbcfafff34fb0003d52808501f",
+      "bytes": 5252
+    },
+    "development/v220/invalidate.log": {
+      "sha256": "fa16dcb2dde747c7db3674cb692375e8f9893226b185321e99fba2d33e66742e",
+      "bytes": 83
+    },
+    "development/v220/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v220/wit-tests.log": {
+      "sha256": "0eeb26f20840836e47a9286a0bb7199bad1400e2fee3c0993d262490ab3188ac",
+      "bytes": 6603
+    },
+    "development/v222/clippy.log": {
+      "sha256": "7e2ed6c890365cc27e3df6a8b9915ca7cf85828d0cc12fcd3cc1c840aff6bdea",
+      "bytes": 5382
+    },
+    "development/v222/engine-tests.log": {
+      "sha256": "40c523389d1769ae4de4aaf8194615e0a698bbd4f2ec66451bf298af30418bd8",
+      "bytes": 15959
+    },
+    "development/v222/invalidate.log": {
+      "sha256": "738719c7ecacad3f08e77e7221dab793675a603ba18d87f7b1061ee9cb9dc43b",
+      "bytes": 82
+    },
+    "development/v222/phases.json": {
+      "sha256": "87160046ea289aec1b04145a8999514784e53c58595589a5e1ae1c0cc755c459",
+      "bytes": 218
+    },
+    "development/v222/wit-tests.log": {
+      "sha256": "af45d391abb4654b593b1fcb9ac4aae5348cada6958e45fb14f2bd3e74c15768",
+      "bytes": 6603
+    },
+    "development/v223/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v223/clippy.log": {
+      "sha256": "aef96e04eb4499e3c624e9d2ec372b59ca814f3b1d3a8fbbaa2279c677638e98",
+      "bytes": 4644
+    },
+    "development/v223/engine-tests.log": {
+      "sha256": "0362a88b9e2b1d6995d2fbba43e139c006a949547f3454f102287b49a46df8e2",
+      "bytes": 16186
+    },
+    "development/v223/invalidate.log": {
+      "sha256": "42b6cfaaeda4de12c0941a46ee020af62943de9737bf4133dd8f7caff674af7f",
+      "bytes": 83
+    },
+    "development/v223/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v223/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v223/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v223/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v223/typecheck/tsconfig.json": {
+      "sha256": "94ccece04c2676a9088a902f99c1d98584aba26c683232e6c8ae9aeb28759578",
+      "bytes": 530
+    },
+    "development/v223/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v223/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v223/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v223/wit-cli.log": {
+      "sha256": "79d5ce22c194b89bb1bb4efc62315024adf9171aed923279ac8432f86f66762a",
+      "bytes": 4507
+    },
+    "development/v223/wit-tests.log": {
+      "sha256": "0fedddcfa89e6c4bef75f24898769779e24af55a0e7e63ac9c3f6346d3ebe184",
+      "bytes": 6603
+    },
+    "development/v224/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v224/clippy.log": {
+      "sha256": "fd117a35799d43545872c33ceb3705dcf33cd6951fee2b39f0c4f0a1c6ffade2",
+      "bytes": 4644
+    },
+    "development/v224/engine-tests.log": {
+      "sha256": "9e3043d40377c63f238a98e1c1c7ec97255d6ca31c5ceb4102eece94fa890eec",
+      "bytes": 16316
+    },
+    "development/v224/invalidate.log": {
+      "sha256": "a57afceec202d38da50fb422fda6a6506a1ec2f06136b1656e4296d48b42d6ad",
+      "bytes": 84
+    },
+    "development/v224/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v224/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v224/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v224/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v224/typecheck/tsconfig.json": {
+      "sha256": "eda4b393ce8e2fdb65c10f606bead7c83b97721f4b4408c8273632627a14a3ee",
+      "bytes": 530
+    },
+    "development/v224/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v224/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v224/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v224/wit-cli.log": {
+      "sha256": "28a1f8a1e16b53827dc56f835e941f81c132402129ddd40aee3271f646bef064",
+      "bytes": 4507
+    },
+    "development/v224/wit-tests.log": {
+      "sha256": "9e82c7b58b0a6e4303078864c17e8a798d7d836638c010657f79702d08187696",
+      "bytes": 6603
+    },
+    "development/v225/engine-tests.log": {
+      "sha256": "44bbbb51408134c1d4e069087f0ac3f4970754834ce82c76aa0247f608b178af",
+      "bytes": 17445
+    },
+    "development/v225/invalidate.log": {
+      "sha256": "a57afceec202d38da50fb422fda6a6506a1ec2f06136b1656e4296d48b42d6ad",
+      "bytes": 84
+    },
+    "development/v225/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v225/wit-tests.log": {
+      "sha256": "1c7e49b19583ddde945364286ecb70e1103ebac4e204ef9068103604c6d6f5e9",
+      "bytes": 6603
+    },
+    "development/v226/engine-tests.log": {
+      "sha256": "6527df4f5af8d02866755814c0a4e85ae2dc116514f455d2661cc1b60fa979ad",
+      "bytes": 18803
+    },
+    "development/v226/invalidate.log": {
+      "sha256": "3dd64b9de142813e326f87a66ea7f2571436ce73398d39fea991c40fc29846e0",
+      "bytes": 83
+    },
+    "development/v226/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v226/wit-tests.log": {
+      "sha256": "cab24ab35f410d13193028cbd070640bff7a466c174d23c1263355a13ce9f86d",
+      "bytes": 6603
+    },
+    "development/v227/engine-tests.log": {
+      "sha256": "9175a7b02cf11f7f963641fd695e026031bce3d0d33bf1d055686a38ea3a4646",
+      "bytes": 17969
+    },
+    "development/v227/invalidate.log": {
+      "sha256": "3dd64b9de142813e326f87a66ea7f2571436ce73398d39fea991c40fc29846e0",
+      "bytes": 83
+    },
+    "development/v227/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v227/wit-tests.log": {
+      "sha256": "c6114d8a25497141cd571650f95a5e15c2742e0c6aeca5d2a7d86e6cf6a2ce12",
+      "bytes": 6603
+    },
+    "development/v228/engine-tests.log": {
+      "sha256": "676b48fb7a5eaa6f2b2182ddf7d45a211cda94ffcf396056794c11b5ad306ac5",
+      "bytes": 17306
+    },
+    "development/v228/invalidate.log": {
+      "sha256": "fc71243aaa7d3b081dc6c953029f3e000774b9053431c65f7a5f0d95234e955d",
+      "bytes": 83
+    },
+    "development/v228/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "development/v228/wit-tests.log": {
+      "sha256": "2a4f33c80d245fd86de6cef274f3085266de6c881003a4ad9a71bf3f2884cbdb",
+      "bytes": 6603
+    },
+    "development/v230/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v230/clippy.log": {
+      "sha256": "5413ede13d400b3c53be843e676d2267659577c224e1507bf5869db2d935107b",
+      "bytes": 4644
+    },
+    "development/v230/engine-tests.log": {
+      "sha256": "25b8e3ce4659980459212347b7c6f07c591832d706e358259d0bc528af2af22d",
+      "bytes": 16778
+    },
+    "development/v230/invalidate.log": {
+      "sha256": "fc71243aaa7d3b081dc6c953029f3e000774b9053431c65f7a5f0d95234e955d",
+      "bytes": 83
+    },
+    "development/v230/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "development/v230/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "development/v230/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "development/v230/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "development/v230/typecheck/tsconfig.json": {
+      "sha256": "47d0bb2e9dd6e2f220fb8f058c36f1ec7dabb001da7ea53f301671f1305f2b31",
+      "bytes": 530
+    },
+    "development/v230/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "development/v230/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "development/v230/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "development/v230/wit-cli.log": {
+      "sha256": "8f64a8eabeb586c3516c911752d36b8d193f6c3060738dd2c65432b95cc073b5",
+      "bytes": 4507
+    },
+    "development/v230/wit-tests.log": {
+      "sha256": "e31fd4d6fa4be84934b95faac8457e330ebd314c3f293d1a8dde77684e7a8fc8",
+      "bytes": 6603
+    },
+    "production/build.log": {
+      "sha256": "60b4c9fd215c2937916cdb3a00178aa23c9a405bfbf55ee2cbc5eeb1777dff2f",
+      "bytes": 266636
+    },
+    "production/invalidate-engine-wit.log": {
+      "sha256": "5338c5a208c3b2f632b4d85c66f38cb9ec08b70c2ff9bdebcc175ba555c6ce82",
+      "bytes": 82
+    },
+    "production/perry_component_host-binary.json": {
+      "sha256": "7e2840d0d05598a0567e75678d29210400488377ea660be32689dd494a26b8e0",
+      "bytes": 265
+    },
+    "production/perry_component_host-tests.log": {
+      "sha256": "d5d217ad64bd53dbeb763da6180ac327cb1ac13686355ff400ba8ee4a19ad818",
+      "bytes": 11986
+    },
+    "production/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "production/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "production/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "production/tree.log": {
+      "sha256": "cd28870ac45018173a5d1f86b33a743bc18ce9b9056e6e9e9c8a64d3688bbebb",
+      "bytes": 12498
+    },
+    "negative/invalidate.log": {
+      "sha256": "1446e613e635d08508c2351ee7f873f2ad83b882850358617dcf7c610e4d4dd8",
+      "bytes": 83
+    },
+    "negative/negative.log": {
+      "sha256": "2d581389279153b7925ed73eee37e6d68e62a8c0ed93078b56cb6d76d538aba5",
+      "bytes": 5754
+    },
+    "negative/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "security/Cargo.lock": {
+      "sha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+      "bytes": 258501
+    },
+    "security/audit-baseline.log": {
+      "sha256": "00c765eeb96938fa9018defdeacc685422123d5247132ad85aaa8a5ae80f6a21",
+      "bytes": 2948
+    },
+    "security/audit.log": {
+      "sha256": "df3e75773d2dddca85303a7b626ffd549cac2038c17f691547c24d9236a9f64c",
+      "bytes": 3040
+    },
+    "security/component-tree.log": {
+      "sha256": "8b45cad6b7ad35c6f1b4bb9c67146371b764e8da71e27c18caaa2ceca30973bf",
+      "bytes": 11858
+    },
+    "security/crypto-new-tree.log": {
+      "sha256": "c69ed9071b22a5a865a82a13a45154567524852a83690c0f2674dcc5a811293d",
+      "bytes": 505
+    },
+    "security/crypto-old-tree.log": {
+      "sha256": "b3b5fd925ae709377e2a2a650dd47c21fcff639f445f2e5e4987af13b9663caf",
+      "bytes": 908
+    },
+    "security/deny.log": {
+      "sha256": "e6ff654c545198a09478fb3b1d29421064d9c172707e3c2cce67784871d2ebe6",
+      "bytes": 1095522
+    },
+    "security/lock.log": {
+      "sha256": "749f9ca3db5fe38d9c2d9aa6eeed688688d1ef921d6ddb5f164a57932f98154a",
+      "bytes": 467
+    },
+    "snapshots/perry-http-runtime-v230-manifest.json": {
+      "sha256": "08cb0f09c4b3c0dd51ca8b254e949dab9f48c0f34ed1db773796455112e39154",
+      "bytes": 5671723
+    },
+    "snapshots/perry-http-runtime-v230-overlay.tar.gz": {
+      "sha256": "ca3825ac320c42189ad98fc678c20ba98611d09d98c9a6019fbe9e5df807b735",
+      "bytes": 840409
+    },
+    "source/crates/perry-component-host/src/async_values/cancel.component.wat": {
+      "sha256": "f2aa5923749113715ba9c40e4ecef077ad77097340593249d696257233a13cd7",
+      "bytes": 6655
+    },
+    "source/crates/perry-component-host/src/async_values/cancel_tests.rs": {
+      "sha256": "48c5cc4b715deb6ef55de3967390fb6ad84b2b69b8a92a71f54baf29a54658fd",
+      "bytes": 4484
+    },
+    "source/crates/perry-component-host/src/async_values/compose.rs": {
+      "sha256": "a292c0d950066df1d874648f5fabab7460d60caf92b352f3744f7d3b8c0de11f",
+      "bytes": 8271
+    },
+    "source/crates/perry-component-host/src/async_values/compound-producer.component.wat": {
+      "sha256": "d2864611778fc59895cdf2f1ce7760af37e35c23850950635b828c4d63457176",
+      "bytes": 5057
+    },
+    "source/crates/perry-component-host/src/async_values/contract_tests.rs": {
+      "sha256": "ed6f1fee8d36b14727c53d281b3df0266a7b407c71bc82e81a27be3c9b620c2a",
+      "bytes": 732
+    },
+    "source/crates/perry-component-host/src/async_values/control.rs": {
+      "sha256": "0822ba3c530319870509d925e3900ca9d95ff91b238c3a5eb8b8758e5f073b90",
+      "bytes": 2912
+    },
+    "source/crates/perry-component-host/src/async_values/heap.wat": {
+      "sha256": "d5195643a9affba2550641ca2d94d9a2e57ce7d048693898fc2181df78dd6cda",
+      "bytes": 4725
+    },
+    "source/crates/perry-component-host/src/async_values/heap_tests.rs": {
+      "sha256": "8a0f26ce07a0213910f4054a022f49f139b8ee83583a825c145e51499f07c28e",
+      "bytes": 3583
+    },
+    "source/crates/perry-component-host/src/async_values/imported-producer.component.wat": {
+      "sha256": "efeae8f801290ec786c0705ffb164ea4edcd9160ebe6b6bc583941b0203319a5",
+      "bytes": 4315
+    },
+    "source/crates/perry-component-host/src/async_values/integration_cancel_tests.rs": {
+      "sha256": "44c56ea6fb45752f4ab41285f6295219403186b7fa68e4c4dabbf17754e56190",
+      "bytes": 10241
+    },
+    "source/crates/perry-component-host/src/async_values/integration_tests.rs": {
+      "sha256": "a80a275322a271c7c8a5e9e907d5af4983d72db8f0f67c83c62850ce91b3dd72",
+      "bytes": 18580
+    },
+    "source/crates/perry-component-host/src/async_values/nested-producer.component.wat": {
+      "sha256": "91e0d253263c1ef8f6c1f4e48d13dcd4e9e4edce81cb09f77ca760f0e6287a1a",
+      "bytes": 6050
+    },
+    "source/crates/perry-component-host/src/async_values/paused-producer.component.wat": {
+      "sha256": "7dfb54e4312ae297c1e6e345d56fd8f5b95eaf8dcf219f9fc5447bca94b195f4",
+      "bytes": 6284
+    },
+    "source/crates/perry-component-host/src/async_values/producer.component.wat": {
+      "sha256": "dedb4a2a2d14244a9d3e2e1c964aa5980ccce7453596e9da90891166433cea16",
+      "bytes": 4325
+    },
+    "source/crates/perry-component-host/src/async_values/reader.component.wat": {
+      "sha256": "0bd8ab4d33d8828351fc9d2c7941e5697fe5c1df6b78ea31606b02114cbe1791",
+      "bytes": 10530
+    },
+    "source/crates/perry-component-host/src/async_values/reader.rs": {
+      "sha256": "7e1f9e5ae9989ace27036b10609f39ac53c2efd8ec62a01e371dfa15a3fb0827",
+      "bytes": 4711
+    },
+    "source/crates/perry-component-host/src/async_values/reader_cleanup.rs": {
+      "sha256": "cb0b679d8815bb2a016d3748869a831f8d9582572f7c440b6f027a058fe93688",
+      "bytes": 3294
+    },
+    "source/crates/perry-component-host/src/async_values/reader_dispose.rs": {
+      "sha256": "89355cbc4fdea7a87b85055cd9213801aea7fef4188750da05957171e40fda34",
+      "bytes": 5834
+    },
+    "source/crates/perry-component-host/src/async_values/reader_tests.rs": {
+      "sha256": "4955e5d7bbd9ba524c93b39e086b10c6d7ba8fcc769953c78de94fce8c21d6a7",
+      "bytes": 27264
+    },
+    "source/crates/perry-component-host/src/async_values/reader_types.rs": {
+      "sha256": "18f401b95107f3723f632451c12483e0dfbe75d3ab0ccda09861b9c76d8f63d5",
+      "bytes": 9727
+    },
+    "source/crates/perry-component-host/src/async_values/task_context.component.wat": {
+      "sha256": "73dffa26aa7a1401a4ad935a71fc5df843ae5643fb28bdf2e9cc5569b31aac5b",
+      "bytes": 3495
+    },
+    "source/crates/perry-component-host/src/async_values/task_context_tests.rs": {
+      "sha256": "4be897f1680c598db678755f8984f2f181c80240d713ac27dbe8e7cff5887206",
+      "bytes": 4824
+    },
+    "source/crates/perry-component-host/src/async_values/transfer_tests.rs": {
+      "sha256": "5f951f530dbc65aae1ae75a34f4d514e64d4df87c433367daf8334ff8a1f7d15",
+      "bytes": 4428
+    },
+    "source/crates/perry-component-host/src/async_values/values.rs": {
+      "sha256": "672ff85f647bf6cc531a46753a481a72e528fc9ed9d725f992fb5e34b03e6825",
+      "bytes": 8334
+    },
+    "source/crates/perry-component-host/src/driver/async_values.rs": {
+      "sha256": "4b24af628f6d9b3ff79878d63d88a94acf8b460fe0d065b21d58a6a053560b90",
+      "bytes": 7727
+    },
+    "source/crates/perry-component-host/src/driver/requests.rs": {
+      "sha256": "ead13b2961232b6f318a09ef8e0a53d8eb0c240eea02f455a1d3042945fea14c",
+      "bytes": 11159
+    },
+    "source/crates/perry-component-host/src/driver/tests.rs": {
+      "sha256": "8ca072b424b9f7717332d7df6a49e226c48ffc4290cf4bef7af83d16c409a571",
+      "bytes": 20503
+    },
+    "source/crates/perry-component-host/src/async_values.rs": {
+      "sha256": "8533f6e28c02b099d74b722632825c9d8d6773a479f484f4713a24b35e704bd6",
+      "bytes": 1248
+    },
+    "source/crates/perry-component-host/src/driver.rs": {
+      "sha256": "ae2a68b192f5e2fa8727d276235e348316ae6f435c8d6f8c501b6e109b722a79",
+      "bytes": 12711
+    },
+    "source/crates/perry-component-host/src/contract.rs": {
+      "sha256": "107e868c8add79b1a85a85321324fb64da29c851e0a3716798c5aaf916e73eb7",
+      "bytes": 9668
+    },
+    "source/crates/perry-component-host/src/transport.rs": {
+      "sha256": "fb60efc769884b1c4110bfc32c9a438422ee68487bd62df46e26b27cf3c317f6",
+      "bytes": 9497
+    },
+    "source/crates/perry-component-host/src/wire.rs": {
+      "sha256": "9b11ed580405f98900a038c485a8ba42cfe143bfbd322ce553251eaebe7730a0",
+      "bytes": 14016
+    },
+    "source/crates/perry-component-host/src/asynchronous.rs": {
+      "sha256": "d73c13709bc9bf9abc3a63e8c705ab6c6f23f256ec0e34648984047be3eba7c3",
+      "bytes": 8560
+    },
+    "source/crates/perry-component-host/src/imports.rs": {
+      "sha256": "2714ebf47aee69574d46de80eb47ebbf995f299c206e14ae9b6852436b10d30b",
+      "bytes": 2857
+    },
+    "source/crates/perry-component-host/src/lib.rs": {
+      "sha256": "038c910cefe71c0fd05a6ca5cc55dd8d853e78fbddb00470edd6a347c2cde330",
+      "bytes": 17103
+    },
+    "source/crates/perry-component-host/Cargo.toml": {
+      "sha256": "b57b9f1dbf0244a20c17eecb8f4483d7a78339923c3dad7c047da5e7738c5819",
+      "bytes": 795
+    },
+    "source/Cargo.toml": {
+      "sha256": "1cc7f5b244a66d940dcab64b6e7f40ac3693ba0f26b4e0fb1cb1ccce5a4f256e",
+      "bytes": 30952
+    },
+    "source/Cargo.lock": {
+      "sha256": "9b33197bcb5a09b4ae9f5c1a9a7f0dd2678be1f8dcba8fefb9d81f3942d8410b",
+      "bytes": 258641
+    },
+    "source/.cargo/config.toml": {
+      "sha256": "f78759b1721b9116d5024ea3c52e7f8a57b0fa6dbfea95af53e9c5c2accbcbc0",
+      "bytes": 4738
+    },
+    "source/rust-toolchain.toml": {
+      "sha256": "02d08527a444fc4330aecf139695ef487fed9059cc1473f65e67e64a782cc348",
+      "bytes": 876
+    },
+    "source/docs/WASI_COMPONENTS.md": {
+      "sha256": "e6ef8ee1a5977c9969fba7ef0be8e3c744a037f36c0c76539aa942534f1709c5",
+      "bytes": 50090
+    },
+    "tools/perry-generic-transport-prod.py": {
+      "sha256": "84432ca732a874c78654cb09d799b1855edcf1ed3c48bd08a676277d661cb60c",
+      "bytes": 6954
+    },
+    "tools/perry-generic-transport-negative.py": {
+      "sha256": "1545f8688a13f77cd37c06a7fdb7d30d6b40b8c3a0283a89ffd543d1fa44ca8e",
+      "bytes": 2310
+    },
+    "tools/perry-generic-transport-verify.py": {
+      "sha256": "fedf9009595b56fc2b653b5be7470054f71fe86dcff9468efcb849faad380cd1",
+      "bytes": 10653
+    },
+    "tools/perry-generic-async-check.py": {
+      "sha256": "4fdc625ea6e87a282d7bc8248fac7b49f2eb31826980cb63579c5fd257c1fe0e",
+      "bytes": 2962
+    },
+    "tools/perry-p3-http-bridge-prepare.py": {
+      "sha256": "5a26b049c35d9469c5ac7b2b4e7a289a8cda20097f493e80753dd0e04c01ab75",
+      "bytes": 1997
+    },
+    "tools/turnloop-http-case-v3-manifest.json": {
+      "sha256": "71ee0f2692d2e9f02ec3710c3c9c380dba2f9ece84ab55242542e25b09d5ea46",
+      "bytes": 207761
+    },
+    "tools/turnloop-http-case-v3-patch.toml": {
+      "sha256": "fc4a5afe7272cfc9eaa5e96448188bf2c42ec8d62ec0728182932f515201bcaa",
+      "bytes": 340
+    },
+    "checks/tokio.log": {
+      "sha256": "fe4f2bd9190b963378e83eeb8c9f38d5f4b08ff5522c06bbf3b6e3ece97bbf61",
+      "bytes": 138
+    }
+  },
+  "evidenceArchive": {
+    "archive": "perry-generic-transport-v230-evidence.tar.gz",
+    "sha256": "7ffc7a19a35fcbf6aaa0fc8840d4c0e0b2302bea241e71b177612a8001ff7e6e",
+    "bytes": 2958728,
+    "verifiedMembers": 141
+  }
+}

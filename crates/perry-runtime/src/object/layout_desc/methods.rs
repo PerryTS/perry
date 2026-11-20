@@ -2,6 +2,7 @@
 //! this table; each entry names the complete static holder chain and its slot.
 //! A changed holder word, or a shadowed receiver, takes ordinary dispatch.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 #[repr(C)]
 pub struct PerryFamilyMethods {
@@ -14,12 +15,13 @@ pub struct PerryFamilyMethod {
     pub atom: *const StaticAtom,
     pub guards: *const PerryMethodHolder,
     pub depth: u32,
-    pub slot: u32,
+    /// The method's byte offset in the last guard's holder (its key's `off`).
+    pub off: u32,
 }
 #[repr(C)]
 pub struct PerryMethodHolder {
     pub class_id: u32,
-    pub word: u32,
+    pub word: LayoutWord,
 }
 unsafe impl Sync for PerryFamilyMethods {}
 unsafe impl Sync for PerryFamilyMethod {}
@@ -45,8 +47,8 @@ const _: () = assert!(std::mem::size_of::<PerryMethodHolder>() == 8);
 /// The carried descriptor band (including possible class method tables).
 /// This immutable word range rejects runtime and shadowed layouts cheaply.
 #[inline(always)]
-pub(crate) const fn may_have_methods(word: u32) -> bool {
-    word.wrapping_sub(LAYOUT_BASE) < LAYOUT_INDEX_LIMIT
+pub(crate) fn may_have_methods(word: u32) -> bool {
+    super::word_in_layout_index(word)
 }
 
 /// A GC leaf: a layout-indexed method lookup, with no allocation, TLS lookup,
@@ -72,7 +74,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
         return 0;
     }
     let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
-    if (*h).obj_type != crate::gc::GC_TYPE_OBJECT
+    if crate::gc_type_is_not_object!((*h).obj_type)
         || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || word_is_shadowed((*obj).parent_class_id)
     {
@@ -106,7 +108,7 @@ pub unsafe extern "C" fn perry_probe_family_method(
     }
     let mut holder = std::ptr::null::<ObjectHeader>();
     for guard in std::slice::from_raw_parts(entry.guards, entry.depth as usize) {
-        let pid = super::super::shapes::class_proto_id(guard.class_id);
+        let pid = super::super::shapes::class_identity_proto_id(guard.class_id);
         let Some(cell) = super::super::shapes::identity_word_slot_in(word_dir, pid) else {
             return 0;
         };
@@ -115,16 +117,14 @@ pub unsafe extern "C" fn perry_probe_family_method(
             return 0;
         }
         holder = (bits & crate::value::POINTER_MASK) as *const ObjectHeader;
-        if (*holder).parent_class_id != guard.word {
+        if (*holder).parent_class_id != guard.word.0 {
             return 0;
         }
     }
     if holder.is_null() {
         return 0;
     }
-    let value = *((holder as *const u8)
-        .add(std::mem::size_of::<ObjectHeader>() + entry.slot as usize * 8)
-        as *const u64);
+    let value = *super::super::header::object_slot_at(holder as *mut ObjectHeader, entry.off);
     // ConstFn is a shape fact. Its immutable function info specifies the ABI;
     // the closure value remains the callee environment, including lexical home.
     let closure = (value & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
@@ -177,6 +177,47 @@ pub(crate) unsafe fn call_by_id(
     } else {
         super::super::key_bytes_hash(bytes.as_ptr(), bytes.len())
     };
+    // An own data property of that name comes first (10.1.8.1 OrdinaryGet).
+    // Under an unshadowed family word the layout names every own key, so a
+    // late key's slot is the only place it can be: Get reads the slot, Call
+    // enters the value with the receiver as `this` (13.3.6.1 EvaluateCall).
+    // A compiled user closure is entered here; any other own value keeps the
+    // generic call, which performs the same Get-then-Call.
+    let word = (*obj).parent_class_id;
+    if word & LAYOUT_SHADOW_BIT == 0 && !word_is_shadowed(word) {
+        if let Some(Some((pos, slot))) = desc_own_key(d, bytes, Some(hash)) {
+            let value = super::store::family_slot_word(obj, slot);
+            if value != crate::value::TAG_HOLE {
+                let h = crate::gc::header_from_trusted_user_ptr(obj.cast());
+                if (*d.keys.add(pos as usize)).attrs & super::super::key_attrs::ENTRY_ACCESSOR_MASK
+                    != 0
+                    || crate::gc_type_is_not_object!((*h).obj_type)
+                    || (*h).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                    || value & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+                    || !crate::closure::is_closure_ptr(
+                        (value & crate::value::POINTER_MASK) as usize,
+                    )
+                {
+                    return None;
+                }
+                let closure =
+                    (value & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+                let info = (*closure).info.as_ref()?;
+                if info.flags & crate::codegen_abi::FN_COMPILED_BODY == 0 {
+                    return None;
+                }
+                return Some(
+                    super::super::native_call_method::compiled_target::enter_compiled_body(
+                        closure,
+                        info,
+                        crate::closure::JsThis::from_f64(recv),
+                        args,
+                        argc,
+                    ),
+                );
+            }
+        }
+    }
     let key = crate::string::atom_lookup(bytes, hash)?;
     let key_bits = crate::value::STRING_TAG | key as u64;
     let callee = perry_probe_family_method(

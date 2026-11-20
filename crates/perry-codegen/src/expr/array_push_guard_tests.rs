@@ -40,7 +40,9 @@ const POINTER_LAYOUT_MASK: &str = "63616";
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -50,6 +52,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -63,12 +66,12 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -100,6 +103,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -145,6 +152,7 @@ fn node_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -203,6 +211,10 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                     field_writeback: None,
                 })],
             },
+            // A bare mention hands `keep` out, so its pushes take the full
+            // receiver admission these tests measure, not the owned one
+            // (`collectors::loop_pushed_arrays`).
+            Stmt::Expr(Expr::LocalGet(ARRAY_ID)),
         ],
         is_async: false,
         is_generator: false,
@@ -216,6 +228,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
     // Called once from module init so the function is not dead-stripped before
     // the census can see it.
     m.init = vec![Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(700)),
         args: vec![Expr::Number(1.0)],
         type_args: Vec::new(),
@@ -265,14 +278,16 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
     &ir[start..end]
 }
 
-/// A canonical numeric `+` whose operands have runtime-derived evidence. The
-/// live-bits guard remains useful because NaN payloads still require GC-layout
-/// bookkeeping even though neither operand rests on source metadata.
+/// A canonical numeric `+` whose operands have runtime-derived evidence but
+/// one of which is not numeric *by construction* (a `Math.floor` result), so
+/// the store keeps its live-bits guard. An add of two by-construction
+/// numbers (`j + j`) is proven non-pointer and takes no guard at all
+/// (`expr::helpers::expr_produces_numeric_bits_by_construction`).
 fn numeric_add_push() -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
-        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::MathFloor(Box::new(Expr::LocalGet(COUNTER_ID)))),
     }
 }
 
@@ -340,6 +355,7 @@ fn a_pointer_push_keeps_the_historical_unguarded_shape() {
     let ir = ir_for(push_module(
         Type::Named("Node".to_string()),
         Expr::New {
+            byte_end: 0,
             class_name: "Node".to_string(),
             args: vec![Expr::LocalGet(COUNTER_ID)],
             type_args: Vec::new(),
@@ -414,6 +430,9 @@ fn element_read_push_module() -> Module {
     body[0] = Stmt::Expr(Expr::ArrayPush {
         array_id: ARRAY_ID,
         value: Box::new(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(ARRAY_ID)),
             index: Box::new(Expr::LocalGet(COUNTER_ID)),
         }),
@@ -491,9 +510,30 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
         generic.contains("call i32 @js_typed_feedback_numeric_array_push_guard")
             && generic.contains("call i64 @js_array_numeric_push_f64_unboxed")
             // #11021: the fallback is the own-aware push, never the bare one.
-            && generic.contains("call i64 @js_array_push_f64_spec_or_own(")
+            && generic.contains("call i64 @js_array_push_f64_spec_or_method(")
             && !generic.contains("call i64 @js_array_push_f64_spec("),
         "a declared-number addition must validate the live value and retain the generic push fallback:\n{generic}"
+    );
+    // The runtime guard proves a live numeric Array with room, not that `push`
+    // is the builtin on it: between the guard and the unboxed append sits the
+    // inline tier's own word test (a null named layout, the default prototype
+    // chain), and its miss is the fallback that resolves the method.
+    let guard = generic
+        .find("call i32 @js_typed_feedback_numeric_array_push_guard")
+        .expect("the runtime guard");
+    let append = generic
+        .find("call i64 @js_array_numeric_push_f64_unboxed")
+        .expect("the unboxed append");
+    let between = &generic[guard..append];
+    let plain = between
+        .find("apush.numeric_plain")
+        .expect("the unboxed append sits in the block the word test admits");
+    let test = &between[..plain];
+    assert!(
+        test.contains("@PERRY_ARRAY_INDEX_FAST_PATH_INVALIDATED")
+            && test.contains("inttoptr")
+            && test.contains("apush.numeric_fallback"),
+        "an own `push` or an own prototype must leave the guarded tier before the append:\n{between}"
     );
     assert!(
         !generic.contains(GUARD_BLOCK),
@@ -519,6 +559,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
                 ty: Type::Array(Box::new(Type::Number)),
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "items".to_string(),
                     byte_offset: 0,
@@ -556,6 +597,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
     let mut m = Module::new("array_push_field_writeback.ts");
     m.classes = vec![class];
     m.init = vec![Stmt::Expr(Expr::New {
+        byte_end: 0,
         class_name: "Buffer".to_string(),
         args: Vec::new(),
         type_args: Vec::new(),
@@ -629,11 +671,27 @@ fn the_field_write_back_compares_a_rooted_pre_append_head() {
         .and_then(|(_, r)| r.split_once(','))
         .map(|(a, _)| a.trim())
         .expect("operand");
-    // "does the field still hold the old head?": the branch into the store.
+    // "does the field still hold the old head?": the branch into the store
+    // (through the stack check moved in front of the store's calling block;
+    // the check's own branch, inside a `stack_guard.*` block, is not it).
+    let mut label = "entry";
     let br = body
         .lines()
+        .filter(|l| {
+            if !l.starts_with(' ') && l.ends_with(':') {
+                label = l.trim_end_matches(':');
+            }
+            !label.starts_with("stack_guard.")
+        })
         .map(str::trim)
-        .find(|l| l.starts_with("br i1 ") && l.contains("label %apush.field.writeback"))
+        .find(|l| {
+            l.starts_with("br i1 ")
+                && l.split("label %").skip(1).any(|part| {
+                    let target = part.split([',', ' ']).next().unwrap();
+                    super::class_field_barrier_tests::through_stack_check(body, target)
+                        .starts_with("apush.field.writeback")
+                })
+        })
         .unwrap_or_else(|| panic!("the field-still-held branch must exist:\n{body}"));
     let held = br["br i1 ".len()..]
         .split(',')
@@ -679,10 +737,10 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
         "the gate must require a GC_TYPE_OBJECT receiver:\n{deref}"
     );
     // The store arm is the ordinary class-field store, i.e. the static-key
-    // store site (#12483): its inline shape-checked store, and the
-    // descriptor-aware `[[Set]]` miss behind it.
+    // store site (#12483): the store probe and the descriptor-aware
+    // `[[Set]]` behind it, one out-of-line call.
     assert!(
-        body.contains("@perry_probe_set(") && body.contains("@js_put_value_set("),
+        body.contains("@perry_store_or_put("),
         "the write-back arm must be the class-field store:\n{body}"
     );
     // Between the header gate and the store: `this.items` is re-read and its
@@ -746,7 +804,7 @@ fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
         "builtin was resolved before args:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        !ir.contains("call i64 @js_array_push_f64_spec_or_"),
         "must not repeat method lookup after args:\n{ir}"
     );
     assert!(
@@ -802,11 +860,67 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
         "a private init binding calls the resolved builtin:\n{ir}"
     );
     assert!(
-        !ir.contains("call i64 @js_array_push_f64_spec_or_own("),
+        !ir.contains("call i64 @js_array_push_f64_spec_or_"),
         "the argument cannot change the resolved method:\n{ir}"
     );
     assert!(
         !ir.contains("apush.spec.writeback"),
         "a private binding cannot be rebound by user code:\n{ir}"
+    );
+}
+
+/// The elements-backed Array-subclass probe (`ObjectMeta.elements`, word 12)
+/// must read nothing the receiver's type has not proven to exist. An Array
+/// receiver branches straight to the inline store; only a GC_TYPE_OBJECT
+/// receiver reads its meta slot, and word 12 is read only through a non-null
+/// meta pointer. The old shape `select`ed the receiver in place of a null meta
+/// pointer and loaded `receiver + 96` unconditionally: a fresh `[]` allocated
+/// at the end of a page faulted (an access violation on Windows).
+#[test]
+fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
+    let ir = ir_for(push_module(Type::Number, numeric_add_push(), Vec::new()));
+    let block = |prefix: &str| {
+        super::class_field_barrier_tests::block_body(&ir, prefix)
+            .unwrap_or_else(|| panic!("no {prefix} block in:\n{ir}"))
+    };
+    let gate = block("apush.elements.");
+    let object_gate = block("apush.elements.meta.");
+    let meta = block("apush.elements.store.");
+    let elements = block("apush.elements.load.");
+    assert!(
+        !gate.contains("load ") && gate.contains("icmp eq i8"),
+        "the Array test must branch on the already-loaded type byte, loading nothing:\n{gate}"
+    );
+    assert!(
+        !object_gate.contains("load ") && object_gate.contains("icmp eq i8"),
+        "the object test must branch before the meta slot is read:\n{object_gate}"
+    );
+    assert!(
+        meta.matches("load i64").count() == 1 && !meta.contains("i64 12"),
+        "the meta block reads only the meta slot:\n{meta}"
+    );
+    assert!(
+        elements.contains("getelementptr i64, ptr %") && elements.contains(", i64 12"),
+        "word 12 is read in its own block, through the proven meta pointer:\n{elements}"
+    );
+    for body in [&gate, &object_gate, &meta, &elements] {
+        assert!(
+            !body.contains("select "),
+            "no select-guarded probe load:\n{body}"
+        );
+    }
+}
+
+#[test]
+fn an_add_of_two_counters_is_proven_and_takes_no_guard() {
+    let counters = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::LocalGet(COUNTER_ID)),
+        right: Box::new(Expr::LocalGet(COUNTER_ID)),
+    };
+    let ir = ir_for(push_module(Type::Number, counters, Vec::new()));
+    assert!(
+        !ir.contains("apush.gc_bookkeeping"),
+        "an fadd of two canonical counters needs no live pointer test:\n{ir}"
     );
 }

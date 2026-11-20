@@ -44,9 +44,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() {
         return (bits & POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 
@@ -61,12 +58,12 @@ unsafe fn instance_object_ptr(this: f64) -> Option<*mut ObjectHeader> {
     if crate::map::is_registered_map(raw)
         || crate::set::is_registered_set(raw)
         || crate::buffer::is_registered_buffer(raw)
-        || crate::typedarray::lookup_typed_array_kind(raw).is_some()
+        || crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
     {
         return None;
     }
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)
@@ -129,9 +126,10 @@ pub extern "C" fn js_promise_subclass_init(this: f64, executor: f64) -> f64 {
             msg.as_ptr(),
             msg.len() as u32,
         ));
-        let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
-        let v = f64::from_bits(JSValue::pointer(err as *const u8).bits());
-        crate::exception::js_throw(v);
+        let err =
+            s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::CoreError::type_error(s));
+        let v = err;
+        crate::exception::throw_core(v);
     }
 
     // Build the backing promise + resolving functions, run the executor. Keep a

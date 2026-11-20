@@ -1,14 +1,17 @@
 //! Exercise the configured WASI providers against local OS services. These
 //! checks qualify provider policy, not Perry guest networking or host platforms.
 use super::*;
+use perry_wasi::p2::bindings::sockets::{
+    instance_network, ip_name_lookup, network, udp, udp_create_socket,
+};
+use perry_wasi::sockets::WasiSocketsCtxView;
+use perry_wasi::{
+    io::poll::Pollable,
+    p2::{udp::UdpSocket, SocketResult},
+};
 use std::net::UdpSocket as NativeUdpSocket;
 use std::time::Duration;
 use wasmtime::component::Resource;
-use wasmtime_wasi::p2::bindings::sockets::{
-    instance_network, ip_name_lookup, network, udp, udp_create_socket,
-};
-use wasmtime_wasi::p2::{Pollable, SocketResult, UdpSocket};
-use wasmtime_wasi::sockets::WasiSocketsCtxView;
 
 fn borrow<T: 'static>(resource: &Resource<T>) -> Resource<T> {
     Resource::new_borrow(resource.rep())
@@ -16,14 +19,13 @@ fn borrow<T: 'static>(resource: &Resource<T>) -> Resource<T> {
 
 fn view(state: &mut State) -> WasiSocketsCtxView<'_> {
     WasiSocketsCtxView {
-        ctx: state.ctx.sockets(),
+        ctx: &mut state.ctx.sockets,
         table: &mut state.table,
     }
 }
 
 async fn bound_socket(view: &mut WasiSocketsCtxView<'_>) -> SocketResult<Resource<UdpSocket>> {
-    let socket =
-        udp_create_socket::Host::create_udp_socket(view, network::IpAddressFamily::Ipv4).await?;
+    let socket = udp_create_socket::Host::create_udp_socket(view, network::IpAddressFamily::Ipv4)?;
     let network = instance_network::Host::instance_network(view).unwrap();
     udp::HostUdpSocket::start_bind(
         view,
@@ -44,7 +46,7 @@ fn grant(port: u16) -> Address {
 }
 
 fn bind(options: &WasiOptions) -> Result<(), network::ErrorCode> {
-    wasmtime_wasi::runtime::in_tokio(async {
+    futures_lite::future::block_on(async {
         let mut state = options.build().unwrap();
         let mut view = view(&mut state);
         let socket = bound_socket(&mut view)
@@ -91,7 +93,7 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
     options.network.addresses.push(grant(0));
 
     // Binding a local socket does not grant a remote endpoint.
-    wasmtime_wasi::runtime::in_tokio(async {
+    futures_lite::future::block_on(async {
         let mut state = options.build().unwrap();
         let mut view = view(&mut state);
         let socket = bound_socket(&mut view).await.unwrap();
@@ -103,7 +105,7 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
     });
 
     options.network.addresses.push(grant(remote.port()));
-    wasmtime_wasi::runtime::in_tokio(async {
+    futures_lite::future::block_on(async {
         let mut state = options.build().unwrap();
         let mut view = view(&mut state);
         let socket = bound_socket(&mut view).await.unwrap();
@@ -114,7 +116,12 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
             udp::HostUdpSocket::stream(&mut view, borrow(&socket), Some(remote.into()))
                 .await
                 .unwrap();
-        view.table.get_mut(&outgoing).unwrap().ready().await;
+        view.table
+            .get_mut(&outgoing)
+            .unwrap()
+            .ready()
+            .await
+            .unwrap();
         assert!(
             udp::HostOutgoingDatagramStream::check_send(&mut view, borrow(&outgoing)).unwrap() > 0
         );
@@ -126,6 +133,7 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
                 remote_address: None,
             }],
         )
+        .await
         .unwrap();
         assert_eq!(count, 1);
         // Dropping the stream waits for any acknowledged asynchronous send.
@@ -137,7 +145,12 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
         assert_eq!(&bytes[..len], b"perry-wasi-udp");
         assert_eq!(peer, local);
         server.send_to(b"reply-from-loopback", peer).unwrap();
-        view.table.get_mut(&incoming).unwrap().ready().await;
+        view.table
+            .get_mut(&incoming)
+            .unwrap()
+            .ready()
+            .await
+            .unwrap();
         let packets =
             udp::HostIncomingDatagramStream::receive(&mut view, borrow(&incoming), 1).unwrap();
         assert_eq!(packets.len(), 1);
@@ -146,7 +159,9 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
             SocketAddr::from(packets.into_iter().next().unwrap().remote_address),
             remote
         );
-        udp::HostIncomingDatagramStream::drop(&mut view, incoming).unwrap();
+        udp::HostIncomingDatagramStream::drop(&mut view, incoming)
+            .await
+            .unwrap();
         udp::HostUdpSocket::drop(&mut view, socket).unwrap();
     });
     assert_eq!(
@@ -156,13 +171,13 @@ fn udp_remote_grant_controls_real_bidirectional_datagrams() {
 }
 
 fn resolve(options: &WasiOptions, name: &str) -> Result<Vec<IpAddr>, network::ErrorCode> {
-    wasmtime_wasi::runtime::in_tokio(async {
+    futures_lite::future::block_on(async {
         let mut state = options.build().unwrap();
         let mut view = view(&mut state);
         let network = instance_network::Host::instance_network(&mut view).unwrap();
         let stream = ip_name_lookup::Host::resolve_addresses(&mut view, network, name.into())
             .map_err(|error| error.downcast().unwrap())?;
-        view.table.get_mut(&stream).unwrap().ready().await;
+        view.table.get_mut(&stream).unwrap().ready().await.unwrap();
         let mut addresses = Vec::new();
         while let Some(address) = ip_name_lookup::HostResolveAddressStream::resolve_next_address(
             &mut view,

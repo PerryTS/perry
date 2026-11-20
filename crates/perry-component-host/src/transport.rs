@@ -8,12 +8,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use wasmtime::component::{ResourceAny, ResourceDynamic, ResourceType, Type, Val};
 use wasmtime::{AsContextMut, StoreContextMut};
 
+// Private C-driver ownership receipts extend the lower JSON event without
+// changing the public Rust ResourceEvent/ResourceHook contract.
+pub(crate) type LoweringHook = std::sync::Arc<
+    dyn Fn(ResourceEvent, &BTreeSet<String>, &BTreeSet<String>) -> Result<()> + Send + Sync,
+>;
+
 pub(crate) struct Lowering<'a> {
     store: StoreContextMut<'a, StoreData>,
     pending: BTreeMap<String, Entry>,
     requests: BTreeMap<String, bool>,
     guest_transfers: BTreeSet<String>,
     host_transfers: BTreeSet<String>,
+    async_transfers: BTreeSet<String>,
 }
 
 impl<'a> Lowering<'a> {
@@ -24,16 +31,38 @@ impl<'a> Lowering<'a> {
             requests: BTreeMap::new(),
             guest_transfers: BTreeSet::new(),
             host_transfers: BTreeSet::new(),
+            async_transfers: BTreeSet::new(),
         }
     }
 
     pub fn value(&mut self, value: &Value, ty: &Type) -> Result<Val> {
-        wire::lower_with(value, ty, &mut |value, ty, own| {
-            self.resource(value, ty, own)
+        wire::lower_typed(value, ty, &mut |value, ty| match ty {
+            Type::Own(r) | Type::Borrow(r) => self
+                .resource(value, *r, matches!(ty, Type::Own(_)))
+                .map(Val::Resource),
+            Type::Future(_) | Type::Stream(_) => {
+                self.store
+                    .data()
+                    .async_values
+                    .get(value, ty, &mut self.async_transfers)
+            }
+            _ => anyhow::bail!("unsupported managed value"),
         })
     }
 
+    pub fn borrowed_keys(&self) -> Vec<String> {
+        self.requests
+            .iter()
+            .filter(|(_, owned)| !**owned)
+            .map(|(key, _)| key.clone())
+            .collect()
+    }
+
     fn reserve(&mut self, token: String, owned: bool) -> Result<()> {
+        ensure!(
+            !owned || !self.store.data().borrowed.contains(&token),
+            "resource is borrowed by an active component call"
+        );
         if let Some(previous) = self.requests.get(&token) {
             ensure!(
                 !owned && !previous,
@@ -50,11 +79,24 @@ impl<'a> Lowering<'a> {
                 .as_str()
                 .context("expected guest resource")?;
             self.reserve(format!("guest:{token}"), owned)?;
-            return self
-                .store
-                .data()
-                .resources
-                .get(token, ty, owned, &mut self.guest_transfers);
+            let resource =
+                self.store
+                    .data()
+                    .resources
+                    .get(token, ty, owned, &mut self.guest_transfers)?;
+            if !resource.owned() {
+                ensure!(
+                    !owned && value["$borrow"] == token,
+                    "invalid resource borrow capability"
+                );
+                self.reserve(format!("lease:{token}"), false)?;
+            } else {
+                ensure!(
+                    value.get("$borrow").is_none(),
+                    "unexpected resource borrow capability"
+                );
+            }
+            return Ok(resource);
         }
         let token = value["$hostResource"]
             .as_str()
@@ -87,6 +129,20 @@ impl<'a> Lowering<'a> {
             ty == ResourceType::host_dynamic(id),
             "host resource type mismatch"
         );
+        if let Some(borrow) = value.get("$borrow") {
+            ensure!(
+                !owned && value["owned"] == false,
+                "a borrow capability cannot transfer ownership"
+            );
+            let borrow = borrow.as_str().context("invalid borrow capability")?;
+            let handle = self
+                .store
+                .data()
+                .resources
+                .host_borrow(borrow, &reference, ty)?;
+            self.reserve(format!("lease:{borrow}"), false)?;
+            return Ok(handle);
+        }
         let handle = if let Some(entry) = self.pending.get(token) {
             ensure!(
                 entry.reference == reference,
@@ -148,11 +204,17 @@ impl<'a> Lowering<'a> {
                     .clone()
             })
             .collect::<Vec<_>>();
-        if !created.is_empty() || !transferred.is_empty() {
-            (state.hook)(ResourceEvent::Lower {
+        let host_changes = !created.is_empty() || !transferred.is_empty();
+        if host_changes || !self.guest_transfers.is_empty() || !self.async_transfers.is_empty() {
+            let event = ResourceEvent::Lower {
                 created,
                 transferred,
-            })?;
+            };
+            if let Some(hook) = &self.store.data().lowering_hook {
+                hook(event, &self.guest_transfers, &self.async_transfers)?;
+            } else if host_changes {
+                (state.hook)(event)?;
+            }
         }
         let state = &mut self.store.data_mut().host_resources;
         for (token, entry) in std::mem::take(&mut self.pending) {
@@ -166,6 +228,10 @@ impl<'a> Lowering<'a> {
             .data_mut()
             .resources
             .transferred(&self.guest_transfers);
+        self.store
+            .data_mut()
+            .async_values
+            .transferred(&self.async_transfers);
         Ok(())
     }
 }
@@ -183,20 +249,45 @@ impl Drop for Lowering<'_> {
     }
 }
 
-pub(crate) fn lift(mut store: StoreContextMut<'_, StoreData>, value: &Val) -> Result<Value> {
-    wire::lift_with(value, &mut |resource| {
-        lift_resource(store.as_context_mut(), resource)
+pub(crate) fn lift(
+    mut store: StoreContextMut<'_, StoreData>,
+    value: &Val,
+    ty: &Type,
+) -> Result<Value> {
+    wire::lift_typed(value, ty, &mut |value, ty| match value {
+        Val::Resource(resource) => lift_resource(store.as_context_mut(), *resource),
+        Val::Future(_) | Val::Stream(_) => store.data_mut().async_values.insert(value, ty),
+        _ => anyhow::bail!("unsupported managed value"),
     })
 }
 
-fn lift_resource(
+pub(crate) fn lift_import(
+    mut store: StoreContextMut<'_, StoreData>,
+    value: &Val,
+    ty: &Type,
+    prepared: &mut std::collections::VecDeque<Value>,
+) -> Result<Value> {
+    wire::lift_typed(value, ty, &mut |value, ty| match (value, ty) {
+        (Val::Resource(_), Type::Borrow(_)) => prepared
+            .pop_front()
+            .context("missing prepared import borrow"),
+        (Val::Resource(resource), Type::Own(_)) => lift_resource(store.as_context_mut(), *resource),
+        (Val::Future(_) | Val::Stream(_), _) => store.data_mut().async_values.insert(value, ty),
+        _ => anyhow::bail!("unsupported managed value"),
+    })
+}
+
+pub(crate) fn lift_resource(
     mut store: StoreContextMut<'_, StoreData>,
     resource: ResourceAny,
 ) -> Result<Value> {
     if !store.data().host_resources.is_host(resource.ty()) {
-        return Ok(
-            json!({"$resource":store.data_mut().resources.insert(resource),"owned":resource.owned()}),
-        );
+        let token = store.data_mut().resources.insert(resource);
+        let mut value = json!({"$resource":token,"owned":resource.owned()});
+        if !resource.owned() {
+            value["$borrow"] = value["$resource"].clone();
+        }
+        return Ok(value);
     }
     let dynamic = resource.try_into_resource_dynamic(store.as_context_mut())?;
     let state = &store.data().host_resources;
@@ -212,6 +303,7 @@ fn lift_resource(
     );
     let mut reference = entry.reference.clone();
     let owned = dynamic.owned();
+    let mut borrowed = None;
     if owned {
         ensure!(
             entry.handle.is_none(),
@@ -237,9 +329,19 @@ fn lift_resource(
             .unwrap();
         entry.reference = reference.clone();
         entry.handle = Some(handle);
+    } else {
+        let handle = dynamic.try_into_resource_any(store.as_context_mut())?;
+        borrowed = Some(
+            store
+                .data_mut()
+                .resources
+                .insert_host_borrow(handle, reference.clone()),
+        );
     }
-    Ok(
-        json!({"$hostResource":reference.token,"type":reference.type_key,
-        "generation":reference.generation,"owned":owned,"new":false}),
-    )
+    let mut value = json!({"$hostResource":reference.token,"type":reference.type_key,
+        "generation":reference.generation,"owned":owned,"new":false});
+    if let Some(borrow) = borrowed {
+        value["$borrow"] = json!(borrow);
+    }
+    Ok(value)
 }

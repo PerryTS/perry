@@ -465,6 +465,7 @@ fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fres
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_stmts(body, bindings, fresh);
             if let Some(c) = catch {
@@ -668,6 +669,7 @@ fn try_rewrite_foreach(
         is_generator: false,
     };
     Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
@@ -865,6 +867,7 @@ fn try_rewrite_navstack(
         is_generator: false,
     };
     Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],

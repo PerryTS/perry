@@ -44,9 +44,7 @@ fn arg(args: *const crate::array::ArrayHeader, index: u32) -> f64 {
 
 fn number_arg(value: f64, default: f64) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        js.as_int32() as f64
-    } else if js.is_number() && value.is_finite() {
+    if js.is_number() && value.is_finite() {
         value
     } else {
         default
@@ -315,9 +313,9 @@ pub extern "C" fn js_readline_emit_keypress_events_args(
     let Some(raw) = raw_ptr_from_value(stream.get_nanbox_f64()) else {
         return undefined();
     };
-    if crate::os::is_process_stdin_handle(raw) {
+    if crate::os_hook_slots::is_process_stdin_handle(raw) {
         listener.with_const_ptr::<ClosureHeader, _>(|listener| {
-            crate::os::enable_process_stdin_keypress_events(listener as i64)
+            crate::os_hook_slots::enable_process_stdin_keypress_events(listener as i64)
         });
     } else {
         let event = scope.root_nanbox_f64(boxed_str(b"data"));

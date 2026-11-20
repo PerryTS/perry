@@ -7,7 +7,7 @@
 //! These assert the LOWERING DECISION, which is what the perf fix is; the
 //! behavioural half (evaluation order, defaults, holes, rest, nested patterns,
 //! generators, a patched `Array.prototype[Symbol.iterator]`) is
-//! `test-files/test_gap_10086_array_destructuring_fast_path.ts`, compared
+//! `tests/parity/language/array/test_gap_10086_array_destructuring_fast_path.ts`, compared
 //! byte-for-byte against node.
 
 use perry_diagnostics::SourceCache;

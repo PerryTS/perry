@@ -41,7 +41,7 @@ pub use visitors::{
     for_each_worker_new, for_each_worker_new_mut,
 };
 pub use worker_entries::{module_uses_worker_threads, worker_url_literals, WorkerUrl};
-pub use worker_paths::resolve_worker_path;
+pub use worker_paths::{resolve_worker_eval_source, resolve_worker_path};
 
 /// The result of const-folding a dynamic `import()` path argument.
 #[derive(Debug, Clone)]
@@ -97,6 +97,8 @@ pub struct FlatExport {
     /// nested `js_create_namespace` call sourced from that module's own
     /// `__perry_ns_<prefix>`. Otherwise `None` (the typical case).
     pub nested_namespace_of: Option<String>,
+    /// The namespace binding retains the defer phase across barrel chains.
+    pub nested_namespace_deferred: bool,
 }
 
 /// Issue #100: resolve a module's exports — flattening `ExportAll`,
@@ -137,6 +139,7 @@ fn same_binding(a: &FlatExport, b: &FlatExport) -> bool {
     a.source_module == b.source_module
         && a.source_local == b.source_local
         && a.nested_namespace_of == b.nested_namespace_of
+        && a.nested_namespace_deferred == b.nested_namespace_deferred
 }
 
 /// The exported bindings of `module_name` (see [`flatten_exports`]).
@@ -187,12 +190,14 @@ where
                         source_module: module_name.to_string(),
                         source_local: local.clone(),
                         namespace_of: None,
+                        namespace_deferred: false,
                     });
                 explicit.push(FlatExport {
                     name: exported.clone(),
                     source_module: origin.source_module,
                     source_local: origin.source_local,
                     nested_namespace_of: origin.namespace_of,
+                    nested_namespace_deferred: origin.namespace_deferred,
                 });
             }
             Export::ReExport {
@@ -214,6 +219,7 @@ where
                             source_module: source.clone(),
                             source_local: imported.clone(),
                             namespace_of: None,
+                            namespace_deferred: false,
                         }
                     });
                 explicit.push(FlatExport {
@@ -221,6 +227,7 @@ where
                     source_module: origin.source_module,
                     source_local: origin.source_local,
                     nested_namespace_of: origin.namespace_of,
+                    nested_namespace_deferred: origin.namespace_deferred,
                 });
             }
             Export::ExportAll { source } => star_sources.push(source),
@@ -230,6 +237,7 @@ where
                     source_module: source.clone(),
                     source_local: String::new(),
                     nested_namespace_of: Some(source.clone()),
+                    nested_namespace_deferred: false,
                 });
             }
         }
@@ -622,6 +630,7 @@ fn collect_local_candidate_defs_from_frames<'a>(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if let Some(finally) = finally {
                         push_local_candidate_stmt_slice(stack, finally);
@@ -827,6 +836,7 @@ fn collect_param_literal_sets_from_frames(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     if let Some(finally) = finally {
                         push_param_stmt_slice(stack, finally);
@@ -972,6 +982,7 @@ fn collect_const_locals_from_frames<'a>(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(fb) = finally {
                             push_const_stmt_slice(stack, fb);
@@ -1092,6 +1103,7 @@ fn scan_mutations_from_frames(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         if let Some(fb) = finally {
                             push_mutation_stmt_slice(stack, fb);

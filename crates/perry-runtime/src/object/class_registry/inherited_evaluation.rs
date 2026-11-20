@@ -150,7 +150,7 @@ pub(crate) fn inherited_evaluations_for_spawn() -> Arc<InheritedEvaluations> {
         }
     }
     drop(index);
-    out.sort_by_key(|e| e.0);
+    crate::cold_sort::sort_by_u64_key(&mut out, |e| u64::from(e.0));
     Arc::new(InheritedEvaluations(out))
 }
 

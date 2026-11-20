@@ -14,11 +14,17 @@ fn string_collisions_survive_deletion_of_first_and_overflow_entries() {
     index.insert(42, 10_001);
     index.insert(42, 10_002);
     index.insert(42, 10_003);
+    assert_eq!(index.find(42, |i| i == 42), Some(42));
+    assert_eq!(index.find(42, |i| i == 10_002), Some(10_002));
+    assert_eq!(index.find(42, |i| i == 20_000), None);
+    assert_eq!(index.find(20_000, |_| true), None);
     index.remove(42, 10_002);
     index.remove(42, 42);
     let mut candidates: Vec<_> = index.candidates(42).collect();
     candidates.sort_unstable();
     assert_eq!(candidates, vec![10_001, 10_003]);
+    assert_eq!(index.find(42, |i| i == 10_003), Some(10_003));
+    assert_eq!(index.find(42, |i| i == 42), None);
     index.remove(42, 10_001);
     index.remove(42, 10_003);
     assert!(index.candidates(42).next().is_none());

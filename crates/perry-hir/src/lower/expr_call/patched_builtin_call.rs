@@ -30,10 +30,7 @@ use super::unwrap_call_callee_ts_wrappers;
 /// An identifier that still names the global built-in (no local, function,
 /// class or import binding shadows it).
 fn is_unshadowed_global(ctx: &LoweringContext, name: &str) -> bool {
-    ctx.lookup_local(name).is_none()
-        && ctx.lookup_func(name).is_none()
-        && ctx.lookup_class(name).is_none()
-        && ctx.lookup_imported_func(name).is_none()
+    !ctx.shadows_unqualified_global(name)
 }
 
 /// `N` / `globalThis.N` for an unshadowed builtin namespace `N`.
@@ -93,6 +90,7 @@ impl NamespaceGuard {
 /// as the intrinsic again and would bind the call straight back to it.
 fn live_namespace(ns: &str) -> Expr {
     Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: 0,
         object: Box::new(Expr::GlobalThisExpr),
         property: ns.to_string(),
@@ -102,7 +100,7 @@ fn live_namespace(ns: &str) -> Expr {
 /// Can the lowered arguments appear in both arms of the guard? Each arm runs
 /// alone, so nothing is evaluated twice; but a definition (a closure or class
 /// body, with its function id) or a suspension point must exist once.
-fn duplicable(args: &[Expr]) -> bool {
+pub(super) fn duplicable(args: &[Expr]) -> bool {
     fn ok(e: &Expr) -> bool {
         if matches!(
             e,
@@ -157,6 +155,11 @@ pub(super) fn try_patched_builtin_call(
         return Ok(NamespaceCall::Plain(args));
     }
     if !duplicable(&args) {
+        // A definition in the arguments cannot sit in both arms. A pair made
+        // only for the facts lowering stays the call it was (MATHC1).
+        if !crate::patched_builtins::namespace_call_guarded_by_scan() {
+            return Ok(NamespaceCall::Plain(args));
+        }
         // A definition in the arguments: the one dynamic call.
         let object = live_namespace(&ns);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
@@ -177,6 +180,7 @@ pub(super) fn dynamic_member_call(
     args: Vec<Expr>,
 ) -> Expr {
     let callee = Box::new(Expr::PropertyGet {
+        byte_end: 0,
         byte_offset: call.span.lo.0,
         object: Box::new(object),
         property: method,
@@ -195,12 +199,15 @@ pub(super) fn dynamic_member_call(
             })
             .collect();
         return Expr::CallSpread {
+            byte_offset: 0,
+            byte_end: 0,
             callee,
             args,
             type_args: Vec::new(),
         };
     }
     Expr::Call {
+        byte_end: 0,
         callee,
         args,
         type_args: Vec::new(),

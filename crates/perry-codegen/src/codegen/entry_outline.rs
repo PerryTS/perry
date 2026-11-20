@@ -238,6 +238,30 @@ pub fn logical_entry_stmts(hir: &HirModule) -> Vec<&perry_hir::Stmt> {
     logical_stmts_of(&hir.init, &chunk_map(hir))
 }
 
+/// The module-scope view used by whole-program analyses. Expand only chunks
+/// called directly by init, using the same recognition as codegen. Factory
+/// chunks belong to their factory scope and remain ordinary functions here.
+/// Remove expanded bodies so each statement has exactly one analysis owner.
+pub fn logical_entry_module(hir: &HirModule) -> std::borrow::Cow<'_, HirModule> {
+    let chunks = chunk_map(hir);
+    let expanded: HashSet<_> = hir
+        .init
+        .iter()
+        .filter_map(|stmt| as_chunk_call(stmt, &chunks))
+        .map(|f| f.id)
+        .collect();
+    if expanded.is_empty() {
+        return std::borrow::Cow::Borrowed(hir);
+    }
+    let mut logical = hir.clone();
+    logical.init = logical_stmts_of(&hir.init, &chunks)
+        .into_iter()
+        .cloned()
+        .collect();
+    logical.functions.retain(|f| !expanded.contains(&f.id));
+    std::borrow::Cow::Owned(logical)
+}
+
 /// Literal name `cjs_wrap::wrap_commonjs_for_target` gives the CJS module
 /// factory closure it generates (`crates/perry/src/commands/compile/cjs_wrap/
 /// wrap.rs`: `function __perry_cjs_factory() { ... }`).
@@ -482,6 +506,7 @@ pub(crate) fn outlined_entry_global_let_ids(hir: &HirModule) -> HashSet<u32> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     record_definers(body, function_id, definer, globals);
                     if let Some(catch) = catch {
@@ -886,6 +911,7 @@ fn stmt_contains_return(stmt: &perry_hir::Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_return)
                 || catch
@@ -1225,6 +1251,7 @@ fn chunk_statements(
             was_unrolled: false,
         });
         new_body.push(perry_hir::Stmt::Expr(perry_hir::Expr::Call {
+            byte_end: 0,
             callee: Box::new(perry_hir::Expr::FuncRef(fn_id)),
             args: Vec::new(),
             type_args: Vec::new(),
@@ -1521,6 +1548,7 @@ mod tests {
                 body: vec![let_stmt(20, "captured", Expr::Number(2.0))],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             },
             Stmt::Expr(Expr::Number(0.0)),
         ]);
@@ -1595,6 +1623,7 @@ mod tests {
             is_exported: false,
             aliases: vec![],
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         });
@@ -1707,6 +1736,7 @@ mod tests {
 
     fn call_no_args(callee: Expr) -> Expr {
         Expr::Call {
+            byte_end: 0,
             callee: Box::new(callee),
             args: vec![],
             type_args: vec![],

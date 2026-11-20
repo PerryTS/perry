@@ -1,0 +1,1 @@
+Improve numeric typed-array loops with entry guards for live owner headers, scalar values, and integer index intervals. Admitted reads and writes share a call-free numeric region, including compound updates; unsupported effects and failed guards retain the original loop.

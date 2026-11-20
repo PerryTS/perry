@@ -109,18 +109,12 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
             "Agent" => matches!(prop, "createConnection" | "createSocket"),
             _ => true,
         },
-        // #6117 / #9325 — native data getters on ws handles. Client instances
-        // expose `readyState`; server instances expose the persistent
-        // connection-tracking `clients` Set. Every other bare member read
-        // stays a plain PropertyGet (method CALLS like `ws.send(..)` arrive
-        // through the call-expression path, not this bare-read block).
-        "ws" => {
-            if matches!(class, "WebSocketServer" | "Server") {
-                prop == "clients"
-            } else {
-                prop == "readyState"
-            }
-        }
+        // #6117 — the native data getter on the global `WebSocket` client:
+        // `readyState`. Every other bare member read stays a plain
+        // PropertyGet (method CALLS like `ws.send(..)` arrive through the
+        // call-expression path, not this bare-read block). npm `ws`'s
+        // `WebSocketServer.clients` (#9325) is the package's own JS now.
+        "__websocket__" => prop == "readyState",
         // net instances dispatch their socket methods and getters through the
         // class_filter table. The module exposes no user own-property surface
         // in the bundle walls, so keep dispatching for any member to preserve
@@ -151,6 +145,10 @@ pub(crate) fn is_native_dispatch_member(module: &str, class: &str, prop: &str) -
     }
 }
 
+pub(crate) fn is_worker_messaging_heap_object(module: &str, class: &str) -> bool {
+    module == "worker_threads" && matches!(class, "MessagePort" | "BroadcastChannel")
+}
+
 pub(crate) fn is_blob_getter_name(prop: &str) -> bool {
     matches!(prop, "size" | "type" | "name" | "lastModified")
 }
@@ -176,18 +174,11 @@ pub(crate) fn is_stream_api_member(module: &str, prop: &str) -> bool {
     match module {
         "readable_stream" => matches!(
             prop,
-            "getReader"
-                | "cancel"
-                | "tee"
-                | "pipeTo"
-                | "pipeThrough"
-                | "locked"
-                | "enqueue"
-                | "close"
-                | "error"
-                | "desiredSize"
-                | "byobRequest"
+            "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough" | "locked"
         ),
+        // The members every controller family owns (Default, Transform,
+        // Byte); `close`, `terminate` and `byobRequest` depend on the family
+        // and go through the controller handle's dispatch.
         "readable_stream_reader" => {
             matches!(prop, "read" | "releaseLock" | "cancel" | "closed")
         }
@@ -613,19 +604,66 @@ mod tests {
     }
 
     #[test]
-    fn ws_dispatches_client_and_server_data_getters_separately() {
-        assert!(is_native_dispatch_member("ws", "WebSocket", "readyState"));
-        assert!(!is_native_dispatch_member("ws", "WebSocket", "clients"));
+    fn ws_dispatches_only_the_client_ready_state_getter() {
         assert!(is_native_dispatch_member(
-            "ws",
-            "WebSocketServer",
-            "clients"
-        ));
-        assert!(is_native_dispatch_member("ws", "Server", "clients"));
-        assert!(!is_native_dispatch_member(
-            "ws",
-            "WebSocketServer",
+            "__websocket__",
+            "WebSocket",
             "readyState"
         ));
+        assert!(!is_native_dispatch_member(
+            "__websocket__",
+            "WebSocket",
+            "clients"
+        ));
+    }
+}
+
+#[cfg(test)]
+mod messaging_property_tests {
+    #[test]
+    fn messaging_heap_objects_use_property_values_and_receiver_calls() {
+        for class in ["MessagePort", "BroadcastChannel"] {
+            assert!(super::is_worker_messaging_heap_object(
+                "worker_threads",
+                class
+            ));
+        }
+        assert!(!super::is_worker_messaging_heap_object(
+            "worker_threads",
+            "Worker"
+        ));
+        assert!(!super::is_worker_messaging_heap_object(
+            "other",
+            "BroadcastChannel"
+        ));
+        let source = r#"
+            import { BroadcastChannel } from 'node:worker_threads';
+            const channel = new BroadcastChannel('properties');
+            const name = channel.name;
+            const handler = channel.onmessage;
+            const missing = channel.unknown;
+            channel.postMessage('value');
+            channel.onmessage();
+            channel.custom();
+            channel.close();
+        "#;
+        let parsed = perry_parser::parse_typescript(source, "messaging-properties.ts").unwrap();
+        let hir = crate::lower_module(&parsed, "messaging-properties", "messaging-properties.ts")
+            .unwrap();
+        let dump = format!("{hir:#?}");
+        for property in [
+            "name",
+            "onmessage",
+            "unknown",
+            "postMessage",
+            "custom",
+            "close",
+        ] {
+            assert!(!dump.contains(&format!("method: \"{property}\"")), "{dump}");
+            assert!(
+                dump.contains(&format!("property: \"{property}\"")),
+                "{dump}"
+            );
+        }
     }
 }

@@ -21,7 +21,7 @@ pub extern "C" fn perry_safe_area_insets_make(top: f64, right: f64, bottom: f64,
     let mut values = [top, right, bottom, left];
     let obj = unsafe {
         crate::object::runtime_layouts::perry_build_runtime_record(
-            std::ptr::addr_of!(crate::object::runtime_layouts::RECORD_F487_0),
+            crate::object::runtime_layouts::RECORD_F487_0::desc(),
             values.as_mut_ptr(),
         )
     };

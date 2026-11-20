@@ -72,7 +72,7 @@ fn cluster_worker_id() -> Option<&'static str> {
 }
 
 fn empty_object_value() -> f64 {
-    let obj = js_object_alloc(0, 0);
+    let obj = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:cluster.default._events", kind = namespace, members = { }; } };
     f64::from_bits(JSValue::object_ptr(obj as *mut u8).bits())
 }
 
@@ -236,6 +236,24 @@ thread_local! {
     static CLUSTER_EMITTER: RefCell<ClusterEmitter> = RefCell::new(ClusterEmitter::default());
 }
 
+/// [`cluster_default_value`] for the generic native-module paths
+/// (`cjs_default_export_value`), which every program links: a slot that
+/// `js_nm_install_cluster` fills, so the cluster default export (an
+/// EventEmitter) is linked only with the cluster module. Empty, it fails
+/// loudly instead of building a cluster object without its prototype.
+static DEFAULT_VALUE: crate::feature_hooks::Hook<fn() -> f64> = crate::feature_hooks::Hook::empty();
+
+pub(crate) fn install_default_value() {
+    DEFAULT_VALUE.set(cluster_default_value);
+}
+
+#[inline(never)]
+pub(crate) fn cluster_default_value_installed() -> f64 {
+    DEFAULT_VALUE
+        .get()
+        .expect("the cluster default export in a program compiled without the cluster module")()
+}
+
 /// The `cluster.default` namespace object — the value bound by
 /// `import cluster from "node:cluster"`. Cached (see
 /// `should_cache_native_module_namespace`), so EventEmitter methods can return
@@ -246,8 +264,9 @@ pub(crate) fn cluster_default_value() -> f64 {
         b"cluster.default".as_ptr(),
         "cluster.default".len(),
     ));
-    let event_emitter = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "events",
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = scope.root_nanbox_f64(crate::node_stream::event_emitter_constructor_value(
         "EventEmitter",
     ));
     if let Some(event_emitter_proto) =
@@ -576,9 +595,13 @@ pub extern "C" fn js_cluster_setup_primary(settings: f64) -> f64 {
 pub extern "C" fn js_cluster_fork(env: f64) -> f64 {
     ensure_cluster_runtime();
 
+    // node's fork() always calls setupPrimary(): the first call applies the
+    // default settings, every later one only emits `setup` again (one tick).
     let needs_setup = CLUSTER_STATE.with(|state| !state.borrow().setup_called);
     if needs_setup {
         apply_setup_primary(TAG_UNDEFINED_F64);
+    } else {
+        defer_cluster_setup_event(settings_value());
     }
 
     let settings = settings_value();
@@ -674,37 +697,19 @@ fn cluster_root_scanner(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
 mod infos {
     use super::*;
     use crate::closure::{ClosureHeader, JsFunctionInfo};
-    use crate::codegen_abi::{JsBody0, JsBody1, JsBody2, JsBody4};
+    use crate::codegen_abi::{JsBody0, JsBody1, JsBody2};
     pub(super) static CLUSTER_INTERNAL_ONLINE: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_online as JsBody0<ClosureHeader>).with_declared(0);
     pub(super) static CLUSTER_INTERNAL_DISCONNECT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_disconnect as JsBody0<ClosureHeader>).with_declared(0);
     pub(super) static CLUSTER_INTERNAL_EXIT: JsFunctionInfo =
         JsFunctionInfo::of(cluster_internal_exit as JsBody2<ClosureHeader>).with_declared(2);
-    pub(super) static CLUSTER_WORKER_SEND: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_send as JsBody4<ClosureHeader>)
-            .with_declared(4)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_KILL: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_kill as JsBody1<ClosureHeader>)
-            .with_declared(1)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_DESTROY: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_destroy as JsBody1<ClosureHeader>)
-            .with_declared(1)
-            .with_length(1);
-    pub(super) static CLUSTER_WORKER_DISCONNECT: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_disconnect as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_IS_CONNECTED: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_is_connected as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0);
-    pub(super) static CLUSTER_WORKER_IS_DEAD: JsFunctionInfo =
-        JsFunctionInfo::of(cluster_worker_is_dead as JsBody0<ClosureHeader>)
-            .with_declared(0)
-            .with_length(0);
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_SEND = crate::cluster::cluster_worker_send, 4; with_declared(4), with_length(0)); realm { "node:cluster.Worker.prototype.send", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_KILL = crate::cluster::cluster_worker_kill, 1; with_declared(1), with_length(0)); realm { "node:cluster.Worker.prototype.kill", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_DESTROY = crate::cluster::cluster_worker_destroy, 1; with_declared(1), with_length(1)); realm { "node:cluster.Worker.prototype.destroy", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_DISCONNECT = crate::cluster::cluster_worker_disconnect, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.disconnect", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_IS_CONNECTED = crate::cluster::cluster_worker_is_connected, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.isConnected", constructible = true; } }
+    crate::realm_decl! { info crate::fn_info!(export static pub(super) CLUSTER_WORKER_IS_DEAD = crate::cluster::cluster_worker_is_dead, 0; with_declared(0), with_length(0)); realm { "node:cluster.Worker.prototype.isDead", constructible = true; } }
     pub(super) static CLUSTER_SETUP_EMIT_THUNK: JsFunctionInfo =
         JsFunctionInfo::of(cluster_setup_emit_thunk as JsBody0<ClosureHeader>)
             .with_declared(0)
@@ -742,7 +747,7 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
     }
 
     ensure_cluster_runtime();
-    let proto = js_object_alloc(0, 7);
+    let proto = crate::realm_decl! { birth js_object_alloc(0, 7); realm { "node:cluster.Worker.prototype", extends = "node:events.EventEmitter.prototype", members = { constructor; send; kill; destroy; disconnect; isConnected; isDead; }; } };
     let proto_value = box_ptr(proto as *const u8);
     set_field(proto_value, b"constructor", value);
     crate::object::set_builtin_property_attrs(
@@ -769,7 +774,9 @@ pub(crate) fn ensure_worker_constructor(value: f64) -> f64 {
         );
     }
 
-    let event_emitter = crate::object::bound_native_callable_export_value("events", "EventEmitter");
+    // The export declaration owns EventEmitter and its statics (no events
+    // attach hook is installed by a cluster-only program).
+    let event_emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
     let event_emitter_proto = crate::object::ensure_function_prototype_object(event_emitter);
     if !event_emitter_proto.is_null() {
         crate::object::prototype_chain::object_set_static_prototype(
@@ -855,7 +862,7 @@ extern "C" fn cluster_worker_kill(
     signal: f64,
 ) -> f64 {
     if is_self_worker_value(this.as_f64()) {
-        let _ = crate::os::js_process_kill(crate::os::js_process_pid(), signal);
+        let _ = crate::os_hook_slots::js_process_kill(crate::os::js_process_pid(), signal);
         return TAG_UNDEFINED_F64;
     }
     let _ = crate::child_process::cp_method_kill(std::ptr::null(), this, signal);
@@ -991,9 +998,13 @@ fn apply_setup_primary(settings_arg: f64) {
         state.setup_called = true;
         state.settings_bits = next.to_bits();
     });
+    defer_cluster_setup_event(next);
+}
+
+fn defer_cluster_setup_event(settings: f64) {
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_SETUP_EMIT_THUNK, 1);
-    crate::closure::js_closure_set_capture_f64(deferred, 0, next);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::closure::js_closure_set_capture_f64(deferred, 0, settings);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_setup_emit_thunk(
@@ -1008,7 +1019,7 @@ extern "C" fn cluster_setup_emit_thunk(
 fn defer_cluster_fork_event(worker: f64) {
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_FORK_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_fork_emit_thunk(
@@ -1133,12 +1144,7 @@ fn scheduling_policy_value() -> i32 {
         if let Some(v) =
             crate::object::native_namespace_prop_override_get(module, "schedulingPolicy")
         {
-            let jv = JSValue::from_bits(v.to_bits());
-            let n = if jv.is_int32() {
-                jv.as_int32()
-            } else {
-                v as i32
-            };
+            let n = v as i32;
             return n;
         }
     }
@@ -1264,11 +1270,7 @@ fn worker_reactor_handle(worker: f64) -> Option<u64> {
     if jv.is_undefined() || jv.is_null() {
         return None;
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        h
-    };
+    let n = h;
     if n >= 0.0 {
         Some(n as u64)
     } else {
@@ -1280,12 +1282,7 @@ fn worker_reactor_handle(worker: f64) -> Option<u64> {
 /// int32-tagged number representations).
 fn number_field(message: f64, name: &[u8]) -> i32 {
     let v = get_field(message, name);
-    let jv = JSValue::from_bits(v.to_bits());
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        v as i32
-    }
+    v as i32
 }
 
 /// Emit `online` exactly once per worker — both the child reactor's `spawn`
@@ -1353,7 +1350,7 @@ fn drain_disconnect_callbacks_if_idle() {
     for bits in callbacks {
         let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_CALLBACK_THUNK, 1);
         crate::closure::js_closure_set_capture_ptr(deferred, 0, bits as i64);
-        crate::timer::js_set_immediate_callback(deferred as i64);
+        crate::timer::schedule_native_immediate(deferred as i64, &[], "PROCESSWRAP");
     }
 }
 
@@ -1411,7 +1408,7 @@ fn mark_worker_disconnected(worker: f64) {
     set_field(worker, b"state", box_string("disconnected"));
     let deferred = crate::closure::js_closure_alloc(&infos::CLUSTER_DISCONNECT_EMIT_THUNK, 1);
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::builtins::js_queue_next_tick(deferred as i64);
 }
 
 extern "C" fn cluster_disconnect_emit_thunk(
@@ -1446,7 +1443,7 @@ extern "C" fn cluster_internal_exit(
     crate::closure::js_closure_set_capture_f64(deferred, 0, worker);
     crate::closure::js_closure_set_capture_f64(deferred, 1, code);
     crate::closure::js_closure_set_capture_f64(deferred, 2, signal);
-    crate::timer::js_set_immediate_callback(deferred as i64);
+    crate::timer::schedule_native_immediate(deferred as i64, &[], "PROCESSWRAP");
     invoke_disconnect_callbacks_if_idle();
     TAG_UNDEFINED_F64
 }
@@ -1571,7 +1568,7 @@ fn listener_key(event: &str) -> Vec<u8> {
 }
 
 fn alloc_object_value(field_count: u32) -> f64 {
-    box_ptr(js_object_alloc(CLUSTER_SHAPE_ID, field_count) as *const u8)
+    box_ptr(crate::realm_decl! { birth js_object_alloc(CLUSTER_SHAPE_ID, field_count); realm { "node:cluster.settings", kind = namespace, extends = "node:cluster.settings", members = { }; "node:cluster.workers", kind = namespace, extends = "node:cluster.workers", members = { }; } } as *const u8)
 }
 
 fn alloc_array_value(capacity: u32) -> f64 {
@@ -1617,7 +1614,7 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
     // native `new EventEmitter()` is a POINTER_TAG registry handle (`0x38000`)
     // that sailed over the old `0x10000` floor into a header read.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
-    if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(header.obj_type) {
         return None;
     }
     Some(raw as *mut ObjectHeader)
@@ -1631,7 +1628,9 @@ fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     let header = unsafe { crate::value::addr_class::try_read_gc_header(raw) }?;
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY => Some(raw as *mut ArrayHeader),
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY => {
+            Some(raw as *mut ArrayHeader)
+        }
         _ => None,
     }
 }

@@ -36,6 +36,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_math_atan", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_atan2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_cos", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_expm1", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log10", DOUBLE, &[DOUBLE]);
@@ -166,6 +167,13 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     );
     module.declare_function("js_component_run_command", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_component_dispose", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_component_http_server_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_component_http_server_close", DOUBLE, &[DOUBLE]);
+    module.declare_function(
+        "js_component_http_handle",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, DOUBLE],
+    );
     module.declare_function(
         "js_component_host_resource_create",
         DOUBLE,
@@ -291,7 +299,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_net_socket_address", I64, &[I64]);
     module.declare_function("js_net_socket_once", I64, &[I64, I64, I64]);
     module.declare_function("js_ext_net_socket_once", I64, &[I64, I64, I64]);
-    module.declare_function("js_ext_net_socket_on", VOID, &[I64, I64, I64]);
+    module.declare_function("js_ext_net_socket_on", I64, &[I64, I64, I64]);
     module.declare_function(
         "js_net_subclass_init",
         DOUBLE,
@@ -366,6 +374,9 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     // Promise (INLINE_TRAP_NEXT) when called from inside the microtask
     // runner dispatching this same step closure.
     module.declare_function("js_async_step_done", I64, &[DOUBLE, I64]);
+    // Settled self-next continuation probe: NaN-boxed bool, true = the await
+    // result is in the iter-result cell and the step continues in place.
+    module.declare_function("js_async_step_resume_now", DOUBLE, &[DOUBLE, I64]);
     // #691 Phase 2: returns the live step closure pointer from
     // INLINE_TRAP.current_step TLS. Codegen NaN-boxes the result.
     module.declare_function("js_get_current_step_closure", I64, &[]);
@@ -462,6 +473,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",
+        I32,
+        &[I32, I32, PTR, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_class_static_super_call_guard",
         I32,
         &[I32, I32, PTR, I64, I64, PTR],
     );

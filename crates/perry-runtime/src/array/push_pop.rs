@@ -1,95 +1,23 @@
 //! push / pop / shift / unshift / set_length / delete + grow primitive.
 use super::*;
+use crate::proxy_hooks::{proxy_delete, proxy_get, proxy_has, proxy_set};
+use crate::{gc, string, value};
 use std::ptr;
 
-/// `pop`/`shift`/`push`/`unshift` on a frozen array perform a `Set`/`Delete`
-/// with `Throw = true` internally (ECMA-262 §23.1.3.*), so a non-writable
-/// `length` / non-extensible receiver makes them throw a **TypeError** — they
-/// must not silently no-op. Used by the frozen guards below.
-#[cold]
-fn throw_frozen_array_mutation() -> ! {
-    crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-}
+#[path = "push_pop/growth.rs"]
+mod growth;
+use growth::initialize_growth_slack;
+pub(super) use growth::install_array_growth_forwarding_with;
+#[cfg(test)]
+pub(crate) use growth::GrowInPlaceTestGuard;
 
-/// `push`/`pop`/`shift`/`unshift` always perform `Set(O, "length", …, true)`
-/// (ECMA-262 §23.1.3.*), so an array whose `length` was made non-writable via
-/// `Object.defineProperty(arr, "length", { writable: false })` makes them throw
-/// a **TypeError** — even when the call would otherwise be a no-op (empty array,
-/// zero-arg). A *frozen* array is caught by `array_is_frozen` first (same throw);
-/// this covers the non-writable-`length`-only case. (test262
-/// Array.prototype.{push,pop,shift,unshift}/set-length-*-non-writable.)
-#[inline]
-pub(crate) fn array_length_is_non_writable(arr: *const ArrayHeader) -> bool {
-    // A non-writable `length` is a key of the array's named layout.
-    array_has_element_descriptors(arr)
-        && crate::object::get_property_attrs(arr as usize, "length")
-            .map(|a| !a.writable())
-            .unwrap_or(false)
-}
-
-/// §23.1.3.21 push performs `Set(O, len, value, true)`; on a non-extensible
-/// receiver `CreateDataProperty` for the new index fails, and `Throw=true`
-/// makes that a TypeError. Node words it exactly this way for
-/// `preventExtensions`, `seal` AND `freeze`.
-///
-/// The failing index is the receiver's CURRENT length, so this takes the
-/// receiver and reads it through the resolved head itself: a caller holding
-/// the address it was handed (which a growth may have left as a forwarding
-/// stub) must not be able to report a stale word as the index.
-#[cold]
-pub(crate) fn throw_non_extensible_array_push(arr: *const ArrayHeader) -> ! {
-    let head = clean_arr_ptr(arr);
-    let index = if head.is_null() {
-        0
-    } else {
-        // SAFETY: `clean_arr_ptr` returned the live resolved head.
-        unsafe { (*head).length }
-    };
-    crate::collection_iter::throw_type_error(&format!(
-        "Cannot add property {index}, object is not extensible"
-    ));
-}
-
-#[cold]
-fn throw_non_writable_length() -> ! {
-    crate::collection_iter::throw_type_error(
-        "Cannot assign to read only property 'length' of object '[object Array]'",
-    );
-}
-
-#[cold]
-pub(super) fn throw_cannot_delete_array_index(index: u32) -> ! {
-    crate::collection_iter::throw_type_error(&format!(
-        "Cannot delete property '{index}' of [object Array]"
-    ));
-}
-
-/// Install an array-growth forwarding stub after `tracked_header_for` proves
-/// allocator ownership of `old_user_addr`. Keeping the classifier injectable
-/// makes the below-2-TiB macOS case deterministic without mapping a fixed low
-/// virtual address in the test process.
-///
-/// # Safety
-/// The classifier must return the live header for `old_user_addr`, and
-/// `new_user_addr` must be a live array allocation.
-#[inline]
-pub(super) unsafe fn install_array_growth_forwarding_with(
-    old_user_addr: usize,
-    new_user_addr: *mut u8,
-    tracked_header_for: impl FnOnce(usize) -> Option<std::ptr::NonNull<crate::gc::GcHeader>>,
-) -> bool {
-    let Some(header) = tracked_header_for(old_user_addr) else {
-        return false;
-    };
-    let header = header.as_ptr();
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
-        || (*header).gc_flags & crate::gc::GC_FLAG_ARENA == 0
-    {
-        return false;
-    }
-    crate::gc::set_forwarding_address(header, new_user_addr);
-    true
-}
+#[path = "push_pop/guards.rs"]
+mod guards;
+pub(crate) use guards::array_length_is_non_writable;
+pub(super) use guards::throw_cannot_delete_array_index;
+use guards::throw_frozen_array_mutation;
+use guards::throw_non_writable_length;
+pub(crate) use guards::{push_guard, throw_non_extensible_array_push};
 
 #[inline]
 pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
@@ -106,25 +34,21 @@ pub(crate) fn guard_writable_length(arr: *const ArrayHeader) {
 #[inline]
 unsafe fn resolved_plain_array_flags(arr: *const ArrayHeader) -> Option<u16> {
     let gc_header = super::header::array_gc_header(arr)?;
-    ((*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY).then(|| (*gc_header)._reserved)
+    (crate::gc_type_is_array!((*gc_header).obj_type)).then(|| (*gc_header)._reserved)
 }
 
 /// Guard called from the static `push_single`/`push` codegen path so that
 /// frozen + non-writable-`length` checks fire even for `arr.push()` with no
-/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`.
+/// arguments.  ECMA-262 §23.1.3.21 always performs `Set(O,"length",…,true)`;
+/// `argc` is the call's static argument count, which decides whether the first
+/// failing `Set` is the element add or the `length` write ([`push_guard`]).
 #[no_mangle]
-pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader) {
+pub extern "C" fn js_array_push_guard(arr: *mut ArrayHeader, argc: u32) {
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
         return;
     }
-    // SAFETY: `clean_arr_ptr_mut` just proved this exact pointer is the live,
-    // non-forwarded array head; no allocation occurs before the flag read.
-    let flags = unsafe { array_object_flags_resolved(arr) };
-    if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
-    }
-    guard_writable_length(arr);
+    push_guard(arr, argc);
 }
 
 #[no_mangle]
@@ -138,22 +62,163 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
     if arr.is_null() {
         return js_array_alloc(min_capacity);
     }
-    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
-        if flags
-            & (crate::gc::OBJ_FLAG_SEALED
-                | crate::gc::OBJ_FLAG_NO_EXTEND
-                | crate::gc::OBJ_FLAG_FROZEN)
+    // SAFETY: `clean_arr_ptr_mut` returned a live, forwarding-resolved head.
+    unsafe { grow_backing::<true>(arr, min_capacity) }
+}
+
+/// Room for one more element in a plain array whose push admission generated
+/// code has just proved, without collecting.
+///
+/// The inline push tier (`expr/array_push.rs`) reaches here only from its
+/// `apush.nofwd` block, after it read a live, non-forwarded `GC_TYPE_ARRAY`
+/// header with no integrity bits, a null named layout and a pristine prototype
+/// chain, and the only test that failed was `length < capacity`. It then stores
+/// the element inline into the returned head, exactly as it does when there is
+/// room, so a regrowth no longer pays the generic push (`push_spec_if_plain`,
+/// the descriptor guard, a handle scope, the classifying slot store).
+///
+/// The head returned has `capacity > length`, and is either `arr` itself
+/// (extended in place, see [`growth::try_extend_in_place`]) or a young
+/// replacement with a forwarding stub left at `arr`. Null means "declined,
+/// nothing changed": anything this would have to collect for, a receiver the
+/// cheap header re-check does not admit, an old or large source. The caller
+/// then takes its complete push.
+///
+/// Never collects, never runs JavaScript, never throws: the caller's value and
+/// receiver registers stay valid across the call.
+#[no_mangle]
+pub extern "C" fn js_array_grow_for_push(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    let Some(header) = (unsafe { value::addr_class::try_read_gc_header(arr as usize) }) else {
+        return ptr::null_mut();
+    };
+    if crate::gc_type_is_not_array!(header.obj_type)
+        || header.gc_flags & (gc::GC_FLAG_FORWARDED | gc::GC_FLAG_TENURED) != 0
+        || header._reserved & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN)
             != 0
-        {
+    {
+        return ptr::null_mut();
+    }
+    unsafe {
+        let length = (*arr).length;
+        // `%Array.prototype%` (which must refuse) owns a named layout, so it
+        // is declined here with every other receiver that has one.
+        if length != (*arr).capacity || length >= 100_000_000 || !(*arr).named.is_null() {
+            return ptr::null_mut();
+        }
+        // The in-place arm first, on the header just read: it needs none of
+        // `grow_backing`'s re-classification.
+        let header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+        if growth::try_extend_in_place(arr, header, grown_capacity(length, length + 1)) {
             return arr;
         }
+        grow_backing::<false>(arr, length + 1)
+    }
+}
+
+/// The capacity a grow from `old_capacity` asks for: at least 16 more slots,
+/// doubling once that is more, clamped to the allocation ceiling, and never
+/// below `min_capacity` (which the caller validates against the ceiling).
+#[inline]
+fn grown_capacity(old_capacity: u32, min_capacity: u32) -> u32 {
+    let grown = std::cmp::max(
+        old_capacity.saturating_mul(2),
+        old_capacity.saturating_add(16),
+    );
+    let doubled = std::cmp::min(grown, super::alloc::ARRAY_MAX_CAPACITY);
+    std::cmp::max(doubled, min_capacity)
+}
+
+/// [`js_array_grow`] on a resolved head. With `MAY_COLLECT == false` a grow
+/// the open nursery block cannot serve returns null with nothing changed,
+/// instead of allocating where a collection could run, and so does a request
+/// the collecting form would answer by throwing (an `%Array.prototype%`
+/// receiver, a capacity past the allocation ceiling): that instantiation
+/// neither collects nor throws, and its caller retries through the complete
+/// form.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+pub(super) unsafe fn grow_backing<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+) -> *mut ArrayHeader {
+    grow_backing_to::<MAY_COLLECT>(arr, min_capacity, false)
+}
+
+/// Give the fresh, unpublished array `arr` a capacity of at least
+/// `capacity` slots and return its head: `arr` itself when it already has
+/// them or the open nursery block can lengthen it where it stands, else a
+/// replacement of exactly that capacity (the old head becomes a forwarding
+/// stub nobody holds). The birth of an at-rest Array whose length may move
+/// reserves its proven upper bound this way (`layout_slot::
+/// js_array_rest_reserve`), so no later store reallocates it. May collect.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+pub(crate) unsafe fn reserve_capacity(arr: *mut ArrayHeader, capacity: u32) -> *mut ArrayHeader {
+    grow_backing_to::<true>(arr, capacity, true)
+}
+
+/// [`grow_backing`]; `exact` asks for `min_capacity` slots and no growth
+/// slack ([`reserve_capacity`]).
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+unsafe fn grow_backing_to<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+    exact: bool,
+) -> *mut ArrayHeader {
+    if let Some(flags) = unsafe { resolved_plain_array_flags(arr) } {
+        if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN) != 0 {
+            // The collecting form answers "no room" with the unchanged head;
+            // the no-collect form promises room on every non-null return.
+            return if MAY_COLLECT { arr } else { ptr::null_mut() };
+        }
+    } else if !MAY_COLLECT {
+        return ptr::null_mut();
     } else if array_is_sealed_or_no_extend(arr) || array_is_frozen(arr) {
         return arr;
     }
+    unsafe { grow_backing_unguarded::<MAY_COLLECT>(arr, min_capacity, exact) }
+}
+
+/// [`grow_backing_to`] without the integrity refusal: the store of a sealed
+/// or non-extensible Array grows when its `length` does (ArraySetLength adds
+/// no property). Every element add goes through the guarded form.
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved array head.
+unsafe fn grow_backing_unguarded<const MAY_COLLECT: bool>(
+    arr: *mut ArrayHeader,
+    min_capacity: u32,
+    exact: bool,
+) -> *mut ArrayHeader {
     unsafe {
         let old_capacity = (*arr).capacity;
         if min_capacity <= old_capacity {
             return arr;
+        }
+        // A sparse Array's far elements live in its named layout. A store
+        // that grows over them must take them in (`adopt_sparse_indices`),
+        // which the no-collect form does not do: it declines.
+        let sparse_source = (*arr).length > old_capacity;
+        if sparse_source && !MAY_COLLECT {
+            return ptr::null_mut();
+        }
+        // DEC 250 (i): `%Array.prototype%` never gains an element. It has no
+        // element room (`seal_realm`), and this is the one place an existing
+        // array's capacity grows, so every dense add to it (push, unshift,
+        // splice, concat-into, a store past its end) arrives here; a sparse
+        // index store refuses in `note_array_index_write`. Cold: only a real
+        // reallocation asks.
+        if arr as usize == super::array_prototype_addr_if_resolved() {
+            if !MAY_COLLECT {
+                return ptr::null_mut();
+            }
+            crate::object::builtin_proto::refuse_index_add(
+                crate::object::builtin_proto::BuiltinProto::Array,
+            );
         }
 
         // Double up to ARRAY_MAX_CAPACITY, or honor a larger minimum.
@@ -161,13 +226,41 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // capacity word (which shares the shape-id band) representable.
         // Clamp doubling before validating min_capacity so only a request
         // beyond the ceiling throws, rather than an oversized growth factor.
-        let doubled = std::cmp::min(old_capacity * 2, super::alloc::ARRAY_MAX_CAPACITY);
-        let new_capacity =
-            super::alloc::array_capacity_or_throw(std::cmp::max(doubled, min_capacity));
+        //
+        // A small array grows by at least 16 slots: a fresh `[]` (four slots)
+        // filled by a loop otherwise reallocates at 4, 8, 16 and 32 elements,
+        // and each reallocation (allocate, copy, forwarding stub) costs about
+        // 800 instructions, against about 55 for an in-capacity push. Sixteen
+        // pushes into `[]` paid two of them, 64% of the loop (the chess
+        // engine's per-node move lists); now one. Large arrays still double.
+        let wanted = if exact {
+            min_capacity
+        } else {
+            grown_capacity(old_capacity, min_capacity)
+        };
+        if !MAY_COLLECT
+            && wanted as usize + crate::array::key_attrs_reserve(arr)
+                > super::alloc::ARRAY_MAX_CAPACITY as usize
+        {
+            return ptr::null_mut();
+        }
+        let new_capacity = super::alloc::array_capacity_or_throw(wanted);
         // A named-property reserve (`named_props.rs`) travels with the array:
         // the replacement allocation keeps the same number of physical slots
         // in front of logical element 0, so `capacity` excludes them on both
         // sides and the element copy below is verbatim at the same byte offset.
+        let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+        // The common case of a loop filling a fresh array: nothing was
+        // allocated after it, so the open nursery block can lengthen it where
+        // it stands. No copy, no forwarding stub, no new address for an alias
+        // to chase (see `try_extend_in_place`).
+        if growth::try_extend_in_place(arr, old_header, new_capacity) {
+            return if sparse_source {
+                growth::adopt_sparse_indices(arr)
+            } else {
+                arr
+            };
+        }
         let reserve = crate::array::key_attrs_reserve(arr);
         let old_size = array_byte_size(old_capacity as usize + reserve);
         let new_size = array_byte_size(new_capacity as usize + reserve);
@@ -182,32 +275,46 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // stub pointing at recycled bytes.
         //
         // For a young source, use the nursery only when the already-open block
-        // can satisfy the grow without collecting. If that allocation would
-        // collect, the source may be promoted while its handle is reloaded;
-        // birth the target old instead so the post-collection source cannot
-        // acquire the same old->young forwarding edge.
-        let old_header =
-            (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        // can satisfy the grow without collecting, and a large target only
+        // when its young dedicated backing needs no collection either (it is
+        // non-moving, so a young stub may forward into it like into Eden).
+        // If that allocation would collect, the source may be promoted while
+        // its handle is reloaded; birth the target old instead so the
+        // post-collection source cannot acquire the same old->young
+        // forwarding edge.
         let source_generation = crate::arena::classify_heap_generation(arr as usize);
-        let source_requires_old_target = (*old_header).gc_flags & crate::gc::GC_FLAG_TENURED != 0
+        let source_requires_old_target = (*old_header).gc_flags & gc::GC_FLAG_TENURED != 0
             || !matches!(source_generation, crate::arena::HeapGeneration::Nursery);
+        if !MAY_COLLECT
+            && (source_requires_old_target
+                || crate::gc_type_is_not_array!((*old_header).obj_type)
+                || (*old_header).gc_flags & gc::GC_FLAG_ARENA == 0)
+        {
+            return ptr::null_mut();
+        }
         let young = if source_requires_old_target {
             ptr::null_mut()
         } else {
-            crate::arena::arena_alloc_gc_no_collect(new_size, 8, crate::gc::GC_TYPE_ARRAY)
+            let small = crate::arena::arena_alloc_gc_no_collect(new_size, 8, gc::GC_TYPE_ARRAY);
+            if small.is_null() {
+                crate::arena::arena_alloc_gc_large_young_no_collect(new_size, 8, gc::GC_TYPE_ARRAY)
+            } else {
+                small
+            }
         };
         let (new_ptr, arr) = if !young.is_null() {
             // No collection, so the source address remains valid without a
             // transient root. Only the old/refill branch needs a handle.
             (young as *mut ArrayHeader, arr)
+        } else if !MAY_COLLECT {
+            // Declined before anything was written: the source is untouched.
+            return ptr::null_mut();
         } else {
-            let scope = crate::gc::RuntimeHandleScope::new();
+            let scope = gc::RuntimeHandleScope::new();
             let source = scope.root_raw_mut_ptr(arr);
-            let target = crate::arena::arena_alloc_gc_old_born_tenured(
-                new_size,
-                8,
-                crate::gc::GC_TYPE_ARRAY,
-            ) as *mut ArrayHeader;
+            let target =
+                crate::arena::arena_alloc_gc_old_born_tenured(new_size, 8, gc::GC_TYPE_ARRAY)
+                    as *mut ArrayHeader;
             (target, source.get_raw_mut_ptr::<ArrayHeader>())
         };
         let shifted = array_front_offset(arr) != reserve;
@@ -219,39 +326,39 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // element kind word carries over exactly.
         (*new_ptr).ek_prefix = (*arr).ek_prefix;
         (*new_ptr).ek_kind = (*arr).ek_kind;
-        crate::gc::runtime_write_barrier_slot(
-            new_ptr as usize,
-            std::ptr::addr_of_mut!((*new_ptr).named) as usize,
-            crate::value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
-        );
+        // A null named layout contributes no old-to-young edge. The
+        // fresh replacement needs this barrier only when that edge exists.
+        if !(*new_ptr).named.is_null() {
+            gc::runtime_write_barrier_slot(
+                new_ptr as usize,
+                std::ptr::addr_of_mut!((*new_ptr).named) as usize,
+                value::js_nanbox_pointer((*new_ptr).named as i64).to_bits(),
+            );
+        }
         // Copy the live dense prefix; sparse indices remain in the named layout.
         let used = (*arr).length.min(old_capacity) as usize;
         // GC_STORE_AUDIT(BARRIERED): growth normalizes the live backing
         // prefix, transfers its layout, and replays its write barriers below.
         ptr::copy_nonoverlapping(array_elements_ptr(arr), array_elements_ptr(new_ptr), used);
-        // Hole-fill unused slack so the from-space scan sees no stale pointers.
-        {
-            let new_elems =
-                crate::array::array_elements_ptr(new_ptr as *const ArrayHeader) as *mut u64;
-            for i in used..new_capacity as usize {
-                // GC_STORE_AUDIT(INIT): unpublished slack contains only
-                // TAG_HOLE; the copied live prefix replays barriers below.
-                ptr::write(new_elems.add(i), crate::value::TAG_HOLE);
-            }
+        // A sparse logical length can make the barrier replay below inspect
+        // slots past `used`: initialize those now. For a dense source every
+        // subsequent read is in the copied live prefix. Its slack can wait
+        // until the old backing has become a forwarding stub, avoiding a
+        // resident high-water containing both the dead backing and new slack.
+        let sparse = (*arr).length as usize > used;
+        if sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
         }
-        let old_header =
-            (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-        let new_header =
-            (new_ptr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
+        let old_header = (arr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
+        let new_header = (new_ptr as *mut u8).sub(gc::GC_HEADER_SIZE) as *mut gc::GcHeader;
         (*new_header)._reserved = (*old_header)._reserved;
         // Header-carried layout facts were copied above. Only these two
         // authoritative bits can owe an address-keyed array record a move.
-        if (*old_header).obj_type != crate::gc::GC_TYPE_ARRAY
-            || (*old_header)._reserved
-                & (crate::gc::GC_ARRAY_CUSTOM_PROTO | crate::gc::GC_ARRAY_ELEMENT_SHAPE)
+        if crate::gc_type_is_not_array!((*old_header).obj_type)
+            || (*old_header)._reserved & (gc::GC_ARRAY_CUSTOM_PROTO | gc::GC_ARRAY_ELEMENT_SHAPE)
                 != 0
         {
-            crate::gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
+            gc::layout_transfer(arr as *mut u8, new_ptr as *mut u8);
         }
         if reserve != 0 {
             // Array expandos, sparse numeric indices and exec-result values
@@ -271,7 +378,7 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
         // value-derived replay whenever the translation declines.
         if young.is_null()
             && (shifted
-                || !crate::gc::relocate_copied_old_object_dirty_pages(
+                || !gc::relocate_copied_old_object_dirty_pages(
                     new_ptr as usize,
                     arr as usize,
                     new_ptr as usize,
@@ -300,19 +407,45 @@ pub extern "C" fn js_array_grow(arr: *mut ArrayHeader, min_capacity: u32) -> *mu
                 if matches!(source_generation, crate::arena::HeapGeneration::Unknown) {
                     // The resolver has a native-storage exception; keep the
                     // ownership classifier when no R2 region proved this head.
-                    crate::value::addr_class::try_read_tracked_gc_header(addr)
+                    value::addr_class::try_read_tracked_gc_header(addr)
                 } else {
                     // R2 proved ownership, and any collecting allocation
                     // refreshed the source through its handle.
                     std::ptr::NonNull::new(old_header)
                 }
             });
-        assert!(
-            installed,
-            "array growth could not install a forwarding stub for the tracked source at {:#x}",
-            arr as usize
-        );
+        if MAY_COLLECT {
+            assert!(
+                installed,
+                "array growth could not install a forwarding stub for the tracked source at {:#x}",
+                arr as usize
+            );
+        } else {
+            // Admitted below only for an arena-owned GC_TYPE_ARRAY nursery
+            // source, which is exactly what the installer accepts.
+            debug_assert!(installed);
+        }
 
+        // A retained stub needs its GC header and first forwarding word, not
+        // the old elements/named slots. Keep its address, extent and allocator
+        // ownership intact; return only complete interior payload pages.
+        // GENERATION_PAGE_SIZE is the minimum supported OS page granularity,
+        // not a workload threshold. Smaller ranges contain no releasable page
+        // and need no OS page-size query during small-array startup work.
+        let stub_bytes = std::mem::size_of::<u64>();
+        if old_size - stub_bytes >= crate::arena::GENERATION_PAGE_SIZE {
+            crate::arena::discard_dead_payload_pages(
+                (arr as *mut u8).add(stub_bytes),
+                old_size - stub_bytes,
+            );
+        }
+        if !sparse {
+            initialize_growth_slack(new_ptr, used, new_capacity as usize);
+        }
+
+        if sparse_source {
+            return growth::adopt_sparse_indices(new_ptr);
+        }
         new_ptr
     }
 }
@@ -329,9 +462,9 @@ unsafe fn proxy_array_length(proxy: f64) -> u64 {
 /// key string is allocated fresh per call so an intervening GC can't leave a
 /// stale interior pointer.
 pub(super) unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64) {
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    let key_f64 = crate::value::js_nanbox_string(key as i64);
-    if crate::proxy::js_proxy_set(proxy, key_f64, value).to_bits() != crate::value::TAG_TRUE {
+    let key = string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = value::js_nanbox_string(key as i64);
+    if proxy_set(proxy, key_f64, value).to_bits() != value::TAG_TRUE {
         crate::collection_iter::throw_type_error(&format!(
             "'set' on proxy: trap returned falsish for property '{}'",
             String::from_utf8_lossy(key_bytes),
@@ -342,16 +475,16 @@ pub(super) unsafe fn proxy_set_str_key(proxy: f64, key_bytes: &[u8], value: f64)
 /// `Get(proxy, <string key>)` through the proxy's `get` trap; fresh key
 /// string per call, same GC rationale as `proxy_set_str_key`.
 unsafe fn proxy_get_str_key(proxy: f64, key_bytes: &[u8]) -> f64 {
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    let key_f64 = crate::value::js_nanbox_string(key as i64);
-    crate::proxy::js_proxy_get(proxy, key_f64)
+    let key = string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = value::js_nanbox_string(key as i64);
+    proxy_get(proxy, key_f64)
 }
 
 /// `HasProperty(proxy, <string key>)` through the proxy's `has` trap.
 unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    let key_f64 = crate::value::js_nanbox_string(key as i64);
-    crate::proxy::js_proxy_has(proxy, key_f64).to_bits() == crate::value::TAG_TRUE
+    let key = string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = value::js_nanbox_string(key as i64);
+    proxy_has(proxy, key_f64).to_bits() == value::TAG_TRUE
 }
 
 /// Spec `DeletePropertyOrThrow(proxy, <string key>)`: routes the
@@ -359,9 +492,9 @@ unsafe fn proxy_has_str_key(proxy: f64, key_bytes: &[u8]) -> bool {
 /// failure — `pop`/`shift`/`unshift` must abort BEFORE their length write
 /// rather than report a successful mutation.
 pub(super) unsafe fn proxy_delete_str_key_or_throw(proxy: f64, key_bytes: &[u8]) {
-    let key = crate::string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
-    let key_f64 = crate::value::js_nanbox_string(key as i64);
-    if crate::proxy::js_proxy_delete(proxy, key_f64).to_bits() != crate::value::TAG_TRUE {
+    let key = string::js_string_from_bytes(key_bytes.as_ptr(), key_bytes.len() as u32);
+    let key_f64 = value::js_nanbox_string(key as i64);
+    if proxy_delete(proxy, key_f64).to_bits() != value::TAG_TRUE {
         let msg = format!(
             "'deleteProperty' on proxy: trap returned falsish for property '{}'",
             String::from_utf8_lossy(key_bytes)
@@ -419,13 +552,13 @@ pub(super) fn proxy_array_mutator(
     args_ptr: *const f64,
     args_len: usize,
 ) -> Option<f64> {
-    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let undefined = f64::from_bits(value::TAG_UNDEFINED);
     // Every trap below runs arbitrary user JS, which can allocate and move
     // heap values. Root the proxy and the incoming args once and reload each
     // carried value from its handle after any trap/allocating call (same
     // pattern as `js_native_call_method`'s dispatch prologue). The proxy
     // cell is nonmoving, and its handle retains the target/handler edges.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let proxy_handle = scope.root_nanbox_f64(proxy);
     let original_args: Vec<f64> = if args_len > 0 && !args_ptr.is_null() {
         unsafe { std::slice::from_raw_parts(args_ptr, args_len).to_vec() }
@@ -433,7 +566,7 @@ pub(super) fn proxy_array_mutator(
         Vec::new()
     };
     let arg_handles = scope.root_nanbox_f64_slice(&original_args);
-    let p = || proxy_handle.get_nanbox_f64();
+    let p = &proxy_handle;
     let arg = |i: usize| -> f64 {
         arg_handles
             .get(i)
@@ -444,75 +577,93 @@ pub(super) fn proxy_array_mutator(
         match method {
             // §23.1.3.21 Array.prototype.push
             "push" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 for i in 0..args_len {
-                    proxy_set_str_key(p(), (len + i as u64).to_string().as_bytes(), arg(i));
+                    proxy_set_str_key(
+                        p.get_nanbox_f64(),
+                        (len + i as u64).to_string().as_bytes(),
+                        arg(i),
+                    );
                 }
                 let new_len = len + args_len as u64;
-                proxy_set_str_key(p(), b"length", new_len as f64);
+                proxy_set_str_key(p.get_nanbox_f64(), b"length", new_len as f64);
                 Some(new_len as f64)
             }
             // §23.1.3.19 Array.prototype.pop
             "pop" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 if len == 0 {
-                    proxy_set_str_key(p(), b"length", 0.0);
+                    proxy_set_str_key(p.get_nanbox_f64(), b"length", 0.0);
                     return Some(undefined);
                 }
                 let idx = (len - 1).to_string();
-                let value_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), idx.as_bytes()));
-                proxy_delete_str_key_or_throw(p(), idx.as_bytes());
-                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                let value_handle =
+                    scope.root_nanbox_f64(proxy_get_str_key(p.get_nanbox_f64(), idx.as_bytes()));
+                proxy_delete_str_key_or_throw(p.get_nanbox_f64(), idx.as_bytes());
+                proxy_set_str_key(p.get_nanbox_f64(), b"length", (len - 1) as f64);
                 Some(value_handle.get_nanbox_f64())
             }
             // §23.1.3.24 Array.prototype.shift — HasProperty gates each move:
             // a hole in the source deletes the destination instead of
             // materializing an own `undefined`.
             "shift" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 if len == 0 {
-                    proxy_set_str_key(p(), b"length", 0.0);
+                    proxy_set_str_key(p.get_nanbox_f64(), b"length", 0.0);
                     return Some(undefined);
                 }
-                let first_handle = scope.root_nanbox_f64(proxy_get_str_key(p(), b"0"));
+                let first_handle =
+                    scope.root_nanbox_f64(proxy_get_str_key(p.get_nanbox_f64(), b"0"));
                 for k in 1..len {
                     let from = k.to_string();
                     let to = (k - 1).to_string();
-                    if proxy_has_str_key(p(), from.as_bytes()) {
-                        let v_handle =
-                            scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                        proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                    if proxy_has_str_key(p.get_nanbox_f64(), from.as_bytes()) {
+                        let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                            p.get_nanbox_f64(),
+                            from.as_bytes(),
+                        ));
+                        proxy_set_str_key(
+                            p.get_nanbox_f64(),
+                            to.as_bytes(),
+                            v_handle.get_nanbox_f64(),
+                        );
                     } else {
-                        proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                        proxy_delete_str_key_or_throw(p.get_nanbox_f64(), to.as_bytes());
                     }
                 }
-                proxy_delete_str_key_or_throw(p(), (len - 1).to_string().as_bytes());
-                proxy_set_str_key(p(), b"length", (len - 1) as f64);
+                proxy_delete_str_key_or_throw(p.get_nanbox_f64(), (len - 1).to_string().as_bytes());
+                proxy_set_str_key(p.get_nanbox_f64(), b"length", (len - 1) as f64);
                 Some(first_handle.get_nanbox_f64())
             }
             // §23.1.3.32 Array.prototype.unshift — same HasProperty gating on
             // the right-shift loop.
             "unshift" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 let count = args_len as u64;
                 if count > 0 {
                     for k in (0..len).rev() {
                         let from = k.to_string();
                         let to = (k + count).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key(p.get_nanbox_f64(), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                p.get_nanbox_f64(),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw(p.get_nanbox_f64(), to.as_bytes());
                         }
                     }
                     for i in 0..args_len {
-                        proxy_set_str_key(p(), i.to_string().as_bytes(), arg(i));
+                        proxy_set_str_key(p.get_nanbox_f64(), i.to_string().as_bytes(), arg(i));
                     }
                 }
                 let new_len = len + count;
-                proxy_set_str_key(p(), b"length", new_len as f64);
+                proxy_set_str_key(p.get_nanbox_f64(), b"length", new_len as f64);
                 Some(new_len as f64)
             }
             // §23.1.3.26 Array.prototype.reverse — four-case swap with
@@ -520,45 +671,69 @@ pub(super) fn proxy_array_mutator(
             // instead of materializing an own `undefined`. Returns the
             // receiver.
             "reverse" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 for lower in 0..len / 2 {
                     let upper = len - lower - 1;
                     let lower_key = lower.to_string();
                     let upper_key = upper.to_string();
-                    let lower_handle = if proxy_has_str_key(p(), lower_key.as_bytes()) {
-                        Some(scope.root_nanbox_f64(proxy_get_str_key(p(), lower_key.as_bytes())))
-                    } else {
-                        None
-                    };
-                    let upper_handle = if proxy_has_str_key(p(), upper_key.as_bytes()) {
-                        Some(scope.root_nanbox_f64(proxy_get_str_key(p(), upper_key.as_bytes())))
-                    } else {
-                        None
-                    };
+                    let lower_handle =
+                        if proxy_has_str_key(p.get_nanbox_f64(), lower_key.as_bytes()) {
+                            Some(scope.root_nanbox_f64(proxy_get_str_key(
+                                p.get_nanbox_f64(),
+                                lower_key.as_bytes(),
+                            )))
+                        } else {
+                            None
+                        };
+                    let upper_handle =
+                        if proxy_has_str_key(p.get_nanbox_f64(), upper_key.as_bytes()) {
+                            Some(scope.root_nanbox_f64(proxy_get_str_key(
+                                p.get_nanbox_f64(),
+                                upper_key.as_bytes(),
+                            )))
+                        } else {
+                            None
+                        };
                     match (&lower_handle, &upper_handle) {
                         (Some(l), Some(u)) => {
-                            proxy_set_str_key(p(), lower_key.as_bytes(), u.get_nanbox_f64());
-                            proxy_set_str_key(p(), upper_key.as_bytes(), l.get_nanbox_f64());
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                lower_key.as_bytes(),
+                                u.get_nanbox_f64(),
+                            );
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                upper_key.as_bytes(),
+                                l.get_nanbox_f64(),
+                            );
                         }
                         (None, Some(u)) => {
-                            proxy_set_str_key(p(), lower_key.as_bytes(), u.get_nanbox_f64());
-                            proxy_delete_str_key_or_throw(p(), upper_key.as_bytes());
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                lower_key.as_bytes(),
+                                u.get_nanbox_f64(),
+                            );
+                            proxy_delete_str_key_or_throw(p.get_nanbox_f64(), upper_key.as_bytes());
                         }
                         (Some(l), None) => {
-                            proxy_delete_str_key_or_throw(p(), lower_key.as_bytes());
-                            proxy_set_str_key(p(), upper_key.as_bytes(), l.get_nanbox_f64());
+                            proxy_delete_str_key_or_throw(p.get_nanbox_f64(), lower_key.as_bytes());
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                upper_key.as_bytes(),
+                                l.get_nanbox_f64(),
+                            );
                         }
                         (None, None) => {}
                     }
                 }
-                Some(p())
+                Some(p.get_nanbox_f64())
             }
             // §23.1.3.31 Array.prototype.splice — removed elements land in a
             // FRESH real array (holes preserved: absent sources leave the
             // pre-holed slot untouched); tail moves are HasProperty-gated and
             // a refused `deleteProperty` throws BEFORE the length write.
             "splice" => {
-                let len = proxy_array_length(p());
+                let len = proxy_array_length(p.get_nanbox_f64());
                 let actual_start = if args_len >= 1 {
                     proxy_relative_index(arg(0), len)
                 } else {
@@ -577,19 +752,40 @@ pub(super) fn proxy_array_mutator(
                 if actual_delete_count > u32::MAX as u64 {
                     crate::array::array_length_range_error();
                 }
-                let removed =
-                    super::species::array_species_create(p(), actual_delete_count as usize);
+                let (removed, removed_is_plain) = super::species::array_species_create(
+                    p.get_nanbox_f64(),
+                    actual_delete_count as usize,
+                );
                 let removed_handle = scope.root_nanbox_f64(removed);
                 for k in 0..actual_delete_count {
                     let from = (actual_start + k).to_string();
-                    if proxy_has_str_key(p(), from.as_bytes()) {
-                        let value = scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                        super::species::species_result_set(
-                            removed_handle.get_nanbox_f64(),
-                            k as usize,
-                            value.get_nanbox_f64(),
-                        );
+                    if proxy_has_str_key(p.get_nanbox_f64(), from.as_bytes()) {
+                        let value = scope.root_nanbox_f64(proxy_get_str_key(
+                            p.get_nanbox_f64(),
+                            from.as_bytes(),
+                        ));
+                        if removed_is_plain {
+                            crate::array::js_array_set_f64(
+                                value::js_nanbox_get_pointer(removed_handle.get_nanbox_f64())
+                                    as *mut ArrayHeader,
+                                k as u32,
+                                value.get_nanbox_f64(),
+                            );
+                        } else {
+                            super::species::species_result_define(
+                                removed_handle.get_nanbox_f64(),
+                                k as usize,
+                                value.get_nanbox_f64(),
+                            );
+                        }
                     }
+                }
+                if !removed_is_plain {
+                    // Step 13: Set(A, "length", actualDeleteCount, true).
+                    super::species::species_result_set_length(
+                        removed_handle.get_nanbox_f64(),
+                        actual_delete_count as usize,
+                    );
                 }
                 let item_count = args_len.saturating_sub(2) as u64;
                 if item_count < actual_delete_count {
@@ -598,19 +794,28 @@ pub(super) fn proxy_array_mutator(
                     while k < len - actual_delete_count {
                         let from = (k + actual_delete_count).to_string();
                         let to = (k + item_count).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key(p.get_nanbox_f64(), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                p.get_nanbox_f64(),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw(p.get_nanbox_f64(), to.as_bytes());
                         }
                         k += 1;
                     }
                     // …then delete the vacated trailing slots.
                     let mut k = len;
                     while k > len - actual_delete_count + item_count {
-                        proxy_delete_str_key_or_throw(p(), (k - 1).to_string().as_bytes());
+                        proxy_delete_str_key_or_throw(
+                            p.get_nanbox_f64(),
+                            (k - 1).to_string().as_bytes(),
+                        );
                         k -= 1;
                     }
                 } else if item_count > actual_delete_count {
@@ -619,25 +824,31 @@ pub(super) fn proxy_array_mutator(
                     while k > actual_start {
                         let from = (k + actual_delete_count - 1).to_string();
                         let to = (k + item_count - 1).to_string();
-                        if proxy_has_str_key(p(), from.as_bytes()) {
-                            let v_handle =
-                                scope.root_nanbox_f64(proxy_get_str_key(p(), from.as_bytes()));
-                            proxy_set_str_key(p(), to.as_bytes(), v_handle.get_nanbox_f64());
+                        if proxy_has_str_key(p.get_nanbox_f64(), from.as_bytes()) {
+                            let v_handle = scope.root_nanbox_f64(proxy_get_str_key(
+                                p.get_nanbox_f64(),
+                                from.as_bytes(),
+                            ));
+                            proxy_set_str_key(
+                                p.get_nanbox_f64(),
+                                to.as_bytes(),
+                                v_handle.get_nanbox_f64(),
+                            );
                         } else {
-                            proxy_delete_str_key_or_throw(p(), to.as_bytes());
+                            proxy_delete_str_key_or_throw(p.get_nanbox_f64(), to.as_bytes());
                         }
                         k -= 1;
                     }
                 }
                 for j in 0..args_len.saturating_sub(2) {
                     proxy_set_str_key(
-                        p(),
+                        p.get_nanbox_f64(),
                         (actual_start + j as u64).to_string().as_bytes(),
                         arg(2 + j),
                     );
                 }
                 proxy_set_str_key(
-                    p(),
+                    p.get_nanbox_f64(),
                     b"length",
                     (len - actual_delete_count + item_count) as f64,
                 );
@@ -663,8 +874,8 @@ pub(super) fn proxy_array_fill(
 ) -> f64 {
     // #5552: the same source lands in many slots — demote a uniquely-owned
     // heap string once (no-op for SSO / non-string), mirroring the dense fill.
-    crate::string::js_string_addref_if_heap_string(value);
-    let scope = crate::gc::RuntimeHandleScope::new();
+    string::js_string_addref_if_heap_string(value);
+    let scope = gc::RuntimeHandleScope::new();
     let proxy_handle = scope.root_nanbox_f64(proxy);
     let value_handle = scope.root_nanbox_f64(value);
     unsafe {
@@ -676,8 +887,7 @@ pub(super) fn proxy_array_fill(
         };
         // Spec: `end === undefined` resolves to `len`, not ToIntegerOrInfinity
         // (which would give 0) — mirror the dense branch's undefined check.
-        let end_absent =
-            has_end == 0 || crate::value::JSValue::from_bits(end.to_bits()).is_undefined();
+        let end_absent = has_end == 0 || value::JSValue::from_bits(end.to_bits()).is_undefined();
         let final_index = if end_absent {
             len
         } else {
@@ -703,7 +913,7 @@ pub extern "C" fn js_array_push_f64(arr: *mut ArrayHeader, value: f64) -> *mut A
     // SSO / non-string. Done on the raw value, covering the inline, grow, and
     // proxy paths below (mirrors the object-field demote in
     // `runtime_store_jsvalue_slot`).
-    crate::string::js_string_addref_if_heap_string(value);
+    string::js_string_addref_if_heap_string(value);
     if let Some(plain) = direct_plain_push_receiver(arr) {
         return unsafe { js_array_push_f64_resolved(plain, value) };
     }
@@ -779,7 +989,7 @@ pub unsafe extern "C" fn js_array_fill_values(
     for i in 0..n {
         let value = *values.add(i as usize);
         // The same demotion `js_array_push_f64` applies before its store.
-        crate::string::js_string_addref_if_heap_string(value);
+        string::js_string_addref_if_heap_string(value);
         // Re-read per element: a pointer store changes the numeric layout
         // flags the next canonicalization reads, as it does across pushes.
         let flags = array_object_flags_resolved(arr);
@@ -797,7 +1007,7 @@ pub unsafe extern "C" fn js_array_fill_values(
 /// caller has already demoted a uniquely-owned heap string in `value`.
 #[inline]
 fn object_backed_push_fast(arr: *mut ArrayHeader, value: f64) -> bool {
-    if crate::array::array_receiver_gc_tag(arr).0 != crate::gc::GC_TYPE_OBJECT {
+    if crate::gc_type_is_not_object!(crate::array::array_receiver_gc_tag(arr).0) {
         return false;
     }
     crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some()
@@ -815,11 +1025,16 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
     // SAFETY: `clean_arr_ptr_mut` just returned this live head and no
     // allocation or safepoint intervenes before the read.
     let flags = unsafe { array_object_flags_resolved(arr) };
-    if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
-        throw_frozen_array_mutation();
+    if flags & gc::OBJ_FLAG_FROZEN != 0 {
+        push_guard(arr, 1);
     }
-    guard_writable_length(arr);
-    if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 {
+    // A non-writable `length` is a descriptor in the named layout; the resolved
+    // probe answers "none" without re-classifying the head, and only a
+    // receiver that has some pays for the complete check.
+    if super::header::array_has_element_descriptors_resolved(arr) {
+        guard_writable_length(arr);
+    }
+    if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
         return arr;
     }
     let length = (*arr).length;
@@ -849,10 +1064,10 @@ unsafe fn js_array_push_f64_resolved(arr: *mut ArrayHeader, value: f64) -> *mut 
 /// and keeps its complete route.
 #[inline(always)]
 fn direct_plain_push_receiver(arr: *mut ArrayHeader) -> Option<*mut ArrayHeader> {
-    unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
+    unsafe { value::addr_class::try_read_gc_header(arr as usize) }
         .filter(|header| {
-            header.obj_type == crate::gc::GC_TYPE_ARRAY
-                && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            crate::gc_type_is_array!(header.obj_type)
+                && header.gc_flags & gc::GC_FLAG_FORWARDED == 0
                 && unsafe { (*arr).named.is_null() }
                 && !super::array_index_fast_path_invalid_for(header._reserved)
         })
@@ -983,12 +1198,12 @@ pub(crate) fn push_spec_if_plain(arr: *mut ArrayHeader, value: f64) -> Option<*m
     // frozen message; only the extensibility bits are answered here.
     // SAFETY: `direct_plain_push_receiver` just proved the resolved head.
     let flags = unsafe { array_object_flags_resolved(plain) };
-    if flags & crate::gc::OBJ_FLAG_FROZEN == 0
-        && flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0
+    if flags & gc::OBJ_FLAG_FROZEN == 0
+        && flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0
     {
         throw_non_extensible_array_push(plain);
     }
-    crate::string::js_string_addref_if_heap_string(value);
+    string::js_string_addref_if_heap_string(value);
     Some(unsafe { js_array_push_f64_resolved(plain, value) })
 }
 
@@ -1002,8 +1217,8 @@ pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut Arra
     // resolver nor the exotic probe (both are classification misses for an
     // OBJECT header); the string demote precedes the store as in
     // `js_array_push_f64`.
-    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_OBJECT {
-        crate::string::js_string_addref_if_heap_string(value);
+    if crate::gc_type_is_object!(crate::array::array_receiver_gc_tag(arr).0) {
+        string::js_string_addref_if_heap_string(value);
         if crate::array::subclass::array_subclass_fast_push_one_raw(arr, value).is_some() {
             return arr;
         }
@@ -1013,7 +1228,7 @@ pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut Arra
         return js_array_push_f64(arr, value);
     }
     if crate::array::array_iteration_is_exotic(cleaned) {
-        crate::string::js_string_addref_if_heap_string(value);
+        string::js_string_addref_if_heap_string(value);
         return push_array_spec_path(cleaned, value);
     }
     js_array_push_f64(cleaned, value)
@@ -1022,7 +1237,7 @@ pub(crate) fn push_spec_declined(arr: *mut ArrayHeader, value: f64) -> *mut Arra
 /// The observable Set/Set-length path for push when indexed descriptors,
 /// sparse storage, or prototype indices make the dense append inequivalent.
 fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
     let length = unsafe { (*arr_handle.get_raw_mut_ptr::<ArrayHeader>()).length };
@@ -1031,7 +1246,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         // 2^32-1 is a named property, not an Array index. The element Set is
         // observable before the final ArraySetLength rejects 2^32.
         let key_text = length.to_string();
-        let key = crate::string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
+        let key = string::js_string_from_bytes(key_text.as_ptr(), key_text.len() as u32);
         unsafe {
             array_named_property_set(
                 arr_handle.get_raw_mut_ptr::<ArrayHeader>(),
@@ -1059,7 +1274,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
         arr_handle.set_raw_mut_ptr(current);
         // An inherited setter above can change either integrity condition.
         if array_is_frozen(current) {
-            throw_frozen_array_mutation();
+            push_guard(current, 1);
         }
         guard_writable_length(current);
         (*current).length = length + 1;
@@ -1071,7 +1286,7 @@ fn push_array_spec_path(arr: *mut ArrayHeader, value: f64) -> *mut ArrayHeader {
 
 #[no_mangle]
 pub extern "C" fn js_array_push_hole(arr: *mut ArrayHeader) -> *mut ArrayHeader {
-    js_array_push_f64(arr, f64::from_bits(crate::value::TAG_HOLE))
+    js_array_push_f64(arr, f64::from_bits(value::TAG_HOLE))
 }
 
 #[no_mangle]
@@ -1099,10 +1314,7 @@ pub extern "C" fn js_array_numeric_push_f64_unboxed(
     // Measured on `for (…) { a.push(v); a.pop(); }`: `array_object_flags` was
     // 24.0% of all samples in the loop, every one of them from this function.
     let flags = crate::array::array_object_flags_from_tag(crate::array::array_receiver_gc_tag(arr));
-    if flags
-        & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND | crate::gc::OBJ_FLAG_FROZEN)
-        != 0
-    {
+    if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND | gc::OBJ_FLAG_FROZEN) != 0 {
         return arr;
     }
     guard_writable_length(arr);
@@ -1152,9 +1364,9 @@ pub extern "C" fn js_array_push_spread_f64(
     // diverge from the typed-local path. Keep pushing through the public
     // helper because a generic receiver may be a Proxy or object-backed Array
     // subclass rather than a plain dense Array.
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let target_handle = scope.root_raw_mut_ptr(target);
-    let boxed = crate::value::js_nanbox_pointer(source as i64);
+    let boxed = value::js_nanbox_pointer(source as i64);
     // Materializing the spread source allocates, so take the destination's
     // address from the rooted slot AFTER that call rather than before it.
     let (source, target) = target_handle.across_mut::<ArrayHeader, _>(|| {
@@ -1177,8 +1389,8 @@ pub extern "C" fn js_array_push_spread_f64(
             }
             let elements = crate::array::array_elements_ptr(source) as *const f64;
             let source_value = *elements.add(i);
-            let value = if source_value.to_bits() == crate::value::TAG_HOLE {
-                f64::from_bits(crate::value::TAG_UNDEFINED)
+            let value = if source_value.to_bits() == value::TAG_HOLE {
+                f64::from_bits(value::TAG_UNDEFINED)
             } else {
                 source_value
             };
@@ -1212,11 +1424,10 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     // matches the existing dense branch later in this function; the logical
     // length is the GC trace bound and a later push overwrites the word before
     // publishing the larger length.
-    if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) } {
-        let guarded_flags =
-            crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
-            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+    if let Some(header) = unsafe { value::addr_class::try_read_gc_header(arr as usize) } {
+        let guarded_flags = gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND;
+        if crate::gc_type_is_array!(header.obj_type)
+            && header.gc_flags & gc::GC_FLAG_FORWARDED == 0
             && !unsafe { array_has_element_descriptors_resolved(arr) }
             && header._reserved & guarded_flags == 0
             && !super::array_index_fast_path_invalid_for(header._reserved)
@@ -1240,7 +1451,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
                     let elements =
                         crate::array::array_elements_ptr(arr as *const ArrayHeader).cast::<f64>();
                     let value = ptr::read(elements.add(new_length as usize));
-                    if value.to_bits() != crate::value::TAG_HOLE {
+                    if value.to_bits() != value::TAG_HOLE {
                         crate::array::array_truncate_length(arr, new_length);
                         return value;
                     }
@@ -1261,6 +1472,9 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     if arr.is_null() {
         return TAG_UNDEFINED_F64;
     }
+    if let Some(recv) = super::generic_object::restricted_array_value(arr) {
+        return crate::array::generic_object_pop(recv);
+    }
     // Resolve the header flags ONCE. `array_is_frozen`, `guard_writable_length`
     // and `array_iteration_is_exotic` each re-ran `clean_arr_ptr` on the head
     // this function had just resolved — three classifications per pop on an
@@ -1268,7 +1482,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
     let plain_flags = unsafe { resolved_plain_array_flags(arr) };
     match plain_flags {
         Some(flags) => {
-            if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
+            if flags & gc::OBJ_FLAG_FROZEN != 0 {
                 throw_frozen_array_mutation();
             }
             guard_writable_length(arr);
@@ -1298,7 +1512,7 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
                 *elements_ptr.add(new_length as usize)
             } else {
                 // Over-long array: no slot backs this index.
-                f64::from_bits(crate::value::TAG_HOLE)
+                f64::from_bits(value::TAG_HOLE)
             };
             crate::array::array_truncate_length(arr, new_length);
             // #9462: the popped slot can be a HOLE — `[1, ,].pop()`,
@@ -1310,13 +1524,13 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
             // #536's bare-NaN empty pop, which this exact function was already
             // fixed for once. The element READ arm of `js_array_get_f64`
             // translates the sentinel; so must the element REMOVE arm.
-            if value.to_bits() == crate::value::TAG_HOLE {
+            if value.to_bits() == value::TAG_HOLE {
                 return TAG_UNDEFINED_F64;
             }
             return value;
         }
 
-        let scope = crate::gc::RuntimeHandleScope::new();
+        let scope = gc::RuntimeHandleScope::new();
         let arr_handle = scope.root_raw_mut_ptr(arr);
         // `Get(O, ToString(newLength))` must consult the prototype chain. It
         // can also run an accessor which allocates, moves `arr`, freezes it,
@@ -1390,14 +1604,12 @@ pub extern "C" fn js_array_pop_f64(arr: *mut ArrayHeader) -> f64 {
 /// length, one layout rebuild. Anything else declines to the full entry.
 #[inline(always)]
 fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) })
-    else {
+    let Some(header) = (unsafe { value::addr_class::try_read_gc_header(arr as usize) }) else {
         return false;
     };
-    let guarded_flags =
-        crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
-        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+    let guarded_flags = gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND;
+    if crate::gc_type_is_not_array!(header.obj_type)
+        || header.gc_flags & gc::GC_FLAG_FORWARDED != 0
         || unsafe { array_has_element_descriptors_resolved(arr) }
         || header._reserved & guarded_flags != 0
     {
@@ -1416,7 +1628,7 @@ fn try_truncate_plain_array_to_zero(arr: *mut ArrayHeader) -> bool {
             // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable when
             // length is published below; rebuild_array_layout then rebuilds
             // the complete live-prefix layout/barrier state.
-            ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
+            ptr::write(elements.add(i as usize), value::TAG_HOLE);
         }
         (*arr).length = 0;
         // EK §3.3: the reset at length 0.
@@ -1450,7 +1662,7 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
     // rejects must not reach a shortcut that stores.
     let cleaned = clean_arr_ptr_mut(arr);
     if !cleaned.is_null()
-        && (array_object_flags(cleaned) & crate::gc::OBJ_FLAG_FROZEN != 0
+        && (array_object_flags(cleaned) & gc::OBJ_FLAG_FROZEN != 0
             || array_length_is_non_writable(cleaned))
     {
         throw_non_writable_length();
@@ -1470,17 +1682,52 @@ pub extern "C" fn js_array_set_length_strict(arr: *mut ArrayHeader, new_length: 
         }
         return;
     }
-    js_array_set_length(cleaned, new_length);
+    // ArraySetLength returned false: an element that cannot be deleted
+    // stopped the truncation, and `Set(O, "length", n, true)` throws.
+    if let Err(index) = array_set_length(cleaned, new_length) {
+        throw_cannot_delete_array_index(index);
+    }
 }
 
 #[no_mangle]
 pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
+    // The sloppy `Set(O, "length", n, false)`: a blocked truncation is silent.
+    let _ = array_set_length(arr, new_length);
+}
+
+/// `Reflect.set(arr, "length", n)`: the [[Set]]'s own boolean. `false` for a
+/// frozen Array, a read-only `length` and a truncation an undeletable element
+/// stopped; an invalid length still throws its RangeError.
+pub(crate) fn array_set_length_reflect(arr: *mut ArrayHeader, new_length: f64) -> bool {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        return true;
+    }
+    if array_object_flags(cleaned) & gc::OBJ_FLAG_FROZEN != 0
+        || array_length_is_non_writable(cleaned)
+    {
+        return false;
+    }
+    array_set_length(cleaned, new_length).is_ok()
+}
+
+/// ArraySetLength (ECMA-262 §10.4.2.4) for `arr.length = n`.
+///
+/// `Err(index)`: the truncation stopped at an element that cannot be deleted
+/// (a non-configurable index, any element of a sealed Array); `length` is now
+/// `index + 1`. A frozen Array and a read-only `length` leave the Array as it
+/// is and answer `Ok` (the strict entry throws for them before it calls).
+///
+/// Extensibility does not enter: a non-extensible or sealed Array may shrink
+/// (it loses the elements that can be deleted) and may grow (a longer
+/// `length` adds no property).
+fn array_set_length(arr: *mut ArrayHeader, new_length: f64) -> Result<(), u32> {
     if new_length.to_bits() == 0 && try_truncate_plain_array_to_zero(arr) {
-        return;
+        return Ok(());
     }
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return;
+        return Ok(());
     }
     let n = array_length_from_property_value_or_throw(new_length);
     unsafe {
@@ -1492,11 +1739,20 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             Some(flags) => flags,
             None => array_object_flags(arr),
         };
-        if flags & crate::gc::OBJ_FLAG_FROZEN != 0 {
-            return;
+        if flags & gc::OBJ_FLAG_FROZEN != 0 {
+            return Ok(());
         }
-        if flags & (crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND) != 0 && n != cur {
-            return;
+        if n < cur && flags & gc::OBJ_FLAG_SEALED != 0 {
+            // Every element of a sealed Array is non-configurable: the highest
+            // present index at or above `n` stops the truncation. The holes
+            // above it go.
+            if let Some(index) = highest_present_index(arr, n, cur) {
+                if index + 1 < cur {
+                    crate::array::array_truncate_length(arr, index + 1);
+                    refresh_array_numeric_layout(arr);
+                }
+                return Err(index);
+            }
         }
         // `defineProperty(arr, "length", {writable:false})` records the flag
         // in the attrs side table; an ordinary `arr.length = n` write must
@@ -1507,7 +1763,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 .map(|a| !a.writable())
                 .unwrap_or(false)
         {
-            return;
+            return Ok(());
         }
         if n < cur {
             // ArraySetLength deletes indices from high to low. This must clear
@@ -1544,15 +1800,15 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     // GC_STORE_AUDIT(BARRIERED): the suffix becomes unreachable
                     // when length is published below; rebuild_array_layout then
                     // rebuilds the complete live-prefix layout/barrier state.
-                    ptr::write(elements.add(i as usize), crate::value::TAG_HOLE);
+                    ptr::write(elements.add(i as usize), value::TAG_HOLE);
                 }
                 (*arr).length = n;
                 // EK §3.1 `length = n`: the prefix stops at the new length.
                 crate::array::ek_lower_prefix(arr, n);
                 rebuild_array_layout(arr);
-                return;
+                return Ok(());
             }
-            let scope = crate::gc::RuntimeHandleScope::new();
+            let scope = gc::RuntimeHandleScope::new();
             let _arr_handle = scope.root_raw_mut_ptr(arr);
             if cur > capacity {
                 let mut sparse_indices: Vec<u32> = array_named_property_names(arr, false)
@@ -1572,7 +1828,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                     if js_array_delete(arr, i) == 0 {
                         (*arr).length = i + 1;
                         refresh_array_numeric_layout(arr);
-                        return;
+                        return Err(i);
                     }
                 }
             }
@@ -1580,7 +1836,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
                 if js_array_delete(arr, i) == 0 {
                     (*arr).length = i + 1;
                     refresh_array_numeric_layout(arr);
-                    return;
+                    return Err(i);
                 }
             }
             (*arr).length = n;
@@ -1589,7 +1845,7 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             crate::array::ek_lower_prefix(arr, n);
             refresh_array_numeric_layout(arr);
         } else if n > cur {
-            let scope = crate::gc::RuntimeHandleScope::new();
+            let scope = gc::RuntimeHandleScope::new();
             let _arr_handle = scope.root_raw_mut_ptr(arr);
             // Growing `length` creates holes conceptually; it must not allocate
             // a dense backing store proportional to the requested length.
@@ -1598,27 +1854,60 @@ pub extern "C" fn js_array_set_length(arr: *mut ArrayHeader, new_length: f64) {
             if n > (*arr).capacity && n > 1_000_000 {
                 (*arr).length = n;
                 refresh_array_numeric_layout(arr);
-                return;
+                return Ok(());
             }
             // Extend: pad with TAG_HOLE. Past-capacity extensions go
             // through `js_array_grow` which installs a forwarding pointer at
             // the OLD location (issue #233 mechanism), so the caller's stale
             // pointer transparently follows the chain to the resized buffer
             // on the next access — no callsite-side writeback needed.
+            // A longer `length` adds no property, so a sealed or
+            // non-extensible Array takes it too: its store grows by the
+            // unguarded form (`js_array_grow` refuses such an Array, which is
+            // right for an element add).
             let target = if n > (*arr).capacity {
-                js_array_grow(arr, n)
+                if flags & (gc::OBJ_FLAG_SEALED | gc::OBJ_FLAG_NO_EXTEND) != 0 {
+                    grow_backing_unguarded::<true>(arr, n, false)
+                } else {
+                    js_array_grow(arr, n)
+                }
             } else {
                 arr
             };
             if !target.is_null() {
-                for i in cur..n {
-                    note_array_slot(target, i as usize, crate::value::TAG_HOLE);
+                // Only slots the store has: a growth that was refused leaves a
+                // logical length over the old store.
+                for i in cur..n.min((*target).capacity) {
+                    note_array_slot(target, i as usize, value::TAG_HOLE);
                 }
                 (*target).length = n;
+                if n > (*target).capacity {
+                    refresh_array_numeric_layout(target);
+                }
             }
         }
         // n == cur is a no-op.
     }
+    Ok(())
+}
+
+/// The highest index in `[from, to)` that is an own property of `arr`: a
+/// dense non-hole slot, a far element in the named layout or an accessor.
+unsafe fn highest_present_index(arr: *mut ArrayHeader, from: u32, to: u32) -> Option<u32> {
+    let capacity = (*arr).capacity;
+    if to > capacity {
+        let far = array_named_property_names(arr, false)
+            .into_iter()
+            .filter_map(|name| crate::object::canonical_array_index(&name))
+            .filter(|&index| index >= from.max(capacity) && index < to)
+            .max();
+        if far.is_some() {
+            return far;
+        }
+    }
+    (from..to.min(capacity))
+        .rev()
+        .find(|&index| crate::array::indexing::array_has_own_index(arr, index))
 }
 
 /// Delete an element from an array by index, creating a "hole".
@@ -1630,7 +1919,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
     let obj = arr as *mut crate::object::ObjectHeader;
     if crate::object::is_arguments_object(obj) {
         let name = index.to_string();
-        let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let key = string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         return crate::object::js_object_delete_field(obj, key);
     }
     let arr = clean_arr_ptr_mut(arr);
@@ -1649,7 +1938,7 @@ pub extern "C" fn js_array_delete(arr: *mut ArrayHeader, index: u32) -> i32 {
             }
         }
         if index < (*arr).capacity {
-            note_array_slot(arr, index as usize, crate::value::TAG_HOLE);
+            note_array_slot(arr, index as usize, value::TAG_HOLE);
         }
         // Sparse indices live in the named-property side table rather than the
         // dense allocation. Always clear that representation too: a later
@@ -1696,9 +1985,7 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
         if crate::array::array_iteration_is_exotic(arr)
             || (crate::object::prototype_chain::array_static_proto_recorded()
                 && array_custom_prototype(arr).is_some())
-            || array_object_flags_resolved(arr)
-                & (crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED)
-                != 0
+            || array_object_flags_resolved(arr) & (gc::OBJ_FLAG_FROZEN | gc::OBJ_FLAG_SEALED) != 0
         {
             return shift_array_spec_path(arr);
         }
@@ -1711,10 +1998,10 @@ pub extern "C" fn js_array_shift_f64(arr: *mut ArrayHeader) -> f64 {
 /// presence and values, and roots both the receiver and carried values across
 /// accessors which may allocate or move either one.
 unsafe fn shift_array_spec_path(arr: *mut ArrayHeader) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
-    let first_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
-    let from_value_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
+    let first_handle = scope.root_nanbox_f64(f64::from_bits(value::TAG_UNDEFINED));
+    let from_value_handle = scope.root_nanbox_f64(f64::from_bits(value::TAG_UNDEFINED));
     let len = (*arr).length;
 
     let (first, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
@@ -1756,9 +2043,9 @@ unsafe fn shift_array_spec_path(arr: *mut ArrayHeader) -> f64 {
 }
 
 fn shift_array_spec_set(
-    arr_handle: &crate::gc::RuntimeHandle<'_>,
+    arr_handle: &gc::RuntimeHandle<'_>,
     index: u32,
-    value_handle: &crate::gc::RuntimeHandle<'_>,
+    value_handle: &gc::RuntimeHandle<'_>,
 ) {
     let (next, post_gc) = arr_handle.across_mut::<ArrayHeader, _>(|| {
         let value = value_handle.get_nanbox_f64();
@@ -1775,7 +2062,7 @@ fn shift_array_spec_set(
     arr_handle.set_raw_mut_ptr(current);
 }
 
-fn shift_array_spec_delete(arr_handle: &crate::gc::RuntimeHandle<'_>, index: u32) {
+fn shift_array_spec_delete(arr_handle: &gc::RuntimeHandle<'_>, index: u32) {
     let (deleted, _) = arr_handle.across_mut::<ArrayHeader, _>(|| {
         arr_handle.with_mut_ptr(|current| crate::array::js_array_delete(current, index))
     });
@@ -1792,10 +2079,15 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     // the new slot — demote it to shared so a later `s += x` on the source local
     // allocates fresh instead of mutating the stored element. No-op for SSO /
     // non-string (mirrors `js_array_push_f64`, #5548).
-    crate::string::js_string_addref_if_heap_string(value);
+    string::js_string_addref_if_heap_string(value);
+    let recv = arr;
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return js_array_alloc(0);
+        return unshift_non_array_receiver(recv, &[value]);
+    }
+    if let Some(boxed) = super::generic_object::restricted_array_value(arr) {
+        super::generic_object::object_unshift(boxed, &value, 1);
+        return arr;
     }
     if crate::array::array_iteration_is_exotic(arr) {
         return unshift_array_spec_path(arr, &[value]);
@@ -1807,7 +2099,7 @@ pub extern "C" fn js_array_unshift_f64(arr: *mut ArrayHeader, value: f64) -> *mu
     if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let _arr_handle = scope.root_raw_mut_ptr(arr);
     let value_handle = scope.root_nanbox_f64(value);
     unsafe {
@@ -1866,9 +2158,21 @@ pub extern "C" fn js_array_unshift_variadic(
     items: *const f64,
     count: u32,
 ) -> *mut ArrayHeader {
+    let recv = arr;
     let arr = clean_arr_ptr_mut(arr);
     if arr.is_null() {
-        return js_array_alloc(0);
+        let values = unsafe {
+            if items.is_null() {
+                &[][..]
+            } else {
+                std::slice::from_raw_parts(items, count as usize)
+            }
+        };
+        return unshift_non_array_receiver(recv, values);
+    }
+    if let Some(boxed) = super::generic_object::restricted_array_value(arr) {
+        super::generic_object::object_unshift(boxed, items, count as usize);
+        return arr;
     }
     // `unshift` always performs `Set(O, "length", …)` (even zero-arg), so both
     // a frozen array and a non-writable `length` throw before the no-op early
@@ -1894,7 +2198,7 @@ pub extern "C" fn js_array_unshift_variadic(
     if array_is_sealed_or_no_extend(arr) {
         return arr;
     }
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
     // The caller-owned alloca itself is stable, but a copying collection can
     // move any pointer values stored in it without rewriting those raw words.
@@ -1927,7 +2231,7 @@ pub extern "C" fn js_array_unshift_variadic(
         // non-string).
         for (i, value) in item_handles.iter().enumerate() {
             let v = value.get_nanbox_f64();
-            crate::string::js_string_addref_if_heap_string(v);
+            string::js_string_addref_if_heap_string(v);
             let v = canonicalize_array_numeric_store_value_from_flags(flags, v);
             // GC_STORE_AUDIT(BARRIERED): inserted slots are covered by the
             // dense-move finisher below.
@@ -1950,8 +2254,26 @@ pub extern "C" fn js_array_unshift_variadic(
     })
 }
 
+/// `ArrayUnshift` is folded from the binding's DECLARED type, and a declared
+/// type is a hint, not a layout fact: `let a = [9]; a = Object.create(p)`
+/// reaches here with an object. Run the spec-generic `Array.prototype.unshift`
+/// on it (it reads `length` and the indices through the real chain) and return
+/// the ORIGINAL receiver, so codegen's realloc write-back keeps the binding on
+/// the object and its length read sees the new `length`. Same rule as the
+/// #7574 arm of [`js_array_push_f64`]; the fresh empty array returned here
+/// before replaced the binding and dropped the call.
+fn unshift_non_array_receiver(recv: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHeader {
+    match crate::array::subclass::array_object_receiver(recv) {
+        Some(obj) => {
+            crate::array::subclass::array_object_method(obj, "unshift", items);
+            recv
+        }
+        None => js_array_alloc(0),
+    }
+}
+
 fn unshift_array_spec_path(arr: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHeader {
-    let scope = crate::gc::RuntimeHandleScope::new();
+    let scope = gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
     let item_handles: Vec<_> = items
         .iter()
@@ -1970,7 +2292,7 @@ fn unshift_array_spec_path(arr: *mut ArrayHeader, items: &[f64]) -> *mut ArrayHe
         let from = k - 1;
         let to = from + count;
         if crate::array::array_spec_has_index(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), from) {
-            let iteration_scope = crate::gc::RuntimeHandleScope::new();
+            let iteration_scope = gc::RuntimeHandleScope::new();
             let value =
                 crate::array::array_spec_get(arr_handle.get_raw_mut_ptr::<ArrayHeader>(), from);
             let value_handle = iteration_scope.root_nanbox_f64(value);

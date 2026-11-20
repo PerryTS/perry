@@ -8,6 +8,7 @@
 //! every collection also bumps it, preventing moved key or recycled ShapeId
 //! identities from meeting an old verdict. No heap edge is owned here.
 
+use crate::codegen_abi::LayoutWord;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Monotonic invalidation epoch for cached store plans. Bumped by descriptor
@@ -89,7 +90,7 @@ struct PlanEntry {
     /// [`PROP_PLAN_EPOCH`] at record time.
     epoch: u64,
     /// Receiver shape whose full interception vet returned negative.
-    shape_id: u32,
+    shape_id: LayoutWord,
 }
 
 // SAFETY: integer fields only; `key_ptr == 0` never matches an interned key,
@@ -107,10 +108,10 @@ crate::perry_thread_local! {
 }
 
 #[inline(always)]
-fn plan_slot(shape_id: u32, key_ptr: usize) -> usize {
+fn plan_slot(shape_id: LayoutWord, key_ptr: usize) -> usize {
     // Slot placement uses content and ShapeId, while the entry retains the
     // canonical pointer and epoch identity checks below.
-    let h = (super::interned_key_slot_hash(key_ptr) ^ ((shape_id as u64) << 17))
+    let h = (super::interned_key_slot_hash(key_ptr) ^ ((shape_id.0 as u64) << 17))
         .wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> 40) as usize & PLAN_CACHE_MASK
 }
@@ -122,8 +123,8 @@ fn plan_diag_enabled() -> bool {
 
 /// A valid negative interception verdict for this shape and interned key.
 #[inline]
-pub(crate) fn store_plan_check(shape_id: u32, key_ptr: usize) -> bool {
-    if shape_id == 0 || key_ptr == 0 {
+pub(crate) fn store_plan_check(shape_id: LayoutWord, key_ptr: usize) -> bool {
+    if shape_id == LayoutWord(0) || key_ptr == 0 {
         return false;
     }
     let slot = plan_slot(shape_id, key_ptr);
@@ -153,8 +154,8 @@ pub(crate) fn store_plan_check(shape_id: u32, key_ptr: usize) -> bool {
 /// Record a fast-store verdict for (shape_id, interned key). Caller has just
 /// completed the full interception vet with a negative result.
 #[inline]
-pub(crate) fn store_plan_record(shape_id: u32, key_ptr: usize) {
-    if shape_id == 0 || key_ptr == 0 {
+pub(crate) fn store_plan_record(shape_id: LayoutWord, key_ptr: usize) {
+    if shape_id == LayoutWord(0) || key_ptr == 0 {
         return;
     }
     let slot = plan_slot(shape_id, key_ptr);
@@ -171,7 +172,7 @@ pub(crate) fn store_plan_record(shape_id: u32, key_ptr: usize) {
         if r <= 8 || r % 1_000_000 == 0 {
             eprintln!(
                 "PLAN-DIAG record #{} shape={} key={:#x} slot={}",
-                r, shape_id, key_ptr, slot
+                r, shape_id.0, key_ptr, slot
             );
         }
     }
@@ -210,8 +211,8 @@ crate::perry_thread_local! {
 }
 
 #[inline(always)]
-fn read_plan_slot(shape_id: u32, key_ptr: usize) -> usize {
-    let h = (u64::from(shape_id) ^ super::interned_key_slot_hash(key_ptr).rotate_left(21))
+fn read_plan_slot(shape_id: LayoutWord, key_ptr: usize) -> usize {
+    let h = (u64::from(shape_id.0) ^ super::interned_key_slot_hash(key_ptr).rotate_left(21))
         .wrapping_mul(0x9E37_79B9_7F4A_7C15);
     (h >> 40) as usize & READ_PLAN_MASK
 }
@@ -226,7 +227,7 @@ fn read_plan_slot(shape_id: u32, key_ptr: usize) -> usize {
 /// receiver's count.
 #[inline]
 pub(crate) fn read_plan_lookup(
-    shape_id: u32,
+    shape_id: LayoutWord,
     keys_id: usize,
     key_ptr: usize,
     key_count: u32,
@@ -251,7 +252,12 @@ pub(crate) fn read_plan_lookup(
 
 /// Record an own-field index resolved by a validated keys-array scan.
 #[inline]
-pub(crate) fn read_plan_record(shape_id: u32, keys_id: usize, key_ptr: usize, field_idx: u32) {
+pub(crate) fn read_plan_record(
+    shape_id: LayoutWord,
+    keys_id: usize,
+    key_ptr: usize,
+    field_idx: u32,
+) {
     if keys_id == 0 || key_ptr == 0 {
         return;
     }
@@ -280,7 +286,7 @@ mod tests {
     /// costs one. The caches themselves are thread-local, so nothing a
     /// parallel thread does can turn a MISS assertion into a spurious hit —
     /// only the positive direction needs this.
-    fn store_plan_records_and_hits(shape_id: u32, key_ptr: usize) -> bool {
+    fn store_plan_records_and_hits(shape_id: LayoutWord, key_ptr: usize) -> bool {
         (0..64).any(|_| {
             store_plan_record(shape_id, key_ptr);
             store_plan_check(shape_id, key_ptr)
@@ -291,23 +297,23 @@ mod tests {
     fn record_then_check_hits_and_epoch_bump_invalidates() {
         let key = crate::string::canonical_key(b"plan-key") as usize;
         let other = crate::string::canonical_key(b"other-key") as usize;
-        assert!(store_plan_records_and_hits(7, key));
+        assert!(store_plan_records_and_hits(LayoutWord(7), key));
         // Different shape or key misses.
-        assert!(!store_plan_check(8, key));
-        assert!(!store_plan_check(7, other));
+        assert!(!store_plan_check(LayoutWord(8), key));
+        assert!(!store_plan_check(LayoutWord(7), other));
         // Epoch bump invalidates.
         prop_plan_epoch_bump();
-        assert!(!store_plan_check(7, key));
+        assert!(!store_plan_check(LayoutWord(7), key));
         // Re-record under the new epoch works again.
-        assert!(store_plan_records_and_hits(7, key));
+        assert!(store_plan_records_and_hits(LayoutWord(7), key));
     }
 
     #[test]
     fn a_verdict_for_one_prototype_shape_does_not_serve_another() {
         let key = crate::string::canonical_key(b"prototype-key") as usize;
-        assert!(store_plan_records_and_hits(11, key));
-        assert!(!store_plan_check(12, key));
-        assert!(!store_plan_check(0, key));
+        assert!(store_plan_records_and_hits(LayoutWord(11), key));
+        assert!(!store_plan_check(LayoutWord(12), key));
+        assert!(!store_plan_check(LayoutWord(0), key));
     }
 
     #[test]
@@ -319,18 +325,21 @@ mod tests {
         // epoch bump between record and lookup flushes the thread-local
         // entry, so retry the roundtrip.
         assert!((0..64).any(|_| {
-            read_plan_record(17, keys, key, 21);
-            read_plan_lookup(17, keys, key, u32::MAX) == Some(21)
+            read_plan_record(LayoutWord(17), keys, key, 21);
+            read_plan_lookup(LayoutWord(17), keys, key, u32::MAX) == Some(21)
         }));
-        assert_eq!(read_plan_lookup(17, keys, other, u32::MAX), None);
+        assert_eq!(
+            read_plan_lookup(LayoutWord(17), keys, other, u32::MAX),
+            None
+        );
         // A shorter list on the same array does not see a slot past its count.
         assert!((0..64).any(|_| {
-            read_plan_record(17, keys, key, 21);
-            read_plan_lookup(17, keys, key, 21).is_none()
-                && read_plan_lookup(17, keys, key, 22) == Some(21)
+            read_plan_record(LayoutWord(17), keys, key, 21);
+            read_plan_lookup(LayoutWord(17), keys, key, 21).is_none()
+                && read_plan_lookup(LayoutWord(17), keys, key, 22) == Some(21)
         }));
         prop_plan_epoch_bump();
-        assert_eq!(read_plan_lookup(17, keys, key, u32::MAX), None);
+        assert_eq!(read_plan_lookup(LayoutWord(17), keys, key, u32::MAX), None);
     }
 
     #[test]
@@ -339,19 +348,22 @@ mod tests {
             b"same-property",
             b"same-property",
         );
-        assert_eq!(plan_slot(0x8000_0042, a), plan_slot(0x8000_0042, b));
         assert_eq!(
-            read_plan_slot(0x8000_0042, a),
-            read_plan_slot(0x8000_0042, b)
+            plan_slot(LayoutWord(0x8000_0042), a),
+            plan_slot(LayoutWord(0x8000_0042), b)
+        );
+        assert_eq!(
+            read_plan_slot(LayoutWord(0x8000_0042), a),
+            read_plan_slot(LayoutWord(0x8000_0042), b)
         );
     }
 
     #[test]
     fn shape_zero_and_null_key_never_cache() {
-        store_plan_record(0, 0x1000);
-        assert!(!store_plan_check(0, 0x1000));
-        store_plan_record(3, 0);
-        assert!(!store_plan_check(3, 0));
+        store_plan_record(LayoutWord(0), 0x1000);
+        assert!(!store_plan_check(LayoutWord(0), 0x1000));
+        store_plan_record(LayoutWord(3), 0);
+        assert!(!store_plan_check(LayoutWord(3), 0));
     }
 }
 
@@ -368,7 +380,7 @@ mod zeroed_cache_tests {
                 let cache = unsafe { &*c.get() };
                 assert_eq!(cache.len(), PLAN_CACHE_SIZE);
                 for e in cache.iter() {
-                    assert_eq!((e.key_ptr, e.epoch, e.shape_id), (0, 0, 0));
+                    assert_eq!((e.key_ptr, e.epoch, e.shape_id.0), (0, 0, 0));
                 }
             });
             READ_PLAN_CACHE.with(|c| {

@@ -1,0 +1,1 @@
+Move required GC marking, pointer census, remembered-set reconstruction and rewrites into collector-owned modules. Keep GC verification and telemetry behind the diagnostics installer, and check diagnostic implementations across module boundaries in the link-absence gate.

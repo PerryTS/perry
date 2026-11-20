@@ -1,0 +1,1 @@
+Report Node's self-signed certificate cause for an untrusted CA-marked leaf only after verifying its self-signature. The certificate remains rejected; configured trust and hostname validation are unchanged.

@@ -12,6 +12,24 @@ use super::*;
 /// default formatting.
 #[no_mangle]
 pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
+    // An integral Number names the key spelled by its decimal text. That key
+    // is the text's property atom, the word every key list compares by
+    // identity, so the key a store adds is the one a later keyed read of the
+    // same Number finds through its atom (`runtime_read_site::probe_integer_key`).
+    if let Some(n) = integral_number(value) {
+        let mut buf = [0u8; 24];
+        let text = super::field_get_set::runtime_read_site::integer_key_text(n, &mut buf);
+        return crate::value::js_nanbox_string(crate::string::property_atom_from_bytes(text) as i64);
+    }
+    if value.to_bits() >> 48 == 0 {
+        // A Number with clear top 16 bits (a denormal, or +0): its key is
+        // ToString of the Number. It is not a raw object pointer, so no
+        // object conversion is tried on it.
+        let key = crate::value::js_jsvalue_to_string(value);
+        if !key.is_null() {
+            return crate::value::js_nanbox_string(key as i64);
+        }
+    }
     if crate::symbol::js_is_symbol(value) != 0 {
         return value;
     }
@@ -42,6 +60,17 @@ pub unsafe extern "C" fn js_to_property_key(value: f64) -> f64 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     crate::value::js_nanbox_string(key as i64)
+}
+
+/// The integer a plain double holds (magnitude at most 2^53, no fraction,
+/// `-0` as 0); `None` for every other value, tagged values included (an
+/// INT32 word can be a class reference).
+#[inline]
+fn integral_number(value: f64) -> Option<i64> {
+    if value.to_bits() & 0x7FFF_0000_0000_0000 >= 0x7FF9_0000_0000_0000 {
+        return None;
+    }
+    super::field_get_set::runtime_read_site::integer_key(value)
 }
 
 /// True when [`js_to_property_key`] provably neither allocates nor calls back
@@ -81,20 +110,6 @@ pub(crate) unsafe fn to_property_key_rooted<'scope>(
     let key_handle = scope.root_nanbox_f64(key);
     let coerced = js_to_property_key(key_handle.get_nanbox_f64());
     scope.root_nanbox_f64(coerced)
-}
-
-/// True when `v` is not a JS Object — i.e. a usable primitive result from
-/// `OrdinaryToPrimitive` (undefined/null/boolean/number/string/bigint and,
-/// crucially, **Symbol**, the one `POINTER_TAG` primitive).
-fn js_value_is_not_object(v: f64) -> bool {
-    let bits = v.to_bits();
-    if (bits & 0xFFFF_0000_0000_0000) != crate::value::POINTER_TAG {
-        return true;
-    }
-    // A Symbol is the one POINTER_TAG primitive. Use `js_is_symbol` (not the
-    // narrower registered-handle table) so a fresh heap `Symbol()` returned
-    // from `toString`/`valueOf` is recognized and preserved as the key.
-    unsafe { crate::symbol::js_is_symbol(v) != 0 }
 }
 
 /// `OrdinaryToPrimitive(O, "string")` with Symbol preservation. The spec
@@ -137,7 +152,7 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
             std::ptr::null(),
             0,
         );
-        if js_value_is_not_object(result) {
+        if crate::value::to_string_primitive::is_primitive_value(result) {
             return Some(result);
         }
     }
@@ -189,19 +204,17 @@ unsafe fn set_property_key_resolved(obj_value: f64, key: f64, value: f64) -> f64
     if key_str.is_null() {
         return value;
     }
-    // Class constructor/prototype refs are INT32-tagged values, not real
-    // `ObjectHeader`s — `extract_obj_ptr` returns null for them, so a
-    // `C.prototype[key] = v` / `C[key] = v` write silently no-op'd here. The
-    // get side already passes the raw NaN-boxed bits into the by-name dispatch
-    // (which has a dedicated 0x7FFE class-ref branch); mirror that on the set
-    // side so static-accessor and prototype instance-setter dispatch run.
+    // A class constructor is a class function object, not a real
+    // `ObjectHeader` — `extract_obj_ptr` returns null for it, so a
+    // `C[key] = v` write silently no-op'd here. The get side already passes
+    // the raw NaN-boxed bits into the by-name dispatch (which has a dedicated
+    // class-ref branch); mirror that on the set side so static-accessor
+    // dispatch runs.
     if let Some(class_id) = super::class_ref_id(obj_value) {
-        if super::class_prototype_ref_id(obj_value).is_none() {
-            let name_ptr = crate::string::string_data(key_str);
-            let name_len = (*key_str).byte_len as usize;
-            if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
-                crate::error::throw_immutable_write(class_id, "prototype");
-            }
+        let name_ptr = crate::string::string_data(key_str);
+        let name_len = (*key_str).byte_len as usize;
+        if std::slice::from_raw_parts(name_ptr, name_len) == b"prototype" {
+            crate::error::throw_immutable_write(class_id, "prototype");
         }
         js_object_set_field_by_name(obj_value.to_bits() as *mut ObjectHeader, key_str, value);
         return value;
@@ -314,8 +327,6 @@ fn object_ptr_from_value(value: f64) -> usize {
     let top = bits >> 48;
     if top == 0x7FFD {
         (bits & crate::value::POINTER_MASK) as usize
-    } else if top == 0 && bits > 0x10000 {
-        bits as usize
     } else {
         0
     }
@@ -521,7 +532,7 @@ mod property_key_tests {
             assert_eq!(js_to_property_key(sym).to_bits(), sym.to_bits());
 
             assert_eq!(string_value_to_rust(js_to_property_key(42.0)), "42");
-            let int_key = f64::from_bits(crate::value::JSValue::int32(7).bits());
+            let int_key = f64::from(7);
             assert_eq!(string_value_to_rust(js_to_property_key(int_key)), "7");
             assert_eq!(
                 string_value_to_rust(js_to_property_key(f64::from_bits(crate::value::TAG_TRUE))),
@@ -767,7 +778,7 @@ mod property_key_tests {
                 crate::string::canonical_key(b"get"),
                 crate::value::js_nanbox_pointer(trap as i64),
             );
-            let proxy = scope.root_nanbox_f64(crate::proxy::js_proxy_new(
+            let proxy = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
                 target.get_nanbox_f64(),
                 handler.get_nanbox_f64(),
             ));
@@ -900,8 +911,9 @@ mod property_key_tests {
             crate::object::class_registry::test_clear_class_side_table_roots();
 
             let class_id = 0x3581;
+            crate::object::js_register_class_id(class_id);
             let sym = crate::symbol::js_symbol_new_empty();
-            let sym_key = crate::symbol::sym_key_from_f64(sym);
+            let _ = crate::object::class_registry::class_decl_prototype_value(class_id);
 
             crate::object::class_registry::js_register_class_computed_method(
                 class_id as i64,
@@ -914,12 +926,8 @@ mod property_key_tests {
                 0,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let method = crate::object::class_registry::lookup_class_symbol_method_in_chain(
-                class_id, sym_key, false,
-            )
-            .expect("computed symbol method should be registered");
-            assert_eq!(method.1, 0);
-            assert!(!method.2);
+            let prototype = crate::object::class_registry::class_decl_prototype_value(class_id);
+            assert!(crate::symbol::js_object_has_own_symbol(prototype, sym));
 
             crate::object::class_registry::js_register_class_computed_accessor(
                 class_id as i64,
@@ -930,13 +938,7 @@ mod property_key_tests {
                 2,
                 f64::from_bits(crate::value::TAG_UNDEFINED),
             );
-            let value = crate::object::class_registry::class_symbol_getter_value(
-                class_id,
-                sym_key,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-                false,
-            )
-            .expect("computed symbol getter should be registered");
+            let value = crate::symbol::js_object_get_symbol_property(prototype, sym);
             assert_eq!(value, 88.0);
 
             crate::object::class_registry::test_clear_class_side_table_roots();

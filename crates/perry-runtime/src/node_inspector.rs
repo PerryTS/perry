@@ -82,9 +82,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 
@@ -107,7 +104,7 @@ fn object_ptr_from_value(value: f64) -> Option<*mut ObjectHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+        if !matches!(gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
             return None;
         }
     }
@@ -162,7 +159,7 @@ fn pending_promise_values(session: f64) -> Vec<f64> {
     let raw = raw_ptr_from_value(value);
     if !JSValue::from_bits(value.to_bits()).is_pointer()
         || !crate::value::addr_class::is_plausible_heap_addr(raw)
-        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_ARRAY)
+        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc_array_type_pat!())
     {
         return Vec::new();
     }
@@ -266,22 +263,30 @@ fn call_function(callback: f64, this: f64, args: &[f64]) -> f64 {
 }
 
 fn node_error_value(message: &str, code: &'static str) -> f64 {
+    node_error(message, code).value()
+}
+
+fn node_error(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_message(msg);
-    boxed_pointer(err as *const u8)
+    let err = crate::error::CoreError::error(msg);
+    err
 }
 
 fn node_type_error_value(message: &str, code: &'static str) -> f64 {
+    node_type_error(message, code).value()
+}
+
+fn node_type_error(message: &str, code: &'static str) -> crate::error::CoreError {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     if !code.is_empty() {
         crate::node_submodules::register_error_code_pub(msg, code);
     }
-    boxed_pointer(crate::error::js_typeerror_new(msg) as *const u8)
+    crate::error::CoreError::type_error(msg)
 }
 
 fn throw_node_error(message: &str, code: &'static str) -> ! {
-    crate::exception::js_throw(node_error_value(message, code))
+    crate::exception::throw_core(node_error(message, code))
 }
 
 fn inspector_command_error(method: &str) -> f64 {
@@ -480,15 +485,19 @@ fn clear_listener_storage(session: f64, event: Option<f64>) {
 }
 
 fn invalid_session_error() -> f64 {
+    invalid_session_core_error().value()
+}
+
+fn invalid_session_core_error() -> crate::error::CoreError {
     let message =
         "Cannot read private member #connection from an object whose class did not declare it";
     let message = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    boxed_pointer(crate::error::js_typeerror_new(message) as *const u8)
+    crate::error::CoreError::type_error(message)
 }
 
 fn require_session(session: f64) {
     if !is_hidden_truthy(session, KEY_SESSION) {
-        crate::exception::js_throw(invalid_session_error());
+        crate::exception::throw_core(invalid_session_core_error());
     }
 }
 
@@ -588,7 +597,7 @@ fn empty_object() -> f64 {
 }
 
 fn object(fields: &[(&str, f64)]) -> f64 {
-    let value = object_value(js_object_alloc(0, fields.len() as u32));
+    let value = object_value(crate::realm_decl! { birth js_object_alloc(0, fields.len() as u32); realm { "node:inspector.console", kind = namespace, members = { log, attrs = writable | enumerable | configurable; info, attrs = writable | enumerable | configurable; debug, attrs = writable | enumerable | configurable; warn, attrs = writable | enumerable | configurable; error, attrs = writable | enumerable | configurable; }; } });
     let obj = object_ptr_from_value(value).expect("fresh object");
     for (name, field) in fields {
         set_field(obj, name, *field);
@@ -1264,23 +1273,23 @@ pub extern "C" fn js_node_inspector_console_object() -> f64 {
     for (name, func) in [
         (
             "log",
-            crate::fn_info!(inspector_console_log, 3; with_declared(3)),
+            crate::fn_info!(#[realm("node:inspector.console.log", constructible = true)] export crate::node_inspector::inspector_console_log, 3; with_declared(3)),
         ),
         (
             "info",
-            crate::fn_info!(inspector_console_info, 3; with_declared(3)),
+            crate::fn_info!(#[realm("node:inspector.console.info", constructible = true)] export crate::node_inspector::inspector_console_info, 3; with_declared(3)),
         ),
         (
             "debug",
-            crate::fn_info!(inspector_console_debug, 3; with_declared(3)),
+            crate::fn_info!(#[realm("node:inspector.console.debug", constructible = true)] export crate::node_inspector::inspector_console_debug, 3; with_declared(3)),
         ),
         (
             "warn",
-            crate::fn_info!(inspector_console_warn, 3; with_declared(3)),
+            crate::fn_info!(#[realm("node:inspector.console.warn", constructible = true)] export crate::node_inspector::inspector_console_warn, 3; with_declared(3)),
         ),
         (
             "error",
-            crate::fn_info!(inspector_console_error, 3; with_declared(3)),
+            crate::fn_info!(#[realm("node:inspector.console.error", constructible = true)] export crate::node_inspector::inspector_console_error, 3; with_declared(3)),
         ),
     ] {
         set_field(obj, name, fn_value(func, name));
@@ -1538,7 +1547,7 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                 proto,
                 "post",
                 fn_value(
-                    crate::fn_info!(promises_session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(#[realm("node:inspector/promises.Session.prototype.post", constructible = true)] export crate::node_inspector::promises_session_post_thunk, 3; with_declared(3)),
                     "post",
                 ),
             );
@@ -1551,19 +1560,19 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             for (method, func) in [
                 (
                     "connect",
-                    crate::fn_info!(session_connect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_connect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "connectToMainThread",
-                    crate::fn_info!(session_connect_main_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connectToMainThread", constructible = true)] export crate::node_inspector::session_connect_main_thunk, 0; with_declared(0)),
                 ),
                 (
                     "disconnect",
-                    crate::fn_info!(session_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.disconnect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_disconnect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "post",
-                    crate::fn_info!(session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.post", constructible = true, effects = { coerce(arg(1), Json); calls(arg(1), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); calls(arg(2), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); stores(fresh); returns(prim(undefined)) })] export crate::node_inspector::session_post_thunk, 3; with_declared(3)),
                 ),
             ] {
                 set_field(proto, method, fn_value(func, method));
@@ -1573,8 +1582,10 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                     crate::object::PropertyAttrs::new(true, false, true),
                 );
             }
-            let emitter =
-                crate::object::bound_native_callable_export_value("events", "EventEmitter");
+            // The export declaration owns EventEmitter and its statics: a
+            // program that imports only node:inspector never installs the
+            // events attach hook the bound path would decorate through.
+            let emitter = crate::node_stream::event_emitter_constructor_value("EventEmitter");
             let emitter_proto =
                 crate::closure::closure_get_dynamic_prop(raw_ptr_from_value(emitter), "prototype");
             if emitter_proto.to_bits() != TAG_UNDEFINED {
@@ -1631,17 +1642,24 @@ fn session_new(promise_mode: bool) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_call_without_new() -> f64 {
-    crate::exception::js_throw(node_type_error_value(
+    crate::exception::throw_core(node_type_error(
         "Class constructor Session cannot be invoked without 'new'",
         "",
     ))
 }
 
+// `new Session(...)` makes a session object whose [[Prototype]] is
+// `Session.prototype`: it ignores its arguments and keeps nothing of the
+// program's; what it stores goes into the session it creates
+// (`stores(fresh)`).
+crate::realm_decl! { "node:inspector.Session", effects = { stores(fresh); returns(fresh("node:inspector.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_new() -> f64 {
     session_new(false)
 }
 
+// The `node:inspector/promises` session, as `node:inspector.Session`.
+crate::realm_decl! { "node:inspector/promises.Session", effects = { stores(fresh); returns(fresh("node:inspector/promises.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_promises_session_new() -> f64 {
     session_new(true)
@@ -1670,8 +1688,8 @@ pub extern "C" fn js_node_inspector_session_connect(session_raw: i64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_connect_to_main_thread(_session_raw: i64) -> f64 {
-    let err = node_error_value("Current thread is not a worker", "ERR_INSPECTOR_NOT_WORKER");
-    crate::exception::js_throw(err)
+    let err = node_error("Current thread is not a worker", "ERR_INSPECTOR_NOT_WORKER");
+    crate::exception::throw_core(err)
 }
 
 #[no_mangle]
@@ -1830,10 +1848,7 @@ fn post_callback(session_raw: i64, method_value: f64, params: f64, callback: f64
         .map(|value| value.to_bits() == params.to_bits())
         .unwrap_or(false)
     {
-        crate::exception::js_throw(node_type_error_value(
-            "Converting circular structure to JSON",
-            "",
-        ));
+        crate::exception::throw_core(node_type_error("Converting circular structure to JSON", ""));
     }
     if method == "Runtime.evaluate"
         && get_prop(params, "expression")

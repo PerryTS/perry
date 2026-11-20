@@ -101,10 +101,10 @@ pub(super) fn with_write_bytes<R>(chunk: f64, encoding: f64, f: impl FnOnce(&[u8
         let addr = value.as_pointer::<u8>() as usize;
         let is_view = !crate::buffer::is_any_array_buffer(addr)
             && (crate::buffer::is_registered_buffer(addr)
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some());
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some());
         if is_view {
             if !crate::buffer::is_node_buffer(addr) && view_backing_is_detached(addr) {
-                crate::typedarray::throw_type_error(
+                crate::typedarray_hook_slots::throw_type_error(
                     b"Cannot perform Construct on a detached ArrayBuffer",
                 );
             }
@@ -188,6 +188,7 @@ fn flush_completely(handle: &mut impl std::io::Write, fd: i32) -> bool {
 /// chunk is never interleaved with a concurrent `console.log`, and drains
 /// that handle's buffer first so the two funnels stay in program order.
 pub(super) fn write_stdout(bytes: &[u8]) {
+    crate::effect!(host_write, stdio);
     let stdout = std::io::stdout();
     let mut handle = stdout.lock();
     #[cfg(unix)]
@@ -206,6 +207,7 @@ pub(super) fn write_stdout(bytes: &[u8]) {
 
 /// Put `bytes` on fd 2. Same contract as [`write_stdout`].
 pub(super) fn write_stderr(bytes: &[u8]) {
+    crate::effect!(host_write, stdio);
     let stderr = std::io::stderr();
     let mut handle = stderr.lock();
     #[cfg(unix)]

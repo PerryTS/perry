@@ -38,7 +38,7 @@ fn test_unrooted_regexp_instance_and_data_reclaimed_by_copying_collection() {
     crate::object::js_object_set_field_by_name(
         addr as *mut crate::ObjectHeader,
         crate::string::intern_ascii_literal(b"tag"),
-        f64::from_bits(crate::value::JSValue::int32(7).bits()),
+        f64::from_bits(crate::value::JSValue::number(7.0).bits()),
     );
 
     let data = crate::regex::regexp_data_of(crate::value::js_nanbox_pointer(addr as i64)).unwrap()
@@ -73,7 +73,7 @@ fn test_live_regexp_expando_survives_full_gc() {
     crate::object::js_object_set_field_by_name(
         addr as *mut crate::ObjectHeader,
         crate::string::intern_ascii_literal(b"tag"),
-        f64::from_bits(crate::value::JSValue::int32(42).bits()),
+        f64::from_bits(crate::value::JSValue::number(42.0).bits()),
     );
     js_shadow_slot_set(0, ptr_bits(addr));
 
@@ -90,7 +90,7 @@ fn test_live_regexp_expando_survives_full_gc() {
             )
             .bits()
         ),
-        Some(crate::value::JSValue::int32(42).bits()),
+        Some(crate::value::JSValue::number(42.0).bits()),
         "a live RegExp's expando must survive a full GC"
     );
     js_shadow_slot_set(0, 0);

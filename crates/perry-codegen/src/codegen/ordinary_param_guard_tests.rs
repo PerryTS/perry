@@ -51,6 +51,7 @@ fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body()
         body: vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),
                 property: "length".to_string(),
                 byte_offset: 0,
@@ -67,6 +68,7 @@ fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body()
         was_unrolled: false,
     });
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::String("abc".to_string())],
         type_args: Vec::new(),
@@ -125,6 +127,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
         body: vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),
                 property: "label".to_string(),
                 byte_offset: 0,
@@ -152,6 +155,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
     // An unknown live value nominates the declaration-guarded plan but cannot
     // provide a call-site proof. It must target the public wrapper.
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: vec![Expr::Undefined],
         type_args: Vec::new(),
@@ -224,6 +228,9 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         arguments_object: None,
     };
     let loaded = Expr::IndexGet {
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
         object: Box::new(Expr::LocalGet(10)),
         index: Box::new(Expr::Integer(0)),
     };
@@ -244,6 +251,9 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             Stmt::While {
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(11)),
                     index: Box::new(Expr::Integer(0)),
                 })],
@@ -272,6 +282,9 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(13)),
                         right: Box::new(Expr::IndexGet {
+                            element_offset: 0,
+                            byte_offset: 0,
+                            byte_end: 0,
                             object: Box::new(Expr::LocalGet(11)),
                             index: Box::new(Expr::Integer(0)),
                         }),
@@ -282,6 +295,9 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
                 value: Box::new(Expr::LocalGet(12)),
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
             }),
             Stmt::Return(Some(Expr::LocalGet(12))),
         ],
@@ -315,6 +331,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![Expr::LocalGet(20), Expr::LocalGet(21)],
             type_args: Vec::new(),
@@ -377,6 +394,9 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     11,
                     Box::new(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(10)),
                         index: Box::new(Expr::Integer(0)),
                     }),
@@ -407,6 +427,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![Expr::LocalGet(20)],
             type_args: Vec::new(),
@@ -481,6 +502,9 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
+                                element_offset: 0,
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(10)),
                                 index: Box::new(Expr::Update {
                                     id: 11,
@@ -496,6 +520,9 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
+                                element_offset: 0,
+                                byte_offset: 0,
+                                byte_end: 0,
                                 object: Box::new(Expr::LocalGet(10)),
                                 index: Box::new(Expr::Update {
                                     id: 11,
@@ -532,6 +559,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
             }),
         },
         Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![Expr::LocalGet(20)],
             type_args: Vec::new(),
@@ -665,6 +693,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         return_type: Type::String,
         body: vec![Stmt::Return(Some(Expr::Await(Box::new(
             Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(220)),
                 property: "label".to_string(),
                 byte_offset: 0,
@@ -712,6 +741,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
             Stmt::Return(Some(Expr::MapHas {
                 map: Box::new(Expr::LocalGet(231)),
                 key: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(230)),
                     property: "label".to_string(),
                     byte_offset: 0,
@@ -853,6 +883,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(owner)),
                 property: "kind".to_string(),
                 byte_offset: 0,
@@ -887,6 +918,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
                 then_branch: vec![Stmt::Return(Some(Expr::Binary {
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(310)),
                         property: "num".to_string(),
                         byte_offset: 0,
@@ -931,6 +963,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
                     right: Box::new(Expr::String("bin".to_string())),
                 },
                 then_branch: vec![Stmt::Return(Some(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::FuncRef(32)),
                     args: vec![Expr::LocalGet(320)],
                     type_args: Vec::new(),
@@ -960,6 +993,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     module.functions.push(eval);
     module.functions.push(eval_recursive);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(31)),
         args: vec![Expr::Undefined],
         type_args: Vec::new(),
@@ -1085,6 +1119,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -1115,6 +1150,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
                 ty: Type::Any,
                 mutable: true,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(420)),
                     property: "label".to_string(),
                     byte_offset: 0,
@@ -1130,6 +1166,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
                         right: Box::new(Expr::String(":".to_string())),
                     }),
                     right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(420)),
                         property: "count".to_string(),
                         byte_offset: 0,
@@ -1151,6 +1188,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
     module.classes.push(label);
     module.functions.push(render);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(42)),
         args: vec![Expr::Undefined],
         type_args: Vec::new(),
@@ -1228,15 +1266,16 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
             return_type: Type::Number,
             body: vec![
                 Stmt::Expr(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::GlobalGet(100)),
                     args: vec![],
                     type_args: vec![],
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::IndexGet {
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(2)),
-                })),
+                Stmt::Return(Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::LocalGet(2)),
+                ))),
             ],
             is_async: false,
             is_generator: false,
@@ -1259,6 +1298,7 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
                 }),
             },
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(10)),
                 args: vec![Expr::LocalGet(20), Expr::Integer(0)],
                 type_args: vec![],

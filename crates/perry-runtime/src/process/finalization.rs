@@ -43,7 +43,7 @@ fn ensure_process_finalization_before_exit_listener() {
         if installed.replace(true) {
             return;
         }
-        crate::os::add_internal_process_listener("beforeExit", callback);
+        crate::os_hook_slots::add_internal_process_listener("beforeExit", callback);
     });
 }
 
@@ -57,7 +57,7 @@ fn sync_process_finalization_before_exit_listener() {
         if !installed.replace(false) {
             return;
         }
-        crate::os::remove_internal_process_listener("beforeExit", callback);
+        crate::os_hook_slots::remove_internal_process_listener("beforeExit", callback);
     });
 }
 
@@ -224,9 +224,20 @@ pub extern "C" fn js_process_run_finalization_before_exit() {
     run_process_finalization_callbacks(ProcessFinalizationKind::BeforeExit);
 }
 
+/// The `process.finalization` exit callbacks: the JS-visible part of every
+/// exit, `process.exit()` included.
+pub(crate) fn run_process_finalization_exit_callbacks() {
+    run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
+}
+
+/// The natural end of the main agent (Node's `FreeEnvironment`), called from
+/// the generated exit epilogue: the `process.finalization` exit callbacks,
+/// then the Node-API environment teardown (cleanup hooks, thread-safe function
+/// and object finalizers). `process.exit()` runs only the callbacks; Node's
+/// `reallyExit` ends the process without freeing the environment.
 #[no_mangle]
 pub extern "C" fn js_process_run_finalization_exit() {
-    run_process_finalization_callbacks(ProcessFinalizationKind::Exit);
+    run_process_finalization_exit_callbacks();
     crate::node_api_host::hooks::shutdown_current_env();
 }
 
@@ -236,20 +247,20 @@ pub(crate) fn process_finalization_value() -> f64 {
         return cached;
     }
 
-    crate::object::runtime_layouts::runtime_record!(obj, RECORD_Q440_0);
+    crate::realm_decl! { record obj, RECORD_Q440_0; realm { process.finalization, kind = namespace, members = { register, attrs = writable | enumerable | configurable; registerBeforeExit, attrs = writable | enumerable | configurable; unregister, attrs = writable | enumerable | configurable; }; } };
     obj.set( 0, JSValue::from_bits((module_function2(
             "register",
-            crate::fn_info!(process_finalization_register_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.finalization.register, constructible = true)] export crate::process::finalization::process_finalization_register_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 1, JSValue::from_bits((module_function2(
             "registerBeforeExit",
-            crate::fn_info!(process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
+            crate::fn_info!(#[realm(process.finalization.registerBeforeExit, constructible = true)] export crate::process::finalization::process_finalization_register_before_exit_function, 2; with_declared(2), with_length(2)),
             2,
         )).to_bits()));
     obj.set( 2, JSValue::from_bits((module_function1(
             "unregister",
-            crate::fn_info!(process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
+            crate::fn_info!(#[realm(process.finalization.unregister, constructible = true)] export crate::process::finalization::process_finalization_unregister_function, 1; with_declared(1), with_length(1)),
             1,
         )).to_bits()));
     let value = module_object_value(obj.finish());

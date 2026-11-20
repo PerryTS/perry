@@ -6,3 +6,6 @@ upstream/** whitespace=-trailing-space,-space-before-tab
 
 # Empty parameter lists are the final, empty column of this generated TSV.
 crates/perry-codegen/src/wasm32/runtime_abi.tsv whitespace=-blank-at-eol
+
+# Pinned upstream wac test fixtures retain their published whitespace.
+third_party/wac-graph/** whitespace=-trailing-space,-space-before-tab

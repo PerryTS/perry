@@ -8,6 +8,7 @@ use super::*;
 /// # Safety
 /// `args_ptr` is valid for `args_len` reads (or null with `args_len == 0`).
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub(crate) unsafe fn class_value_method_call(
     object: f64,
@@ -71,21 +72,7 @@ unsafe fn class_receiver_arm(
 ) -> Option<f64> {
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, &refreshed_args);
-    if crate::object::class_prototype_ref_id(object).is_some() {
-        if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-            crate::object::class_registry::class_method_slot_target(class_id, method_name)
-        {
-            return Some(crate::object::class_registry::call_vtable_method(
-                func_ptr,
-                object.to_bits() as i64,
-                args_ptr,
-                args_len,
-                param_count,
-                has_synthetic_arguments,
-                has_rest,
-            ));
-        }
-    } else if class_id != 0
+    if class_id != 0
         && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
             .is_some()
     {
@@ -196,12 +183,10 @@ pub(super) unsafe fn dispatch_primitive(
         ));
     }
 
-    // A legacy class value (the INT32 immediate or `C.prototype`); class
-    // function objects arrive through `class_value_method_call`.
+    // A flagged `C.prototype` reference; constructor function objects arrive
+    // through `class_value_method_call`. INT32 numbers use primitive methods.
     if (object.to_bits() >> 48) == 0x7FFE {
-        if let Some(class_id) =
-            crate::object::class_value::legacy_class_value_word(object.to_bits())
-        {
+        if let Some(class_id) = crate::object::class_value::class_ref_word(object.to_bits()) {
             if let Some(r) = class_receiver_arm(
                 class_id,
                 root_scope,
@@ -357,7 +342,7 @@ pub(super) unsafe fn dispatch_primitive(
                                 (payload.to_bits() & 0x0000_FFFF_FFFF_FFFF)
                                     as *const crate::bigint::BigIntHeader,
                             );
-                            let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                            let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                             return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                         }
                     }
@@ -603,10 +588,7 @@ pub(super) unsafe fn dispatch_primitive(
                     let msg = b"'then' property on Promise is not callable";
                     let msg_str =
                         crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                    let err = crate::error::js_typeerror_new(msg_str);
-                    crate::exception::js_throw(f64::from_bits(
-                        JSValue::pointer(err as *const u8).bits(),
-                    ));
+                    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
                 }
                 let args = refreshed_args();
                 let result = unsafe {
@@ -744,7 +726,7 @@ pub(super) unsafe fn dispatch_primitive(
         // The cell's own [[Prototype]], not the realm's `Date.prototype`: an
         // instance of `class D extends Date` links `D.prototype`, whose methods
         // override the intrinsic ones (`get` walks on to `Date.prototype`).
-        let proto = crate::date::date_cell_prototype(object_handle.get_nanbox_f64());
+        let proto = crate::date_hook_slots::date_cell_prototype(object_handle.get_nanbox_f64());
         let proto_handle = root_scope.root_nanbox_f64(proto);
         if object_ptr_from_value(proto).is_some() {
             let key = crate::string::js_string_from_bytes(
@@ -769,7 +751,7 @@ pub(super) unsafe fn dispatch_primitive(
             }
         }
         if method_name == "toString" {
-            let string = crate::date::js_date_to_string(object);
+            let string = crate::date_hook_slots::js_date_to_string(object);
             return Some(f64::from_bits(JSValue::string_ptr(string).bits()));
         }
     }
@@ -802,15 +784,15 @@ pub(super) unsafe fn dispatch_primitive(
         );
         match method_name {
             "isZero" => {
-                let result = crate::bigint::js_bigint_is_zero(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_zero(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "isNeg" | "isNegative" => {
-                let result = crate::bigint::js_bigint_is_negative(bigint_ptr);
+                let result = crate::bigint_hooks::js_bigint_is_negative(bigint_ptr);
                 return Some(f64::from_bits(JSValue::bool(result != 0).bits()));
             }
             "toNumber" => {
-                return Some(crate::bigint::js_bigint_to_f64(bigint_ptr));
+                return Some(crate::bigint_hooks::js_bigint_to_f64(bigint_ptr));
             }
             "toString" => {
                 // #2864: ToNumber/ToInteger-coerce + validate the radix
@@ -821,8 +803,8 @@ pub(super) unsafe fn dispatch_primitive(
                     None
                 };
                 let result_ptr = match radix {
-                    Some(r) => crate::bigint::js_bigint_to_string_radix(bigint_ptr, r),
-                    None => crate::bigint::js_bigint_to_string(bigint_ptr),
+                    Some(r) => crate::bigint_hooks::js_bigint_to_string_radix(bigint_ptr, r),
+                    None => crate::bigint_hooks::js_bigint_to_string(bigint_ptr),
                 };
                 return Some(f64::from_bits(JSValue::string_ptr(result_ptr).bits()));
             }
@@ -860,8 +842,8 @@ pub(super) unsafe fn dispatch_primitive(
         // #10694: a raw word must be allocator-owned before the brand read.
         if top16 == 0 && raw_bits >= 0x10000 && crate::buffer::header_is_owned(raw_bits as usize) {
             let addr = raw_bits as usize;
-            if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-                let ta = addr as *mut crate::typedarray::TypedArrayHeader;
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+                let ta = addr as *mut crate::typedarray_hook_slots::TypedArrayHeader;
                 if let Some(r) = dispatch_typed_array_method(ta, method_name, args_ptr, args_len) {
                     return Some(r);
                 }

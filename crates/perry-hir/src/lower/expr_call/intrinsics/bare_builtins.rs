@@ -55,8 +55,7 @@ pub(crate) fn try_function_return_this(
                         }
                         if let ast::Expr::Ident(ident) = inner_target {
                             if ident.sym.as_ref() == "Function"
-                                && ctx.lookup_local("Function").is_none()
-                                && ctx.lookup_func("Function").is_none()
+                                && !ctx.shadows_unqualified_global("Function")
                             {
                                 if let ast::Expr::Lit(ast::Lit::Str(s)) =
                                     inner_call.args[0].expr.as_ref()
@@ -104,10 +103,7 @@ pub(crate) fn try_bare_regexp_call(
                 callee_inner = p.expr.as_ref();
             }
             if let ast::Expr::Ident(ident) = callee_inner {
-                if ident.sym.as_ref() == "RegExp"
-                    && ctx.lookup_local("RegExp").is_none()
-                    && ctx.lookup_func("RegExp").is_none()
-                {
+                if ident.sym.as_ref() == "RegExp" && !ctx.shadows_unqualified_global("RegExp") {
                     // Zero-arg `RegExp()` is `RegExp(undefined)` → an empty
                     // source `/(?:)/`. Without an explicit `Expr::Undefined`
                     // pattern the call fell through to the bare-ident dispatch
@@ -136,10 +132,9 @@ pub(crate) fn try_bare_regexp_call(
     Ok(None)
 }
 
-/// #2874: `Iterator.from(x)` — wrap an iterable in a lazy iterator-helper
-/// object. Only fires when `Iterator` is the global (not a local/func/import).
-/// The produced helper's `.map`/`.filter`/`.take`/etc. dispatch at runtime via
-/// `js_native_call_method`, so no further HIR variants are needed.
+/// #2874: `Iterator.from(x)` (the runtime's `js_iterator_from`, the same entry
+/// as the `Iterator.from` function object) and `Iterator.concat(...)`. Only
+/// fires when `Iterator` is the global (not a local/func/import).
 pub(crate) fn try_iterator_from(
     ctx: &mut LoweringContext,
     call: &ast::CallExpr,
@@ -161,7 +156,8 @@ pub(crate) fn try_iterator_from(
     let ast::MemberProp::Ident(prop) = &member.prop else {
         return Ok(None);
     };
-    if prop.sym.as_ref() != "from" {
+    let prop_name = prop.sym.as_ref();
+    if prop_name != "from" && prop_name != "concat" {
         return Ok(None);
     }
     let mut obj = member.obj.as_ref();
@@ -176,6 +172,33 @@ pub(crate) fn try_iterator_from(
         || ctx.lookup_func("Iterator").is_some()
     {
         return Ok(None);
+    }
+    if prop_name == "concat" {
+        // A builtin static's receiver collapses to `GlobalGet(0)` in callee
+        // position; call the real `Iterator.concat` function instead.
+        let args = call
+            .args
+            .iter()
+            .map(|arg| lower_expr(ctx, &arg.expr))
+            .collect::<Result<Vec<_>>>()?;
+        let iterator = Expr::PropertyGet {
+            object: Box::new(Expr::GlobalGet(0)),
+            property: "Iterator".to_string(),
+            byte_offset: 0,
+            byte_end: 0,
+        };
+        return Ok(Some(Expr::Call {
+            callee: Box::new(Expr::PropertyGet {
+                object: Box::new(iterator),
+                property: "concat".to_string(),
+                byte_offset: 0,
+                byte_end: 0,
+            }),
+            args,
+            type_args: vec![],
+            byte_offset: 0,
+            byte_end: 0,
+        }));
     }
     let arg = if call.args.is_empty() {
         Expr::Undefined

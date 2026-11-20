@@ -1,0 +1,4 @@
+failed to encode the graph
+
+Caused by:
+    the graph contains a cycle and cannot be encoded

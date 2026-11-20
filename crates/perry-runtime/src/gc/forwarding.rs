@@ -63,7 +63,7 @@ crate::perry_thread_local! {
 }
 
 fn note_refusal_walk() {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     let name = super::pin::copying_walk_phase().unwrap_or("(outside a named walk)");
@@ -85,7 +85,7 @@ fn note_refusal_walk() {
 /// until now was invisible until it corrupted something several collections
 /// later in an unrelated function.
 pub(super) fn report_forwarding_refusals(phase: &str) {
-    if !crate::gc::gc_diag_enabled() {
+    if !crate::gc::diagnostic_hooks::enabled() {
         return;
     }
     let sources = refused_forwarding_source_count();

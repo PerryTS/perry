@@ -1,0 +1,22 @@
+{
+    "packages": [
+        {
+            "name": "test:foo",
+            "path": "foo.wat"
+        }
+    ],
+    "nodes": [
+        {
+            "type": "import",
+            "name": "foo",
+            "package": 0,
+            "export": "bar"
+        },
+        {
+            "type": "import",
+            "name": "foo",
+            "package": 0,
+            "export": "bar"
+        }
+    ]
+}

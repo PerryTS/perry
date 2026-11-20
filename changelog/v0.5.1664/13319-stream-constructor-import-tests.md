@@ -1,0 +1,1 @@
+Correct the stream-constructor HIR fixture to expect canonical default exports for default imports while retaining named-export construction. Add compiled parity coverage for default and named legacy Stream imports.

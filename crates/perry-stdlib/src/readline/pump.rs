@@ -19,9 +19,9 @@ fn build_keypress_object(name: &str, ctrl: bool, shift: bool, meta: bool, seq: &
     use perry_runtime::object::js_object_set_field;
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let obj = unsafe {
-        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            perry_runtime::object::runtime_layouts::RECORD_F483_0
-        ))
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(
+            perry_runtime::object::runtime_layouts::RECORD_F483_0::desc(),
+        )
     };
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let name_str = js_string_from_bytes(name.as_ptr(), name.len() as u32);
@@ -666,7 +666,10 @@ pub extern "C" fn js_readline_has_active() -> i32 {
         || LINE_CALLBACK.with(|c| c.borrow().is_some());
     let has_readline_close_cb =
         !CLOSE_FIRED.with(|f| *f.borrow()) && CLOSE_CALLBACK.with(|c| c.borrow().is_some());
+    // `end`/`close` listeners alone do not start the reader, so they hold the
+    // loop only while another consumer has it running.
     let has_stdin_end_cb = !STDIN_END_FIRED.load(Ordering::Acquire)
+        && (started || eof)
         && STDIN_END_CALLBACKS
             .lock()
             .map(|v| !v.is_empty())

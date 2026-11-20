@@ -45,6 +45,9 @@ fn write() -> Stmt {
         object: Box::new(Expr::LocalGet(3)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(2)),
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     })
 }
 
@@ -117,11 +120,15 @@ fn escaped_arguments_publish_cells_but_unmapped_arguments_do_not() {
 fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
     for read in [
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             property: "length".into(),
             byte_offset: 0,
         },
         Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(3)),
             index: Box::new(Expr::Integer(0)),
         },

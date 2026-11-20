@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -80,6 +81,7 @@ pub(crate) unsafe fn nm_dispatch_module(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_net(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -162,6 +164,25 @@ unsafe fn net_provider_dispatch(ctx: &NmCtx, name: &str) -> f64 {
     dispatch(name.as_ptr(), name.len(), ctx.args_ptr, ctx.args_len)
 }
 
+/// Call a node:net provider entry from the runtime itself (a child
+/// process's stdio pipe sockets), or `None` when no net provider is linked.
+#[cfg(unix)]
+pub(crate) unsafe fn net_provider_call(name: &str, args: &[f64]) -> Option<f64> {
+    if crate::value::JS_NATIVE_NET_DISPATCH
+        .load(std::sync::atomic::Ordering::SeqCst)
+        .is_null()
+    {
+        return None;
+    }
+    let ctx = NmCtx {
+        obj: std::ptr::null(),
+        args_ptr: args.as_ptr(),
+        args_len: args.len(),
+        assert_skip_prototype: false,
+    };
+    Some(net_provider_dispatch(&ctx, name))
+}
+
 /// Initialize a proven native net base on its existing derived receiver.
 /// Only constructor export metadata chooses the family; no receiver name or
 /// transport id participates in attachment.
@@ -200,6 +221,7 @@ pub unsafe extern "C" fn js_net_subclass_init(
 /// `new` on a bound node:net class value (`const Sock = net.Socket; new Sock()`,
 /// pg's function-local `new (require('net')).Socket()`). Registered by
 /// `js_nm_install_net`; the classes are provider-owned like the factories.
+#[inline(always)]
 pub(crate) unsafe fn nm_ctor_net(
     _module: &str,
     method: &str,
@@ -233,6 +255,7 @@ pub(crate) unsafe fn nm_ctor_net(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_node_pty(
     ctx: &NmCtx,
     module_name: &str,
@@ -277,6 +300,7 @@ pub(crate) unsafe fn nm_dispatch_node_pty(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -353,6 +377,7 @@ pub(crate) unsafe fn nm_dispatch_os(ctx: &NmCtx, module_name: &str, method_name:
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -586,6 +611,7 @@ pub(crate) unsafe fn nm_dispatch_path(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -615,64 +641,74 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
     );
     match (module_name, method_name) {
         ("perf_hooks", "now") => crate::date::js_performance_now(),
-        ("perf_hooks", "mark") => crate::perf_hooks::js_perf_mark(arg(0), arg(1)),
-        ("perf_hooks", "measure") => crate::perf_hooks::js_perf_measure(arg(0), arg(1), arg(2)),
-        ("perf_hooks", "getEntries") => crate::perf_hooks::js_perf_get_entries(),
+        ("perf_hooks", "mark") => crate::perf_hook_slots::js_perf_mark(arg(0), arg(1)),
+        ("perf_hooks", "measure") => {
+            crate::perf_hook_slots::js_perf_measure(arg(0), arg(1), arg(2))
+        }
+        ("perf_hooks", "getEntries") => crate::perf_hook_slots::js_perf_get_entries(),
         ("perf_hooks", "getEntriesByType") => {
-            crate::perf_hooks::js_perf_get_entries_by_type(arg(0))
+            crate::perf_hook_slots::js_perf_get_entries_by_type(arg(0))
         }
         ("perf_hooks", "getEntriesByName") => {
-            crate::perf_hooks::js_perf_get_entries_by_name(arg(0), arg(1))
+            crate::perf_hook_slots::js_perf_get_entries_by_name(arg(0), arg(1))
         }
-        ("perf_hooks", "clearMarks") => crate::perf_hooks::js_perf_clear_marks(arg(0)),
-        ("perf_hooks", "clearMeasures") => crate::perf_hooks::js_perf_clear_measures(arg(0)),
+        ("perf_hooks", "clearMarks") => crate::perf_hook_slots::js_perf_clear_marks(arg(0)),
+        ("perf_hooks", "clearMeasures") => crate::perf_hook_slots::js_perf_clear_measures(arg(0)),
         ("perf_hooks", "eventLoopUtilization") => {
-            crate::perf_hooks::js_perf_event_loop_utilization(arg(0), arg(1))
+            crate::perf_hook_slots::js_perf_event_loop_utilization(arg(0), arg(1))
         }
-        ("perf_hooks", "toJSON") => crate::perf_hooks::js_perf_to_json(),
+        ("perf_hooks", "toJSON") => crate::perf_hook_slots::js_perf_to_json(),
         ("perf_hooks", "clearResourceTimings") => {
-            crate::perf_hooks::js_perf_clear_resource_timings()
+            crate::perf_hook_slots::js_perf_clear_resource_timings()
         }
         ("perf_hooks", "setResourceTimingBufferSize") => {
-            crate::perf_hooks::js_perf_set_resource_timing_buffer_size(arg(0))
+            crate::perf_hook_slots::js_perf_set_resource_timing_buffer_size(arg(0))
         }
-        ("perf_hooks", "markResourceTiming") => crate::perf_hooks::js_perf_mark_resource_timing(
-            arg(0),
-            arg(1),
-            arg(2),
-            arg(3),
-            arg(4),
-            arg(5),
-            arg(6),
-            arg(7),
-        ),
-        ("perf_hooks", "timerify") => crate::perf_hooks::js_perf_timerify(arg(0), arg(1)),
+        ("perf_hooks", "markResourceTiming") => {
+            crate::perf_hook_slots::js_perf_mark_resource_timing(
+                arg(0),
+                arg(1),
+                arg(2),
+                arg(3),
+                arg(4),
+                arg(5),
+                arg(6),
+                arg(7),
+            )
+        }
+        ("perf_hooks", "timerify") => crate::perf_hook_slots::js_perf_timerify(arg(0), arg(1)),
+        ("perf_hooks", "monitorEventLoopDelay") => {
+            crate::perf_hook_slots::js_perf_monitor_event_loop_delay(arg(0))
+        }
+        ("perf_hooks", "createHistogram") => {
+            crate::perf_hook_slots::js_perf_create_histogram(arg(0))
+        }
 
         // ── PerformanceObserver instance (perf_observer) ──
         // The registry index lives in field[1] of the namespace object; the
         // runtime fns re-derive it from the object value.
         ("perf_observer", "observe") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_observe(obs_val, arg(0))
+            crate::perf_hook_slots::js_perf_observer_observe(obs_val, arg(0))
         }
         ("perf_observer", "disconnect") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_disconnect(obs_val)
+            crate::perf_hook_slots::js_perf_observer_disconnect(obs_val)
         }
         ("perf_observer", "takeRecords") => {
             let obs_val = crate::value::js_nanbox_pointer(obj as i64);
-            crate::perf_hooks::js_perf_observer_take_records(obs_val)
+            crate::perf_hook_slots::js_perf_observer_take_records(obs_val)
         }
 
         // ── PerformanceObserverEntryList (the callback `list` arg) ──
-        ("perf_observer_list", "getEntries") => crate::perf_hooks::current_list_get_entries(),
+        ("perf_observer_list", "getEntries") => crate::perf_hook_slots::current_list_get_entries(),
         ("perf_observer_list", "getEntriesByType") => {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "type", args_len == 0);
-            crate::perf_hooks::current_list_get_by_type(arg(0))
+            crate::perf_hook_slots::validate_perf_list_filter_arg(arg(0), "type", args_len == 0);
+            crate::perf_hook_slots::current_list_get_by_type(arg(0))
         }
         ("perf_observer_list", "getEntriesByName") => {
-            crate::perf_hooks::validate_perf_list_filter_arg(arg(0), "name", args_len == 0);
-            crate::perf_hooks::current_list_get_by_name(arg(0))
+            crate::perf_hook_slots::validate_perf_list_filter_arg(arg(0), "name", args_len == 0);
+            crate::perf_hook_slots::current_list_get_by_name(arg(0))
         }
 
         // ── Histogram instance methods ──
@@ -685,7 +721,7 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
             } else {
                 std::slice::from_raw_parts(args_ptr, args_len)
             };
-            crate::perf_histogram::histogram_method(obj, method_name, args)
+            crate::perf_hook_slots::histogram_method(obj, method_name, args)
                 .unwrap_or_else(|| f64::from_bits(JSValue::undefined().bits()))
         }
 
@@ -701,6 +737,7 @@ pub(crate) unsafe fn nm_dispatch_perf(ctx: &NmCtx, module_name: &str, method_nam
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -729,35 +766,43 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         typed_kind
     );
     match (module_name, method_name) {
-        ("process", "on") => crate::os::js_process_on(arg_bits(0), arg_bits(1)),
-        ("process", "addListener") => crate::os::js_process_add_listener(arg_bits(0), arg_bits(1)),
-        ("process", "once") => crate::os::js_process_once(arg_bits(0), arg_bits(1)),
+        ("process", "on") => crate::os_hook_slots::js_process_on(arg_bits(0), arg_bits(1)),
+        ("process", "addListener") => {
+            crate::os_hook_slots::js_process_add_listener(arg_bits(0), arg_bits(1))
+        }
+        ("process", "once") => crate::os_hook_slots::js_process_once(arg_bits(0), arg_bits(1)),
         ("process", "prependListener") => {
-            crate::os::js_process_prepend_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_prepend_listener(arg_bits(0), arg_bits(1))
         }
         ("process", "prependOnceListener") => {
-            crate::os::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_prepend_once_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "emit") => crate::os::js_process_emit(arg_bits(0), pack_args_from(1)),
+        ("process", "emit") => {
+            crate::os_hook_slots::js_process_emit(arg_bits(0), pack_args_from(1))
+        }
         ("process", "removeListener") => {
-            crate::os::js_process_remove_listener(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_remove_listener(arg_bits(0), arg_bits(1))
         }
-        ("process", "off") => crate::os::js_process_off(arg_bits(0), arg_bits(1)),
+        ("process", "off") => crate::os_hook_slots::js_process_off(arg_bits(0), arg_bits(1)),
         ("process", "removeAllListeners") => {
-            crate::os::js_process_remove_all_listeners(arg_bits(0))
+            crate::os_hook_slots::js_process_remove_all_listeners(arg_bits(0))
         }
         ("process", "listenerCount") => {
-            crate::os::js_process_listener_count(arg_bits(0), arg_bits(1))
+            crate::os_hook_slots::js_process_listener_count(arg_bits(0), arg_bits(1))
         }
         ("process", "listeners") => {
-            ptr_to_f64(crate::os::js_process_listeners(arg_bits(0)) as *const u8)
+            ptr_to_f64(crate::os_hook_slots::js_process_listeners(arg_bits(0)) as *const u8)
         }
         ("process", "rawListeners") => {
-            ptr_to_f64(crate::os::js_process_raw_listeners(arg_bits(0)) as *const u8)
+            ptr_to_f64(crate::os_hook_slots::js_process_raw_listeners(arg_bits(0)) as *const u8)
         }
-        ("process", "eventNames") => ptr_to_f64(crate::os::js_process_event_names() as *const u8),
-        ("process", "setMaxListeners") => crate::os::js_process_set_max_listeners(arg(0)),
-        ("process", "getMaxListeners") => crate::os::js_process_get_max_listeners(),
+        ("process", "eventNames") => {
+            ptr_to_f64(crate::os_hook_slots::js_process_event_names() as *const u8)
+        }
+        ("process", "setMaxListeners") => {
+            crate::os_hook_slots::js_process_set_max_listeners(arg(0))
+        }
+        ("process", "getMaxListeners") => crate::os_hook_slots::js_process_get_max_listeners(),
         ("process", "send") => {
             crate::process::process_ipc_send_call(arg(0), arg(1), arg(2), arg(3))
         }
@@ -818,7 +863,9 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
         }
         ("process", "nextTick") => {
             // Validate the callback and forward trailing args (#3046).
-            unsafe { crate::os::js_process_next_tick(arg_bits(0), pack_args_from(1)) };
+            unsafe {
+                crate::process::tick_args::js_process_next_tick(arg_bits(0), pack_args_from(1))
+            };
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
         ("process", "chdir") => {
@@ -864,7 +911,7 @@ pub(crate) unsafe fn nm_dispatch_process(ctx: &NmCtx, module_name: &str, method_
             crate::process::js_process_initgroups(arg(0), arg(1));
             f64::from_bits(crate::value::TAG_UNDEFINED)
         }
-        ("process", "kill") => crate::os::js_process_kill(arg(0), arg(1)),
+        ("process", "kill") => crate::os_hook_slots::js_process_kill(arg(0), arg(1)),
         ("process", "exit") => {
             crate::process::js_process_exit(arg(0));
             f64::from_bits(crate::value::TAG_UNDEFINED)

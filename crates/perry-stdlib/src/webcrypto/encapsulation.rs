@@ -40,7 +40,7 @@ unsafe fn nth_arg(args_ptr: *const f64, args_len: usize, index: usize) -> f64 {
     }
 }
 
-fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
+pub(super) fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<u8>)> {
     let public_bytes = ml_kem_public_bytes_from_der(algo, public_der)?;
     let mut random = [0u8; 32];
     rand_core_06::OsRng.fill_bytes(&mut random);
@@ -74,7 +74,11 @@ fn ml_kem_encapsulate(algo: KeyAlgo, public_der: &[u8]) -> Option<(Vec<u8>, Vec<
     }
 }
 
-fn ml_kem_decapsulate(algo: KeyAlgo, private_der: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>> {
+pub(super) fn ml_kem_decapsulate(
+    algo: KeyAlgo,
+    private_der: &[u8],
+    ciphertext: &[u8],
+) -> Option<Vec<u8>> {
     let (seed_bytes, _) = ml_kem_private_seed_and_public_from_der(algo, private_der)?;
     let seed = ml_kem::Seed::try_from(seed_bytes.as_slice()).ok()?;
     match algo {
@@ -148,9 +152,9 @@ unsafe fn object_with_two_buffers(first_bytes: &[u8], second_bytes: &[u8]) -> *m
         return reject_with_dom_exception("OperationError", "The operation failed");
     }
     let obj = scope.root_raw_mut_ptr(
-        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(std::ptr::addr_of!(
-            perry_runtime::object::runtime_layouts::RECORD_V026
-        )),
+        perry_runtime::object::runtime_layouts::perry_alloc_runtime_record(
+            perry_runtime::object::runtime_layouts::RECORD_V026::desc(),
+        ),
     );
     if obj
         .get_raw_mut_ptr::<perry_runtime::ObjectHeader>()
@@ -408,7 +412,7 @@ mod record_layout_tests {
             perry_runtime::value::js_nanbox_get_pointer(result.get_nanbox_f64())
                 as *mut perry_runtime::ObjectHeader
         };
-        let desc = std::ptr::addr_of!(perry_runtime::object::runtime_layouts::RECORD_V026);
+        let desc = perry_runtime::object::runtime_layouts::RECORD_V026::desc();
         unsafe {
             assert_eq!((*pointer()).parent_class_id, (*desc).layout_id);
         }

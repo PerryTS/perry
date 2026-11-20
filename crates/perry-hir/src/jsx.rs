@@ -64,7 +64,15 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     let props_expr = if props_parts.is_empty() {
         Expr::Null
     } else if has_spread_attr {
-        Expr::ObjectSpread { parts: props_parts }
+        Expr::ObjectSpread {
+            parts: props_parts
+                .into_iter()
+                .map(|(key, value)| match key {
+                    Some(key) => crate::ir::ObjectPart::Define(key, value),
+                    None => crate::ir::ObjectPart::Spread(value),
+                })
+                .collect(),
+        }
     } else {
         Expr::object_literal(
             props_parts
@@ -89,6 +97,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     }
 
     Ok(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: func_name.to_string(),
             param_types: Vec::new(),
@@ -123,7 +132,9 @@ fn react_create_element_call(
         return None;
     };
     Some(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(object),
             property: "createElement".to_string(),
@@ -170,6 +181,7 @@ pub(crate) fn lower_jsx_fragment(
     // props)` — see `react_create_element_call`.
     if let Some(react_local) = ctx.react_default_import_local.clone() {
         let fragment_type = Expr::PropertyGet {
+            byte_end: 0,
             byte_offset: 0,
             object: Box::new(if let Some(id) = ctx.lookup_local(&react_local) {
                 Expr::LocalGet(id)
@@ -191,6 +203,7 @@ pub(crate) fn lower_jsx_fragment(
     }
 
     Ok(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: func_name.to_string(),
             param_types: Vec::new(),
@@ -266,6 +279,7 @@ pub(crate) fn lower_jsx_element_name(
             // e.g. React.Fragment → PropertyGet on the namespace
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),
@@ -304,6 +318,7 @@ pub(crate) fn lower_jsx_object(ctx: &mut LoweringContext, obj: &ast::JSXObject) 
         ast::JSXObject::JSXMemberExpr(member) => {
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),

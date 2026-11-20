@@ -34,7 +34,11 @@ fn restore_coverage_keeps_an_untraced_malloc_parents_uncovered_page() {
             fallback_headers: Vec::new(),
         };
         remembered_set_clear();
-        restore_surviving_dirty_coverage(&snapshot, &Default::default(), "malloc_uncovered");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(
+            &snapshot,
+            &Default::default(),
+            "malloc_uncovered",
+        );
         assert!(
             EXTERNAL_DIRTY_SLOT_PAGES.with(|s| {
                 s.borrow()
@@ -86,13 +90,13 @@ fn exercise_restore() {
             .into_iter()
             .collect();
         remembered_set_clear();
-        restore_surviving_dirty_coverage(&snapshot, &covered, "first");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(&snapshot, &covered, "first");
         assert!(
             barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().contains(&page)),
             "repair must restore the page containing the young edges"
         );
         // Productivity counts edges, even when their page is already dirty.
-        restore_surviving_dirty_coverage(&snapshot, &covered, "repeat");
+        restore_surviving_dirty_coverage::<{ cfg!(test) }>(&snapshot, &covered, "repeat");
         assert_eq!(barrier::DIRTY_OLD_PAGES.with(|s| s.borrow().len()), 1);
     }
     remembered_set_clear();
@@ -110,15 +114,13 @@ fn field(line: &str, name: &str) -> usize {
 #[test]
 fn restore_coverage_diagnostic_matches_walk_and_off_arm() {
     const CHILD: &str = "PERRY_TEST_RESTORE_COVERAGE_CHILD";
-    let thread = std::thread::current();
-    let name = thread.name().expect("libtest thread name");
+    let name = crate::test_support::current_test_name();
     if std::env::var(CHILD).ok().as_deref() == Some(name) {
         exercise_restore();
         return;
     }
     for enabled in ["0", "1"] {
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        let output = crate::test_support::test_process(name)
             .env(CHILD, name)
             .env("PERRY_GC_DIAG", enabled)
             .output()
@@ -126,7 +128,8 @@ fn restore_coverage_diagnostic_matches_walk_and_off_arm() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
-            output.status.success() && stdout.contains("restore coverage witness completed"),
+            crate::test_support::passed(output.status)
+                && stdout.contains("restore coverage witness completed"),
             "witness failed (diag={enabled}): {}\n{stdout}\n{stderr}",
             output.status
         );

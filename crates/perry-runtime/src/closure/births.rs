@@ -88,7 +88,7 @@ pub(crate) fn bear(birth: &ClosureBirth, sources: BirthSources<'_>) -> Option<*m
         *word = sources.word(source)?;
     }
     let shape_id = super::shape::birth_shape_for_body(birth.info);
-    let header = (u64::from(shape_id) << 32) | u64::from(birth.capture_count);
+    let header = (u64::from(shape_id.0) << 32) | u64::from(birth.capture_count);
     Some(super::alloc::js_closure_alloc_fixed(
         birth.info,
         header,

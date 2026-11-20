@@ -24,8 +24,11 @@ fn has_method() -> Function {
         params: vec![number_param(1, "componentType")],
         return_type: Type::Boolean,
         body: vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 object: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::This),
                     property: "componentTypeSet".to_string(),
                     byte_offset: 0,
@@ -84,6 +87,7 @@ fn archetype_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -119,8 +123,11 @@ fn executor_class() -> Class {
             ],
             return_type: Type::Boolean,
             body: vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         property: "componentTypeSet".to_string(),
                         byte_offset: 0,
@@ -152,6 +159,7 @@ fn executor_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -275,9 +283,13 @@ fn compile_nested_map_get_ir() -> String {
             params: vec![number_param(1, "entityId")],
             return_type: Type::Number,
             body: vec![Stmt::Return(Some(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         object: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             object: Box::new(Expr::This),
                             property: "ctx".to_string(),
                             byte_offset: 0,
@@ -312,6 +324,7 @@ fn compile_nested_map_get_ir() -> String {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });

@@ -307,13 +307,11 @@ fn parse_json_source_tree(input: &[u8]) -> Option<JsonSourceNode> {
     JsonSourceParser::new(input).parse()
 }
 
-/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) into a real
-/// `ArrayHeader` tree and return a JSValue pointing at it. The reviver walk
-/// below reads `length`/`capacity`/element f64s directly off the pointer — a
-/// `LazyArrayHeader` has a different layout, so without this the walk reads
-/// garbage and SIGSEGVs. Unlike `redirect_lazy_to_materialized` (stringify),
-/// this forces materialization even when nothing has indexed the array yet.
-/// No-op for non-lazy values. Refs #1424.
+/// Force-materialize a lazy-tape array (`PERRY_JSON_TAPE`) before the
+/// reviver walk, which reads `length`/`capacity`/element f64s directly off
+/// the pointer: materialization fills every element slot and turns the
+/// value into the ordinary array in place, so the returned JSValue is the
+/// same object. No-op for non-lazy values. Refs #1424.
 unsafe fn force_materialize_if_lazy(value: JSValue) -> JSValue {
     let bits = value.bits();
     if (bits >> 48) != 0x7FFD {
@@ -398,8 +396,9 @@ fn to_length(value: f64) -> usize {
 unsafe fn json_is_array(value: f64) -> bool {
     let mut current = value;
     for _ in 0..64 {
-        if crate::proxy::js_proxy_is_proxy(current) != 0 {
-            let Some(target) = crate::proxy::js_proxy_checked_target_for_is_array(current) else {
+        if crate::proxy_hooks::proxy_is_proxy(current) != 0 {
+            let Some(target) = crate::proxy_hooks::proxy_checked_target_for_is_array(current)
+            else {
                 return false;
             };
             current = target;
@@ -411,15 +410,15 @@ unsafe fn json_is_array(value: f64) -> bool {
 }
 
 unsafe fn json_is_object(value: f64) -> bool {
-    if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        let _ = crate::proxy::js_proxy_checked_target(value);
+    if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        let _ = crate::proxy_hooks::proxy_checked_target(value);
         return true;
     }
     if let Some(ptr) = extract_pointer(value.to_bits()) {
         if crate::value::addr_class::is_handle_band(ptr as usize) {
             return false;
         }
-        return gc_obj_type(ptr) == crate::gc::GC_TYPE_OBJECT;
+        return crate::gc_type_is_object!(gc_obj_type(ptr));
     }
     false
 }
@@ -433,9 +432,7 @@ unsafe fn string_header_bytes<'a>(ptr: *const StringHeader) -> Option<&'a [u8]> 
 }
 
 fn number_matches_source(value: JSValue, source_number: f64) -> bool {
-    let current = if value.is_int32() {
-        value.as_int32() as f64
-    } else if value.is_number() {
+    let current = if value.is_number() {
         value.as_number()
     } else {
         return false;
@@ -519,7 +516,7 @@ unsafe fn annotate_source_tree(node: &mut JsonSourceNode, value: JSValue) {
                 elements,
                 original_bits,
             },
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         ) => {
             *original_bits = value.bits();
             let arr = ptr as *const crate::ArrayHeader;
@@ -654,8 +651,8 @@ unsafe fn enumerable_keys_for_internalize(
     value_handle: &crate::gc::RuntimeHandle<'_>,
 ) -> *mut crate::ArrayHeader {
     let value = value_handle.get_nanbox_f64();
-    let keys_value = if crate::proxy::js_proxy_is_proxy(value) != 0 {
-        crate::proxy::js_proxy_own_keys_for_json(value)
+    let keys_value = if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+        crate::proxy_hooks::proxy_own_keys_for_json(value)
     } else {
         let keys = crate::object::js_object_keys_value(value);
         f64::from_bits(POINTER_TAG | ((keys as u64) & POINTER_MASK))
@@ -837,6 +834,13 @@ pub unsafe extern "C" fn js_json_parse_with_reviver(
 ) -> JSValue {
     let scope = crate::gc::RuntimeHandleScope::new();
     let text_handle = scope.root_string_ptr(text_ptr);
+    // A reviver that is not callable is ignored (JSON.parse step 3): only an
+    // allocator-owned closure is kept (and rooted), as on the thunk path.
+    let reviver_ptr = if reviver_ptr != 0 && crate::closure::is_closure_ptr(reviver_ptr as usize) {
+        reviver_ptr
+    } else {
+        0
+    };
     let reviver = reviver_ptr as *const crate::closure::ClosureHeader;
     let reviver_handle = scope.root_raw_const_ptr(reviver);
 

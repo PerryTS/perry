@@ -59,6 +59,39 @@ pub extern "C" fn js_typed_array_get(ta: *const TypedArrayHeader, index: i32) ->
     }
 }
 
+/// `ta[key]` (10.4.5.4 [[Get]] of an integer-indexed exotic object) for the
+/// typed array cell `raw` of any kind, which compiled code admitted by its
+/// type byte after the receiver missed the kind its read site expected
+/// (`ta_element_read` in perry-codegen): a Number `key` that is an integral
+/// in-bounds index reads that element, every other Number reads `undefined`
+/// (its CanonicalNumericIndexString is no valid integer index). Any other key
+/// takes the complete `[[Get]]`.
+#[no_mangle]
+pub unsafe extern "C" fn js_typed_array_get_number_key(raw: i64, key: f64) -> f64 {
+    let ta = raw as usize as *const TypedArrayHeader;
+    if !crate::JSValue::from_bits(key.to_bits()).is_number() {
+        return crate::value::js_dyn_index_get(crate::value::js_nanbox_pointer(raw), key);
+    }
+    // The caller admitted the cell: its owner's type byte classifies the
+    // storage (a native arena view, a shared buffer) without a second proof.
+    let owner = crate::buffer::store::owner(ta as usize);
+    let owner_type = (*crate::buffer::store::header(owner)).obj_type;
+    if owner_type == crate::gc::GC_TYPE_NATIVE_ARENA_OWNER
+        && crate::buffer::store::is_view(ta as usize)
+    {
+        crate::native_arena::validate_view_alive(
+            crate::native_arena::native_view_from_typed_array(ta),
+        );
+    }
+    let idx = key as i64;
+    if idx as f64 != key || idx < 0 || idx >= crate::typedarray::element_length(ta) as i64 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    let shared = owner_type & !crate::codegen_abi::BYTES_TYPE_VIEW
+        == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER;
+    load_at_shared(ta, idx as usize, shared)
+}
+
 /// Read the exact raw lane bits of a BigInt64Array/BigUint64Array element.
 ///
 /// Cross-crate structured-clone snapshots use this instead of
@@ -294,6 +327,11 @@ static KEEP_JS_TYPED_ARRAY_INDEX_GET_DYNAMIC: extern "C" fn(*const TypedArrayHea
 /// `ta.at(i)` with negative-index support.
 #[no_mangle]
 pub extern "C" fn js_typed_array_at(ta: *const TypedArrayHeader, index: f64) -> f64 {
+    // 23.2.3.1 step 4: ToIntegerOrInfinity( index ) (an object operand runs its
+    // `valueOf`) with the receiver rooted; one tag test for a plain number.
+    let (index, ta) =
+        crate::array::index_operand_across(ta as *const crate::array::ArrayHeader, index);
+    let ta = ta as *const TypedArrayHeader;
     let ta = clean_ta_ptr(ta);
     if ta.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -365,12 +403,12 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
             // out-of-bounds coercion on a non-plain-number value so the hot
             // in-bounds and primitive-value paths are untouched (test262
             // Set/tonumber-value-throws, key-is-out-of-bounds-*).
-            if value_needs_coercion_side_effect(value) {
-                if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
-                    let _ = bigint::to_bigint_for_store(value);
-                } else {
-                    let _ = jsvalue_to_f64(value);
-                }
+            // A BigInt view converts every value: ToBigInt of a Number, a
+            // string or a Boolean is a TypeError (or a parse) too.
+            if kind == KIND_BIGINT64 || kind == KIND_BIGUINT64 {
+                let _ = bigint::to_bigint_for_store(value);
+            } else if value_needs_coercion_side_effect(value) {
+                let _ = jsvalue_to_f64(value);
             }
             return;
         }
@@ -392,8 +430,10 @@ pub extern "C" fn js_typed_array_set(ta: *mut TypedArrayHeader, index: i32, valu
 /// (§23.2.3.24.1 SetTypedArrayFromArrayLike), which is observable: a throwing
 /// element coercion must leave earlier elements written.
 enum SetSource {
-    /// Numeric source already read into f64 element values (typed array / Buffer).
+    /// Numeric source already read into f64 element values (Buffer, string).
     Buffered(Vec<f64>),
+    /// Another typed array: coercion-free, copied by [`copy_typed_array`].
+    TypedArray(*const TypedArrayHeader),
     /// Plain JS `Array` source — read+coerce each slot lazily.
     Array(*const ArrayHeader, usize),
     /// Array-like object source — `length` already coerced; read keys lazily.
@@ -457,16 +497,11 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
         return Some(SetSource::Empty);
     };
 
-    // Source is another typed array (coercion-free; buffered for overlap safety).
+    // Source is another typed array (coercion-free).
     if lookup_typed_array_kind(addr).is_some() {
         let src = addr as *const TypedArrayHeader;
         bigint::validate_copy_kinds(dst_kind, crate::typedarray::element_kind(src));
-        let len = crate::typedarray::element_length(src) as usize;
-        let mut out = Vec::with_capacity(len);
-        for i in 0..len {
-            out.push(load_at(src, i));
-        }
-        return Some(SetSource::Buffered(out));
+        return Some(SetSource::TypedArray(src));
     }
 
     // Perry's Uint8Array is Buffer-backed; treat it as a numeric typed-array
@@ -493,12 +528,12 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
         let header =
             (addr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let obj_type = (*header).obj_type;
-        if obj_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(obj_type) {
             let arr = addr as *const ArrayHeader;
             let len = crate::array::js_array_length(arr) as usize;
             return Some(SetSource::Array(arr, len));
         }
-        if obj_type == crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_object!(obj_type) {
             // Array-like object: LengthOfArrayLike = ToLength(ToNumber(Get(o,"length"))).
             let obj = addr as *const crate::object::ObjectHeader;
             let len_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
@@ -509,6 +544,143 @@ unsafe fn classify_set_source(source_value: f64, dst_kind: u8) -> Option<SetSour
     }
 
     Some(SetSource::Empty)
+}
+
+/// `ta`'s element storage resolved once for a run of stores that runs no user
+/// code and allocates nothing: the element kind, its width and the address of
+/// element `base`. `None` for shared memory, whose stores keep the
+/// per-element atomic width of `store_at`.
+unsafe fn resolved_destination(
+    ta: *mut TypedArrayHeader,
+    base: usize,
+) -> Option<(u8, usize, *mut u8)> {
+    // `typed_array_has_shared_backing` without its typed-array lookup: the
+    // caller resolved `ta` as one.
+    if (*crate::buffer::store::header(crate::buffer::store::owner(ta as usize))).obj_type & !0x20
+        == crate::gc::GC_TYPE_BUFFER_SHARED_ARRAY_BUFFER
+    {
+        return None;
+    }
+    let kind = crate::typedarray::element_kind(ta);
+    let size = crate::typedarray::elem_size_for_kind(kind);
+    Some((kind, size, data_ptr_mut(ta).add(base * size)))
+}
+
+/// SetTypedArrayFromArrayLike for the leading elements of the Array `arr`
+/// that are plain Numbers (`len` > 0 of them read): `Get` of an element below
+/// the length of a dense array without element descriptors is its slot, and
+/// `ToNumber` of a plain double is the double, so no element runs user code
+/// and the destination resolved once stays valid. Returns how many leading
+/// elements were stored; the caller's per-element `Get` + `ToNumber` + `Set`
+/// continues at the first one that is not a plain Number (a hole, a tagged
+/// value), or at 0 when the array or the destination is not of that kind.
+unsafe fn store_number_prefix(
+    ta: *mut TypedArrayHeader,
+    base: usize,
+    arr: *const ArrayHeader,
+    len: usize,
+) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let Some(header) = crate::value::addr_class::try_read_gc_header(arr as usize) else {
+        return 0;
+    };
+    if !crate::gc_type_is_array!(header.obj_type)
+        || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+        || (*arr).length > (*arr).capacity
+        || crate::array::array_has_element_descriptors_resolved(arr)
+    {
+        return 0;
+    }
+    let Some((kind, size, dst)) = resolved_destination(ta, base) else {
+        return 0;
+    };
+    let n = len.min((*arr).length as usize);
+    let src = crate::array::array_elements_ptr(arr) as *const u64;
+    match kind {
+        KIND_FLOAT32 => number_prefix::<KIND_FLOAT32>(dst, size, src, n),
+        KIND_FLOAT64 => number_prefix::<KIND_FLOAT64>(dst, size, src, n),
+        KIND_INT32 => number_prefix::<KIND_INT32>(dst, size, src, n),
+        KIND_UINT32 => number_prefix::<KIND_UINT32>(dst, size, src, n),
+        KIND_INT16 => number_prefix::<KIND_INT16>(dst, size, src, n),
+        KIND_UINT16 => number_prefix::<KIND_UINT16>(dst, size, src, n),
+        KIND_INT8 => number_prefix::<KIND_INT8>(dst, size, src, n),
+        KIND_UINT8 => number_prefix::<KIND_UINT8>(dst, size, src, n),
+        KIND_UINT8_CLAMPED => number_prefix::<KIND_UINT8_CLAMPED>(dst, size, src, n),
+        KIND_FLOAT16 => number_prefix::<KIND_FLOAT16>(dst, size, src, n),
+        _ => 0,
+    }
+}
+
+/// [`store_number_prefix`]'s loop for one element kind: the leading plain
+/// doubles of the `n` NaN-boxed words at `src`, converted and stored.
+#[inline(always)]
+unsafe fn number_prefix<const KIND: u8>(
+    dst: *mut u8,
+    size: usize,
+    src: *const u64,
+    n: usize,
+) -> usize {
+    let mut k = 0;
+    while k < n {
+        let bits = *src.add(k);
+        // Below the NaN-box tag band: a plain double (`js_number_coerce`'s
+        // identity arm).
+        if bits & 0x7FFF_0000_0000_0000 >= 0x7FF9_0000_0000_0000 {
+            break;
+        }
+        store_raw(dst.add(k * size), KIND, f64::from_bits(bits));
+        k += 1;
+    }
+    k
+}
+
+/// SetTypedArrayFromTypedArray of `src` (`len` elements, kinds already
+/// validated) into `ta` from element `base`. The same element type is a byte
+/// copy with memmove semantics, which is the spec's clone-then-copy when both
+/// views share a buffer. Other numeric types convert element by element when
+/// the two byte ranges are disjoint; an overlapping range, shared memory or
+/// a BigInt conversion reads the source into a buffer first.
+unsafe fn copy_typed_array(
+    ta: *mut TypedArrayHeader,
+    base: usize,
+    src: *const TypedArrayHeader,
+    len: usize,
+) {
+    if len == 0 {
+        return;
+    }
+    let skind = crate::typedarray::element_kind(src);
+    if !typed_array_has_shared_backing(src) {
+        if let Some((dkind, dsize, dst)) = resolved_destination(ta, base) {
+            let ssize = crate::typedarray::elem_size_for_kind(skind);
+            let sp = data_ptr(src);
+            if skind == dkind {
+                std::ptr::copy(sp, dst, len * dsize);
+                return;
+            }
+            let (s0, s1) = (sp as usize, sp as usize + len * ssize);
+            let (d0, d1) = (dst as usize, dst as usize + len * dsize);
+            if !bigint::is_bigint_kind(skind) && (s1 <= d0 || d1 <= s0) {
+                for i in 0..len {
+                    store_raw(
+                        dst.add(i * dsize),
+                        dkind,
+                        load_number_raw(sp.add(i * ssize), skind),
+                    );
+                }
+                return;
+            }
+        }
+    }
+    let mut elems = Vec::with_capacity(len);
+    for i in 0..len {
+        elems.push(load_at(src, i));
+    }
+    for (i, v) in elems.into_iter().enumerate() {
+        store_at(ta, base + i, v);
+    }
 }
 
 /// `TypedArray.prototype.set(source, offset?)` — bulk-copy/coerce the source
@@ -543,6 +715,7 @@ pub extern "C" fn js_typed_array_set_from(
         let target_len = crate::typedarray::element_length(ta) as f64;
         let src_len = match &source {
             SetSource::Buffered(v) => v.len(),
+            SetSource::TypedArray(src) => crate::typedarray::element_length(*src) as usize,
             SetSource::Array(_, n) | SetSource::ArrayLike(_, n) => *n,
             SetSource::Empty => 0,
         };
@@ -563,8 +736,14 @@ pub extern "C" fn js_typed_array_set_from(
             // SetTypedArrayFromArrayLike: interleave Get + ToNumber/ToBigInt + Set
             // per element so a throwing element coercion leaves earlier elements
             // written ("values are set until exception").
+            SetSource::TypedArray(src) => copy_typed_array(ta, base, src, src_len),
             SetSource::Array(arr, len) => {
-                for k in 0..len {
+                let stored = if is_bigint {
+                    0
+                } else {
+                    store_number_prefix(ta, base, arr, len)
+                };
+                for k in stored..len {
                     let raw = crate::array::js_array_get_f64(arr, k as u32);
                     let v = if is_bigint {
                         bigint::to_bigint_for_store(raw)

@@ -29,7 +29,7 @@
 //! the EXPOSED set; consumers combine "not exposed" with their own binding
 //! proof (single immutable `let`, fresh construction).
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use perry_hir::{BinaryOp, Expr, Module, Stmt};
 
@@ -49,8 +49,15 @@ pub(crate) struct BufferExposure {
     pub remote: HashSet<u32>,
 }
 
-pub(crate) fn buffer_exposure(hir: &Module) -> BufferExposure {
-    let mut scan = Scan::default();
+/// `native_member_calls`: the module's proven method sites
+/// (`builtin_proto::native_member_site_proven`). Only a proven Buffer read
+/// keeps the buffer sealed: an unproven one may run a patched
+/// `Buffer.prototype` reader with the buffer as `this`.
+pub(crate) fn buffer_exposure(hir: &Module, native_member_calls: &BTreeSet<u32>) -> BufferExposure {
+    let mut scan = Scan {
+        proven: Some(native_member_calls),
+        ..Scan::default()
+    };
     scan.walk_module(hir);
     let never_string = never_string_locals(hir, &scan);
 
@@ -146,18 +153,23 @@ pub(crate) fn buffer_exposure(hir: &Module) -> BufferExposure {
 /// never a string on its face, a `.length` read or a Buffer read intrinsic.
 /// It flags every exposing use the module scan found (and more: a key or a
 /// call argument whose proof needs module facts counts as exposing here).
-pub(crate) fn stmt_may_expose(stmt: &Stmt, id: u32) -> bool {
-    let mut probe = Probe { id, found: false };
+pub(crate) fn stmt_may_expose(stmt: &Stmt, id: u32, native_member_calls: &BTreeSet<u32>) -> bool {
+    let mut probe = Probe {
+        id,
+        found: false,
+        proven: native_member_calls,
+    };
     probe.stmt(stmt);
     probe.found
 }
 
-struct Probe {
+struct Probe<'p> {
     id: u32,
     found: bool,
+    proven: &'p BTreeSet<u32>,
 }
 
-impl Probe {
+impl Probe<'_> {
     fn stmts(&mut self, stmts: &[Stmt]) {
         for s in stmts {
             self.stmt(s);
@@ -223,6 +235,7 @@ impl Probe {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(c) = catch {
@@ -270,7 +283,7 @@ impl Probe {
                     self.found = true;
                 }
             }
-            Expr::IndexGet { object, index }
+            Expr::IndexGet { object, index, .. }
             | Expr::IndexUpdate { object, index, .. }
             | Expr::BufferIndexGet {
                 buffer: object,
@@ -284,6 +297,7 @@ impl Probe {
                 object,
                 index,
                 value,
+                ..
             }
             | Expr::BufferIndexSet {
                 buffer: object,
@@ -316,6 +330,13 @@ impl Probe {
                 object, property, ..
             } if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)) => {}
             Expr::Uint8ArrayLength(array) if matches!(array.as_ref(), Expr::LocalGet(_)) => {}
+            // A proven `Buffer.prototype.equals` on two locals keeps neither.
+            Expr::Call { callee, args, .. }
+                if crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                    self.proven,
+                    callee,
+                    args,
+                ) => {}
             Expr::Call { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
@@ -324,7 +345,7 @@ impl Probe {
                             && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
                                 property,
                             )
-                ) =>
+                ) && crate::builtin_proto::native_member_site_proven(self.proven, callee) =>
             {
                 for arg in args {
                     self.expr(arg);
@@ -341,6 +362,8 @@ impl Probe {
 
 #[derive(Default)]
 struct Scan<'a> {
+    /// The module's proven method sites (`buffer_exposure`).
+    proven: Option<&'a BTreeSet<u32>>,
     /// The body being walked: the module init, a function, a class member or
     /// a closure each get their own id.
     body: u32,
@@ -378,6 +401,11 @@ struct Scan<'a> {
     /// `(source, alias, body)` for `const alias = source`: the source stays
     /// sealed only if the alias does.
     aliases: Vec<(u32, u32, u32)>,
+    /// The module function whose own body is being walked (not a closure
+    /// inside it), with that body's id.
+    cur_fn: Option<(u32, u32)>,
+    /// Every `return e` of a module function's own body, per FuncId.
+    returns: HashMap<u32, Vec<&'a Expr>>,
 }
 
 impl<'a> Scan<'a> {
@@ -395,12 +423,14 @@ impl<'a> Scan<'a> {
         self.walk_stmts(&hir.init);
         for f in &hir.functions {
             let outer = self.enter_body();
+            self.cur_fn = Some((f.id, self.body));
             for p in &f.params {
                 if let Some(d) = &p.default {
                     self.walk_expr(d);
                 }
             }
             self.walk_stmts(&f.body);
+            self.cur_fn = None;
             self.body = outer;
         }
         for c in &hir.classes {
@@ -474,7 +504,15 @@ impl<'a> Scan<'a> {
                     }
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => self.walk_expr(e),
+            Stmt::Return(Some(e)) => {
+                if let Some((f, body)) = self.cur_fn {
+                    if body == self.body {
+                        self.returns.entry(f).or_default().push(e);
+                    }
+                }
+                self.walk_expr(e);
+            }
+            Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 self.boxed.extend(ids.iter().copied());
             }
@@ -521,6 +559,7 @@ impl<'a> Scan<'a> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.walk_stmts(body);
                 if let Some(c) = catch {
@@ -588,7 +627,7 @@ impl<'a> Scan<'a> {
                 }
                 self.walk_children(e);
             }
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index, .. } => {
                 if let Expr::LocalGet(recv) = object.as_ref() {
                     self.note_key(*recv, index);
                 } else {
@@ -600,6 +639,7 @@ impl<'a> Scan<'a> {
                 object,
                 index,
                 value,
+                ..
             } => {
                 if let Expr::LocalGet(recv) = object.as_ref() {
                     self.note_key(*recv, index);
@@ -683,12 +723,22 @@ impl<'a> Scan<'a> {
                         }
                     }
                 }
+                // A proven `Buffer.prototype.equals` on two locals keeps neither.
+                Expr::PropertyGet { .. }
+                    if self.proven.is_some_and(|p| {
+                        crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                            p, callee, args,
+                        )
+                    }) => {}
                 Expr::PropertyGet {
                     object, property, ..
                 } if matches!(object.as_ref(), Expr::LocalGet(_))
                     && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
                         property,
-                    ) =>
+                    )
+                    && self.proven.is_some_and(|p| {
+                        crate::builtin_proto::native_member_site_proven(p, callee)
+                    }) =>
                 {
                     for arg in args {
                         self.walk_expr(arg);
@@ -716,11 +766,21 @@ enum KeyDep {
     Local(u32),
     /// This local must be a never-reassigned fresh typed array or buffer.
     Array(u32),
+    /// A direct call of this module function must never return a string.
+    Return(u32),
 }
 
-fn dep_holds(dep: KeyDep, never_string: &HashSet<u32>, scan: &Scan<'_>) -> bool {
+/// The greatest fixed point of [`never_string_locals`]: locals that never
+/// hold a string, and module functions whose direct calls never return one.
+struct NeverString {
+    locals: HashSet<u32>,
+    returns: HashSet<u32>,
+}
+
+fn dep_holds(dep: KeyDep, never_string: &NeverString, scan: &Scan<'_>) -> bool {
     match dep {
-        KeyDep::Local(id) => never_string.contains(&id),
+        KeyDep::Local(id) => never_string.locals.contains(&id),
+        KeyDep::Return(f) => never_string.returns.contains(&f),
         KeyDep::Array(id) => {
             scan.fresh_arrays.contains(&id)
                 && scan.let_counts.get(&id).copied() == Some(1)
@@ -732,8 +792,9 @@ fn dep_holds(dep: KeyDep, never_string: &HashSet<u32>, scan: &Scan<'_>) -> bool 
 
 /// Structural half of "this key is never a string": numeric literals,
 /// operators whose result is a Number, BigInt or Boolean, `+` of two such
-/// operands, the numeric `Math` intrinsics, and an element read of a fresh
-/// typed array with such a key. What remains to decide is collected in `deps`.
+/// operands, the numeric `Math` intrinsics, an element read of a fresh typed
+/// array with such a key, and a direct call of a module function whose every
+/// `return` has such a shape. What remains to decide is collected in `deps`.
 fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::Bool(_) => true,
@@ -757,7 +818,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
         | Expr::MathClz32(_)
         | Expr::MathMin(_)
         | Expr::MathMax(_) => true,
-        Expr::IndexGet { object, index }
+        Expr::IndexGet { object, index, .. }
         | Expr::Uint8ArrayGet {
             array: object,
             index,
@@ -776,6 +837,15 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
             deps.push(KeyDep::Local(*id));
             true
         }
+        // The arguments are evaluated (and scanned) on their own; the value
+        // is whatever the callee's own `return`s produce, or `undefined`.
+        Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::FuncRef(f) => {
+                deps.push(KeyDep::Return(*f));
+                true
+            }
+            _ => false,
+        },
         _ => false,
     }
 }
@@ -795,8 +865,12 @@ fn is_canonical_index_string(s: &str) -> bool {
 /// never-string shape (greatest fixed point). A module function's parameter
 /// qualifies when the function is only ever called directly (never used as a
 /// value, never exported, no `arguments` object) and every call passes a
-/// never-string argument at that position.
-fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> HashSet<u32> {
+/// never-string argument at that position. A module function's direct call
+/// never returns a string when the function is neither async nor a generator
+/// (their calls return an object, whose key conversion runs user code) and
+/// every `return e` of its own body (not of a closure inside it) has a
+/// never-string shape; falling off the end returns `undefined`.
+fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> NeverString {
     let mut params: HashMap<u32, (u32, usize)> = HashMap::new();
     let mut candidates: HashSet<u32> = HashSet::new();
     for f in &hir.functions {
@@ -813,14 +887,30 @@ fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> HashSet<u32> {
     candidates.extend(scan.writes.keys().copied());
     candidates.extend(scan.let_counts.keys().copied());
     candidates.retain(|id| !scan.opaque_bindings.contains(id));
-    let mut ns = candidates;
-    let holds = |e: &Expr, ns: &HashSet<u32>| {
+    let mut ns = NeverString {
+        locals: candidates,
+        returns: hir
+            .functions
+            .iter()
+            .filter(|f| !f.is_async && !f.is_generator)
+            .map(|f| f.id)
+            .collect(),
+    };
+    let holds = |e: &Expr, ns: &NeverString| {
         let mut deps = Vec::new();
         key_never_string_shape(e, &mut deps) && deps.iter().all(|d| dep_holds(*d, ns, scan))
     };
     loop {
         let mut drop = Vec::new();
-        for id in &ns {
+        let mut drop_fns = Vec::new();
+        for &f in &ns.returns {
+            if let Some(rs) = scan.returns.get(&f) {
+                if !rs.iter().all(|r| holds(r, &ns)) {
+                    drop_fns.push(f);
+                }
+            }
+        }
+        for id in &ns.locals {
             let writes_ok = scan
                 .writes
                 .get(id)
@@ -836,11 +926,14 @@ fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> HashSet<u32> {
                 drop.push(*id);
             }
         }
-        if drop.is_empty() {
+        if drop.is_empty() && drop_fns.is_empty() {
             break;
         }
         for id in drop {
-            ns.remove(&id);
+            ns.locals.remove(&id);
+        }
+        for f in drop_fns {
+            ns.returns.remove(&f);
         }
     }
     ns
@@ -849,3 +942,53 @@ fn never_string_locals(hir: &Module, scan: &Scan<'_>) -> HashSet<u32> {
 #[cfg(test)]
 #[path = "sealed_buffers_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod proven_read_tests {
+    //! Only a reader site the whole-program facts prove keeps its buffer
+    //! sealed: an unproven one may run a patched `Buffer.prototype` reader
+    //! with the buffer as `this` (which may read `.buffer` and transfer it).
+    use super::*;
+    use perry_hir::types::Type;
+
+    const SITE: u32 = 41;
+
+    fn module() -> Module {
+        let mut hir = Module::new("sealed_proven_read");
+        hir.init.push(Stmt::Let {
+            id: 1,
+            name: "buf".to_string(),
+            ty: Type::Named("Buffer".to_string()),
+            mutable: false,
+            init: Some(Expr::BufferAlloc {
+                size: Box::new(Expr::Number(8.0)),
+                fill: None,
+                encoding: None,
+            }),
+        });
+        hir.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: SITE,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "readInt32BE".to_string(),
+            }),
+            args: vec![Expr::Number(0.0)],
+            type_args: Vec::new(),
+            byte_offset: SITE,
+        }));
+        hir
+    }
+
+    #[test]
+    fn only_a_proven_buffer_read_keeps_the_buffer_sealed() {
+        let hir = module();
+        let none = BTreeSet::new();
+        let proven: BTreeSet<u32> = [SITE].into_iter().collect();
+        assert!(buffer_exposure(&hir, &none).exposed.contains(&1));
+        assert!(!buffer_exposure(&hir, &proven).exposed.contains(&1));
+        assert!(stmt_may_expose(&hir.init[1], 1, &none));
+        assert!(!stmt_may_expose(&hir.init[1], 1, &proven));
+    }
+}

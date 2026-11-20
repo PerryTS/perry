@@ -8,7 +8,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-use super::typed_array_lacks_array_method;
+use super::{is_array_generic_base, is_qualified_type_name, typed_array_lacks_array_method};
 
 /// Is `expr` a reference to a node:stream class constructor — bare
 /// (`Readable`) or namespaced (`stream.Readable`)? Used by
@@ -59,14 +59,19 @@ fn is_named_or_generic_non_array(ty: &Type) -> bool {
 /// user's `push` method.
 fn is_push_owning_class_type(ty: &Type, ctx: &LoweringContext) -> bool {
     match ty {
-        Type::Named(name) => ctx.lookup_class(name).is_some() || ctx.is_interface_type(name),
+        Type::Named(name) => {
+            ctx.lookup_class(name).is_some()
+                || ctx.is_interface_type(name)
+                || is_qualified_type_name(name)
+        }
         // #11128: an `InstanceType<typeof C>` receiver is whatever `C`
         // constructs — never proven to be an array.
         Type::Generic { base, .. } if base == "InstanceType" => true,
+        // Only `Array`/`ReadonlyArray` generics are array receivers; `Pick<Svc, "join">`
+        // and other utility or user generics keep their own methods.
         Type::Generic { base, .. } => {
             let builtin = ["Map", "Set", "WeakMap", "WeakSet", "Promise"];
-            !builtin.contains(&base.as_str())
-                && (ctx.lookup_class(base).is_some() || ctx.is_interface_type(base))
+            !builtin.contains(&base.as_str()) && !is_array_generic_base(base)
         }
         Type::Object(_) => true, // object type literal with push property
         Type::Union(variants) => variants.iter().any(|v| is_push_owning_class_type(v, ctx)),
@@ -1172,9 +1177,6 @@ pub(super) fn try_array_only_methods(
                                 | Expr::ArrayToSorted { .. }
                                 | Expr::ArrayToSpliced { .. }
                                 | Expr::ArrayWith { .. }
-                                | Expr::ArrayEntries(_)
-                                | Expr::ArrayKeys(_)
-                                | Expr::ArrayValues(_)
                                 | Expr::ObjectKeys(_)
                                 | Expr::ObjectValues(_)
                                 | Expr::ObjectEntries(_)
@@ -1423,7 +1425,9 @@ pub(super) fn try_array_only_methods(
                             // Preserve one variadic call, including the
                             // Proxy method/length reads and final length Set.
                             return Ok(Ok(Expr::Call {
+                                byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
+                                    byte_end: 0,
                                     object: Box::new(array_expr),
                                     property: "push".to_string(),
                                     byte_offset: call.span.lo.0,

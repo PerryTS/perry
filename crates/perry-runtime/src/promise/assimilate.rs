@@ -50,30 +50,22 @@ fn is_native_array_value(value: f64) -> bool {
     }
     // Off-GC-heap header-less typed arrays / buffers are not Arrays and must
     // not be header-probed (#5226).
-    if crate::typedarray::is_offheap_sidetable_alloc(ptr) {
+    if crate::typedarray_hook_slots::is_offheap_sidetable_alloc(ptr) {
         return false;
     }
     unsafe {
         let header = (ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         matches!(
             (*header).obj_type,
-            crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
         )
     }
 }
 
 pub(super) fn get_array_prototype_then_action() -> Result<Option<f64>, f64> {
-    let array_ctor = crate::object::js_get_global_this_builtin_value(b"Array".as_ptr(), 5);
-    if is_definitely_primitive(array_ctor) {
-        return Ok(None);
-    }
-    let array_proto = combinator_catch_js(|| unsafe {
-        crate::value::js_dynamic_object_get_property(
-            array_ctor,
-            b"prototype".as_ptr() as *const i8,
-            9,
-        )
-    })?;
+    // What an array inherits from: %Array.prototype%, not the writable
+    // `globalThis.Array` binding's `prototype`.
+    let array_proto = crate::object::builtin_prototype_value("Array");
     if is_definitely_primitive(array_proto) {
         return Ok(None);
     }
@@ -164,9 +156,7 @@ fn get_then_action_read(value: f64) -> Result<Option<f64>, f64> {
 }
 
 pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_action: f64) {
-    use crate::closure::{
-        js_closure_alloc, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
     // The job closure's allocation and the `async_hooks` init callbacks can
     // collect: hold every value in a handle and read it after.
@@ -175,7 +165,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let thenable = scope.root_nanbox_f64(thenable);
     let then_action = scope.root_nanbox_f64(then_action);
     let callback = js_closure_alloc(crate::fn_info!(promise_resolve_thenable_job, 0), 3);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         callback,
         0,
         crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64()),
@@ -185,7 +175,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,
@@ -193,7 +183,7 @@ pub(super) fn enqueue_thenable_job(promise: *mut Promise, thenable: f64, then_ac
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -239,12 +229,19 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
             // No own `then` → intrinsic `then`. Adopt via the native job so
             // the outer settles exactly two ticks later (V8 hop parity; see
             // `enqueue_native_adoption_job`).
-            OwnThen::None => {
+            OwnThen::None
+                if !super::promise_has_own_constructor(
+                    (value.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize,
+                ) =>
+            {
                 let inner =
                     crate::value::js_nanbox_get_pointer(value.get_nanbox_f64()) as *mut Promise;
                 enqueue_native_adoption_job(p(), inner);
                 return;
             }
+            // An own constructor is read by the intrinsic then (its
+            // SpeciesConstructor step), so the job calls it as a thenable.
+            OwnThen::None => {}
         }
     }
 
@@ -266,7 +263,7 @@ pub(crate) fn promise_resolve_assimilating(promise: *mut Promise, value: f64) {
 /// (Next.js cold-start head reorder: the flight client's module-dep chain
 /// lost exactly one such race against the RSC stream read loop).
 pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promise) {
-    use crate::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use crate::closure::js_closure_alloc;
 
     // `outer` is adopting `inner`'s eventual state — `inner`'s rejection (now or
     // later) is consumed by `outer`, so `inner` is no longer an unhandled
@@ -286,12 +283,12 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let outer = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(outer as i64));
     let inner = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(inner as i64));
     let callback = js_closure_alloc(crate::fn_info!(native_promise_adoption_job, 0), 2);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         callback,
         0,
         crate::value::js_nanbox_get_pointer(outer.get_nanbox_f64()),
     );
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         callback,
         1,
         crate::value::js_nanbox_get_pointer(inner.get_nanbox_f64()),
@@ -299,7 +296,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(callback as i64));
 
     let context = capture_context();
-    let ids = crate::async_hooks::init_resource(
+    let ids = crate::async_hook_slots::init_resource(
         "PromiseResolveThenableJob",
         f64::from_bits(crate::value::TAG_UNDEFINED),
         false,
@@ -307,7 +304,7 @@ pub(super) fn enqueue_native_adoption_job(outer: *mut Promise, inner: *mut Promi
     let callback = crate::value::js_nanbox_get_pointer(callback.get_nanbox_f64())
         as *mut crate::closure::ClosureHeader;
     TASK_QUEUE.with(|q| {
-        q.borrow_mut().push_back(Task::Microtask {
+        q.borrow_mut().enqueue_promise_job(Task::Microtask {
             callback,
             context,
             async_id: ids.async_id,
@@ -327,10 +324,8 @@ extern "C" fn native_promise_adoption_job(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
-    let outer = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let inner = js_closure_get_capture_ptr(closure, 1) as *mut Promise;
+    let outer = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let inner = crate::closure::closure_capture_ref(closure, 1) as *mut Promise;
     if outer.is_null() || inner.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
@@ -343,6 +338,17 @@ extern "C" fn native_promise_adoption_job(
     };
     match settled {
         Some((value, is_error)) => {
+            // This job is the intrinsic `then` call that attaches `outer`'s reaction
+            // to `inner`. When `inner` rejected between the resolve (where
+            // `enqueue_native_adoption_job` already cleared it) and now, which is
+            // the case for an `async` arrow returning a call to an `async` function
+            // that throws after an await (that continuation was queued first), it
+            // re-entered the unhandled set with no reaction attached, and the
+            // checkpoint at the end of this drain reported a rejection `outer`
+            // delivers to its own handlers. Node reports nothing here.
+            if is_error {
+                crate::promise::mark_rejection_handled(inner);
+            }
             // Null-closure AsyncStep = a pure propagation task: the runner
             // resolves/rejects `outer` with `value` on the next tick.
             let scope = crate::gc::RuntimeHandleScope::new();
@@ -356,7 +362,7 @@ extern "C" fn native_promise_adoption_job(
                     })
                 });
             TASK_QUEUE.with(|q| {
-                q.borrow_mut().push_back(Task::AsyncStep(
+                q.borrow_mut().enqueue_promise_job(Task::AsyncStep(
                     std::ptr::null(),
                     value_handle.get_nanbox_f64(),
                     outer,
@@ -405,10 +411,9 @@ pub(super) extern "C" fn thenable_job_resolve_fn(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let guard_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let guard_arr =
+        crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     if thenable_job_take_guard(guard_arr) {
         promise_resolve_assimilating(promise, value);
     }
@@ -430,10 +435,9 @@ pub(super) extern "C" fn thenable_job_reject_fn(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    use crate::closure::js_closure_get_capture_ptr;
-
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let guard_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let guard_arr =
+        crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     if thenable_job_take_guard(guard_arr) {
         js_promise_reject(promise, reason);
     }
@@ -445,12 +449,9 @@ extern "C" fn promise_resolve_thenable_job(
     _this: crate::closure::JsThis,
 ) -> f64 {
     use crate::array::{js_array_alloc, js_array_set_f64};
-    use crate::closure::{
-        js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-        js_closure_set_capture_ptr,
-    };
+    use crate::closure::{js_closure_alloc, js_closure_get_capture_f64};
 
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut Promise;
     if promise.is_null() {
         return 0.0;
     }
@@ -460,37 +461,51 @@ extern "C" fn promise_resolve_thenable_job(
         js_promise_resolve(promise, thenable);
         return 0.0;
     }
-    // The resolve/reject closures below may be invoked with zero arguments by
-    // the thenable's `then`; their infos declare 1, so the missing value pads
-    // to `undefined`.
+    // The allocations below and the `then` call can collect: hold every value
+    // in a handle and read it at its use.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(promise as i64));
+    let thenable = scope.root_nanbox_f64(thenable);
+    let then_action = scope.root_nanbox_f64(then_action);
+    let live_promise = || crate::value::js_nanbox_get_pointer(promise.get_nanbox_f64());
     let guard_arr = js_array_alloc(1);
     unsafe {
         (*guard_arr).length = 1;
     }
     js_array_set_f64(guard_arr, 0, 0.0);
+    let guard_arr = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(guard_arr as i64));
+    let live_guard = || {
+        crate::value::js_nanbox_get_pointer(guard_arr.get_nanbox_f64())
+            as *mut crate::array::ArrayHeader
+    };
 
+    // `then` may call these with zero arguments; their infos declare 1, so the
+    // missing value pads to `undefined`.
     let resolve_closure = js_closure_alloc(&THENABLE_JOB_RESOLVE_FN_INFO, 2);
-    js_closure_set_capture_ptr(resolve_closure, 0, promise as i64);
-    js_closure_set_capture_ptr(resolve_closure, 1, guard_arr as i64);
+    crate::closure::closure_set_capture_ref(resolve_closure, 0, live_promise());
+    crate::closure::closure_set_capture_ref(resolve_closure, 1, live_guard() as i64);
+    let resolve_value =
+        scope.root_nanbox_f64(crate::value::js_nanbox_pointer(resolve_closure as i64));
     let reject_closure = js_closure_alloc(&THENABLE_JOB_REJECT_FN_INFO, 2);
-    js_closure_set_capture_ptr(reject_closure, 0, promise as i64);
-    js_closure_set_capture_ptr(reject_closure, 1, guard_arr as i64);
+    crate::closure::closure_set_capture_ref(reject_closure, 0, live_promise());
+    crate::closure::closure_set_capture_ref(reject_closure, 1, live_guard() as i64);
 
-    let resolve_value = crate::value::js_nanbox_pointer(resolve_closure as i64);
-    let reject_value = crate::value::js_nanbox_pointer(reject_closure as i64);
-    let args = [resolve_value, reject_value];
+    let args = [
+        resolve_value.get_nanbox_f64(),
+        crate::value::js_nanbox_pointer(reject_closure as i64),
+    ];
 
     let result = combinator_catch_js(|| unsafe {
         crate::closure::native_call_value_this(
-            then_action,
-            crate::closure::JsThis::from_f64(thenable),
+            then_action.get_nanbox_f64(),
+            crate::closure::JsThis::from_f64(thenable.get_nanbox_f64()),
             args.as_ptr(),
             args.len(),
         )
     });
     if let Err(reason) = result {
-        if thenable_job_take_guard(guard_arr) {
-            js_promise_reject(promise, reason);
+        if thenable_job_take_guard(live_guard()) {
+            js_promise_reject(live_promise() as *mut Promise, reason);
         }
     }
     0.0
@@ -551,14 +566,14 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     ));
     resolve_handle.with_mut_ptr(|resolve| {
         promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            crate::closure::js_closure_set_capture_ptr(resolve, 0, promise as i64);
+            crate::closure::closure_set_capture_ref(resolve, 0, promise as i64);
         })
     });
     let reject_handle =
         scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(&PROMISE_REJECT_FN_INFO, 1));
     reject_handle.with_mut_ptr(|reject| {
         promise_handle.with_mut_ptr::<Promise, _>(|promise| {
-            crate::closure::js_closure_set_capture_ptr(reject, 0, promise as i64);
+            crate::closure::closure_set_capture_ref(reject, 0, promise as i64);
         })
     });
 

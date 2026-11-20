@@ -73,6 +73,8 @@ fn scan_function_shell_for_max_local(func: &Function, max_id: &mut LocalId) {
 
 /// FuncId companion to [`scan_function_shell_for_max_local`].
 fn scan_function_shell_for_max_func(func: &Function, max_id: &mut FuncId) {
+    // Class members are emitted functions too, even with an empty body.
+    *max_id = (*max_id).max(func.id);
     scan_params_for_max_func(&func.params, max_id);
     scan_decorators_for_max_func(&func.decorators, max_id);
 }
@@ -218,6 +220,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_local(body, max_id);
             if let Some(c) = catch {
@@ -459,6 +462,7 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_func(body, max_id);
             if let Some(c) = catch {
@@ -563,6 +567,7 @@ mod tests {
         let expr = Expr::ObjectAssign {
             target: Box::new(Expr::LocalGet(3)),
             sources: vec![Expr::New {
+                byte_end: 0,
                 class_name: "__AnonShape_test".to_string(),
                 args: vec![closure],
                 type_args: Vec::new(),
@@ -634,6 +639,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }
@@ -901,5 +907,31 @@ mod tests {
             56,
             "function/class decorator-arg closure FuncIds must be counted"
         );
+    }
+    #[test]
+    fn class_member_without_nested_closures_reserves_its_emitted_identity() {
+        let mut module = Module::new("test");
+        let mut class = class_with_fields("Methods", Vec::new());
+        let member = |id| Function {
+            id,
+            name: "member".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: Type::Any,
+            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            is_async: false,
+            is_generator: false,
+            is_strict: false,
+            was_plain_async: false,
+            was_unrolled: false,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+        };
+        class.methods.push(member(999));
+        module.classes.push(class);
+        assert_eq!(compute_max_func_id(&module), 999);
+        module.classes[0].constructor = Some(member(1001));
+        assert_eq!(compute_max_func_id(&module), 1001);
     }
 }

@@ -31,7 +31,12 @@ pub(crate) fn build_throw_routing(
         done_id,
         Box::new(Expr::Bool(true)),
     ))];
-    fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    fallback.extend(build_finally_run_stmts(
+        finallys,
+        state_id,
+        false,
+        hoisted_ids,
+    ));
     fallback.push(Stmt::Throw(Expr::LocalGet(throw_param_id)));
     build_abrupt_routing(
         catches,
@@ -146,7 +151,12 @@ pub(crate) fn build_completion_resume_stmts(
         pending_type_id,
         Box::new(Expr::Number(0.0)),
     ))];
-    return_fallback.extend(build_finally_run_stmts(finallys, state_id, hoisted_ids));
+    return_fallback.extend(build_finally_run_stmts(
+        finallys,
+        state_id,
+        true,
+        hoisted_ids,
+    ));
     return_fallback.push(Stmt::Expr(Expr::LocalSet(
         done_id,
         Box::new(Expr::Bool(true)),
@@ -247,6 +257,7 @@ pub(crate) fn build_abrupt_routing(
             *seq,
             state_id,
             inclusive_lower,
+            pending_kind == 2.0,
             hoisted_ids,
         );
         let (condition, jump) = if *kind == 0 {
@@ -334,6 +345,7 @@ pub(crate) fn wrap_dispatch_loop(
             body: handler,
         }),
         finally: None,
+        forof_completion: None,
     }]
 }
 
@@ -362,6 +374,7 @@ pub(crate) fn build_dispatch_catch_handler(
         u32::MAX,
         state_id,
         true,
+        false,
         hoisted_ids,
     ));
     fallback.push(Stmt::Throw(Expr::LocalGet(err_id)));
@@ -392,9 +405,17 @@ pub(crate) fn build_dispatch_catch_handler(
 pub(crate) fn build_finally_run_stmts(
     finallys: &[FinallyRoute],
     state_id: LocalId,
+    closing_return: bool,
     hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
-    build_finally_run_stmts_inner_to(finallys, u32::MAX, state_id, false, hoisted_ids)
+    build_finally_run_stmts_inner_to(
+        finallys,
+        u32::MAX,
+        state_id,
+        false,
+        closing_return,
+        hoisted_ids,
+    )
 }
 
 /// [`build_finally_run_stmts`] for a completion headed to the handler with
@@ -407,6 +428,7 @@ pub(crate) fn build_finally_run_stmts_inner_to(
     seq: u32,
     state_id: LocalId,
     inclusive_lower: bool,
+    closing_return: bool,
     hoisted_ids: &std::collections::HashSet<LocalId>,
 ) -> Vec<Stmt> {
     let mut out = Vec::new();
@@ -414,6 +436,14 @@ pub(crate) fn build_finally_run_stmts_inner_to(
         let mut body = route.body.clone();
         rewrite_hoisted_lets_in_stmts(&mut body, hoisted_ids);
         rewrite_catch_returns_to_iter_result(&mut body);
+        // A `.return()` leaving a for-of from a yield is a return completion
+        // of the loop body: mark it before the loop-close finally reads it.
+        if let (true, Some(completion)) = (closing_return, route.forof_completion) {
+            body.insert(
+                0,
+                Stmt::Expr(Expr::LocalSet(completion, Box::new(Expr::Number(1.0)))),
+            );
+        }
         out.push(Stmt::If {
             condition: finally_route_condition(route, state_id, inclusive_lower),
             then_branch: body,
@@ -497,6 +527,7 @@ fn not_object_condition(result: Expr) -> Expr {
 #[allow(clippy::too_many_arguments)]
 fn sync_delegate_call(route: &DelegationRoute, name: &str, value: LocalId) -> Expr {
     route.await_result(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: name.to_string(),
             param_types: vec![Type::Any, Type::Any],
@@ -547,6 +578,7 @@ pub(crate) fn build_yield_star_return_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
@@ -600,6 +632,7 @@ pub(crate) fn build_yield_star_return_routes(
         // else            return {__r.value, false};   // re-yield, generator not done
         let mut dispatch_done = Stmt::If {
             condition: Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(r_id)),
                 property: "done".to_string(),
@@ -608,6 +641,7 @@ pub(crate) fn build_yield_star_return_routes(
                 Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                 Stmt::Return(Some(make_iter_result(
                     Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
@@ -617,6 +651,7 @@ pub(crate) fn build_yield_star_return_routes(
             ],
             else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
                 Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(r_id)),
                     property: "value".to_string(),
@@ -638,6 +673,7 @@ pub(crate) fn build_yield_star_return_routes(
                 *then_branch = vec![Stmt::Expr(Expr::LocalSet(
                     return_param_id,
                     Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
@@ -674,7 +710,7 @@ pub(crate) fn build_yield_star_return_routes(
                 vec![call_ret, no_method]
             } else {
                 let error_id = alloc_local(next_local_id);
-                let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+                let mut fallback = build_finally_run_stmts(finallys, state_id, false, hoisted_ids);
                 fallback.push(Stmt::Throw(Expr::LocalGet(error_id)));
                 let mut on_error = build_abrupt_routing(
                     catches,
@@ -700,6 +736,7 @@ pub(crate) fn build_yield_star_return_routes(
                         body: on_error,
                     }),
                     finally: None,
+                    forof_completion: None,
                 }]
             }
         };
@@ -794,6 +831,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "throw".to_string(),
@@ -814,6 +852,7 @@ pub(crate) fn build_yield_star_throw_routes(
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
@@ -909,6 +948,7 @@ pub(crate) fn build_yield_star_throw_routes(
         } else {
             Stmt::If {
                 condition: Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(route.result_id)),
                     property: "done".to_string(),
@@ -939,7 +979,7 @@ pub(crate) fn build_yield_star_throw_routes(
         // there would swallow the error). That async-wide limitation is out of
         // scope here; matching the existing async fallback keeps the error
         // propagating rather than being silently dropped.
-        let mut fallback = build_finally_run_stmts(finallys, state_id, hoisted_ids);
+        let mut fallback = build_finally_run_stmts(finallys, state_id, false, hoisted_ids);
         fallback.push(Stmt::Throw(Expr::LocalGet(de_id)));
         let route_to_outer_catch = build_abrupt_routing(
             catches,
@@ -986,6 +1026,7 @@ pub(crate) fn build_yield_star_throw_routes(
                 body: route_to_outer_catch,
             }),
             finally: None,
+            forof_completion: None,
         };
         branches.push((in_interval, vec![protocol]));
     }

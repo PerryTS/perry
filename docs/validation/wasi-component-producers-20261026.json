@@ -1,0 +1,267 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-10-26",
+  "scope": "Native TypeScript canonical component producer factories and writers on Linux",
+  "status": "qualified producers; full WASI 0.3 integration remains open",
+  "sourceParent": "406b757b8a7f7cbdb7125775802314726324c53a",
+  "qualifiedSnapshot": "v360",
+  "componentHostAbi": 11,
+  "maxPendingCalls": 64,
+  "maxRetainedContexts": 1024,
+  "changes": [
+    "Discover component-bound async factories with expanded structural WIT schemas; capture original nominal schema and index privately.",
+    "Create owned nonthenable future/stream reader and writer endpoints and validate typed bounded writes.",
+    "Retain payload wrappers until native ownership receipts; return fresh owned partial/cancelled remainders, preserving bytes, wide integers, Unicode and nested futures.",
+    "Soft-close collected stream writers, dispose unconsumed owned payloads, and recheck native ownership before collecting completed/foreign/stale writers.",
+    "Intentionally retire an unfinished future producer quietly; preserve genuine callback/destructor errors and reject pending public work.",
+    "Share the native 64-pending-call limit so collectors defer without throwing under queue pressure, while returned contexts have a separate 1024-context bound.",
+    "Materialize payload-free stream units as dense undefined elements; require matching ABI 11 runtime and engine archives."
+  ],
+  "development": {
+    "component": 77,
+    "promise": 59,
+    "asyncHooks": 12,
+    "engine": 181,
+    "wit": 22,
+    "engineClippyWarnings": 0
+  },
+  "production": {
+    "component": 77,
+    "promise": 59,
+    "asyncHooks": 12,
+    "closureAbi": 1,
+    "nativeClassGuard": 1,
+    "engine": 181,
+    "wit": 22,
+    "uid": 65534,
+    "gid": 65534,
+    "panicAbort": true
+  },
+  "compiledProduction": {
+    "producer": {
+      "phases": 10,
+      "copiedObjects": 4159,
+      "protectedFromspaceEvents": 4
+    },
+    "reader": {
+      "phases": 14,
+      "copiedObjects": 10225,
+      "protectedFromspaceEvents": 10
+    },
+    "persistent": {
+      "phases": 6,
+      "copiedObjects": 3333,
+      "protectedFromspaceEvents": 7
+    },
+    "async": {
+      "phases": 6,
+      "copiedObjects": 3951,
+      "protectedFromspaceEvents": 19
+    },
+    "p3-command": {
+      "phases": 12
+    },
+    "p3-http": {
+      "phases": 8
+    }
+  },
+  "nonTestNewComponentWarnings": 0,
+  "runtimeTestBinary": {
+    "path": "/root/codex-components-p2-20261021/async-runtime-target/prod/build/perry-runtime/d71d6d2d7042b42b/out/perry_runtime-d71d6d2d7042b42b",
+    "sha256": "a46b0c9aba6ec0f24670a1a206e58cb6139d799a3276ec6a657f4f563a52dcf4",
+    "fresh": false,
+    "uid": 65534,
+    "gid": 65534
+  },
+  "engineTestBinaries": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/8b554e73797787e0/out/perry_component_host-8b554e73797787e0",
+      "sha256": "189c96f46c616b189811aee6da82c60540df513f911b23ac787ae8224d065ab1",
+      "fresh": false
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "28c59a2536261406f5092d82f8f7688611bc3e891eeec677f9233ea4adf0a1e0",
+      "fresh": false
+    }
+  },
+  "nativeArtifactHashes": {
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/perry": "4bdc31be65fde8be8af644c6e305fd4c7b9f0fcdaa5f3d184a92ed53c71e992a",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/perry-wit": "aa969a8f27f03dc57e14880d1a085398b52705e7150da4a4baa729b3a1e7bf7a",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/perry-gc-effects": "4ad22c8634e14ba54bf6b937d36c7c35b1d82d52eac406f27a01e2c5b6c6b28e",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_runtime.a": "7845fff1873218c2955216f87169e172b4b53168e1ba8c1e89e0ecff9699f9f2",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_stdlib.a": "ae1607c9d06a6923e422b58c8f9ba157825b8e760b6886f2bff88d8a45efd3c1",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_component_host.a": "084abc5cc700d0c98de40f6b20e37db18af3b49d21447e34dd135f71c03f3e06",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_runtime_instr.a": "1abec6bf8a8bd2086a2b47ba58be2be3fb59e598a995637ebd69be9c0a47d9c0",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_stdlib_instr.a": "9203c18deaece268b3c0f23461eb96392b81144fc75cbd7ce74e1f88e3cfa1e4",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/component_wat": "344f5f143c8022cf623586d82aaf3e8f7d2f815491999f924687120273da54a1",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_runtime.a.gc-effects": "4e7e666f0b16cab49cbeaa74982048c6b1b20d45c297f1a57edf89bf2383de3a",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/toolchain/libperry_runtime_instr.a.gc-effects": "3c6e461de49df3898b0ea1061449d6af77ec47baf6d8af69df461642e47c3736",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/producer/host-ordinary": "f3384c5da9f3c5704b3111e54c54c2c20ddbe8bc78ac537aaf60c9c2a890f8d5",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/producer/host-moving": "768f2a4f369351cd5a1f48dfa90bcf957792d8e1ab967934c9695369affb3ea4",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/producer/scalar.wasm": "78db314770a86a3dcca129c794b6dde6f69d115a1b131ebd30f38d9c651bf263",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/producer/resource-stream.wasm": "a93be313c94546833d5d21cec4373dca5a06066fe92d47f0c96cd1576347a0f4",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/producer/resources.wasm": "932a3928c9339aaa1f3d3acfa908157fdec631bff2e9ef05eab04a8018e8d3d9",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/host-ordinary": "d5a5ef7001db42c475370a992749bd5c34bf190bb9209bff960c8baaa367cb34",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/host-moving": "bc1f6f88e67f6ebb0af002d3237aeb23edebc4febc98b0fb36ef89429029340b",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/paused.wasm": "6c51994d6aa8aa3870800e8cd5f996510f0f73b52023cabd91508cb5a4c2a666",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/compound.wasm": "4b09af35f0b9eff8f6157a81cd45161f2b9ed2c489e45891e2f9039819f9c9e6",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/nested.wasm": "6f2ca1485ee892ad15854fbf8565242461c694619aa5b00717c3e9a35aef9c7a",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/stream.wasm": "a93be313c94546833d5d21cec4373dca5a06066fe92d47f0c96cd1576347a0f4",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/reader/future.wasm": "bf317e0b3698ac79158db1a31022ad35ba3340b7d0841faa156d217f417b54ef",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/persistent/host-ordinary": "69285562f8407f49bacf517fa221e7d839657be4067678c6ebbd0a0d40a35633",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/persistent/host-moving": "90113deb504993b53805f90ce2a82341ca37cf86ba820a6c32e9d0a33a980d25",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/persistent/clock.wasm": "0926c2d641c4469b224a88b47639d2599ebf08f254fac13c6b7683287c560f52",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/async/host-ordinary": "edef1865db73b1b10ed7e86c791f4a138cf1bf980adc163f172a9d14eee33c01",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/async/host-moving": "5ace5c44bf36e3ec7f76e48772549630042037488b0e6b4091834bbb0e06fa27",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/async/clock.wasm": "bb6718d064d60b9f0db240fad92e7f37d1d2bcf48cefbd46ff04a06f2e43780f",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/host-ordinary": "ad0e28bfccd5b6ed3380fc041ab0a0a1ea2121ef6a39a87f1fc57a343c5e1541",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/bad-init.wasm": "9177d71374df12eb08c9f0f344ad6e35b0bae1594e09b1544617bceff764ffa4",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/exit.wasm": "bc0fd891b8c5bb9244129a0e883bc2e5da96ca61e9ae33cf6a120b4d58cc1fb3",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/wrong-version.wasm": "aa3dce4661d36820dddfb0527e2138a12f92ecbd24414b59ce62cbcf9cab10fb",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/late-trap.wasm": "f2a604877e7e6cb4312780f3bb6fb2312c5ba0025a17cfb95e068e38fc646668",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/init-exit.wasm": "9ce9bc5378a24114d5a19172d76dda670f533597cb11001ad4f9c17a07bef193",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/ok.wasm": "3d7aa3448a73ac25a5aba6e43e1ac9604eaa0efce059a064ae168344c48a3d6b",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/err.wasm": "bafef5203a1a7c645ff8b6e58db6a059de8033ae47d776867a173339b8bacf06",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/clock.wasm": "6b4ee891e9218991c79f6c6bad40b4589ea08eaf3168daff6a5751912f5c50a9",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-command/closed-stdio.wasm": "7653c44fe43f159a860c692ba550fed4b58704af1078bb43033fec4d1a9c6911",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-http/host-ordinary": "09e818ef3f3e849ab2aca5bb1da491ca7a2b7e518895bc18a7fac89cd3753d30",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-http/trap.wasm": "7f4675b88b4b5c6952e595782d65338fd18e1dccaa01955c3bdabfac9bab79d8",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-http/echo.wasm": "1a2a780ec251da91a098c10f08e352fb23b272caefb6260ac3fabe952abb5fb6",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-http/denied.wasm": "dc7d77faaaf67ed377071e951953ca7d6071753e260de83dc8e27142986da0e7",
+    "/root/codex-components-p2-20261021/perry-producers-v360-artifacts/p3-http/late-trap.wasm": "2681325b5634c85dce1452de979b655c63a491024db295318d217c48da9e1161",
+    "/root/codex-components-p2-20261021/perry-producer-v360-tests/runtime-tests": "a46b0c9aba6ec0f24670a1a206e58cb6139d799a3276ec6a657f4f563a52dcf4",
+    "/root/codex-components-p2-20261021/perry-producer-v360-tests/perry_component_host-tests": "189c96f46c616b189811aee6da82c60540df513f911b23ac787ae8224d065ab1",
+    "/root/codex-components-p2-20261021/perry-producer-v360-tests/perry_wit-tests": "28c59a2536261406f5092d82f8f7688611bc3e891eeec677f9233ea4adf0a1e0",
+    "/root/codex-components-p2-20261021/perry-producer-v360-tests/controls/unobserved-future/host-ordinary": "a243675b755debeed34629068dc4df75cba1cb8bda92672a47a12c7b817c5fdd",
+    "/root/codex-components-p2-20261021/perry-producer-v360-tests/controls/alias-discovery/host-ordinary": "04e4ff5ee34c08f1d6744cde1a3b911730709991a7714d1bab656b7060c10f5c"
+  },
+  "sourceHashes": {
+    "crates/perry-abi/src/component_host.rs": "7ac5a1c9d2e05e5547f886ced289fb52477738096fe258de35ad93d9aac04160",
+    "crates/perry-component-host/src/async_values/producer_tests.rs": "20c496e7e40aca3f2fd2bf21db17dd26e3ce88c16ba3bd76e331ea1d8c77111f",
+    "crates/perry-component-host/src/driver/requests.rs": "b1fc7c0f17937b076dcb307b0459e5cd9f6912c6295d9b7b7aaaa673ae08c572",
+    "crates/perry-component-host/src/driver/writers.rs": "9eb1393b35d20a04e37e4fd8f6cf3d2979568ad89a5cf36b92cc8c5932726caa",
+    "crates/perry-component-host/src/ffi/driver.rs": "e7d0c33eba87a0387982a18b3d35a3efddfe9cdb609223c89a250beed1aa7ef6",
+    "crates/perry-component-host/src/ffi/driver/tests/disposal_tests.rs": "1d7eeb7ce98d629466b8936428c44d3fa81d2dccb73518c1a035e2c5c3dca17f",
+    "crates/perry-runtime/src/component/async_value.rs": "493c485bdc5ecc667f7988e712af2b52a99ca0327e25a0a840d98232bf098caa",
+    "crates/perry-runtime/src/component/cleanup.rs": "7516dc2ceb0e432726de67852bdfad1b8998a9aad56a9eabc70eef8991cb9768",
+    "crates/perry-runtime/src/component/mod.rs": "d20902ce541bdc4ffca7914d729e7f8dc162d6be2c055df10fda326bedbbba0c",
+    "crates/perry-runtime/src/component/persistent.rs": "5fb20eaa905239610def716670e359f0e770bbaf9e97b08a3a06a2fb251b9a28",
+    "crates/perry-runtime/src/component/persistent/operations.rs": "8a0a88ab28d68e2a8d80c4ea373dcd885c67e7db7382bd902dd8f51a7c1a95ac",
+    "crates/perry-runtime/src/component/persistent/poll.rs": "64bcc22d0a6bf8d7f16eccf0d717d43860a37925970c4bb84f571efa5f6e3be0",
+    "crates/perry-runtime/src/component/persistent/records.rs": "26dc3be1e256d96d157013c8a1fed5a0bf7387fa5117abd402415c53af1862b9",
+    "crates/perry-runtime/src/component/persistent/submit.rs": "88415e061df0d79b51c11afc673a9b03d6834f203d074b55be60467f353b5d40",
+    "crates/perry-runtime/src/component/persistent/tests.rs": "d3e15781b515d5b6e3a3af7effb99330590fa9742bcf861b14be4f4a50a8fb07",
+    "crates/perry-runtime/src/component/persistent/tests/producers.rs": "37f0c7012531af543ba730f361aff2bbd06b270788467ebd306f043aca3daf3b",
+    "crates/perry-runtime/src/component/persistent/tests/readers.rs": "67e81b1fbfa8c9ed41a8bcdefe75744412c47384607f64816eeff9d42242e214",
+    "crates/perry-runtime/src/component/producer.rs": "7fdee00c41321146266abea00fd6b7b2b93e16b3cd7f1788b51bac8452b50e13",
+    "crates/perry-runtime/src/component/writer.rs": "879445cf22d3b6db50de3e9e46b8fb77a9ce5b24cff2d6a7ab3ee49c81d59bb0",
+    "crates/perry-runtime/src/object/owned_state_bag.rs": "3e6d18a320fd5c0b193ce43f9d6cc89aa8e5fd0961f1eedbd563e7c6ed6ed367",
+    "crates/perry-wit/src/typescript.rs": "8e42c6afdd986b68fba40f7219839150bf00cc119cc780c91a4ef41d81829b2e",
+    "scripts/component_check.sh": "4a9436d4559ce8a6d381da241e83c27fb5cb724a5c74cdbcb260133bbf801546",
+    "scripts/component_producer_acceptance.py": "e3cb8a96f5a0179e6c96fca9ee197c2b6c990ef1efc1b590df458568faa781ee",
+    "scripts/test_actions_plan.py": "e5ea310a0e12766b499bd40c17031b4f6dee2214e4d28796ec72a780182755a7",
+    "test-wasi/components/producers/host.ts": "51106ac7b38b6af3c46dd39f1e783ce4e7d936b5e9982d682e8184001cf13486",
+    "test-wasi/components/producers/resource-stream.wit": "20ad563c12644f0f3000639b8191df50f7d74aa42a6543e48b7a5bc439a5a488",
+    "test-wasi/components/producers/resources.wit": "e133e7f1071c654968e5581c6c26c812571b7ea1a0a87443dc25745bb0f6586f",
+    "test-wasi/components/producers/world.wit": "0987f818cc5873e7257675bdff4cc71e604e3ef53c37389e8b695232b49999bf",
+    "types/perry/component/index.d.ts": "351ade02a9bbc9544babf6620edeb523798e5880d3839cfde833c8b4d7883d77"
+  },
+  "lint": {
+    "phases": [
+      {
+        "phase": "address",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "holders",
+        "exitCode": 1,
+        "identicalToParent": true
+      },
+      {
+        "phase": "tokio",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "node",
+        "exitCode": 0,
+        "identicalToParent": true
+      },
+      {
+        "phase": "size",
+        "exitCode": 1,
+        "identicalToParent": true
+      }
+    ],
+    "changedRustFileLines": {
+      "crates/perry-abi/src/component_host.rs": 137,
+      "crates/perry-component-host/src/async_values/producer_tests.rs": 930,
+      "crates/perry-component-host/src/driver/requests.rs": 612,
+      "crates/perry-component-host/src/driver/writers.rs": 134,
+      "crates/perry-component-host/src/ffi/driver.rs": 319,
+      "crates/perry-component-host/src/ffi/driver/tests/disposal_tests.rs": 634,
+      "crates/perry-runtime/src/component/async_value.rs": 293,
+      "crates/perry-runtime/src/component/cleanup.rs": 230,
+      "crates/perry-runtime/src/component/mod.rs": 375,
+      "crates/perry-runtime/src/component/persistent.rs": 294,
+      "crates/perry-runtime/src/component/persistent/operations.rs": 155,
+      "crates/perry-runtime/src/component/persistent/poll.rs": 764,
+      "crates/perry-runtime/src/component/persistent/records.rs": 112,
+      "crates/perry-runtime/src/component/persistent/submit.rs": 367,
+      "crates/perry-runtime/src/component/persistent/tests.rs": 913,
+      "crates/perry-runtime/src/component/persistent/tests/producers.rs": 242,
+      "crates/perry-runtime/src/component/persistent/tests/readers.rs": 372,
+      "crates/perry-runtime/src/component/producer.rs": 210,
+      "crates/perry-runtime/src/component/writer.rs": 245,
+      "crates/perry-runtime/src/object/owned_state_bag.rs": 85,
+      "crates/perry-wit/src/typescript.rs": 363
+    },
+    "baselineOversizedFilesByteUnchanged": [
+      "crates/perry-codegen/src/codegen/closure.rs",
+      "crates/perry-codegen/src/lower_call/console_promise.rs",
+      "crates/perry-hir/src/lower/module_decl.rs",
+      "crates/perry-runtime/src/arena/page_meta/mod.rs",
+      "crates/perry-runtime/src/arena/tests.rs",
+      "crates/perry-runtime/src/array/header.rs",
+      "crates/perry-runtime/src/json/replacer.rs",
+      "crates/perry-runtime/src/node_stream_event_emitter.rs",
+      "crates/perry-runtime/src/node_stream_readwrite.rs",
+      "crates/perry-runtime/src/object/field_get_set/enumeration.rs",
+      "crates/perry-runtime/src/object/layout_desc.rs",
+      "crates/perry-runtime/src/object/layout_probe.rs",
+      "crates/perry-runtime/src/object/runtime_layouts.rs",
+      "crates/perry-runtime/src/object/shapes_store.rs",
+      "crates/perry/src/commands/compile/resolve/tests.rs"
+    ],
+    "newCustodyVerdicts": [],
+    "shippingCargoLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab"
+  },
+  "controls": {
+    "unobservedFuture": {
+      "product": "v358",
+      "fixture": "v360",
+      "exitCode": 1,
+      "diagnostic": "component driver call failed; Store retired"
+    },
+    "aliasDiscovery": {
+      "product": "v352",
+      "exitCode": 1,
+      "diagnostic": "Missing factory: future<tuple>"
+    }
+  },
+  "evidence": {
+    "file": "perry-component-producers-v360-evidence.tar.gz",
+    "sha256": "b6b584082154047b9d7b493717f069d3346d580a610f938424011e2038aabef5",
+    "bytes": 8857578,
+    "members": 307
+  },
+  "limits": [
+    "This receipt qualifies Linux native standalone factories, writers and readers; ordinary P3 command and plain/TLS HTTP regression phases also pass.",
+    "JavaScript factories are asynchronous; error-context and async Perry-authored guest adapters remain unsupported.",
+    "Persistent concurrent HTTP handoff, macOS/Windows extended provider qualification, final WASM/npm packages and released Turnloop adoption remain unfinished.",
+    "Component checks now include producer acceptance; the complete SDK component_check.sh pipeline was not rerun in this producer step.",
+    "Existing address-classification/root-custody/file-size gate failures and the recorded crypto-bigint advisory remain open; no waiver or dependency change is introduced."
+  ]
+}

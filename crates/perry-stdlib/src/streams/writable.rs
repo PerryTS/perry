@@ -279,7 +279,7 @@ fn writable_capture_usize(closure: *const ClosureHeader, idx: u32) -> usize {
 }
 
 fn writable_capture_promise(closure: *const ClosureHeader, idx: u32) -> *mut Promise {
-    perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as *mut Promise
+    perry_runtime::closure::closure_capture_ref(closure, idx) as *mut Promise
 }
 
 extern "C" fn writable_write_start_microtask(
@@ -289,7 +289,7 @@ extern "C" fn writable_write_start_microtask(
     unsafe {
         let stream_id = writable_capture_usize(closure, 0);
         let writer_id = writable_capture_usize(closure, 1);
-        let cb = perry_runtime::closure::js_closure_get_capture_ptr(closure, 2);
+        let cb = perry_runtime::closure::closure_capture_ref(closure, 2);
         let chunk_bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, 3) as u64;
         let write_promise = writable_capture_promise(closure, 4);
         run_writable_write(
@@ -350,7 +350,7 @@ unsafe fn attach_writable_write_handlers(
         1,
         (writer_id as f64).to_bits() as i64,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 2, write_promise as i64);
+    perry_runtime::closure::closure_set_capture_ref(on_fulfilled, 2, write_promise as i64);
 
     let on_rejected = perry_runtime::closure::js_closure_alloc(
         perry_runtime::fn_info!(writable_write_rejected, 1; with_declared(1)),
@@ -366,7 +366,7 @@ unsafe fn attach_writable_write_handlers(
         1,
         (writer_id as f64).to_bits() as i64,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(on_rejected, 2, write_promise as i64);
+    perry_runtime::closure::closure_set_capture_ref(on_rejected, 2, write_promise as i64);
 
     let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
 }
@@ -432,7 +432,7 @@ unsafe fn attach_writable_close_handlers(
         0,
         (stream_id as f64).to_bits() as i64,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(on_fulfilled, 1, close_promise as i64);
+    perry_runtime::closure::closure_set_capture_ref(on_fulfilled, 1, close_promise as i64);
 
     let on_rejected = perry_runtime::closure::js_closure_alloc(
         perry_runtime::fn_info!(writable_close_rejected, 1; with_declared(1)),
@@ -443,7 +443,7 @@ unsafe fn attach_writable_close_handlers(
         0,
         (stream_id as f64).to_bits() as i64,
     );
-    perry_runtime::closure::js_closure_set_capture_ptr(on_rejected, 1, close_promise as i64);
+    perry_runtime::closure::closure_set_capture_ref(on_rejected, 1, close_promise as i64);
 
     let _ = perry_runtime::promise::js_promise_then(sink_promise, on_fulfilled, on_rejected);
 }
@@ -644,9 +644,9 @@ pub(super) unsafe fn writable_stream_write(
             1,
             (writer_id as f64).to_bits() as i64,
         );
-        perry_runtime::closure::js_closure_set_capture_ptr(job, 2, cb);
+        perry_runtime::closure::closure_set_capture_ref(job, 2, cb);
         perry_runtime::closure::js_closure_set_capture_ptr(job, 3, chunk.to_bits() as i64);
-        perry_runtime::closure::js_closure_set_capture_ptr(job, 4, write_promise as i64);
+        perry_runtime::closure::closure_set_capture_ref(job, 4, write_promise as i64);
         perry_runtime::builtins::js_queue_microtask(job as i64);
     }
     promise

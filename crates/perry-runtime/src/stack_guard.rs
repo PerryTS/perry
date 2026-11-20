@@ -35,20 +35,7 @@ thread_local! {
 /// `(lowest usable address, size)` of the calling thread's stack.
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn stack_bounds() -> Option<(usize, usize)> {
-    let mut attr = std::mem::MaybeUninit::<libc::pthread_attr_t>::uninit();
-    let mut addr: *mut libc::c_void = std::ptr::null_mut();
-    let mut size: usize = 0;
-    // SAFETY: getstack/destroy run only after getattr_np initialized attr;
-    // both outputs are live locals and the address is never dereferenced.
-    let ok = unsafe {
-        if libc::pthread_getattr_np(libc::pthread_self(), attr.as_mut_ptr()) != 0 {
-            return None;
-        }
-        let ok = libc::pthread_attr_getstack(attr.as_ptr(), &mut addr, &mut size) == 0;
-        libc::pthread_attr_destroy(attr.as_mut_ptr());
-        ok
-    };
-    (ok && !addr.is_null() && size != 0).then_some((addr as usize, size))
+    crate::native_stack::stack_bounds()
 }
 
 /// `(lowest usable address, size)` of the calling thread's stack.
@@ -91,6 +78,20 @@ pub(crate) fn publish_stack_limit() {
     publish(AGENT_PTR_STACK_LIMIT, limit as *const u8);
 }
 
+/// A compiled prologue's stack check, for a runtime entry that a cycle of
+/// runtime frames alone can re-enter (a builtin that dispatches by name back
+/// into the same lookup) and that no compiled body's check would bound.
+/// Throws `RangeError: Maximum call stack size exceeded` once the calling
+/// frame is below this agent's limit; a null limit never fires.
+#[inline(always)]
+pub(crate) fn check_native_stack() {
+    let limit = crate::agent_ptrs::read(AGENT_PTR_STACK_LIMIT) as usize;
+    let here = std::ptr::addr_of!(limit) as usize;
+    if here < limit {
+        js_stack_overflow();
+    }
+}
+
 /// Called by a function prologue whose frame is below this thread's limit.
 /// Never returns (it throws, or exits when the error itself overflows).
 ///
@@ -101,6 +102,7 @@ pub(crate) fn publish_stack_limit() {
 /// restored before the throw; an overflow inside that window is fatal.
 #[no_mangle]
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 pub extern "C-unwind" fn js_stack_overflow() -> ! {
     let (limit, relaxed) = LIMITS.with(|l| l.get());
@@ -112,9 +114,9 @@ pub extern "C-unwind" fn js_stack_overflow() -> ! {
     publish(AGENT_PTR_STACK_LIMIT, relaxed as *const u8);
     let msg = b"Maximum call stack size exceeded";
     let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
+    let err = crate::error::CoreError::range_error(msg);
     publish(AGENT_PTR_STACK_LIMIT, limit as *const u8);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(err)
 }
 
 #[cfg(test)]

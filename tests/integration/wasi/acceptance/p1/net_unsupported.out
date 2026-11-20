@@ -1,0 +1,4 @@
+dns.lookup ENOTSUP getaddrinfo ENOTSUP example.com
+net.connect ENOTSUP
+listen EADDRNOTAVAIL
+exit 0

@@ -2,7 +2,7 @@
 //!
 //! `GC_FLAG_FORWARDED` means "the first payload word is where this object moved
 //! to". The two forwarding walkers (`CopyingNurseryCollector::rewrite_raw_addr`
-//! and `gc::verify::try_rewrite_raw_addr`) used to trust that byte for any
+//! and `gc::rewrite::try_rewrite_raw_addr`) used to trust that byte for any
 //! address in a known heap region, and to trust whatever word it found.
 //!
 //! For a slot the collector already proved is a live reference, both are safe.
@@ -70,6 +70,7 @@ fn a_real_forwarding_pointer_is_still_followed() {
     );
 }
 
+#[cfg(target_pointer_width = "64")]
 /// SABOTAGE: the forwarding word is a NaN-boxed value, not an address.
 ///
 /// Before #8174 the walk returned it and the caller masked it to 48 bits. Now

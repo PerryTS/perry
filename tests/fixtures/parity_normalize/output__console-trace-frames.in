@@ -1,0 +1,8 @@
+Trace: here
+    at Object.<anonymous> (/x/test.ts:1:1)
+    at Module._compile (node:internal/modules/cjs/loader:1:2)
+    1: js_closure_call
+             at /x/test.ts:2:3
+        (… 4 more identical frames)
+  (… 9 more identical frames)
+kept  at mid-line

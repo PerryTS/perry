@@ -158,6 +158,7 @@ pub(crate) fn build_and_run_link(
     for obj_path in obj_paths {
         cmd.arg(obj_path);
     }
+    cmd.args(super::link_pad_args());
 
     // HarmonyOS: pick up native C objects that build.rs scripts emitted
     // alongside the Rust artifacts. Rust's staticlib normally bundles these
@@ -195,9 +196,30 @@ pub(crate) fn build_and_run_link(
         is_cross_macos,
     )?;
 
+    // `PERRY_LINK_LLD=1`: lld instead of GNU ld for a native glibc Linux
+    // executable built on Linux with the default function layout
+    // (`elf_linker`).
+    let lld = super::elf_linker::use_lld(
+        cfg!(target_os = "linux")
+            && is_linux
+            && !is_musl
+            && matches!(target, None | Some("linux"))
+            && matches!(
+                perry_codegen::program_function_layout(),
+                perry_codegen::FunctionLayout::Default
+            ),
+    );
     if !is_windows {
         if is_android || is_linux || is_harmonyos {
             cmd.arg("-Wl,--gc-sections");
+            // The runtime reads `__start_`/`__stop_perry_js_text` (the JS
+            // text section's bounds, `error_stack_frames.rs`). By default a
+            // reference to them retains every input section of that name,
+            // which would keep every compiled JS function alive; with
+            // start-stop-gc they retain nothing and unreferenced functions
+            // are collected as before. GNU ld >= 2.37 and lld >= 13 accept
+            // it; older linkers warn and ignore it.
+            cmd.arg("-Wl,-z,start-stop-gc");
             // Native glibc Linux executables link at a fixed base (ET_EXEC),
             // as bun does. Every pointer in perry's static data (class method
             // slots, shape/key tables, string and closure headers, stack-map
@@ -227,6 +249,28 @@ pub(crate) fn build_and_run_link(
             {
                 cmd.arg("-no-pie");
             }
+            if let Some(mode) = lld {
+                super::elf_linker::add_link_args(&mut cmd, mode);
+            }
+            // An Android program is a shared object, and a shared object
+            // exports every default-visibility symbol: each one is a
+            // --gc-sections root, so nothing in the runtime or stdlib is ever
+            // collected, and references from adapters that only a linked
+            // wrapper archive installs (perry-ext-http's `js_ext_http_*`,
+            // `common::wrapper_imports`) stay as undefined symbols that make
+            // `System.loadLibrary` fail. The Java side reaches the library
+            // only through JNI, so it exports exactly that and everything
+            // else is local, as in an executable. Patterns, not names: lld
+            // rejects a named global the program doesn't define.
+            if is_android {
+                let script = ctx.cache_dir.join("android-exports.map");
+                fs::create_dir_all(&ctx.cache_dir)?;
+                fs::write(
+                    &script,
+                    "{\n  global:\n    Java_*;\n    JNI_On*;\n    ANativeActivity_on*;\n  local:\n    *;\n};\n",
+                )?;
+                cmd.arg(format!("-Wl,--version-script={}", script.display()));
+            }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
             cmd.arg("-dead_strip");
@@ -248,6 +292,20 @@ pub(crate) fn build_and_run_link(
                 cmd.arg("-Wl,-no_exported_symbols");
             }
         }
+        // The runtime archives this link may pull from, for the default
+        // hot-text order (`hot_text_order`).
+        let stdlib_archive = stdlib_lib.as_deref().filter(|_| ctx.needs_stdlib);
+        let runtime_archives: Vec<&Path> =
+            std::iter::once(runtime_lib).chain(stdlib_archive).collect();
+        // The script must fit the linker that runs: the native lld switch,
+        // or a link line that picks lld itself (the cross links to Linux,
+        // `PERRY_EXTRA_LINK_ARGS`, appended last below).
+        let extra_args = super::extra_link_args();
+        let runs_lld = lld.is_some()
+            || super::elf_linker::driver_runs_lld(
+                cmd.get_args()
+                    .chain(extra_args.iter().map(std::ffi::OsStr::new)),
+            );
         super::function_layout::add_link_args(
             &mut cmd,
             &ctx.cache_dir,
@@ -256,7 +314,29 @@ pub(crate) fn build_and_run_link(
             is_harmonyos,
             is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
             is_watchos || is_visionos,
+            &runtime_archives,
+            runs_lld,
+            // The default hot-data order: native glibc Linux executables,
+            // where it was recorded and measured (`hot_data_order`).
+            cfg!(target_os = "linux")
+                && is_linux
+                && !is_musl
+                && matches!(target, None | Some("linux")),
+            verbose,
         )?;
+        super::runtime_layouts::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+        );
+        super::wrapper_hooks::add_link_args(
+            &mut cmd,
+            !(is_linux || is_android || is_harmonyos),
+            is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos,
+            is_watchos || is_visionos,
+            well_known_libs,
+        );
         // PERRY_LINK_MAP=<path> — emit a linker map (which archive each symbol
         // resolves from) for diagnosing dup-symbol / shadowing bugs. Honor it on
         // every non-Windows linker, not just native macOS. GNU ld (ELF) spells
@@ -551,7 +631,20 @@ pub(crate) fn build_and_run_link(
                     cmd.arg(wk);
                 }
             }
-            cmd.arg(stdlib);
+            // The stdlib (linked first) bundles its own `jni` crate copy; left
+            // global, its AttachGuard functions shadow perry-ui-android's and
+            // the jni frame-level check aborts in PerryBridge.nativeInit.
+            let ndk_bin = std::env::var_os("ANDROID_NDK_HOME").and_then(|ndk| {
+                std::path::Path::new(&ndk_clang_path(&ndk.to_string_lossy()))
+                    .parent()
+                    .map(|p| p.to_path_buf())
+            });
+            let stdlib = if is_android {
+                localize_bundled_jni_in_stdlib(stdlib, ndk_bin.as_deref())
+            } else {
+                stdlib.clone()
+            };
+            cmd.arg(&stdlib);
             // #466 Phase 4 step 2: see the parallel comment in the
             // non-Android branch above.
             for wk in &well_known_libs {
@@ -928,14 +1021,9 @@ pub(crate) fn build_and_run_link(
             .arg("-lm")
             .arg("-lpthread")
             .arg("-ldl");
-
-        // -lssl/-lcrypto are vestigial — Perry's stdlib is rustls-only (no
-        // system OpenSSL). On glibc they happen to be present so the link
-        // tolerates them, but a static musl sysroot has no libssl.a/libcrypto.a
-        // and the link would fail. Skip them for musl (#4826).
-        if ctx.needs_stdlib && !is_musl {
-            cmd.arg("-lssl").arg("-lcrypto");
-        }
+        // No -lssl/-lcrypto: perry-stdlib bundles its own OpenSSL
+        // (openssl-sys `vendored`) and TLS is rustls, so nothing links the
+        // system libraries and users need no OpenSSL dev package.
     } else if is_windows {
         windows_link::add_system_libs(&mut cmd, target);
         windows_link::embed_app_manifest(&mut cmd, ctx.needs_ui);
@@ -985,11 +1073,7 @@ pub(crate) fn build_and_run_link(
 
         // On Linux (native, not cross-compiling to macOS), link against system libraries
         if cfg!(target_os = "linux") && !is_cross_macos {
-            cmd.arg("-lm").arg("-lpthread").arg("-ldl");
-
-            if ctx.needs_stdlib {
-                cmd.arg("-lssl").arg("-lcrypto");
-            }
+            cmd.args(super::linux_dylib_libs::LINUX_DYLIB_SYSTEM_LIBS);
         }
     }
 
@@ -1398,8 +1482,9 @@ pub(crate) fn build_and_run_link(
                         // rlibs are bit-identical and dedupe at link time. Without
                         // this, native libs pull in a parallel std with different
                         // metadata hashes and the final Swift-driven link fails
-                        // with hundreds of duplicate-symbol errors.
-                        cargo_cmd.arg("-Zbuild-std=std,panic_abort");
+                        // with hundreds of duplicate-symbol errors. The flags are
+                        // the workspace's own `[unstable]` build-std settings.
+                        cargo_cmd.args(workspace_build_std_args());
                     }
 
                     // For Android, ensure 16 KB page size alignment (required by Google Play),
@@ -1904,15 +1989,7 @@ pub(crate) fn build_and_run_link(
     // take the same path once the arguments are large: macOS caps them at
     // 1 MiB (`link_args_need_response_file`).
     // `PERRY_FORCE_LINK_RESPONSE_FILE=1` forces the path for testing.
-    // PERRY_EXTRA_LINK_ARGS — space-separated args appended verbatim to the
-    // final link invocation. Diagnostic escape hatch (e.g.
-    // `-Wl,-why_live,_js_fs_open` to ask ld64 why a symbol survived
-    // dead-strip); not part of any documented stable surface.
-    if let Ok(extra) = std::env::var("PERRY_EXTRA_LINK_ARGS") {
-        for a in extra.split_whitespace() {
-            cmd.arg(a);
-        }
-    }
+    cmd.args(super::extra_link_args());
 
     let mut response_file_to_clean: Option<PathBuf> = None;
     if cfg!(target_os = "windows")
@@ -1962,4 +2039,44 @@ pub(crate) fn build_and_run_link(
     winui_assets::deploy_winui_runtime_assets(target, ctx.needs_ui, exe_path)?;
 
     Ok(link_cache_status)
+}
+
+/// `-Zbuild-std` / `-Zbuild-std-features` exactly as the workspace's
+/// `.cargo/config.toml` `[unstable]` table sets them for every perry archive.
+/// A native crate built outside the workspace gets them on its command line.
+fn workspace_build_std_args() -> Vec<String> {
+    const CONFIG: &str = include_str!("../../../../../../.cargo/config.toml");
+    let config: toml::Table = CONFIG.parse().expect("workspace .cargo/config.toml parses");
+    let list = |key: &str| -> String {
+        config
+            .get("unstable")
+            .and_then(|unstable| unstable.get(key))
+            .and_then(|value| value.as_array())
+            .map(|items| {
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",")
+            })
+            .unwrap_or_else(|| panic!("workspace .cargo/config.toml lacks [unstable] {key}"))
+    };
+    vec![
+        format!("-Zbuild-std={}", list("build-std")),
+        format!("-Zbuild-std-features={}", list("build-std-features")),
+    ]
+}
+
+#[cfg(test)]
+mod workspace_build_std_tests {
+    #[test]
+    fn native_crates_get_the_workspace_std() {
+        assert_eq!(
+            super::workspace_build_std_args(),
+            vec![
+                "-Zbuild-std=std,panic_abort".to_string(),
+                "-Zbuild-std-features=".to_string(),
+            ]
+        );
+    }
 }

@@ -118,6 +118,9 @@ impl Regex {
         limits: Limits,
         budget: &mut Budget,
     ) -> Result<Self, Error> {
+        // Native/tooling callers accept arbitrary patterns and share Perex's
+        // process-wide feature-unified slot with every other adapter.
+        perex::install_unicode_properties();
         input_budget(pattern, limits, budget)?;
         charge(budget, flags.len())?;
         let pattern = Input::wtf8(pattern).map_err(Error::Encoding)?;

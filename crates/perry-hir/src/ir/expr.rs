@@ -52,8 +52,9 @@ pub enum ClassFreshStaticInit {
     Block(u32),
 }
 
-/// Expression
-#[derive(Debug, Clone)]
+/// Expression. Its `Clone` (`walker/expr_clone.rs`) copies without
+/// recursion per nesting level.
+#[derive(Debug)]
 pub enum Expr {
     // Literals
     Undefined,
@@ -163,6 +164,8 @@ pub enum Expr {
         /// when unknown (synthesized calls from transforms/intrinsics, etc.) —
         /// a 0 sentinel resolves to no location, falling back to `<anonymous>`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
@@ -170,6 +173,9 @@ pub enum Expr {
         callee: Box<Expr>,
         args: Vec<CallArg>,
         type_args: Vec<Type>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     /// `super(...)` with spread arguments (`super(...arguments)` — the tsc
@@ -221,11 +227,17 @@ pub enum Expr {
         /// transforms/desugaring) — resolves to no location. Mirrors
         /// `Call.byte_offset` / `New::byte_offset`; excluded from stable-hashing.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
     PropertySet {
         object: Box<Expr>,
         property: String,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
     // Property update (++/--)
     PropertyUpdate {
@@ -234,17 +246,34 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
     },
 
     // Array/index access
     IndexGet {
         object: Box<Expr>,
         index: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     IndexSet {
         object: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     // Index update (arr[i]++ or obj[key]++)
     IndexUpdate {
@@ -253,6 +282,13 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
 
     // Object literal
@@ -286,11 +322,10 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
-    // Object literal with spread: { ...src, key: val, ...src2, key2: val2 }
-    // Each part is (None, expr) for a spread source, or (Some(key), expr) for a static prop.
+    // Object literal built in source order: { ...src, key: val, [k]: v, ...src2 }
     // Parts are ordered to reflect JavaScript evaluation order (later props override earlier spreads).
     ObjectSpread {
-        parts: Vec<(Option<String>, Expr)>,
+        parts: Vec<ObjectPart>,
     },
 
     // `Object.assign(target, ...sources)` — distinct from ObjectSpread because
@@ -342,6 +377,12 @@ pub enum Expr {
     /// Restore a captured private-name environment around a continuation.
     PrivateLexicalBrandPush(Box<Expr>),
     PrivateLexicalBrandPop,
+    /// Compiler-generated, no source syntax: true exactly in a body codegen
+    /// lowers with a proven `this` of class `.0` (a `$pshape` clone, whose
+    /// receiver, layout and method table the module facts prove), false in
+    /// every other body. Versions the `this.F` loop hoist
+    /// (`lower::property_array_hoist`). Evaluating it has no effect.
+    ThisProvenClass(String),
 
     /// Private-name brand check: `#field in obj`.
     ///
@@ -438,6 +479,8 @@ pub enum Expr {
         /// Excluded from stable-hashing (derived metadata, like `byte_offset`;
         /// the appended `LocalGet` args it counts are themselves hashed).
         cap_args_appended: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic new expression (new with non-identifier callee)
@@ -453,6 +496,8 @@ pub enum Expr {
         /// not-a-constructor case lowers here (callee is `LocalGet`), so this
         /// is the field that localizes ajv's `undefined is not a constructor`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Dynamic `new` with spread arguments — `new <callee>(...args)`.
@@ -467,6 +512,8 @@ pub enum Expr {
         /// #5253: source byte offset of the `new` expression — see
         /// `New::byte_offset`.
         byte_offset: u32,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
+        byte_end: u32,
     },
 
     /// Runtime `new.target` value for ordinary functions.
@@ -911,10 +958,15 @@ pub enum Expr {
     /// of a guarded namespace call (`patched_builtin_call`):
     /// `NamespacePatched(ns) ? <the generic call> : <the intrinsic>`.
     NamespacePatched(String),
-    /// `this` in module top-level code. Node runs the assembled test files
-    /// as CJS, where top-level `this` is `module.exports` — a fresh plain
-    /// object distinct from `globalThis`. Lowered separately from
-    /// `Expr::This` so function-body `this` semantics are untouched.
+    /// `this` in CommonJS module top-level code. Node runs a CommonJS file
+    /// (the assembled test files, `node --experimental-strip-types` on a
+    /// `.ts`/`.js` in a CommonJS scope) with `this === module.exports`; Perry
+    /// materializes a stand-in plain object instead (the real `module.exports`
+    /// is a separate object, so the identity does not hold) — distinct from
+    /// `globalThis` in both. Lowered separately from
+    /// `Expr::This` so function-body `this` semantics are untouched. An ES
+    /// module's top-level `this` is `undefined` instead (#13558), so it lowers
+    /// to `Expr::Undefined` and never reaches this variant.
     ModuleTopThis,
     // Process uptime: process.uptime() -> number (seconds)
     ProcessUptime,
@@ -1295,6 +1347,24 @@ pub enum Expr {
         value: Box<Expr>,
         step_closure: Box<Expr>,
     },
+
+    /// Settled self-next continuation (SNC). Evaluates to the await result
+    /// (the primitive, or the fulfilled native promise's value) when the
+    /// runtime proved that the FIFO round trip of publishing this await and
+    /// dispatching it again is unobservable; the step then continues in place
+    /// with that value as its next resume value. A decline evaluates to the
+    /// TDZ sentinel (never a legitimate await result: observing it throws) and
+    /// changes nothing; test it with `AsyncStepDeclined` and take the ordinary
+    /// `AsyncStepChain` path.
+    /// Only emitted by `build_async_step_driver_direct`.
+    AsyncStepResumeNow {
+        value: Box<Expr>,
+        step_closure: Box<Expr>,
+    },
+
+    /// True (NaN-boxed bool) when the operand is the decline sentinel of
+    /// `AsyncStepResumeNow`. Only emitted by `build_async_step_driver_direct`.
+    AsyncStepDeclined(Box<Expr>),
 
     /// Optimized done-case for the async-step driver: equivalent to
     /// `Promise.resolve(value)` at the position where the state machine
@@ -2769,6 +2839,13 @@ pub enum Expr {
         value: Box<Expr>,
         receiver: Box<Expr>,
         strict: bool,
+        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
+        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        byte_offset: u32,
+        byte_end: u32,
+        /// Element-fact source identity (SWC span.lo), independent of verdict sites.
+        /// Ignored by stable hashing and structural equality.
+        element_offset: u32,
     },
     ReflectHas {
         target: Box<Expr>,
@@ -2891,6 +2968,8 @@ pub enum Expr {
         /// compile-time path resolution (`collect_modules`) is identical for
         /// both — only the dispatch shape differs. `false` for ESM `import()`.
         synchronous: bool,
+        /// `import.defer()` resolves a deferred namespace, without evaluation.
+        deferred: bool,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same
@@ -2952,5 +3031,88 @@ impl Expr {
     pub fn is_global_fetch_callee(&self) -> bool {
         matches!(self, Expr::PropertyGet { object, property, .. }
             if matches!(object.as_ref(), Expr::GlobalGet(0)) && property == "fetch")
+    }
+}
+
+impl Expr {
+    /// A compiler-owned indexed read with no source or verdict identity.
+    pub fn synthetic_index_get(object: Box<Expr>, index: Box<Expr>) -> Self {
+        Self::IndexGet {
+            object,
+            index,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+
+    /// A compiler-owned indexed write with no source or verdict identity.
+    pub fn synthetic_index_set(object: Box<Expr>, index: Box<Expr>, value: Box<Expr>) -> Self {
+        Self::IndexSet {
+            object,
+            index,
+            value,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+}
+
+/// One part of an [`Expr::ObjectSpread`], in source order.
+#[derive(Debug, Clone)]
+pub enum ObjectPart {
+    /// `...src`: CopyDataProperties from `src`.
+    Spread(Expr),
+    /// `key: value` with a static (non-`__proto__`) key: CreateDataProperty.
+    Define(String, Expr),
+    /// `[key]: value`: `key` is evaluated, converted by ToPropertyKey once,
+    /// then `value` is evaluated and defined (CreateDataProperty). `value`
+    /// is never an anonymous function definition (those need
+    /// NamedEvaluation and keep the literal builder).
+    Computed { key: Box<Expr>, value: Expr },
+}
+
+impl ObjectPart {
+    /// The value-producing expression of this part (the source of a spread).
+    pub fn value(&self) -> &Expr {
+        match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => e,
+            ObjectPart::Computed { value, .. } => value,
+        }
+    }
+
+    /// True for a part that defines a key (static or computed).
+    pub fn defines_key(&self) -> bool {
+        !matches!(self, ObjectPart::Spread(_))
+    }
+}
+
+type PartExprs<'a, T> = std::iter::Chain<std::option::IntoIter<T>, std::iter::Once<T>>;
+
+/// Every sub-expression of a part in evaluation order: a computed key, then
+/// the value. Walkers iterate `parts.iter().flatten()` so no part's key is
+/// skipped.
+impl<'a> IntoIterator for &'a ObjectPart {
+    type Item = &'a Expr;
+    type IntoIter = PartExprs<'a, &'a Expr>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (key, value) = match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => (None, e),
+            ObjectPart::Computed { key, value } => (Some(&**key), value),
+        };
+        key.into_iter().chain(std::iter::once(value))
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ObjectPart {
+    type Item = &'a mut Expr;
+    type IntoIter = PartExprs<'a, &'a mut Expr>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (key, value) = match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => (None, e),
+            ObjectPart::Computed { key, value } => (Some(&mut **key), value),
+        };
+        key.into_iter().chain(std::iter::once(value))
     }
 }

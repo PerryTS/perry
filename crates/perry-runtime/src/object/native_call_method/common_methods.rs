@@ -185,17 +185,23 @@ pub(super) unsafe fn dispatch_common(
         // reach this dispatch (the `call` arm below guards `class_ref_id` for
         // exactly that reason). Without the `is_int32()` half, an int32 number
         // with a locale argument would still take the arg-less default arm.
-        // A *registered ClassRef* shares INT32_TAG and must stay on the
+        // A *registered ClassRef* shares INTERNAL_WORD_TAG and must stay on the
         // default arm: `Object.prototype.toLocaleString` ignores its
         // arguments per spec, and falling through would resolve
         // `Number.prototype.toLocaleString` against a class reference.
         "toLocaleString"
             if !jsval.is_bigint()
-                && !((jsval.is_number()
-                    || (jsval.is_int32() && super::class_ref_id(object).is_none()))
-                    && args_len > 0
-                    && !args_ptr.is_null()) =>
+                && !(jsval.is_number() && args_len > 0 && !args_ptr.is_null()) =>
         {
+            // An ordinary object reads `toLocaleString` off its prototype
+            // chain like any method: a function-constructor, replaced or
+            // `Object.create` prototype that defines it wins over
+            // `Object.prototype`'s, whose no-op body is answered below.
+            if let Some(called) =
+                call_ordinary_receiver_inherited_method(object_handle, method_name, arg_handles)
+            {
+                return called;
+            }
             return Some(js_object_default_to_locale_string(object));
         }
 
@@ -208,18 +214,16 @@ pub(super) unsafe fn dispatch_common(
 
         // Common string methods on string values
         "toString" => {
-            // A class REFERENCE (INT32-tagged registered class id) is a
+            // A class constructor (a class function object) is a
             // function value: `C.toString()` must produce the class source,
             // not the numeric rendering of its class id ("1"). #9413 retains
             // that source at compile time; classes perry synthesized (no
             // registered source) still get the NativeFunction form, which
             // Test262's assertToStringOrNativeFunction accepts.
-            if super::class_prototype_ref_id(object).is_none() {
-                if let Some(cid) = super::native_module::class_ref_id(object) {
-                    let s = super::class_registry::class_ref_to_string(cid);
-                    let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
-                }
+            if let Some(cid) = super::native_module::class_ref_id(object) {
+                let s = super::class_registry::class_ref_to_string(cid);
+                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             }
             // A per-evaluation class object (`ClassExprFresh`) is a function too.
             if let Some(source) = super::field_get_set::class_object_default_to_string(object) {
@@ -273,7 +277,7 @@ pub(super) unsafe fn dispatch_common(
                     }
                     Some("BigInt") if payload_jsv.is_bigint() => {
                         let ptr = payload_jsv.as_bigint_ptr();
-                        let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                        let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                         return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
                     }
                     Some("Symbol") => {
@@ -289,7 +293,7 @@ pub(super) unsafe fn dispatch_common(
                 return Some(object);
             } else if jsval.is_bigint() {
                 let ptr = jsval.as_bigint_ptr();
-                let str_ptr = crate::bigint::js_bigint_to_string(ptr);
+                let str_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
                 return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             } else if jsval.is_number() {
                 let n = jsval.as_number();
@@ -405,7 +409,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             // Proxy receiver (#3656): `p.call(thisArg, ...args)` routes through
             // the proxy `apply` trap (or, absent a trap, forwards to the target).
-            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+            if crate::proxy_hooks::proxy_is_proxy(object) == 1 {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr
                 } else {
@@ -419,7 +423,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
                 } else {
                     &[]
                 };
-                return Some(crate::proxy::call_proxy_value_with_this(
+                return Some(crate::proxy_hooks::call_proxy_value_with_this(
                     object, this_arg, args,
                 ));
             }
@@ -462,7 +466,7 @@ pub(crate) unsafe fn dispatch_function_proto_method(
             }
             // Proxy receiver (#3656): `p.apply(thisArg, argsArray)` routes
             // through the proxy `apply` trap (or forwards to the target).
-            if crate::proxy::js_proxy_is_proxy(object) == 1 {
+            if crate::proxy_hooks::proxy_is_proxy(object) == 1 {
                 let this_arg = if args_len >= 1 && !args_ptr.is_null() {
                     *args_ptr
                 } else {
@@ -540,8 +544,6 @@ unsafe fn apply_argument_list(
         } else {
             (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
         }
-    } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
-        args_arr_bits as usize
     } else {
         0
     };
@@ -554,7 +556,7 @@ unsafe fn apply_argument_list(
     }
     // IsArray follows proxy targets; their handles must never be
     // interpreted as ArrayHeader pointers, even for wrapped arrays.
-    let buf: Vec<f64> = if crate::proxy::js_proxy_is_proxy(args_arr_val) == 1 {
+    let buf: Vec<f64> = if crate::proxy_hooks::proxy_is_proxy(args_arr_val) == 1 {
         rooted(&mut callee, &mut receiver, || {
             generic_array_like_to_vec(args_arr_val)
         })
@@ -602,13 +604,17 @@ pub(crate) unsafe fn call_function_with_explicit_this(
     args: &[f64],
 ) -> f64 {
     let raw_ptr = (object.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    // Constructor-export alias shims only recognize the native bound-method
-    // representation. The callee's own body record decides this once, before
-    // any shim probes its captures. An unknown body keeps the conservative
+    // Constructor-export alias shims recognize native export metadata in both
+    // the legacy bound-method and export-specific body representations.
+    // The callee's own body record decides this before a shim probes captures. An unknown body keeps the conservative
     // dispatch path.
-    let construction_alias =
-        crate::closure::closure_info(raw_ptr as *const crate::closure::ClosureHeader)
-            .is_none_or(|info| info.code == crate::closure::BOUND_METHOD_FUNC_PTR);
+    let construction_alias = crate::closure::closure_info(
+        raw_ptr as *const crate::closure::ClosureHeader,
+    )
+    .is_none_or(|info| {
+        info.code == crate::closure::BOUND_METHOD_FUNC_PTR
+            || info.flags & crate::codegen_abi::FN_NATIVE_EXPORT != 0
+    });
     // Static bound-method value (`C.m.call(x)`): arm the one-shot static-`this`
     // override so the method body sees `x` instead of the lexical class-ref
     // (static private brand checks). Only a bound-method body can be one.
@@ -703,6 +709,5 @@ fn is_plain_non_array_object(object: f64) -> bool {
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return false;
     };
-    header.obj_type == crate::gc::GC_TYPE_OBJECT
-        && !crate::array::is_array_subclass_instance(object)
+    crate::gc_type_is_object!(header.obj_type) && !crate::array::is_array_subclass_instance(object)
 }

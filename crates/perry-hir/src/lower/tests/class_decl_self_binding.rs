@@ -146,6 +146,89 @@ fn repeatable_class_decl_shares_its_first_evaluation() {
     );
 }
 
+fn constructor_body(hir: &Module, class_name: &str) -> String {
+    let ctor = class(hir, class_name)
+        .constructor
+        .as_ref()
+        .unwrap_or_else(|| panic!("`{class_name}` must have a constructor"));
+    format!("{:?}", ctor.body)
+}
+
+#[test]
+fn repeatable_computed_key_class_decl_reads_its_evaluation() {
+    // #13965: undici's `HeadersList` inside the CommonJS factory, which is
+    // not provably run once. The capture of `cmp` and the computed key make
+    // the declaration a fresh class object; its constructor's `instanceof`
+    // must test against that evaluation, not the template.
+    let hir = lower(
+        r#"
+            export function factory() {
+                function cmp(a: any, b: any) { return 1; }
+                class L {
+                    self: boolean;
+                    constructor(init?: any) { this.self = init instanceof L; }
+                    [Symbol.iterator]() { return 1; }
+                    sorted() { return [].sort(cmp); }
+                }
+                return L;
+            }
+        "#,
+    );
+    let factory = factory_body(&hir);
+    assert!(
+        factory.contains("ClassExprFresh"),
+        "the declaration must be a fresh class object: {factory}"
+    );
+    let ctor = constructor_body(&hir, "L");
+    assert!(
+        ctor.contains("InstanceOf")
+            && !ctor.contains("ty_expr: None")
+            && !ctor.contains("ty_expr: Some(ClassRef(\"L\"))"),
+        "`instanceof L` in the constructor must test this evaluation: {ctor}"
+    );
+}
+
+#[test]
+fn repeatable_computed_key_class_without_captures_reads_its_evaluation() {
+    let hir = lower(
+        r#"
+            export function factory() {
+                class K {
+                    [Symbol.iterator]() { return 1; }
+                    static self() { return K; }
+                }
+                return K;
+            }
+        "#,
+    );
+    let self_body = static_method_body(&hir, "K", "self");
+    assert!(
+        !self_body.contains("ClassRef(\"K\")"),
+        "a member reads its own evaluation, not the template: {self_body}"
+    );
+}
+
+#[test]
+fn run_once_computed_key_class_decl_keeps_its_class_ref() {
+    let hir = lower(
+        r#"
+            const made = (function () {
+                class K {
+                    [Symbol.iterator]() { return 1; }
+                    static self() { return K; }
+                }
+                return K;
+            })();
+            export { made };
+        "#,
+    );
+    let self_body = static_method_body(&hir, "K", "self");
+    assert!(
+        self_body.contains("ClassRef(\"K\")"),
+        "a run-once declaration keeps its ClassRef: {self_body}"
+    );
+}
+
 #[test]
 fn renamed_repeatable_class_constructs_its_lexical_evaluation() {
     let hir = lower(

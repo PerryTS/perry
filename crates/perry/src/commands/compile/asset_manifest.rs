@@ -48,7 +48,7 @@ pub(super) fn write(
         }
         let kind = if path.extension().and_then(|ext| ext.to_str()) == Some("json") {
             Some("json")
-        } else if is_recognized_text_asset(path) {
+        } else if is_recognized_text_asset(path) || ctx.text_loader_asset_paths.contains(path) {
             Some("text")
         } else {
             None

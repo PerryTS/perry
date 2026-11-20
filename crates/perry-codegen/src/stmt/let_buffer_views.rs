@@ -69,7 +69,7 @@ pub(super) fn register_noalias_buffer_view(
         ctx.block().store(I32, &len_value, &slot);
         Some(slot)
     };
-    let scope_idx = ctx.buffer_alias_base + ctx.buffer_data_slots.len() as u32;
+    let scope_idx = ctx.buffer_alias_scopes.allocate();
     ctx.buffer_data_slots
         .insert(id, (data_slot.clone(), scope_idx));
     let native_owned = match init.native_owner_local_id {
@@ -134,7 +134,11 @@ pub(crate) fn distrust_views_the_stmt_may_expose(ctx: &mut FnCtx<'_>, stmt: &per
             ctx.receiver_descriptors
                 .buffer_view(*id)
                 .is_some_and(|view| view.pointer_state.is_stable() && view.native_owned.is_none())
-                && crate::collectors::sealed_buffers::stmt_may_expose(stmt, *id)
+                && crate::collectors::sealed_buffers::stmt_may_expose(
+                    stmt,
+                    *id,
+                    &ctx.wpfacts.native_member_calls,
+                )
         })
         .collect();
     for id in exposed {
@@ -166,9 +170,13 @@ pub(crate) fn late_exposure_limit(ctx: &FnCtx<'_>, stmts: &[perry_hir::Stmt], i:
     }
     (i + 1..stmts.len())
         .find(|j| {
-            trusted
-                .iter()
-                .any(|id| crate::collectors::sealed_buffers::stmt_may_expose(&stmts[*j], *id))
+            trusted.iter().any(|id| {
+                crate::collectors::sealed_buffers::stmt_may_expose(
+                    &stmts[*j],
+                    *id,
+                    &ctx.wpfacts.native_member_calls,
+                )
+            })
         })
         .unwrap_or(stmts.len())
 }

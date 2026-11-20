@@ -1,0 +1,11 @@
+package foo:bar@0.2.1;
+
+interface types {
+    resource r;
+    resource s;
+}
+
+interface api {
+    use types.{r};
+    do-something: func(x: r);
+}

@@ -13,8 +13,10 @@ set -e
 # inline bump allocator, so class instances now allocate through
 # `js_object_alloc_class_inline_keys` instead of emitting an inline
 # `js_inline_arena_state` sequence; array literals still use the inline form.
-# Both spellings count as "this object was heap-allocated".
-ALLOC_RE='call .*@(js_inline_arena_state|js_object_alloc)'
+# Both spellings count as "this object was heap-allocated". Layout-owned
+# classes now allocate through `perry_alloc_layout(@perry_layout_class_N)`; a
+# guard that only knew the older helpers would pass the scalar half vacuously.
+ALLOC_RE='call .*@(js_inline_arena_state|js_object_alloc|perry_alloc_layout)'
 DISPATCH_RE='call .*@(js_native_call_value|js_native_call_method|perry_method_.*__getValue)'
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -69,33 +71,19 @@ COMPILE_LOG="$TMPDIR/compile.log"
 set +e
 (
   cd "$TMPDIR"
-  PERRY_LLVM_BITCODE_LINK=1 "$PERRY" compile main.ts \
+  "$PERRY" compile main.ts \
     --no-link \
-    --keep-intermediates \
+    --trace llvm \
     --no-auto-optimize \
     --no-cache >"$COMPILE_LOG" 2>&1
 )
 COMPILE_STATUS=$?
 set -e
 
-IR_FILE="$TMPDIR/main_ts.ll"
-if [ ! -f "$IR_FILE" ]; then
-  # Some CI runners invoke Perry from a workspace where the displayed
-  # "Wrote LLVM IR: <path>" location is relative to the original shell
-  # cwd, not the temporary compile cwd. Trust the compiler's reported
-  # path before failing the guard.
-  while IFS= read -r logged_ir; do
-    [ -z "$logged_ir" ] && continue
-    if [ -f "$logged_ir" ]; then
-      cp "$logged_ir" "$IR_FILE"
-      break
-    fi
-    if [ -f "$TMPDIR/$logged_ir" ]; then
-      cp "$TMPDIR/$logged_ir" "$IR_FILE"
-      break
-    fi
-  done < <(sed -n 's/^Wrote LLVM IR: //p' "$COMPILE_LOG")
-fi
+# `--trace llvm` is the supported way to get the IR: it writes one .ll per
+# module under ./.perry-trace/llvm/ (the bitcode-link path that used to leave
+# main_ts.ll beside the sources was removed).
+IR_FILE="$TMPDIR/.perry-trace/llvm/main_ts.ll"
 
 if [ ! -f "$IR_FILE" ]; then
   echo "FAIL: expected LLVM IR file was not emitted"
@@ -120,9 +108,9 @@ if [ ! -s "$MAIN_IR" ] || ! grep -q '^define double @perry_fn_main_ts__main(' "$
   exit 1
 fi
 
-if grep -Eq 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR"; then
+if grep -Eq 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_alloc_layout|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR"; then
   echo "FAIL: scalar field-return method still allocates or dispatches"
-  grep -En 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR" || true
+  grep -En 'call .*@(js_inline_arena_state|js_object_alloc|js_object_alloc_class|perry_alloc_layout|perry_method_.*MyClass.*getValue|js_native_call_method)' "$MAIN_IR" || true
   exit 1
 fi
 
@@ -269,29 +257,16 @@ UNSAFE_COMPILE_LOG="$TMPDIR/unsafe_compile.log"
 set +e
 (
   cd "$TMPDIR"
-  PERRY_LLVM_BITCODE_LINK=1 "$PERRY" compile unsafe.ts \
+  "$PERRY" compile unsafe.ts \
     --no-link \
-    --keep-intermediates \
+    --trace llvm \
     --no-auto-optimize \
     --no-cache >"$UNSAFE_COMPILE_LOG" 2>&1
 )
 UNSAFE_COMPILE_STATUS=$?
 set -e
 
-UNSAFE_IR_FILE="$TMPDIR/unsafe_ts.ll"
-if [ ! -f "$UNSAFE_IR_FILE" ]; then
-  while IFS= read -r logged_ir; do
-    [ -z "$logged_ir" ] && continue
-    if [ -f "$logged_ir" ]; then
-      cp "$logged_ir" "$UNSAFE_IR_FILE"
-      break
-    fi
-    if [ -f "$TMPDIR/$logged_ir" ]; then
-      cp "$TMPDIR/$logged_ir" "$UNSAFE_IR_FILE"
-      break
-    fi
-  done < <(sed -n 's/^Wrote LLVM IR: //p' "$UNSAFE_COMPILE_LOG")
-fi
+UNSAFE_IR_FILE="$TMPDIR/.perry-trace/llvm/unsafe_ts.ll"
 
 if [ ! -f "$UNSAFE_IR_FILE" ]; then
   echo "FAIL: expected unsafe LLVM IR file was not emitted"

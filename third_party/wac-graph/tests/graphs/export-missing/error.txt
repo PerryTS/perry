@@ -1,0 +1,4 @@
+failed to add alias node 1 for test case `export-missing`
+
+Caused by:
+    instance does not have an export named `foo`

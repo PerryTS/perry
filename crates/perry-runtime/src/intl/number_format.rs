@@ -1275,8 +1275,8 @@ pub(crate) fn number_to_locale_string(value: f64, locales: f64, options: f64) ->
 
 pub(crate) fn bigint_to_locale_string(value: f64, locales: f64, options: f64) -> *mut StringHeader {
     let ptr = JSValue::from_bits(value.to_bits()).as_bigint_ptr();
-    let negative = crate::bigint::js_bigint_is_negative(ptr) != 0;
-    let digits_ptr = crate::bigint::js_bigint_to_string(ptr);
+    let negative = crate::bigint_hooks::js_bigint_is_negative(ptr) != 0;
+    let digits_ptr = crate::bigint_hooks::js_bigint_to_string(ptr);
     // Copy into an owned `String` right away — `digits_ptr` is GC-managed and
     // `make_instance` below allocates, which can move/free it.
     let digits = unsafe { string_header_as_str(digits_ptr) };
@@ -1344,6 +1344,7 @@ pub(crate) fn intl_object_from_value(
             "Intl.{expected_kind}.prototype.{method} called on incompatible receiver"
         ));
     };
+    let obj = slot_holder(obj);
     let kind = get_string_field(obj, KEY_KIND);
     if kind.as_deref() != Some(expected_kind) {
         throw_type_error(&format!(
@@ -1366,10 +1367,10 @@ fn unwrap_legacy_constructed(value: f64) -> Option<f64> {
     // would mis-classify it (its band overlaps the heap range on Linux) and
     // dereference garbage. Route straight to the symbol `Get`, which fires the
     // proxy `get` trap (intl-legacy-constructed-symbol-on-unwrap).
-    if crate::proxy::js_proxy_is_proxy(value) == 0 {
+    if crate::proxy_hooks::proxy_is_proxy(value) == 0 {
         // A direct, already-initialized instance never needs unwrapping.
         if let Some(obj) = object_ptr_from_value(value) {
-            if get_string_field(obj, KEY_KIND).is_some() {
+            if get_string_field(slot_holder(obj), KEY_KIND).is_some() {
                 return None;
             }
         }

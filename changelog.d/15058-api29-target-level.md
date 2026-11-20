@@ -1,0 +1,1 @@
+Target Android API level 29 (Android 10) in one place, android_api_level!() in perry-codegen: the NDK clang target, the emitted LLVM triple and the app template minSdk all follow it. The minimum supported Android version rises to 10.

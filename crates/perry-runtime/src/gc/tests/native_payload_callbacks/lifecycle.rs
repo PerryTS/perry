@@ -18,19 +18,13 @@ fn subclass_attachment_reopens_the_same_cell_and_rejects_open_or_finalized() {
         })
     };
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
-    let cell_ptr = obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        ((*(*obj).meta).native_state & POINTER_MASK)
-            as *mut crate::native_handle::NativeHandleHeader
-    });
+    let cell_ptr = np::payload_cell_of_value(value()).expect("attached");
     assert!(!np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     assert_eq!(DROPS.load(Ordering::SeqCst), 1, "rejected input is dropped");
     assert!(np::close_attached::<Probe>(value(), &FAMILY));
     assert!(np::attach_to_object(value(), &FAMILY, Probe::default(), 0));
     obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| unsafe {
-        assert_eq!(
-            ((*(*obj).meta).native_state & POINTER_MASK) as *mut _,
-            cell_ptr
-        );
+        assert_eq!(np::payload_cell_of_object(obj), Some(cell_ptr));
         assert_eq!((*obj).class_id, 777);
     });
     unsafe { crate::native_handle::finalize_native_handle_at_teardown(cell_ptr) };
@@ -175,8 +169,10 @@ fn reopen_preserves_object_cell_properties_and_serial_identity() {
     unsafe {
         assert_eq!(crate::object::shapes::object_prototype_word(obj), proto);
         assert_eq!(crate::object::shapes::object_shape_stamp(obj), shape);
+        // Read by key: slot 0 is the payload cell, the own property follows it.
+        let own = crate::string::js_string_from_bytes(b"own".as_ptr(), 3);
         assert_eq!(
-            crate::object::js_object_get_field(obj, 0).bits(),
+            crate::object::js_object_get_field_by_name(obj, own).bits(),
             123.0f64.to_bits()
         );
     }
@@ -335,7 +331,7 @@ extern "C" fn closes_then_throws(
     err: f64,
 ) -> f64 {
     assert_eq!(np::close(this.as_f64(), &FAMILY), CloseOutcome::Deferred);
-    crate::exception::js_throw(err)
+    crate::exception::test_throw(err)
 }
 #[test]
 fn l9_callback_throw_wins_over_deferred_close() {

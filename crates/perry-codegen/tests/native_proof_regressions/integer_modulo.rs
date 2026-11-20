@@ -46,47 +46,39 @@ fn assert_integer_modulo_with_negative_zero_repair(ir: &str) {
 }
 
 fn assert_checked_modulo(ir: &str) {
-    // The fallback is the shared out-of-line `js_number_mod` helper (exact
-    // i53 remainder, else `fmod`), not an inline `frem` — `frem` was already a
-    // libm call, so the site keeps its size.
     assert!(
-        ir.contains("call double @js_number_mod("),
-        "runtime-checked modulo must fall back to the shared js_number_mod helper:\n{ir}"
+        ir.contains("call double @perry_checked_number_remainder("),
+        "ordinary arithmetic must use the shared checked Number operation:\n{ir}"
     );
-    // Scope the "no frem" check to the checked path's own fallback blocks: a
-    // separate typed-f64 clone of a constant expression may still fold
-    // through `frem double <const>, <const>`, which is not this lowering.
-    let fallbacks: Vec<&str> = ir
+    let body = ir
+        .split("define linkonce_odr double @perry_checked_number_remainder(")
+        .nth(1)
+        .and_then(|rest| rest.split("\n}").next())
+        .expect("the referenced checked operation must be defined in the LLVM unit");
+    assert_eq!(body.matches("freeze i32").count(), 2, "{body}");
+    assert_eq!(body.matches("fcmp oeq double").count(), 2, "{body}");
+    assert!(
+        body.contains("fptosi double")
+            && body.contains("sitofp i32")
+            && body.contains("icmp ne i32")
+            && body.contains("srem i32")
+            && !body.contains("mod.i32.convert"),
+        "frozen exact roundtrips and a nonzero divisor must guard integer remainder:\n{body}"
+    );
+    assert!(
+        body.lines()
+            .any(|line| line.contains("icmp eq i32") && line.ends_with(", -1"))
+            && body.contains("i32 1, i32")
+            && body.contains("call double @llvm.copysign.f64("),
+        "INT_MIN/-1 must stay defined and every result must retain the dividend sign:\n{body}"
+    );
+    let fallback = body
         .split("\nmod.f64.fallback")
-        .skip(1)
-        .map(|rest| {
-            rest.split("\n\n")
-                .next()
-                .unwrap_or(rest)
-                .split("\nmod.merge")
-                .next()
-                .unwrap_or(rest)
-        })
-        .collect();
+        .nth(1)
+        .expect("the shared operation must retain its floating fallback block");
     assert!(
-        !fallbacks.is_empty(),
-        "checked modulo must emit a mod.f64.fallback block:\n{ir}"
-    );
-    for block in &fallbacks {
-        assert!(
-            block.contains("call double @js_number_mod(") && !block.contains("frem double"),
-            "the checked-modulo fallback must call js_number_mod, not frem:\n{block}"
-        );
-    }
-    assert!(
-        ir.contains("mod.i32.convert")
-            && ir.contains("srem i32")
-            && ir.contains("fptosi double")
-            && ir.contains("sitofp i32")
-            && ir.contains("icmp ne i32")
-            && ir.contains("bitcast double")
-            && ir.contains("icmp slt i64"),
-        "runtime-checked modulo must guard conversion and preserve negative zero:\n{ir}"
+        fallback.contains("call double @js_number_mod(") && !body.contains("frem double"),
+        "refused operands must keep the exact-i53/IEEE runtime fallback:\n{body}"
     );
 }
 

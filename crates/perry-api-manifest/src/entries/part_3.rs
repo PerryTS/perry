@@ -526,8 +526,6 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     class("events", "EventEmitter"),
     class("events", "EventEmitterAsyncResource"),
     class("domain", "Domain"),
-    class("ws", "WebSocketServer"),
-    class("ws", "WebSocket"),
     class("net", "Socket"),
     class("net", "Stream"),
     class("net", "Server"),
@@ -752,6 +750,10 @@ pub(crate) const API_MANIFEST_PART_3: &[ApiEntry] = &[
     method("diagnostics_channel", "subscribe", false, None),
     method("diagnostics_channel", "tracingChannel", false, None),
     method("diagnostics_channel", "unsubscribe", false, None),
+    // --- node:trace_events direct submodule.
+    property("trace_events", "default"),
+    method("trace_events", "createTracing", false, None),
+    method("trace_events", "getEnabledCategories", false, None),
     // --- node:fs/promises direct submodule (#2728). Only the named exports
     // Perry actually backs with runtime thunks (see
     // `perry-runtime::node_submodules::fs_promises`) are declared. FileHandle

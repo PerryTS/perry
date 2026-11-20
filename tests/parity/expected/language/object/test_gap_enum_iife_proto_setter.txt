@@ -1,0 +1,5 @@
+DEC 250: Cannot add member Object.prototype.Trap: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype.1000: built-in objects are read-only in a compiled program
+{"0":"A","1":"Trap","3":"D","1000":"K","A":0,"Trap":1,"K":1000,"D":3} 0,1,3,1000,A,Trap,K,D 1 1 K
+
+{"0":"B","B":0} true

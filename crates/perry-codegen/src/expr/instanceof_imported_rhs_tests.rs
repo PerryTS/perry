@@ -88,6 +88,7 @@ fn compile(module: &Module, opts: CompileOptions) -> String {
 #[test]
 fn imported_function_constructor_rhs_resolves_the_constructor_value() {
     let mut opts = CompileOptions {
+        namespace_self_import: false,
         emit_ir_only: true,
         ..Default::default()
     };
@@ -108,8 +109,9 @@ fn imported_function_constructor_rhs_resolves_the_constructor_value() {
 }
 
 #[test]
-fn imported_class_rhs_keeps_the_static_class_id_check() {
+fn imported_class_rhs_resolves_its_constructor_object() {
     let mut opts = CompileOptions {
+        namespace_self_import: false,
         emit_ir_only: true,
         ..Default::default()
     };
@@ -119,12 +121,12 @@ fn imported_class_rhs_keeps_the_static_class_id_check() {
     let ir = compile(&instanceof_imported("Klass"), opts);
 
     assert!(
-        ir.contains(STATIC_CALL),
-        "an imported class must keep the static class-id check:\n{ir}"
+        ir.contains("call double @js_class_value(i32 7701)") && ir.contains(DYNAMIC_CALL),
+        "an imported class must read @@hasInstance from its function object:\n{ir}"
     );
     assert!(
-        !ir.contains(DYNAMIC_CALL),
-        "the dynamic helper would only unpack the same class id back out:\n{ir}"
+        !ir.contains(STATIC_CALL),
+        "the class-id check misses computed static hooks:\n{ir}"
     );
 }
 
@@ -137,6 +139,7 @@ fn unresolved_import_rhs_keeps_its_reserved_builtin_id() {
     let ir = compile(
         &instanceof_imported("Error"),
         CompileOptions {
+            namespace_self_import: false,
             emit_ir_only: true,
             ..Default::default()
         },
@@ -166,6 +169,7 @@ fn weak_wrapper_constructors_name_their_instance_class_ids() {
         let ir = compile(
             &instanceof_imported(name),
             CompileOptions {
+                namespace_self_import: false,
                 emit_ir_only: true,
                 ..Default::default()
             },

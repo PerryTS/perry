@@ -61,7 +61,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             args,
             type_args,
             byte_offset,
+            byte_end,
+            ..
         } => Expr::Call {
+            byte_end: *byte_end,
             callee: Box::new(substitute_expr(callee, substitutions)),
             args: args
                 .iter()
@@ -155,8 +158,12 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
 
         // Property access
         Expr::PropertyGet {
-            object, property, ..
+            object,
+            property,
+            byte_end,
+            ..
         } => Expr::PropertyGet {
+            byte_end: *byte_end,
             byte_offset: 0,
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
@@ -165,10 +172,15 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             property,
             value,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::PropertySet {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             value: Box::new(substitute_expr(value, substitutions)),
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
         Expr::PropertyUpdate {
             object,
@@ -176,16 +188,31 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             op,
             prefix,
             strict,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::PropertyUpdate {
             object: Box::new(substitute_expr(object, substitutions)),
             property: property.clone(),
             op: *op,
             prefix: *prefix,
             strict: *strict,
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
 
         // Index access
-        Expr::IndexGet { object, index } => Expr::IndexGet {
+        Expr::IndexGet {
+            object,
+            index,
+            byte_end,
+            element_offset,
+            byte_offset,
+            ..
+        } => Expr::IndexGet {
+            element_offset: *element_offset,
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
         },
@@ -193,10 +220,17 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             object,
             index,
             value,
+            element_offset,
+            byte_offset,
+            byte_end,
+            ..
         } => Expr::IndexSet {
             object: Box::new(substitute_expr(object, substitutions)),
             index: Box::new(substitute_expr(index, substitutions)),
             value: Box::new(substitute_expr(value, substitutions)),
+            element_offset: *element_offset,
+            byte_offset: *byte_offset,
+            byte_end: *byte_end,
         },
 
         // Literals
@@ -209,7 +243,16 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         Expr::ObjectSpread { parts } => Expr::ObjectSpread {
             parts: parts
                 .iter()
-                .map(|(k, v)| (k.clone(), substitute_expr(v, substitutions)))
+                .map(|part| match part {
+                    ObjectPart::Spread(v) => ObjectPart::Spread(substitute_expr(v, substitutions)),
+                    ObjectPart::Define(k, v) => {
+                        ObjectPart::Define(k.clone(), substitute_expr(v, substitutions))
+                    }
+                    ObjectPart::Computed { key, value } => ObjectPart::Computed {
+                        key: Box::new(substitute_expr(key, substitutions)),
+                        value: substitute_expr(value, substitutions),
+                    },
+                })
                 .collect(),
         },
         Expr::Array(elems, _) => Expr::Array(
@@ -272,7 +315,10 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             type_args,
             byte_offset,
             cap_args_appended,
+            byte_end,
+            ..
         } => Expr::New {
+            byte_end: *byte_end,
             class_name: class_name.clone(),
             args: args
                 .iter()
@@ -1138,6 +1184,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             body,
             catch,
             finally,
+            forof_completion,
         } => Stmt::Try {
             body: substitute_stmts(body, substitutions),
             catch: catch.as_ref().map(|c| CatchClause {
@@ -1145,6 +1192,7 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
                 body: substitute_stmts(&c.body, substitutions),
             }),
             finally: finally.as_ref().map(|f| substitute_stmts(f, substitutions)),
+            forof_completion: *forof_completion,
         },
         Stmt::Switch {
             discriminant,

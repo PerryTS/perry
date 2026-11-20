@@ -114,16 +114,6 @@ fn json_number_spelling_matches_ecmascript_boundaries() {
 }
 
 #[test]
-fn tagged_int32_json_numbers_keep_their_signed_value() {
-    for value in [i32::MIN, -1, 0, 1, i32::MAX] {
-        let bits = crate::value::INT32_TAG | value as u32 as u64;
-        let mut output = String::new();
-        unsafe { write_number(&mut output, f64::from_bits(bits)) };
-        assert_eq!(output, value.to_string());
-    }
-}
-
-#[test]
 fn vector_escaping_matches_json_encoder_at_every_boundary() {
     let characters: Vec<char> = (0..=127)
         .filter_map(char::from_u32)
@@ -158,4 +148,46 @@ fn control_escapes_append_to_existing_output_without_temporary_formatting() {
         output,
         format!("prefix:{}", serde_json::to_string(&text).unwrap())
     );
+}
+
+#[test]
+fn signed32_number_writer_keeps_boundaries_fractional_neighbors_and_zero_spelling() {
+    let boundaries = [
+        i32::MIN as f64 - 1.0,
+        i32::MIN as f64,
+        -1.0,
+        0.0,
+        1.0,
+        i32::MAX as f64,
+        i32::MAX as f64 + 1.0,
+        u32::MAX as f64,
+        9007199254740991.0,
+    ];
+    for n in boundaries {
+        for value in [
+            n - 0.5,
+            n,
+            n + 0.5,
+            f64::from_bits(n.to_bits().wrapping_add(1)),
+            f64::from_bits(n.to_bits().wrapping_sub(1)),
+        ] {
+            if !value.is_finite() {
+                continue;
+            }
+            let mut output = String::new();
+            unsafe {
+                write_number(&mut output, value);
+            }
+            let mut oracle = ryu_js::Buffer::new();
+            assert_eq!(
+                output,
+                if value == 0.0 {
+                    "0"
+                } else {
+                    oracle.format_finite(value)
+                },
+                "{value:?}"
+            );
+        }
+    }
 }

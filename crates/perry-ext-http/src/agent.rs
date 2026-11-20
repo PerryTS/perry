@@ -280,8 +280,6 @@ unsafe fn read_number_field(obj_f64: f64, field: &str) -> Option<f64> {
     let val = JsValue::from_bits(bits);
     if val.is_number() {
         Some(val.to_number())
-    } else if val.is_int32() {
-        Some(val.to_int32() as f64)
     } else {
         None
     }
@@ -905,9 +903,9 @@ pub unsafe extern "C" fn js_ext_http_agent_dispatch_property(
             let map = scope.root_nanbox(empty_object_f64());
 
             let object = unsafe {
-                perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-                    perry_ffi::runtime_layouts::RECORD_F6_0
-                ))
+                perry_ffi::runtime_layouts::alloc_runtime_record(
+                    perry_ffi::runtime_layouts::RECORD_F6_0::desc(),
+                )
             };
             if object.is_null() {
                 f64::from_bits(TAG_UNDEFINED)
@@ -1680,9 +1678,9 @@ pub(crate) unsafe fn build_connect_options(
     path: &str,
 ) -> f64 {
     let obj: *mut perry_ffi::ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-            perry_ffi::runtime_layouts::RECORD_F7_0
-        ))
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F7_0::desc(),
+        )
     };
     if obj.is_null() {
         return f64::from_bits(TAG_UNDEFINED);

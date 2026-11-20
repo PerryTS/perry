@@ -1,0 +1,1 @@
+Fix missing-argument validation for Worker, MessagePort and BroadcastChannel `postMessage` while preserving explicit `undefined`. Use existing zero-copy native arguments and ordinary Worker method dispatch; rejected calls enqueue nothing and own method replacements/getters are respected.

@@ -9,7 +9,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::block_skip::{block_skip_reclaimed_totals, sabotage};
+use crate::gc::mark::block_skip::{block_skip_reclaimed_totals, sabotage};
 
 const PLANT_BYTES: usize = 3 * crate::arena::BLOCK_SIZE + crate::arena::BLOCK_SIZE / 2;
 

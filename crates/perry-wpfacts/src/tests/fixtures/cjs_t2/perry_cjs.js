@@ -1,0 +1,66 @@
+import { createRequire as __perry_cjs_support_create_require } from 'node:module';
+export const cache = __perry_declared_keys("/t2/r.js", "/t2/m.js");
+export const main = { exports: undefined, __perry_cjs_record: true, id: undefined, path: undefined, filename: undefined, loaded: false, children: undefined, parent: undefined, paths: undefined, require: undefined };
+// The runtime's `Module._cache`, `process.mainModule` and
+// `require.extensions` exist only for a program that can reach them (not
+// closed): a closed program reads none of them by census.
+export let extensions;
+
+let pendingParent;
+export function setPending(record) {
+    pendingParent = record;
+}
+export function takePending() {
+    const record = pendingParent;
+    pendingParent = undefined;
+    return record;
+}
+let base;
+// A static edge whose target was evaluated and then deleted from the cache
+// re-runs it, as Node does, with the requiring module as its parent (the
+// handoff its record reads). One loader for the program: the path is
+// absolute. One body, so the edges of every module share it (the facts solve
+// it once). The edge links the new record: it reads the cache by its literal
+// path, a declared slot. A read here by the parameter is a computed key that
+// reaches `Object.prototype` (its `constructor`), and the link would store
+// the parent on it.
+let reloader;
+export function reload(path, parent) {
+    
+        throw requireError('error', 'ERR_PERRY_CJS_CLOSED', 'a closed program has no CommonJS loader');
+    
+}
+// A literal builtin `require` is a static native binding (#13296); only a
+// computed specifier reaches this loader, and only a program that is not
+// closed has one. A closed program links no `createRequire`.
+export function builtin(specifier) {
+    
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    
+}
+// Node's updateChildren: a required child is linked once to its first parent
+// and appears once in each requiring module's children.
+export function link(module, child) {
+    if (!child) return;
+    if (child.parent === undefined) child.parent = module;
+    if (module.children.indexOf(child) === -1) module.children.push(child);
+}
+// A path module's live record, or its fresh evaluation after a deletion
+// through the requiring module's own loader. (A wrapper's static cases do the
+// same with their literal path, so each reads its own cache slot.)
+function refresh(path, value, reloader) {
+    
+        return value;
+    
+}
+export function requireError(kind, code, message) {
+    const err = kind === 'type' ? new TypeError(message) : new Error(message);
+    err.code = code;
+    return err;
+}
+export function requireComputed(specifier, dir, reloader) {
+    // A closed program has no computed require (design CJS_LINK §2.5).
+    
+        throw requireError('error', 'MODULE_NOT_FOUND', "Cannot find module '" + specifier + "'");
+    
+}

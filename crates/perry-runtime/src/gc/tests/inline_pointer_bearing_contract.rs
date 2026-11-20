@@ -151,7 +151,7 @@ fn plain_numbers_and_primitives_need_no_bookkeeping() {
         crate::value::TAG_NULL,
         crate::value::TAG_TRUE,
         crate::value::TAG_FALSE,
-        crate::value::INT32_TAG | 42,
+        crate::value::INTERNAL_WORD_TAG | 42,
     ];
     for bits in barrier_free {
         assert!(
@@ -249,7 +249,7 @@ fn sabotaged_guard_strands_a_young_child_the_shipped_guard_keeps() {
         },
         "the sabotaged guard must skip the barrier — otherwise this arm proves nothing"
     );
-    let rejected = std::panic::catch_unwind(verify_old_to_young_edges_covered);
+    let rejected = crate::test_support::child_unwind(verify_old_to_young_edges_covered);
     assert!(
         rejected.is_err(),
         "a skipped barrier on a heap-pointer child must leave the old->young edge \

@@ -7,75 +7,11 @@
 
 use super::generator::*;
 use super::*;
+use crate::codegen_abi::LayoutWord;
 
 // Private evaluation brands occupy the low serial range. Reserve a high
 // identity for the intrinsic sync-generator brand, carried by all transitions.
 pub(crate) const GENERATOR_STATE_BRAND: u64 = u64::MAX - 2;
-
-/// A fresh class evaluation owns the actual functions of its symbol methods.
-/// Their keys are retained in its existing computed-declaration slots.
-pub(crate) unsafe fn install_evaluation_generator_symbols(proto: f64, owner: f64, class_id: u32) {
-    let Some(decl) = crate::object::class_registry::declarations::class_declaration(class_id)
-    else {
-        return;
-    };
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let proto = scope.root_nanbox_f64(proto);
-    let owner = scope.root_nanbox_f64(owner);
-    for member in decl
-        .members()
-        .iter()
-        .filter(|m| m.name.is_null() && m.is_method() && !m.entry.is_null())
-    {
-        if !crate::closure::info_has(
-            &*(member.entry as *const crate::closure::JsFunctionInfo),
-            crate::closure::FN_GENERATOR,
-        ) {
-            continue;
-        }
-        let Some(key) = crate::object::class_registry::declarations::evaluation_computed_member_key(
-            crate::value::js_nanbox_get_pointer(owner.get_nanbox_f64()) as *const ObjectHeader,
-            class_id,
-            member,
-        ) else {
-            continue;
-        };
-        if crate::symbol::js_is_symbol(key) == 0 {
-            continue;
-        }
-        let key = scope.root_nanbox_f64(key);
-        let name = crate::symbol::symbol_function_name(crate::symbol::sym_key_from_f64(
-            key.get_nanbox_f64(),
-        ));
-        let method = scope.root_nanbox_f64(
-            crate::object::native_module::class_method_declaration_value(
-                owner.get_nanbox_f64(),
-                &name,
-                member.code as usize,
-                member.param_count,
-                member.has_synthetic_arguments(),
-                member.has_rest(),
-                member.entry as usize,
-                true,
-            ),
-        );
-        crate::object::native_module::set_bound_native_closure_name(
-            crate::value::js_nanbox_get_pointer(method.get_nanbox_f64())
-                as *mut crate::closure::ClosureHeader,
-            &name,
-        );
-        crate::symbol::define_symbol_data_property(
-            proto.get_nanbox_f64(),
-            key.get_nanbox_f64(),
-            method.get_nanbox_f64(),
-        );
-        crate::symbol::set_symbol_property_attrs(
-            crate::value::js_nanbox_get_pointer(proto.get_nanbox_f64()) as usize,
-            crate::symbol::sym_key_from_f64(key.get_nanbox_f64()),
-            crate::object::PropertyAttrs::new(true, false, true),
-        );
-    }
-}
 
 /// A computed static symbol method is an ordinary own property of its class.
 /// Retain its actual callable and home, as named class methods already do.
@@ -100,16 +36,27 @@ pub(crate) unsafe fn install_class_symbol_method(
         crate::symbol::symbol_function_name(crate::symbol::sym_key_from_f64(key.get_nanbox_f64()));
     // Use the same declaration value as named/computed-string methods:
     // its home and ordinary method metadata belong to this callable.
-    let method = crate::object::native_module::class_method_declaration_value(
-        owner.get_nanbox_f64(),
-        name.as_bytes(),
-        body,
-        params,
-        false,
-        rest,
-        entry,
-        true,
-    );
+    let method = if entry == 0 {
+        crate::object::build_symbol_bound_method_closure(
+            owner.get_nanbox_f64(),
+            body,
+            params,
+            rest,
+            true,
+            &name,
+        )
+    } else {
+        crate::object::native_module::class_method_declaration_value(
+            owner.get_nanbox_f64(),
+            name.as_bytes(),
+            body,
+            params,
+            false,
+            rest,
+            entry,
+            true,
+        )
+    };
     let method = scope.root_nanbox_f64(method);
     // A static Symbol-keyed method is a class static symbol member: arm the
     // latch that instanceof's Symbol.hasInstance lookup and the other
@@ -126,43 +73,6 @@ pub(crate) unsafe fn install_class_symbol_method(
         crate::symbol::sym_key_from_f64(key.get_nanbox_f64()),
         crate::object::PropertyAttrs::new(true, false, true),
     );
-}
-
-/// The source entry selects generator lowering, while Get and the ordinary
-/// callable invocation prove the selected method and its receiver per use.
-pub(crate) unsafe fn call_generator_symbol_method(
-    object: f64,
-    key: f64,
-    args: *const f64,
-    len: usize,
-) -> f64 {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let object = scope.root_nanbox_f64(object);
-    let key = scope.root_nanbox_f64(key);
-    let args = scope.root_nanbox_f64_slice(if len == 0 {
-        &[]
-    } else {
-        std::slice::from_raw_parts(args, len)
-    });
-    let recv = if let Some(cid) = crate::object::class_prototype_ref_id(object.get_nanbox_f64()) {
-        crate::object::class_registry::class_decl_prototype_value(cid)
-    } else if let Some(cid) =
-        crate::object::class_value::legacy_class_value_word(object.get_nanbox_u64())
-    {
-        crate::value::js_nanbox_pointer(crate::object::class_value::class_value_ptr(cid) as i64)
-    } else {
-        object.get_nanbox_f64()
-    };
-    let recv = scope.root_nanbox_f64(recv);
-    let value =
-        crate::symbol::js_object_get_symbol_property(recv.get_nanbox_f64(), key.get_nanbox_f64());
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
-    crate::object::method_call::js_method_call_value(
-        value,
-        recv.get_nanbox_f64(),
-        args.as_ptr(),
-        args.len(),
-    )
 }
 
 /// The instance's `[[GeneratorState]]`: its private slot holding the resume
@@ -199,19 +109,20 @@ pub(crate) fn generator_original_prototype_key() -> &'static str {
 /// private slot, the generator brand, extensible, and a [[Prototype]] its
 /// record holds (`PROTO_ID_RECORD_HELD`): the shape names no prototype, so
 /// a birth neither hashes a prototype identity nor mints a shape.
-fn birth_shape() -> u32 {
+fn birth_shape() -> LayoutWord {
     let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
     if shape != 0 {
-        return shape;
+        return LayoutWord(shape);
     }
     prepare_birth_shape()
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
-fn prepare_birth_shape() -> u32 {
+fn prepare_birth_shape() -> LayoutWord {
     let shape = record_birth_shape(GENERATOR_STATE_BRAND);
-    BIRTH_SHAPE.with(|memo| memo.set(shape));
+    BIRTH_SHAPE.with(|memo| memo.set(shape.0));
     shape
 }
 
@@ -219,8 +130,9 @@ fn prepare_birth_shape() -> u32 {
 /// `[[GeneratorState]]` private slot, the brand, extensible, prototype held
 /// by the record. Published once per agent per kind and kept for its life.
 #[cold]
+#[optimize(size)]
 #[inline(never)]
-pub(super) fn record_birth_shape(brand: u64) -> u32 {
+pub(super) fn record_birth_shape(brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let _no_move = crate::gc::GcSuppressScope::new();
     let proof = SharedLayout::shape_cache_entry();
@@ -255,7 +167,7 @@ pub(super) fn record_birth_shape(brand: u64) -> u32 {
     // SAFETY: the record of the id just published in this agent.
     unsafe {
         crate::object::shapes::note_external_shape_carrier(
-            crate::object::shapes::shape_descriptor_by_id(shape),
+            crate::object::shapes::shape_descriptor_for_word(shape),
         );
     }
     shape
@@ -264,12 +176,12 @@ pub(super) fn record_birth_shape(brand: u64) -> u32 {
 /// The fallback layout for a prototype the record cannot hold unambiguously
 /// (a function, or a non-heap object such as a Proxy): the shape names it, as
 /// every ordinary object's shape does. Rare; one intern per birth.
-fn shape_held_birth_shape(proto: f64) -> u32 {
+fn shape_held_birth_shape(proto: f64) -> LayoutWord {
     shape_held_birth_shape_for(proto, GENERATOR_STATE_BRAND)
 }
 
 /// [`shape_held_birth_shape`] for a generator kind's `brand`.
-pub(super) fn shape_held_birth_shape_for(proto: f64, brand: u64) -> u32 {
+pub(super) fn shape_held_birth_shape_for(proto: f64, brand: u64) -> LayoutWord {
     use crate::object::canonical_keys::{CanonicalKeys, SharedLayout};
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
@@ -320,7 +232,7 @@ pub(crate) fn fixed_generator_state(value: f64) -> Option<*const crate::closure:
     let addr = value.as_pointer::<u8>() as usize;
     unsafe {
         let header = crate::value::addr_class::try_read_gc_header(addr)?;
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT {
+        if crate::gc_type_is_not_object!(header.obj_type) {
             return None;
         }
         fixed_generator_state_of_object(addr as *const ObjectHeader)
@@ -338,7 +250,8 @@ pub(crate) unsafe fn fixed_generator_state_of_object(
     obj: *const ObjectHeader,
 ) -> Option<*const crate::closure::ClosureHeader> {
     let shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    let bits = if shape != 0 && crate::object::shapes::object_shape_stamp(obj) == shape {
+    let bits = if shape != 0 && crate::object::shapes::object_shape_stamp(obj) == LayoutWord(shape)
+    {
         *(obj as *const u8)
             .add(std::mem::size_of::<ObjectHeader>())
             .cast::<u64>()
@@ -388,10 +301,54 @@ pub(crate) unsafe fn generator_record_prototype_word(obj: *const ObjectHeader) -
     // A sync birth layout answers from its own kind alone; every other
     // record-held instance (async, or transitioned) resolves its kind first.
     let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    if sync_shape != 0 && crate::object::shapes::object_shape_stamp(obj) == sync_shape {
+    if sync_shape != 0 && crate::object::shapes::object_shape_stamp(obj) == LayoutWord(sync_shape) {
         return record_prototype_word::<false>(birth_record_bits(obj));
     }
     other_record_prototype_word(obj)
+}
+
+/// The object a `Get(gen, "next")` on sync generator `obj` first finds an own
+/// key on, when its chain up to that object is all empty: `obj` is on the
+/// sync birth layout with no overflow (no own key but its private state), and
+/// its record's prototype control holds the owner function while the owner's
+/// original prototype is unmaterialized (an empty object whose [[Prototype]]
+/// is `%GeneratorPrototype%`; [`generator_record_prototype_word`]). Then the
+/// answer is `%GeneratorPrototype%`, whose own keys the read scans. `None`
+/// for every other instance: the ordinary [[Get]] decides. Allocation-free.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell.
+pub(crate) unsafe fn sync_generator_next_owner(
+    obj: *const ObjectHeader,
+) -> Option<*const ObjectHeader> {
+    let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
+    if sync_shape == 0
+        || crate::object::shapes::object_shape_stamp(obj) != LayoutWord(sync_shape)
+        || crate::object::overflow::has_overflow(obj)
+    {
+        return None;
+    }
+    let record = JSValue::from_bits(birth_record_bits(obj));
+    if !record.is_pointer() {
+        return None;
+    }
+    let state = record.as_pointer::<crate::closure::ClosureHeader>();
+    let owner = holder_owner(*state.add(1).cast::<u64>().add(PROTO_SLOT))?;
+    if crate::closure::props::fn_private_intrinsic_read(owner as usize, &ORIGINAL_PROTOTYPE_READ)
+        .is_some()
+    {
+        return None;
+    }
+    let gen_proto =
+        crate::object::GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire);
+    if gen_proto == 0
+        || !crate::value::addr_class::try_read_gc_header(gen_proto as usize).is_some_and(|h| {
+            crate::gc_type_is_object!(h.obj_type) && h.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        })
+    {
+        return None;
+    }
+    Some(gen_proto as *const ObjectHeader)
 }
 
 /// [`generator_record_prototype_word`] for an async or transitioned instance.
@@ -435,7 +392,7 @@ unsafe fn record_of_record_held(
 ) -> Option<(*const crate::closure::ClosureHeader, bool)> {
     let stamp = crate::object::shapes::object_shape_stamp(obj);
     let sync_shape = BIRTH_SHAPE.with(std::cell::Cell::get);
-    let (bits, is_async) = if sync_shape != 0 && stamp == sync_shape {
+    let (bits, is_async) = if sync_shape != 0 && stamp == LayoutWord(sync_shape) {
         (birth_record_bits(obj), false)
     } else {
         async_or_transitioned_record_bits(obj, stamp)?
@@ -466,10 +423,10 @@ unsafe fn birth_record_bits(obj: *const ObjectHeader) -> u64 {
 #[inline(never)]
 unsafe fn async_or_transitioned_record_bits(
     obj: *const ObjectHeader,
-    stamp: u32,
+    stamp: LayoutWord,
 ) -> Option<(u64, bool)> {
     let async_shape = super::async_generator_state::published_birth_shape();
-    if async_shape != 0 && stamp == async_shape {
+    if async_shape != LayoutWord(0) && stamp == async_shape {
         return Some((birth_record_bits(obj), true));
     }
     transitioned_record_held_bits(obj)
@@ -491,13 +448,10 @@ unsafe fn transitioned_record_held_bits(obj: *const ObjectHeader) -> Option<(u64
 #[inline(never)]
 unsafe fn owner_original_prototype_word<const ASYNC: bool>(holder: u64) -> Option<u64> {
     let owner = holder_owner(holder)?;
-    let bag = (*owner).props;
-    if !bag.is_null() {
-        if let Some(original) =
-            ORIGINAL_PROTOTYPE_READ.read(crate::value::js_nanbox_pointer(bag as i64))
-        {
-            return Some(original.to_bits());
-        }
+    if let Some(original) =
+        crate::closure::props::fn_private_intrinsic_read(owner as usize, &ORIGINAL_PROTOTYPE_READ)
+    {
+        return Some(original.to_bits());
     }
     let gen_proto = if ASYNC {
         crate::object::ASYNC_GENERATOR_PROTOTYPE_PTR.load(std::sync::atomic::Ordering::Acquire)
@@ -536,7 +490,7 @@ pub(crate) fn generator_observe_record_prototype(value: f64) {
         let Some(header) = crate::value::addr_class::try_read_gc_header(addr) else {
             return;
         };
-        if header.obj_type != crate::gc::GC_TYPE_OBJECT
+        if crate::gc_type_is_not_object!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return;
@@ -553,7 +507,7 @@ pub(crate) fn generator_observe_record_prototype(value: f64) {
         let Some(owner) = holder_owner(*state.add(1).cast::<u64>().add(PROTO_SLOT)) else {
             return;
         };
-        if !(*owner).props.is_null() {
+        if crate::closure::props::has_store(owner as usize) {
             return;
         }
         owner
@@ -615,6 +569,7 @@ pub(super) unsafe fn resume_fixed_state(
     resume_fixed_step(state, op, arg).into_result()
 }
 
+crate::fn_info!(#[realm(throws = passes(2))] declare
 /// The generator birth owns an inaccessible, two-parameter compiled resume
 /// body (one argument for bodies with no abrupt routes). Once the receiver's brand proves that edge, no general callable,
 /// rest-argument or arity dispatch remains to resolve. The body returns the
@@ -634,15 +589,12 @@ pub(crate) unsafe fn resume_fixed_step(
     };
     let set = |index, bits| {
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
-            // GC_STORE_AUDIT(POINTER_FREE): shared done/executing/step controls only.
+            // GC_STORE_AUDIT(POINTER_FREE): controls or the canonical undefined sent value.
             p.add(1).cast::<u64>().cast_mut().add(index).write(bits);
         })
     };
     if get(3) == crate::value::TAG_TRUE {
-        let msg = b"Generator is already executing";
-        let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(msg);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        throw_generator_executing();
     }
     let next_only =
         state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| (*(*p).info).params == 1);
@@ -650,7 +602,7 @@ pub(crate) unsafe fn resume_fixed_step(
     {
         set(1, crate::value::TAG_TRUE);
         if op == 2.0 {
-            crate::exception::js_throw(arg);
+            crate::exception::throw_program_value(arg);
         }
         set(STEP_SLOT, (STEP_DONE as f64).to_bits());
         let value = if op == 1.0 {
@@ -665,35 +617,81 @@ pub(crate) unsafe fn resume_fixed_step(
     }
     set(3, crate::value::TAG_TRUE);
     if op == 0.0 {
-        state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
-            js_generator_set_slot(p.cast_mut(), 2, arg.to_bits(), 1)
-        });
+        // The ordinary next() call sends undefined. Its bits prove there is
+        // neither a managed edge nor a string alias to publish, just as for
+        // the frame's done/executing controls. Keep the full slot operation
+        // for sent values that need barrier or alias handling.
+        if arg.to_bits() == crate::value::TAG_UNDEFINED {
+            set(2, crate::value::TAG_UNDEFINED);
+        } else {
+            state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+                js_generator_set_slot(p.cast_mut(), 2, arg.to_bits(), 1)
+            });
+        }
     }
     // next consumes the sent slot from this refreshed frame at body entry,
     // including after barrier work. Abrupt arguments cross no slot barrier;
     // their remaining setup is the non-collecting exception-stack capture.
     // The argument is never read here after the body can collect.
-    let result = crate::exception::catch_generator_resume(&state, op, arg);
+    // 27.5.3.3 GeneratorResume: an abrupt completion of the body completes
+    // the generator. The body's own completion catch marks it done and not
+    // executing before it rethrows, so the throw passes through this frame
+    // with nothing left to do here; the catching frame's handler truncates
+    // the runtime handle stack, this scope included (as for any runtime
+    // frame that calls into JS).
+    let value = state.with_const_ptr::<crate::closure::ClosureHeader, _>(|p| {
+        let arg = if op == 0.0 {
+            f64::from_bits(*p.add(1).cast::<u64>().add(2))
+        } else {
+            arg
+        };
+        if (*(*p).info).params == 1 {
+            return crate::closure::body_call::js_body_call_unwind!(
+                (*(*p).info).code,
+                p,
+                crate::closure::plain_call_receiver(),
+                arg
+            );
+        }
+        crate::closure::body_call::js_body_call_unwind!(
+            (*(*p).info).code,
+            p,
+            crate::closure::plain_call_receiver(),
+            op,
+            arg
+        )
+    });
     set(3, crate::value::TAG_FALSE);
-    match result {
-        Ok(value) => {
-            // The record can keep this value in a slot its body appends to
-            // in place. Handing it out aliases it, exactly as storing it into
-            // an IteratorResult member did: demote a uniquely owned string.
-            if value.to_bits() & crate::value::TAG_MASK == crate::value::STRING_TAG {
-                crate::string::js_string_addref(
-                    (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::StringHeader,
-                );
-            }
-            let kind = f64::from_bits(get(STEP_SLOT)) as u32;
-            debug_assert!(matches!(kind, STEP_YIELD | STEP_DONE | STEP_INNER_RESULT));
-            FixedStep { value, kind }
-        }
-        Err(value) => {
-            set(1, crate::value::TAG_TRUE);
-            crate::exception::js_throw(value)
-        }
+    // The record can keep this value in a slot its body appends to in place.
+    // Handing it out aliases it, exactly as storing it into an IteratorResult
+    // member did: demote a uniquely owned string.
+    if value.to_bits() & crate::value::TAG_MASK == crate::value::STRING_TAG {
+        crate::string::js_string_addref(
+            (value.to_bits() & crate::value::POINTER_MASK) as *mut crate::StringHeader,
+        );
     }
+    let kind = f64::from_bits(get(STEP_SLOT)) as u32;
+    debug_assert!(matches!(kind, STEP_YIELD | STEP_DONE | STEP_INNER_RESULT));
+    FixedStep { value, kind }
+}
+);
+
+/// 27.5.3.3 GeneratorValidate step 3: resuming a generator whose body is
+/// running throws a TypeError.
+#[cold]
+pub(crate) fn throw_generator_executing() -> ! {
+    let msg = b"Generator is already executing";
+    let msg = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
+}
+
+/// A for-of step the compiler emits over a proven sync generator found the
+/// record executing (its body is running and reached the same generator's
+/// step): the TypeError of [`resume_fixed_step`].
+#[no_mangle]
+#[cold]
+pub extern "C-unwind" fn js_generator_resume_executing() -> f64 {
+    throw_generator_executing()
 }
 
 /// A previously marked prototype already owns its stable serial. Read those
@@ -701,8 +699,11 @@ pub(crate) unsafe fn resume_fixed_step(
 unsafe fn prototype_identity(value: f64) -> Option<u64> {
     let addr = (value.to_bits() & crate::value::POINTER_MASK) as usize;
     if let Some(header) = crate::value::addr_class::try_read_gc_header(addr) {
-        if header.obj_type == crate::gc::GC_TYPE_OBJECT {
-            let meta = (*(addr as *const ObjectHeader)).meta;
+        if crate::object_has_meta_word!(header.obj_type) {
+            let meta = crate::meta_read!(crate::meta_obj_from_type!(
+                addr as *const ObjectHeader as *mut _,
+                header.obj_type,
+            ));
             if !meta.is_null()
                 && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0
                 && (*meta).proto_serial != 0
@@ -732,7 +733,7 @@ pub extern "C" fn js_generator_create(
         owner as *mut crate::closure::ClosureHeader
     };
     let owner = scope.root_raw_const_ptr(owner);
-    ensure_generator_intrinsics();
+    ensure_generator_kind_tower(false);
     // GetPrototypeFromConstructor, read from the owner's declared slot
     // without materializing it.
     let holder = owner.with_const_ptr::<crate::closure::ClosureHeader, _>(|owner| unsafe {
@@ -832,7 +833,7 @@ pub(super) fn classify_prototype(value: f64, is_async: bool) -> Holder {
     let ordinary = jv.is_pointer()
         && unsafe {
             crate::value::addr_class::try_read_gc_header(jv.as_pointer::<u8>() as usize)
-                .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_OBJECT)
+                .is_some_and(|h| crate::gc_type_is_object!(h.obj_type))
         };
     if ordinary {
         Holder::Record(value.to_bits())
@@ -855,7 +856,11 @@ pub(super) unsafe fn birth_prototype_holder(
     if owner.is_null() {
         return Holder::Record(generator_prototype_bits(is_async));
     }
-    if crate::closure::props::bag_of(owner as usize).is_null()
+    // The `prototype` slot holds the made (or assigned) value.
+    if let Some(value) = crate::closure::props::prototype_slot_value(owner as usize) {
+        return classify_prototype(value, is_async);
+    }
+    if !crate::closure::props::has_store(owner as usize)
         && crate::closure::props::closure_has_generator_body(owner)
     {
         return Holder::Record(crate::value::js_nanbox_pointer(owner as i64).to_bits());

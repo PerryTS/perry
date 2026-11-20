@@ -1,0 +1,1 @@
+`s += a[i]` over a specialized typed-array parameter keeps the accumulator a plain Number whatever the array's length expression is (#13740). The #8619 read proof was fed only the parameters with an integer-literal length, so `new Int32Array(1 << 20)` ran the string-or-number add diamond while `new Int32Array(1048576)` did not, about 4x slower.

@@ -185,8 +185,9 @@ pub(crate) fn try_lower_concat_site_cached(
     } else {
         ""
     };
+    let linkage = concat_site_table_linkage(crate::stubs::snap_image_run());
     ctx.typed_parse_rodata.push(format!(
-        "@{table_name} = private {tls}global {CONCAT_SITE_TABLE_TY} zeroinitializer"
+        "@{table_name} = {linkage} {tls}global {CONCAT_SITE_TABLE_TY} zeroinitializer"
     ));
     let table_ref = format!("@{table_name}");
 
@@ -276,4 +277,23 @@ pub(crate) fn try_lower_concat_site_cached(
             (plain_val.as_str(), plain_end.as_str()),
         ],
     )))
+}
+
+/// Linkage of a per-site table: under the image build it is a named local
+/// symbol (the image driver names its words); otherwise it stays private.
+fn concat_site_table_linkage(image_build: bool) -> &'static str {
+    if image_build {
+        "internal"
+    } else {
+        "private"
+    }
+}
+
+#[cfg(test)]
+mod linkage_tests {
+    #[test]
+    fn the_image_build_names_the_table_and_the_default_does_not() {
+        assert_eq!(super::concat_site_table_linkage(true), "internal");
+        assert_eq!(super::concat_site_table_linkage(false), "private");
+    }
 }

@@ -1,0 +1,3 @@
+package test:driver;
+interface clock { wait-for: async func(value: u64); }
+world plugin { import clock; export run: async func(value: u64) -> u64; }

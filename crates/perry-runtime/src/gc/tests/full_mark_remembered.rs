@@ -6,7 +6,7 @@
 
 use super::super::*;
 use super::support::*;
-use crate::gc::trace::remembered_mark_sabotage;
+use crate::gc::mark::remembered_mark_sabotage;
 
 fn run_isolated(test: fn()) {
     std::thread::spawn(move || {
@@ -144,7 +144,8 @@ fn dropping_one_folded_entry_fails_young_edge_coverage() {
         }
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
-        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
             red.is_err(),
             "dropping one folded entry must turn coverage red"
@@ -194,7 +195,8 @@ fn dropping_one_folded_entry_fails_malloc_edge_coverage() {
         }
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
-        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
             red.is_err(),
             "dropping one folded entry must turn coverage red"
@@ -444,7 +446,7 @@ fn folded_full_mark_matches_the_reference_for_arena_and_malloc_parents() {
         ];
         let mut cursor = 0;
         let mut folded = StickyRememberedSet::default();
-        while !drain_trace_worklist_step_remembering(
+        while !drain_trace_worklist_step_remembering::<{ cfg!(test) }>(
             &mut worklist,
             &mut cursor,
             &valid,
@@ -490,7 +492,7 @@ fn the_fold_neither_marks_nor_remembers_an_old_weak_holders_target() {
         let mut worklist = vec![header];
         let mut cursor = 0;
         let mut sticky = StickyRememberedSet::default();
-        while !drain_trace_worklist_step_remembering(
+        while !drain_trace_worklist_step_remembering::<{ cfg!(test) }>(
             &mut worklist,
             &mut cursor,
             &valid,

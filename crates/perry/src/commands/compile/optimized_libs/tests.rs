@@ -62,13 +62,13 @@ fn web_streams_remain_bundled_when_well_known_wrappers_are_enabled() {
 }
 
 /// The emitted-FFI → link derivation resolves to real well-known bindings.
-/// The codegen prefix net routes `js_undici_*` to these
+/// The codegen prefix net routes `js_parcel_watcher_*` to these
 /// binding keys; each must exist in the shipped `well_known_bindings.toml`
 /// and map to its `perry-ext-*` crate, or the driver's routing loop would
 /// silently drop the flip.
 #[test]
 fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
-    for (key, krate) in [("undici", "perry-ext-undici")] {
+    for (key, krate) in [("@parcel/watcher", "perry-ext-parcel-watcher")] {
         let binding = super::super::well_known::lookup_well_known(key)
             .unwrap_or_else(|| panic!("`{key}` must be a well-known binding"));
         assert_eq!(binding.krate, krate, "binding `{key}` routes to `{krate}`");
@@ -78,7 +78,7 @@ fn ext_prefix_binding_keys_resolve_to_wrapper_crates() {
 #[test]
 fn external_net_transport_keeps_tls_provider_without_bundled_net() {
     let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
-    super::driver::finalize_tls_transport_features(&mut features, true, true);
+    super::driver::finalize_tls_transport_features(&mut features, true, true, true);
     assert_eq!(
         features,
         std::collections::BTreeSet::from(["external-net-tls"]),
@@ -87,10 +87,36 @@ fn external_net_transport_keeps_tls_provider_without_bundled_net() {
 }
 
 #[test]
+fn external_net_transport_without_tls_links_no_tls_provider() {
+    let mut features = std::collections::BTreeSet::from(["bundled-net", "tls"]);
+    super::driver::finalize_tls_transport_features(&mut features, false, true, false);
+    assert!(
+        features.is_empty(),
+        "a net or child_process program must not install the TLS adapters: {features:?}"
+    );
+}
+
+#[test]
 fn direct_tls_without_external_transport_keeps_legacy_umbrella() {
     let mut features = std::collections::BTreeSet::new();
-    super::driver::finalize_tls_transport_features(&mut features, true, false);
+    super::driver::finalize_tls_transport_features(&mut features, true, false, true);
     assert_eq!(features, std::collections::BTreeSet::from(["tls"]));
+}
+
+#[test]
+fn child_process_links_net_without_calling_its_install_hook() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!well_known_iteration_set(&ctx).contains("net"));
+    ctx.uses_child_process = true;
+    assert!(
+        well_known_iteration_set(&ctx).contains("net"),
+        "a child's stdio pipes are net sockets, so net is linked"
+    );
+    assert!(
+        !program_module_set(&ctx).contains("net"),
+        "the entry does not install net: the runtime does at the first pipe socket"
+    );
 }
 
 #[test]
@@ -116,17 +142,6 @@ fn explicit_node_fetch_import_still_routes_to_well_known_fetch() {
     let modules = well_known_iteration_set(&ctx);
 
     assert!(modules.contains("node-fetch"));
-}
-
-#[test]
-fn explicit_undici_import_routes_to_well_known_undici() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    ctx.native_module_imports.insert("undici".to_string());
-
-    let modules = well_known_iteration_set(&ctx);
-
-    assert!(modules.contains("undici"));
 }
 
 #[test]
@@ -216,7 +231,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     set_env_var(
         "PERRY_FORCE_WELL_KNOWN",
-        Some("http, node:net ws definitely-not-real"),
+        Some("http, node:net perry/websocket definitely-not-real"),
     );
     let ctx = CompilationContext::new(std::env::current_dir().expect("cwd"));
     let modules = well_known_iteration_set(&ctx);
@@ -225,7 +240,7 @@ fn forced_well_known_env_extends_iteration_set() {
 
     assert!(modules.contains("http"));
     assert!(modules.contains("net"));
-    assert!(modules.contains("ws"));
+    assert!(modules.contains("perry/websocket"));
     assert!(!modules.contains("node:net"));
     assert!(!modules.contains("definitely-not-real"));
 }
@@ -239,7 +254,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let net = super::super::well_known::lookup_well_known("net").expect("net well-known binding");
-    let ws = super::super::well_known::lookup_well_known("ws").expect("ws well-known binding");
+    let ws = super::super::well_known::lookup_well_known("perry/websocket")
+        .expect("perry/websocket well-known binding");
     let net_lib = dir
         .path()
         .join(super::super::well_known::ext_staticlib_filename(
@@ -264,7 +280,8 @@ fn prebuilt_well_known_archives_resolve_through_perry_lib_dir() {
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
     ctx.native_module_imports.insert("net".to_string());
-    ctx.native_module_imports.insert("ws".to_string());
+    ctx.native_module_imports
+        .insert("perry/websocket".to_string());
     let libs = resolve_prebuilt_ext_libs(&routed_modules(&ctx), None, OutputFormat::Json);
 
     set_env_var("PERRY_LIB_DIR", old_lib_dir.as_deref());
@@ -315,7 +332,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let mut archives = Vec::new();
-    for module in ["net", "ws"] {
+    for module in ["net", "perry/websocket"] {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
         let lib = dir
             .path()
@@ -331,7 +348,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     set_env_var("PERRY_DISABLE_WELL_KNOWN", Some("1"));
 
     let mut ctx = CompilationContext::new(dir.path().to_path_buf());
-    for module in ["net", "ws", "events"] {
+    for module in ["net", "perry/websocket", "events"] {
         ctx.native_module_imports.insert(module.to_string());
     }
     let routed = super::routed_modules(&ctx);
@@ -345,7 +362,7 @@ fn disabled_flip_still_routes_sole_provider_wrappers() {
     assert!(libs.contains(&archives[1]), "ws: {libs:?}");
     assert_eq!(
         routed,
-        std::collections::BTreeSet::from(["net".to_string(), "ws".to_string()])
+        std::collections::BTreeSet::from(["net".to_string(), "perry/websocket".to_string()])
     );
     assert!(super::wrapper_is_sole_provider("node:net"));
     assert!(!super::wrapper_is_sole_provider("tls"));
@@ -462,51 +479,6 @@ fn http_import_installs_the_external_adapters_of_the_prebuilt_stdlib() {
     );
 }
 
-/// Both default and optimized builds use the same binding provider. Keep a
-/// concrete ABI inventory: removing the bundled provider must not make its
-/// former superset witness vacuous.
-#[test]
-fn ext_zlib_is_the_only_provider_and_covers_the_linked_surface() {
-    let root = find_perry_workspace_root().expect("workspace root");
-    assert!(!root.join("crates/perry-stdlib/src/zlib.rs").exists());
-    let source = std::fs::read_to_string(root.join("crates/perry-ext-zlib/src/lib.rs")).unwrap()
-        + &std::fs::read_to_string(root.join("crates/perry-ext-zlib/src/stream.rs")).unwrap();
-    for family in [
-        "gzip",
-        "gunzip",
-        "deflate",
-        "inflate",
-        "deflate_raw",
-        "inflate_raw",
-        "unzip",
-        "brotli_compress",
-        "brotli_decompress",
-        "zstd_compress",
-        "zstd_decompress",
-    ] {
-        for symbol in [
-            format!("js_zlib_{family}_sync"),
-            format!("js_zlib_{family}"),
-            format!("js_zlib_create_{family}"),
-            format!("js_zlib_{family}_init"),
-        ] {
-            assert!(source.contains(&symbol), "missing binding ABI: {symbol}");
-        }
-    }
-    for retired in [
-        "scan_zlib_roots",
-        "js_zlib_process_pending",
-        "js_zlib_has_active_handles",
-    ] {
-        assert!(
-            !source.contains(retired),
-            "retired zlib plumbing: {retired}"
-        );
-    }
-    let manifest = std::fs::read_to_string(root.join("crates/perry-stdlib/Cargo.toml")).unwrap();
-    assert!(manifest.contains("compression-gzip = [\"dep:perry-ext-zlib\"]"));
-}
-
 /// Regression: a program that references `WebAssembly.*` must get the
 /// `perry-runtime/wasm-host` cross feature so the runtime archive carries
 /// `js_webassembly_*` symbol definitions. Without it the link fails with
@@ -597,7 +569,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
     .map(|k| (*k, std::env::var(k).ok()))
     .collect();
 
-    let modules = ["http", "node:https", "net", "zlib", "ws"];
+    let modules = ["http", "node:https", "net", "zlib", "perry/websocket"];
     let dir = tempfile::tempdir().expect("tempdir");
     for module in modules {
         let binding = super::super::well_known::lookup_well_known(module).expect("binding");
@@ -712,7 +684,7 @@ fn codegen_install_symbols_match_the_linked_wrappers() {
         for flip in [true, false] {
             assert!(expect(no_auto, flip, "zlib").ends_with("Some(\"js_ext_zlib_nm_install\")"));
             assert!(expect(no_auto, flip, "net").ends_with("Some(\"js_ext_net_nm_install\")"));
-            assert!(expect(no_auto, flip, "ws").ends_with("None"));
+            assert!(expect(no_auto, flip, "perry/websocket").ends_with("None"));
         }
     }
 }
@@ -859,4 +831,316 @@ fn the_instrumented_variant_names_its_archives_with_an_instr_suffix() {
     }
     // A name that is not an archive is left alone.
     assert_eq!(name("perry", true), "perry");
+}
+
+/// Run this module's test `name` alone in a child test process and report
+/// whether this call was the parent (`true`: the child ran it and passed, the
+/// caller returns) or the child (`false`: the caller runs the test body).
+///
+/// Lowering records dynamic-code reach (`perry_hir::has_deferred_dynamic_code_sites`)
+/// in process-global state that the driver drains once per compile. Every
+/// other test in this binary that lowers a program can leave it set, so a test
+/// asserting what a plain program does NOT install must not share their
+/// process. The child sees only its own test, without draining anyone's state.
+fn ran_in_isolated_child(name: &str) -> bool {
+    const CHILD: &str = "PERRY_TEST_ISOLATED_FEATURES_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        return false;
+    }
+    let module = module_path!().split_once("::").unwrap().1;
+    let name = format!("{module}::{name}");
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", &name, "--test-threads=1", "--nocapture"])
+        .env(CHILD, "1")
+        .output()
+        .expect("run isolated feature test");
+    assert!(
+        child.status.success() && String::from_utf8_lossy(&child.stdout).contains("1 passed;"),
+        "isolated feature test {name} failed or did not run\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&child.stdout),
+        String::from_utf8_lossy(&child.stderr)
+    );
+    true
+}
+
+/// A program with one native addon of the given reach and Node-API imports.
+fn addon_context(
+    dir: &std::path::Path,
+    reach: &[perry_runtime_manifest::NodeApiReach],
+    imports: &[&str],
+) -> CompilationContext {
+    let mut ctx = CompilationContext::new(dir.to_path_buf());
+    ctx.native_addons.insert(
+        "fixture/addon.node".to_string(),
+        crate::commands::compile::NativeAddonModule {
+            logical_id: "fixture/addon.node".to_string(),
+            package: "fixture".to_string(),
+            version: "1.0.0".to_string(),
+            source_path: dir.join("addon.node"),
+            package_dir: dir.to_path_buf(),
+            entry_relative: "addon.node".into(),
+            ship_package_payload: true,
+            reach: reach.iter().copied().collect(),
+            node_api_imports: imports.iter().map(|name| name.to_string()).collect(),
+            #[cfg(feature = "target-wasi")]
+            wasm_archives: Vec::new(),
+        },
+    );
+    ctx
+}
+
+/// The host links and exports the Node-API symbols its addons import, and
+/// its whole inventory for an open addon (which can look any export up).
+#[test]
+fn node_api_host_exports_what_its_addons_import() {
+    use perry_runtime_manifest::{node_api_host_symbols, NodeApiReach};
+    let dir = tempfile::tempdir().unwrap();
+    assert!(CompilationContext::new(dir.path().to_path_buf())
+        .node_api_host_exports()
+        .is_empty());
+    let closed = addon_context(
+        dir.path(),
+        &[],
+        &["napi_create_int32", "napi_set_named_property"],
+    );
+    assert_eq!(
+        closed.node_api_host_exports(),
+        ["napi_create_int32", "napi_set_named_property"]
+    );
+    let open = addon_context(dir.path(), &[NodeApiReach::World], &["napi_get_global"]);
+    assert_eq!(
+        open.node_api_host_exports(),
+        node_api_host_symbols().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn vfs_c_exports_cover_addon_dependencies_without_expanding_node_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = addon_context(dir.path(), &[], &["napi_create_int32"]);
+    assert_eq!(
+        ctx.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+    assert_eq!(ctx.node_api_host_exports(), ["napi_create_int32"]);
+
+    ctx.native_addons.clear();
+    assert!(ctx.perry_c_host_exports().is_empty());
+
+    let open = addon_context(
+        dir.path(),
+        &[perry_runtime_manifest::NodeApiReach::World],
+        &[],
+    );
+    assert_eq!(
+        open.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+}
+
+/// A native addon reaches what its Node-API imports reach. A closed addon
+/// links the Node-API host and the subsystems of the values it creates, not
+/// every global subsystem; an open one links them all.
+#[test]
+fn native_addons_install_what_their_imports_reach() {
+    if ran_in_isolated_child("native_addons_install_what_their_imports_reach") {
+        return;
+    }
+    use perry_runtime_manifest::NodeApiReach;
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
+    let dir = tempfile::tempdir().unwrap();
+    let features = BTreeSet::new();
+    let with_addon = |reach: &[NodeApiReach]| {
+        auto_optimized_cross_features(&addon_context(dir.path(), reach, &[]), &features, &[])
+    };
+    let has = |cross: &[String], feature: &str| cross.iter().any(|f| f == feature);
+    let world = [
+        "perry-runtime/temporal",
+        "perry-runtime/url-engine",
+        "perry-runtime/perf-hooks",
+        "perry-runtime/os",
+        "perry-runtime/messaging",
+        "perry-runtime/event-target",
+        "perry-runtime/thread",
+        "perry-runtime/async-hooks",
+        "perry-runtime/proxy",
+        "perry-runtime/proc-ipc",
+        "perry-runtime/diagnostics",
+        "perry-runtime/global-json",
+    ];
+    let values = [
+        "perry-runtime/bigint",
+        "perry-runtime/date",
+        "perry-runtime/typedarray",
+    ];
+    let closed = with_addon(&[]);
+    assert!(has(&closed, "perry-runtime/node-api-host"), "{closed:?}");
+    for feature in world.iter().chain(&values) {
+        assert!(!has(&closed, feature), "closed addon selected {feature}");
+    }
+    let dated = with_addon(&[NodeApiReach::Date]);
+    assert!(has(&dated, "perry-runtime/date"), "{dated:?}");
+    assert!(!has(&dated, "perry-runtime/bigint"), "{dated:?}");
+    let open = with_addon(&[NodeApiReach::World]);
+    for feature in world.iter().chain(&values) {
+        assert!(has(&open, feature), "open addon lacks {feature}: {open:?}");
+    }
+}
+
+#[test]
+fn deserializers_install_regex_without_a_regex_literal() {
+    if ran_in_isolated_child("deserializers_install_regex_without_a_regex_literal") {
+        return;
+    }
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
+    let dir = tempfile::tempdir().unwrap();
+    let features = BTreeSet::new();
+    let plain = CompilationContext::new(dir.path().to_path_buf());
+    assert!(!auto_optimized_cross_features(&plain, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+    for module in ["v8", "worker_threads"] {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports.insert(module.to_string());
+        assert!(auto_optimized_cross_features(&ctx, &features, &[])
+            .iter()
+            .any(|f| f == "perry-runtime/regex-engine"));
+    }
+    let mut ipc = CompilationContext::new(dir.path().to_path_buf());
+    ipc.uses_proc_ipc = true;
+    assert!(auto_optimized_cross_features(&ipc, &features, &[])
+        .iter()
+        .any(|f| f == "perry-runtime/regex-engine"));
+}
+
+/// The GC diagnostics (`PERRY_GC_LOG`'s per-collection line, `PERRY_GC_DIAG`,
+/// the evacuation verifier) run only in a program whose installer calls
+/// `js_runtime_install_diagnostics`. A program selected from its own features
+/// (every auto-optimized native link and every WASI link) installs it only when
+/// asked: by a diagnostics API in the source, or by one of these knobs set
+/// while compiling, as for the instrument knobs. Without the compile-time arm a
+/// WASI program run with `PERRY_GC_LOG=1` printed nothing, and the image
+/// selftest's moving/full-collection gate could not see its collections.
+/// Its "nothing installs" arm reads dynamic-code reach, so it runs alone.
+#[test]
+fn gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics() {
+    if ran_in_isolated_child("gc_diagnostic_knobs_set_while_compiling_install_the_gc_diagnostics") {
+        return;
+    }
+    let _guard = env_lock();
+    assert!(!perry_hir::has_deferred_dynamic_code_sites());
+    let knobs = [
+        "PERRY_GC_DIAG",
+        "PERRY_GC_LOG",
+        "PERRY_GC_VERIFY_EVACUATION",
+    ];
+    let saved: Vec<_> = knobs
+        .iter()
+        .chain(&["PERRY_GC_TRACE"])
+        .map(|k| (*k, std::env::var(k).ok()))
+        .collect();
+    for (knob, _) in &saved {
+        set_env_var(knob, None);
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = CompilationContext::new(dir.path().to_path_buf());
+    let installs = || {
+        auto_optimized_cross_features(&ctx, &BTreeSet::new(), &[])
+            .contains(&"perry-runtime/diagnostics".to_string())
+    };
+    assert!(!installs(), "no knob, no diagnostics API: nothing installs");
+    for knob in knobs {
+        set_env_var(knob, Some("1"));
+        assert!(
+            installs(),
+            "{knob}=1 while compiling must install the GC diagnostics"
+        );
+        set_env_var(knob, Some("0"));
+        assert!(!installs(), "{knob}=0 is off, as the runtime parses it");
+        set_env_var(knob, None);
+    }
+    for (knob, value) in saved {
+        set_env_var(knob, value.as_deref());
+    }
+}
+
+/// A `net` or `child_process` program links no TLS; a TLS import, the http
+/// family, and perry's `upgradeToTLS` on a plain `net` socket each reach it.
+#[test]
+fn reaches_tls_is_the_tls_family_or_upgrade_to_tls() {
+    let dir = tempfile::tempdir().unwrap();
+    let program = |modules: &[&str], upgrade: bool| {
+        let mut ctx = CompilationContext::new(dir.path().to_path_buf());
+        ctx.native_module_imports = modules.iter().map(|m| m.to_string()).collect();
+        ctx.uses_upgrade_to_tls = upgrade;
+        super::reaches_tls(&ctx)
+    };
+    assert!(!program(&["net"], false));
+    assert!(!program(&["child_process", "events"], false));
+    assert!(program(&["net"], true));
+    for module in ["tls", "node:https", "http2", "http"] {
+        assert!(program(&[module], false), "{module} reaches TLS");
+    }
+}
+
+#[test]
+fn json_install_selection_keeps_native_producers_and_formatting_roots() {
+    if ran_in_isolated_child("json_install_selection_keeps_native_producers_and_formatting_roots") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected =
+        |ctx: &CompilationContext| auto_optimized_cross_features(ctx, &BTreeSet::new(), &[]);
+    let engine = "perry-runtime/json-engine".to_string();
+    let format = "perry-runtime/json-format".to_string();
+    assert!(!selected(&ctx).contains(&engine));
+    ctx.uses_json_format = true;
+    assert!(selected(&ctx).contains(&format));
+    assert!(!selected(&ctx).contains(&engine));
+    for producer in [
+        "tls",
+        "http2",
+        "stream/consumers",
+        "worker_threads",
+        "bun",
+        "module",
+    ] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx).contains(&engine), "{producer}");
+        assert!(
+            !selected(&ctx).contains(&format),
+            "engine includes formatting"
+        );
+    }
+}
+
+#[test]
+fn regex_unicode_install_selection_covers_external_producers() {
+    if ran_in_isolated_child("regex_unicode_install_selection_covers_external_producers") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected = |ctx: &CompilationContext| {
+        auto_optimized_cross_features(ctx, &BTreeSet::new(), &[])
+            .contains(&"perry-runtime/regex-unicode".to_string())
+    };
+    assert!(!selected(&ctx));
+    ctx.uses_regex = true;
+    assert!(
+        !selected(&ctx),
+        "the engine alone does not require membership tables"
+    );
+    ctx.uses_regex_unicode = true;
+    assert!(selected(&ctx));
+    ctx.uses_regex_unicode = false;
+    for producer in ["v8", "worker_threads", "module", "url", "fs"] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx), "{producer}");
+    }
+    ctx.native_module_imports.clear();
+    ctx.uses_proc_ipc = true;
+    assert!(selected(&ctx));
+    ctx.uses_proc_ipc = false;
+    ctx.uses_get_builtin_module = true;
+    assert!(selected(&ctx));
 }

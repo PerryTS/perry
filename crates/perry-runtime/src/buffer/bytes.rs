@@ -396,8 +396,9 @@ impl Brand {
 }
 
 fn allocate(brand: Brand, len: usize, init: Init) -> f64 {
-    let len = u32::try_from(len)
-        .unwrap_or_else(|_| crate::typedarray::throw_range_error(b"Invalid buffer size"));
+    let len = u32::try_from(len).unwrap_or_else(|_| {
+        crate::typedarray_hook_slots::throw_range_error(b"Invalid buffer size")
+    });
     let init = match init {
         Init::Zero => super::store::Init::Zero,
         Init::Uninit => super::store::Init::Uninit,
@@ -425,7 +426,7 @@ pub fn new_bytes(brand: Brand, len: usize, init: Init) -> (f64, Pinned) {
 /// Typed allocation through the same retained-byte capability. `length` is
 /// an element count; consumers access the result as bytes within `no_gc`.
 pub(crate) fn new_typed_bytes(kind: u8, length: u32) -> (f64, Pinned) {
-    let ptr = crate::typedarray::typed_array_alloc(kind, length);
+    let ptr = crate::typedarray_hook_slots::typed_array_alloc(kind, length);
     let value = crate::value::js_nanbox_pointer(ptr as i64);
     (
         value,
@@ -463,12 +464,13 @@ fn copy_typed_range_inner(
     if !addr.is_pointer() {
         return Err(NotBytes::Foreign);
     }
-    let kind = crate::typedarray::lookup_typed_array_kind(addr.as_pointer::<u8>() as usize)
-        .ok_or(NotBytes::Foreign)?;
-    let shared = crate::typedarray::typed_array_has_shared_backing(
-        addr.as_pointer::<crate::typedarray::TypedArrayHeader>(),
+    let kind =
+        crate::typedarray_hook_slots::lookup_typed_array_kind(addr.as_pointer::<u8>() as usize)
+            .ok_or(NotBytes::Foreign)?;
+    let shared = crate::typedarray_hook_slots::typed_array_has_shared_backing(
+        addr.as_pointer::<crate::typedarray_hook_slots::TypedArrayHeader>(),
     );
-    let size = crate::typedarray::elem_size_for_kind(kind);
+    let size = crate::typedarray_hook_slots::elem_size_for_kind(kind);
     let source_len = no_gc(|scope| bytes(current(), scope).map(|bytes| bytes.len() / size))?;
     let start = start.min(source_len);
     let length = length.min(source_len - start);
@@ -486,7 +488,7 @@ fn copy_typed_range_inner(
                     index
                 };
                 unsafe {
-                    crate::typedarray::copy_shared_lane(
+                    crate::typedarray_hook_slots::copy_shared_lane(
                         source.ptr.add(index * size),
                         pin.as_mut_ptr().add(i * size),
                         size,
@@ -616,4 +618,9 @@ pub(crate) fn copy_range_with_collection(
     collect: impl FnOnce(f64),
 ) -> Result<f64, NotBytes> {
     copy_value_inner(brand, input, start, length, Init::PoolCopy, collect)
+}
+
+/// Copy bytes into a JS Buffer value.
+pub(crate) fn buffer_from_slice(bytes: &[u8]) -> f64 {
+    from_slice(Brand::Buffer, bytes)
 }

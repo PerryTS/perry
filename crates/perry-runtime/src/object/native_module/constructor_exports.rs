@@ -27,10 +27,10 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
         return false;
     }
 
-    !match module {
-        "assert" | "assert/strict" => matches!(property, "doesNotReject" | "rejects"),
-        "bun" => matches!(
-            property,
+    !crate::realm_decl! { native_nonconstructors(module, property);
+        "assert" | "assert/strict" => [ "doesNotReject" | "rejects"],
+        "bun" => [
+
             "build"
                 | "file"
                 | "fileURLToPath"
@@ -39,10 +39,10 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "plugin"
                 | "stringWidth"
                 | "write"
-        ),
-        "buffer.Buffer" => property == "of",
-        "console" => matches!(
-            property,
+        ],
+        "buffer.Buffer" => ["of"],
+        "console" => [
+
             "assert"
                 | "clear"
                 | "context"
@@ -67,9 +67,9 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "timeStamp"
                 | "trace"
                 | "warn"
-        ),
-        "crypto" => matches!(
-            property,
+        ],
+        "crypto" => [
+
             "getCiphers"
                 | "getCurves"
                 | "getHashes"
@@ -78,22 +78,22 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "publicDecrypt"
                 | "publicEncrypt"
                 | "timingSafeEqual"
-        ),
-        "crypto.KeyObject" => property == "from",
-        "dns" | "dns/promises" => property == "getServers",
-        "events" => property == "once",
-        "http" => property == "setMaxIdleHTTPParsers",
-        "inspector" => matches!(property, "close" | "url"),
-        "inspector.DOMStorage" => matches!(
-            property,
+        ],
+        "crypto.KeyObject" => ["from"],
+        "dns" | "dns/promises" => ["getServers"],
+        "events" => ["once"],
+        "http" => ["setMaxIdleHTTPParsers"],
+        "inspector" => [ "close" | "url"],
+        "inspector.DOMStorage" => [
+
             "domStorageItemAdded"
                 | "domStorageItemRemoved"
                 | "domStorageItemUpdated"
                 | "domStorageItemsCleared"
                 | "registerStorage"
-        ),
-        "inspector.Network" => matches!(
-            property,
+        ],
+        "inspector.Network" => [
+
             "dataReceived"
                 | "dataSent"
                 | "loadingFailed"
@@ -103,11 +103,11 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "webSocketClosed"
                 | "webSocketCreated"
                 | "webSocketHandshakeResponseReceived"
-        ),
-        "inspector.Session" | "inspector/promises.Session" => property == "once",
-        "module" => matches!(property, "flushCompileCache" | "isBuiltin"),
-        "os" => matches!(
-            property,
+        ],
+        "inspector.Session" | "inspector/promises.Session" => ["once"],
+        "module" => [ "flushCompileCache" | "isBuiltin"],
+        "os" => [
+
             "availableParallelism"
                 | "freemem"
                 | "machine"
@@ -115,9 +115,9 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "totalmem"
                 | "type"
                 | "version"
-        ),
-        "path" | "path.posix" | "path.win32" => matches!(
-            property,
+        ],
+        "path" | "path.posix" | "path.win32" => [
+
             "basename"
                 | "dirname"
                 | "extname"
@@ -129,9 +129,9 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "relative"
                 | "resolve"
                 | "toNamespacedPath"
-        ),
-        "process" => matches!(
-            property,
+        ],
+        "process" => [
+
             "_debugEnd"
                 | "_debugProcess"
                 | "_fatalException"
@@ -152,17 +152,17 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "getuid"
                 | "reallyExit"
                 | "uptime"
-        ),
-        "punycode.ucs2" => property == "encode",
-        "stream" => property == "_isArrayBufferView",
-        "timers/promises" => property == "setInterval",
-        "tls" => property == "getCiphers",
-        "util" => matches!(
-            property,
+        ],
+        "punycode.ucs2" => ["encode"],
+        "stream" => ["_isArrayBufferView"],
+        "timers/promises" => ["setInterval"],
+        "tls" => ["getCiphers"],
+        "util" => [
+
             "aborted" | "isDeepStrictEqual" | "parseArgs" | "toUSVString"
-        ),
-        "util.types" | "util/types" => matches!(
-            property,
+        ],
+        "util.types" | "util/types" => [
+
             "isAnyArrayBuffer"
                 | "isArgumentsObject"
                 | "isArrayBuffer"
@@ -192,14 +192,14 @@ pub(crate) fn is_native_module_constructor_export(module: &str, property: &str) 
                 | "isSymbolObject"
                 | "isWeakMap"
                 | "isWeakSet"
-        ),
-        "v8" => matches!(
-            property,
+        ],
+        "v8" => [
+
             "cachedDataVersionTag" | "stopCoverage" | "takeCoverage"
-        ),
-        "v8.promiseHooks" => matches!(property, "onAfter" | "onBefore" | "onInit" | "onSettled"),
-        "worker_threads" => matches!(property, "moveMessagePortToContext" | "postMessageToThread"),
-        _ => false,
+        ],
+        "v8.promiseHooks" => [ "onAfter" | "onBefore" | "onInit" | "onSettled"],
+        "worker_threads" => [ "moveMessagePortToContext" | "postMessageToThread"],
+
     }
 }
 

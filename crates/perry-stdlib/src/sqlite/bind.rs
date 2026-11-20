@@ -15,13 +15,7 @@ use std::os::raw::{c_char, c_int, c_void};
 pub(crate) unsafe fn sqlite_value_to_jsvalue(value: &SqliteValue) -> JSValue {
     match value {
         SqliteValue::Null => JSValue::null(),
-        SqliteValue::Integer(n) => {
-            if *n >= i32::MIN as i64 && *n <= i32::MAX as i64 {
-                JSValue::int32(*n as i32)
-            } else {
-                JSValue::number(*n as f64)
-            }
-        }
+        SqliteValue::Integer(n) => JSValue::number(*n as f64),
         SqliteValue::Real(n) => JSValue::number(*n),
         SqliteValue::Text(s) => {
             let ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -177,11 +171,12 @@ pub(crate) unsafe fn bind_node_sqlite_value(
     let js = value_from_f64(value);
     let rc = if js.is_null() {
         ffi::sqlite3_bind_null(raw_stmt, index)
-    } else if js.is_undefined() || js.is_bool() {
-        return Err(BindError::Type(format!(
-            "Provided value cannot be bound to SQLite parameter {}.",
-            index
-        )));
+    } else if js.is_undefined() {
+        // node 26.12 binds `undefined` as NULL.
+        ffi::sqlite3_bind_null(raw_stmt, index)
+    } else if js.is_bool() {
+        // node 26.12 binds booleans as INTEGER 1 / 0.
+        ffi::sqlite3_bind_int64(raw_stmt, index, js.as_bool() as i64)
     } else if js.is_any_string() {
         let ptr = js_get_string_pointer_unified(value) as *const StringHeader;
         if ptr.is_null() {
@@ -192,13 +187,6 @@ pub(crate) unsafe fn bind_node_sqlite_value(
                 (ptr as *const u8).add(std::mem::size_of::<StringHeader>()) as *const c_char;
             ffi::sqlite3_bind_text(raw_stmt, index, data_ptr, len, ffi::SQLITE_TRANSIENT())
         }
-    } else if js.is_int32() {
-        // Node binds every JS number via sqlite3_bind_double — even
-        // integral values (a column with no affinity stores them as REAL,
-        // and `stmt.expandedSQL` renders `5.0`). Match that instead of
-        // promoting integral numbers to SQLite INTEGERs (#6561); only
-        // BigInt binds as INTEGER.
-        ffi::sqlite3_bind_double(raw_stmt, index, js.as_int32() as f64)
     } else if js.is_bigint() {
         let Some(value) = bigint_to_i64(js.as_bigint_ptr()) else {
             return Err(BindError::ArgValue(
@@ -257,7 +245,7 @@ pub(crate) fn is_named_parameter_object(value: f64) -> bool {
     let raw = raw_addr_from_value(value);
     raw >= 0x1000
         && !is_registered_buffer(raw)
-        && perry_runtime::typedarray::lookup_typed_array_kind(raw).is_none()
+        && perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw).is_none()
         && unsafe { perry_runtime::symbol::js_is_symbol(value) == 0 }
 }
 
@@ -412,13 +400,9 @@ pub(crate) unsafe fn node_sqlite_integer_value(value: i64, read_bigints: bool) -
             value
         ));
     }
-    // Always hand out a NUMBER-tagged double, never an INT32-tagged value
-    // (#6561). Node's node:sqlite returns plain JS numbers, and perry's
-    // INT32 tag shares its storage shape with `Expr::ClassRef`
-    // (`INT32_TAG | class_id`, see #618): when a small integer like a
-    // rowid `1` escapes into an any-typed context, `js_value_typeof`
-    // cannot tell it apart from a registered class id and reports
-    // "function" instead of "number".
+    // Return SQLite integers in the raw-f64 representation used by Node-API
+    // number producers (#6561). Both this form and INT32-tagged words are
+    // numbers; class constructors have their own function objects.
     JSValue::number(value as f64)
 }
 
@@ -542,8 +526,6 @@ pub(crate) unsafe fn node_sqlite_result_value(ctx: *mut ffi::sqlite3_context, va
     let js = value_from_f64(value);
     if js.is_null() || js.is_undefined() {
         ffi::sqlite3_result_null(ctx);
-    } else if js.is_int32() {
-        ffi::sqlite3_result_double(ctx, js.as_int32() as f64);
     } else if js.is_number() {
         ffi::sqlite3_result_double(ctx, js.as_number());
     } else if js.is_any_string() {
@@ -657,6 +639,22 @@ mod tests {
     use super::is_named_parameter_object;
 
     #[test]
+    fn integer_columns_are_raw_double_numbers() {
+        // A Number has one encoding: every INTEGER column value (i32 range or
+        // not) is the raw f64, never an INT32 word, so a row field the facts
+        // prove to be a Number reads as a plain double.
+        for n in [0i64, 5, -1, i32::MAX as i64, i32::MIN as i64, 1 << 40] {
+            let v = unsafe { super::sqlite_value_to_jsvalue(&super::SqliteValue::Integer(n)) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "INTEGER {n}");
+            // node:sqlite's column reader (`sqlite3_column_int64` ->
+            // `node_sqlite_integer_value`): the same raw double (P3 B1 audit,
+            // NUM_SEEDS.md "int32-box producers").
+            let v = unsafe { super::node_sqlite_integer_value(n, false) };
+            assert_eq!(v.bits(), (n as f64).to_bits(), "node:sqlite INTEGER {n}");
+        }
+    }
+
+    #[test]
     fn symbols_are_not_named_parameter_objects() {
         let symbol = unsafe { perry_runtime::symbol::js_symbol_new_empty() };
         assert!(!is_named_parameter_object(symbol));
@@ -664,8 +662,11 @@ mod tests {
 
     #[test]
     fn typed_arrays_are_not_named_parameter_objects() {
-        let typed_array = perry_runtime::typedarray::js_typed_array_new_empty(
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+        // A typed array is born only once its runtime family is installed;
+        // the empty constructor slot aborts (`family_never`).
+        perry_runtime::feature_hooks::js_runtime_install_typedarray();
+        let typed_array = perry_runtime::typedarray_hook_slots::js_typed_array_new_empty(
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             1,
         );
         let value = perry_runtime::value::js_nanbox_pointer(typed_array as i64);

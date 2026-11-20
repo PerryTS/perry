@@ -11,6 +11,7 @@ use super::*;
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -101,6 +102,11 @@ pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_n
             js_assert_does_not_reject(arg(0), arg(1), arg(2))
         }
         ("assert", "ifError") | ("assert/strict", "ifError") => js_assert_if_error(arg(0)),
+        ("assert", "AssertionError") | ("assert/strict", "AssertionError") => {
+            crate::collection_iter::throw_type_error(
+                "Class constructor AssertionError cannot be invoked without 'new'",
+            )
+        }
         ("assert", "Assert") | ("assert/strict", "Assert") => {
             crate::fs::validate::throw_type_error_with_code(
                 "Class constructor Assert cannot be invoked without 'new'",
@@ -120,6 +126,7 @@ pub(crate) unsafe fn nm_dispatch_assert(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_async_hooks(
     ctx: &NmCtx,
     module_name: &str,
@@ -160,17 +167,22 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
                 message.as_ptr(),
                 message.len() as u32,
             ));
-            let err = msg
-                .with_mut_ptr::<crate::StringHeader, _>(|msg| crate::error::js_typeerror_new(msg));
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+            let err = msg.with_mut_ptr::<crate::StringHeader, _>(|msg| {
+                crate::error::CoreError::type_error(msg)
+            });
+            crate::exception::throw_core(err)
         }
-        ("async_hooks", "createHook") => crate::async_hooks::js_async_hooks_create_hook(arg(0)),
+        ("async_hooks", "createHook") => {
+            crate::async_hook_slots::js_async_hooks_create_hook(arg(0))
+        }
         ("async_hooks", "executionAsyncId") => {
-            crate::async_hooks::js_async_hooks_execution_async_id()
+            crate::async_hook_slots::js_async_hooks_execution_async_id()
         }
-        ("async_hooks", "triggerAsyncId") => crate::async_hooks::js_async_hooks_trigger_async_id(),
+        ("async_hooks", "triggerAsyncId") => {
+            crate::async_hook_slots::js_async_hooks_trigger_async_id()
+        }
         ("async_hooks", "executionAsyncResource") => {
-            crate::async_hooks::js_async_hooks_execution_async_resource()
+            crate::async_hook_slots::js_async_hooks_execution_async_resource()
         }
         _ => f64::from_bits(JSValue::undefined().bits()),
     }
@@ -183,6 +195,7 @@ pub(crate) unsafe fn nm_dispatch_async_hooks(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -221,6 +234,7 @@ pub(crate) unsafe fn nm_dispatch_bigint(ctx: &NmCtx, module_name: &str, method_n
 /// resolution lives in `crate::bun_ffi::dispatch`; this bucket just forwards
 /// the raw NaN-boxed args.
 #[allow(unused_variables, unused_mut, unused_unsafe, clippy::all)]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -242,6 +256,7 @@ pub(crate) unsafe fn nm_dispatch_bun_ffi(ctx: &NmCtx, module_name: &str, method_
 /// `stderr` are property reads handled in `native_module.rs`, and
 /// `pathToFileURL`/`fileURLToPath` alias the `node:url` implementations.
 #[allow(clippy::all)]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -327,8 +342,8 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
         ("bun", "write") => crate::bun_compat::js_bun_write(arg(0), arg(1)),
         ("bun", "Glob") => crate::bun_compat::js_bun_glob_new(arg(0)),
         ("bun", "unsupported") => crate::bun_compat::js_bun_unsupported(arg(0)),
-        ("bun", "pathToFileURL") => crate::url::js_url_path_to_file_url(arg(0), arg(1)),
-        ("bun", "fileURLToPath") => crate::url::js_url_file_url_to_path(arg(0), arg(1)),
+        ("bun", "pathToFileURL") => crate::url_hooks::url_path_to_file_url(arg(0), arg(1)),
+        ("bun", "fileURLToPath") => crate::url_hooks::url_file_url_to_path(arg(0), arg(1)),
         ("bun.ant", "getPeerUid") => crate::bun_compat::js_bun_ant_get_peer_uid(arg(0)),
         ("bun.ant", "getPeerPid") => crate::bun_compat::js_bun_ant_get_peer_pid(arg(0)),
         ("bun.ant", "memoryPressureLevel") => crate::bun_compat::js_bun_ant_memory_pressure_level(),
@@ -343,6 +358,7 @@ pub(crate) unsafe fn nm_dispatch_bun(ctx: &NmCtx, module_name: &str, method_name
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -456,6 +472,9 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
         }
         ("buffer", "isAscii") => crate::buffer::js_buffer_is_ascii(arg(0)),
         ("buffer", "isUtf8") => crate::buffer::js_buffer_is_utf8(arg(0)),
+        ("buffer", "resolveObjectURL") => {
+            crate::object::global_fetch::call_buffer_resolve_object_url(arg(0))
+        }
 
         // ── process EventEmitter API ──
         _ => f64::from_bits(JSValue::undefined().bits()),
@@ -469,6 +488,7 @@ pub(crate) unsafe fn nm_dispatch_buffer(ctx: &NmCtx, module_name: &str, method_n
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_child_process(
     ctx: &NmCtx,
     module_name: &str,
@@ -549,6 +569,7 @@ pub(crate) unsafe fn nm_dispatch_child_process(
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -625,6 +646,7 @@ pub(crate) unsafe fn nm_dispatch_cluster(ctx: &NmCtx, module_name: &str, method_
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -741,6 +763,7 @@ pub(crate) unsafe fn nm_dispatch_console(ctx: &NmCtx, module_name: &str, method_
     clippy::let_and_return,
     clippy::all
 )]
+#[inline(always)]
 pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_name: &str) -> f64 {
     let NmCtx {
         obj,
@@ -780,10 +803,15 @@ pub(crate) unsafe fn nm_dispatch_crypto(ctx: &NmCtx, module_name: &str, method_n
             "Class constructor X509Certificate cannot be invoked without 'new'",
             "ERR_CONSTRUCT_CALL_REQUIRED",
         ),
+        // Node's legacy `Certificate` returns an instance with or without
+        // `new`; its instances are the same stateless SPKAC namespace.
+        ("crypto", "Certificate") => {
+            crate::object::native_module::create_sub_namespace("crypto.Certificate")
+        }
         ("crypto.KeyObject", "from") => {
             super::native_module_crypto_key_object::key_object_from(arg(0))
         }
-        ("crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
+        ("crypto" | "crypto.webcrypto", "getRandomValues") if args_len >= 1 => {
             let undefined = f64::from_bits(JSValue::undefined().bits());
             super::native_module_crypto_random::random_fill_sync(arg(0), undefined, undefined)
         }

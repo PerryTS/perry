@@ -107,7 +107,7 @@ pub(crate) fn class_final(
             if field.is_private
                 || field.key_expr.is_some()
                 || !field.decorators.is_empty()
-                || field.name.starts_with("__perry_cap_")
+                || field.origin.is_capture()
             {
                 return Err("nonpublic or captured field layout");
             }
@@ -142,6 +142,7 @@ pub(crate) fn class_final(
                         object,
                         property,
                         value,
+                        ..
                     }) => {
                         matches!(object.as_ref(), Expr::This)
                             && names.contains(property.as_str())

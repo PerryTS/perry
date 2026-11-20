@@ -1,0 +1,4 @@
+openNamed object {"master":11}
+openScoped object {"master":31}
+openNested object {"master":41}
+openEscaped object {"master":51}

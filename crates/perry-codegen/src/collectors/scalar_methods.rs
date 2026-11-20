@@ -157,6 +157,7 @@ fn scalar_method_straight_line_body<'a>(
                 object,
                 property,
                 value,
+                ..
             }) if matches!(object.as_ref(), Expr::This) && field_write.is_none() => {
                 field_write = Some((property.as_str(), value.as_ref()));
             }
@@ -461,6 +462,7 @@ fn stmt_writes_this_property(stmt: &Stmt, property: &str) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_write_this_property(body, property)
                 || catch

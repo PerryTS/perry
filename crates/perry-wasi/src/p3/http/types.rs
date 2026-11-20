@@ -1,0 +1,607 @@
+// Interface forwarding adapted from Wasmtime 48.0.5; Apache-2.0 WITH LLVM-exception.
+use crate::http::p2::{WasiHttp, WasiHttpCtxView};
+use crate::http::FieldMap;
+use crate::p3::bindings::clocks::types::Duration;
+use crate::p3::http::bindings::http::types::{
+    ErrorCode, FieldName, FieldValue, Fields, HeaderError, Headers, Host, HostFields, HostRequest,
+    HostRequestOptions, HostRequestWithStore, HostResponse, HostResponseWithStore, Method, Request,
+    RequestOptions, RequestOptionsError, Response, Scheme, StatusCode, Trailers,
+};
+use crate::p3::http::body::Body;
+use crate::p3::http::{HeaderResult, HttpError, RequestOptionsResult};
+use std::sync::Arc;
+use wasmtime::component::{Access, FutureReader, Resource, ResourceTable, StreamReader};
+use wasmtime::error::Context as _;
+
+fn get_fields<'a>(
+    table: &'a ResourceTable,
+    fields: &Resource<Fields>,
+) -> wasmtime::Result<&'a Fields> {
+    table.get(fields).context("failed to get fields from table")
+}
+
+fn get_fields_mut<'a>(
+    table: &'a mut ResourceTable,
+    fields: &Resource<Fields>,
+) -> HeaderResult<&'a mut Fields> {
+    table
+        .get_mut(fields)
+        .context("failed to get fields from table")
+        .map_err(crate::p3::http::HeaderError::trap)
+}
+
+fn push_fields(table: &mut ResourceTable, fields: Fields) -> wasmtime::Result<Resource<Fields>> {
+    table.push(fields).context("failed to push fields to table")
+}
+
+fn delete_fields(table: &mut ResourceTable, fields: Resource<Fields>) -> wasmtime::Result<Fields> {
+    let mut fields = table
+        .delete(fields)
+        .context("failed to delete fields from table")?;
+    // When fields are passed by ownership to the host that flags them as
+    // immutable within `wasi:http`, and this semantically means that putting
+    // fields in a request, then getting them back out, will return an immutable
+    // view of the headers rather than mutable for example.
+    fields.set_immutable();
+    Ok(fields)
+}
+
+fn get_request<'a>(
+    table: &'a ResourceTable,
+    req: &Resource<Request>,
+) -> wasmtime::Result<&'a Request> {
+    table.get(req).context("failed to get request from table")
+}
+
+fn get_request_mut<'a>(
+    table: &'a mut ResourceTable,
+    req: &Resource<Request>,
+) -> wasmtime::Result<&'a mut Request> {
+    table
+        .get_mut(req)
+        .context("failed to get request from table")
+}
+
+fn get_response<'a>(
+    table: &'a ResourceTable,
+    res: &Resource<Response>,
+) -> wasmtime::Result<&'a Response> {
+    table.get(res).context("failed to get response from table")
+}
+
+fn get_response_mut<'a>(
+    table: &'a mut ResourceTable,
+    res: &Resource<Response>,
+) -> wasmtime::Result<&'a mut Response> {
+    table
+        .get_mut(res)
+        .context("failed to get response from table")
+}
+
+fn get_request_options<'a>(
+    table: &'a ResourceTable,
+    opts: &Resource<RequestOptions>,
+) -> wasmtime::Result<&'a RequestOptions> {
+    table
+        .get(opts)
+        .context("failed to get request options from table")
+}
+
+fn get_request_options_mut<'a>(
+    table: &'a mut ResourceTable,
+    opts: &Resource<RequestOptions>,
+) -> RequestOptionsResult<&'a mut RequestOptions> {
+    table
+        .get_mut(opts)
+        .context("failed to get request options from table")
+        .map_err(crate::p3::http::RequestOptionsError::trap)
+}
+
+fn push_request_options(
+    table: &mut ResourceTable,
+    opts: RequestOptions,
+) -> wasmtime::Result<Resource<RequestOptions>> {
+    table
+        .push(opts)
+        .context("failed to push request options to table")
+}
+
+fn delete_request_options(
+    table: &mut ResourceTable,
+    opts: Resource<RequestOptions>,
+) -> wasmtime::Result<RequestOptions> {
+    table
+        .delete(opts)
+        .context("failed to delete request options from table")
+}
+
+/// Parse an outgoing request `authority`, rejecting a malformed value.
+///
+/// `http::uri::Authority` accepts an authority whose port section is empty or
+/// non-numeric (for example `example.com:` or `example.com:abc`), so the port
+/// is validated here as well. A `:` inside an IPv6 literal host such as `[::1]`
+/// is part of the host rather than a port delimiter, so the port is only looked
+/// for after any closing bracket.
+fn parse_authority(authority: String) -> Result<http::uri::Authority, ()> {
+    let has_port = match authority.rfind(']') {
+        Some(i) => authority[i..].contains(':'),
+        None => authority.contains(':'),
+    };
+    let authority = http::uri::Authority::try_from(authority).map_err(|_| ())?;
+    if has_port && authority.port_u16().is_none() {
+        return Err(());
+    }
+    Ok(authority)
+}
+
+impl HostFields for WasiHttpCtxView<'_> {
+    fn new(&mut self) -> wasmtime::Result<Resource<Fields>> {
+        push_fields(self.table, FieldMap::new_mutable(self.ctx.field_size_limit))
+    }
+
+    fn from_list(
+        &mut self,
+        entries: Vec<(FieldName, FieldValue)>,
+    ) -> HeaderResult<Resource<Fields>> {
+        let mut fields = FieldMap::new_mutable(self.ctx.field_size_limit);
+        for (name, value) in entries {
+            fields.append(name, value)?;
+        }
+        let fields = push_fields(self.table, fields).map_err(crate::p3::http::HeaderError::trap)?;
+        Ok(fields)
+    }
+
+    fn get(
+        &mut self,
+        fields: Resource<Fields>,
+        name: FieldName,
+    ) -> wasmtime::Result<Vec<FieldValue>> {
+        let fields = get_fields(self.table, &fields)?;
+        Ok(fields
+            .get_all(name)
+            .into_iter()
+            .map(|val| val.as_bytes().into())
+            .collect())
+    }
+
+    fn has(&mut self, fields: Resource<Fields>, name: FieldName) -> wasmtime::Result<bool> {
+        let fields = get_fields(self.table, &fields)?;
+        Ok(fields.contains_key(name))
+    }
+
+    fn set(
+        &mut self,
+        fields: Resource<Fields>,
+        name: FieldName,
+        values: Vec<FieldValue>,
+    ) -> HeaderResult<()> {
+        get_fields_mut(self.table, &fields)?.set(name, values)?;
+        Ok(())
+    }
+
+    fn delete(&mut self, fields: Resource<Fields>, name: FieldName) -> HeaderResult<()> {
+        get_fields_mut(self.table, &fields)?.remove_all(name)?;
+        Ok(())
+    }
+
+    fn get_and_delete(
+        &mut self,
+        fields: Resource<Fields>,
+        name: FieldName,
+    ) -> HeaderResult<Vec<FieldValue>> {
+        let values = get_fields_mut(self.table, &fields)?
+            .remove_all(name)?
+            .into_iter();
+        Ok(values.map(|value| value.as_bytes().into()).collect())
+    }
+
+    fn append(
+        &mut self,
+        fields: Resource<Fields>,
+        name: FieldName,
+        value: FieldValue,
+    ) -> HeaderResult<()> {
+        get_fields_mut(self.table, &fields)?.append(name, value)?;
+        Ok(())
+    }
+
+    fn copy_all(
+        &mut self,
+        fields: Resource<Fields>,
+    ) -> wasmtime::Result<Vec<(FieldName, FieldValue)>> {
+        let fields = get_fields(self.table, &fields)?;
+        let fields = fields
+            .ordered_iter()
+            .map(|(name, value)| (name.into(), value.as_bytes().into()))
+            .collect();
+        Ok(fields)
+    }
+
+    fn clone(&mut self, fields: Resource<Fields>) -> wasmtime::Result<Resource<Fields>> {
+        let mut fields = get_fields(self.table, &fields)?.clone();
+        fields.set_mutable(self.ctx.field_size_limit);
+        push_fields(self.table, fields)
+    }
+
+    fn drop(&mut self, fields: Resource<Fields>) -> wasmtime::Result<()> {
+        delete_fields(self.table, fields)?;
+        Ok(())
+    }
+}
+
+impl<T> HostRequestWithStore<T> for WasiHttp {
+    fn new(
+        mut store: Access<T, Self>,
+        headers: Resource<Headers>,
+        contents: Option<StreamReader<u8>>,
+        trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
+        options: Option<Resource<RequestOptions>>,
+    ) -> wasmtime::Result<(Resource<Request>, FutureReader<Result<(), ErrorCode>>)> {
+        let (body, body_result) = Body::new_guest(&mut store, contents, trailers)?;
+        let WasiHttpCtxView { table, .. } = store.get();
+        let headers = delete_fields(table, headers)?;
+        let options = options
+            .map(|options| delete_request_options(table, options))
+            .transpose()?;
+        let req = Request {
+            method: http::Method::GET,
+            scheme: None,
+            authority: None,
+            path_with_query: None,
+            headers,
+            options: options.map(Into::into),
+            body,
+        };
+        let req = table.push(req).context("failed to push request to table")?;
+        Ok((req, body_result))
+    }
+
+    fn consume_body(
+        mut store: Access<T, Self>,
+        req: Resource<Request>,
+        fut: FutureReader<Result<(), ErrorCode>>,
+    ) -> wasmtime::Result<(
+        StreamReader<u8>,
+        FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
+    )> {
+        let getter = store.getter();
+        let Request { body, .. } = store
+            .get()
+            .table
+            .delete(req)
+            .context("failed to delete request from table")?;
+        body.consume(store, fut, getter)
+    }
+
+    fn drop(mut store: Access<'_, T, Self>, req: Resource<Request>) -> wasmtime::Result<()> {
+        let Request { body, .. } = store
+            .get()
+            .table
+            .delete(req)
+            .context("failed to delete request from table")?;
+        body.drop(store)?;
+        Ok(())
+    }
+}
+
+impl HostRequest for WasiHttpCtxView<'_> {
+    fn get_method(&mut self, req: Resource<Request>) -> wasmtime::Result<Method> {
+        let Request { method, .. } = get_request(self.table, &req)?;
+        Ok(method.into())
+    }
+
+    fn set_method(
+        &mut self,
+        req: Resource<Request>,
+        method: Method,
+    ) -> wasmtime::Result<Result<(), ()>> {
+        let req = get_request_mut(self.table, &req)?;
+        let Ok(method) = method.try_into() else {
+            return Ok(Err(()));
+        };
+        req.method = method;
+        Ok(Ok(()))
+    }
+
+    fn get_path_with_query(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<String>> {
+        let Request {
+            path_with_query, ..
+        } = get_request(self.table, &req)?;
+        Ok(path_with_query.as_ref().map(|pq| pq.as_str().into()))
+    }
+
+    fn set_path_with_query(
+        &mut self,
+        req: Resource<Request>,
+        path_with_query: Option<String>,
+    ) -> wasmtime::Result<Result<(), ()>> {
+        let req = get_request_mut(self.table, &req)?;
+        let Some(path_with_query) = path_with_query else {
+            req.path_with_query = None;
+            return Ok(Ok(()));
+        };
+        let Ok(path_with_query) = path_with_query.try_into() else {
+            return Ok(Err(()));
+        };
+        req.path_with_query = Some(path_with_query);
+        Ok(Ok(()))
+    }
+
+    fn get_scheme(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<Scheme>> {
+        let Request { scheme, .. } = get_request(self.table, &req)?;
+        Ok(scheme.as_ref().map(Into::into))
+    }
+
+    fn set_scheme(
+        &mut self,
+        req: Resource<Request>,
+        scheme: Option<Scheme>,
+    ) -> wasmtime::Result<Result<(), ()>> {
+        let req = get_request_mut(self.table, &req)?;
+        let Some(scheme) = scheme else {
+            req.scheme = None;
+            return Ok(Ok(()));
+        };
+        let Ok(scheme) = scheme.try_into() else {
+            return Ok(Err(()));
+        };
+        req.scheme = Some(scheme);
+        Ok(Ok(()))
+    }
+
+    fn get_authority(&mut self, req: Resource<Request>) -> wasmtime::Result<Option<String>> {
+        let Request { authority, .. } = get_request(self.table, &req)?;
+        Ok(authority.as_ref().map(|auth| auth.as_str().into()))
+    }
+
+    fn set_authority(
+        &mut self,
+        req: Resource<Request>,
+        authority: Option<String>,
+    ) -> wasmtime::Result<Result<(), ()>> {
+        let req = get_request_mut(self.table, &req)?;
+        let Some(authority) = authority else {
+            req.authority = None;
+            return Ok(Ok(()));
+        };
+        let Ok(authority) = parse_authority(authority) else {
+            return Ok(Err(()));
+        };
+        req.authority = Some(authority);
+        Ok(Ok(()))
+    }
+
+    fn get_options(
+        &mut self,
+        req: Resource<Request>,
+    ) -> wasmtime::Result<Option<Resource<RequestOptions>>> {
+        let Request { options, .. } = get_request(self.table, &req)?;
+        if let Some(options) = options {
+            let options = push_request_options(
+                self.table,
+                RequestOptions::new_immutable(Arc::clone(options)),
+            )?;
+            Ok(Some(options))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn get_headers(&mut self, req: Resource<Request>) -> wasmtime::Result<Resource<Headers>> {
+        let Request { headers, .. } = get_request(self.table, &req)?;
+        push_fields(self.table, headers.clone())
+    }
+}
+
+impl HostRequestOptions for WasiHttpCtxView<'_> {
+    fn new(&mut self) -> wasmtime::Result<Resource<RequestOptions>> {
+        push_request_options(self.table, RequestOptions::new_mutable_default())
+    }
+
+    fn get_connect_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+    ) -> wasmtime::Result<Option<Duration>> {
+        let opts = get_request_options(self.table, &opts)?;
+        let Some(connect_timeout) = opts.connect_timeout else {
+            return Ok(None);
+        };
+        let ns = connect_timeout.as_nanos();
+        let ns = Duration::try_from(ns)
+            .context("connect timeout duration nanoseconds do not fit in u64")?;
+        Ok(Some(ns))
+    }
+
+    fn set_connect_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+        duration: Option<Duration>,
+    ) -> RequestOptionsResult<()> {
+        let opts = get_request_options_mut(self.table, &opts)?;
+        let opts = opts.get_mut().ok_or(RequestOptionsError::Immutable)?;
+        opts.connect_timeout = duration.map(core::time::Duration::from_nanos);
+        Ok(())
+    }
+
+    fn get_first_byte_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+    ) -> wasmtime::Result<Option<Duration>> {
+        let opts = get_request_options(self.table, &opts)?;
+        let Some(first_byte_timeout) = opts.first_byte_timeout else {
+            return Ok(None);
+        };
+        let ns = first_byte_timeout.as_nanos();
+        let ns = Duration::try_from(ns)
+            .context("first byte timeout duration nanoseconds do not fit in u64")?;
+        Ok(Some(ns))
+    }
+
+    fn set_first_byte_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+        duration: Option<Duration>,
+    ) -> RequestOptionsResult<()> {
+        let opts = get_request_options_mut(self.table, &opts)?;
+        let opts = opts.get_mut().ok_or(RequestOptionsError::Immutable)?;
+        opts.first_byte_timeout = duration.map(core::time::Duration::from_nanos);
+        Ok(())
+    }
+
+    fn get_between_bytes_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+    ) -> wasmtime::Result<Option<Duration>> {
+        let opts = get_request_options(self.table, &opts)?;
+        let Some(between_bytes_timeout) = opts.between_bytes_timeout else {
+            return Ok(None);
+        };
+        let ns = between_bytes_timeout.as_nanos();
+        let ns = Duration::try_from(ns)
+            .context("between bytes timeout duration nanoseconds do not fit in u64")?;
+        Ok(Some(ns))
+    }
+
+    fn set_between_bytes_timeout(
+        &mut self,
+        opts: Resource<RequestOptions>,
+        duration: Option<Duration>,
+    ) -> RequestOptionsResult<()> {
+        let opts = get_request_options_mut(self.table, &opts)?;
+        let opts = opts.get_mut().ok_or(RequestOptionsError::Immutable)?;
+        opts.between_bytes_timeout = duration.map(core::time::Duration::from_nanos);
+        Ok(())
+    }
+
+    fn clone(
+        &mut self,
+        opts: Resource<RequestOptions>,
+    ) -> wasmtime::Result<Resource<RequestOptions>> {
+        let opts = get_request_options(self.table, &opts)?;
+        push_request_options(self.table, RequestOptions::new_mutable(Arc::clone(opts)))
+    }
+
+    fn drop(&mut self, opts: Resource<RequestOptions>) -> wasmtime::Result<()> {
+        delete_request_options(self.table, opts)?;
+        Ok(())
+    }
+}
+
+impl<T> HostResponseWithStore<T> for WasiHttp {
+    fn new(
+        mut store: Access<T, Self>,
+        headers: Resource<Headers>,
+        contents: Option<StreamReader<u8>>,
+        trailers: FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
+    ) -> wasmtime::Result<(Resource<Response>, FutureReader<Result<(), ErrorCode>>)> {
+        let (body, body_result) = Body::new_guest(&mut store, contents, trailers)?;
+        let WasiHttpCtxView { table, .. } = store.get();
+        let headers = delete_fields(table, headers)?;
+        let res = Response {
+            status: http::StatusCode::OK,
+            headers,
+            body,
+        };
+        let res = table
+            .push(res)
+            .context("failed to push response to table")?;
+        Ok((res, body_result))
+    }
+
+    fn consume_body(
+        mut store: Access<T, Self>,
+        res: Resource<Response>,
+        fut: FutureReader<Result<(), ErrorCode>>,
+    ) -> wasmtime::Result<(
+        StreamReader<u8>,
+        FutureReader<Result<Option<Resource<Trailers>>, ErrorCode>>,
+    )> {
+        let getter = store.getter();
+        let Response { body, .. } = store
+            .get()
+            .table
+            .delete(res)
+            .context("failed to delete response from table")?;
+        body.consume(store, fut, getter)
+    }
+
+    fn drop(mut store: Access<'_, T, Self>, res: Resource<Response>) -> wasmtime::Result<()> {
+        let Response { body, .. } = store
+            .get()
+            .table
+            .delete(res)
+            .context("failed to delete response from table")?;
+        body.drop(store)?;
+        Ok(())
+    }
+}
+
+impl HostResponse for WasiHttpCtxView<'_> {
+    fn get_status_code(&mut self, res: Resource<Response>) -> wasmtime::Result<StatusCode> {
+        let res = get_response(self.table, &res)?;
+        Ok(res.status.into())
+    }
+
+    fn set_status_code(
+        &mut self,
+        res: Resource<Response>,
+        status_code: StatusCode,
+    ) -> wasmtime::Result<Result<(), ()>> {
+        let res = get_response_mut(self.table, &res)?;
+        match http::StatusCode::from_u16(status_code) {
+            Ok(status) if matches!(status_code, 100..=599) => {
+                res.status = status;
+                Ok(Ok(()))
+            }
+            _ => Ok(Err(())),
+        }
+    }
+
+    fn get_headers(&mut self, res: Resource<Response>) -> wasmtime::Result<Resource<Headers>> {
+        let Response { headers, .. } = get_response(self.table, &res)?;
+        push_fields(self.table, headers.clone())
+    }
+}
+
+impl Host for WasiHttpCtxView<'_> {
+    fn convert_error_code(&mut self, error: HttpError) -> wasmtime::Result<ErrorCode> {
+        error.downcast()
+    }
+
+    fn convert_header_error(
+        &mut self,
+        error: crate::p3::http::HeaderError,
+    ) -> wasmtime::Result<HeaderError> {
+        error.downcast()
+    }
+
+    fn convert_request_options_error(
+        &mut self,
+        error: crate::p3::http::RequestOptionsError,
+    ) -> wasmtime::Result<RequestOptionsError> {
+        error.downcast()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn authority_accepts_ipv6_and_validates_ports() {
+        use super::parse_authority;
+
+        // Host names and IPv4 literals, with and without an explicit port.
+        assert!(parse_authority("example.com".into()).is_ok());
+        assert!(parse_authority("example.com:443".into()).is_ok());
+        assert!(parse_authority("127.0.0.1:80".into()).is_ok());
+
+        // Bracketed IPv6 literals: the colons belong to the host, so a missing
+        // port must still be accepted and not mistaken for an empty port.
+        assert!(parse_authority("[::1]".into()).is_ok());
+        assert!(parse_authority("[2001:db8::1]".into()).is_ok());
+        assert!(parse_authority("[::1]:443".into()).is_ok());
+
+        // When a port section is present it must be a valid number.
+        assert!(parse_authority("example.com:".into()).is_err());
+        assert!(parse_authority("example.com:abc".into()).is_err());
+    }
+}

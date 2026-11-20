@@ -12,7 +12,7 @@ use crate::value::TAG_UNDEFINED;
 /// time value, anything else is `ToNumber`; NaN and negatives wait 0.
 fn sleep_delay_ms(value: f64) -> f64 {
     let delay = if crate::date::is_date_value(value) {
-        crate::date::date_cell_timestamp(value) - crate::date::js_date_now()
+        crate::date::date_cell_timestamp(value) - crate::clock::wall_millis()
     } else {
         crate::builtins::js_number_coerce(value)
     };

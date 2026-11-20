@@ -14,7 +14,7 @@ fn number_arg(value: f64, name: &str) -> Option<f64> {
     if js.is_undefined() {
         return None;
     }
-    if !js.is_number() && !js.is_int32() {
+    if !js.is_number() {
         let message = format!(
             "The \"{}\" argument must be of type number. Received {}",
             name,
@@ -22,11 +22,7 @@ fn number_arg(value: f64, name: &str) -> Option<f64> {
         );
         crate::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    Some(if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    })
+    Some(value)
 }
 
 fn range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
@@ -75,8 +71,9 @@ pub(super) unsafe fn random_fill_sync(target: f64, offset_bits: f64, size_bits: 
     use rand::Rng;
 
     let addr = value_addr(target);
-    let elem_size = if let Some(kind) = crate::typedarray::lookup_typed_array_kind(addr) {
-        crate::typedarray::elem_size_for_kind(kind).max(1)
+    let elem_size = if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+    {
+        crate::typedarray_hook_slots::elem_size_for_kind(kind).max(1)
     } else if crate::buffer::is_registered_buffer(addr) {
         1
     } else {

@@ -605,6 +605,10 @@ STEM_EMITTER_ARG_INDEX = {
     # layout notes are gone after ShapeId tracing): 12 args -> 9, and the
     # static-key bookkeeping 8 -> 6. The stems themselves are unchanged.
     "emit_jsvalue_slot_store_pointer_tested": 8,
+    # 0b12532106 split the body into `_known` (the caller states whether the
+    # value is a heap pointer); the class-field store calls it directly, with
+    # the stem at the same index. The plain emitter forwards its stem to it.
+    "emit_jsvalue_slot_store_pointer_tested_known": 8,
     "emit_guarded_inbounds_array_store": 4,
     "emit_guarded_inbounds_array_store_keyed": 4,
     # The static-key store IC (`expr/put_value_store_ic.rs`): its bookkeeping
@@ -616,6 +620,7 @@ STEM_EMITTER_ARG_INDEX = {
 # call passes an identifier, and the stem literal lives at THEIR call sites
 # (which the census scans through the same table above).
 STEM_FORWARDERS = {
+    "emit_jsvalue_slot_store_pointer_tested",
     "emit_guarded_inbounds_array_store",
     "emit_guarded_inbounds_array_store_keyed",
 }
@@ -650,10 +655,11 @@ CODEGEN_BARRIERED_BINDINGS = {
     # the unconditional element store inside `emit_dynamic_pointer_push_store`,
     # which the same `apush`-stem caller barriers after its layout bookkeeping.
     "crates/perry-codegen/src/expr/array_push.rs": ("apush", 2),
-    # The static-key store IC: two unconditional slot stores (the existing-key
-    # hit and the key-add hit), each discharged by the `put.pic`-stem
-    # bookkeeping emitted right after it.
-    "crates/perry-codegen/src/expr/put_value_store_ic.rs": ("put.pic", 2),
+    # The compact append and both coloured-key store arms each have a live
+    # census witness, including the constructor-run arm in layout_read.
+    "crates/perry-codegen/src/expr/array_append.rs": ("append", 1),
+    "crates/perry-codegen/src/expr/private_resume_frame.rs": ("frame_slot", 1),
+    "crates/perry-codegen/src/expr/layout_read.rs": (("l2s", "l2i"), 2),
     # Step 4b (#10884): a loop region's bare store of a pointer-capable value,
     # discharged by the same `put.pic`-stem bookkeeping the store IC emits
     # (`emit_static_store_ic_bookkeeping`), witnessed in IR by
@@ -1048,12 +1054,15 @@ def check_codegen_claims(files: dict[str, str]) -> tuple[list[str], dict]:
                 "CODEGEN_BARRIERED_BINDINGS."
             )
             continue
-        stem, expected = binding
-        if stem != "*" and stem not in census_stems:
-            errors.append(
-                f"{rel}: bound to stem {stem!r} which is not in the census — "
-                "stale binding"
-            )
+        bound_stems, expected = binding
+        if isinstance(bound_stems, str):
+            bound_stems = (bound_stems,)
+        for stem in bound_stems:
+            if stem != "*" and stem not in census_stems:
+                errors.append(
+                    f"{rel}: bound to stem {stem!r} which is not in the census — "
+                    "stale binding"
+                )
         if count != expected:
             errors.append(
                 f"{rel}: {count} BARRIERED marker(s) but the binding pins {expected} "
@@ -1633,15 +1642,18 @@ def run_self_tests() -> int:
                 "// GC_STORE_AUDIT(BARRIERED): planted\n"
                 "// GC_STORE_AUDIT(BARRIERED): planted store\n" + codegen_calls
             ),
-            # The static-key store IC: two bound markers (the existing-key and
-            # the key-add store) and their stem-literal calls, so V-P1 tracks
-            # the real binding table.
-            "crates/perry-codegen/src/expr/put_value_store_ic.rs": (
-                "// GC_STORE_AUDIT(BARRIERED): planted\n"
-                "// GC_STORE_AUDIT(BARRIERED): planted add\n"
+            "crates/perry-codegen/src/expr/array_append.rs": (
+                "// GC_STORE_AUDIT(BARRIERED): planted append\n"
+                "fn lower_append(ctx: &mut FnCtx) {\n"
+                "    emit_write_barrier_slot_value_and_generation_tested(ctx, a, b, c, d, \"append\");\n"
+                "}\n"
+            ),
+            "crates/perry-codegen/src/expr/layout_read.rs": (
+                "// GC_STORE_AUDIT(BARRIERED): planted store\n"
+                "// GC_STORE_AUDIT(BARRIERED): planted init\n"
                 "fn lower_store(ctx: &mut FnCtx) {\n"
-                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
-                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"l2s\");\n"
+                "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"l2i\");\n"
                 "}\n"
             ),
             # Step 4b's bare pointer store (one marker, the same put.pic
@@ -1652,10 +1664,20 @@ def run_self_tests() -> int:
                 "    emit_static_store_ic_bookkeeping(ctx, a, b, c, d, \"put.pic\");\n"
                 "}\n"
             ),
+            "crates/perry-codegen/src/expr/private_resume_frame.rs": (
+                "// GC_STORE_AUDIT(BARRIERED): planted private frame store\n"
+                "fn lower_frame(ctx: &mut FnCtx) {\n"
+                "    emit_write_barrier_slot_value_and_generation_tested(ctx, a, b, c, d, \"frame_slot\");\n"
+                "}\n"
+            ),
             STEM_REGISTRY_PATH: (
                 "pub(super) const VERIFIED_BARRIER_STEMS: &[(&str, StemKind)] = &[\n"
                 + registry
+                + "    (\"frame_slot\", StemKind::ValueAndGenerationTested),\n"
                 + "    (\"put.pic\", StemKind::PointerTestedStore),\n"
+                + "    (\"append\", StemKind::ValueAndGenerationTested),\n"
+                + "    (\"l2s\", StemKind::PointerTestedStore),\n"
+                + "    (\"l2i\", StemKind::PointerTestedStore),\n"
                 + "];\n"
             ),
             STEM_TEST_MOD_HOST: "#[cfg(test)]\nmod barrier_stem_census_tests;\n",
@@ -1693,6 +1715,20 @@ def run_self_tests() -> int:
     base = synthetic_tree()
     expect_verify("V-P1 green baseline", base, None)
 
+    # Both arms in a multi-stem binding are required independently.
+    for stem in ("l2s", "l2i"):
+        t = dict(base)
+        t[STEM_REGISTRY_PATH] = t[STEM_REGISTRY_PATH].replace(
+            f'    ("{stem}", StemKind::PointerTestedStore),\n', ""
+        )
+        # Remove the matching emitter too, so the independent emitter/census
+        # check does not mask the file-binding check this mutation targets.
+        path = "crates/perry-codegen/src/expr/layout_read.rs"
+        t[path] = "\n".join(
+            line for line in t[path].splitlines() if f'"{stem}"' not in line
+        ) + "\n"
+        expect_verify(f"V-P1 missing bound {stem}", t, f"bound to stem {stem!r}")
+
     t = dict(base)
     t["crates/perry-codegen/src/expr/array_push.rs"] += (
         'fn lower_x(ctx: &mut FnCtx) {\n'
@@ -1720,21 +1756,21 @@ def run_self_tests() -> int:
     # fail loudly, and so must a call at the old, longer arity — its stem
     # index then lands on a non-literal argument.
     t = dict(base)
-    t["crates/perry-codegen/src/expr/put_value_store_ic.rs"] = t[
-        "crates/perry-codegen/src/expr/put_value_store_ic.rs"
+    t["crates/perry-codegen/src/expr/layout_read.rs"] = t[
+        "crates/perry-codegen/src/expr/layout_read.rs"
     ].replace(
-        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "put.pic");',
-        'emit_static_store_ic_bookkeeping(ctx, a, "put.pic");',
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "l2s");',
+        'emit_static_store_ic_bookkeeping(ctx, a, "l2s");',
         1,
     )
     expect_verify("V-P4b emitter arity shrank", t, "expected stem at index")
 
     t = dict(base)
-    t["crates/perry-codegen/src/expr/put_value_store_ic.rs"] = t[
-        "crates/perry-codegen/src/expr/put_value_store_ic.rs"
+    t["crates/perry-codegen/src/expr/layout_read.rs"] = t[
+        "crates/perry-codegen/src/expr/layout_read.rs"
     ].replace(
-        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "put.pic");',
-        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, "put.pic");',
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, "l2s");',
+        'emit_static_store_ic_bookkeeping(ctx, a, b, c, d, e, f, "l2s");',
         1,
     )
     expect_verify("V-P4c emitter arity grew", t, "non-literal stem")
@@ -1799,6 +1835,9 @@ def run_self_tests() -> int:
         '    emit_write_barrier_slot_generation_tested(ctx, a, b, c, d, "apush");\n'
         "}\n"
     )
+    # Remove the extra private-frame witness too, keeping this fixture below
+    # the existing floor rather than weakening scanner-rot detection.
+    del t["crates/perry-codegen/src/expr/private_resume_frame.rs"]
     expect_verify("V-P13 census below floor", t, None, "scanner rot")
 
     t = dict(base)

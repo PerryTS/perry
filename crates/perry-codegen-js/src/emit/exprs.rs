@@ -322,7 +322,7 @@ impl JsEmitter {
                     let _ = write!(self.output, "[{}]", self.quote_string(property));
                 }
             }
-            Expr::PropertySet { object, property, value } => {
+            Expr::PropertySet { object, property, value, .. } => {
                 self.output.push('(');
                 self.emit_expr(object);
                 if is_valid_identifier(property) {
@@ -357,13 +357,13 @@ impl JsEmitter {
             }
 
             // --- Index access ---
-            Expr::IndexGet { object, index } => {
+            Expr::IndexGet { object, index , .. } => {
                 self.emit_expr(object);
                 self.output.push('[');
                 self.emit_expr(index);
                 self.output.push(']');
             }
-            Expr::IndexSet { object, index, value } => {
+            Expr::IndexSet { object, index, value, .. } => {
                 self.output.push('(');
                 self.emit_expr(object);
                 self.output.push('[');
@@ -417,16 +417,22 @@ impl JsEmitter {
             Expr::ObjectSpread { parts } => {
                 self.output.push('{');
                 let mut first = true;
-                for (key_opt, val) in parts.iter() {
+                for part in parts.iter() {
                     if !first { self.output.push_str(", "); }
                     first = false;
-                    match key_opt {
-                        None => {
+                    match part {
+                        perry_hir::ObjectPart::Spread(val) => {
                             self.output.push_str("...(");
                             self.emit_expr(val);
                             self.output.push(')');
                         }
-                        Some(key) => {
+                        perry_hir::ObjectPart::Computed { key, value } => {
+                            self.output.push('[');
+                            self.emit_expr(key);
+                            self.output.push_str("]: ");
+                            self.emit_expr(value);
+                        }
+                        perry_hir::ObjectPart::Define(key, val) => {
                             if is_valid_identifier(key) {
                                 self.output.push_str(key);
                             } else {

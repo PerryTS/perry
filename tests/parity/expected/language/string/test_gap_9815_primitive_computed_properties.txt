@@ -1,0 +1,79 @@
+charAt function true true true
+trim function true true true
+toUpperCase function true true true
+toString function true true true
+constructor function true true true
+borrowed b abcde ABCDE
+length 5 5 5
+index 0 a a
+index 0 a a
+index 1 b b
+index 1 b b
+index -1 undefined undefined
+index 1.5 undefined undefined
+index 99 undefined undefined
+index NaN undefined undefined
+index Infinity undefined undefined
+index 01 undefined undefined
+index 1.0 undefined undefined
+index missing undefined undefined
+charAt function true true true
+trim function true true true
+toUpperCase function true true true
+toString function true true true
+constructor function true true true
+borrowed a abcdef  ABCDEF 
+length 8 8 8
+index 0    
+index 0    
+index 1 a a
+index 1 a a
+index -1 undefined undefined
+index 1.5 undefined undefined
+index 99 undefined undefined
+index NaN undefined undefined
+index Infinity undefined undefined
+index 01 undefined undefined
+index 1.0 undefined undefined
+index missing undefined undefined
+charAt function true true true
+trim function true true true
+toUpperCase function true true true
+toString function true true true
+constructor function true true true
+borrowed b abc ABC
+length 3 3 3
+index 0 a a
+index 0 a a
+index 1 b b
+index 1 b b
+index -1 undefined undefined
+index 1.5 undefined undefined
+index 99 undefined undefined
+index NaN undefined undefined
+index Infinity undefined undefined
+index 01 undefined undefined
+index 1.0 undefined undefined
+index missing undefined undefined
+DEC 250: Cannot add member Object.prototype.inherited9815: built-in objects are read-only in a compiled program
+custom function true
+receiver xyz
+custom string true
+value string:abc
+custom undefined true
+value undefined
+custom number true
+value 81
+custom number true
+value 99
+custom string true
+value b
+custom number true
+value 73
+coercion b string:abc 73 3
+bigint index b
+symbol identity true
+boxed 42 b 3
+constructor override 91 91
+direct call b b
+deleted undefined undefined

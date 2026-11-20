@@ -4,6 +4,7 @@
  * Workflows never execute from upstream/; Perry-owned implementations live in
  * .github/actions/perry/ and simpler steps remain inline.
  */
+import { realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
@@ -224,7 +225,11 @@ export async function updateActionPins(argv = process.argv.slice(2)): Promise<nu
   return 0
 }
 
-const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url
+// Compare resolved paths: argv[1] keeps a symlinked prefix that import.meta.url
+// has resolved away.
+const isMain =
+  process.argv[1] !== undefined &&
+  pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url
 if (isMain) {
   updateActionPins().then((status) => {
     process.exitCode = status

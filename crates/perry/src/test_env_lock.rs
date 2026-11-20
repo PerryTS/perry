@@ -11,20 +11,24 @@
 //! Both sides now take THIS lock, so the guard is genuinely process-wide.
 //! Any future test that touches env vars should take it too.
 
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
+
+/// Ownership of the process environment for one test.
+///
+/// A test restores its own changes before it releases the guard. A test that
+/// panics never hands the environment on: the workspace builds tests with
+/// `panic = "abort"`, so libtest runs every test in a process of its own and a
+/// panic ends that process, environment and lock with it.
+pub(crate) struct EnvGuard {
+    _lock: MutexGuard<'static, ()>,
+}
 
 /// Acquire the process-wide environment lock.
-///
-/// Fails closed on poisoning, matching the guard this replaced. Callers restore
-/// the environment *after* the work they wrap, so a panic mid-test unwinds
-/// without restoring — leaving `PATH` pointing at a deleted temp dir. Recovering
-/// the lock there would hand that broken environment to every subsequent test
-/// and turn one failure into a cascade that no longer names its cause. Poison
-/// means "a test that owns the environment died"; stopping is the useful answer.
-pub(crate) fn env_lock() -> MutexGuard<'static, ()> {
+pub(crate) fn env_lock() -> EnvGuard {
     static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    ENV_LOCK
+    let lock = ENV_LOCK
         .get_or_init(|| Mutex::new(()))
         .lock()
-        .expect("env lock poisoned — a test panicked while owning the process environment")
+        .unwrap_or_else(PoisonError::into_inner);
+    EnvGuard { _lock: lock }
 }

@@ -1,7 +1,7 @@
 //! Object freeze / seal / extensibility helpers, extracted from
 //! `object_ops.rs` to keep that file under the 2k-line limit. These map the
 //! `Object.freeze` / `Object.seal` / `Object.preventExtensions` family (and
-//! their `is*` predicates) onto the per-object GC-header reserved-flag bits.
+//! their `is*` predicates) onto shape-owned integrity and the existing header mirrors.
 
 use super::*;
 
@@ -36,21 +36,18 @@ unsafe fn restrict_function_keys(owner: usize, freeze: bool) {
     // Publish integrity there too, so the named-store shape and Function twin
     // carry the same facts as the receiver header.
     if let Some(_edit) = super::descriptor_state::HolderEdit::new(owner) {
-        let holder = super::descriptor_state::descriptor_holder(owner);
-        let value = crate::value::js_nanbox_pointer(holder as i64);
-        if freeze {
-            js_object_freeze(value);
+        super::descriptor_state::owner_key_target(owner).restrict(if freeze {
+            super::descriptor_state::Restrict::Freeze
         } else {
-            js_object_seal(value);
-        }
+            super::descriptor_state::Restrict::Seal
+        });
     }
 }
 
 /// Drop `writable`/`configurable` on every own **symbol-keyed** property of
-/// `obj`. The string-keyed table is handled by `mark_all_keys`; symbol props
-/// live in a separate side table, so `Object.freeze`/`Object.seal` must walk
-/// it too (else a frozen object's symbol props stay writable and strict writes
-/// to them wrongly succeed).
+/// `obj` through the existing symbol ownership funnel. Ordinary owned tables
+/// already restrict their string and symbol entries in one integrity operation;
+/// other receiver families retain this normalized symbol walk.
 unsafe fn mark_all_symbol_keys(
     obj: *mut ObjectHeader,
     drop_writable: bool,
@@ -102,7 +99,7 @@ unsafe fn set_integrity_level_proxy(obj_value: f64, frozen: bool) -> f64 {
             b"Cannot set integrity level: 'preventExtensions' trap returned falsish",
         );
     }
-    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys = crate::proxy_hooks::proxy_own_keys(obj_value);
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys = scope.root_raw_const_ptr(extract_obj_ptr(keys) as *const crate::array::ArrayHeader);
     if keys.with_const_ptr::<crate::array::ArrayHeader, _>(|ptr| ptr.is_null()) {
@@ -152,7 +149,7 @@ unsafe fn test_integrity_level_proxy(obj_value: f64, frozen: bool) -> bool {
     if crate::value::js_is_truthy(ext) != 0 {
         return false;
     }
-    let keys = crate::proxy::js_proxy_own_keys(obj_value);
+    let keys = crate::proxy_hooks::proxy_own_keys(obj_value);
     let scope = crate::gc::RuntimeHandleScope::new();
     let keys = scope.root_raw_const_ptr(extract_obj_ptr(keys) as *const crate::array::ArrayHeader);
     if keys.with_const_ptr::<crate::array::ArrayHeader, _>(|ptr| ptr.is_null()) {
@@ -216,7 +213,7 @@ unsafe fn integrity_flags_are_writable(obj: *const ObjectHeader) -> bool {
 unsafe fn set_integrity_flags(obj: *mut ObjectHeader, flags: u16) {
     // Array growth aliases retain their old header. Integrity must restrict
     // the live owner, just like the descriptor and element readers do.
-    let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+    let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
         super::array_object_ops::array_header(obj) as *mut ObjectHeader
     } else {
         obj
@@ -248,7 +245,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
         return obj_value;
     }
     crate::array::subclass_elements::deopt_value(obj_value);
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ true)
         };
@@ -256,23 +253,24 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
     if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
         crate::typedarray_props::typed_array_mark_no_extend(owner);
         if unsafe { crate::typedarray_props::owner_length(owner) } != 0 {
-            let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-            if !holder.is_null() {
-                js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-            }
+            unsafe {
+                super::descriptor_state::owner_key_target(owner)
+                    .restrict(super::descriptor_state::Restrict::NoExtend)
+            };
             throw_object_type_error(b"Cannot freeze array buffer views with elements");
         }
         // An empty integer-indexed owner has only its ordinary holder to restrict.
         if let Some(_edit) = super::descriptor_state::HolderEdit::new(owner) {
             unsafe {
-                let holder = super::descriptor_state::descriptor_holder(owner);
-                js_object_freeze(crate::value::js_nanbox_pointer(holder as i64));
-            }
+                super::descriptor_state::owner_key_target(owner)
+                    .restrict(super::descriptor_state::Restrict::Freeze)
+            };
         }
         return obj_value;
     }
     unsafe {
         let obj = extract_obj_ptr(obj_value);
+        crate::object::arguments::arguments_object_unmap_all(obj);
         if shapes::transition_object_integrity(
             obj,
             crate::gc::OBJ_FLAG_FROZEN | crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND,
@@ -297,7 +295,7 @@ pub extern "C" fn js_object_freeze(obj_value: f64) -> f64 {
             // below would read a garbage `keys_array` off the TA header and
             // can fault depending on heap layout. The GC flags above are the
             // entire integrity state for them.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;
@@ -383,7 +381,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
         return obj_value;
     }
     crate::array::subclass_elements::deopt_value(obj_value);
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return unsafe {
             set_integrity_level_proxy(obj_value, /*frozen=*/ false)
         };
@@ -396,18 +394,16 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
     if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
         crate::typedarray_props::typed_array_mark_no_extend(owner);
         if unsafe { crate::typedarray_props::owner_length(owner) } != 0 {
-            let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-            if !holder.is_null() {
-                js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-            }
+            unsafe {
+                super::descriptor_state::owner_key_target(owner)
+                    .restrict(super::descriptor_state::Restrict::NoExtend)
+            };
             throw_object_type_error(b"Cannot seal array buffer views with elements");
         }
         unsafe {
-            let holder = super::descriptor_state::descriptor_holder(owner);
-            if !holder.is_null() {
-                js_object_seal(crate::value::js_nanbox_pointer(holder as i64));
-            }
-        }
+            super::descriptor_state::owner_key_target(owner)
+                .restrict(super::descriptor_state::Restrict::Seal)
+        };
         return obj_value;
     }
     unsafe {
@@ -424,7 +420,7 @@ pub extern "C" fn js_object_seal(obj_value: f64) -> f64 {
                 crate::gc::OBJ_FLAG_SEALED | crate::gc::OBJ_FLAG_NO_EXTEND,
             );
             // TypedArray receivers: GC flags only — see `js_object_freeze`.
-            if crate::typedarray::lookup_typed_array_kind(obj as usize).is_some()
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(obj as usize).is_some()
                 || crate::typedarray_props::typed_array_addr_from_value(obj_value).is_some()
             {
                 return obj_value;
@@ -500,7 +496,7 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     // yields the fake pointer and `gc_header_for` would deref unmapped memory.
     // Route through the `[[PreventExtensions]]` trap; per spec throw a TypeError
     // if it reports failure, then return the proxy. (Proxy crash cluster.)
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         let ok = crate::proxy::js_reflect_prevent_extensions(obj_value);
         if crate::value::js_is_truthy(ok) == 0 {
             throw_object_type_error(b"'preventExtensions' on proxy: trap returned falsish");
@@ -509,10 +505,10 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
     }
     if let Some(owner) = crate::typedarray_props::typed_array_addr_from_value(obj_value) {
         crate::typedarray_props::typed_array_mark_no_extend(owner);
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        if !holder.is_null() {
-            js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
-        }
+        unsafe {
+            super::descriptor_state::owner_key_target(owner)
+                .restrict(super::descriptor_state::Restrict::NoExtend)
+        };
         return obj_value;
     }
     unsafe {
@@ -529,8 +525,8 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
                 && crate::object::class_value::class_closure_id(obj as usize).is_none()
             {
                 if let Some(_edit) = super::descriptor_state::HolderEdit::new(obj as usize) {
-                    let holder = super::descriptor_state::descriptor_holder(obj as usize);
-                    js_object_prevent_extensions(crate::value::js_nanbox_pointer(holder as i64));
+                    super::descriptor_state::owner_key_target(obj as usize)
+                        .restrict(super::descriptor_state::Restrict::NoExtend);
                 }
             }
         }
@@ -547,6 +543,30 @@ pub extern "C" fn js_object_prevent_extensions(obj_value: f64) -> f64 {
 /// `{writable: true, enumerable: true, configurable: true}`, which is
 /// configurable (and writable), so any such key fails both levels — matching
 /// the behaviour of `Object.freeze`/`Object.seal`, which populate the table.
+impl super::descriptor_state::KeyTarget {
+    /// [`KeyTarget::restrict`] on an ordinary holder.
+    #[inline]
+    pub(crate) unsafe fn restrict_object(
+        o: *mut ObjectHeader,
+        level: super::descriptor_state::Restrict,
+    ) {
+        if o.is_null() {
+            return;
+        }
+        let value = crate::value::js_nanbox_pointer(o as i64);
+        match level {
+            super::descriptor_state::Restrict::NoExtend => js_object_prevent_extensions(value),
+            super::descriptor_state::Restrict::Seal => js_object_seal(value),
+            super::descriptor_state::Restrict::Freeze => js_object_freeze(value),
+        };
+    }
+    /// [`KeyTarget::satisfies`] on an ordinary holder.
+    #[inline]
+    pub(crate) unsafe fn object_satisfies(o: *mut ObjectHeader, frozen: bool) -> bool {
+        o.is_null() || object_integrity_level(o, frozen)
+    }
+}
+
 unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     if shapes::shape_word_is_writable(obj) {
         if let Some(shape) = shapes::object_shape_descriptor(obj) {
@@ -564,7 +584,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
         }
     }
     // Growth aliases share the live array's integrity.
-    let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+    let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
         super::array_object_ops::array_header(obj) as *mut ObjectHeader
     } else {
         obj
@@ -642,7 +662,7 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
     }
     // Dense indices and length use the array's integrity facts; customized
     // indices, named properties and symbols share its ordinary holder.
-    if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!((*gc).obj_type) {
         let arr = super::array_object_ops::array_header(obj);
         if frozen
             && crate::array::js_array_length(arr) != 0
@@ -665,20 +685,20 @@ unsafe fn object_integrity_level(obj: *mut ObjectHeader, frozen: bool) -> bool {
                 return false;
             }
         }
-        let holder = crate::array::array_property_bag(arr);
-        if holder.is_null() {
-            return true;
-        }
-        let keys = crate::object::object_keys(holder);
-        for i in 0..keys.count() {
-            let entry = crate::object::key_attrs::keys_entry(keys.arr(), i);
-            if crate::object::key_attrs::entry_is_private(entry) {
+        // The named own keys are the ones [[OwnPropertyKeys]] lists after the
+        // indices and `length` (both settled above), and each one's attributes
+        // are read BY KEY through the reader [[GetOwnProperty]] answers from,
+        // never by a bit at the key's position in the holder's key list.
+        for name in crate::array::array_named_property_names(arr, false) {
+            if name == "length" || super::canonical_array_index(&name).is_some() {
                 continue;
             }
-            if entry & crate::object::key_attrs::ENTRY_NON_CONFIGURABLE == 0
+            let attrs = get_property_attrs(arr as usize, &name)
+                .unwrap_or(PropertyAttrs::new(true, true, true));
+            if attrs.configurable()
                 || (frozen
-                    && entry & crate::object::key_attrs::ENTRY_ACCESSOR == 0
-                    && entry & crate::object::key_attrs::ENTRY_NON_WRITABLE == 0)
+                    && attrs.writable()
+                    && get_accessor_descriptor(arr as usize, &name).is_none())
             {
                 return false;
             }
@@ -769,7 +789,7 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
     if is_symbol_primitive(obj_value) {
         return f64::from_bits(TAG_TRUE);
     }
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ true)
         } {
@@ -787,8 +807,7 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         if !satisfies {
             return f64::from_bits(TAG_FALSE);
         }
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        return if holder.is_null() || unsafe { object_integrity_level(holder, true) } {
+        return if unsafe { super::descriptor_state::owner_key_target(owner).satisfies(true) } {
             f64::from_bits(TAG_TRUE)
         } else {
             f64::from_bits(TAG_FALSE)
@@ -799,7 +818,9 @@ pub extern "C" fn js_object_is_frozen(obj_value: f64) -> f64 {
         if obj.is_null() || (obj as usize) <= 0x10000 {
             return f64::from_bits(TAG_TRUE); // non-objects are vacuously frozen
         }
-        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID {
+        if (*obj).class_id == super::namespace_create::MODULE_NAMESPACE_CLASS_ID
+            || (*obj).class_id == super::deferred_namespace::DEFERRED_NAMESPACE_CLASS_ID
+        {
             // 10.4.6.5: every export is a writable data property (its live
             // binding's accessor is internal), so a namespace is frozen only
             // when it exports nothing.
@@ -831,7 +852,7 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
     if is_symbol_primitive(obj_value) {
         return f64::from_bits(TAG_TRUE);
     }
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         return if unsafe {
             test_integrity_level_proxy(obj_value, /*frozen=*/ false)
         } {
@@ -848,8 +869,7 @@ pub extern "C" fn js_object_is_sealed(obj_value: f64) -> f64 {
         if !satisfies {
             return f64::from_bits(TAG_FALSE);
         }
-        let holder = unsafe { super::descriptor_state::descriptor_holder(owner) };
-        return if holder.is_null() || unsafe { object_integrity_level(holder, false) } {
+        return if unsafe { super::descriptor_state::owner_key_target(owner).satisfies(false) } {
             f64::from_bits(TAG_TRUE)
         } else {
             f64::from_bits(TAG_FALSE)
@@ -882,7 +902,7 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
     }
     // Proxy receiver: route through the `[[IsExtensible]]` trap rather than
     // dereferencing the fake pointer. (Proxy crash cluster.)
-    if crate::proxy::js_proxy_is_proxy(obj_value) != 0 {
+    if crate::proxy_hooks::proxy_is_proxy(obj_value) != 0 {
         let r = crate::proxy::js_reflect_is_extensible(obj_value);
         return if crate::value::js_is_truthy(r) != 0 {
             f64::from_bits(TAG_TRUE)
@@ -929,7 +949,7 @@ pub extern "C" fn js_object_is_extensible(obj_value: f64) -> f64 {
                 );
             }
         }
-        let obj = if (*gc_header_for(obj)).obj_type == crate::gc::GC_TYPE_ARRAY {
+        let obj = if crate::gc_type_is_array!((*gc_header_for(obj)).obj_type) {
             super::array_object_ops::array_header(obj) as *mut ObjectHeader
         } else {
             obj

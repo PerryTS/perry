@@ -1,0 +1,1 @@
+The realm image has one Set index sizing, shared by the emitter and the runtime threshold crossing, and static array elements have one home in the realm manifest (array storage). A realm-diff gate script compares the realm dumper with checked-in references, in full mode and with a test-only restricted realm reach.

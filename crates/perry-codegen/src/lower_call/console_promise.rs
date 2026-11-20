@@ -25,194 +25,26 @@ use crate::nanbox::{double_literal, POINTER_MASK_I64};
 use crate::type_analysis::{is_global_constructor_expr, receiver_class_name};
 use crate::types::{DOUBLE, I64, PTR};
 
-use super::try_emit_buffer_read_intrinsic;
+use super::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 
-fn util_types_arg_is_async_function_static(ctx: &FnCtx<'_>, expr: &Expr) -> Option<bool> {
-    match expr {
-        Expr::FuncRef(fid) => Some(ctx.local_async_funcs.contains(fid)),
-        Expr::Closure { is_async, .. } => Some(*is_async),
-        Expr::LocalGet(id) => match ctx.stable_local_type_proof(id) {
-            Some(HirType::Function(ft)) => Some(ft.is_async),
-            _ => None,
-        },
-        _ => None,
-    }
-}
-
-/// Lower every argument of a `console.*` call into `group`, left to right, with
-/// each already-evaluated value rooted across the evaluation of the ones that
-/// follow it, and re-read below the last of them.
-///
-/// **Every** argument, including the ones the method ignores. Node evaluates a
-/// call's whole argument list before it invokes the callee, so
-/// `console.dir(o, opts, sideEffect())` runs `sideEffect` BEFORE anything is
-/// printed. Two arms here used to evaluate the surplus arguments after the
-/// print (`dir`) or not at all (`time` / `count`), which is an observable
-/// difference rather than a formatting one — see #7649.
-///
-/// The window per argument is "the arguments after it": the consuming
-/// `js_console_*` call is emitted immediately below the last one, and an
-/// argument that is a literal or a proven non-pointer costs nothing, so a call
-/// like `console.table(rows)` emits exactly the IR it emitted before.
-fn lower_console_args<'a>(
-    ctx: &mut FnCtx<'_>,
-    group: &mut crate::rooting::RootedGroup<'a>,
-    args: &'a [Expr],
-) -> Result<Vec<String>> {
-    for (i, arg) in args.iter().enumerate() {
-        let collects = any_operand_may_collect(ctx, args[i + 1..].iter());
-        group.lower(ctx, arg, collects)?;
-    }
-    group.reread_all(ctx)
-}
-
-fn nanbox_bool_literal(value: bool) -> String {
-    double_literal(f64::from_bits(if value {
-        crate::nanbox::TAG_TRUE
-    } else {
-        crate::nanbox::TAG_FALSE
-    }))
-}
-
-fn lower_util_types_predicate_arg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
-    let Expr::NativeMethodCall {
-        module,
-        class_name,
-        method,
-        object,
-        args,
-        ..
-    } = expr
-    else {
-        return Ok(None);
-    };
-    let is_direct_util_types_module =
-        matches!(module.as_str(), "util/types" | "util.types") && class_name.is_none();
-    if !is_direct_util_types_module || object.is_some() {
-        return Ok(None);
-    }
-    if method == "isAsyncFunction" {
-        if let Some(is_async) = args
-            .first()
-            .and_then(|arg| util_types_arg_is_async_function_static(ctx, arg))
-        {
-            return Ok(Some(nanbox_bool_literal(is_async)));
-        }
-        let value = if let Some(first) = args.first() {
-            lower_expr(ctx, first)?
-        } else {
-            double_literal(0.0)
-        };
-        return Ok(Some(ctx.block().call(
-            DOUBLE,
-            "js_util_types_is_async_function",
-            &[(DOUBLE, &value)],
-        )));
-    }
-    let Some(runtime) = (match method.as_str() {
-        "isArgumentsObject" => Some("js_util_types_is_arguments_object"),
-        "isPromise" => Some("js_util_types_is_promise"),
-        "isBigIntObject" => Some("js_util_types_is_big_int_object"),
-        "isArrayBuffer" => Some("js_util_types_is_array_buffer"),
-        "isSharedArrayBuffer" => Some("js_util_types_is_shared_array_buffer"),
-        "isAnyArrayBuffer" => Some("js_util_types_is_any_array_buffer"),
-        "isArrayBufferView" => Some("js_util_types_is_array_buffer_view"),
-        "isDataView" => Some("js_util_types_is_data_view"),
-        "isTypedArray" => Some("js_util_types_is_typed_array"),
-        "isUint8Array" => Some("js_util_types_is_uint8_array"),
-        "isInt8Array" => Some("js_util_types_is_int8_array"),
-        "isInt16Array" => Some("js_util_types_is_int16_array"),
-        "isUint16Array" => Some("js_util_types_is_uint16_array"),
-        "isInt32Array" => Some("js_util_types_is_int32_array"),
-        "isUint32Array" => Some("js_util_types_is_uint32_array"),
-        "isFloat16Array" => Some("js_util_types_is_float16_array"),
-        "isFloat32Array" => Some("js_util_types_is_float32_array"),
-        "isFloat64Array" => Some("js_util_types_is_float64_array"),
-        "isUint8ClampedArray" => Some("js_util_types_is_uint8_clamped_array"),
-        "isBigInt64Array" => Some("js_util_types_is_big_int64_array"),
-        "isBigUint64Array" => Some("js_util_types_is_big_uint64_array"),
-        "isMap" => Some("js_util_types_is_map"),
-        "isMapIterator" => Some("js_util_types_is_map_iterator"),
-        "isProxy" => Some("js_util_types_is_proxy"),
-        "isExternal" => Some("js_util_types_is_external"),
-        "isModuleNamespaceObject" => Some("js_util_types_is_module_namespace_object"),
-        "isSet" => Some("js_util_types_is_set"),
-        "isSetIterator" => Some("js_util_types_is_set_iterator"),
-        "isWeakMap" => Some("js_util_types_is_weak_map"),
-        "isWeakSet" => Some("js_util_types_is_weak_set"),
-        "isDate" => Some("js_util_types_is_date"),
-        "isRegExp" => Some("js_util_types_is_reg_exp"),
-        "isAsyncFunction" => Some("js_util_types_is_async_function"),
-        "isGeneratorFunction" => Some("js_util_types_is_generator_function"),
-        "isGeneratorObject" => Some("js_util_types_is_generator_object"),
-        "isNativeError" => Some("js_util_types_is_native_error"),
-        "isKeyObject" => Some("js_util_types_is_key_object"),
-        "isCryptoKey" => Some("js_util_types_is_crypto_key"),
-        "isNumberObject" => Some("js_util_types_is_number_object"),
-        "isStringObject" => Some("js_util_types_is_string_object"),
-        "isBooleanObject" => Some("js_util_types_is_boolean_object"),
-        "isSymbolObject" => Some("js_util_types_is_symbol_object"),
-        "isBoxedPrimitive" => Some("js_util_types_is_boxed_primitive"),
-        _ => None,
-    }) else {
-        return Ok(None);
-    };
-    let value = if let Some(first) = args.first() {
-        lower_expr(ctx, first)?
-    } else {
-        double_literal(0.0)
-    };
-    Ok(Some(ctx.block().call(DOUBLE, runtime, &[(DOUBLE, &value)])))
-}
+#[path = "console_promise/util_types.rs"]
+mod util_types;
+use util_types::lower_console_args;
+use util_types::lower_util_types_predicate_arg;
 
 pub fn try_lower_console_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
     args: &[Expr],
 ) -> Result<Option<String>> {
-    // console.log(<args...>) sink.
-    //
-    // JS spec: console.log can take any number of args, separated by
-    // single spaces. We approximate by emitting a separate dispatch
-    // call per arg with a literal " " in between, then a final "\n".
-    // The runtime functions take a NaN-boxed double and print it
-    // followed by a single trailing space (for the inter-arg form)
-    // or newline (for the final/single-arg form). For now we use the
-    // existing js_console_log_dynamic for every arg — the runtime
-    // already adds a newline, so multi-arg console.log will be
-    // separated by newlines instead of spaces. Spec-compliant
-    // separator handling lives in a future Phase I tweak.
-    if let Expr::PropertyGet {
-        object, property, ..
-    } = callee
-    {
-        if matches!(object.as_ref(), Expr::GlobalGet(_))
-            && matches!(
-                property.as_str(),
-                "log"
-                    | "info"
-                    | "warn"
-                    | "error"
-                    | "debug"
-                    | "dir"
-                    | "dirxml"
-                    | "profile"
-                    | "profileEnd"
-                    | "timeStamp"
-                    | "table"
-                    | "trace"
-                    | "group"
-                    | "groupEnd"
-                    | "groupCollapsed"
-                    | "time"
-                    | "timeEnd"
-                    | "timeLog"
-                    | "count"
-                    | "countReset"
-                    | "clear"
-                    | "assert"
-            )
-        {
+    if let Expr::PropertyGet { property, .. } = callee {
+        if perry_hir::method_call::console_method(callee).is_some() {
+            // The intrinsic is what `console.<m>` holds only where the facts
+            // prove it; elsewhere read the property and call its value.
+            if !crate::builtin_proto::console_intrinsic_proven(ctx, callee) {
+                return crate::builtin_proto::lower_console_generic_call(ctx, property, args)
+                    .map(Some);
+            }
             // Catch-all for the entire console.* surface. Most of
             // them are best-effort: we route the args through
             // js_console_log_dynamic so the user at least sees the
@@ -1025,20 +857,34 @@ pub(crate) fn lower_split_method_call(
             ctx.current_block = call_idx;
             (undef_idx, merge_idx)
         });
+        // G8: `f.apply(x, arguments)` on a deferred binding reads its slot
+        // at the site: the bundle while the object is unborn.
+        let apply_bundle = (property == "apply" && args.len() == 2)
+            .then(|| crate::codegen::arguments::deferred_forward_apply_binding(ctx, &args[1]))
+            .flatten();
         let mut arg_idx = Vec::with_capacity(args.len());
         for (i, a) in args.iter().enumerate() {
+            if i == 1 && apply_bundle.is_some() {
+                continue;
+            }
             let collects = arg_collects[i + 1..].iter().any(|&c| c);
             arg_idx.push(group.lower(ctx, a, collects)?);
         }
         let recv_box = group.reread(ctx, recv_i)?;
         let value = group.reread_emitted(ctx, value_root);
         let mut lowered_args = Vec::with_capacity(args.len());
-        for i in arg_idx {
+        for &i in &arg_idx {
             lowered_args.push(group.reread(ctx, i)?);
         }
-        let forward = property == "apply"
-            && args.len() == 2
-            && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
+        if let Some(id) = apply_bundle {
+            lowered_args.push(crate::codegen::arguments::emit_deferred_binding_value(
+                ctx, id,
+            ));
+        }
+        let forward = apply_bundle.is_some()
+            || property == "apply"
+                && args.len() == 2
+                && matches!(crate::type_analysis::static_type_of(ctx, &args[1]),
                 Some(perry_hir::types::Type::Named(name)) if name == "__perry_arguments_object");
         let r = if forward {
             let result = ctx.block().call(
@@ -1062,6 +908,25 @@ pub(crate) fn lower_split_method_call(
             let merge_label = ctx.block_label(merge);
             ctx.block().cond_br(&miss, &cold_label, &merge_label);
             ctx.current_block = cold;
+            // An unborn binding's object is born here, for the ordinary call
+            // (the bundle was only ever passed to the intrinsic apply); the
+            // birth collects, so every operand is read again below it.
+            let (recv_box, value, lowered_args) = match apply_bundle {
+                Some(id) => {
+                    crate::codegen::arguments::ensure_arguments_object(ctx, id);
+                    let recv_box = group.reread(ctx, recv_i)?;
+                    let value = group.reread_emitted(ctx, value_root);
+                    let mut lowered = Vec::with_capacity(2);
+                    for &i in &arg_idx {
+                        lowered.push(group.reread(ctx, i)?);
+                    }
+                    lowered.push(crate::codegen::arguments::emit_deferred_binding_value(
+                        ctx, id,
+                    ));
+                    (recv_box, value, lowered)
+                }
+                None => (recv_box, value, lowered_args),
+            };
             let value = emit_split_call_half(
                 ctx,
                 &lookup,
@@ -1367,7 +1232,18 @@ pub fn try_lower_native_method_str_dispatch(
                 if ctx.receiver_descriptors.byte_view_param(*id).is_some_and(|access|
                     access.brands == [crate::runtime_abi::GC_TYPE_BUFFER]));
             if is_buffer_class || guarded_buffer_param {
-                if let Some(lowered) = try_emit_buffer_read_intrinsic(ctx, object, property, args)?
+                if let Some(lowered) =
+                    try_emit_buffer_equals_intrinsic(ctx, callee, object, property, args)?
+                {
+                    let materialized = crate::expr::materialize_js_value(
+                        ctx,
+                        lowered,
+                        crate::native_value::MaterializationReason::FunctionAbi,
+                    );
+                    return Ok(Some(materialized));
+                }
+                if let Some(lowered) =
+                    try_emit_buffer_read_intrinsic(ctx, callee, object, property, args)?
                 {
                     let materialized = crate::expr::materialize_js_value(
                         ctx,
@@ -1922,10 +1798,20 @@ fn lower_closure_call_rooted<'a>(
         let key_box = blk.load(DOUBLE, &key_handle_global);
         let key_bits = blk.bitcast_double_to_i64(&key_box);
         let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
-        blk.call(
-            DOUBLE,
-            "js_object_get_field_by_name_f64",
-            &[(I64, &obj_bits), (I64, &key_handle)],
+        // The receiver is any value: a Number whose top 16 bits are clear
+        // must not reach the handle entry, which reads it as a raw pointer.
+        crate::expr::index_get::named_get_on_unproven_receiver(
+            ctx,
+            &obj_bits,
+            &key_handle,
+            "0",
+            |ctx| {
+                ctx.block().call(
+                    DOUBLE,
+                    "js_object_get_field_by_name_f64",
+                    &[(I64, &obj_bits), (I64, &key_handle)],
+                )
+            },
         )
     } else {
         lower_expr(ctx, callee)?

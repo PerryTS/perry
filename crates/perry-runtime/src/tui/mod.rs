@@ -15,7 +15,8 @@
 //! - `Text(content)` — single-line text node
 //! - `render(root)` — paints one frame to stdout
 //!
-//! Cell grid is a packed `Vec<Cell>` (no per-cell allocation per frame).
+//! The cell grid stores graphemes at their terminal-column positions;
+//! multi-scalar graphemes share owned text across the two buffers.
 //! Double buffer: render to back, diff against front, emit minimal ANSI
 //! to reconcile changed cells. The diff is unconditional (every render
 //! call emits only what changed since the last call), so even Phase 1's

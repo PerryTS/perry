@@ -3,6 +3,7 @@
 
 use super::super::*;
 use super::support::*;
+use crate::codegen_abi::LayoutWord;
 use crate::object::shapes;
 
 const SIBLINGS: usize = 4096;
@@ -34,8 +35,12 @@ unsafe fn old_siblings(count: usize) -> (*mut crate::ArrayHeader, Vec<*mut GcHea
         headers.push(header_from_user_ptr(obj.cast()));
     }
     js_shadow_slot_set(1, crate::value::TAG_UNDEFINED);
-    assert!(shapes::shape_descriptor_by_id(id).unwrap().old_carrier);
-    (root, headers, id)
+    assert!(
+        shapes::test_descriptor_for_retained_word(id)
+            .unwrap()
+            .old_carrier
+    );
+    (root, headers, id.0)
 }
 
 #[test]
@@ -45,8 +50,10 @@ fn full_mark_does_not_remember_one_shared_keys_word_for_every_carrier() {
     let _scan = ConservativeScanDisabledGuard::new();
     unsafe {
         let (_, headers, id) = old_siblings(SIBLINGS);
-        let keys = shapes::shape_descriptor_by_id(id).unwrap().keys;
-        let keys_slot = shapes::shape_descriptor_by_id(id)
+        let keys = shapes::test_descriptor_for_retained_word(LayoutWord(id))
+            .unwrap()
+            .keys;
+        let keys_slot = shapes::test_descriptor_for_retained_word(LayoutWord(id))
             .unwrap()
             .keys_slot()
             .unwrap();
@@ -55,12 +62,12 @@ fn full_mark_does_not_remember_one_shared_keys_word_for_every_carrier() {
         let valid = build_valid_pointer_set();
         let mut worklist = Vec::new();
         for header in headers {
-            visit_gc_rewrite_slots(header, |slot| {
+            visit_gc_rewrite_slots::<{ cfg!(test) }>(header, |slot| {
                 if slot.slot == keys_slot {
                     shared_words += 1;
                 }
             });
-            trace::trace_heap_rewrite_slots_remembering(
+            mark::trace_heap_rewrite_slots_remembering::<{ cfg!(test) }>(
                 header,
                 &valid,
                 &mut worklist,
@@ -140,7 +147,8 @@ fn old_same_shape_graph_survives_copying_minors_and_full_cycles_without_external
                     EXTERNAL_DIRTY_SLOT_PAGES.with(|p| p.borrow().is_empty()),
                     "shared shape words must not enter the per-parent external log"
                 );
-                let descriptor = shapes::shape_descriptor_by_id(id).expect("live shape");
+                let descriptor =
+                    shapes::test_descriptor_for_retained_word(LayoutWord(id)).expect("live shape");
                 let keys = descriptor.keys as *const crate::ArrayHeader;
                 assert_eq!((*keys).length, 2);
                 assert_string_bytes(
@@ -167,7 +175,8 @@ fn old_same_shape_graph_survives_copying_minors_and_full_cycles_without_external
                 "reclaim must include clear and restore, even on the synchronous full path"
             );
             let valid = build_valid_pointer_set();
-            let descriptor = shapes::shape_descriptor_by_id(id).expect("live shape after full");
+            let descriptor = shapes::test_descriptor_for_retained_word(LayoutWord(id))
+                .expect("live shape after full");
             assert!(
                 valid.contains(&(descriptor.keys as usize)),
                 "full must retain the keys array"

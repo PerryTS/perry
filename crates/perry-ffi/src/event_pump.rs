@@ -179,16 +179,36 @@ mod tests {
             return;
         }
 
+        // This thread is the mutator whose full traces decide its retired ids.
+        perry_runtime::gc::gc_init();
         let domain = crate::NativeRegistryDomain::new().unwrap();
         let retired = crate::reserve_handle_id_in_domain(domain);
         assert_ne!(retired, 0);
+        let identity = crate::handle_registration(retired).unwrap();
+        // An operation lease outlives the proof, so the release lands in the
+        // tick quarantine: only the outer-tick hook can finish it.
+        let lease = crate::acquire_handle_registration(identity, crate::NativeLeaseKind::Operation)
+            .unwrap();
         crate::free_handle_id(retired);
         let held = crate::reserve_handle_id_in_domain(domain);
-        assert_ne!(held, retired, "retired ids wait for the next outer tick");
+        assert_ne!(held, retired, "a retired id waits for the collector");
 
         // Exercise the real runtime tick. The test must not call the drain
         // helper directly because the registration edge is the behavior under
         // test.
+        unsafe { js_run_stdlib_pump() };
+        let after_tick = crate::reserve_handle_id_in_domain(domain);
+        assert_ne!(
+            after_tick, retired,
+            "an outer tick never reissues a retired id"
+        );
+        collect_unobserved();
+        let while_leased = crate::reserve_handle_id_in_domain(domain);
+        assert_ne!(
+            while_leased, retired,
+            "a proven id still waits for its lease and the next tick"
+        );
+        drop(lease);
         unsafe { js_run_stdlib_pump() };
         let reused = crate::reserve_handle_id_in_domain(domain);
         assert_eq!(
@@ -196,8 +216,9 @@ mod tests {
             "private-domain reservation installs the tick hook"
         );
 
-        crate::free_handle_id(held);
-        crate::free_handle_id(reused);
+        for id in [held, after_tick, while_leased, reused] {
+            crate::free_handle_id(id);
+        }
         unsafe { js_run_stdlib_pump() };
     }
 
@@ -241,28 +262,39 @@ mod tests {
 
         // Allocation must install the lifecycle hook even when no extension
         // event pump has been initialized. Never drain the quarantine directly.
+        perry_runtime::gc::gc_init();
         let prior_tick = crate::register_handle(10_u64);
+        let identity = crate::handle_registration(prior_tick).unwrap();
+        let lease = crate::acquire_handle_registration(identity, crate::NativeLeaseKind::Operation)
+            .unwrap();
         assert!(crate::drop_handle(prior_tick));
         let held = crate::register_handle(20_u64);
-        assert_ne!(held, prior_tick, "retired ids wait for the next outer tick");
+        assert_ne!(held, prior_tick, "a retired id waits for the collector");
         unsafe { js_run_stdlib_pump() };
-        let allocation_only = crate::register_handle(15_u64);
+        let after_tick = crate::register_handle(15_u64);
+        assert_ne!(
+            after_tick, prior_tick,
+            "an outer tick never reissues a retired id"
+        );
+        collect_unobserved();
+        drop(lease);
+        unsafe { js_run_stdlib_pump() };
+        let allocation_only = crate::register_handle(16_u64);
         assert_eq!(
             allocation_only, prior_tick,
             "allocation installs the tick hook"
         );
-        assert!(crate::drop_handle(allocation_only));
 
         // Now exercise the public extension registration seam and actual
         // callback dispatch, including re-entry within an outer tick.
         register_aux_event_pump(lifecycle_probe, lifecycle_idle);
         unsafe { js_run_stdlib_pump() };
         assert_eq!(LIFECYCLE_PHASE.load(Ordering::SeqCst), 2);
-        assert_eq!(CALLBACK_HANDLE.load(Ordering::SeqCst), prior_tick);
+        let callback = CALLBACK_HANDLE.load(Ordering::SeqCst);
         assert!(CALLBACK_DROPPED.load(Ordering::SeqCst));
         let nested = NESTED_HANDLE.load(Ordering::SeqCst);
         assert_ne!(
-            nested, prior_tick,
+            nested, callback,
             "nested pumps must not promote this tick's ids"
         );
         assert_eq!(*crate::get_handle::<u64>(nested).unwrap(), 40);
@@ -270,14 +302,24 @@ mod tests {
         unsafe { js_run_stdlib_pump() };
         assert_eq!(LIFECYCLE_PHASE.load(Ordering::SeqCst), 3);
         let next_tick = crate::register_handle(50_u64);
+        assert_ne!(next_tick, callback, "a later outer tick reissues nothing");
+        collect_unobserved();
+        let proven = crate::register_handle(60_u64);
         assert_eq!(
-            next_tick, prior_tick,
-            "a later outer tick makes the id reusable"
+            proven, callback,
+            "two full traces that name nothing reissue the callback's id"
         );
-        for handle in [held, nested, next_tick] {
+        for handle in [held, after_tick, allocation_only, nested, next_tick, proven] {
             assert!(crate::drop_handle(handle));
         }
         unsafe { js_run_stdlib_pump() };
+    }
+
+    /// Two real full collections on this mutator: the first ages every parked
+    /// id past its young epoch, the second releases what no traced word names.
+    fn collect_unobserved() {
+        perry_runtime::gc::js_gc_collect();
+        perry_runtime::gc::js_gc_collect();
     }
 
     #[test]

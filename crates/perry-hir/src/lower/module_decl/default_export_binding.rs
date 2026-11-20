@@ -81,6 +81,40 @@ pub(crate) fn mark_exported_function_bodies(module: &mut Module) {
     }
 }
 
+/// A native default import has metadata rather than a runtime local slot.
+/// Exporting it by name must materialize that ordinary binding value, just as
+/// `export default value` does, instead of emitting a getter for a nonexistent
+/// compiled function named after the import. Named native imports retain their
+/// existing live ESM-export-cell getters.
+pub(super) fn materialize_native_default_alias(
+    ctx: &mut LoweringContext,
+    module: &mut Module,
+    local: &str,
+) -> String {
+    let native_default = module.imports.iter().any(|import| {
+        import.is_native && !import.type_only && import.specifiers.iter().any(|specifier| {
+            matches!(specifier, crate::ir::ImportSpecifier::Default { local: name } if name == local)
+        })
+    });
+    if !native_default
+        || ctx.lookup_native_module(local).is_none()
+        || ctx.lookup_local(local).is_some()
+    {
+        return local.to_string();
+    }
+    let value = super::super::lower_expr::native_module_binding_value(ctx, local);
+    let name = format!("__perry_native_default_export_{}", ctx.fresh_local());
+    let id = ctx.define_local(name.clone(), crate::types::Type::Any);
+    module.init.push(crate::ir::Stmt::Let {
+        id,
+        name: name.clone(),
+        ty: crate::types::Type::Any,
+        mutable: false,
+        init: Some(value),
+    });
+    name
+}
+
 #[cfg(test)]
 mod tests {
     use crate::ir::{Export, Module};
@@ -136,6 +170,23 @@ mod tests {
             "{:?}",
             module.exported_functions
         );
+    }
+
+    #[test]
+    fn a_named_export_of_a_native_default_has_a_runtime_value_binding() {
+        let module = lower_src("import fs from 'fs'; export { fs };");
+        let local = module
+            .exports
+            .iter()
+            .find_map(|export| match export {
+                Export::Named { local, exported } if exported == "fs" => Some(local),
+                _ => None,
+            })
+            .unwrap();
+        assert!(module.init.iter().any(|stmt| matches!(stmt,
+            crate::ir::Stmt::Let { name, init: Some(crate::ir::Expr::NativeModuleRef(source)), .. }
+                if name == local && source == "fs"
+        )), "{:?}", module.init);
     }
 
     #[test]

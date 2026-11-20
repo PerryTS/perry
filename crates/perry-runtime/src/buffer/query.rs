@@ -42,7 +42,7 @@ pub unsafe extern "C" fn js_value_buffer_or_typedarray_data(
     let Some(addr) = buffer_addr_from_raw(raw as i64) else {
         return std::ptr::null();
     };
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
         return super::bytes::no_gc(|_| {
             if let Ok(span) =
                 super::bytes::span(crate::value::js_nanbox_pointer(addr as i64), false)

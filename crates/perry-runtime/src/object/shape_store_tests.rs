@@ -1,5 +1,6 @@
 //! Shape-store regressions; the module path remains `shape_store::tests`.
 use super::*;
+use crate::codegen_abi::LayoutWord;
 #[test]
 fn function_recreated_data_key_clears_the_deletion_marker() {
     let _lock = crate::gc::global_side_table_test_lock();
@@ -33,7 +34,7 @@ fn plain_add_uses_the_existing_chain_answer_without_recording_another_fact() {
         let key = crate::string::canonical_key(b"plainShapeAnswerOnly");
         let boxed_key = crate::value::js_nanbox_string(key as i64);
         const ANON: u32 = 0x63C2;
-        super::super::class_registry::js_register_anon_shape_class_id(ANON);
+        crate::object::declarations::test_declare_anonymous(ANON);
         for obj in [
             super::super::js_object_alloc(0, 0),
             super::super::js_object_alloc_null_proto(0, 0),
@@ -54,27 +55,27 @@ fn plain_add_uses_the_existing_chain_answer_without_recording_another_fact() {
                 17.0
             );
         }
+        // DEC 250 Q2: the program cannot add the key to the default
+        // prototype (the add is a TypeError), so the existing chain answer
+        // stays true and a fresh object's store still lands.
         let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
-        super::super::js_object_set_field_by_name(proto, key, 29.0);
-        super::super::set_property_attrs(
-            proto as usize,
-            "plainShapeAnswerOnly".into(),
-            super::super::PropertyAttrs::new(false, true, true),
-        );
+        crate::exception::catch_js_throw(|| {
+            super::super::js_object_set_field_by_name(proto, key, 29.0)
+        })
+        .expect_err("a program add on Object.prototype is refused");
         let fresh = super::super::js_object_alloc(0, 0);
         super::super::alloc_plain::mark_object_plain_ordinary(fresh);
         let owner = crate::value::js_nanbox_pointer(fresh as i64);
-        let result = try_store(owner, boxed_key, 23.0);
-        let present = super::super::obj_value_has_own_key(owner, boxed_key);
-        super::super::js_object_delete_dynamic_value(
-            crate::value::js_nanbox_pointer(proto as i64),
-            boxed_key,
-        );
         assert_eq!(
-            result, None,
-            "the default prototype's current attributes remain authoritative"
+            try_store(owner, boxed_key, 23.0),
+            Some(23.0),
+            "the chain answer is unchanged"
         );
-        assert!(!present);
+        assert!(super::super::obj_value_has_own_key(owner, boxed_key));
+        assert!(!super::super::obj_value_has_own_key(
+            crate::value::js_nanbox_pointer(proto as i64),
+            boxed_key
+        ));
     }
 }
 
@@ -174,11 +175,7 @@ fn own_number_store_preserves_lanes_and_generalizes_a_function_slot() {
             super::super::js_object_get_field_by_name_f64(obj, atom),
             f64::INFINITY
         );
-        assert!(try_own_store(
-            obj,
-            atom,
-            f64::from_bits(crate::JSValue::int32(42).bits())
-        ));
+        assert!(try_own_store(obj, atom, f64::from(42)));
         assert_eq!(
             super::super::js_object_get_field_by_name_f64(obj, atom),
             42.0
@@ -614,14 +611,14 @@ fn own_slot_plan_cannot_hide_a_later_declaration() {
     let record = unsafe { shapes::object_shape_record(obj).unwrap() };
     let actual_keys = record.keys() as usize;
     super::super::prop_plan::read_plan_record(
-        unsafe { (*obj).shape_word() },
+        unsafe { LayoutWord((*obj).shape_word()) },
         actual_keys,
         key as usize,
         0,
     );
     assert_eq!(
         super::super::prop_plan::read_plan_lookup(
-            unsafe { (*obj).shape_word() },
+            unsafe { LayoutWord((*obj).shape_word()) },
             actual_keys,
             key as usize,
             2
@@ -685,7 +682,7 @@ fn function_dictionary_adds_reuse_the_named_bag_transition() {
 }
 
 #[test]
-fn function_dictionary_asks_its_actual_prototype_own_attributes() {
+fn a_linked_function_asks_its_actual_prototype_own_attributes() {
     let _lock = crate::gc::global_side_table_test_lock();
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let a = fresh_test_function();
@@ -714,10 +711,10 @@ fn function_dictionary_asks_its_actual_prototype_own_attributes() {
             (*((v.to_bits() & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader))
                 .shape_id
         };
-        assert_eq!(
+        assert_ne!(
             id(a),
             id(b),
-            "FunctionDictionary is shared across these distinct prototype chains"
+            "each function's shape names its own prototype identity"
         );
     }
     assert_eq!(
@@ -729,7 +726,7 @@ fn function_dictionary_asks_its_actual_prototype_own_attributes() {
     assert_eq!(
         unsafe { try_store(b, key_value, 2.0) },
         Some(2.0),
-        "the same FunctionDictionary id with a different prototype must remain writable"
+        "a different prototype's chain must remain writable"
     );
 }
 
@@ -947,22 +944,23 @@ fn array_named_chain_includes_object_prototype_after_warmup() {
     let arr = crate::array::js_array_alloc(4);
     let receiver = crate::value::js_nanbox_pointer(arr as i64);
     assert_eq!(unsafe { try_store(receiver, key_value, 1.0) }, Some(1.0));
+    // DEC 250 Q2: the program's add on the array chain's grandparent is a
+    // TypeError, so the warmed chain answer stays true for a fresh array.
     let proto = crate::array::object_prototype_addr() as *mut ObjectHeader;
-    super::super::js_object_set_field_by_name(proto, key, 9.0);
-    super::super::set_property_attrs(
-        proto as usize,
-        "arrayGrandparentRange".into(),
-        super::super::PropertyAttrs::new(false, true, true),
-    );
+    crate::exception::catch_js_throw(|| super::super::js_object_set_field_by_name(proto, key, 9.0))
+        .expect_err("a program add on Object.prototype is refused");
     let fresh = crate::array::js_array_alloc(4);
     let fresh_value = crate::value::js_nanbox_pointer(fresh as i64);
-    let answer = unsafe { try_store(fresh_value, key_value, 2.0) };
-    super::super::js_object_delete_dynamic_value(
-        crate::value::js_nanbox_pointer(proto as i64),
-        key_value,
+    assert_eq!(
+        unsafe { try_store(fresh_value, key_value, 2.0) },
+        Some(2.0),
+        "the chain answer is unchanged"
     );
-    assert_eq!(answer, None, "Object.prototype is part of an array's chain");
-    assert!(!super::super::obj_value_has_own_key(fresh_value, key_value));
+    assert!(super::super::obj_value_has_own_key(fresh_value, key_value));
+    assert!(!super::super::obj_value_has_own_key(
+        crate::value::js_nanbox_pointer(proto as i64),
+        key_value
+    ));
 }
 
 #[test]
@@ -978,20 +976,28 @@ fn array_chain_projection_declines_a_changed_prototype_after_warmup() {
     let prototype = super::super::js_object_get_prototype_of(receiver);
     let original = super::super::js_object_get_prototype_of(prototype);
     let readonly = super::super::js_object_alloc(0, 0);
-    super::super::js_object_set_field_by_name(readonly, key, 9.0);
-    super::super::set_property_attrs(
-        readonly as usize,
-        "rangeEnd".into(),
-        super::super::PropertyAttrs::new(false, true, true),
-    );
-    super::super::js_object_set_prototype_of(
-        prototype,
-        crate::value::js_nanbox_pointer(readonly as i64),
-    );
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_field_by_name(readonly, key, 9.0)
+    });
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::set_property_attrs(
+            readonly as usize,
+            "rangeEnd".into(),
+            super::super::PropertyAttrs::new(false, true, true),
+        )
+    });
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_prototype_of(
+            prototype,
+            crate::value::js_nanbox_pointer(readonly as i64),
+        )
+    });
     let fresh = crate::array::js_array_alloc(4);
     let fresh_value = crate::value::js_nanbox_pointer(fresh as i64);
     let answer = unsafe { try_store(fresh_value, key_value, 2.0) };
-    super::super::js_object_set_prototype_of(prototype, original);
+    crate::object::own_override::as_builtin_definition(|| {
+        super::super::js_object_set_prototype_of(prototype, original)
+    });
     assert_eq!(answer, None, "a custom array chain needs the complete Set");
 }
 

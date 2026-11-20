@@ -85,7 +85,7 @@ impl<'s> RootedIterArray<'s> {
         let live = unsafe {
             let header =
                 (rooted as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*header).obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!((*header).obj_type)
                 && (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 rooted
@@ -233,11 +233,12 @@ pub extern "C" fn js_array_forEach(arr: *const ArrayHeader, callback: *const Clo
         return;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        crate::typedarray::js_typed_array_for_each(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        crate::typedarray_hook_slots::js_typed_array_for_each(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
         return;
     }
@@ -323,13 +324,14 @@ pub extern "C" fn js_array_map(
         return js_array_alloc(0);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
         // Typed-array receiver: read elements per element-kind and return a
         // same-kind TypedArray (mirrors the sort/at/findLast delegation).
-        return crate::typedarray::js_typed_array_map(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_map(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as *mut ArrayHeader;
     }
     unsafe {
@@ -359,9 +361,10 @@ pub extern "C" fn js_array_map(
         // callback is ever invoked. For the common case (plain array whose
         // constructor is the intrinsic `Array`) this returns a fresh plain
         // array, identical to the prior `js_array_alloc_with_length`.
-        let result_box =
+        // Only the default arm's fresh plain array takes slot writes: a
+        // species constructor may return a frozen, short or pre-filled Array.
+        let (result_box, is_plain) =
             crate::array::species::array_species_create(rooted.receiver(), length as usize);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
         // Root the result too: it must survive (and be re-derived after)
         // every callback-triggered collection during the fill loop.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -370,6 +373,9 @@ pub extern "C" fn js_array_map(
         };
 
         let exotic = crate::array::array_iteration_is_exotic(arr);
+        // The plain result's dense prefix: the leading run of written slots
+        // (a source hole leaves the result's slot a hole).
+        let mut written_run: u32 = 0;
         for i in 0..length as usize {
             let element = if exotic {
                 let arr = rooted.arr();
@@ -403,9 +409,12 @@ pub extern "C" fn js_array_map(
                 // under the array's already-known layout first), so no
                 // separate publish write is needed here.
                 super::header_gc_slots::fill_resolved_array_slot(result, i, mapped.to_bits());
+                if i as u32 == written_run {
+                    written_run += 1;
+                }
             } else {
-                // Custom species container: CreateDataPropertyOrThrow via [[Set]].
-                crate::array::species::species_result_set(
+                // Species constructor's result: CreateDataPropertyOrThrow.
+                crate::array::species::species_result_define(
                     result_rooted.get_nanbox_f64(),
                     i,
                     mapped,
@@ -413,7 +422,14 @@ pub extern "C" fn js_array_map(
             }
         }
 
-        result_arr(&result_rooted)
+        if is_plain {
+            let result = result_arr(&result_rooted);
+            // The plain result is this map's own fill, never seen by the callback.
+            crate::array::ek_birth_prefix(result, written_run);
+            result
+        } else {
+            result_arr(&result_rooted)
+        }
     }
 }
 
@@ -532,11 +548,12 @@ pub extern "C" fn js_array_filter(
         return js_array_alloc(0);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_filter(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_filter(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as *mut ArrayHeader;
     }
     unsafe {
@@ -553,8 +570,8 @@ pub extern "C" fn js_array_filter(
         // ECMA-262 §23.1.3.7 step 5: ArraySpeciesCreate(O, 0) runs before the
         // iteration (validates `O.constructor` / `@@species`, throwing on a
         // poisoned getter or non-constructor species before the callback runs).
-        let result_box = crate::array::species::array_species_create(rooted.receiver(), 0);
-        let is_plain = crate::array::species::species_result_is_plain_array(result_box);
+        let (result_box, is_plain) =
+            crate::array::species::array_species_create(rooted.receiver(), 0);
         // Root the result across callbacks; a push can also REALLOCATE the
         // plain array, so write the returned pointer back into the handle.
         let result_rooted = scope.root_nanbox_f64(result_box);
@@ -600,10 +617,11 @@ pub extern "C" fn js_array_filter(
                         crate::value::JSValue::pointer(result as *const u8).bits(),
                     ));
                 } else {
-                    crate::array::species::species_result_set(
+                    // CreateDataPropertyOrThrow(A, to, kValue).
+                    crate::array::species::species_result_define(
                         result_rooted.get_nanbox_f64(),
                         to,
-                        element,
+                        element_root.get_nanbox_f64(),
                     );
                     to += 1;
                 }
@@ -634,11 +652,12 @@ pub extern "C" fn js_array_find(arr: *const ArrayHeader, callback: *const Closur
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -713,11 +732,12 @@ pub extern "C" fn js_array_findIndex(
         return -1;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find_index(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find_index(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         ) as i32;
     }
     unsafe {
@@ -773,11 +793,12 @@ pub extern "C" fn js_array_find_last(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_find_last(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_find_last(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -832,11 +853,12 @@ pub extern "C" fn js_array_find_last_index(
         return -1;
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        let r = crate::typedarray::js_typed_array_find_last_index(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        let r = crate::typedarray_hook_slots::js_typed_array_find_last_index(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
         return r as i32;
     }
@@ -881,6 +903,10 @@ pub extern "C" fn js_array_find_last_index(
 /// at - element access supporting negative indices (arr.at(-1) = last)
 #[no_mangle]
 pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
+    // 23.1.3.1 step 3 / 23.2.3.1: ToIntegerOrInfinity( index ) runs an object
+    // operand's `valueOf` before the receiver is read; the typed-array and
+    // Buffer arms below get the number.
+    let (index, arr) = super::splice_slice::index_operand_across(arr, index);
     let arr = normalize_array_receiver(arr);
     if arr.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
@@ -889,9 +915,9 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
     // and Uint8Array/Buffer have different layouts than ArrayHeader, and the
     // codegen happily routes their `.at(i)` through this generic helper.
     let addr = arr as usize;
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return crate::typedarray::js_typed_array_at(
-            addr as *const crate::typedarray::TypedArrayHeader,
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        return crate::typedarray_hook_slots::js_typed_array_at(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             index,
         );
     }
@@ -921,6 +947,11 @@ pub extern "C" fn js_array_at(arr: *const ArrayHeader, index: f64) -> f64 {
         if idx < 0 || idx >= length {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
+        // A sparse Array keeps a short store under its length: an index past
+        // the store is read by the complete accessor, never as a raw slot.
+        if idx >= i64::from((*arr).capacity) {
+            return crate::array::js_array_get_f64(arr, idx as u32);
+        }
         let elements_ptr = array_elements_ptr(arr);
         array_element_get_value(elements_ptr, idx as usize)
     }
@@ -949,11 +980,12 @@ pub extern "C" fn js_array_some(arr: *const ArrayHeader, callback: *const Closur
         return f64::from_bits(TAG_FALSE);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_some(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_some(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -1023,8 +1055,13 @@ pub extern "C" fn js_array_some_captureless(
     if arr.is_null() {
         return f64::from_bits(TAG_FALSE);
     }
-    if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+    // WebAssembly checks the type of every indirect call, so a body cannot be
+    // over-applied there as the native loop below does (a body declaring one
+    // parameter traps when called with three). Closure dispatch applies the
+    // declared arity, so wasm takes the generic path for every receiver.
+    if cfg!(target_os = "wasi")
+        || super::header::receiver_may_be_registered_exotic(arr)
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
         || super::header::receiver_may_be_registered_exotic(arr)
             && crate::buffer::is_registered_buffer(arr as usize)
     {
@@ -1115,11 +1152,12 @@ pub extern "C" fn js_array_every(arr: *const ArrayHeader, callback: *const Closu
         return f64::from_bits(TAG_TRUE);
     }
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_every(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_every(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
+            f64::from_bits(crate::value::TAG_UNDEFINED),
         );
     }
     unsafe {
@@ -1181,6 +1219,18 @@ pub extern "C" fn js_array_flatMap(
         return js_array_alloc(0);
     }
     unsafe {
+        let recv_value = array_receiver_value(arr);
+        if !crate::array::species::default_species_is_certain(recv_value) {
+            // An own `constructor`, a recorded prototype or a `constructor`
+            // accessor: ArraySpeciesCreate(O, 0) can run user code and the
+            // result may be any object.
+            let result = crate::array::js_arraylike_flatMap(
+                recv_value,
+                crate::value::js_nanbox_pointer(callback as i64),
+                undefined_value(),
+            );
+            return crate::value::js_nanbox_get_pointer(result) as *mut ArrayHeader;
+        }
         let length = (*arr).length;
         let scope = crate::gc::RuntimeHandleScope::new();
         let rooted = RootedIterArray::new(&scope, arr);
@@ -1213,9 +1263,20 @@ pub extern "C" fn js_array_flatMap(
             ));
         };
 
+        // A sparse store, an index accessor or an inherited index: the
+        // receiver is read by HasProperty / Get, as `map` and `filter` do.
+        let exotic = crate::array::array_iteration_is_exotic(arr);
         for i in 0..length as usize {
-            let Some(element) = rooted.present(i) else {
-                continue;
+            let element = if exotic {
+                if !crate::array::array_spec_has_index(rooted.arr(), i as u32) {
+                    continue;
+                }
+                crate::array::array_spec_get(rooted.arr(), i as u32)
+            } else {
+                match rooted.present(i) {
+                    Some(element) => element,
+                    None => continue,
+                }
             };
             let mapped = cb_site.call(
                 current_callback(),
@@ -1228,7 +1289,18 @@ pub extern "C" fn js_array_flatMap(
             // push in the inner loop can move the callback result's target.
             sub_rooted.set_nanbox_f64(mapped);
             let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
-            if !sub_arr.is_null() {
+            if !sub_arr.is_null() && crate::array::array_iteration_is_exotic(sub_arr) {
+                // The callback returned a sparse (or otherwise exotic) Array:
+                // FlattenIntoArray reads it by HasProperty / Get.
+                let sub_len = (*sub_arr).length;
+                for j in 0..sub_len {
+                    let sub_arr = crate::array::flattenable_array_ptr(sub_rooted.get_nanbox_f64());
+                    if !crate::array::array_spec_has_index(sub_arr, j) {
+                        continue;
+                    }
+                    push_rooted(crate::array::array_spec_get(sub_arr, j));
+                }
+            } else if !sub_arr.is_null() {
                 let sub_len = (*sub_arr).length;
                 for j in 0..sub_len as usize {
                     // Resolve from the rooted value after each allocation so a
@@ -1293,10 +1365,10 @@ pub extern "C" fn js_array_reduce(
     // storage is NOT NaN-boxed f64, so the generic ArrayHeader path below would
     // read garbage). Issue #2799.
     if super::header::receiver_may_be_registered_exotic(arr)
-        && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some()
+        && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some()
     {
-        return crate::typedarray::js_typed_array_reduce(
-            arr as *const crate::typedarray::TypedArrayHeader,
+        return crate::typedarray_hook_slots::js_typed_array_reduce(
+            arr as *const crate::typedarray_hook_slots::TypedArrayHeader,
             callback,
             has_initial,
             initial,
@@ -1385,9 +1457,7 @@ pub extern "C" fn js_array_reduce(
 pub(crate) fn throw_reduce_of_empty() -> ! {
     let msg = "Reduce of empty array with no initial value";
     let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err_ptr = crate::error::js_typeerror_new(msg_str);
-    let err_value = crate::value::JSValue::pointer(err_ptr as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(err_value))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg_str))
 }
 
 /// `arr.toLocaleString(locales?, options?)` (#2808).
@@ -1505,8 +1575,8 @@ fn resolve_callback_ptr(cb_boxed: f64) -> Option<i64> {
         // that bare id anyway: DirectCallN falls back to js_closure_callN,
         // whose proxy-callee path performs the Proxy [[Call]].
         if !crate::closure::get_valid_func_ptr(ptr).is_null()
-            || (crate::proxy::js_proxy_is_proxy(cb_boxed) == 1
-                && crate::proxy::proxy_wraps_callable(cb_boxed))
+            || (crate::proxy_hooks::proxy_is_proxy(cb_boxed) == 1
+                && crate::proxy_hooks::proxy_wraps_callable(cb_boxed))
         {
             return Some(ptr as i64);
         }
@@ -1544,7 +1614,6 @@ fn render_callback_plain(cb_boxed: f64) -> String {
         || jv.is_null()
         || jv.is_bool()
         || jv.is_number()
-        || jv.is_int32()
         || jv.is_any_string()
         || jv.is_bigint()
     {
@@ -1564,8 +1633,7 @@ fn render_callback_plain(cb_boxed: f64) -> String {
 fn throw_not_a_function(rendered: String) -> ! {
     let message = format!("{} is not a function", rendered);
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 /// Validate a higher-order array/TypedArray callback (#4091). Returns the
@@ -1595,7 +1663,7 @@ pub extern "C" fn js_validate_array_map_callback(arr: i64, cb_boxed: f64) -> i64
     }
     let is_typed_array =
         super::header::receiver_may_be_registered_exotic(arr as *const ArrayHeader)
-            && crate::typedarray::lookup_typed_array_kind(arr as usize).is_some();
+            && crate::typedarray_hook_slots::lookup_typed_array_kind(arr as usize).is_some();
     let rendered = if is_typed_array {
         render_callback_plain(cb_boxed)
     } else {

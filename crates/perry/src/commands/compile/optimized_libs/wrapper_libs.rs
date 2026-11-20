@@ -16,8 +16,11 @@ use super::super::rust_target_triple;
 ///
 /// Each wrapper is located through `find_library`, which honours the
 /// `PERRY_LIB_DIR` / `PERRY_RUNTIME_DIR` overrides and the exe-dir /
-/// Homebrew `../lib` probes. A missing wrapper is a broken install or an
-/// incomplete workspace build, and stops the compile with what to build.
+/// Homebrew `../lib` probes, then the triple's ext package (npm or
+/// `~/.perry/ext`). A missing wrapper whose triple has an ext package is
+/// fetched once (`ensure_ext_package`, opt-out `PERRY_NO_AUTO_FETCH=1`);
+/// otherwise it is a broken install or an incomplete workspace build, and
+/// stops the compile with what to install or build.
 pub(crate) fn resolve_prebuilt_ext_libs(
     iteration_set: &std::collections::BTreeSet<String>,
     target: Option<&str>,
@@ -40,30 +43,41 @@ pub(crate) fn resolve_prebuilt_ext_libs(
                 &binding.lib,
                 rust_target_triple(target),
             ));
-        match super::super::library_search::find_library(&filename, target) {
-            Some(path) => {
-                if matches!(format, OutputFormat::Text) {
-                    println!(
-                        "  well-known: routing `{}` → {} ({})",
-                        module,
-                        path.display(),
-                        binding.tracking.as_deref().unwrap_or("no tracking issue")
-                    );
-                }
-                libs.push(path);
-            }
-            None => {
+        // An npm install ships the ext archives in their own package, fetched
+        // the first time a compile needs one (never otherwise).
+        let found = match super::super::library_search::locate_or_fetch(&filename, target) {
+            Ok(found) => Some(found.link),
+            Err(super::super::library_search::Missed {
+                refused: Some(message),
+                ..
+            }) => {
                 eprintln!(
-                    "error: `{module}` links the prebuilt wrapper archive `{filename}`, which \
-                     was not found. Install Perry's bundled libraries next to the perry binary, \
-                     set PERRY_LIB_DIR, or build the workspace (`cargo build --release` builds \
-                     `{}` with the runtime; `scripts/build_instr_runtime.sh` builds the \
-                     instrumented `_instr` archives a compile with an instrument knob links).",
-                    binding.krate
+                    "error: `{module}` links the prebuilt wrapper archive `{filename}`; {message}"
                 );
                 std::process::exit(1);
             }
+            Err(_) => None,
+        };
+        let Some(path) = found else {
+            eprintln!(
+                "error: `{module}` links the prebuilt wrapper archive `{filename}`, which \
+                 was not found. Install Perry's bundled libraries next to the perry binary, \
+                 set PERRY_LIB_DIR, or build the workspace (`cargo build --release` builds \
+                 `{}` with the runtime; `scripts/build_instr_runtime.sh` builds the \
+                 instrumented `_instr` archives a compile with an instrument knob links).",
+                binding.krate
+            );
+            std::process::exit(1);
+        };
+        if matches!(format, OutputFormat::Text) {
+            println!(
+                "  well-known: routing `{}` → {} ({})",
+                module,
+                path.display(),
+                binding.tracking.as_deref().unwrap_or("no tracking issue")
+            );
         }
+        libs.push(path);
     }
     libs
 }

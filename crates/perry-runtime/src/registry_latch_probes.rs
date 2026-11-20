@@ -32,7 +32,10 @@ fn unregistered_scratch_addr() -> usize {
 fn unregistered_address_misses_every_probe() {
     let addr = unregistered_scratch_addr();
 
-    assert_eq!(crate::typedarray::lookup_typed_array_kind(addr), None);
+    assert_eq!(
+        crate::typedarray_hook_slots::lookup_typed_array_kind(addr),
+        None
+    );
     assert!(!crate::buffer::is_registered_buffer(addr));
     assert!(!crate::buffer::is_uint8array_buffer(addr));
     assert!(!crate::buffer::is_array_buffer(addr));
@@ -59,20 +62,29 @@ fn unregistered_address_misses_every_probe() {
 fn typed_array_is_found_after_the_idle_fast_path_ran() {
     let scratch = unregistered_scratch_addr();
     // 1. take the probe's fast path at least once.
-    assert_eq!(crate::typedarray::lookup_typed_array_kind(scratch), None);
+    assert_eq!(
+        crate::typedarray_hook_slots::lookup_typed_array_kind(scratch),
+        None
+    );
 
     // 2. only now create the feature.
-    let ta = crate::typedarray::js_typed_array_new(crate::typedarray::KIND_FLOAT64 as i32, 4.0);
+    let ta = crate::typedarray_hook_slots::js_typed_array_new(
+        crate::typedarray_hook_slots::KIND_FLOAT64 as i32,
+        4.0,
+    );
     assert!(!ta.is_null(), "test premise: the typed array allocated");
 
     // 3. the probe must see it.
     assert_eq!(
-        crate::typedarray::lookup_typed_array_kind(ta as usize),
-        Some(crate::typedarray::KIND_FLOAT64),
+        crate::typedarray_hook_slots::lookup_typed_array_kind(ta as usize),
+        Some(crate::typedarray_hook_slots::KIND_FLOAT64),
         "a typed array created after the idle fast path must still be registered"
     );
     // The unrelated scratch address must NOT have become a typed array.
-    assert_eq!(crate::typedarray::lookup_typed_array_kind(scratch), None);
+    assert_eq!(
+        crate::typedarray_hook_slots::lookup_typed_array_kind(scratch),
+        None
+    );
 }
 
 #[test]
@@ -214,7 +226,10 @@ fn detached_buffer_mark_is_found_after_the_idle_fast_path_ran() {
 /// An address no allocator on any supported platform can return: above
 /// `addr_class::is_valid_obj_ptr`'s heap ceiling, so no concurrently running
 /// test can widen a registry window to cover it.
+#[cfg(target_pointer_width = "64")]
 const FAR_OUTSIDE_ANY_WINDOW: usize = 0x7000_0000_0000_0000;
+#[cfg(target_pointer_width = "32")]
+const FAR_OUTSIDE_ANY_WINDOW: usize = 0xF000_0000;
 
 /// The class-prototype probe uses an exact inverse address index. Keep both
 /// positive and negative membership covered: class-heavy bundles saturate the

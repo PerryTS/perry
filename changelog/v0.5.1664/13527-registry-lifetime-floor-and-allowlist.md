@@ -1,0 +1,11 @@
+Make the registry lifetime audit green again after six address-keyed registries were replaced with better mechanisms, and drop the five allowlist entries that outlived them.
+
+`python3 scripts/registry_lifetime_check.py` was exiting 2, not 1: `only 184 registries enumerated (floor 187)`. That is the gate's own parser-liveness assertion — it fires when the enumerator stops matching, so the failure said "do not trust this scan", not "here is a violation". It hid a second, ordinary defect behind it: five stale allowlist entries, which only surfaced once the floor stopped aborting the run.
+
+The six registries are gone because the code got better, not because a regex broke. Diffing `--list` between `e91af6efe6` (where the floor was last set, 190 enumerated) and today (184) shows exactly six removals and **nothing added**: `EXPORT_SINGLETONS`, `NAMESPACE_SINGLETONS` and `DEFAULT_OBJECT_SINGLETONS` in `node_submodules/mod.rs` (`97e40e8826`, replaced by per-submodule slots behind a single pointer), plus `UNCLONEABLE_OBJECTS` and `UNTRANSFERABLE_OBJECTS` (`cc1da0e683`, unified into one clone-marker mechanism) and `ENVIRONMENT_DATA` (`bc1f7ec92e`, inherited through one clone graph) in `worker_threads.rs`.
+
+`MIN_REGISTRIES` therefore moves `187 -> 181`, keeping the same three-entry parser-liveness margin the file's floor history establishes (`181 = 184 - 3`), with the six removals and their commits recorded beside it so the next reader can re-derive the number. `MIN_REMOVING` is deliberately untouched: 120 registries have a production removal path against a floor of 118, so lowering it would only weaken the gate.
+
+The five allowlist entries removed are the three `node_submodules` tables and the two `worker_threads` clone-marker tables — the ones the gate named as `no such registry lacks a removal path any more`. `ENVIRONMENT_DATA` needed no entry because it never lacked a removal path. The allowlist goes from 69 to 64.
+
+Verified in both directions. As committed the gate reports `OK (184 registries; 120 with a production removal path; 64 allowlisted)` and the self-test passes. Driven deliberately, both guards still fire: raising the floor above reality exits 2 with `only 184 registries enumerated (floor 200)`, and re-adding one stale allowlist entry exits 1 with `stale allowlist entry … EXPORT_SINGLETONS`.

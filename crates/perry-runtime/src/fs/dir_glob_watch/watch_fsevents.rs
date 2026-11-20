@@ -15,8 +15,10 @@
 //!
 //! Semantics follow libuv's `uv__fsevents_event_cb`: one event per reported
 //! path, `'rename'` when any of Created / Removed / Renamed / RootChanged is
-//! set, otherwise `'change'` when any of the modification flags is set;
-//! latency 0.05 s so a burst coalesces the way it does under node. Events
+//! set, otherwise `'change'` when any of the modification flags is set.
+//! A regular file's coalesced creation/write retains both facts until routing
+//! distinguishes the already-watched file from its parent directory.
+//! Latency is 0.05 s so a burst coalesces the way it does under node. Events
 //! arrive on a private dispatch queue (libdispatch lives in libSystem: no
 //! CFRunLoop thread, no further dylib) and each callback pushes onto the
 //! per-thread [`EventQueue`] like every other cross-thread producer.
@@ -55,6 +57,7 @@ const EVENT_FLAG_ITEM_MODIFIED: u32 = 0x0000_1000;
 const EVENT_FLAG_ITEM_FINDER_INFO_MOD: u32 = 0x0000_2000;
 const EVENT_FLAG_ITEM_CHANGE_OWNER: u32 = 0x0000_4000;
 const EVENT_FLAG_ITEM_XATTR_MOD: u32 = 0x0000_8000;
+const EVENT_FLAG_ITEM_IS_FILE: u32 = 0x0001_0000;
 
 const RENAME_FLAGS: u32 = EVENT_FLAG_ITEM_CREATED
     | EVENT_FLAG_ITEM_REMOVED
@@ -70,6 +73,16 @@ const CHANGE_FLAGS: u32 = EVENT_FLAG_ITEM_MODIFIED
 /// change, else the event carries no action (HistoryDone, MustScanSubDirs,
 /// bare IsFile/IsDir markers) and is dropped.
 pub(super) fn classify_flags(flags: u32) -> Option<EventClass> {
+    // A shared stream rebuilt after adding a file root can still carry its
+    // creation flag with the next write. Keep both facts until target routing:
+    // the parent directory sees creation; the already-watched file sees change.
+    let created_file = EVENT_FLAG_ITEM_CREATED | EVENT_FLAG_ITEM_IS_FILE;
+    if flags & created_file == created_file
+        && flags & CHANGE_FLAGS != 0
+        && flags & (RENAME_FLAGS & !EVENT_FLAG_ITEM_CREATED) == 0
+    {
+        return Some(EventClass::FileCreatedAndChanged);
+    }
     if flags & RENAME_FLAGS != 0 {
         Some(EventClass::Rename)
     } else if flags & CHANGE_FLAGS != 0 {
@@ -391,6 +404,21 @@ mod tests {
         );
         assert_eq!(classify_flags(0x0001 /* MustScanSubDirs */), None);
         assert_eq!(classify_flags(0x0001_0000 /* ItemIsFile alone */), None);
+    }
+
+    #[test]
+    fn coalesced_file_creation_keeps_change_without_reclassifying_real_renames() {
+        let flags = EVENT_FLAG_ITEM_IS_FILE | EVENT_FLAG_ITEM_CREATED | EVENT_FLAG_ITEM_MODIFIED;
+        let class = classify_flags(flags).unwrap();
+        assert_eq!(class.node_name_for_target(false), "rename");
+        assert_eq!(class.node_name_for_target(true), "change");
+        for rename in [
+            EVENT_FLAG_ITEM_REMOVED,
+            EVENT_FLAG_ITEM_RENAMED,
+            EVENT_FLAG_ROOT_CHANGED,
+        ] {
+            assert_eq!(classify_flags(flags | rename), Some(EventClass::Rename));
+        }
     }
 
     #[test]

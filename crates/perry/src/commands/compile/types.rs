@@ -92,6 +92,25 @@ pub struct CompileArgs {
     #[arg(long, value_name = "NAME=EXPR")]
     pub define: Vec<String>,
 
+    /// Bake module source paths relative to this directory instead of their
+    /// build location (also via `PERRY_SOURCE_ROOT`). A module at `<DIR>/a/b.js`
+    /// sees `<TARGET>/a/b.js` in `__dirname`, `__filename`, `import.meta.*`,
+    /// `require` resolution, stack-frame labels and runtime error text, so the
+    /// program no longer depends on the directory it was built in. Compile-time
+    /// file access is unchanged. A module outside `<DIR>` keeps its real path
+    /// (with a warning).
+    #[arg(long, value_name = "DIR")]
+    pub source_root: Option<PathBuf>,
+
+    /// Absolute path that `--source-root` is mapped onto (also via
+    /// `PERRY_SOURCE_ROOT_TARGET`; default `/`).
+    #[arg(long, value_name = "PATH")]
+    pub source_root_target: Option<String>,
+
+    /// Compiler-owned ancestry for recursive build-time macro expansion.
+    #[arg(long, hide = true)]
+    pub macro_import_stack: Vec<PathBuf>,
+
     /// Keep intermediate files (for debugging)
     #[arg(long)]
     pub keep_intermediates: bool,
@@ -181,6 +200,11 @@ pub struct CompileArgs {
     /// `perry.embed` (package.json) / `[compile] embed` (perry.toml). Repeatable.
     #[arg(long)]
     pub embed: Vec<String>,
+
+    /// Package explicitly embedded files as Node SEA assets. Ordinary
+    /// `--embed` builds do not activate the `node:sea` API.
+    #[arg(long)]
+    pub sea: bool,
 
     /// Map Bun standalone-executable virtual paths below `/$bunfs/root/` to
     /// an extracted filesystem tree. Static module edges resolve through the
@@ -666,6 +690,10 @@ pub struct GeneratedAssetModule {
 
 /// Compilation context tracking all modules
 pub struct CompilationContext {
+    /// This compilation executed build-time code with external inputs.
+    pub(crate) has_build_time_execution: bool,
+    /// Active importing modules, forwarded to native macro compiler children.
+    pub(crate) macro_import_stack: Vec<PathBuf>,
     /// Native TypeScript modules to compile
     pub native_modules: BTreeMap<PathBuf, HirModule>,
     pub(crate) reexport_pruner: super::collect_modules::reexport_prune::ReexportPruner,
@@ -673,6 +701,16 @@ pub struct CompilationContext {
     /// a string literal, or constructs a Worker). Gates worker entries named
     /// by URL literals (`collect_modules/worker_url.rs`).
     pub(crate) uses_worker_threads: bool,
+    pub(crate) uses_thread_codec: bool,
+    pub(crate) uses_date: bool,
+    pub(crate) uses_perf_hooks: bool,
+    pub(crate) uses_os: bool,
+    pub(crate) uses_messaging: bool,
+    pub(crate) uses_event_target: bool,
+    /// The program may read `navigator` / `Navigator` (named, or through an
+    /// escaped global object): `Navigator.prototype` gets its getters.
+    pub(crate) uses_navigator: bool,
+    pub(crate) uses_typedarray: bool,
     /// `new URL("<script>", import.meta.url)` targets not yet accepted.
     pub(crate) worker_url_candidates: Vec<super::collect_modules::worker_url::WorkerUrlCandidate>,
     /// Accepted URL-literal targets, linked once collection ends.
@@ -739,6 +777,10 @@ pub struct CompilationContext {
     /// addons. Unlike the older compile/native-library policy lists this set
     /// deliberately has no wildcard syntax.
     pub native_addon_packages: BTreeSet<String>,
+    /// The wasm32 archives of `perry.nativeAddons` packages whose addons a
+    /// WASI program links statically: package name -> addon entry (the
+    /// `.node` path inside the package) -> archives.
+    pub native_addon_wasm: BTreeMap<String, BTreeMap<String, Vec<PathBuf>>>,
     /// Approved `.node` entries reached by the compile graph, keyed by their
     /// relocatable package-relative logical id.
     pub native_addons: BTreeMap<String, NativeAddonModule>,
@@ -786,6 +828,11 @@ pub struct CompilationContext {
     /// automatic wasm imports also register bytes there but must still lower
     /// their executable adapter on a later metadata pass.
     pub file_loader_asset_paths: HashSet<PathBuf>,
+    /// Canonical paths a static import read with `{ type: "text" }`. Such a
+    /// file becomes a text module (default export = its contents) whatever
+    /// its extension, as with Bun (`import s from "./Dockerfile" with
+    /// { type: "text" }`).
+    pub text_loader_asset_paths: HashSet<PathBuf>,
     /// Stable `$perryfs` names chosen for generated asset-module members.
     /// These are keyed by canonical source path so the ordinary file-loader
     /// collection path can reuse them without knowing how the import arose.
@@ -834,6 +881,17 @@ pub struct CompilationContext {
     pub compile_package_dirs: BTreeSet<PathBuf>,
     /// Compile package roots already checked for unsupported Node native addon markers.
     pub checked_compile_package_native_addon_roots: HashSet<PathBuf>,
+    /// Canonical roots of `perry.nativeAddons` packages the walk entered. A
+    /// platform payload is approved through the wrapper copy that loads it,
+    /// which an isolated store (pnpm) keeps outside the payload's ancestors.
+    pub native_addon_wrapper_roots: BTreeSet<PathBuf>,
+    /// Names importers ask of a CommonJS module whose `module.exports` is
+    /// assigned a value its source does not spell out (a UMD `factory(…)`,
+    /// an identifier, …), keyed by the module's canonical path. The wrap
+    /// exports each as a snapshot of the `module.exports` property, as Bun
+    /// and bundlers bind them. A program-wide fact: found after the first
+    /// walk, applied by the second.
+    pub cjs_demanded_exports: BTreeMap<PathBuf, BTreeSet<String>>,
     /// #1680 (Phase 2 of #1677): build-time codegen steps declared in the
     /// host `package.json` `perry.codegen`. Each is a shell command run
     /// (in `codegen_dir`) before module collection, so a codegen library
@@ -910,6 +968,8 @@ pub struct CompilationContext {
     /// identity/display layer stays compiled, so non-regex programs still
     /// format/compare values correctly.
     pub uses_regex: bool,
+    /// A regex producer can query Unicode property membership.
+    pub uses_regex_unicode: bool,
     /// Whether any TS module uses the TC39 `Temporal.*` API. Gates
     /// `perry-runtime/temporal` (the `temporal_rs` engine + its transitive
     /// tz/calendar deps, ~580 KB). Independent of JS `Date`, which has its own
@@ -955,6 +1015,16 @@ pub struct CompilationContext {
     /// intrinsics, so a mention means it may be used as a VALUE).
     pub uses_global_math: bool,
     pub uses_global_json: bool,
+    pub uses_json_format: bool,
+    pub uses_json_engine: bool,
+    /// Native capabilities and computed member keys may occur in different modules.
+    pub uses_computed_member_keys: bool,
+    pub uses_date_computed_member_keys: bool,
+    pub uses_file_handle_capability: bool,
+    pub uses_bun_file_capability: bool,
+    pub uses_turnloop: bool,
+    pub uses_bigint: bool,
+    pub uses_proxy: bool,
     pub uses_global_reflect: bool,
     pub uses_global_atomics: bool,
     /// Per-group `globalThis` web-platform member tables (URL / Text* /
@@ -989,6 +1059,11 @@ pub struct CompilationContext {
     /// none of it. NB: not via `native_module_imports`, which only tracks
     /// `requires_stdlib` modules — dgram is runtime-only.
     pub uses_dgram: bool,
+    /// Whether any TS module reaches `node:child_process` (detected like
+    /// `uses_dgram`: child_process is runtime-only too). A child's stdio pipes
+    /// are `net.Socket`s, so such a program links perry-ext-net
+    /// (`optimized_libs::well_known_iteration_set`).
+    pub uses_child_process: bool,
     /// Program imports `node:test` / `node:test/reporters` — installs
     /// `perry-runtime/mod-node-test`.
     pub uses_node_test: bool,
@@ -996,6 +1071,19 @@ pub struct CompilationContext {
     /// module is only known at runtime, so auto-optimized runtimes must retain
     /// optional builtin namespace data such as the HTTP/2 key tables.
     pub uses_get_builtin_module: bool,
+    /// A process, loader or global object can reveal native modules through
+    /// computed names. Dedicated process intrinsics do not expose that object.
+    pub uses_dynamic_native_constants: bool,
+    /// Whether any module names `upgradeToTLS`, perry's TLS upgrade of a
+    /// `net.Socket`: such a program reaches TLS without importing `tls`
+    /// ([`super::optimized_libs::reaches_tls`]).
+    pub uses_upgrade_to_tls: bool,
+    /// Whether any module imports, requires, or names (`getBuiltinModule`)
+    /// `dns` / `dns/promises`. Arms the dns export router so a namespace
+    /// created at runtime (a CommonJS `require('node:dns')`) reaches
+    /// `lookup` / `resolve*` / `reverse`; programs without it keep those FFIs
+    /// out of the link (see `js_dns_install_exports`).
+    pub uses_dns: bool,
     /// Whether `perry/thread` is imported. When true, the runtime must
     /// keep `panic = "unwind"` so that worker-thread panics translate to
     /// promise rejections via `catch_unwind` in `perry-runtime/src/thread.rs`
@@ -1017,6 +1105,8 @@ pub struct CompilationContext {
     /// the lowering thread, so direct calls to a patched member lower as
     /// dynamic calls instead of binding the intrinsic.
     pub patched_builtins: perry_hir::PatchedBuiltins,
+    /// Source-only realm reach; emission is unchanged in WRT3a.
+    pub realm_reach: perry_hir::realm_reach::RealmReach,
     /// #10848: modules lowered so far in the current walk.
     pub patched_builtins_lowered_modules: usize,
     /// #10848: a module scanned AFTER others were already lowered added a
@@ -1053,6 +1143,15 @@ pub struct CompilationContext {
     /// call canonicalizes the entry; bundle-extension entries don't update
     /// it, so their `import.meta.main` correctly resolves to false.
     pub entry_canonical: Option<PathBuf>,
+    /// The CommonJS support module (`cjs_wrap::support`, imported as
+    /// `perry:cjs` by every wrapped module): its path, fixed by the entry, and
+    /// the wrapped modules' canonical paths in collection-finish order (its
+    /// cache's keys). The walk writes it once every CommonJS module is known.
+    pub cjs_support_path: Option<PathBuf>,
+    pub cjs_support_keys: Vec<String>,
+    /// The program's CommonJS closed-world fact (`cjs_link`), decided once
+    /// every module is collected; `false` until then.
+    pub cjs_closed: bool,
     /// Extra perry-stdlib Cargo features the codegen-side FFI registry
     /// (`perry-codegen::ext_registry`) recorded during compilation.
     /// Populated by the drain right before `build_optimized_libs` from
@@ -1218,6 +1317,8 @@ pub struct CompilationContext {
     /// Sources (any enables): `PERRY_TREE_SHAKE=1` env, or
     /// `perry.experiments.treeShake: true` in the host `package.json`.
     pub tree_shake: bool,
+    /// Layer-1 dead-code elimination state across the two collection walks.
+    pub export_demand: super::export_demand::ExportDemand,
     /// #2309: refusals (`new Function` RuntimeUnknown, #463 unimplemented APIs)
     /// recorded while lowering `node_modules` modules under tree-shaking,
     /// instead of hard-erroring. After reachability is computed, any whose
@@ -1316,11 +1417,59 @@ impl std::fmt::Debug for CompilationContext {
 }
 
 impl CompilationContext {
+    /// Does a linked native addon reach `reach`? An addon reaches what its
+    /// Node-API imports reach; an open one (`World`) reaches everything.
+    pub fn native_addons_reach(&self, reach: perry_runtime_manifest::NodeApiReach) -> bool {
+        use perry_runtime_manifest::NodeApiReach;
+        self.native_addons
+            .values()
+            .any(|addon| addon.reach.contains(&NodeApiReach::World) || addon.reach.contains(&reach))
+    }
+
+    /// The Node-API symbols the host links and exports: what its addons
+    /// import. An open addon can look any export up at run time (`dlsym`, a
+    /// library of its own), so with one the host exports its whole inventory.
+    pub fn node_api_host_exports(&self) -> Vec<&'static str> {
+        let open = self.native_addons_reach(perry_runtime_manifest::NodeApiReach::World);
+        perry_runtime_manifest::node_api_host_symbols()
+            .filter(|symbol| {
+                !self.native_addons.is_empty()
+                    && (open
+                        || self
+                            .native_addons
+                            .values()
+                            .any(|addon| addon.node_api_imports.contains(*symbol)))
+            })
+            .collect()
+    }
+
+    /// Perry C functions available to approved native addons.
+    ///
+    /// Export the full, currently small inventory whenever an addon is linked.
+    /// A shared library used by the addon can call these functions without
+    /// leaving an import in the top-level addon binary for our scanner to see.
+    /// Projects without native addons keep the exports out of the host binary.
+    pub fn perry_c_host_exports(&self) -> Vec<&'static str> {
+        perry_runtime_manifest::perry_c_host_symbols()
+            .filter(|_| !self.native_addons.is_empty())
+            .collect()
+    }
+
     pub fn new(project_root: PathBuf) -> Self {
         Self {
             native_modules: BTreeMap::new(),
+            has_build_time_execution: false,
+            macro_import_stack: Vec::new(),
             reexport_pruner: Default::default(),
             uses_worker_threads: false,
+            uses_thread_codec: false,
+            uses_date: false,
+            uses_perf_hooks: false,
+            uses_os: false,
+            uses_messaging: false,
+            uses_event_target: false,
+            uses_navigator: false,
+            uses_typedarray: false,
             worker_url_candidates: Vec::new(),
             worker_url_accepted: Vec::new(),
             worker_url_entries: Vec::new(),
@@ -1338,6 +1487,7 @@ impl CompilationContext {
             project_root,
             native_libraries: Vec::new(),
             native_addon_packages: BTreeSet::new(),
+            native_addon_wasm: BTreeMap::new(),
             native_addons: BTreeMap::new(),
             native_addon_paths: BTreeMap::new(),
             package_aliases: HashMap::new(),
@@ -1350,6 +1500,7 @@ impl CompilationContext {
             embedded_assets: Vec::new(),
             bunfs_root: None,
             file_loader_asset_paths: HashSet::new(),
+            text_loader_asset_paths: HashSet::new(),
             file_loader_asset_names: HashMap::new(),
             generated_asset_modules: BTreeMap::new(),
             module_aliases: BTreeMap::new(),
@@ -1362,6 +1513,8 @@ impl CompilationContext {
             app_metadata: perry_codegen::AppMetadata::default(),
             compile_package_dirs: BTreeSet::new(),
             checked_compile_package_native_addon_roots: HashSet::new(),
+            native_addon_wrapper_roots: BTreeSet::new(),
+            cjs_demanded_exports: BTreeMap::new(),
             codegen_steps: Vec::new(),
             codegen_dir: None,
             type_checker: None,
@@ -1379,6 +1532,7 @@ impl CompilationContext {
             uses_zlib_zstd: false,
             uses_web_compression_stream: false,
             uses_regex: false,
+            uses_regex_unicode: false,
             uses_temporal: false,
             uses_event_emitter: false,
             uses_url: false,
@@ -1387,6 +1541,15 @@ impl CompilationContext {
             uses_intl_namespace: false,
             uses_global_math: false,
             uses_global_json: false,
+            uses_json_format: false,
+            uses_json_engine: false,
+            uses_computed_member_keys: false,
+            uses_date_computed_member_keys: false,
+            uses_file_handle_capability: false,
+            uses_bun_file_capability: false,
+            uses_turnloop: false,
+            uses_bigint: false,
+            uses_proxy: false,
             uses_global_reflect: false,
             uses_global_atomics: false,
             uses_global_url: false,
@@ -1399,11 +1562,16 @@ impl CompilationContext {
             uses_intl_datetime: false,
             uses_diagnostics: false,
             uses_dgram: false,
+            uses_child_process: false,
             uses_node_test: false,
             uses_get_builtin_module: false,
+            uses_dynamic_native_constants: false,
+            uses_upgrade_to_tls: false,
+            uses_dns: false,
             needs_thread: false,
             cross_module_class_field_types: HashMap::new(),
             patched_builtins: Default::default(),
+            realm_reach: Default::default(),
             patched_builtins_lowered_modules: 0,
             patched_builtins_grew_after_lower: false,
             proto_census: Default::default(),
@@ -1411,6 +1579,9 @@ impl CompilationContext {
             min_windows_version: "10".to_string(),
             windows_subsystem: "auto".to_string(),
             entry_canonical: None,
+            cjs_support_path: None,
+            cjs_support_keys: Vec::new(),
+            cjs_closed: false,
             extra_stdlib_features: BTreeSet::new(),
             // #5263: default-allow dynamic stdlib member access. Dynamic
             // `fs[name]` over the *linked* namespace can only select among
@@ -1439,6 +1610,7 @@ impl CompilationContext {
             allow_native_library: Vec::new(),
             allow_compile_packages: Vec::new(),
             tree_shake: false,
+            export_demand: Default::default(),
             deferred_refusals: Vec::new(),
             side_effects_cache: HashMap::new(),
             define: HashMap::new(),
@@ -1469,6 +1641,16 @@ pub struct NativeAddonModule {
     /// data/shared libraries remain available. Exact project-path entries ship
     /// only the explicitly authorized `.node` file.
     pub ship_package_payload: bool,
+    /// What the addon reaches beyond the values the program hands it: the
+    /// marks of its Node-API imports (`node_api_host_symbols.txt`).
+    /// `NodeApiReach::World` makes it open, a dynamic-code site.
+    pub reach: BTreeSet<perry_runtime_manifest::NodeApiReach>,
+    /// The Node-API symbols the addon imports (`napi_*`, `node_api_*`).
+    pub node_api_imports: BTreeSet<String>,
+    /// WASI: the addon's wasm32 archives, linked into the program; empty for
+    /// a loaded (sidecar) addon.
+    #[cfg(feature = "target-wasi")]
+    pub wasm_archives: Vec<PathBuf>,
 }
 
 /// External native library manifest parsed from package.json `perry.nativeLibrary` field

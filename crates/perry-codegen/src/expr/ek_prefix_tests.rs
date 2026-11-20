@@ -175,9 +175,10 @@ fn frontier_raises(ll: &str) -> usize {
         let Some(zext) = def(ll, z).filter(|d| d.contains("zext i1 ")) else {
             continue;
         };
-        let not_hole = regs(zext).first().and_then(|r| def(ll, r)).is_some_and(|d| {
-            d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64)
-        });
+        let not_hole = regs(zext)
+            .first()
+            .and_then(|r| def(ll, r))
+            .is_some_and(|d| d.contains("icmp ne i64 ") && d.contains(crate::nanbox::TAG_HOLE_I64));
         let Some(raise_block) = block_of(ll, &store) else {
             continue;
         };
@@ -185,9 +186,10 @@ fn frontier_raises(ll: &str) -> usize {
         let at_frontier = ll.lines().map(str::trim).any(|l| {
             l.starts_with("br i1 ")
                 && l.contains(&taken)
-                && regs(l).first().and_then(|c| def(ll, c)).is_some_and(|d| {
-                    d.contains("icmp eq i32 ") && regs(d).contains(load)
-                })
+                && regs(l)
+                    .first()
+                    .and_then(|c| def(ll, c))
+                    .is_some_and(|d| d.contains("icmp eq i32 ") && regs(d).contains(load))
         });
         if at_frontier && not_hole {
             n += 1;
@@ -204,6 +206,9 @@ fn read_ir(numeric: bool) -> String {
             param(2, "key", Type::Any),
         ],
         vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(1)),
         }))],
@@ -352,17 +357,24 @@ fn inline_writers_raise_the_frontier() {
     let append = store_ir(Stmt::Expr(Expr::IndexSet {
         object: Box::new(Expr::LocalGet(0)),
         index: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(0)),
             property: "length".into(),
             byte_offset: 0,
         }),
         value: Box::new(Expr::LocalGet(1)),
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     assert!(frontier_raises(&append) >= 1, "a[a.length] = v raises P");
     let indexed = store_ir(Stmt::Expr(Expr::IndexSet {
         object: Box::new(Expr::LocalGet(0)),
         index: Box::new(Expr::Integer(0)),
         value: Box::new(Expr::LocalGet(1)),
+        element_offset: 0,
+        byte_offset: 0,
+        byte_end: 0,
     }));
     assert!(
         frontier_raises(&indexed) >= 2,
@@ -382,6 +394,9 @@ fn dynamic_read_ic_takes_the_prefix_hit_first() {
     let ll = module_ir(
         vec![param(1, "o", Type::Any), param(2, "i", Type::Number)],
         vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
         }))],

@@ -1,6 +1,5 @@
 //! Private, object-owned facts share an ordinary GC array. Slots are private
 //! runtime state, never public own properties or an owner-address registry.
-use super::ObjectHeader;
 use crate::array::ArrayHeader;
 
 pub(crate) const ASYNC_RESOURCE: u32 = 4;
@@ -21,6 +20,15 @@ pub(crate) const COMPONENT_HOST_NEXT_RESOURCE: u32 = 18;
 pub(crate) const COMPONENT_HOST_RESOURCE: u32 = 19;
 pub(crate) const COMPONENT_FINALIZATION: u32 = 20;
 pub(crate) const COMPONENT_RESOURCE_PARENT: u32 = 21;
+pub(crate) const COMPONENT_ASYNC_IMPORTS: u32 = 22;
+pub(crate) const COMPONENT_RESOURCE_BORROW: u32 = 23;
+pub(crate) const COMPONENT_ASYNC_RESULT_TYPE: u32 = 24;
+pub(crate) const COMPONENT_DRIVER_OWNER: u32 = 25;
+pub(crate) const COMPONENT_ASYNC_VALUE: u32 = 26;
+pub(crate) const COMPONENT_ASYNC_WRITER: u32 = 27;
+pub(crate) const WASM_TABLE: u32 = 28;
+/// An Intl service instance's internal-slot record (`intl/slot_record.rs`).
+pub(crate) const INTL_SLOTS: u32 = 29;
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();
@@ -29,15 +37,8 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
     } else {
         None
     };
-    let holder: *mut ObjectHeader = super::descriptor_state::descriptor_holder(owner);
-    if holder.is_null() {
-        return std::ptr::null_mut();
-    }
-    let meta = if create {
-        super::object_meta_ensure(holder)
-    } else {
-        (*holder).meta
-    };
+    let meta = super::descriptor_state::owner_key_target(owner)
+        .meta(super::MetaReason::OwnedState, create);
     if meta.is_null() {
         return std::ptr::null_mut();
     }

@@ -43,8 +43,7 @@ fn shift_queue_mixed_survivors_move_and_removed_slots_are_not_roots() {
 fn shift_queue_old_destination_remembers_young_edges_across_growth_and_refill() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let capacity = OLD_BORN_ELEMENTS;
-    let arr = array::js_array_alloc(capacity);
-    assert!(crate::arena::pointer_in_old_gen(arr as usize));
+    let arr = unsafe { promote_young_large(array::js_array_alloc(capacity)) };
     js_shadow_slot_set(0, ptr_bits(arr as usize));
     let mut current = arr;
     for cycle in 0..3 {

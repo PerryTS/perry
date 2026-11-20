@@ -1,0 +1,1 @@
+Whole-program facts link an `import()` site to the modules its specifier resolves to (through the importing module's dynamic import entry, as the dispatch does) and keep ⊤ for the fallback. A relative specifier used to match no module, so the imported module's exports kept only their local callers and a literal `import("./m.js")` could miscompile (printed 5 for 105).

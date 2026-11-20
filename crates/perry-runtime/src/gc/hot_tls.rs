@@ -24,7 +24,7 @@ use super::barrier::{
     GC_BIRTH_EXTRA_FLAGS, INCREMENTAL_MARK_BARRIER_MINOR_ONLY, INCREMENTAL_MARK_BARRIER_VALID_PTRS,
 };
 use super::malloc::{ARENA_FREE_LIST, ARENA_FREE_LIST_NONEMPTY};
-use super::trace::ValidPointerSet;
+use super::mark::ValidPointerSet;
 use std::cell::{Cell, RefCell};
 
 // --- gc::barrier ------------------------------------------------------------

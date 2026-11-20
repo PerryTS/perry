@@ -196,12 +196,13 @@ fn nested_class_shadowing_outer_var_constructs_the_class_not_the_local() {
     );
 }
 
-/// Self-construction is lowered before a named class expression's capture
-/// union is known. The post-body pass appends the lexical self cell, and must
-/// also mark it as a capture argument so constructor binding does not discard
-/// it as an ordinary user argument.
+/// A named class expression in a function is a fresh evaluation (#11298), so
+/// self-construction goes through the lexical self binding (that evaluation),
+/// not a static `New` of the shared template with the self cell appended as a
+/// capture argument: the template's instances do not inherit from the
+/// evaluated class's prototype (`instanceof c` was false for them).
 #[test]
-fn named_class_expr_self_new_records_appended_capture_provenance() {
+fn named_class_expr_self_new_constructs_through_its_evaluation() {
     let source = r#"
         const make = () => class c {
             static create(): any { return new c(); }
@@ -222,8 +223,8 @@ fn named_class_expr_self_new_records_appended_capture_provenance() {
     let body = format!("{:#?}", create.body);
 
     assert!(
-        body.contains("cap_args_appended: 1"),
-        "the appended lexical-self cell must be identified as a capture arg: {body}"
+        body.contains("NewDynamic {") && !body.contains("New {"),
+        "`new c()` must construct the evaluated class through its self binding: {body}"
     );
 }
 

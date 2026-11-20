@@ -31,7 +31,7 @@ use super::builtin_proto::{pristine, redirect_or_refresh, BuiltinProto};
 use crate::string::StringHeader;
 use crate::value::{JSValue, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_UNDEFINED};
 
-use crate::regex::{js_string_match_all_js, js_string_match_js, js_string_search_js};
+use crate::regex::hooked::{js_string_match_all_js, js_string_match_js, js_string_search_js};
 use crate::string::{
     js_string_at, js_string_char_at, js_string_char_code_at, js_string_code_point_at,
     js_string_concat, js_string_ends_with, js_string_ends_with_at, js_string_index_of,
@@ -100,9 +100,7 @@ unsafe fn fast_recv(recv: f64) -> Option<*const StringHeader> {
 #[inline(always)]
 fn number_index(v: f64) -> Option<i32> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32())
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(v as i32)
     } else {
         None
@@ -113,9 +111,7 @@ fn number_index(v: f64) -> Option<i32> {
 #[inline(always)]
 fn number_value(v: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(f64::from(jsval.as_int32()))
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(v)
     } else {
         None
@@ -141,8 +137,21 @@ fn opt_index(v: Option<f64>, default: i32) -> Option<i32> {
 unsafe fn string_by_name(recv: f64, name: &[u8], args: &[f64]) -> f64 {
     // SAFETY: every name below is an ASCII literal.
     let name_str = std::str::from_utf8_unchecked(name);
-    if let Some(value) = super::string_native_method(recv, name_str, args) {
-        return value;
+    // Only a primitive string reads `String.prototype` by kind. A `String`
+    // wrapper object is an ordinary object: its own `[[Prototype]]` (which
+    // the program may have replaced) decides. `Get` first; the ordinary
+    // dispatch only answers while the method found is still the builtin.
+    if is_string(recv) {
+        if let Some(value) = super::string_native_method(recv, name_str, args) {
+            return value;
+        }
+    }
+    let mut recv = recv;
+    let mut args = args.to_vec();
+    if !is_string(recv) {
+        if let Some(value) = redirect_or_refresh(&mut recv, name, &mut args) {
+            return value;
+        }
     }
     super::js_native_call_method(
         recv,
@@ -504,9 +513,9 @@ mod tests;
 //
 // `Pristine(Array)` alone is not the receiver's proof: an array may own a
 // property of the method's name, or carry its own `[[Prototype]]`. Both are
-// recorded on the cell (`GC_ARRAY_KEY_ATTRS`, the descriptor flag,
-// `GC_ARRAY_CUSTOM_PROTO`) — the same bits the emitted own-override guard
-// reads — and every other receiver kind answers from the own-override
+// recorded on the cell (its named layout `ArrayHeader.named`, the
+// descriptor flag `GC_ARRAY_KEY_ATTRS`, `GC_ARRAY_CUSTOM_PROTO`) — the same
+// words the emitted own-override guard reads — and every other receiver kind answers from the own-override
 // predicate's global gate. A miss takes the real `Get`; a builtin found
 // there runs the body below on the re-read operands.
 
@@ -558,8 +567,10 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        // Not an object (a stream handle id, …): owns nothing.
-        return true;
+        // Not an object (a stream handle id, …): owns nothing. `null` and
+        // `undefined` behind the annotation take the real `Get`, which
+        // throws.
+        return !super::own_override::array_site_nullish_receiver(*recv);
     }
     let addr = (bits & POINTER_MASK) as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
@@ -567,13 +578,25 @@ unsafe fn array_admits(recv: &mut f64, name: &[u8], args: &mut [f64]) -> bool {
         Some(h)
             if matches!(
                 h.obj_type,
-                crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
             ) =>
         {
-            h._reserved & ARRAY_NOT_DEFAULT == 0
+            (h._reserved & ARRAY_NOT_DEFAULT == 0 && !array_has_named_layout(addr, h))
                 || (h._reserved & crate::gc::GC_ARRAY_CUSTOM_PROTO == 0
                     && !may_own_named(recv, name, args))
         }
+        // An ordinary object behind the Array annotation (an array-like, a
+        // class instance, an object with its own method of the name): only
+        // the real `Get` says which method it holds, or that it holds none.
+        Some(h)
+            if crate::gc_type_is_object!(h.obj_type)
+                && super::own_override::array_site_object_receiver(*recv) =>
+        {
+            false
+        }
+        // Any other cell kind behind the Array annotation (a Map, a Date, a
+        // closure, a typed array, ...): the real `Get`.
+        _ if super::own_override::array_site_object_receiver(*recv) => false,
         _ => {
             super::own_override::PERRY_OWN_NAMED_PROP_INSTALLED
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -593,9 +616,10 @@ fn ptr_boxed(p: i64) -> f64 {
     f64::from_bits(POINTER_TAG | p as u64)
 }
 
-/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain array
-/// cell whose header records no named property, descriptor or own
-/// `[[Prototype]]` — one byte load and one header word. Anything else asks
+/// The inline half of [`array_admits`]: `Pristine(Array)` and a plain,
+/// unforwarded array cell whose header records no descriptor or own
+/// `[[Prototype]]` and which has no named layout (`ArrayHeader.named`, where
+/// an own `indexOf` lives) — the header word and the `named` word. Anything else asks
 /// [`array_slow`].
 #[inline(always)]
 unsafe fn array_fast_admits(recv: f64) -> bool {
@@ -604,14 +628,29 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
     }
     let bits = recv.to_bits();
     if bits & !POINTER_MASK != POINTER_TAG {
-        return true;
+        return !super::own_override::array_site_nullish_receiver(recv);
     }
-    let addr = (bits & POINTER_MASK) as usize;
-    if !crate::value::addr_class::is_above_handle_band(addr) || addr as u64 >= 1u64 << 47 {
+    let Some(header) = crate::value::addr_class::pointer_value_header(bits) else {
+        return false;
+    };
+    crate::gc_type_is_array!(header.obj_type)
+        && header._reserved & ARRAY_NOT_DEFAULT == 0
+        && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+        && (*((bits & POINTER_MASK) as *const crate::array::ArrayHeader))
+            .named
+            .is_null()
+}
+
+/// Does the array at `addr` (header `h`) own a named layout, where its named
+/// properties live? A lazy array has none. A forwarded alias answers from the
+/// head it forwards to.
+#[inline]
+unsafe fn array_has_named_layout(addr: usize, h: &crate::gc::GcHeader) -> bool {
+    if crate::gc_type_is_not_array!(h.obj_type) {
         return false;
     }
-    let header = (addr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    (*header).obj_type == crate::gc::GC_TYPE_ARRAY && (*header)._reserved & ARRAY_NOT_DEFAULT == 0
+    let live = crate::array::clean_arr_ptr(addr as *const crate::array::ArrayHeader);
+    live.is_null() || !(*live).named.is_null()
 }
 
 /// The out-of-line half: the exact admission, and on a miss the real `Get`
@@ -622,6 +661,15 @@ unsafe fn array_fast_admits(recv: f64) -> bool {
 unsafe fn array_slow(recv: &mut f64, name: &[u8], args: &mut [f64], out: &mut f64) -> bool {
     if array_admits(recv, name, args) {
         return false;
+    }
+    // A primitive behind the Array annotation (a String, a boolean, ...): its
+    // `Get` selects its own kind's member, which may be a builtin too
+    // (`String.prototype.slice`): run it as itself.
+    if recv.to_bits() & !POINTER_MASK != POINTER_TAG
+        && super::own_override::array_site_nullish_receiver(*recv)
+    {
+        *out = super::builtin_proto::complete_call(*recv, name, args);
+        return true;
     }
     match redirect_or_refresh(recv, name, args) {
         Some(value) => {
@@ -714,4 +762,5 @@ array_entries! {
     js_array_m_slice1 / js_array_b_slice1 = b"slice", recv(a) => ptr_boxed(js_array_slice_values(arr(recv), a, UNDEFINED));
     js_array_m_slice2 / js_array_b_slice2 = b"slice", recv(a, b) => ptr_boxed(js_array_slice_values(arr(recv), a, b));
     js_array_m_shift0 / js_array_b_shift0 = b"shift", recv() => js_array_shift_f64(arr(recv));
+    js_array_m_pop0 / js_array_b_pop0 = b"pop", recv() => js_array_pop_f64(arr(recv));
 }

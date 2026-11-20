@@ -1,14 +1,10 @@
-//! GTK4 Tree / outline view — `gtk4::TreeView` + `gtk4::TreeStore`
-//! (issue #480 / Linux parity work).
+//! Tree / outline view: `gtk4::TreeView` + `gtk4::TreeStore`.
 //!
-//! GTK 4.10+ recommends `GtkColumnView` + `GtkTreeListModel` over
-//! the legacy TreeView/TreeStore stack, but TreeView is still
-//! functional through gtk4-rs 0.9 + the `v4_6` feature gate this
-//! crate uses, and the legacy API gives us a 1:1 mapping for the
-//! `TreeNode` + `treeNodeAddChild` + `TreeView(root, onSelect)` API
-//! shape with substantially less ceremony than ColumnView's
-//! property-binding plumbing. Migration to ColumnView when the v4_6
-//! gate is bumped past 4.10 is a follow-up.
+//! GTK 4.10 deprecates this stack in favor of `GtkColumnView` + `GtkTreeListModel`, but it maps
+//! 1:1 onto `TreeNode` / `treeNodeAddChild` / `TreeView(root, onSelect)` without ColumnView's
+//! property-binding plumbing. Migrating to ColumnView is a follow-up.
+
+#![allow(deprecated)]
 
 use gtk4::glib::Type as GType;
 use gtk4::prelude::*;

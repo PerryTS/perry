@@ -34,8 +34,10 @@ static ENTRY_POINTS: NodeApiHost = NodeApiHost {
 
 /// Fill the slot and register the host's GC roots.
 pub(crate) fn install() {
+    crate::native_finalizer_hook::install();
     HOST.set(&ENTRY_POINTS);
     crate::feature_hooks::NODE_API_ROOT_SCANNER.set(super::scan_node_api_roots_mut);
+    crate::feature_hooks::NODE_API_WEAK_PRUNE.set(super::prune_dead_weak_references);
     crate::gc::gc_register_named_mutable_root_scanner(
         super::ROOT_SCANNER_NAME,
         super::scan_node_api_roots_mut,

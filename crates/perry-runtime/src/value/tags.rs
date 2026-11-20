@@ -60,9 +60,15 @@ pub const fn is_reference_bits(bits: u64) -> bool {
     top16 == POINTER_TAG >> 48 || top16 == HANDLE_TAG >> 48
 }
 
-/// Int32 tag: 0x7FFE_0000_XXXX_XXXX (32 bits for i32)
-pub(crate) const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-pub(crate) const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
+/// The `0x7FFE` band holds runtime-internal words only, never a JS value
+/// (P3 B4b): a JS Number has one encoding, the plain double. The words are
+/// the I32 slot words of an at-rest Array or an I32 field lane
+/// (`layout_slot`, decoded by its accessor before a value leaves the
+/// slot), overflow-table route markers, the bound-function inline-args
+/// marker, class id and state captures, a method's home word
+/// (`CLASS_PROTOTYPE_REF_FLAG`), key-attribute words and the async i32
+/// control cells.
+pub(crate) const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 
 /// String pointer tag: 0x7FFF_XXXX_XXXX_XXXX (48 bits for string pointer)
 pub(crate) const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
@@ -146,7 +152,7 @@ mod nanbox_operand_tests {
                 pointer_floor.wrapping_neg(),
             ),
             ("TAG_TRUE", TAG_TRUE),
-            ("INT32_TAG", INT32_TAG),
+            ("INTERNAL_WORD_TAG", INTERNAL_WORD_TAG),
             ("BIGINT_TAG", BIGINT_TAG),
             ("TAG_TDZ", TAG_TDZ),
             ("TAG_FALSE", TAG_FALSE),
@@ -290,3 +296,14 @@ pub static JS_NATIVE_ASYNC_HOOKS_CONSTRUCT: AtomicPtr<()> = AtomicPtr::new(std::
 pub(crate) type JsNativeAsyncLocalStorageSubclassInitFn = unsafe extern "C" fn(f64) -> f64;
 pub static JS_NATIVE_ASYNC_LOCAL_STORAGE_SUBCLASS_INIT: AtomicPtr<()> =
     AtomicPtr::new(std::ptr::null_mut());
+/// `super(...args)` into a native module constructor whose state the
+/// instance CARRIES (a native payload such as a node:zlib codec): the
+/// constructor's in-place form initializes the receiver the derived `new`
+/// allocated, which keeps the subclass prototype and its overrides. The
+/// constructors live in perry-stdlib and the extension crates, which this
+/// crate cannot call, so perry-stdlib installs its one router at startup.
+/// (module ptr, len, export ptr, len, receiver, args ptr, len) -> the
+/// receiver, or undefined when the export has no in-place constructor.
+pub(crate) type JsNativeSubclassInitFn =
+    unsafe extern "C" fn(*const u8, usize, *const u8, usize, f64, *const f64, usize) -> f64;
+pub static JS_NATIVE_SUBCLASS_INIT: AtomicPtr<()> = AtomicPtr::new(std::ptr::null_mut());

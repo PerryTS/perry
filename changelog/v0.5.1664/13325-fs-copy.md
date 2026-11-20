@@ -1,0 +1,1 @@
+Fix recursive `fs.cpSync(..., { dereference: true })` to copy nested symlink targets as regular files or directories rather than preserving the links. Apply filters once per entry before following targets, including callback copies. Preserve default/verbatim link behavior, timestamp and mode handling, and no-write rejection for existing or dangling targets.

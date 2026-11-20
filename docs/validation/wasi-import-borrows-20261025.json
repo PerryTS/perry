@@ -1,0 +1,1012 @@
+{
+  "scope": "Linux native import-borrow lifecycle, nominal composition and private runtime codec qualification; not full TypeScript persistent-driver integration",
+  "baseRevision": "19f148c48f60df48d3aa4764f4cf866f82ce56ab",
+  "qualifiedCodeSnapshot": "v291",
+  "documentationSnapshot": "v293",
+  "abi": 9,
+  "sourceFilesVerified": 38806,
+  "manifestSha256": "9044b52b20334f7b0ebebe406b628f58c1f3820675969fa150709057d112e226",
+  "finalManifestSha256": "675eab66a5b0a84f02ccc0391586a2e6bd810059986cf8aa34d85d2e8f71e44b",
+  "shippingLockSha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+  "validationLockSha256": "b312b6670c24f567e7f1e69991cb5cfb6d5b0d1774acd40568fba04a68ea73fb",
+  "tests": {
+    "developmentEngine": 171,
+    "productionPanicAbortEngine": 171,
+    "developmentWit": 22,
+    "productionPanicAbortWit": 22,
+    "productionUid": 65534,
+    "productionGid": 65534,
+    "runtimeComponent": 47,
+    "runtimeAsyncHooks": 11,
+    "allTargetsClippyWarningsDenied": true,
+    "generatedBindingsStrictTypeScript": true,
+    "unmodifiedUpstreamFixtureCases": 32
+  },
+  "subjects": [
+    "ffi_driver_future_resource_payloads_keep_identity_through_private_disposal",
+    "ffi_driver_async_import_borrows_can_be_forwarded_until_their_individual_import_settles",
+    "ffi_driver_queued_forwarding_pins_borrows_before_the_import_settles",
+    "ffi_driver_callback_submission_preserves_the_borrow_after_an_immediate_import_result",
+    "ffi_driver_cancelled_queued_forwarding_releases_its_import_borrow_pin",
+    "ffi_driver_retiring_pending_import_borrows_cancels_forwarding_and_drops_owners_once",
+    "ffi_driver_wasi_resource_import_borrows_use_native_aliases_until_forwarding_finishes",
+    "composed_root_borrows_and_owners_preserve_same_named_interface_resource_identities",
+    "composed_root_borrows_and_owners_accept_direct_resource_imports",
+    "composed_nested_functions_alias_outer_resources_without_type_reexports",
+    "composed_root_direct_resource_does_not_shadow_an_unrelated_interface_resource"
+  ],
+  "negativeControls": {
+    "pin": {
+      "exitCode": 101,
+      "passed": 0,
+      "failed": 1
+    },
+    "expiry": {
+      "exitCode": 101,
+      "passed": 0,
+      "failed": 1
+    },
+    "isolation": {
+      "exitCode": 101,
+      "passed": 0,
+      "failed": 1
+    },
+    "encoder": {
+      "exitCode": 101,
+      "passed": 0,
+      "failed": 1
+    },
+    "runtime-codec": {
+      "exitCode": 101,
+      "passed": 0,
+      "failed": 1
+    }
+  },
+  "providerCleanupNegativeControl": {
+    "snapshot": "v288",
+    "exitCode": 101,
+    "enginePassed": 169,
+    "engineFailed": 1,
+    "onlyCompiledCodeDeltaToPassingV289": "crates/perry-component-host/src/asynchronous/borrows.rs"
+  },
+  "upstream": {
+    "crate": "wac-graph",
+    "version": "0.12.0",
+    "archiveSha256": "f0418130ea1c8f995ac51fd495080942604bca6455e6fb11f110aa1cefd3f549",
+    "modifiedFiles": [
+      "src/encoding.rs",
+      "src/graph.rs"
+    ],
+    "allOtherArchiveFilesVerified": true,
+    "license": {
+      "LICENSE": {
+        "url": "https://raw.githubusercontent.com/bytecodealliance/wac/5a7480c69ae7a4dc9eb161f485cbcb8c95e372c9/LICENSE",
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+      }
+    },
+    "fixtureNames": [
+      "map-type-mismatch",
+      "merged-usings",
+      "export-already-exists",
+      "nested-use-type",
+      "merged-func-results",
+      "implicit-import-conflict",
+      "use-type-by-id-import",
+      "used-resource",
+      "invalid-import-name",
+      "implements-imports",
+      "implements-exports",
+      "package-already-registered",
+      "argument-already-satisfied",
+      "invalid-export-name",
+      "implements-satisfied",
+      "import-resource-alias",
+      "missing-argument",
+      "merging-import-dependencies",
+      "type-aggregation-error",
+      "contains-cycle",
+      "import-already-exists",
+      "simple",
+      "semver-highest-version-retained",
+      "export-missing",
+      "argument-type-mismatch",
+      "not-instantiation",
+      "implicit-resource-import",
+      "duplicate-imports",
+      "not-an-instance",
+      "map-types",
+      "simple-versioned",
+      "versioned-transitive-usings"
+    ]
+  },
+  "qualifiedProductionBinaries": {
+    "perry_component_host": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-component-host/8b554e73797787e0/out/perry_component_host-8b554e73797787e0",
+      "sha256": "d84e6e788d0885af6dfdc2c22ee51083ad5a521b376ad729ce56351120c5799f",
+      "fresh": false,
+      "protectedPath": "/root/codex-components-p2-20261021/perry-borrow-interop-v291-artifacts/perry_component_host-tests"
+    },
+    "perry_wit": {
+      "path": "/root/codex-components-p2-20261021/turnloop-provider-target/prod/build/perry-wit/527fd89bba1749a8/out/perry_wit-527fd89bba1749a8",
+      "sha256": "4b3388229ee182e937219598bcc5209a11b2abbad05699e3cbef20ded99278d2",
+      "fresh": false,
+      "protectedPath": "/root/codex-components-p2-20261021/perry-borrow-interop-v291-artifacts/perry_wit-tests"
+    }
+  },
+  "turnloopValidationPatchSourceFilesVerified": 1529,
+  "security": {
+    "cargoDenyExitCode": 0,
+    "shippingAuditExitCode": 1,
+    "parentAuditExitCode": 1,
+    "identicalAdvisories": [
+      [
+        "RUSTSEC-2026-0387",
+        "crypto-bigint",
+        "0.5.5"
+      ],
+      [
+        "RUSTSEC-2026-0387",
+        "crypto-bigint",
+        "0.7.5"
+      ]
+    ],
+    "newIgnores": [],
+    "dependencySoakException": false,
+    "normalEngineTreeContainsTokio": false,
+    "normalEngineTreeContainsCryptoBigint": false
+  },
+  "localChecks": [
+    {
+      "phase": "tokio",
+      "exitCode": 0
+    },
+    {
+      "phase": "tokio-self-test",
+      "exitCode": 0
+    },
+    {
+      "phase": "node-pin",
+      "exitCode": 0
+    },
+    {
+      "phase": "diff",
+      "exitCode": 0
+    }
+  ],
+  "unchangedParentLintFailures": [
+    {
+      "arm": "parent",
+      "check": "file-size",
+      "exitCode": 1,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b"
+    },
+    {
+      "arm": "parent",
+      "check": "address",
+      "exitCode": 1,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea"
+    },
+    {
+      "arm": "parent",
+      "check": "roots",
+      "exitCode": 1,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48"
+    },
+    {
+      "arm": "current",
+      "check": "file-size",
+      "exitCode": 1,
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b"
+    },
+    {
+      "arm": "current",
+      "check": "address",
+      "exitCode": 1,
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea"
+    },
+    {
+      "arm": "current",
+      "check": "roots",
+      "exitCode": 1,
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48"
+    }
+  ],
+  "limitations": [
+    "TypeScript still uses legacy host calls; persistent FrameBatch/ALS routing, future/stream wrappers and GC pump integration remain unfinished.",
+    "HTTP has not migrated to the persistent driver.",
+    "Other platforms, released Turnloop adoption and final combined compiler/runtime/WASM/npm qualification remain open.",
+    "Root shipping-lock RUSTSEC-2026-0387 and parent file-size/address/root-holder lint debt remain open.",
+    "Async constructor callbacks that suspend before the native handle is published still require a canonical fixture audit."
+  ],
+  "sourceSha256": {
+    "crates/perry-component-host/src/async_values.rs": "2e661c621a6cca26bed3f9dd2aa322b8b0d99b115466750b73be4a8f08192adb",
+    "crates/perry-component-host/src/async_values/compose_tests.rs": "572502108dc8da1af8de071235b79166aeba21bc669b940b0aaf8183b9432d01",
+    "crates/perry-component-host/src/asynchronous.rs": "026e8a74daed10a2e664aa5601bc3021d87d99a889bb64c926ffcddcbc741d35",
+    "crates/perry-component-host/src/asynchronous/borrows.rs": "912ed97b49bae31cbcfdbe6b041ba414827df7ba9f16b56dcf6d898d59fb31b4",
+    "crates/perry-component-host/src/asynchronous/import_values.rs": "91ebe85087b1cbb625cfaa99665d677d01e611f265c18253b6c3e866003fdbce",
+    "crates/perry-component-host/src/borrowed.rs": "df8aba4f328f65c0e193d623ec307c6f473c8d1b6c22e2ff10080f1f1cb89ce9",
+    "crates/perry-component-host/src/driver.rs": "5fcb628c0a24bfadc39aa6fd0d5ba6a9b83690dd1b44ff51c582def5875327c4",
+    "crates/perry-component-host/src/driver/requests.rs": "9cf4ef951eb77fa29c3ea612d610a7519e484e3dac0b11f0a30ee009bea23619",
+    "crates/perry-component-host/src/ffi/driver/tests.rs": "513958f81af33c07602c9563211a85fc46c7ab1502ae011c5733b522deb49b7a",
+    "crates/perry-component-host/src/ffi/driver/tests/interop_tests.rs": "e84044f0a12ae168e9c298260dc6f530c6306d11f6caa24efe93ef08e1265f65",
+    "crates/perry-component-host/src/host_resources.rs": "ae30be5d2a8099bff3f0fe8debb994773979765fc00ace3dd9c8946860247d49",
+    "crates/perry-component-host/src/imports.rs": "f11986cfcc70269ccf823c9e4a0954b3cf87eb3d1f559e96ec66719c180a80b1",
+    "crates/perry-component-host/src/lib.rs": "677025cf5800a6b7337631efa42e57a5420b7b81a7181f82c5749cd4a589545c",
+    "crates/perry-component-host/src/resources.rs": "7cbce97b0f3facc46e631b5ac52a01522acbc0d64fba83286c7cf5434b346551",
+    "crates/perry-component-host/src/transport.rs": "8a74df422d3b2f8ae2b1856a2b00c7358dc64812e76e658ce5f0673218662238",
+    "crates/perry-runtime/src/component/host_payload.rs": "ac714eebf7c48511a5328fee083ffb9adbdd27a8321d92f0efd3806ead3d3d2f",
+    "crates/perry-runtime/src/component/host_resource.rs": "6cf4438ea8a152b483e7645bbcefccd370d5ea9fbb8a909f4247cae7cca849d4",
+    "crates/perry-runtime/src/component/host_resource_tests.rs": "9d5e9682b53c59285c93e0ddad932c8532c7b6b1697f3485a88cbb3ab290d9ee",
+    "crates/perry-runtime/src/component/resource.rs": "6fca622edb602c1c1367729c6100d54334e95e7e007b91be0af8b7c954d51f41",
+    "crates/perry-runtime/src/component/tests.rs": "e6d7c64f19bc3f5e98a7f0655980fad2592a2b83510631c31649499b3ab86c52",
+    "crates/perry-runtime/src/component/value.rs": "daf80aeb53df75f078511def3b2facb81a8d646f893b8b55819d65d24459f32f",
+    "crates/perry-runtime/src/object/owned_state_bag.rs": "3957da586fa3f541ff0eee541846d2c684f42030cfd81d507aaf55a1d45d760e"
+  },
+  "archiveName": "perry-borrow-interop-v293-evidence.tar.gz",
+  "evidenceFiles": {
+    "runs/perry-generic-async-v278/wit-tests.log": {
+      "sha256": "4494346931aed407cc05bf8142edea9a061734e7656278ed8e24909c250dbabb",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v278/engine-tests.log": {
+      "sha256": "c2dc28cf82cd98b64695245c9f31a5939e5ae260990fbf647e18bc97cfddf1df",
+      "bytes": 22894
+    },
+    "runs/perry-generic-async-v278/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v278/invalidate.log": {
+      "sha256": "9949cb02755456226f17a22e35efcfdd920d27c9c08a51b7acdbf2ec34c3c3ac",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v279/wit-cli.log": {
+      "sha256": "36640a79c17fa4b88f08a54a37bc867bb2b9dcc54e04c8bf0478aff2194b97d4",
+      "bytes": 4507
+    },
+    "runs/perry-generic-async-v279/typecheck.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v279/wit-tests.log": {
+      "sha256": "1f7d37d7d6c2ff4efb9f4aee146e70fe295b870a80d67990eef94511d2d96831",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v279/engine-tests.log": {
+      "sha256": "ab93d5728e9a9435d7df0304bbd5597e5163944773ec8256a6310f799be2db45",
+      "bytes": 22087
+    },
+    "runs/perry-generic-async-v279/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "runs/perry-generic-async-v279/clippy.log": {
+      "sha256": "72beec7e7c223b75ba72aebb66c8fdb3040d75ceea0c0a31f0b4f0a1b34880e0",
+      "bytes": 4762
+    },
+    "runs/perry-generic-async-v279/bindings.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v279/invalidate.log": {
+      "sha256": "350841bb5d1f5c2a97bbe98ba0563094eae2f1615b78a2335c4ba6458083df2e",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v279/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "runs/perry-generic-async-v279/typecheck/tsconfig.json": {
+      "sha256": "b95b31347bfe511c22452cfa969c27cf60a6fe5224bd0e76fbb7156bc6f24227",
+      "bytes": 530
+    },
+    "runs/perry-generic-async-v279/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "runs/perry-generic-async-v279/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "runs/perry-generic-async-v279/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "runs/perry-generic-async-v279/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "runs/perry-generic-async-v280/wit-cli.log": {
+      "sha256": "790fd954877e93312634acd83f36591a52f74abf098ceda1ec9d816508622b4f",
+      "bytes": 4507
+    },
+    "runs/perry-generic-async-v280/typecheck.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v280/wit-tests.log": {
+      "sha256": "fd989829357181ba89ed33add139cc0ea47b48c9807816f9c109b3330b7b170f",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v280/engine-tests.log": {
+      "sha256": "2267a06a6684bdab4c7a0bf34f5ce581ea0b0ca767f54cd2d38870b23cf8b233",
+      "bytes": 22335
+    },
+    "runs/perry-generic-async-v280/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "runs/perry-generic-async-v280/clippy.log": {
+      "sha256": "96434dfafef519c27710a42242a5a8b11bb3c727a1bde0ca938861d7276adab6",
+      "bytes": 4644
+    },
+    "runs/perry-generic-async-v280/bindings.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v280/invalidate.log": {
+      "sha256": "46a42290161aeca92fe9148c996ddbc45f92bb15c61217707c13daaf4865c0af",
+      "bytes": 84
+    },
+    "runs/perry-generic-async-v280/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "runs/perry-generic-async-v280/typecheck/tsconfig.json": {
+      "sha256": "8048aba21885453e291068c8102f499fc55d91f0a2a5d76471baaa98d430e3f1",
+      "bytes": 530
+    },
+    "runs/perry-generic-async-v280/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "runs/perry-generic-async-v280/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "runs/perry-generic-async-v280/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "runs/perry-generic-async-v280/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "runs/perry-driver-ffi-runtime-v280/runtime-component-tests.log": {
+      "sha256": "5c1d1f4dafbb62156bf08bff1fed85bc1c02198ab6e96e7b1e5de8777b76ae6e",
+      "bytes": 32041
+    },
+    "runs/perry-driver-ffi-runtime-v280/phases.json": {
+      "sha256": "ade6c7dad9e7277f61ceb13dfa9029ac8334494964962d67861498674d6e9866",
+      "bytes": 126
+    },
+    "runs/perry-driver-ffi-runtime-v280/invalidate.log": {
+      "sha256": "0b648da018e8231befcedf16e414e001d8ac73945f7b2c5747a06e07214f6ed6",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v281/wit-tests.log": {
+      "sha256": "5207042c5a76d402120c768394cae1d40900e178871b58370c3716d0a7a09432",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v281/engine-tests.log": {
+      "sha256": "8246af888f02769a0b0ab6087329f1696e3cf9eb7b2fca10a28eb2474f73dec7",
+      "bytes": 23217
+    },
+    "runs/perry-generic-async-v281/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v281/invalidate.log": {
+      "sha256": "490cab5e36896a782b9f1976b73b666222ac274b93392b4b3be170956e133de2",
+      "bytes": 84
+    },
+    "runs/perry-driver-ffi-runtime-v281/runtime-component-tests.log": {
+      "sha256": "44b6f8ad279a6c5b8414927efafb29ad7f4bbaba3fe30c5d2cf4d3ee6e15ef2e",
+      "bytes": 54322
+    },
+    "runs/perry-driver-ffi-runtime-v281/runtime-async-hooks-tests.log": {
+      "sha256": "078505652856a0ac1d35119f67b41373a60c3635cb960f1a8e0615ce8e10e8df",
+      "bytes": 50140
+    },
+    "runs/perry-driver-ffi-runtime-v281/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "runs/perry-driver-ffi-runtime-v281/invalidate.log": {
+      "sha256": "51dac8d278b4fd2108dcc7172da4415c1be98c5ec17f3e7d45add5605e6b19f5",
+      "bytes": 844
+    },
+    "runs/perry-generic-async-v282/wit-tests.log": {
+      "sha256": "f382e5c760af56fcbd5aa694a64acac3af29219aefcf767f42a01a2f707a562c",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v282/engine-tests.log": {
+      "sha256": "a5e6438ca840da6ce1c19bed3805a741a8e6b4c6ec1e02a8078afa93d0eb7eb8",
+      "bytes": 31158
+    },
+    "runs/perry-generic-async-v282/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v282/invalidate.log": {
+      "sha256": "97ea5363e1406894999218384f52744b4d6b2eefe4a8d9b7ab9d46fa90aa75a9",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v283/wit-tests.log": {
+      "sha256": "19022ff1b429017f3fbe182b9ce5c6e1a090fc48d7560e8202763bac6c9a3a2d",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v283/engine-tests.log": {
+      "sha256": "bffb87be008c95848fec4bbf4f8616ab40c1966a4441af9e2540c3d2d9ab8f6e",
+      "bytes": 31350
+    },
+    "runs/perry-generic-async-v283/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v283/invalidate.log": {
+      "sha256": "4e0ebb2d253c263ce97de5b4ad73b612a0f3a361389b52cc32c82a5408ba1a9b",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v284/wit-tests.log": {
+      "sha256": "e1e07afcd0f170d909275d897fdb48a2ac0fca30bfee24753920efa5c14e624a",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v284/engine-tests.log": {
+      "sha256": "cacca371e05254bdbe6bb1ced834b5f2659b54e741c824cceade0aa10dc06d97",
+      "bytes": 31370
+    },
+    "runs/perry-generic-async-v284/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v284/invalidate.log": {
+      "sha256": "4e0ebb2d253c263ce97de5b4ad73b612a0f3a361389b52cc32c82a5408ba1a9b",
+      "bytes": 83
+    },
+    "runs/perry-driver-ffi-runtime-v286/runtime-component-tests.log": {
+      "sha256": "40bd2ab53ea5e88f6039e44a8ef558bd13cbc9c4a9eb5de86ef3d63a73c404fe",
+      "bytes": 54423
+    },
+    "runs/perry-driver-ffi-runtime-v286/runtime-async-hooks-tests.log": {
+      "sha256": "bf529349677dd02c5feeaeeb005db53eb5c30429062f8c42efac240a9fb5972f",
+      "bytes": 50140
+    },
+    "runs/perry-driver-ffi-runtime-v286/phases.json": {
+      "sha256": "d103dbd9343c6df640105cf2023aa88bed3e1e3cfcb02a053cc5bc9770f1cccc",
+      "bytes": 193
+    },
+    "runs/perry-driver-ffi-runtime-v286/invalidate.log": {
+      "sha256": "e657953d754770d35e82aaf278f71963418fa460c9bd013480ec956a7f3902be",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v288/wit-tests.log": {
+      "sha256": "8716b0ea9a3ec48882bc9a74a57e23da62d8a3976d5c80d37df21ee53b6fc542",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v288/engine-tests.log": {
+      "sha256": "7a08de07675b70604aa08bb9a696eb30fa9df3affa58abc2098db51c6b820894",
+      "bytes": 24459
+    },
+    "runs/perry-generic-async-v288/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v288/invalidate.log": {
+      "sha256": "b96322a57830d20943441358a40eb3e2da9cc2eabdf6e64eca5461446cc6c874",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v289/wit-cli.log": {
+      "sha256": "e57b13c016ea72a5f2b54eafcebe873ebe7896243d97017be8388bec8dafefb6",
+      "bytes": 4507
+    },
+    "runs/perry-generic-async-v289/typecheck.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v289/wit-tests.log": {
+      "sha256": "7d21600adfcf6569de1c627ed7833f260bc929531fea250a23498cf8de80e0ef",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v289/engine-tests.log": {
+      "sha256": "c901d8c4bbdbdfafd32e1e8593452f564414810491e6ed9acf1e03abe06291a2",
+      "bytes": 22927
+    },
+    "runs/perry-generic-async-v289/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "runs/perry-generic-async-v289/clippy.log": {
+      "sha256": "e8526c50a78ce526dc44c2c8c10b8cf3962e6375b9faefd087ebcdf62cb38218",
+      "bytes": 4762
+    },
+    "runs/perry-generic-async-v289/bindings.log": {
+      "sha256": "df4fce3a2617a400261c11f8e8d0cf1cf1818af4955f7efc79e8675541c3e847",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v289/invalidate.log": {
+      "sha256": "9d25cf044297cd6a6d117bf7adcb7c3f5ee46cb4ef934938a08284565a995d97",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v289/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "runs/perry-generic-async-v289/typecheck/tsconfig.json": {
+      "sha256": "c4500ec301141d719893a5bcc3ba19e6e623417bcd2b24c4dd995c1ba8634038",
+      "bytes": 530
+    },
+    "runs/perry-generic-async-v289/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "runs/perry-generic-async-v289/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "runs/perry-generic-async-v289/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "runs/perry-generic-async-v289/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "runs/perry-native-driver-prod-v289/build.log": {
+      "sha256": "e86e11d58d6aed079fd29e794e10fd2876813a53e61e3d85f1ea3358f93d7390",
+      "bytes": 265522
+    },
+    "runs/perry-native-driver-prod-v289/perry_component_host-binary.json": {
+      "sha256": "a5e49644bf554c2c8e10689c9ed66fefddc769d0eb7d14df3ff17295c8bde879",
+      "bytes": 265
+    },
+    "runs/perry-native-driver-prod-v289/perry_component_host-tests.log": {
+      "sha256": "39757eb036210853cf3653538b79d856b467df4ea8aff2b9567067518b1d73f5",
+      "bytes": 18135
+    },
+    "runs/perry-native-driver-prod-v289/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "runs/perry-native-driver-prod-v289/tree.log": {
+      "sha256": "26f6b571fee90b8e655e70583f4538cdb83ac284b406bcff65e0363c02cb5568",
+      "bytes": 12585
+    },
+    "runs/perry-native-driver-prod-v289/invalidate-engine-wit.log": {
+      "sha256": "13a8e733690fff40c2d683bc3603212c0b34f7c222a6aaf4ff6b72c37120984a",
+      "bytes": 82
+    },
+    "runs/perry-native-driver-prod-v289/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "runs/perry-native-driver-prod-v289/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "runs/perry-generic-async-v290/wit-tests.log": {
+      "sha256": "cd75835b16c7ab6ecd46cdfe4241dbd6092b73f5ce9f9c5cf0acc2eb3a690222",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v290/engine-tests.log": {
+      "sha256": "7a51bc7b0e2233186a8353e7fa31449e843e06933d603b21960a9cc78b5c00ee",
+      "bytes": 23880
+    },
+    "runs/perry-generic-async-v290/phases.json": {
+      "sha256": "ea362c52a83f636518aca24a4599ace3fdecdd3202c485f0cb616c1de01720f0",
+      "bytes": 168
+    },
+    "runs/perry-generic-async-v290/invalidate.log": {
+      "sha256": "55dba9ccf1cbc701d93f940b437caacf103adf3f3ef16b14205d9fcc8fa074c0",
+      "bytes": 84
+    },
+    "runs/perry-generic-async-v291/wit-cli.log": {
+      "sha256": "89958c889dc1a6c23daf70a1a9e0ba4f275c1892e3ee82a4c4aa2c6a555220c9",
+      "bytes": 4507
+    },
+    "runs/perry-generic-async-v291/typecheck.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v291/wit-tests.log": {
+      "sha256": "40759fbd91e3aafcdb8ad20b84a4f4c6719588cda1174eae59219caaafe3ffbf",
+      "bytes": 6603
+    },
+    "runs/perry-generic-async-v291/engine-tests.log": {
+      "sha256": "21627f56837ae8655ac04a6db42b3c6c6d3204b63de9147a58d7215fe1c81bcf",
+      "bytes": 23059
+    },
+    "runs/perry-generic-async-v291/phases.json": {
+      "sha256": "f9944cd53ef88c1f3ec1a1d1a6e5955f7f04399f8d2957fd0e655a3f318ab06e",
+      "bytes": 372
+    },
+    "runs/perry-generic-async-v291/clippy.log": {
+      "sha256": "ff1a500af495c9aaa00c5373f71ef2cd17a6cfa2a9f6446beb61218f467897ee",
+      "bytes": 4644
+    },
+    "runs/perry-generic-async-v291/bindings.log": {
+      "sha256": "24d9d0a8abf430c960b39c5a173f06418669cd3d65c92451ba352c9c845f33cd",
+      "bytes": 45
+    },
+    "runs/perry-generic-async-v291/invalidate.log": {
+      "sha256": "9d25cf044297cd6a6d117bf7adcb7c3f5ee46cb4ef934938a08284565a995d97",
+      "bytes": 83
+    },
+    "runs/perry-generic-async-v291/typecheck/world.wit": {
+      "sha256": "bb9a38bcf36ea263746c7fa5e274a7708b6784b26589ed9f698eaa136cfb2727",
+      "bytes": 365
+    },
+    "runs/perry-generic-async-v291/typecheck/tsconfig.json": {
+      "sha256": "22a638cb8ea3ca2e1275f38b310b97cc05dc1cfa04c04564a637d634c9363659",
+      "bytes": 530
+    },
+    "runs/perry-generic-async-v291/typecheck/typecheck.ts": {
+      "sha256": "7db75513776920a75cfd664346a561439bde3ba892932409da5e2786f0f17344",
+      "bytes": 1570
+    },
+    "runs/perry-generic-async-v291/typecheck/generated/world.json": {
+      "sha256": "f017262e5153ce478af7e9774ede1a8a305b60d96fa6d51b21e894f8e6b136f0",
+      "bytes": 2977
+    },
+    "runs/perry-generic-async-v291/typecheck/generated/bindings.ts": {
+      "sha256": "48619a5a79cb7cb7732ca61102947dc11a8cc875ce96cfe39f20bd2220cb513b",
+      "bytes": 4112
+    },
+    "runs/perry-generic-async-v291/typecheck/generated/guest.ts": {
+      "sha256": "af6183533059cb638a34cc452efad842c1a1552ef7e14a80ea8a4102fae9d951",
+      "bytes": 3266
+    },
+    "runs/perry-native-driver-prod-v291/build.log": {
+      "sha256": "b8850df0d55a356d4d86111b26d087dc2bc10239bd8109b736b7ca65256467f6",
+      "bytes": 265403
+    },
+    "runs/perry-native-driver-prod-v291/perry_component_host-binary.json": {
+      "sha256": "5adbedf188b78f2b53805130dec3a4f6993068d4a25451903905e4e0ea86a456",
+      "bytes": 265
+    },
+    "runs/perry-native-driver-prod-v291/perry_component_host-tests.log": {
+      "sha256": "b02448031e68c956ddd74c1e3250cc08b9b9386765097ae0154284982fd6a0e3",
+      "bytes": 18267
+    },
+    "runs/perry-native-driver-prod-v291/perry_wit-tests.log": {
+      "sha256": "3ff5a9600103dda6546a13dea6edd747c4b20a9149cd97872df00d0326d30515",
+      "bytes": 1971
+    },
+    "runs/perry-native-driver-prod-v291/tree.log": {
+      "sha256": "2eff6fb66dc90356301f3df337ebbb2ab9f703a866c0d09cecc6ea05cf85ff26",
+      "bytes": 12585
+    },
+    "runs/perry-native-driver-prod-v291/invalidate-engine-wit.log": {
+      "sha256": "bf9c69ed8339eae3f7e79aa587943ae23b87e134fd4e8fee3f0984ea33a456a0",
+      "bytes": 82
+    },
+    "runs/perry-native-driver-prod-v291/perry_wit-binary.json": {
+      "sha256": "fe773164f059096e0f27ca97d06512b3a02d103755f8e1f3a457426bdfaeae56",
+      "bytes": 243
+    },
+    "runs/perry-native-driver-prod-v291/phases.json": {
+      "sha256": "d00c2e369b040c60ad77d6038ccd37f870b32e99c2e3f040ff4e966ea0dab61f",
+      "bytes": 282
+    },
+    "negative/pin/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/pin/negative.log": {
+      "sha256": "f693bbfa4e189519e3478ceb209eda1910d4ec0309dc989e35fe6cf737223e02",
+      "bytes": 6070
+    },
+    "negative/pin/invalidate.log": {
+      "sha256": "31172a4f39e24c2987d61738737ce483771a0e63ec184e88aef7a658f7c44d4c",
+      "bytes": 83
+    },
+    "negative/pin/mutated.rs": {
+      "sha256": "fc288a76e238c1d2cf93c34cd2bffd164b5c4d6845ad174103bebad1ff9bba8d",
+      "bytes": 21127
+    },
+    "negative/expiry/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/expiry/negative.log": {
+      "sha256": "37ffba207eb8b3002c145024b77b45651adef41b3eab40f769f2582d222ed400",
+      "bytes": 5828
+    },
+    "negative/expiry/invalidate.log": {
+      "sha256": "271eff54eadf5ffd1e2f542d60693109e6bbeb65a9fa32071987ea9d7d1581bd",
+      "bytes": 83
+    },
+    "negative/expiry/mutated.rs": {
+      "sha256": "7b8b1d0099b391aec1302d266141a72019d2fd9b6063060370d0c05b7588c9c8",
+      "bytes": 5306
+    },
+    "negative/isolation/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/isolation/negative.log": {
+      "sha256": "4bc261e878690df70acf40609ebf53cd516929f7be74e619aa01be7da3a493a7",
+      "bytes": 5928
+    },
+    "negative/isolation/invalidate.log": {
+      "sha256": "f370c9eb704cbfd47b8eb33541350b4fb483dd2cb3a67f2cd8d051f59ee34854",
+      "bytes": 83
+    },
+    "negative/isolation/mutated.rs": {
+      "sha256": "c81e51737bf776c9b31ae1cd96ee4c92002dc30fc4ef98eb9f59086363298842",
+      "bytes": 4478
+    },
+    "negative/encoder/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/encoder/negative.log": {
+      "sha256": "213636fcb7c785477be9bdf40dc965795cc40bdf6b939d8aed1df8c6845568f9",
+      "bytes": 5752
+    },
+    "negative/encoder/invalidate.log": {
+      "sha256": "b1f0586629014fc9e8f73eb22def8c82ec7f4ecfc894c30a2852af4fe1d9a4be",
+      "bytes": 83
+    },
+    "negative/encoder/mutated.rs": {
+      "sha256": "2979972c83a455c0c1207658f67a4bf27b05d2e2103455c7e5a34c49fd2e35e1",
+      "bytes": 40340
+    },
+    "negative/runtime-codec/phases.json": {
+      "sha256": "39b53cc41711b2ac0debb9380111c85bbf5f337aa1152114edc63bfd9b2737b1",
+      "bytes": 111
+    },
+    "negative/runtime-codec/negative.log": {
+      "sha256": "5f9c6890278e48a620529052c16a59368ae96fc1259505bf6fe5e8adb3581f98",
+      "bytes": 50533
+    },
+    "negative/runtime-codec/invalidate.log": {
+      "sha256": "3631cedd2ad0482688517e946611a3576126f4f81a791bf97242087573bc2634",
+      "bytes": 83
+    },
+    "upstream/result.json": {
+      "sha256": "e568695fea60080f7c4703421d6c9ffe1fd6324a3c6a0e653eaa5a597e61431d",
+      "bytes": 212
+    },
+    "upstream/upstream-files.json": {
+      "sha256": "7a4c02d71631039bf3f94711d839112250e213e1eccd9281ab33564cc1d5c3ee",
+      "bytes": 27913
+    },
+    "upstream/test.log": {
+      "sha256": "6acef3fd46166e00a72aa5a481aa41b093a4cb4db06fc3b27bb22ba03cb3865a",
+      "bytes": 11001
+    },
+    "security/Cargo.lock": {
+      "sha256": "c0c77b202d422016fdb7fc1e3312f5fc500d35fbb8923c17a851f6917b2626ab",
+      "bytes": 258358
+    },
+    "security/deny.log": {
+      "sha256": "b3dfe303f154daf039a5bc022b00997bb968e04fc430b228a4273bb722f7ee21",
+      "bytes": 1095395
+    },
+    "security/phases.json": {
+      "sha256": "8d307ebda380d3dda08eaccc5c68a72a6e44fbba94472204111ef2035e2670ef",
+      "bytes": 158
+    },
+    "security/audit-baseline.log": {
+      "sha256": "d47cbcb05c4db29a707b2f984f788eea666d1daba7e9bde514ea1e4be2919a5d",
+      "bytes": 20612
+    },
+    "security/Cargo-baseline.lock": {
+      "sha256": "e2fea4dcc6c051c2b340d44015a7ee1cf3a388d572eb554bed8035cc17203599",
+      "bytes": 258501
+    },
+    "security/audit.log": {
+      "sha256": "d47cbcb05c4db29a707b2f984f788eea666d1daba7e9bde514ea1e4be2919a5d",
+      "bytes": 20612
+    },
+    "local/node-pin.log": {
+      "sha256": "c5de53a384a6ebd59c492797b73ac9386059d4a59c9e773ac0b343da51785dc3",
+      "bytes": 2481
+    },
+    "local/diff.log": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "bytes": 0
+    },
+    "local/changed-files.json": {
+      "sha256": "2f446a295b9ab851a3a795919c628690922f26590df4da5dde5a6c0645753187",
+      "bytes": 10346
+    },
+    "local/tokio-self-test.log": {
+      "sha256": "b00ea5b4cbd5b142c45e6f2e1c4b74289f4849b92eb4064a9e9aacbfdc074785",
+      "bytes": 81
+    },
+    "local/phases.json": {
+      "sha256": "9b50879b197d4977b8b5cffbcadd807cf8ed52a09559a1efe973b95401efe071",
+      "bytes": 211
+    },
+    "local/tokio.log": {
+      "sha256": "668e4b688d194dc6b537bdbbe0a075bbd6d29a2f78e8b0be1dd3e49a3a801f51",
+      "bytes": 507
+    },
+    "lint/results.json": {
+      "sha256": "0dddab656b540fc52c3c6486720fe13917120e43712a3b0306d3826f4d18a094",
+      "bytes": 930
+    },
+    "lint/current-address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    },
+    "lint/current-file-size.log": {
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "bytes": 1388
+    },
+    "lint/parent-address.log": {
+      "sha256": "9ed7255453b910401c7c49ae78b97d438169d390b3321eb349e4bce1f9be05ea",
+      "bytes": 3968
+    },
+    "lint/parent-roots.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/current-roots.log": {
+      "sha256": "d545b30e51168a7cbe0e17576898ad9ba3ee397b583ad7de0ffeff1fd6a62b48",
+      "bytes": 20899
+    },
+    "lint/parent-file-size.log": {
+      "sha256": "55d717db298ca6fa4e868f701947b560def2009b99707e3d27097da3f8d6845b",
+      "bytes": 1388
+    },
+    "negative/runtime-codec/mutated.rs": {
+      "sha256": "613486750a0ad01f5516cf71619136bd36eedf3c4b5286d2a606e7195b232006",
+      "bytes": 11513
+    },
+    "snapshots/perry-http-runtime-v286-manifest.json": {
+      "sha256": "dbd8a19748b5a00f9fce77f39eaa7023dd25150d70225444c2d6726e7af0481b",
+      "bytes": 5694098
+    },
+    "snapshots/perry-http-runtime-v286-overlay.tar.gz": {
+      "sha256": "f0f527f50cc936e9515d497f82e1a08cd7529782de163137d0f4b625f771faeb",
+      "bytes": 1000718
+    },
+    "snapshots/perry-http-runtime-v288-manifest.json": {
+      "sha256": "a4f27a53d8bfb29e97c954ae4e69d4942319213d822b46ca74eb52e6fdd9137e",
+      "bytes": 5694098
+    },
+    "snapshots/perry-http-runtime-v288-overlay.tar.gz": {
+      "sha256": "98080751399733dc25de5384bd29c5e4123c75174ca73190ac7476d9fc1a638f",
+      "bytes": 1001220
+    },
+    "snapshots/perry-http-runtime-v289-manifest.json": {
+      "sha256": "6f6a77cb2a1aa6527d75dd5632cbd59ef9fdae14a7ac49caf308db0f110766c7",
+      "bytes": 5694098
+    },
+    "snapshots/perry-http-runtime-v289-overlay.tar.gz": {
+      "sha256": "59f6f13e506348d3d23eafc6acde285f8b1c9d3ff8f73c11ea1a99ba2f0bb175",
+      "bytes": 1001427
+    },
+    "snapshots/perry-http-runtime-v291-manifest.json": {
+      "sha256": "9044b52b20334f7b0ebebe406b628f58c1f3820675969fa150709057d112e226",
+      "bytes": 5694098
+    },
+    "snapshots/perry-http-runtime-v291-overlay.tar.gz": {
+      "sha256": "64be290e19499d37406f997ce1fa6ebb7e60df1e40f266f1cb22e6b86d3ad390",
+      "bytes": 1001677
+    },
+    "snapshots/perry-http-runtime-v293-manifest.json": {
+      "sha256": "675eab66a5b0a84f02ccc0391586a2e6bd810059986cf8aa34d85d2e8f71e44b",
+      "bytes": 5694216
+    },
+    "snapshots/perry-http-runtime-v293-overlay.tar.gz": {
+      "sha256": "0645d791f672c944a87827424bee8f12af42b4caa8b91b60a0bc14279595d473",
+      "bytes": 1002425
+    },
+    "source/crates/perry-component-host/src/async_values.rs": {
+      "sha256": "2e661c621a6cca26bed3f9dd2aa322b8b0d99b115466750b73be4a8f08192adb",
+      "bytes": 1635
+    },
+    "source/crates/perry-component-host/src/async_values/compose_tests.rs": {
+      "sha256": "572502108dc8da1af8de071235b79166aeba21bc669b940b0aaf8183b9432d01",
+      "bytes": 3246
+    },
+    "source/crates/perry-component-host/src/asynchronous.rs": {
+      "sha256": "026e8a74daed10a2e664aa5601bc3021d87d99a889bb64c926ffcddcbc741d35",
+      "bytes": 8790
+    },
+    "source/crates/perry-component-host/src/asynchronous/borrows.rs": {
+      "sha256": "912ed97b49bae31cbcfdbe6b041ba414827df7ba9f16b56dcf6d898d59fb31b4",
+      "bytes": 3306
+    },
+    "source/crates/perry-component-host/src/asynchronous/import_values.rs": {
+      "sha256": "91ebe85087b1cbb625cfaa99665d677d01e611f265c18253b6c3e866003fdbce",
+      "bytes": 2803
+    },
+    "source/crates/perry-component-host/src/borrowed.rs": {
+      "sha256": "df8aba4f328f65c0e193d623ec307c6f473c8d1b6c22e2ff10080f1f1cb89ce9",
+      "bytes": 5305
+    },
+    "source/crates/perry-component-host/src/driver.rs": {
+      "sha256": "5fcb628c0a24bfadc39aa6fd0d5ba6a9b83690dd1b44ff51c582def5875327c4",
+      "bytes": 13945
+    },
+    "source/crates/perry-component-host/src/driver/requests.rs": {
+      "sha256": "9cf4ef951eb77fa29c3ea612d610a7519e484e3dac0b11f0a30ee009bea23619",
+      "bytes": 21128
+    },
+    "source/crates/perry-component-host/src/ffi/driver/tests.rs": {
+      "sha256": "513958f81af33c07602c9563211a85fc46c7ab1502ae011c5733b522deb49b7a",
+      "bytes": 24114
+    },
+    "source/crates/perry-component-host/src/ffi/driver/tests/interop_tests.rs": {
+      "sha256": "e84044f0a12ae168e9c298260dc6f530c6306d11f6caa24efe93ef08e1265f65",
+      "bytes": 16754
+    },
+    "source/crates/perry-component-host/src/host_resources.rs": {
+      "sha256": "ae30be5d2a8099bff3f0fe8debb994773979765fc00ace3dd9c8946860247d49",
+      "bytes": 6762
+    },
+    "source/crates/perry-component-host/src/imports.rs": {
+      "sha256": "f11986cfcc70269ccf823c9e4a0954b3cf87eb3d1f559e96ec66719c180a80b1",
+      "bytes": 4986
+    },
+    "source/crates/perry-component-host/src/lib.rs": {
+      "sha256": "677025cf5800a6b7337631efa42e57a5420b7b81a7181f82c5749cd4a589545c",
+      "bytes": 22200
+    },
+    "source/crates/perry-component-host/src/resources.rs": {
+      "sha256": "7cbce97b0f3facc46e631b5ac52a01522acbc0d64fba83286c7cf5434b346551",
+      "bytes": 4354
+    },
+    "source/crates/perry-component-host/src/transport.rs": {
+      "sha256": "8a74df422d3b2f8ae2b1856a2b00c7358dc64812e76e658ce5f0673218662238",
+      "bytes": 12094
+    },
+    "source/crates/perry-runtime/src/component/host_payload.rs": {
+      "sha256": "ac714eebf7c48511a5328fee083ffb9adbdd27a8321d92f0efd3806ead3d3d2f",
+      "bytes": 12418
+    },
+    "source/crates/perry-runtime/src/component/host_resource.rs": {
+      "sha256": "6cf4438ea8a152b483e7645bbcefccd370d5ea9fbb8a909f4247cae7cca849d4",
+      "bytes": 11539
+    },
+    "source/crates/perry-runtime/src/component/host_resource_tests.rs": {
+      "sha256": "9d5e9682b53c59285c93e0ddad932c8532c7b6b1697f3485a88cbb3ab290d9ee",
+      "bytes": 15350
+    },
+    "source/crates/perry-runtime/src/component/resource.rs": {
+      "sha256": "6fca622edb602c1c1367729c6100d54334e95e7e007b91be0af8b7c954d51f41",
+      "bytes": 7337
+    },
+    "source/crates/perry-runtime/src/component/tests.rs": {
+      "sha256": "e6d7c64f19bc3f5e98a7f0655980fad2592a2b83510631c31649499b3ab86c52",
+      "bytes": 11315
+    },
+    "source/crates/perry-runtime/src/component/value.rs": {
+      "sha256": "daf80aeb53df75f078511def3b2facb81a8d646f893b8b55819d65d24459f32f",
+      "bytes": 12392
+    },
+    "source/crates/perry-runtime/src/object/owned_state_bag.rs": {
+      "sha256": "3957da586fa3f541ff0eee541846d2c684f42030cfd81d507aaf55a1d45d760e",
+      "bytes": 2975
+    },
+    "harness/perry-borrow-interop-prod-v2.py": {
+      "sha256": "ed48534905a43472c880657e91019de969504f29e052f8d8d122d8ddcb252e0d",
+      "bytes": 8958
+    },
+    "harness/perry-borrow-interop-negative.py": {
+      "sha256": "b89579927b18ce092b797a549ad8fbed81475e2cfb4ae772d3ab9fe36eb405c0",
+      "bytes": 3622
+    },
+    "harness/perry-borrow-runtime-negative.py": {
+      "sha256": "46539baae11a7153992004f90de448abc8b51d90e268cba9814faeab089fdbf1",
+      "bytes": 2088
+    },
+    "harness/perry-borrow-security.py": {
+      "sha256": "ff0adf18ea95fb402b83ca97ccd9b92f6cbb2470d1420d063cd5243229dfb92e",
+      "bytes": 1720
+    },
+    "harness/perry-wac-upstream-check.py": {
+      "sha256": "ff45d3008c9dbfdaf0048bd0de02189230dc5a19b949cce39b36df384f59f3d7",
+      "bytes": 1822
+    },
+    "harness/perry-borrow-interop-verify.py": {
+      "sha256": "cf4e82de9e2b6c8d438fad6f653ea32d6484143ad7875e43c800028fd75fc3b5",
+      "bytes": 10613
+    }
+  }
+}

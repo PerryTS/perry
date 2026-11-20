@@ -489,9 +489,18 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let bits = blk.bitcast_double_to_i64(&keys_arr_boxed);
                 blk.and(I64, &bits, POINTER_MASK_I64)
             };
+            // `js_object_rest` takes an object POINTER. The source is any
+            // value: only a heap pointer (POINTER_TAG / STRING_TAG) is
+            // masked down to one; a primitive (a Number above all, whose
+            // low bits are no address) has no own properties to copy and is
+            // passed as null, which answers the empty object.
             let obj_handle = {
                 let bits = blk.bitcast_double_to_i64(&obj_box);
-                blk.and(I64, &bits, POINTER_MASK_I64)
+                let top16 = blk.lshr(I64, &bits, "48");
+                let masked_tag = blk.and(I64, &top16, "65533"); // 0xFFFD
+                let is_heap_ptr = blk.icmp_eq(I64, &masked_tag, "32765"); // 0x7FFD
+                let masked = blk.and(I64, &bits, POINTER_MASK_I64);
+                blk.select(crate::types::I1, &is_heap_ptr, I64, &masked, "0")
             };
             let rest_ptr = blk.call(
                 I64,
@@ -547,7 +556,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // is a synthetic "default" marker we'd want js_array_sort_default;
         // for now we always use the user-comparator path.
         Expr::ArraySort { array, comparator } => {
-            let rooted_operands: [&perry_hir::Expr; 2] = [array, comparator];
+            let ordering = super::numeric_order::numeric_order(ctx, comparator);
+            let key = match &ordering {
+                Some(perry_hir::analysis::NumericOrder::Keyed { property, .. }) => {
+                    Some(Expr::String(property.clone()))
+                }
+                _ => None,
+            };
+            // A literal key may allocate too. Root it with the original
+            // operands before extracting either receiver/comparator handle.
+            let mut rooted_operands: Vec<&Expr> = vec![array, comparator];
+            if let Some(key) = &key {
+                rooted_operands.push(key);
+            }
             let (rooted_values, rooted_group) =
                 crate::lower_call::lower_operand_list_rooted(ctx, &rooted_operands)?;
             let arr_box = rooted_values[0].clone();
@@ -558,11 +579,47 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // sorting — throws TypeError for any other value, returns 0
             // (default sort) for undefined.
             let cmp_handle = blk.call(I64, "js_validate_array_comparator", &[(DOUBLE, &cmp_box)]);
-            let result = blk.call(
-                I64,
-                "js_array_sort_with_comparator",
-                &[(I64, &arr_handle), (I64, &cmp_handle)],
-            );
+            // The HIR certificate proves only callback effects/ordering.
+            // The runtime admits the actual receiver shape and key domain;
+            // type annotations never establish either of those facts.
+            let result = match ordering {
+                Some(order) => {
+                    let direction = match order {
+                        perry_hir::analysis::NumericOrder::Ascending => "1",
+                        perry_hir::analysis::NumericOrder::Descending => "-1",
+                        perry_hir::analysis::NumericOrder::Keyed { descending, .. } => {
+                            if descending {
+                                "-1"
+                            } else {
+                                "1"
+                            }
+                        }
+                    };
+                    if key.is_some() {
+                        blk.call(
+                            I64,
+                            "js_array_sort_key_order",
+                            &[
+                                (I64, &arr_handle),
+                                (I64, &cmp_handle),
+                                (I32, direction),
+                                (DOUBLE, &rooted_values[2]),
+                            ],
+                        )
+                    } else {
+                        blk.call(
+                            I64,
+                            "js_array_sort_numeric_order",
+                            &[(I64, &arr_handle), (I64, &cmp_handle), (I32, direction)],
+                        )
+                    }
+                }
+                None => blk.call(
+                    I64,
+                    "js_array_sort_with_comparator",
+                    &[(I64, &arr_handle), (I64, &cmp_handle)],
+                ),
+            };
             let rooted_result = nanbox_pointer_inline(blk, &result);
             rooted_group.release(ctx);
             Ok(rooted_result)
@@ -1469,7 +1526,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_write_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }
@@ -1493,7 +1550,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let _ = ctx
                 .block()
                 .call(I32, "js_fs_append_file_sync", &[(DOUBLE, &p), (DOUBLE, &c)]);
-            let rooted_result = double_literal(0.0);
+            let rooted_result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
             rooted_group.release(ctx);
             Ok(rooted_result)
         }

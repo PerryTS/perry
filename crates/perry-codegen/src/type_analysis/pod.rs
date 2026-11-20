@@ -41,23 +41,30 @@ pub(crate) fn is_typed_array_expr(ctx: &FnCtx<'_>, object: &Expr) -> bool {
         .is_some_and(is_typed_array_class)
 }
 
+/// `object.length` is a Number by the value `object` holds, not by its
+/// annotation: a literal, a binding whose stable initializer proof is a
+/// String, an Array or a numeric typed array, or one the whole-program facts
+/// prove holds only strings and ordinary Arrays
+/// (`ElisionFacts::length_number_inputs`). A declared `string[]` element or
+/// an `any` cast can hold a Number, whose `length` is `undefined`.
 pub(crate) fn expression_has_numeric_length(ctx: &FnCtx<'_>, object: &Expr) -> bool {
-    // A LocalGet's declared hint is only a candidate, but a stable initializer
-    // proof is runtime-derived evidence. String literals have a numeric
-    // length just like widened strings; consult that proof directly so a
-    // literal-typed binding does not fall back to a dynamic `+` consumer.
-    if let Expr::LocalGet(id) = object {
-        if matches!(
-            ctx.stable_local_type_proof(id),
-            Some(HirType::String | HirType::StringLiteral(_))
-        ) {
-            return true;
+    match object {
+        Expr::String(_) | Expr::WtfString(_) | Expr::Array(_, _) => true,
+        Expr::LocalGet(id) => {
+            let proven = match ctx.stable_local_type_proof(id) {
+                Some(
+                    HirType::String
+                    | HirType::StringLiteral(_)
+                    | HirType::Array(_)
+                    | HirType::Tuple(_),
+                ) => true,
+                Some(HirType::Named(name)) => {
+                    name == "Buffer" || is_numeric_typed_array_class(name)
+                }
+                _ => false,
+            };
+            proven || (!ctx.wpfacts_off && ctx.wpfacts.length_number_inputs.contains(id))
         }
-    }
-
-    match static_type_of(ctx, object) {
-        Some(HirType::Array(_)) | Some(HirType::Tuple(_)) | Some(HirType::String) => true,
-        Some(HirType::Named(name)) => name == "Buffer" || is_numeric_typed_array_class(&name),
         _ => false,
     }
 }
@@ -125,7 +132,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, value, out);
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
         }
@@ -133,6 +140,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             object,
             index,
             value,
+            ..
         } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
@@ -212,6 +220,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             property,
             value,
+            ..
         } => {
             let pod_field_set = matches!(object.as_ref(), Expr::LocalGet(id) if *id == target_id)
                 && ctx.pod_records.get(&target_id).is_some_and(|local| {
@@ -239,7 +248,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
                     .iter()
                     .any(|arg| expr_may_materialize_pod_local(ctx, arg, target_id))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)
         }
@@ -247,6 +256,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
             object,
             index,
             value,
+            ..
         } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)
@@ -477,6 +487,18 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }
+            // I32 at rest B2: a present at-rest slot is decoded to its int32
+            // Number; there is no boxed fallback edge.
+            if crate::expr::rest_elems::number_read(ctx, expr) {
+                return false;
+            }
+            // A flat-const table element is a native `[N x i32]` load
+            // (issue #50): no boxed fallback edge exists.
+            if let Expr::IndexGet { index, .. } = expr {
+                if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() {
+                    return false;
+                }
+            }
             receiver_class_name(ctx, object)
                 .as_deref()
                 .is_some_and(crate::type_analysis::is_numeric_typed_array_class)
@@ -543,6 +565,14 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 return false;
             }
 
+            // The whole-program field contract already licenses a canonical
+            // raw-f64 load. Carry that same proof through arithmetic instead
+            // of reclassifying the value from its erased field annotation.
+            // Guarded/absent/non-F64 fields are refused by proves_number.
+            if crate::expr::wpfacts_access::proves_number(ctx, expr) {
+                return false;
+            }
+
             // R admits this exact fresh bare read only after the shape's F64
             // representation check; there is no boxed fallback in F.
             if crate::stmt::region_loop::is_f64_read(ctx, expr) {
@@ -596,7 +626,7 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 .unwrap_or(false);
             !ptr_shape_numeric
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }

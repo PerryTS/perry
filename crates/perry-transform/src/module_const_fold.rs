@@ -41,6 +41,7 @@ use crate::closure_local_inline::{for_each_expr_in_stmt_mut, nested_stmt_lists};
 
 pub fn run(module: &mut Module) {
     fold_module_consts(module);
+    crate::immutable_numeric_arrays::run(module);
     // Phase 2 runs unconditionally — see `rewrite_literal_index_gets`.
     rewrite_literal_index_gets(module);
 }
@@ -298,6 +299,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 walk_stmt_exprs(s, f);
@@ -504,6 +506,7 @@ fn nested_stmt_lists_shared(stmt: &Stmt) -> Vec<&Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {
@@ -554,7 +557,7 @@ fn rewrite_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, String>, visible: &Ha
 }
 
 fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
-    if let Expr::IndexGet { object, index } = expr {
+    if let Expr::IndexGet { object, index, .. } = expr {
         let property = match index.as_ref() {
             Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
             Expr::LocalGet(id) if visible.contains(id) => consts
@@ -571,6 +574,7 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
             // value.
             let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
             *expr = Expr::PropertyGet {
+                byte_end: 0,
                 // Synthesized: the literal was not written at a source span
                 // (phase 1 substituted it), so there is no member offset to
                 // carry. `0` is the established "no debug location" value on
@@ -844,6 +848,9 @@ mod tests {
         m.functions.push(func(
             1,
             vec![Stmt::Return(Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(8)),
                 index: Box::new(Expr::LocalGet(3)),
             }))],
@@ -877,6 +884,9 @@ mod tests {
             m.functions.push(func(
                 1,
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(8)),
                     index: Box::new(Expr::String(key.to_string())),
                 }))],
@@ -903,6 +913,9 @@ mod tests {
             m.functions.push(func(
                 1,
                 vec![Stmt::Return(Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(8)),
                     index: Box::new(Expr::String(key.to_string())),
                 }))],
@@ -926,6 +939,9 @@ mod tests {
     fn the_rewrite_runs_with_no_module_consts_at_all() {
         let mut m = Module::new("k.ts");
         m.init.push(Stmt::Expr(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(8)),
             index: Box::new(Expr::String("name".to_string())),
         }));
@@ -950,6 +966,9 @@ mod tests {
 
     fn read_k(id: u32) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(8)),
             index: Box::new(Expr::LocalGet(id)),
         }
@@ -1104,7 +1123,13 @@ mod tests {
     fn a_nested_literal_index_rewrites_at_every_level() {
         let mut m = Module::new("k.ts");
         m.init.push(Stmt::Expr(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
             object: Box::new(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(8)),
                 index: Box::new(Expr::String("outer".to_string())),
             }),

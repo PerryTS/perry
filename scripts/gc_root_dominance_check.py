@@ -702,7 +702,8 @@ JS_ALLOC_RE = re.compile(
 ALLOC_RE = re.compile(
     "^(" + "|".join("js_" + a for a in
                      JS_ALLOC_RE.pattern[len("^js_("):-len(")$")].split("|"))
-    + r"|perry_birth_class|perry_birth_empty_array)$"
+    + r"|perry_birth_class|perry_birth_empty_array|perry_birth_empty_array_16"
+    + r"|perry_birth_empty_array_n)$"
 )
 
 
@@ -1718,10 +1719,13 @@ def is_collecting(callee):
 #          count and are deliberately NOT folded in here — same reasoning as
 #          ALLOC_RE's deleted `bigint_\w+_op`.
 POLL_CAPABLE_RUNTIME = {
+    # These wrappers inherit coercion / splitter callback collection points.
+    "js_string_replace_all_js", "js_string_split",
     # Null-raw birth calls reach js_inline_arena_slow_alloc, which can collect.
     # Non-null fast calls carry a call-site gc-leaf-function attribute; the
     # symbol itself must never be classified as noncollecting.
-    "perry_birth_class", "perry_birth_empty_array",
+    "perry_birth_class", "perry_birth_empty_array", "perry_birth_empty_array_16",
+    "perry_birth_empty_array_n",
     "js_inline_arena_slow_alloc",
     "js_call_function",
     # Calling a JS closure. The four names this replaces
@@ -1736,20 +1740,12 @@ POLL_CAPABLE_RUNTIME = {
     # above for the reach proof behind each one.
     "js_object_get_field_by_name_f64", "js_object_get_field_by_name_boxed",
     "js_object_get_field_by_property_id_f64",
-    "js_object_get_field_ic", "js_object_get_field_ic_miss",
-    # Same getter/Proxy-capable implementation as the retained three-arg ABI;
-    # the fourth argument only adds a numeric packed cache publication.
-    "js_object_get_field_ic_miss_packed",
-    # T1: the two slow exits of the inline generic-get tower, and now the ONLY
-    # property-GET symbols most emitted sites carry. `_slow` reaches
-    # `get_field_ic_miss_impl` (hence `js_object_get_field_by_name`, hence a
-    # user getter and `js_proxy_get`); `_nonptr` reaches
-    # `js_object_get_field_by_name_f64` on every arm. A register held across
-    # either is exactly as stale as one held across the entries they replaced.
-    # Omitting them would silently re-open the #7154 GET hole that this set
-    # exists to close, because the calls they replaced no longer appear at
-    # those sites.
-    "js_object_get_field_ic_slow", "js_object_get_field_ic_nonptr",
+    # Current emitted receiver-layout reads. The raw and site-memo slow
+    # paths call user getters or get_field_miss; boxed entrances delegate to
+    # those paths or the coercing non-pointer read. All can re-enter JS.
+    "js_object_get_field_slow", "js_object_get_field_site_slow",
+    "js_object_get_field_value", "js_object_get_field_value_site",
+    "js_object_get_field_nonptr",
     "js_typed_feedback_object_get_field_by_name_f64",
     "js_array_sort_default", "js_array_sort_with_comparator",
     "js_array_map", "js_array_filter", "js_typed_array_for_each",
@@ -1815,9 +1811,9 @@ POLL_CAPABLE_RUNTIME = {
     "js_array_to_sorted_default", "js_array_to_sorted_with_comparator",
     "js_bigint_from_f64",
     "js_boxed_number_new", "js_boxed_string_new",
-    "js_broadcast_channel_new",
+    "js_broadcast_channel_new", "js_broadcast_channel_new_counted",
+    "js_worker_threads_broadcast_channel_new",
     "js_create_namespace",
-    "js_ethers_wallet_create_random",
     # #10508: `new EventEmitter(opts)` reads `opts.captureRejections` (a
     # getter can run) and the AsyncResource form runs the subclass init.
     "js_event_emitter_async_resource_object_new", "js_event_emitter_object_new",
@@ -1918,6 +1914,14 @@ POLL_CAPABLE_RUNTIME = {
     # `js_string_concat_value_box` on its miss path, so it can allocate and
     # re-enter a moving minor exactly like its callee (the #7616 shape).
     "js_string_concat_site_value",
+    # JST slice 3: the literal-operand concat entries. `js_string_concat_parts`
+    # takes the collecting allocation (and the general arm's ToString) like
+    # `js_string_concat_chain`; `js_string_concat_lit_value_box` is the
+    # literal-prefix twin of `js_string_concat_value_box`.
+    "js_string_concat_parts", "js_string_concat_lit_value_box",
+    # JST slice 4: the count-specialized forms of `js_string_concat_parts`.
+    "js_string_concat_parts_2", "js_string_concat_parts_3",
+    "js_string_concat_parts_4", "js_string_concat_parts_5",
     # `js_private_brand_add` is the referent-with-no-name that NEITHER audit can
     # ask for: `--audit-poll-reach` only walks symbols `ALLOC_RE` matches, and
     # `js_private_brand_add` matches no alloc/new/create convention, so the one
@@ -1935,6 +1939,19 @@ POLL_CAPABLE_RUNTIME = {
     # corpus is that one, which the same PR fixes in
     # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
+    # Fifth wave, one hop each, the audit's own premise:
+    #   js_object_assign_fresh -> js_object_assign_one  (object/assign.rs: the
+    #       spread / Object.assign birth copies through the listed per-source
+    #       copy, which runs the source's getters)
+    #   js_array_flat_depth    -> js_number_coerce  (array/flat_clone.rs:
+    #       ToIntegerOrInfinity(depth) runs a user valueOf, and
+    #       ArraySpeciesCreate may run a user constructor)
+    #   js_array_flat          -> js_array_flat_depth  (a pure delegate)
+    #   js_array_to_spliced    -> js_number_coerce  (array/immutable.rs:
+    #       ToIntegerOrInfinity(start / skipCount) runs a user valueOf)
+    "js_object_assign_fresh",
+    "js_array_flat", "js_array_flat_depth",
+    "js_array_to_spliced",
 }
 
 
@@ -3300,7 +3317,8 @@ def _stale_use_replacing_edges(f, def_of, src_reg, chain, direct, use):
 def _collecting_insn(ins):
     # The fast birth call shares a symbol with the collecting slow call.
     # Codegen proves the fast arm leaf at the call site, never on the symbol.
-    if ins.callee in {"perry_birth_class", "perry_birth_empty_array"}:
+    if ins.callee in {"perry_birth_class", "perry_birth_empty_array",
+                      "perry_birth_empty_array_16", "perry_birth_empty_array_n"}:
         if '"gc-leaf-function"' in ins.text:
             return False
     return is_collecting(ins.callee)
@@ -4381,7 +4399,8 @@ fast.3:
   br label %poll.5
 slow.4:
   store i1 false, ptr %valid
-  %r = call double @js_object_get_field_ic_slow(double %g, i64 0)
+  %gb = bitcast double %g to i64
+  %r = call double @js_object_get_field_value(i64 %gb, ptr null, i64 0)
   %v3 = load i1, ptr %valid
   br i1 %v3, label %fast.3, label %poll.5
 poll.5:
@@ -4625,7 +4644,7 @@ __SAFEPOINT__
 # `double`/`i64` arithmetic in typed-f64 specialisations, none a pointer. It
 # needs its own change with its own measured hit count.
 _SELFTEST_PROPERTY_GET_WINDOW = """\
-define double @perry_fn_selftest__clone(double %a1, double %a2, i64 %a3) {
+define double @perry_fn_selftest__clone(double %a1, double %a2, i64 %a3, ptr %key) {
 entry.0:
   %d = alloca double
   store double %a2, ptr %d
@@ -4634,7 +4653,7 @@ entry.0:
   %rb = bitcast double %a1 to i64
   %rh = and i64 %rb, 281474976710655
   call void @js_typed_feedback_observe_property_get(i64 4242, i64 %rh, i64 %a3)
-  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %inner = call double @js_object_get_field_slow(i64 %rh, ptr %key)
   %out = call double @perry_fn_other__callee(double %def, double %inner)
   ret double %out
 }
@@ -4645,7 +4664,7 @@ entry.0:
 # every other respect — if the control reports anything, the check is firing on
 # the code shape rather than on the staleness.
 _SELFTEST_PROPERTY_GET_RELOADED = """\
-define double @perry_fn_selftest__clone_reloaded(double %a1, double %a2, i64 %a3) {
+define double @perry_fn_selftest__clone_reloaded(double %a1, double %a2, i64 %a3, ptr %key) {
 entry.0:
   %d = alloca double
   store double %a2, ptr %d
@@ -4653,7 +4672,7 @@ entry.0:
   %rb = bitcast double %a1 to i64
   %rh = and i64 %rb, 281474976710655
   call void @js_typed_feedback_observe_property_get(i64 4242, i64 %rh, i64 %a3)
-  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %inner = call double @js_object_get_field_slow(i64 %rh, ptr %key)
   %def = load double, ptr %d
   %out = call double @perry_fn_other__callee(double %def, double %inner)
   ret double %out
@@ -4669,7 +4688,7 @@ entry.0:
 # invisible. Before the opcode match this was reported only because the text
 # "or i64" happens to occur inside "xor i64".
 _SELFTEST_XOR_HANDLE_WINDOW = """\
-define double @perry_fn_selftest__xor_handle(double %a1, double %a2, i64 %a3) {
+define double @perry_fn_selftest__xor_handle(double %a1, double %a2, i64 %a3, ptr %key) {
 entry.0:
   %d = alloca double
   store double %a2, ptr %d
@@ -4679,7 +4698,7 @@ entry.0:
   %dh = xor i64 %db, 9222809086901354496
   %rb = bitcast double %a1 to i64
   %rh = and i64 %rb, 281474976710655
-  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %inner = call double @js_object_get_field_slow(i64 %rh, ptr %key)
   %out = call double @js_object_get_field_by_name_f64(i64 %dh, i64 %a3)
   ret double %out
 }
@@ -4687,14 +4706,14 @@ entry.0:
 
 # The fix: the handle is re-derived from the slot BELOW the collecting call.
 _SELFTEST_XOR_HANDLE_RELOADED = """\
-define double @perry_fn_selftest__xor_handle_reloaded(double %a1, double %a2, i64 %a3) {
+define double @perry_fn_selftest__xor_handle_reloaded(double %a1, double %a2, i64 %a3, ptr %key) {
 entry.0:
   %d = alloca double
   store double %a2, ptr %d
   call void @js_shadow_slot_bind(i32 1, ptr %d)
   %rb = bitcast double %a1 to i64
   %rh = and i64 %rb, 281474976710655
-  %inner = call double @js_object_get_field_ic_miss(i64 %rh, i64 %a3, ptr @perry_ic_1)
+  %inner = call double @js_object_get_field_slow(i64 %rh, ptr %key)
   %def = load double, ptr %d
   %db = bitcast double %def to i64
   %dh = xor i64 %db, 9222809086901354496
@@ -6833,7 +6852,8 @@ def self_test():
     # Both birth entry points are heap sources through their fast/slow phi.
     # Prove a late store and a missing bind fail, while the rooted/reloaded
     # twin clears. Also prove only the non-leaf call is a collection window.
-    for birth in ("perry_birth_class", "perry_birth_empty_array"):
+    for birth in ("perry_birth_class", "perry_birth_empty_array",
+                  "perry_birth_empty_array_16", "perry_birth_empty_array_n"):
         fixture = f"""define i64 @birth_control(i1 %fits, ptr %raw) {{
 entry.0:
   %home = alloca i64
@@ -7143,10 +7163,10 @@ entry.0:
         # change is about must be in the set, or the fixture arms below are
         # asserting something the classification no longer does.
         _pget_family = {"js_object_get_field_by_name_f64",
-                        "js_object_get_field_ic_miss",
-                        "js_object_get_field_ic_miss_packed",
-                        "js_object_get_field_ic_slow",
-                        "js_object_get_field_ic_nonptr",
+                        "js_object_get_field_slow",
+                        "js_object_get_field_site_slow",
+                        "js_object_get_field_slow",
+                        "js_object_get_field_nonptr",
                         "js_typed_feedback_object_get_field_by_name_f64"}
         if not _pget_family <= POLL_CAPABLE_RUNTIME:
             print("self-test FAIL: the emitted property-GET dispatch "
@@ -7345,27 +7365,22 @@ entry.0:
                       file=sys.stderr)
                 ok = False
 
-        # The packed entry is the name emitted by generic property reads now,
-        # and since T1 the SLOW entry is the only one most sites carry at all:
-        # the tower's six other calls collapsed into it, so a set that named
-        # only the older ABIs would classify almost every real property-GET
-        # window `MOVING: no` — the exact #7154 hole, reopened by a size
-        # optimisation rather than by a misspelling. Both are asserted in both
-        # directions against the same fixture.
+        # Each current property-read entrance must expose stale and reloaded
+        # roots identically in the moving-only and unfiltered audits.
         for entry, extra_args in (
-                ("js_object_get_field_ic_miss_packed",
-                 "ptr @perry_ic_1, ptr @perry_ic_packed_1)"),
-                ("js_object_get_field_ic_slow",
-                 "ptr @perry_ic_1, ptr @perry_ic_packed_1)"),
-                ("js_object_get_field_ic_nonptr", "i64 4242)")):
+                ("js_object_get_field_slow", "ptr %key)"),
+                ("js_object_get_field_site_slow", "ptr %key, ptr @read_site)"),
+                ("js_object_get_field_value", "ptr %key, i64 4242)"),
+                ("js_object_get_field_value_site", "ptr %key, i64 4242, ptr @read_site)"),
+                ("js_object_get_field_nonptr", "ptr %key, i64 4242)")):
             for label, source, want in (
                     ("stale", _SELFTEST_PROPERTY_GET_WINDOW, 1),
                     ("reloaded", _SELFTEST_PROPERTY_GET_RELOADED, 0)):
                 packed = os.path.join(td, f"property_get_{entry}_{label}.ll")
                 source = source.replace(
-                    "@js_object_get_field_ic_miss(",
+                    "@js_object_get_field_slow(",
                     "@%s(" % entry).replace(
-                    "ptr @perry_ic_1)", extra_args)
+                    "ptr %key)", extra_args)
                 with open(packed, "w") as fh:
                     fh.write(source)
                 for moving_only in (False, True):

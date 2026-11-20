@@ -97,7 +97,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         "on" | "addListener" if args.len() >= 2 => {
             let event_ptr = str_arg(args[0]);
             let cb_ptr = unbox_to_i64(args[1]);
-            js_ext_net_socket_on(handle, event_ptr, cb_ptr);
+            let _ = js_ext_net_socket_on(handle, event_ptr, cb_ptr);
             nanbox_handle(handle)
         }
         "connect" if !args.is_empty() => {
@@ -106,12 +106,6 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
             let arg3 = args.get(2).copied().unwrap_or(undefined);
             js_ext_net_socket_method_connect(handle, args[0], arg2, arg3);
             nanbox_handle(handle)
-        }
-        "upgradeToTLS" if !args.is_empty() => {
-            let servername_ptr = str_arg(args[0]);
-            let verify = if args.len() >= 2 { args[1] } else { 1.0 };
-            let promise = js_net_socket_upgrade_tls(handle, servername_ptr, verify);
-            perry_runtime::value::js_nanbox_pointer(promise as i64)
         }
         // Issue #2131 — EventEmitter surface on any-typed receivers
         // (the accepted-socket arg of `server.on('connection', s => …)`
@@ -143,13 +137,7 @@ pub(crate) unsafe fn dispatch_external_net_socket(handle: i64, method: &str, arg
         }
         "getMaxListeners" => js_ext_net_socket_get_max_listeners(handle),
         "setMaxListeners" if !args.is_empty() => {
-            let bits = args[0].to_bits();
-            let n = if (bits >> 48) == 0x7FFE {
-                (bits as u32 as i32) as f64
-            } else {
-                args[0]
-            };
-            js_ext_net_socket_set_max_listeners(handle, n)
+            js_ext_net_socket_set_max_listeners(handle, args[0])
         }
         "eventNames" => json_str_to_value(js_net_socket_event_names(handle)),
         // Issue #2211 — `socket.listeners(event)` / `socket.rawListeners(event)`

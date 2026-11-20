@@ -33,7 +33,7 @@ fn the_classifier_admits_a_malloc_object_through_the_registry_term() {
         ));
         assert!(super::super::barrier::plausible_arena_user_ptr_header(header).is_none());
         assert!(gc_malloc_header_is_tracked(header));
-        assert!(trace::classifier_valid_object_start(user as usize));
+        assert!(mark::classifier_valid_object_start(user as usize));
     });
 }
 
@@ -46,6 +46,6 @@ fn the_classifier_admits_an_arena_object_without_the_registry() {
         // alone must admit it.
         assert!(!gc_malloc_header_is_tracked(header));
         assert!(super::super::barrier::plausible_arena_user_ptr_header(header).is_some());
-        assert!(trace::classifier_valid_object_start(leaf));
+        assert!(mark::classifier_valid_object_start(leaf));
     });
 }

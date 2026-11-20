@@ -114,3 +114,78 @@ fn a_growing_nursery_does_not_promote_a_parent_before_rating_its_first_round() {
         "bounded survivor occupancy must not turn a complete Eden window into an early one"
     );
 }
+
+// The owner-authorized alternative to an extra young round is a complete
+// speculative trace, with the ordinary 950-permille criterion and rollback.
+fn run_current_parent_probe(commit: bool) {
+    use crate::gc::promote_in_place::{parent_probe_promotion_holds_up, InPlacePromotionTestGuard};
+    let _guard = CopyingNurseryTestGuard::new(ROOTS);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let _promote = InPlacePromotionTestGuard::enabled(333);
+    let parent = crate::object::js_object_alloc(0, 1);
+    js_shadow_slot_set(0, ptr_bits(parent as usize));
+    for slot in 1..=LEAVES {
+        allocate_string(Some(slot));
+        allocate_string(None);
+    }
+    let first = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(first.copying_nursery.eligible);
+    assert!(!first.copying_nursery.in_place_promotion);
+    assert!(crate::gc::tenuring::PromotionPolicy::snapshot().parent_probe_active());
+    let policy = crate::gc::tenuring::PromotionPolicy::snapshot();
+    assert!(crate::gc::promote_in_place::should_attempt_parent_probe_promotion(policy));
+    crate::gc::promote_in_place::seed_promoted_dead_bytes_for_tests(
+        crate::gc::promote_in_place::PROMOTED_DEAD_BUDGET_BYTES,
+    );
+    assert!(!crate::gc::promote_in_place::should_attempt_parent_probe_promotion(policy));
+    crate::gc::promote_in_place::seed_promoted_dead_bytes_for_tests(0);
+    let before = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    if !commit {
+        for _ in 0..LEAVES {
+            allocate_string(None);
+        }
+    }
+    let untraced_before = crate::gc::untraced_promotion_cycles();
+    let second = collect_minor_trace(GcTriggerKind::Direct);
+    assert!(second.copying_nursery.eligible);
+    assert_eq!(second.copying_nursery.in_place_promotion, commit);
+    assert!(!second.copying_nursery.first_cycle_promotion_attempted);
+    assert!(!second.copying_nursery.first_cycle_promotion_rolled_back);
+    assert_eq!(crate::gc::untraced_promotion_cycles(), untraced_before);
+    let after = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
+    if commit {
+        assert_eq!(
+            after, before,
+            "current high survival commits without copying"
+        );
+        assert!(!crate::arena::pointer_in_nursery(after));
+        assert!(second.copying_nursery.in_place_promoted_blocks > 0);
+    } else {
+        assert_ne!(
+            after, before,
+            "refuted speculation must undo retag and evacuate"
+        );
+        assert!(crate::arena::pointer_in_nursery(after));
+        assert!(
+            second.copying_nursery.copied_objects > 0,
+            "rollback must clear marks"
+        );
+    }
+    assert!(!parent_probe_promotion_holds_up(0, 0));
+    assert!(!parent_probe_promotion_holds_up(1000, 949));
+    assert!(parent_probe_promotion_holds_up(1000, 950));
+}
+
+#[test]
+fn parent_probe_commits_from_current_survival() {
+    std::thread::spawn(|| run_current_parent_probe(true))
+        .join()
+        .unwrap();
+}
+
+#[test]
+fn parent_probe_refuted_by_current_survival_rolls_back() {
+    std::thread::spawn(|| run_current_parent_probe(false))
+        .join()
+        .unwrap();
+}

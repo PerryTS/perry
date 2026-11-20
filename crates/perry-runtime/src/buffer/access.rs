@@ -3,7 +3,7 @@ use super::*;
 #[derive(Clone, Copy)]
 enum BufferSetSource {
     Buffer(*const BufferHeader),
-    TypedArray(*const crate::typedarray::TypedArrayHeader),
+    TypedArray(*const crate::typedarray_hook_slots::TypedArrayHeader),
     Array(*const ArrayHeader),
     Object(*const crate::object::ObjectHeader),
     Empty,
@@ -11,7 +11,8 @@ enum BufferSetSource {
 
 #[inline]
 fn js_value_to_number(value: f64) -> f64 {
-    crate::value::JSValue::from_bits(value.to_bits()).to_number()
+    // ToNumber: an object's `valueOf` / `toString` / `Symbol.toPrimitive` runs.
+    crate::builtins::js_number_coerce(value)
 }
 
 #[inline]
@@ -30,11 +31,9 @@ fn to_integer_or_zero(value: f64) -> i64 {
 
 #[inline]
 fn to_uint8(value: f64) -> u8 {
-    let number = js_value_to_number(value);
-    if !number.is_finite() || number == 0.0 {
-        return 0;
-    }
-    (number.trunc() as i64).rem_euclid(256) as u8
+    // The shared element conversion: ToNumber (a BigInt or a Symbol throws),
+    // then ToUint8.
+    crate::typedarray_hook_slots::jsvalue_to_uint8(value)
 }
 
 #[inline]
@@ -53,7 +52,7 @@ fn pointer_addr_from_value(value: f64) -> Option<usize> {
         let addr = bits as usize;
         if crate::buffer::header_is_owned(addr)
             && (crate::buffer::is_registered_buffer(addr)
-                || crate::typedarray::lookup_typed_array_kind(addr).is_some())
+                || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some())
         {
             return Some(addr);
         }
@@ -93,13 +92,15 @@ fn decode_buffer_set_source(value: f64) -> BufferSetSource {
         return BufferSetSource::Buffer(addr as *const BufferHeader);
     }
 
-    if crate::typedarray::lookup_typed_array_kind(addr).is_some() {
-        return BufferSetSource::TypedArray(addr as *const crate::typedarray::TypedArrayHeader);
+    if crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some() {
+        return BufferSetSource::TypedArray(
+            addr as *const crate::typedarray_hook_slots::TypedArrayHeader,
+        );
     }
 
     match gc_type_at(addr) {
-        Some(crate::gc::GC_TYPE_ARRAY) => BufferSetSource::Array(addr as *const ArrayHeader),
-        Some(crate::gc::GC_TYPE_OBJECT) => {
+        Some(crate::gc_array_type_pat!()) => BufferSetSource::Array(addr as *const ArrayHeader),
+        Some(crate::gc_object_type_pat!()) => {
             BufferSetSource::Object(addr as *const crate::object::ObjectHeader)
         }
         _ => BufferSetSource::Empty,
@@ -129,7 +130,7 @@ unsafe fn buffer_set_source_len(source: BufferSetSource) -> usize {
             }
         }
         BufferSetSource::TypedArray(ptr) => {
-            crate::typedarray::js_typed_array_length(ptr).max(0) as usize
+            crate::typedarray_hook_slots::js_typed_array_length(ptr).max(0) as usize
         }
         BufferSetSource::Array(ptr) => crate::array::js_array_length(ptr) as usize,
         BufferSetSource::Object(ptr) => array_like_object_length(ptr),
@@ -146,13 +147,14 @@ unsafe fn collect_buffer_set_bytes(source: BufferSetSource, source_len: usize) -
             }
         }
         BufferSetSource::TypedArray(ptr) => {
-            if let Some(kind) = crate::typedarray::lookup_typed_array_kind(ptr as usize) {
-                if crate::typedarray::bigint::is_bigint_kind(kind) {
-                    crate::typedarray::bigint::throw_bigint_number_mix();
+            if let Some(kind) = crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize)
+            {
+                if crate::typedarray_hook_slots::bigint::is_bigint_kind(kind) {
+                    crate::typedarray_hook_slots::bigint::throw_bigint_number_mix();
                 }
             }
             for i in 0..source_len {
-                bytes.push(to_uint8(crate::typedarray::js_typed_array_get(
+                bytes.push(to_uint8(crate::typedarray_hook_slots::js_typed_array_get(
                     ptr, i as i32,
                 )));
             }
@@ -187,11 +189,11 @@ fn bulk_source_is_bytes(source: BufferSetSource) -> bool {
     match source {
         BufferSetSource::Buffer(ptr) => !ptr.is_null(),
         BufferSetSource::TypedArray(ptr) => matches!(
-            crate::typedarray::lookup_typed_array_kind(ptr as usize),
+            crate::typedarray_hook_slots::lookup_typed_array_kind(ptr as usize),
             Some(
-                crate::typedarray::KIND_INT8
-                    | crate::typedarray::KIND_UINT8
-                    | crate::typedarray::KIND_UINT8_CLAMPED
+                crate::typedarray_hook_slots::KIND_INT8
+                    | crate::typedarray_hook_slots::KIND_UINT8
+                    | crate::typedarray_hook_slots::KIND_UINT8_CLAMPED
             )
         ),
         _ => false,
@@ -323,6 +325,37 @@ pub extern "C" fn js_buffer_set(buf_ptr: *mut BufferHeader, index: i32, value: i
     }
 }
 
+/// `buf[index] = value` for a `Buffer` / `Uint8Array` with a JS value: the
+/// element store of an integer-indexed object (TypedArraySetElement).
+/// `ToNumber(value)` first, for every index (an invalid one included): an
+/// object's `valueOf` / `toString` / `Symbol.toPrimitive` runs, a BigInt or a
+/// Symbol throws a TypeError and nothing is stored. Then `ToUint8` (modulo
+/// 2^8, not a saturating cast) and the store, if `index` is still inside the
+/// view: the conversion may have detached, shrunk or moved it, so the bound
+/// is the one `js_buffer_set` reads after it.
+///
+/// Every runtime byte store that receives a JS value goes through here; the
+/// raw `js_buffer_set` takes an already-converted integer.
+pub(crate) fn js_buffer_set_value(buf_ptr: *mut BufferHeader, index: i32, value: f64) {
+    if buf_ptr.is_null() {
+        return;
+    }
+    let v = crate::value::JSValue::from_bits(value.to_bits());
+    if v.is_number() {
+        let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+        js_buffer_set(buf_ptr, index, i32::from(byte));
+        return;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buf = scope.root_raw_mut_ptr(buf_ptr);
+    let byte = crate::typedarray_hook_slots::jsvalue_to_uint8(value);
+    js_buffer_set(
+        buf.get_raw_mut_ptr::<BufferHeader>(),
+        index,
+        i32::from(byte),
+    );
+}
+
 /// Copy bytes from source buffer into target buffer at given offset.
 /// Implements Uint8Array.prototype.set(source, offset)
 #[no_mangle]
@@ -428,9 +461,11 @@ pub extern "C" fn js_buffer_set_from_value(
                 Ok(true) => (),
                 Ok(false) => super::numeric::throw_out_of_range(),
                 Err(super::bytes::NotBytes::Frozen) => {
-                    crate::typedarray::throw_type_error(b"Cannot modify a frozen typed array")
+                    crate::typedarray_hook_slots::throw_type_error(
+                        b"Cannot modify a frozen typed array",
+                    )
                 }
-                Err(_) => crate::typedarray::throw_type_error(
+                Err(_) => crate::typedarray_hook_slots::throw_type_error(
                     b"Cannot perform set on a detached ArrayBuffer",
                 ),
             }

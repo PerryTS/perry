@@ -1,0 +1,397 @@
+//! Constructor helper protocols, selected after normal callee resolution.
+use super::*;
+
+pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
+    crate::family_reach::namespace(m, ns, None);
+    m.diagnostic_builtin(call, |_| format!("new {ns:?}"));
+    // A spread shifts argument positions, so a summary that reads fixed
+    // positions cannot be trusted. Every fixed and spread value may land in
+    // each position such a summary consumes (at most three), so rematch the
+    // same site with that widened argument list instead of guessing.
+    let c = m.calls[call as usize].clone();
+    if !c.spread.is_empty() && ns != BuiltinNs::Array {
+        let vals = all_arg_values(m, call);
+        let c2 = m.calls.len() as CallId;
+        m.calls.push(CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Undef,
+            args: vec![vals; c.args.len().max(3)],
+            spread: vec![],
+            ret: c.ret,
+            site: c.site,
+            region: m.thrown,
+        });
+        m.why_mint(c2, None, u32::MAX);
+        return new_builtin_ns(m, ns, c2);
+    }
+    match ns {
+        BuiltinNs::Map | BuiltinNs::Set | BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
+            // The template names its collection kind (`members::collection_member`).
+            let what = match ns {
+                BuiltinNs::Map => "Map",
+                BuiltinNs::Set => "Set",
+                BuiltinNs::WeakMap => "WeakMap",
+                _ => "WeakSet",
+            };
+            let c = site_tmpl(m, call, what);
+            let fa = m.field_any(c);
+            if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
+                // Its values are what `set` and the constructor store
+                // (`solve/map_vals.rs`).
+                m.map_born(c);
+            }
+            if let Some(src) = arg(m, call, 0) {
+                let vals = iterate(m, call, src);
+                if matches!(ns, BuiltinNs::Map | BuiltinNs::WeakMap) {
+                    // Entries `[key, value]`: the collection holds both.
+                    let ek = m.elem_key();
+                    m.cons(vals, Cons::Load { key: ek, dst: fa });
+                    // AddEntriesFromIterable (24.1.1.2 step 4.f, 24.3.1.1):
+                    // the value is Get(entry, "1") of each entry object.
+                    let one = Key::Named(m.atom("1"));
+                    let mv = m.map_vals(c);
+                    m.cons(vals, Cons::Load { key: one, dst: mv });
+                    let zero = Key::Named(m.atom("0"));
+                    let mk = m.map_keys(c);
+                    m.cons(vals, Cons::Load { key: zero, dst: mk });
+                } else {
+                    m.edge(vals, fa);
+                }
+            }
+            ret_tok(m, call, c);
+        }
+        BuiltinNs::Promise => {
+            let p = site_tmpl(m, call, "Promise");
+            let v = promise_value(m, p);
+            if let Some(ex) = arg(m, call, 0) {
+                let res = resolver(m, call, v);
+                // R-JOBTHROW: the reject function and an abrupt executor
+                // completion reject this promise (27.2.3.1 steps 9-10).
+                let pr = super::promise_reason(m, p);
+                let rej = rejecter(m, pr);
+                let rn = m.node_l("resolver");
+                m.add_tok(rn, res);
+                let jn = m.node_l("rejecter");
+                m.add_tok(jn, rej);
+                let ret = m.node_l("executor-ret");
+                let call2 = m.calls.len() as CallId;
+                let _call2 = m.chain_call(
+                    call,
+                    0,
+                    ex,
+                    CallSite {
+                        first_arg_fixed: false,
+                        this: ThisArg::Undef,
+                        args: vec![rn, jn],
+                        spread: vec![],
+                        ret,
+                        site: call2,
+                        region: pr,
+                    },
+                    move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
+                );
+            }
+            ret_tok(m, call, p);
+        }
+        BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => {
+            implicit_args(m, call, "Error message", Protocol::Any);
+            let e = error_tok(m, call);
+            let options = if ns == BuiltinNs::AggregateError {
+                if let Some(src) = arg(m, call, 0) {
+                    let vals = iterate(m, call, src);
+                    let arr = site_tmpl(m, call, "Array");
+                    let elems = m.field_any(arr);
+                    m.edge(vals, elems);
+                    let errors = m.atom("errors");
+                    let f = m.field(e, errors);
+                    m.add_tok(f, arr);
+                }
+                2
+            } else {
+                1
+            };
+            if let Some(o) = arg(m, call, options) {
+                let ca = m.atom("cause");
+                let f = m.field(e, ca);
+                m.cons(
+                    o,
+                    Cons::Load {
+                        key: Key::Named(ca),
+                        dst: f,
+                    },
+                );
+            }
+            ret_tok(m, call, e);
+        }
+        BuiltinNs::Date => {
+            // ECMA-262 21.4.2.1: one operand ToPrimitive (unless a Date
+            // internal-slot copy); 2..7 operands ToNumber. No operand is
+            // retained or called otherwise; surplus operands are ignored.
+            let c = m.calls[call as usize].clone();
+            for &a in c.args.iter().take(if c.args.len() == 1 { 1 } else { 7 }) {
+                string_methods::to_prim(m, a, "Date constructor ToNumber/ToString");
+            }
+            let o = site_tmpl(m, call, "Date");
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::RegExp => {
+            // ECMA-262 22.2.4.1 RegExp(pattern, flags), 22.2.3.2
+            // RegExpInitialize: IsRegExp reads `pattern[@@match]`; a pattern
+            // without [[RegExpMatcher]] that IsRegExp accepts gives `source`
+            // (and `flags` while `flags` is undefined); P and F go through
+            // ToString. Nothing else of an operand is read or called (the
+            // call arm adds the `constructor` read of `RegExp(re)`); surplus
+            // operands are ignored.
+            let c = m.calls[call as usize].clone();
+            if let Some(&p) = c.arg(0) {
+                let wk = collections::WK_PREFIX;
+                string_methods::read_only(m, p, &format!("{wk}match"));
+                // Step 4: a pattern with [[RegExpMatcher]] gives its
+                // [[OriginalSource]] / [[OriginalFlags]] (`Cons::NotRegExp`).
+                let q = m.node_l("RegExp pattern");
+                m.cons(p, Cons::NotRegExp { dst: q });
+                string_methods::read_prim(m, q, "source", "RegExp pattern source ToString");
+                string_methods::read_prim(m, q, "flags", "RegExp pattern flags ToString");
+                string_methods::to_prim(m, q, "RegExp pattern ToString");
+            }
+            if let Some(&f) = c.arg(1) {
+                string_methods::to_prim(m, f, "RegExp flags ToString");
+            }
+            let o = site_tmpl(m, call, "RegExp");
+            // Rule M7 (22.2.4.1, 22.2.3.2 RegExpInitialize): a pattern
+            // operand of one String constant and no flags operand is the
+            // object's [[OriginalSource]] with flags "", as a literal's
+            // (`Cons::RegExpPattern`, `Model::regexp_pattern`).
+            // Rule M9: both operands, for a global one-class pattern.
+            if let (Some(&p), Some(&f)) = (c.arg(0), c.arg(1)) {
+                m.regexp_ctor_args.insert(o, (p, f));
+            }
+            if let (Some(&p), None) = (c.arg(0), c.arg(1)) {
+                m.regexp_ctor_toks.insert(o);
+                m.cons(p, Cons::RegExpPattern { tok: o });
+            }
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::TypedArrayKind(_)
+        | BuiltinNs::DataView
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::SharedArrayBuffer => {
+            // 23.2.5: object sources are iterated or read as array-like;
+            // elements ToNumber/ToBigInt. ArrayBuffer length is ToIndex,
+            // with only options.maxByteLength read. A DataView's buffer is
+            // read through its internal slots; offset and length ToIndex.
+            // No identity is kept.
+            let buffer = matches!(ns, BuiltinNs::ArrayBuffer | BuiltinNs::SharedArrayBuffer);
+            let what = match ns {
+                BuiltinNs::DataView => "DataView",
+                BuiltinNs::ArrayBuffer => "ArrayBuffer",
+                BuiltinNs::SharedArrayBuffer => "SharedArrayBuffer",
+                _ => "TypedArray",
+            };
+            let c = m.calls[call as usize].clone();
+            if let Some(&src) = c.arg(0) {
+                if buffer {
+                    string_methods::to_prim(m, src, "ArrayBuffer byteLength ToIndex");
+                    if let Some(&opts) = c.arg(1) {
+                        string_methods::read_prim(
+                            m,
+                            opts,
+                            "maxByteLength",
+                            "ArrayBuffer maxByteLength ToIndex",
+                        );
+                    }
+                } else if ns == BuiltinNs::DataView {
+                    for &a in c.args_from(1).iter().take(2) {
+                        string_methods::to_prim(m, a, "DataView byteOffset/byteLength ToIndex");
+                    }
+                } else {
+                    let vals = typed_array_methods::source(m, call, src);
+                    string_methods::to_prim(
+                        m,
+                        vals,
+                        "typed-array constructor element ToNumber/ToBigInt",
+                    );
+                    for &a in c.args_from(1).iter().take(2) {
+                        string_methods::to_prim(m, a, "typed-array byteOffset/length ToIndex");
+                    }
+                }
+            }
+            let o = match buffer {
+                true => site_tmpl(m, call, what),
+                false => site_view(m, call, what),
+            };
+            // A view's buffer: an ArrayBuffer argument (23.2.5.1.3
+            // InitializeTypedArrayFromArrayBuffer, 25.3.2.1 DataView), else
+            // one AllocateTypedArray allocates (a DataView needs one).
+            if !buffer {
+                let fresh = (what == "TypedArray").then(|| site_tmpl(m, call, "ArrayBuffer"));
+                match m.calls[call as usize].arg(0).copied() {
+                    Some(src) => m.cons(
+                        src,
+                        Cons::ViewedBuffer {
+                            view: o,
+                            fresh,
+                            share: false,
+                        },
+                    ),
+                    None => {
+                        if let Some(ab) = fresh {
+                            let f = viewed_buffer(m, o);
+                            m.add_tok(f, ab);
+                        }
+                    }
+                }
+            }
+            // A typed array's elements; a buffer or a DataView has none.
+            if what == "TypedArray" {
+                let fa = m.field_any(o);
+                m.add_prim(fa, prim::NUM | prim::BIGINT);
+            }
+            let c = m.calls[call as usize].clone();
+            if let Some(&src) = c.arg(0) {
+                m.cons(src, Cons::ShareBuffer { ta: o });
+            }
+            if buffer && c.arg(1).is_some() {
+                // B4: `new ArrayBuffer(n, { maxByteLength })` is resizable.
+                let r = m.reason("B4 resizable ArrayBuffer");
+                m.mark_hard(o, Hard::B4Resizable, r);
+            }
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::Function => {
+            if !function_ctor_runs_code(m, call, 0, true) {
+                return;
+            }
+            set_dyn_eval(m, "E14 new Function(...)");
+            unknown_method(m, call, "E14 dynamic code");
+        }
+        // Not a constructor (TypeError).
+        BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_) => {}
+        // A constructor whose [[Construct]] throws a TypeError before it reads
+        // an argument: Symbol (20.4.1.1 step 1), BigInt (21.2.1.1 step 1),
+        // %TypedArray% (23.2.1.1 step 1). Nothing is constructed.
+        BuiltinNs::Symbol | BuiltinNs::BigInt | BuiltinNs::TypedArray => {}
+        // Number (21.1.1.1), String (22.1.1.1), Boolean (20.3.1.1) with a
+        // NewTarget: ToNumeric / ToString / ToBoolean of the first operand,
+        // then a wrapper object OrdinaryCreateFromConstructor(NewTarget, ...)
+        // with the primitive in its internal slot. It is the wrapper the
+        // syntactic form births (gen `BoxedPrimitiveNew` -> "BoxedNumber" / "BoxedString" / "BoxedBoolean"),
+        // so `new Number(x)` and `new C(x)` with C = Number are one model.
+        BuiltinNs::Number | BuiltinNs::String | BuiltinNs::Boolean => {
+            let c = m.calls[call as usize].clone();
+            if ns != BuiltinNs::Boolean {
+                if let Some(&a) = c.arg(0) {
+                    string_methods::to_prim(
+                        m,
+                        a,
+                        "primitive wrapper constructor ToNumeric/ToString",
+                    );
+                }
+            }
+            // The wrapper records its kind (its realm prototype and slot).
+            let what = match ns {
+                BuiltinNs::Number => "BoxedNumber",
+                BuiltinNs::String => "BoxedString",
+                _ => "BoxedBoolean",
+            };
+            let o = site_tmpl(m, call, what);
+            ret_tok(m, call, o);
+        }
+        BuiltinNs::Array => call_builtin_ns(m, ns, call),
+        BuiltinNs::Object => {
+            let o = site_tmpl(m, call, "Object()");
+            ret_tok(m, call, o);
+        }
+        _ => {
+            implicit_args(m, call, "builtin constructor argument", Protocol::Any);
+            let o = site_tmpl(m, call, "builtin");
+            ret_tok(m, call, o);
+        }
+    }
+}
+
+/// `new Name(...)` where `Name` is not a program class: a builtin by name.
+pub fn construct_named(m: &mut Model, name: &str, call: CallId) {
+    if matches!(name, "TextEncoderStream" | "TextDecoderStream") {
+        super::native_protocol::global_any_disable(m);
+    }
+    crate::family_reach::global(m, name);
+    m.diagnostic_builtin(call, |_| format!("new {name}"));
+    if let Some(ns) = ns_by_name(name) {
+        return new_builtin_ns(m, ns, call);
+    }
+    match name {
+        "URL" => {
+            let c = m.calls[call as usize].clone();
+            for &a in c.args.iter().take(2) {
+                string_methods::to_prim(m, a, "URL constructor USVString");
+            }
+            let o = site_tmpl(m, call, "URL");
+            ret_tok(m, call, o);
+        }
+        "URLSearchParams" => {
+            if let Some(src) = arg(m, call, 0) {
+                // WebIDL union: primitive -> USVString (no hooks), object
+                // -> iterable pairs or record. Coerce only entry values.
+                let vals = iterate(m, call, src);
+                let pair = iterate(m, call, vals);
+                string_methods::to_prim(m, pair, "URLSearchParams pair USVString");
+                let fields = m.node_l("params-record-value");
+                m.cons(
+                    src,
+                    Cons::Load {
+                        key: Key::any(),
+                        dst: fields,
+                    },
+                );
+                string_methods::to_prim(m, fields, "URLSearchParams record USVString");
+            }
+            let o = site_tmpl(m, call, "URLSearchParams");
+            ret_tok(m, call, o);
+        }
+        "TextEncoder" | "TextDecoder" => {
+            if name == "TextDecoder" {
+                if let Some(label) = arg(m, call, 0) {
+                    string_methods::to_prim(m, label, "TextDecoder label DOMString");
+                }
+                if let Some(opts) = arg(m, call, 1) {
+                    for key in ["fatal", "ignoreBOM"] {
+                        string_methods::read_only(m, opts, key);
+                    }
+                }
+            }
+            let o = site_tmpl(m, call, "TextCodec");
+            ret_tok(m, call, o);
+        }
+        "Proxy" => {
+            let c = m.calls[call as usize].clone();
+            let r = m.reason("E9 new Proxy (by name)");
+            if let Some(&t) = c.arg(0) {
+                m.cons(
+                    t,
+                    Cons::Hard {
+                        kind: Hard::E9Proxy,
+                        reason: r,
+                    },
+                );
+            }
+            unknown_method(m, call, "E9 Proxy");
+        }
+        _ => match super::effects::declared_ctor(name) {
+            // The realm's constructor, while the global holds it: what its
+            // declaration says. A write under the name (now, or later in the
+            // solve: the replay) is the unknown constructor again.
+            Some(e) if !m.unit_mode => {
+                let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let a = m.atom(name);
+                if native_written(m, g, a) {
+                    unknown_method(m, call, &format!("argument of written constructor {name}"));
+                } else {
+                    m.native_missing.push((g, a, NativeMiss::New(call)));
+                    super::effects::run_construct(m, e, call);
+                }
+            }
+            _ => unknown_method(m, call, &format!("argument of unknown constructor {name}")),
+        },
+    }
+}

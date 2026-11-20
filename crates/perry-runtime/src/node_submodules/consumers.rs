@@ -149,9 +149,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & crate::value::POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 
@@ -174,7 +171,7 @@ fn object_ptr_from_value(value: f64) -> Option<*const ObjectHeader> {
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_OBJECT) {
+        if !matches!(gc_type_for_ptr(raw), Some(crate::gc_object_type_pat!())) {
             return None;
         }
     }
@@ -210,9 +207,7 @@ fn has_named_callable(value: f64, name: &[u8]) -> bool {
 
 fn invalid_chunk_error(value: f64) -> f64 {
     let jsval = JSValue::from_bits(value.to_bits());
-    let (kind, detail) = if jsval.is_int32() {
-        ("number", format!(" ({})", jsval.as_int32()))
-    } else if jsval.is_number() {
+    let (kind, detail) = if jsval.is_number() {
         ("number", format!(" ({})", value))
     } else if jsval.is_bool() {
         ("boolean", String::new())
@@ -270,10 +265,8 @@ fn append_buffer_value_bytes(raw: usize, out: &mut Vec<u8>) {
     });
 }
 
-fn append_number_chunk(value: f64, jsval: JSValue, out: &mut Vec<u8>) {
-    let text = if jsval.is_int32() {
-        jsval.as_int32().to_string()
-    } else if value.is_finite() && value.fract() == 0.0 {
+fn append_number_chunk(value: f64, out: &mut Vec<u8>) {
+    let text = if value.is_finite() && value.fract() == 0.0 {
         (value as i64).to_string()
     } else {
         value.to_string()
@@ -313,11 +306,11 @@ fn append_chunk_bytes_for_consumer(
         append_string_value_bytes(value, out);
         return Ok(());
     }
-    if jsval.is_int32() || (jsval.is_number() && value.is_finite()) {
+    if jsval.is_number() && value.is_finite() {
         if mode == ChunkMode::Text {
             return Err(invalid_chunk_error(value));
         }
-        append_number_chunk(value, jsval, out);
+        append_number_chunk(value, out);
         return Ok(());
     }
 
@@ -332,10 +325,10 @@ fn append_chunk_bytes_for_consumer(
 
     unsafe {
         match gc_type_for_ptr(raw) {
-            Some(crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY) => {
+            Some(crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY) => {
                 append_array_chunk_bytes(raw, out, mode, depth)
             }
-            Some(crate::gc::GC_TYPE_OBJECT) => {
+            Some(crate::gc_object_type_pat!()) => {
                 if let Some(Ok(chunks)) =
                     crate::node_stream::js_node_stream_collect_chunks_result(value)
                 {
@@ -473,13 +466,13 @@ fn collect_by_method_promise(kind: ConsumerKind, receiver: f64, method: CollectM
     let result_arr = crate::array::js_array_alloc(0);
     let step = js_closure_alloc(crate::fn_info!(consumer_collect_step, 1), 6);
     let reject = js_closure_alloc(crate::fn_info!(consumer_collect_rejected, 1), 1);
-    js_closure_set_capture_ptr(step, 0, result_promise as i64);
-    js_closure_set_capture_ptr(step, 1, result_arr as i64);
+    crate::closure::closure_set_capture_ref(step, 0, result_promise as i64);
+    crate::closure::closure_set_capture_ref(step, 1, result_arr as i64);
     js_closure_set_capture_f64(step, 2, receiver);
-    js_closure_set_capture_ptr(step, 3, reject as i64);
+    crate::closure::closure_set_capture_ref(step, 3, reject as i64);
     js_closure_set_capture_ptr(step, 4, method as i64);
     js_closure_set_capture_ptr(step, 5, kind as i64);
-    js_closure_set_capture_ptr(reject, 0, result_promise as i64);
+    crate::closure::closure_set_capture_ref(reject, 0, result_promise as i64);
     call_collector_method(receiver, method, step, reject);
     boxed_pointer(result_promise as *const u8)
 }
@@ -578,7 +571,7 @@ extern "C" fn consumer_collect_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::Promise;
     crate::promise::js_promise_reject(promise, reason);
     0.0
 }
@@ -588,10 +581,11 @@ extern "C" fn consumer_collect_step(
     _this: crate::closure::JsThis,
     iter_result: f64,
 ) -> f64 {
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut crate::Promise;
-    let mut result_arr = js_closure_get_capture_ptr(closure, 1) as *mut crate::array::ArrayHeader;
+    let promise = crate::closure::closure_capture_ref(closure, 0) as *mut crate::Promise;
+    let mut result_arr =
+        crate::closure::closure_capture_ref(closure, 1) as *mut crate::array::ArrayHeader;
     let receiver = js_closure_get_capture_f64(closure, 2);
-    let reject = js_closure_get_capture_ptr(closure, 3) as *const ClosureHeader;
+    let reject = crate::closure::closure_capture_ref(closure, 3) as *const ClosureHeader;
     let method = CollectMethod::from_i64(js_closure_get_capture_ptr(closure, 4));
     let kind = ConsumerKind::from_i64(js_closure_get_capture_ptr(closure, 5));
     if promise.is_null() || result_arr.is_null() {
@@ -613,7 +607,7 @@ extern "C" fn consumer_collect_step(
 
     let value = js_object_get_field_by_name_f64(result_obj, named_key(b"value"));
     result_arr = crate::array::js_array_push_f64(result_arr, value);
-    js_closure_set_capture_ptr(closure as *mut ClosureHeader, 1, result_arr as i64);
+    crate::closure::closure_set_capture_ref(closure as *mut ClosureHeader, 1, result_arr as i64);
     call_collector_method(receiver, method, closure, reject);
     0.0
 }

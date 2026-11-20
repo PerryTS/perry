@@ -192,6 +192,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 visit_stmt(s, ctx);
@@ -515,7 +516,9 @@ mod tests {
     fn fetch_requires_net_fetch() {
         let mut m = empty_module();
         m.init.push(Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "fetch".into(),

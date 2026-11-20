@@ -94,7 +94,13 @@ pub(crate) fn begin(
     property: &str,
     receiver: &str,
 ) -> Option<FamilyRead> {
-    if crate::target_layout::target_is_ilp32(ctx.target_triple)
+    // Every word read is the receiver's i32 layout word @4, a NaN-boxed slot
+    // at object_slot_base_bytes + 8 * slot (16 on LP64 and wasm32), or the
+    // descriptor's fixed-width layout_id @12. The answer is the receiver's
+    // own slot, so no shadow bit or prototype state enters it. Other 32-bit
+    // targets have no lowering yet.
+    if (crate::target_layout::target_is_ilp32(ctx.target_triple)
+        && !crate::target_layout::wasm32_lowering(ctx.target_triple))
         || !crate::layout_desc::layouts_enabled("executable", ctx.target_triple)
         || crate::expr::typed_feedback_emission_enabled()
         || ctx.is_static_class_this(object)
@@ -102,8 +108,14 @@ pub(crate) fn begin(
         return None;
     }
     let class = crate::type_analysis::receiver_class_name(ctx, object)
-        .or_else(|| super::property_get::guarded_declared_class_get_candidate(ctx, object))?;
-    let class_id = *ctx.class_ids.get(&class)?;
+        .or_else(|| super::property_get::guarded_declared_class_get_candidate(ctx, object));
+    let class_id = if let Some(class) = class {
+        *ctx.class_ids.get(&class)?
+    } else if let perry_hir::Expr::LocalGet(id) = object {
+        *ctx.receiver_families.get(id)?
+    } else {
+        return None;
+    };
     let arms = candidates(&ctx.program_layouts, class_id, property);
     if arms.is_empty() {
         return None;
@@ -123,7 +135,9 @@ pub(crate) fn begin(
     ctx.current_block = word_idx;
     let word_ptr = super::receiver_range::emit_field_ptr(ctx.block(), &recv.biased, 4);
     let word = ctx.block().load(I32, &word_ptr);
-    let header = crate::target_layout::object_header_size_bytes(ctx.target_triple) as i64;
+    let header =
+        crate::target_layout::object_slot_base_bytes(ctx.target_triple, ctx.program_layouts.form())
+            as i64;
     let mut slots = std::collections::BTreeMap::<u32, Vec<Candidate>>::new();
     for arm in arms {
         slots.entry(arm.slot).or_default().push(arm);
@@ -145,15 +159,17 @@ pub(crate) fn begin(
                 &desc,
                 &[(I64, &crate::layout_desc::DESC_LAYOUT_ID_OFFSET.to_string())],
             );
+            // The whole-image DPA row word is immutable. Publication of the
+            // current agent's shape facts happens before an object is born.
             let expected = blk.load(I32, &ptr);
             // Only a registered ordinary-band layout proves an object. Reject
             // both 0 (declined registration) and u32::MAX (the startup marker).
             let relative = blk.sub(
                 I32,
                 &expected,
-                &(crate::runtime_abi::SHAPE_ID_BASE as i32).to_string(),
+                &(crate::runtime_abi::LAYOUT_TAG as i32).to_string(),
             );
-            let registered = blk.icmp_ult(I32, &relative, "1073741824");
+            let registered = blk.icmp_ult(I32, &relative, "268435456");
             let equal = blk.icmp_eq(I32, &word, &expected);
             let equal = blk.and(I1, &registered, &equal);
             accepted = blk.or(I1, &accepted, &equal);
@@ -216,6 +232,7 @@ mod tests {
             init_count: keys.len() as u32,
             discriminant: 0,
             variants: Vec::new(),
+            born_with_keys: false,
         }
     }
 

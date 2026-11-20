@@ -10,8 +10,8 @@ use perry_hir::{ArrayLikeSource, Expr, Stmt};
 use crate::temp_root_coverage::main_ir_for;
 
 /// The shadow-bit compare: `icmp uge i32 %word, UNSHADOWED_WORD_END`.
-const PATCHED: &str = "-1342177280";
-const _: () = assert!(crate::runtime_abi::UNSHADOWED_WORD_END as i32 == -1342177280);
+const PATCHED: &str = "-1879048192";
+const _: () = assert!(crate::runtime_abi::LAYOUT_ORDINARY_END as i32 == -1879048192);
 
 fn let_local(id: u32, name: &str, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {
@@ -63,6 +63,7 @@ fn a_folded_array_method_with_an_observing_argument_tests_before_it() {
             Stmt::Expr(Expr::ArrayMap {
                 array: Box::new(Expr::LocalGet(1)),
                 callback: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(2)),
                     property: "f".to_string(),
@@ -110,7 +111,12 @@ fn a_borrowed_prototype_call_proves_array_and_function_and_a_binding_does_not() 
     );
     for slot in ["i64 48", "i64 40", "i64 32"] {
         assert!(
-            proto.contains(&format!("getelementptr i8, ptr @PERRY_AGENT_PTRS, {slot}")),
+            proto.contains(&format!("getelementptr i8, ptr @PERRY_AGENT_PTRS, {slot}"))
+                // The activation's one read of the block address (`agent_ptr.rs`).
+                || (proto.contains("@llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)")
+                    && proto.lines().any(|l| {
+                        l.contains("= getelementptr i8, ptr %") && l.ends_with(&format!(", {slot}"))
+                    })),
             "the Array, Function and Object intrinsics are all tested ({slot}):\n{proto}"
         );
     }
@@ -138,7 +144,9 @@ fn a_proven_string_method_is_one_checked_entry_call() {
         vec![
             let_local(1, "s", Type::String, Expr::String("abcdef".to_string())),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "slice".to_string(),

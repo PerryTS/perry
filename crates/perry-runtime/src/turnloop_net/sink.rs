@@ -27,11 +27,15 @@ use super::NodeError;
 /// How many net bindings can be linked at once.
 ///
 /// The slots are claimed, not merely reserved: 0 is `perry-ext-net` (P1), 1 is
-/// `perry-ext-http` (P5), 3 is this module's own test slot, and 2/4/5/6 are
-/// P7's four database bindings (`perry-db-turnloop::subsystem`). A binding is a
-/// separately linked `staticlib` with its own sink function, so four database
-/// bindings really do need four slots even though they share one transport
-/// module. 7 is `perry-ext-ws`'s outbound client and 8 the HTTP/1.1 listener
+/// `perry-ext-http`'s HTTP/1.1 server (P5), 2 is `perry-stdlib`'s turnloop
+/// HTTP client, 3 is this module's own test slot, 4 is `perry-ext-net`'s TLS
+/// lane, 5 is `perry-stdlib`'s framework server, and 6 is `perry-ext-http`'s
+/// client lane. The band
+/// 9..=12 was the P7 database bindings' — those bindings no longer exist in
+/// this workspace (their loop-driven transport was removed with them; the
+/// bindings were replaced by pure-TypeScript drivers), so the band stays
+/// reserved. A binding is a separately linked `staticlib` with its own sink
+/// function. 7 is `perry-ext-ws`'s outbound client and 8 the HTTP/1.1 listener
 /// its standalone `WebSocketServer({ port })` binds through
 /// `perry-http-server`; those are two slots and not one because they are two
 /// sink functions in the same binary — the crate's own, and the server core's.
@@ -52,9 +56,9 @@ use super::NodeError;
 /// `perry-ext-ioredis` on 5 with `perry-stdlib`'s bundled framework server.
 /// Each pair needs a program linking both bindings to reach, which is why
 /// nothing caught it — and a fastify app that uses mysql2 is not an exotic
-/// shape. The database bindings now occupy 9..=12
-/// (`perry-db-turnloop::subsystem`, which is the one authority for that band),
-/// and [`register_sink`] refuses a slot already held by a *different* sink, so
+/// shape. The database band 9..=12 is reserved for database bindings, which
+/// no longer exist in this workspace, and [`register_sink`] refuses a slot
+/// already held by a *different* sink, so
 /// a future collision declines loudly instead of silently misrouting.
 pub const MAX_SUBSYSTEMS: usize = 32;
 
@@ -99,6 +103,10 @@ pub const NET_FLAG_STALE: i32 = 2;
 pub const NET_FLAG_HANDLE_PARTS: i32 = 4;
 /// TLS plaintext, already decoded, delivered on the socket's current route.
 pub const NET_FLAG_PLAINTEXT: i32 = 8;
+/// A `Wrote` for a write the kernel took whole when the caller wrote it
+/// (libuv's `uv_try_write`): Node's `req.async === false`, so the write
+/// callback runs from `process.nextTick`, as a `TickObject`.
+pub const NET_FLAG_SYNC_WRITE: i32 = 16;
 /// A subsystem-owned deadline expired (P5). `id` names the deadline, which is
 /// the caller's own id — a connection's, not a socket handle's.
 pub const NET_TIMER: i32 = 9;
@@ -296,6 +304,8 @@ static LINKS: [AtomicBool; MAX_SUBSYSTEMS] = [const { AtomicBool::new(false) }; 
 /// dropped, because a binding whose sink never registered would look like a
 /// socket that simply never produces events.
 pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_SUBSYSTEMS {
         return false;
@@ -330,6 +340,8 @@ pub fn register_sink(subsystem: u8, sink: SinkFn, alloc: AllocFn) -> bool {
 /// id allocator. Refused, like [`register_sink`], for a slot another sink
 /// holds, and for a slot already registered without `links`.
 pub fn register_link_sink(subsystem: u8, sink: SinkFn) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::turnloop_net::install();
     let slot = subsystem as usize;
     if slot >= MAX_LINK_ROUTES {
         return false;

@@ -49,9 +49,19 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
         }
     }
     let mut ambiguous = BTreeSet::new();
-    for site in pf.sites.iter().filter(|s| s.module as usize == mi) {
+    for site in pf
+        .sites
+        .iter()
+        .filter(|s| s.module as usize == mi && !s.access.is_store())
+    {
         let reason = match &site.verdict {
             perry_wpfacts::Verdict::No(why) => why.clone(),
+            perry_wpfacts::Verdict::OwnLength => {
+                "native own-length proof recorded (Array or String); tag admission applies".into()
+            }
+            perry_wpfacts::Verdict::NativeMember => {
+                "native member proof recorded (builtin family); generic guard/path emitted".into()
+            }
             perry_wpfacts::Verdict::T0Mono => {
                 "whole-program monomorphic proof recorded; generic guard/path emitted".into()
             }
@@ -60,6 +70,34 @@ pub(super) fn facts_for(pf: &perry_wpfacts::ProgramFacts, path: &str) -> Arc<Fac
             }
             perry_wpfacts::Verdict::E0 => {
                 "proof behind the entry guard recorded; generic guard/path emitted".into()
+            }
+            perry_wpfacts::Verdict::Dead => "dead site proof recorded; generic path emitted".into(),
+            perry_wpfacts::Verdict::Throws => {
+                "always-throws site proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::PerKind => {
+                "per-kind mixed receiver proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::IntrinsicCall => {
+                "intrinsic callee proof recorded; generic call emitted".into()
+            }
+            perry_wpfacts::Verdict::NsExport => {
+                "namespace export binding proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::OwnDataOrAbsent => {
+                "own data or absent proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::AccessorGet | perry_wpfacts::Verdict::AccessorSet => {
+                "accessor proof recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::AddsKey => {
+                "adds-key store recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::KnownObjectStore => {
+                "known-object store recorded; generic path emitted".into()
+            }
+            perry_wpfacts::Verdict::ProxyTrap => {
+                "proxy trap proof recorded; generic path emitted".into()
             }
         };
         let key = (site.byte_offset, site.key.clone(), site.is_call);

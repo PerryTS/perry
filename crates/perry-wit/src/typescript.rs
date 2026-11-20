@@ -68,6 +68,22 @@ impl Typescript<'_> {
             ),
             Type::List(inner) if self.is_byte(inner) => "Uint8Array".into(),
             Type::List(inner) => format!("Array<{}>", self.ty(inner)),
+            Type::Future(inner) => format!(
+                "ComponentFuture<{}>",
+                inner
+                    .as_deref()
+                    .map_or_else(|| "void".into(), |t| self.ty(t))
+            ),
+            Type::Stream(inner) => {
+                let payload = inner
+                    .as_deref()
+                    .map_or_else(|| "void".into(), |t| self.ty(t));
+                if inner.as_deref().is_some_and(|t| self.is_byte(t)) {
+                    format!("ComponentStream<{payload}, Uint8Array>")
+                } else {
+                    format!("ComponentStream<{payload}>")
+                }
+            }
             Type::Resource => "never".into(), // Resources are used through own/borrow handles.
             Type::Own(key) => format!(
                 "OwnedResource<{}>",
@@ -115,13 +131,19 @@ impl Typescript<'_> {
             .map(|(i, field)| format!("arg{i}: {}", self.ty(&field.ty)))
             .collect::<Vec<_>>()
             .join(", ");
-        format!(
-            "({params}) => {}",
-            function
-                .result
-                .as_ref()
-                .map_or_else(|| "void".into(), |t| self.ty(t))
-        )
+        format!("({params}) => {}", self.result(function))
+    }
+
+    fn result(&self, function: &Function) -> String {
+        let result = function
+            .result
+            .as_ref()
+            .map_or_else(|| "void".into(), |t| self.ty(t));
+        if function.async_ {
+            format!("Promise<{result}>")
+        } else {
+            result
+        }
     }
 
     fn interface(&self, out: &mut String, name: &str, interfaces: &[Interface]) {
@@ -164,10 +186,7 @@ impl Typescript<'_> {
                     .map(|i| format!("arg{i}"))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let result = function
-                    .result
-                    .as_ref()
-                    .map_or_else(|| "void".into(), |t| self.ty(t));
+                let result = self.result(function);
                 writeln!(
                     out,
                     "      {}: ({params}): {result} => {call}{}, {}, [{args}]) as {result},",
@@ -246,19 +265,28 @@ pub fn typescript_guest(world: &World) -> String {
 
 fn generate(world: &World, guest: bool) -> String {
     let generator = Typescript { world };
+    let incoming_http = world.exports.iter().find(|interface| {
+        interface
+            .name
+            .starts_with("wasi:http/incoming-handler@0.2.")
+            || interface.name == "wasi:http/handler@0.3.0"
+    });
     let mut out = String::from("// Generated from WIT by perry-wit. Do not edit.\n");
     if guest {
         out.push_str(
             "import { registerComponentExports, callComponentImport, createComponentResource, getComponentResourceValue } from \"perry/component\";\n",
         );
         out.push_str(
-            "import type { OwnedResource, BorrowedResource } from \"perry/component\";\n\n",
+            "import type { OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n",
         );
     } else {
         out.push_str(
             "import { loadComponent, callComponent, disposeComponent, createComponentHostResource, getComponentHostResourceValue } from \"perry/component\";\n",
         );
-        out.push_str("import type { ComponentOptions, ComponentHandle, OwnedResource, BorrowedResource } from \"perry/component\";\n\n");
+        out.push_str("import type { ComponentOptions, ComponentHandle, ComponentAsyncType, OwnedResource, BorrowedResource, ComponentFuture, ComponentStream } from \"perry/component\";\n\n");
+        if incoming_http.is_some() {
+            out.push_str("import { handleComponentHttpRequest } from \"perry/component\";\nimport type { ComponentHttpServer } from \"perry/component\";\n\n");
+        }
     }
     writeln!(out, "export const world = {};", quoted(&world.name)).unwrap();
     writeln!(
@@ -315,10 +343,20 @@ fn generate(world: &World, guest: bool) -> String {
                 .collect::<Vec<_>>(),
         );
         generator.host_resources(&mut out);
-        out.push_str("export interface Component { exports: Exports; dispose(): void; }\n");
+        if incoming_http.is_some() {
+            out.push_str("export interface Component { exports: Exports; dispose(): void; handleHttp(server: ComponentHttpServer): Promise<void>; }\n");
+        } else {
+            out.push_str("export interface Component { exports: Exports; dispose(): void; asyncTypes(): readonly ComponentAsyncType[]; }\n");
+        }
         out.push_str("export type ImportBuilder = (resources: HostResources) => Imports | ApplicationImports;\n");
         out.push_str("export function load(bytes: Uint8Array, imports: Imports | ApplicationImports | ImportBuilder, options?: ComponentOptions): Component {\n  const supplied = typeof imports === \"function\" ? (handle: ComponentHandle) => imports(hostResources(handle)) : imports;\n  const handle = loadComponent(bytes, contract, supplied, options);\n  return {\n    dispose: () => disposeComponent(handle),\n    exports: ");
         out.push_str(&generator.wrappers(&world.exports, "callComponent(handle, "));
+        if incoming_http.is_none() {
+            out.push_str(",\n    asyncTypes: () => handle.asyncTypes(),");
+        }
+        if let Some(interface) = incoming_http {
+            writeln!(out, ",\n    handleHttp: (server: ComponentHttpServer): Promise<void> => handleComponentHttpRequest(server, handle, {}),", quoted(&interface.name)).unwrap();
+        }
         out.push_str("\n  };\n}\n\n");
     }
     out

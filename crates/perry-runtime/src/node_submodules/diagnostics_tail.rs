@@ -74,9 +74,6 @@ fn store_handle(store: f64) -> Option<i64> {
         return Some(token);
     }
     let bits = store.to_bits();
-    if bits & crate::value::TAG_MASK == crate::value::INT32_TAG {
-        return Some((bits & crate::value::INT32_MASK) as i32 as i64);
-    }
     if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
         let raw = (bits & crate::value::POINTER_MASK) as i64;
         if raw > 0 && raw < 0x10000 {
@@ -145,13 +142,13 @@ pub(crate) extern "C" fn diag_channel_with_store_scope(
                 }) {
                     Ok(context) => context,
                     Err(err) => {
-                        schedule_uncaught(err);
+                        schedule_uncaught(UncaughtError::Caught(err));
                         continue;
                     }
                 }
             }
             StoreTransform::NonCallable => {
-                schedule_uncaught(make_transform_not_a_function_error());
+                schedule_uncaught(UncaughtError::Core(make_transform_not_a_function_error()));
                 continue;
             }
             StoreTransform::None => data,
@@ -177,7 +174,7 @@ pub(crate) extern "C" fn diag_channel_with_store_scope(
         crate::fn_info!(diag_store_scope_dispose, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(dispose, 0, scope_id);
+    crate::closure::closure_set_capture_word(dispose, 0, scope_id);
     let dispose_value = boxed_ptr(dispose);
     install_dispose(obj, dispose_value);
     boxed_ptr(obj)
@@ -280,7 +277,7 @@ pub(crate) extern "C" fn diag_bounded_run(
         }
         Err(err) => {
             publish_channel(events[1], context);
-            crate::exception::js_throw(err)
+            crate::exception::rethrow_caught(err)
         }
     }
 }
@@ -294,7 +291,7 @@ pub(crate) extern "C" fn diag_bounded_scope_dispose(
     }
     let end = js_closure_get_capture_ptr(closure, 0);
     let context = f64::from_bits(js_closure_get_capture_ptr(closure, 1) as u64);
-    js_closure_set_capture_ptr(closure as *mut ClosureHeader, 2, 1);
+    crate::closure::closure_set_capture_word(closure as *mut ClosureHeader, 2, 1);
     publish_channel(end, context);
     undefined()
 }
@@ -311,9 +308,9 @@ pub(crate) extern "C" fn diag_bounded_with_scope(
         crate::fn_info!(diag_bounded_scope_dispose, 0; with_declared(0)),
         3,
     );
-    js_closure_set_capture_ptr(dispose, 0, events[1]);
+    crate::closure::closure_set_capture_word(dispose, 0, events[1]);
     js_closure_set_capture_ptr(dispose, 1, context.to_bits() as i64);
-    js_closure_set_capture_ptr(dispose, 2, 0);
+    crate::closure::closure_set_capture_word(dispose, 2, 0);
     let dispose_value = boxed_ptr(dispose);
     install_dispose(obj, dispose_value);
     boxed_ptr(obj)
@@ -324,7 +321,7 @@ fn bounded_run_method_closure(id: i64) -> f64 {
         crate::fn_info!(diag_bounded_run, 1; with_rest_kind(0, crate::closure::FN_REST_SYNTHETIC_ARGUMENTS)),
         1,
     );
-    js_closure_set_capture_ptr(c, 0, id);
+    crate::closure::closure_set_capture_word(c, 0, id);
     boxed_ptr(c)
 }
 

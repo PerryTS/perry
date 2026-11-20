@@ -62,6 +62,7 @@ fn underapplied_call_ir() -> String {
         "caller",
         Vec::new(),
         vec![Stmt::Return(Some(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::FuncRef(1)),
             args: vec![Expr::Number(7.0)],
             type_args: Vec::new(),

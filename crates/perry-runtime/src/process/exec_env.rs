@@ -51,20 +51,18 @@ unsafe fn validate_load_env_file_url(value: f64) {
         return;
     }
     let obj = jv.as_pointer::<crate::object::ObjectHeader>() as *mut crate::object::ObjectHeader;
-    if obj.is_null() || !crate::url::is_url_object_shape(obj) {
+    if obj.is_null() || !crate::object::url_layout::is_url_object_shape(obj) {
         return;
     }
-    let protocol = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PROTOCOL,
-    ));
+    let protocol = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PROTOCOL),
+    );
     if protocol != "file:" {
         throw_invalid_load_env_file_url_scheme();
     }
-    let pathname = crate::url::get_string_content(crate::object::js_object_get_field_f64(
-        obj,
-        crate::url::parse::URL_PATHNAME,
-    ));
+    let pathname = crate::value::boxed_text::get_string_content(
+        crate::object::js_object_get_field_f64(obj, crate::url::parse::URL_PATHNAME),
+    );
     if has_encoded_forward_slash(&pathname) {
         crate::fs::validate::throw_type_error_with_code(
             "File URL path must not include encoded / characters",
@@ -109,8 +107,7 @@ unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> 
     crate::node_submodules::register_error_code_pub(msg_ptr, code);
     crate::node_submodules::register_error_syscall(msg_ptr, "open");
     crate::node_submodules::register_error_path(msg_ptr, target.to_string());
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+    crate::exception::throw_core(crate::error::CoreError::error(msg_ptr));
 }
 
 // Issue #2013 — process-arg-validation helpers shared by `js_process_chdir`
@@ -127,6 +124,7 @@ unsafe fn throw_load_env_file_open_error(err: &std::io::Error, target: &str) -> 
 /// based on whatever bytes the numeric value masqueraded as.
 #[no_mangle]
 pub unsafe extern "C" fn js_process_chdir_jsv(value: f64) {
+    crate::process::worker_restrictions::ensure_worker_operation_allowed("chdir");
     let jv = JSValue::from_bits(value.to_bits());
     if !jv.is_any_string() {
         let message = format!(
@@ -152,11 +150,7 @@ fn execve_throw_invalid_arg_type(name: &str, expected: &str, value: f64) -> ! {
 fn execve_received_value(value: f64) -> String {
     let jv = JSValue::from_bits(value.to_bits());
     if crate::fs::validate::is_numeric(jv) {
-        let n = if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        };
+        let n = jv.as_number();
         return crate::fs::validate::format_received_number(n);
     }
     if let Some(value) = module_value_to_string(value) {
@@ -268,7 +262,9 @@ pub extern "C" fn js_process_execve(exec_path: f64, args: f64, env: f64) -> f64 
     let argv = execve_parse_args(args);
     let env_pairs = execve_parse_env(env);
 
-    #[cfg(unix)]
+    // libc exposes no execve on tvOS and watchOS (the platforms forbid it): take the
+    // unsupported arm there.
+    #[cfg(all(unix, not(any(target_os = "tvos", target_os = "watchos"))))]
     {
         let path_c = match std::ffi::CString::new(path.as_str()) {
             Ok(path_c) => path_c,
@@ -294,7 +290,7 @@ pub extern "C" fn js_process_execve(exec_path: f64, args: f64, env: f64) -> f64 
         }
     }
 
-    #[cfg(not(unix))]
+    #[cfg(not(all(unix, not(any(target_os = "tvos", target_os = "watchos")))))]
     {
         let _ = (path, argv, env_pairs);
         crate::fs::validate::throw_type_error_with_code(

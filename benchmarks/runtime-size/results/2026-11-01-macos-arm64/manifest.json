@@ -1,0 +1,124 @@
+{
+  "reference": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+  "candidate": "reference plus 198 optimize(size) attributes on existing cold, inline(never) runtime functions",
+  "platform": "macOS-26.5-arm64-arm-64bit-Mach-O",
+  "machine": "arm64",
+  "hardware": "Apple M1 Max",
+  "contention": "Unrelated cargo/rustc builds ran on the shared host. Experiment builds and profiles did not overlap timed measurements.",
+  "host_load_samples": [
+    {
+      "epoch": 1793564561.811373,
+      "cargo": 5,
+      "rustc": 8
+    },
+    {
+      "epoch": 1793564569.91907,
+      "cargo": 5,
+      "rustc": 8
+    },
+    {
+      "epoch": 1793564578.027959,
+      "cargo": 5,
+      "rustc": 8
+    },
+    {
+      "epoch": 1793564586.119045,
+      "cargo": 5,
+      "rustc": 8
+    },
+    {
+      "epoch": 1793564594.207089,
+      "cargo": 5,
+      "rustc": 8
+    },
+    {
+      "epoch": 1793564602.286557,
+      "cargo": 5,
+      "rustc": 8
+    }
+  ],
+  "scan_binaries": {
+    "o2": {
+      "bytes": 5634688,
+      "sha256": "ae058a032e811bcf04ad87518ec5f2e1450cae8268656c7f4309d1f939bc9a95"
+    },
+    "oz": {
+      "bytes": 3369840,
+      "sha256": "f334d474870e5ac110b9b79ef5eed4ed5e3814baf88000a0199070ce289848d6"
+    },
+    "cold": {
+      "bytes": 5602240,
+      "sha256": "57709a4897203d443a8c0d91f67ba8a7ad90d7ba9c91f7dab06ab8db5bb75caa"
+    }
+  },
+  "archive_provenance": {
+    "o2": {
+      "commit": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+      "config": "[profile.issue-o2]\ninherits = \"release\"\nopt-level = 2\nlto = \"fat\"\nstrip = false\n[profile.issue-o2.package.perry-runtime]\nopt-level = 2\n[profile.issue-o2.package.perry-stdlib]\nopt-level = 2\n",
+      "archive_sha256": {
+        "libperry_stdlib.a": "736edb545f7e5f2e18e7982ec7b4a7c67f398bec21e688d4ba9778b503c43af3",
+        "libperry_runtime.a": "5d084f6b0ad4f0115d3136c8be842a0a89be30ebbf43336ccdec98684d38ad40"
+      }
+    },
+    "oz": {
+      "commit": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+      "config": "[profile.issue-oz]\ninherits = \"release\"\nopt-level = \"z\"\nlto = \"fat\"\nstrip = false\n[profile.issue-oz.package.perry-runtime]\nopt-level = \"z\"\n[profile.issue-oz.package.perry-stdlib]\nopt-level = \"z\"\n",
+      "archive_sha256": {
+        "libperry_stdlib.a": "db3f50cc9d61d234bf33e448c57224428e8910b7ca47f7e13ab92dee9cf6ab62",
+        "libperry_runtime.a": "b9f10308d23efbe4d9c5e3ea58603142b3e9b96e6985e9a0a00ea38186e5598b"
+      }
+    },
+    "cold": {
+      "commit": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+      "config": "[profile.issue-o2]\ninherits = \"release\"\nopt-level = 2\nlto = \"fat\"\nstrip = false\n[profile.issue-o2.package.perry-runtime]\nopt-level = 2\n[profile.issue-o2.package.perry-stdlib]\nopt-level = 2\n",
+      "archive_sha256": {
+        "libperry_stdlib.a": "2ba5708baf1b027bd3a8f57402f8478f2aff2d945fd3e6f3b5a7bb064fa54a31",
+        "libperry_runtime.a": "15e7a6b722d75dc9f369bad059c70e62344f3f194d1840b77d95e5f1a67dc50a"
+      }
+    },
+    "full-reference": {
+      "commit": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+      "config": "[profile.issue-o2]\ninherits = \"release\"\nopt-level = 2\nlto = \"fat\"\nstrip = false\n[profile.issue-o2.package.perry-runtime]\nopt-level = 2\n[profile.issue-o2.package.perry-stdlib]\nopt-level = 2\n",
+      "archive_sha256": {
+        "libperry_stdlib.a": "439dc3e022d27e355e6f3e8b58bbc536164de4299a104f0e0e5347cdff5ba2cd",
+        "libperry_runtime.a": "18a106c9279d79c7eee55f385dcb2f97aaa15acf14815a3a55f07c3132402d97"
+      }
+    },
+    "full-cold": {
+      "commit": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+      "config": "[profile.issue-o2]\ninherits = \"release\"\nopt-level = 2\nlto = \"fat\"\nstrip = false\n[profile.issue-o2.package.perry-runtime]\nopt-level = 2\n[profile.issue-o2.package.perry-stdlib]\nopt-level = 2\n",
+      "archive_sha256": {
+        "libperry_stdlib.a": "089eebe179e07a2437dc6ddd53b810eb8d5367fce7c13713f52f9c9460517a46",
+        "libperry_runtime.a": "673e9b6cde96f5437d9ecd70ecc4c5e6c4c5420d30207bea29a582c9a87b3a73"
+      }
+    }
+  },
+  "application_sizes": {
+    "full-reference": {
+      "chess-engine": 7031600,
+      "chess-tui": 8680656,
+      "chess-tests": 7113200,
+      "chess-cli": 9978992
+    },
+    "full-cold": {
+      "chess-engine": 6966512,
+      "chess-tui": 8615552,
+      "chess-tests": 7064528,
+      "chess-cli": 9913888
+    }
+  },
+  "gc_movement": [
+    {
+      "name": "test_gap_descriptor_snapshot_moving",
+      "status": 0,
+      "parity": true,
+      "moved_objects": 302
+    },
+    {
+      "name": "test_gap_typedarr_moving_owner",
+      "status": 0,
+      "parity": true,
+      "moved_objects": 7245
+    }
+  ]
+}

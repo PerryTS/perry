@@ -1,0 +1,1 @@
+Cold sorts in perry-runtime (GC diagnostics, stack-map verification, layout and shape census, directory listing, locale, resolver order) share one `cold_sort` instantiation instead of one standard-library sort per call site, which shrinks every linked binary. Array.prototype.sort, typed-array sorts and property-enumeration order stay on the standard sort.

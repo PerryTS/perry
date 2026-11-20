@@ -68,6 +68,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n);
@@ -120,6 +121,9 @@ mod tests {
             value: Box::new(Expr::Number(1.0)),
             receiver: Box::new(Expr::LocalGet(0)),
             strict: true,
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
         }
     }
 
@@ -136,6 +140,8 @@ mod tests {
                 object: Box::new(Expr::LocalGet(0)),
                 property: "d".to_string(),
                 value: Box::new(Expr::Number(2.0)),
+                byte_offset: 0,
+                byte_end: 0,
             }),
         ];
         assert_eq!(count_straight_line_store_sites(&stmts), 4);

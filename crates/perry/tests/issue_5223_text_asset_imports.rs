@@ -4,9 +4,9 @@
 //! Fix: a recognized text-asset extension (`.txt`, `.sql`, `.md`, `.html`,
 //! `.htm`, `.css`, `.graphql`, `.gql`, `.glsl`, `.vert`, `.frag`) is read
 //! verbatim and synthesized into a native module whose default export is the
-//! file contents as a JS string — mirroring the existing JSON-module path. The
-//! trigger is the extension; an explicit `with { type: "text" }` attribute is
-//! parsed and tolerated but is not (yet) itself the trigger. `.wasm` is out of
+//! file contents as a JS string — mirroring the existing JSON-module path. A
+//! static import with `with { type: "text" }` selects the same loader for any
+//! file, extensionless or source alike (Bun's text loader). `.wasm` is out of
 //! scope.
 
 use std::path::PathBuf;
@@ -144,6 +144,34 @@ process.stdout.write(note.trim());
 
     let stdout = compile_and_run(dir.path());
     assert_eq!(stdout, "attribute-form works");
+}
+
+#[test]
+fn type_text_attribute_reads_any_file_as_text() {
+    // The attribute alone selects the text loader: an extensionless file and a
+    // TypeScript file are both read verbatim instead of being parsed.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dockerfile = "FROM postgres:17\nRUN echo \"hi\"\n";
+    let snippet = "export const x: number = 1;\n";
+    std::fs::write(dir.path().join("Dockerfile"), dockerfile).expect("write Dockerfile");
+    std::fs::write(dir.path().join("snippet.ts"), snippet).expect("write snippet");
+    std::fs::write(
+        dir.path().join("main.ts"),
+        r#"
+import dockerfile from "./Dockerfile" with { type: "text" };
+import snippet from "./snippet.ts" with { type: "text" };
+process.stdout.write(JSON.stringify(dockerfile) + "\n" + JSON.stringify(snippet) + "\n");
+"#,
+    )
+    .expect("write main");
+
+    let stdout = compile_and_run(dir.path());
+    let expected = format!(
+        "{}\n{}\n",
+        serde_json::to_string(dockerfile).unwrap(),
+        serde_json::to_string(snippet).unwrap()
+    );
+    assert_eq!(stdout, expected);
 }
 
 #[test]

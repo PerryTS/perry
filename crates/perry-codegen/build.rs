@@ -1,7 +1,43 @@
+// The compiler realm table is generated once, by the build script of the
+// leaf crate perry-realm-table (`perry_realm_table::REALM`), and read from there.
 fn main() {
+    if let Ok(output) = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .output()
+    {
+        if output.status.success() {
+            println!(
+                "cargo:rustc-env=PERRY_BUILD_GIT_SHA={}",
+                String::from_utf8_lossy(&output.stdout).trim()
+            );
+        }
+    }
+    let branch = std::process::Command::new("git")
+        .args(["symbolic-ref", "-q", "HEAD"])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned());
+    for path in std::iter::once("HEAD").chain(branch.as_deref()) {
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["rev-parse", "--git-path", path])
+            .output()
+        {
+            if output.status.success() {
+                println!(
+                    "cargo:rerun-if-changed={}",
+                    String::from_utf8_lossy(&output.stdout).trim()
+                );
+            }
+        }
+    }
+
     println!("cargo:rerun-if-env-changed=LLVM_SYS_221_PREFIX");
     println!("cargo:rerun-if-changed=src/wasm32/target_options.cpp");
-    if std::env::var_os("CARGO_FEATURE_TARGET_WASI").is_some() {
+    println!("cargo:rerun-if-changed=src/inprocess/unique_sections.cpp");
+    let wasi = std::env::var_os("CARGO_FEATURE_TARGET_WASI").is_some();
+    let inprocess = std::env::var_os("CARGO_FEATURE_LLVM_INPROCESS").is_some();
+    if wasi || inprocess {
         let include = if let Some(prefix) = std::env::var_os("LLVM_SYS_221_PREFIX") {
             std::path::PathBuf::from(prefix).join("include")
         } else {
@@ -12,13 +48,19 @@ fn main() {
             assert!(output.status.success(), "llvm-config --includedir failed");
             std::path::PathBuf::from(String::from_utf8(output.stdout).unwrap().trim())
         };
-        cc::Build::new()
+        let mut build = cc::Build::new();
+        build
             .cpp(true)
             .include(include)
-            .file("src/wasm32/target_options.cpp")
             .flag_if_supported("-std=c++17")
-            .flag_if_supported("/std:c++17")
-            .compile("perry_wasm_target_options");
+            .flag_if_supported("/std:c++17");
+        if wasi {
+            build.file("src/wasm32/target_options.cpp");
+        }
+        if inprocess {
+            build.file("src/inprocess/unique_sections.cpp");
+        }
+        build.compile("perry_llvm_target_options");
     }
 
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {

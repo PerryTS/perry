@@ -60,7 +60,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // expando side table. Must precede the GC-header read below — small
         // typed arrays are plain-`alloc`ed without a `GcHeader`, so reading
         // `addr - 8` is allocator-metadata garbage.
-        if crate::typedarray::lookup_typed_array_kind(obj_addr).is_some() {
+        if crate::typedarray_hook_slots::lookup_typed_array_kind(obj_addr).is_some() {
             // #6943: `js_string_coerce` allocates for every non-heap-string key
             // and runs a user `toString` / `valueOf` for an object key, so it
             // can trigger a GC that **evacuates**. `obj` was resolved from
@@ -74,7 +74,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
                 return false;
             }
             return crate::typedarray_props::typed_array_has_own_property(
-                obj as *const crate::typedarray::TypedArrayHeader,
+                obj as *const crate::typedarray_hook_slots::TypedArrayHeader,
                 key_str,
             );
         }
@@ -121,7 +121,7 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         }
         if obj_addr >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc = gc_header_for(obj);
-            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!((*gc).obj_type)
                 || (*gc).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY
             {
                 // Root the receiver before coercion or lazy materialization,
@@ -226,7 +226,12 @@ pub(crate) fn obj_value_has_own_key(value: f64, key: f64) -> bool {
         // `keys_find_slot_by_key_ptr` allocates nothing (a consult-only shape
         // probe, then a raw slot compare), so unlike the loop it replaced it
         // needs no per-iteration re-rooting.
-        crate::object::keys_find_slot_by_key_ptr(keys, key_count, key_str).is_some()
+        //
+        // Object model §3.2: an optional layout key whose slot holds the hole
+        // is absent (`key_view`).
+        crate::object::keys_find_slot_by_key_ptr(keys_view, key_count, key_str).is_some_and(
+            |position| !crate::object::key_view::position_is_hole(obj, keys_view, position),
+        )
     }
 }
 
@@ -267,7 +272,7 @@ pub(crate) fn obj_value_attrs(value: f64, key: f64) -> Option<(bool, bool)> {
             && crate::value::addr_class::try_read_tracked_gc_header(obj as usize)
                 .is_some_and(|gc| (*gc.as_ptr()).obj_type == crate::gc::GC_TYPE_LAZY_ARRAY);
         let is_array = crate::value::addr_class::try_read_gc_header(obj as usize)
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY);
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type));
         let owner = if is_array || lazy_index {
             super::array_object_ops::array_header(obj) as usize
         } else {

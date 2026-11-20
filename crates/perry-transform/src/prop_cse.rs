@@ -281,6 +281,7 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
+                    byte_end: 0,
                     object: Box::new(Expr::LocalGet(key.0)),
                     property: key.1.clone(),
                     byte_offset: 0,
@@ -374,6 +375,7 @@ fn nested_stmt_lists(s: &mut Stmt) -> Vec<&mut Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {
@@ -496,6 +498,7 @@ fn scan_stmt(s: &Stmt, found: &mut bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 scan_stmt(st, found);
@@ -572,6 +575,7 @@ mod tests {
 
     fn read(id: LocalId, prop: &str) -> Expr {
         Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),
             property: prop.to_string(),
             byte_offset: 0,
@@ -682,6 +686,7 @@ mod tests {
         let mut body = vec![
             diverging("kind", "num"),
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::FuncRef(7)),
                 args: vec![],
                 type_args: vec![],
@@ -874,6 +879,7 @@ mod tests {
     fn define_property_anywhere_vetoes_the_module() {
         let body = vec![
             Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(read(9, "defineProperty")),
                 args: vec![],
                 type_args: vec![],
@@ -891,6 +897,7 @@ mod tests {
     #[test]
     fn an_object_literal_accessor_vetoes_the_module() {
         let body = vec![Stmt::Expr(Expr::Call {
+            byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
                 name: "js_object_define_accessor".to_string(),
                 param_types: vec![],
@@ -910,6 +917,7 @@ mod tests {
     fn an_accessor_installed_in_a_for_init_vetoes_the_module() {
         let body = vec![Stmt::For {
             init: Some(Box::new(Stmt::Expr(Expr::Call {
+                byte_end: 0,
                 callee: Box::new(read(9, "defineProperty")),
                 args: vec![],
                 type_args: vec![],

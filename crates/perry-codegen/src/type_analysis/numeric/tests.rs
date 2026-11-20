@@ -16,7 +16,9 @@ mod scalar_own_read_tests;
 
 fn ir_opts() -> CompileOptions {
     CompileOptions {
+        namespace_self_import: false,
         static_shape_ids: Vec::new(),
+        program_layout_ordinals: Default::default(),
         program_class_shape_ids: Default::default(),
         program_facts: Default::default(),
         program_layouts: Default::default(),
@@ -26,6 +28,7 @@ fn ir_opts() -> CompileOptions {
         non_entry_module_prefixes: Vec::new(),
         thread_literal_module_prefixes: Vec::new(),
         nextjs_path_init_modules: Vec::new(),
+        lazy_path_init_modules: Vec::new(),
         import_function_prefixes: std::collections::HashMap::new(),
         import_function_ffi_aliases: std::collections::HashMap::new(),
         import_function_origin_names: std::collections::HashMap::new(),
@@ -39,12 +42,12 @@ fn ir_opts() -> CompileOptions {
         verify_native_regions: false,
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
+        namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
-        program_class_accessor_names: Default::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -76,6 +79,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -89,6 +96,7 @@ fn probe_module(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Module {
         name: name.to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
         exports: Vec::new(),
         classes: Vec::new(),
         interfaces: Vec::new(),
@@ -127,10 +135,12 @@ fn probe_module(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -166,6 +176,7 @@ fn length_plus_one(object: Expr) -> Expr {
     Expr::Binary {
         op: BinaryOp::Add,
         left: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(object),
             property: "length".to_string(),
             byte_offset: 0,
@@ -667,7 +678,9 @@ fn typed_param(id: u32, name: &str, ty: Type) -> Param {
 /// `recv.charCodeAt(index)`
 fn char_code_at(recv: Expr, index: Expr) -> Expr {
     Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(recv),
             property: "charCodeAt".to_string(),
             byte_offset: 0,
@@ -916,10 +929,10 @@ mod symbol_keyed_element_reads {
                     name: "f".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::LocalGet(2)),
-                    }),
+                    init: Some(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::LocalGet(2)),
+                    )),
                 },
                 truthy_return(3),
             ],
@@ -974,10 +987,10 @@ mod symbol_keyed_element_reads {
                     name: "v".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::IndexGet {
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::LocalGet(2)),
-                    }),
+                    init: Some(Expr::synthetic_index_get(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::LocalGet(2)),
+                    )),
                 },
                 truthy_return(3),
             ],
@@ -994,6 +1007,72 @@ mod symbol_keyed_element_reads {
         assert!(
             fcmp_one_only_under_the_plain_number_guard(&body),
             "the read's boxed fallback must not become a numeric proof:\n{body}"
+        );
+    }
+}
+
+#[path = "number_result_tests.rs"]
+mod number_result_tests;
+
+/// `const s = <init>; for (let i = 0; i < 64; i++) u8[i] = s.charCodeAt(i);`
+/// with `u8` an annotated `Uint8Array` parameter and `s` declared `ty`.
+fn char_code_at_byte_store_ir(ty: Type, init: Expr) -> String {
+    let body = vec![
+        Stmt::Let {
+            id: 2,
+            name: "s".to_string(),
+            ty,
+            mutable: false,
+            init: Some(init),
+        },
+        Stmt::For {
+            init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
+            condition: Some(Expr::Compare {
+                op: CompareOp::Lt,
+                left: Box::new(Expr::LocalGet(11)),
+                right: Box::new(Expr::Integer(64)),
+            }),
+            update: Some(Expr::Update {
+                id: 11,
+                op: UpdateOp::Increment,
+                prefix: false,
+            }),
+            body: vec![Stmt::Expr(Expr::IndexSet {
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(11)),
+                value: Box::new(char_code_at(Expr::LocalGet(2), Expr::LocalGet(11))),
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+            })],
+        },
+        Stmt::Return(Some(Expr::Integer(0))),
+    ];
+    emitted_ir(probe_module(
+        "char_code_at_byte_store_unit.ts",
+        vec![typed_param(1, "u8", Type::Named("Uint8Array".to_string()))],
+        body,
+    ))
+}
+
+#[test]
+fn char_code_at_stored_into_a_uint8array_needs_no_tonumber_call() {
+    // #14970: a byte store converts a value that may not be a Number with
+    // ToNumber in the runtime. `charCodeAt` on a proven string is a Number,
+    // and that holds without the program facts (this module carries none),
+    // so the store stays on the native byte store.
+    let literal = Expr::String("abcdefghijklmnopqrstuvwxyz".to_string());
+    // `const s = atob(b64)` reaches codegen declared `Any`: the string proof
+    // comes from the initializer alone.
+    let decoded = Expr::Atob(Box::new(Expr::String("QUJDREVGR0g=".to_string())));
+    for (ty, init) in [(Type::String, literal), (Type::Any, decoded)] {
+        let ir = char_code_at_byte_store_ir(ty, init);
+        let probe = probe_ir(&ir);
+        assert!(
+            !probe.contains("@js_typed_array_index_set_dynamic")
+                && !probe.contains("@js_typed_feedback_native_call_method_by_id"),
+            "a Number-valued byte store must not take the runtime ToNumber \
+             store, nor its value the generic method site:\n{probe}"
         );
     }
 }

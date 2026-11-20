@@ -1,0 +1,1 @@
+An inherited static symbol-keyed accessor runs with the receiver as `this`: `Deep[Symbol.species]` on `class Deep extends Own {}` answers `Deep`, and `super[S]` in a static method keeps the calling class. The holder only locates the accessor, as for a string-keyed static accessor.

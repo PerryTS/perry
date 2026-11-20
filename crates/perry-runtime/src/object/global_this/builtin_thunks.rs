@@ -1,5 +1,12 @@
 use super::*;
 
+// The realm image and worker population name the same owning function-info
+// static. Its export is derived by fn_info! and the manifest producer.
+pub(crate) const ARRAY_CONSTRUCTOR_INFO: *const crate::closure::JsFunctionInfo = crate::fn_info!(
+    #[realm(Array, kind = constructor, provider = builtin_constructor, members = { isArray; from; of; prototype; [Symbol.species] = accessor(get = "Array[\"@@species\"].<get>"); }, spec = {length = 1}, emit = metadata(realm_function_metadata), births = ["%ArrayIteratorPrototype%"])]
+    export crate::object::global_this::builtin_thunks::global_this_array_thunk, 1; with_rest(0)
+);
+
 pub(crate) extern "C" fn global_this_array_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -93,11 +100,9 @@ fn math_number_arg(value: f64) -> f64 {
 
 fn math_to_int32(value: f64) -> i32 {
     let n = math_number_arg(value);
-    if !n.is_finite() || n == 0.0 {
-        return 0;
-    }
-    const TWO_32: f64 = 4_294_967_296.0;
-    (n.trunc().rem_euclid(TWO_32) as u32) as i32
+    // ES ToInt32 without a floating-point remainder (#10511): one
+    // truncating conversion for |n| < 2^63, the exponent rule beyond.
+    crate::value::dyn_to_int32(n)
 }
 
 fn math_to_uint32(value: f64) -> u32 {
@@ -128,7 +133,7 @@ math_unary_thunk!(math_cbrt_thunk, |x: f64| crate::math::js_math_cbrt(x));
 math_unary_thunk!(math_ceil_thunk, |x: f64| x.ceil());
 math_unary_thunk!(math_cos_thunk, |x: f64| crate::math::js_math_cos(x));
 math_unary_thunk!(math_cosh_thunk, |x: f64| crate::math::js_math_cosh(x));
-math_unary_thunk!(math_exp_thunk, |x: f64| x.exp());
+math_unary_thunk!(math_exp_thunk, |x: f64| crate::math::js_math_exp(x));
 math_unary_thunk!(math_expm1_thunk, |x: f64| crate::math::js_math_expm1(x));
 math_unary_thunk!(math_floor_thunk, |x: f64| x.floor());
 math_unary_thunk!(math_fround_thunk, |x: f64| crate::math::js_math_fround(x));
@@ -423,7 +428,7 @@ pub(crate) extern "C" fn global_this_bigint_thunk(
     _this: crate::closure::JsThis,
     value: f64,
 ) -> f64 {
-    let ptr = crate::bigint::js_bigint_from_f64(value);
+    let ptr = crate::bigint_hooks::js_bigint_from_f64(value);
     crate::value::js_nanbox_bigint(ptr as i64)
 }
 
@@ -707,7 +712,7 @@ pub(crate) extern "C" fn proxy_revocable_thunk(
     target: f64,
     handler: f64,
 ) -> f64 {
-    crate::proxy::js_proxy_revocable(target, handler)
+    crate::proxy_hooks::proxy_revocable(target, handler)
 }
 
 #[cfg(test)]

@@ -36,21 +36,26 @@ use std::cell::RefCell;
 #[path = "shapes_layout_registration.rs"]
 mod layout_registration;
 pub(crate) use layout_registration::{
-    allocate_declared_layout_id, fresh_semantic_generation, install_declared_layout,
+    allocate_declared_layout_for_kind, allocate_declared_layout_id, fresh_semantic_generation,
+    install_declared_layout,
 };
 
 #[path = "shapes_spread.rs"]
 mod shapes_spread;
 
+#[path = "shapes_class_role.rs"]
+mod shapes_class_role;
+pub(crate) use shapes_class_role::{
+    object_is_plain_record, receiver_has_class_identity, shape_is_plain_record,
+};
+
 #[path = "shapes_own_data.rs"]
 mod shapes_own_data;
-pub(crate) use shapes_own_data::own_data_shape;
+pub(crate) use shapes_own_data::{own_data_shape, plain_receiver_miss_is_final};
 
 #[path = "shapes_branded_birth.rs"]
 mod shapes_branded_birth;
-pub(crate) use shapes_branded_birth::{
-    branded_birth_layout, WEAKMAP_BIRTH_LAYOUT, WEAKSET_BIRTH_LAYOUT,
-};
+pub(crate) use shapes_branded_birth::branded_birth_layout;
 #[path = "shapes_birth_width.rs"]
 mod shapes_birth_width;
 #[path = "shapes_last_key_rollback.rs"]
@@ -65,7 +70,7 @@ mod shapes_prototype;
 #[cfg(test)]
 pub(crate) use shapes_linked_birth::shape_is_evaluation_layout_of;
 pub(crate) use shapes_linked_birth::{
-    complete_layout_generation, declaration_parent_identity, evaluation_layout_family,
+    complete_layout_generation, declaration_parent_identity, evaluation_family_desc_index_plus_one,
     mutation_generation, note_evaluation_layout, pristine_declaration_holder,
     stamp_linked_final_shape, stamp_linked_final_shape_requested,
 };
@@ -85,12 +90,15 @@ pub(crate) use shapes_evaluation_brand::{
 mod shapes_worker_seed;
 #[cfg(test)]
 pub(crate) use shapes_prototype::clear_class_identity_words;
+#[cfg(any(test, debug_assertions))]
+pub(crate) use shapes_prototype::prototype_word_rooted_by_minor;
 pub(crate) use shapes_prototype::{
     identity_prototype_word, identity_word_slot, identity_word_slot_in, note_full_trace_begin,
     proto_id_carries_word, prune_dead_shape_prototypes, shape_prototype_word, write_identity_word,
 };
 #[path = "shapes_store_kind.rs"]
 pub(crate) mod store_kind;
+use crate::codegen_abi::{LayoutWord, ShapeId};
 pub(crate) use shapes_birth_width::{
     created_birth_shape, keyless_birth_width, note_spill_width, KeylessBirth,
 };
@@ -105,11 +113,44 @@ pub(crate) use shapes_slot_list::{
 pub(crate) use shapes_store::ConstFnSlotInfo;
 pub(crate) use shapes_store::PERRY_EMPTY_SHAPE_DIR;
 use shapes_store::{
-    IdList, ShapeRecord, ShapeSlab, RECORD_FLAG_BIRTH_OWNER, RECORD_FLAG_CACHE_CARRIER,
-    RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER, RECORD_FLAG_FACTS_INDEXED,
-    RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
+    IdList, ShapeRecord, ShapeSlab, DYNAMIC_BASE_ROWS, RECORD_FLAG_BIRTH_OWNER,
+    RECORD_FLAG_CACHE_CARRIER, RECORD_FLAG_CARRIED_SEEN, RECORD_FLAG_EXTERNAL_CARRIER,
+    RECORD_FLAG_FACTS_INDEXED, RECORD_FLAG_OLD_CARRIER, RECORD_FLAG_OLD_CARRIER_SEEN,
 };
 pub(crate) use shapes_worker_seed::{install_worker_shape_seed, worker_shape_seed};
+
+/// What one canonical key list owns in the shape table (CKI S2), held on the
+/// list's trie node (`canonical_keys::with_list_shapes`), so no table keyed by
+/// the list's address is consulted to reach it.
+#[derive(Default)]
+pub(crate) struct ListShapes {
+    /// Every descriptor id minted on this list (see `ShapeTableInner`'s
+    /// owned-family note for the order contract: a set).
+    family: IdList,
+    /// The slot index of the backing, on the node that owns the backing
+    /// (`canonical_keys::with_backing_shapes`); `None` everywhere else.
+    index: Option<Box<ShapeIndex>>,
+}
+
+impl ListShapes {
+    /// Does this state own heap memory (a spilled family or an index)? The
+    /// trie drops only the pages holding such nodes.
+    #[inline]
+    pub(crate) fn owns_heap(&self) -> bool {
+        self.index.is_some() || matches!(self.family, IdList::Spill(_))
+    }
+
+    /// No descriptor and no index.
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.index.is_none() && self.family.is_empty()
+    }
+}
+
+/// The node of a list as a shape record names it: a canonical node, or
+/// `NO_NODE` for an owned list (whose family and index stay keyed by its heap
+/// address in `ShapeTableInner`).
+const NO_NODE: u32 = crate::object::canonical_keys::NO_NODE;
 
 #[derive(Clone)]
 pub(crate) struct ShapeIndex {
@@ -234,6 +275,66 @@ impl ShapeDescriptor {
         }
     }
 
+    /// Is `slot` a ConstFn lane (see `ShapeRecord::lane_is_constfn`)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(&self, slot: u32) -> bool {
+        if slot < super::field_rep::REP_SLOTS {
+            self.special_constfn_mask & (1u32 << slot) != 0
+        } else {
+            shapes_store::tail_constfn_slot(self.constfn_infos(), slot)
+        }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap): word 0 below 32, and
+    /// SPECIAL exactly for a body-list entry past it (no tail producer of an
+    /// F64 lane exists yet).
+    #[inline]
+    pub(crate) fn lane(&self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep, slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists.
+    #[inline(never)]
+    pub(crate) fn has_tail_constfn(&self) -> bool {
+        shapes_store::has_tail_infos(self.constfn_infos())
+    }
+
+    /// Any ConstFn lane at all (word 0 or tail).
+    #[inline]
+    pub(crate) fn has_constfn_lane(&self) -> bool {
+        self.special_constfn_mask != 0 || self.has_tail_constfn()
+    }
+
+    /// Learned deprecation word `word` past word 0 (see
+    /// `ShapeRecord::tail_deprecation`).
+    pub(crate) fn tail_deprecation(&self, word: usize) -> u32 {
+        if self.extras == 0 {
+            return 0;
+        }
+        // SAFETY: a live descriptor borrows the record-owned extension.
+        let extras = unsafe { &*(self.extras as usize as *const shapes_store::ShapeExtras) };
+        extras
+            .tail_to_any
+            .get(word)
+            .map_or(0, |w| w.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    /// Any learned deprecation, word 0 or tail.
+    #[inline(never)]
+    pub(crate) fn deprecation_pending(&self) -> bool {
+        self.deprecation_targets() != (0, 0) || self.tail_deprecation_any()
+    }
+
+    fn tail_deprecation_any(&self) -> bool {
+        (0..shapes_store::tail_words(self.constfn_infos())).any(|w| self.tail_deprecation(w) != 0)
+    }
+
     #[inline]
     pub(crate) fn deprecation_targets(&self) -> (u32, u32) {
         if self.extras == 0 {
@@ -254,9 +355,20 @@ impl ShapeDescriptor {
     /// which is the authority (the array can be a longer shared backing).
     #[inline]
     pub(crate) fn keys_view(&self) -> crate::object::ObjectKeys {
-        crate::object::ObjectKeys::new(
+        // The node is the slab record's: a descriptor lifted from the table
+        // names its record, and the trie validates the node against these
+        // keys on use, so a stale copy can only miss, never mislead.
+        let node = if self.record == 0 {
+            crate::object::canonical_keys::NO_NODE
+        } else {
+            // SAFETY: slab record addresses never move (#9706); `record` was
+            // lifted from a live record.
+            unsafe { (*(self.record as *const shapes_store::ShapeRecord)).keys_node() }
+        };
+        crate::object::ObjectKeys::with_node(
             self.keys as usize as *mut ArrayHeader,
             self.logical_key_count,
+            node,
         )
     }
 
@@ -295,12 +407,18 @@ impl ShapeDescriptor {
 pub(crate) struct ShapeRecordRef(std::ptr::NonNull<ShapeRecord>);
 
 impl ShapeRecordRef {
+    /// See [`ShapeRecord::proves_no_function_method_keys`].
+    #[inline(always)]
+    pub(crate) fn proves_no_function_method_keys(self) -> bool {
+        unsafe { (*self.0.as_ptr()).proves_no_function_method_keys() }
+    }
+
     #[inline]
-    pub(crate) fn field_define_target(self) -> u32 {
+    pub(crate) fn field_define_target(self) -> LayoutWord {
         unsafe { (*self.0.as_ptr()).field_define_target() }
     }
 
-    pub(crate) fn note_field_define_target(self, target: u32) {
+    pub(crate) fn note_field_define_target(self, target: LayoutWord) {
         unsafe { (*self.0.as_ptr()).note_field_define_target(target) }
     }
 
@@ -359,7 +477,11 @@ impl ShapeRecordRef {
         let bytes = crate::string::header_str_checked(key)?.as_bytes();
         let hash = super::key_bytes_hash(bytes.as_ptr(), bytes.len());
         match shape_slot_lookup_verdict(
-            r.keys as usize as *const ArrayHeader,
+            crate::object::ObjectKeys::with_node(
+                r.keys as usize as *mut ArrayHeader,
+                r.logical_key_count,
+                r.keys_node(),
+            ),
             bytes,
             hash,
             r.logical_key_count,
@@ -369,6 +491,11 @@ impl ShapeRecordRef {
             KeysIndexVerdict::Absent => Some(None),
             KeysIndexVerdict::Unindexed => None,
         }
+    }
+
+    #[inline]
+    pub(crate) fn identity(self) -> ShapeId {
+        unsafe { (*self.0.as_ptr()).shape_id }
     }
 
     #[inline]
@@ -390,6 +517,20 @@ impl ShapeRecordRef {
         unsafe { (*self.0.as_ptr()).object_kind() }
     }
 
+    /// [`ShapeRecord::kind_is`]: the kind test on the stored field, no decode.
+    #[inline(always)]
+    pub(crate) fn kind_is(self, kind: ShapeObjectKind) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).kind_is(kind) }
+    }
+
+    /// [`ShapeRecord::same_kind_as`] for two live records.
+    #[inline(always)]
+    pub(crate) fn same_kind_as(self, other: &ShapeRecordRef) -> bool {
+        // SAFETY: both are live slab records (type docs).
+        unsafe { (*self.0.as_ptr()).same_kind_as(&*other.0.as_ptr()) }
+    }
+
     /// The record's live inline-slot bound — the same fact a lifted
     /// descriptor's `live_inline_slot_count` copies.
     #[inline]
@@ -407,19 +548,27 @@ impl ShapeRecordRef {
     /// asked before any per-key attribute lookup.
     #[inline]
     pub(crate) fn element_kind(self) -> u64 {
-        unsafe { u64::from((*self.0.as_ptr()).element_kind) }
+        unsafe { u64::from((*self.0.as_ptr()).element_kind()) }
     }
 
     /// The class family layout this record is an evaluation copy of, or 0
-    /// (`shapes_linked_birth::evaluation_layout_family`).
+    /// (`shapes_linked_birth::evaluation_family_desc_index_plus_one`).
     #[inline]
-    pub(crate) fn evaluation_layout_of(self) -> u32 {
-        unsafe { (*self.0.as_ptr()).evaluation_layout_of }
+    pub(crate) fn family_desc_index_plus_one(self) -> u32 {
+        unsafe { (*self.0.as_ptr()).family_desc_index_plus_one }
     }
 
     pub(crate) fn summary(self) -> u8 {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).summary() }
+    }
+
+    /// The record's E2 enumeration bits (`key_attrs::ENUM_*`): birth facts
+    /// of its immutable key prefix.
+    #[inline]
+    pub(crate) fn enum_bits(self) -> u32 {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).enum_bits() }
     }
 
     /// The record's logical key count (how many entries of `keys` the shape
@@ -435,6 +584,41 @@ impl ShapeRecordRef {
     pub(crate) fn keys(self) -> u64 {
         // SAFETY: a live slab record (type docs).
         unsafe { (*self.0.as_ptr()).keys }
+    }
+
+    /// The first `count` of this record's keys: its own list (with the node
+    /// it carries) at its own count, a node-less prefix view otherwise.
+    #[inline]
+    pub(crate) fn keys_view_of(self, count: u32) -> crate::object::ObjectKeys {
+        let view = self.keys_view();
+        if view.count() == count {
+            view
+        } else {
+            crate::object::ObjectKeys::new(view.arr(), count)
+        }
+    }
+
+    /// This record's ordered keys with the trie node it carries.
+    #[inline]
+    pub(crate) fn keys_view(self) -> crate::object::ObjectKeys {
+        // SAFETY: a live slab record (type docs).
+        unsafe {
+            let record = &*self.0.as_ptr();
+            crate::object::ObjectKeys::with_node(
+                record.keys as usize as *mut ArrayHeader,
+                record.logical_key_count,
+                record.keys_node(),
+            )
+        }
+    }
+
+    /// A static record: an external carrier (a compiler-owned layout or
+    /// seed) or a cache carrier. No prune retires it, so a receiver of its
+    /// shape keeps nothing alive but the record's keys, which outlive every
+    /// trace only when they are image data.
+    pub(crate) fn is_static_record(self) -> bool {
+        // SAFETY: a live slab record.
+        unsafe { (*self.0.as_ptr()).cache_carrier() }
     }
 
     /// The `keys` word's address: the slot the collector marks through and
@@ -474,12 +658,58 @@ impl ShapeRecordRef {
     pub(crate) fn constfn_info(self, slot: u32) -> Option<u64> {
         // SAFETY: a live slab record (type docs).
         unsafe {
-            (*self.0.as_ptr())
-                .constfn_infos()
-                .iter()
-                .find(|entry| u32::from(entry.slot) == slot)
-                .map(|entry| entry.info)
+            let infos = (*self.0.as_ptr()).constfn_infos();
+            infos
+                .binary_search_by_key(&slot, |entry| entry.slot)
+                .ok()
+                .map(|i| infos[i].info)
         }
+    }
+
+    /// The 2-bit lane of `slot` (any slot, no cap); see `ShapeDescriptor::lane`.
+    #[inline]
+    pub(crate) fn lane(self, slot: u32) -> u64 {
+        if slot < super::field_rep::REP_SLOTS {
+            super::field_rep::slot_rep(self.rep(), slot)
+        } else if self.lane_is_constfn(slot) {
+            super::field_rep::REP_SPECIAL
+        } else {
+            super::field_rep::REP_ANY
+        }
+    }
+
+    /// A ConstFn lane at slot >= 32 exists. Only the field-representation
+    /// verifier asks, so it exists in the same configurations.
+    #[cfg(any(
+        test,
+        debug_assertions,
+        feature = "field-rep-assert",
+        perry_gc_instruments
+    ))]
+    #[inline]
+    pub(crate) fn has_tail_constfn(self) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).has_tail_constfn() }
+    }
+
+    /// Is `slot` a ConstFn lane of this shape (any slot, no cap)?
+    #[inline]
+    pub(crate) fn lane_is_constfn(self, slot: u32) -> bool {
+        // SAFETY: a live slab record (type docs).
+        unsafe { (*self.0.as_ptr()).lane_is_constfn(slot) }
+    }
+
+    /// The I32 lanes of this shape (`field_rep::i32_lane_slots`), one bit per
+    /// slot below 32 (I32 at rest, PR C).
+    #[inline]
+    pub(crate) fn i32_lanes(self) -> u32 {
+        super::field_rep::i32_lane_slots(self.rep(), self.special_constfn_mask())
+    }
+
+    /// Is `slot` an I32 lane of this shape?
+    #[inline]
+    pub(crate) fn lane_is_i32(self, slot: u32) -> bool {
+        slot < super::field_rep::REP_SLOTS && self.i32_lanes() & (1u32 << slot) != 0
     }
 
     #[inline]
@@ -491,7 +721,7 @@ impl ShapeRecordRef {
     #[inline]
     pub(crate) fn has_special_deprecation(self) -> bool {
         // SAFETY: a live slab record (type docs).
-        unsafe { (*self.0.as_ptr()).deprecation_targets().1 != 0 }
+        unsafe { (*self.0.as_ptr()).deprecation_pending() }
     }
 
     /// Mark `slot` deprecated (`F64` -> `10`, `field_rep`): the lineage has
@@ -677,115 +907,26 @@ unsafe fn stored_key_matches(key: *const crate::StringHeader, bits: u64) -> bool
 #[cfg(test)]
 pub(crate) fn test_position_bound_of(obj: *const crate::object::ObjectHeader) -> Option<u32> {
     let id = unsafe { object_shape_stamp(obj) };
-    shape_record_by_id(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
+    shape_record_for_word(id).map(|r| unsafe { (*r.0.as_ptr()).position_bound() })
 }
 
 /// `(stored POSBOUND, its definition)` for shape `id`.
 #[cfg(test)]
-pub(crate) fn test_positional_of_id(id: u32) -> Option<(u32, u32)> {
-    shape_record_by_id(id).map(|r| unsafe {
+pub(crate) fn test_positional_of_id(id: LayoutWord) -> Option<(u32, u32)> {
+    shape_record_for_word(id).map(|r| unsafe {
         let r = &*r.0.as_ptr();
         (r.stored_position_bound(), r.position_bound_by_facts())
     })
 }
 
-/// The address of this thread's ordinary shape-directory mirror, which
-/// [`positional_key_words`] reads through (`agent_ptrs` slot
-/// `AGENT_PTR_SHAPE_DIR`).
-#[inline]
-pub(crate) fn ordinary_dir_addr() -> *const u8 {
-    ShapeSlab::ordinary_dir_addr()
-}
-
-/// [`positional_key_words`] for the computed-key read
-/// (`object::dynamic_key_read`), which also refuses a shape whose
-/// [[Prototype]] identity is PER-OBJECT.
-///
-/// A read site's front is reached only past its own receiver tests; the
-/// computed-key read has no site, so it takes this exclusion from the shape
-/// itself. A per-object identity is how an exotic read receiver
-/// (`process.env`, an arguments object) and a module namespace project "its
-/// reads are not answered by its key list" into their shape
-/// ([`object_proto_id`]), so such a list naming the key proves nothing.
-///
-/// # Safety
-/// As [`positional_key_words`].
-#[inline]
-pub(crate) unsafe fn plain_positional_key_words(
-    dir: *const u8,
-    shape_id: u32,
-) -> Option<(PositionalKeys, usize)> {
-    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
-    if r.proto_id == PROTO_ID_PER_OBJECT {
-        return None;
-    }
-    super::key_attrs::debug_assert_positional(
-        r.keys as usize as *const ArrayHeader,
-        r.position_bound_raw(),
-    );
-    Some((
-        PositionalKeys(r.keys as usize as *const ArrayHeader),
-        r.position_bound_raw() as usize,
-    ))
-}
-
-/// A record's canonical keys array, for [`positional_key_words`]: its words
-/// are asked only once POSBOUND is known to be nonzero, so the front-offset
-/// arithmetic runs only on the path that reads a key.
-pub(crate) struct PositionalKeys(*const ArrayHeader);
-
-impl PositionalKeys {
-    /// The first logical key word.
-    ///
-    /// # Safety
-    /// Only when the record's POSBOUND is nonzero: then `keys` names a live
-    /// keys array (the collector marks through and rewrites `keys`) holding
-    /// at least POSBOUND logical keys. Logical element `i` sits past the
-    /// array's FRONT OFFSET, which a canonical list can carry without ever
-    /// being shifted (a size-class round-up alone makes the physical capacity
-    /// exceed the logical one: `keys_front_offset_tests`), so the accessor is
-    /// asked, never `+8`.
-    #[inline(always)]
-    pub(crate) unsafe fn words(&self) -> *const u64 {
-        crate::array::array_elements_ptr(self.0) as *const u64
-    }
-}
-
-/// The keys of shape `shape_id` that are positional, and the position bound.
-///
-/// # Safety
-/// `dir` is this agent's ordinary directory.
+#[path = "shapes_ordinary_dir.rs"]
+mod shapes_ordinary_dir;
 #[cfg(test)]
-pub(crate) unsafe fn positional_key_words(
-    dir: *const u8,
-    shape_id: u32,
-) -> Option<(PositionalKeys, usize)> {
-    let r = ShapeSlab::ordinary_record_in(dir, shape_id)?;
-    super::key_attrs::debug_assert_positional(
-        r.keys as usize as *const ArrayHeader,
-        r.position_bound_raw(),
-    );
-    Some((
-        PositionalKeys(r.keys as usize as *const ArrayHeader),
-        r.position_bound_raw() as usize,
-    ))
-}
-
-/// Does shape `shape_id` store the key whose NaN-boxed bits are `key_bits`
-/// at inline slot `guess`, by position? See [`positional_key_words`].
-///
-/// # Safety
-/// As [`positional_key_words`].
-#[cfg(test)]
-pub(crate) unsafe fn slot_guess_confirmed(
-    dir: *const u8,
-    shape_id: u32,
-    key_bits: u64,
-    guess: usize,
-) -> bool {
-    positional_key_words(dir, shape_id)
-        .is_some_and(|(keys, bound)| guess < bound && *keys.words().add(guess) == key_bits)
-}
+pub(crate) use shapes_ordinary_dir::slot_guess_confirmed;
+pub(crate) use shapes_ordinary_dir::{
+    dir_atoms, ordinary_dir_addr, plain_positional_key_words, publish_agent_atoms,
+    retract_agent_atoms,
+};
 
 /// Byte equality without a libc call for the short keys property names are.
 #[inline]
@@ -829,134 +970,13 @@ impl PartialEq for ShapeDescriptor {
 
 impl Eq for ShapeDescriptor {}
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ShapeObjectKind {
-    /// An ordinary object whose own slots are proven plain data (a class
-    /// instance, or a class-less receiver a birth site marked
-    /// `OBJ_FLAG_PLAIN_ORDINARY`) and that carries no Array-subclass numeric
-    /// proof. The ONE kind a store may be admitted on by its ShapeId alone
-    /// (charter step 3, `shapes_store_kind`).
-    Ordinary,
-    Class,
-    /// A function object (`GC_TYPE_CLOSURE`) whose own properties are exactly
-    /// the intrinsic ones (`name`, `length`, `prototype`) and whose
-    /// [[Prototype]] is the intrinsic its body kind names (the shape's
-    /// `proto_id`). Minted in the exotic band: no per-site own-slot cache may
-    /// hold it, because a closure's +16 is not an inline slot.
-    Function,
-    /// A function object that carries anything else (a user property, a
-    /// deleted or redefined intrinsic, an accessor, a recorded
-    /// [[Prototype]]): the answer lives on the object.
-    FunctionDictionary,
-    /// The ordinary layout of [`ShapeObjectKind::Ordinary`], on a receiver
-    /// whose own slots are NOT proven plain data: a class-less receiver no
-    /// birth site marked ordinary (`URL`, `Object.prototype`, a typed-array
-    /// prototype, or a runtime-born record). Reads
-    /// treat it as `Ordinary`; a store is never admitted on it by shape.
-    OrdinaryUnmarked,
-    /// [`ShapeObjectKind::Ordinary`] carrying the Array-subclass packed-numeric
-    /// proof (`array::subclass`). Entered only by publishing the proof and
-    /// left by retiring it (or by any other shape change), so the proof is a
-    /// shape transition and a store word naming an `Ordinary` id can never
-    /// match a proof-carrying receiver.
-    OrdinaryNumericProof,
-    /// A native-module namespace whose own keys and reads come from its
-    /// export surface. The namespace brand is part of shape identity, so an
-    /// ordinary record with a module name in a data slot cannot impersonate it.
-    NativeNamespace,
-    /// A bound call/apply adapter with the ordinary five bound slots plus a
-    /// resolved function operand in slot 5. Appended to preserve every earlier
-    /// ordinal and the packed kind field of existing shape records.
-    FunctionBoundCall,
-    FunctionBoundApply,
-    /// Ordinary bound function: target, receiver and partial-argument slots.
-    FunctionBound,
-    /// Ordinary slots and links, plus receiver-local native fallback when
-    /// an ordinary read produces undefined. Absence proofs must retain
-    /// collecting native forwarding.
-    OrdinaryNativeAlias,
-    /// Ordinary ObjectHeader slots with a birth-declared [[Call]] method.
-    /// Unlike Function kinds, this is not a ClosureHeader allocation.
-    CallableOrdinary,
-    /// Runtime-born ordinary storage with native read forwarding, without
-    /// the plain-store admission carried by OrdinaryNativeAlias.
-    OrdinaryUnmarkedNativeAlias,
-}
-
-impl ShapeObjectKind {
-    #[inline]
-    pub(crate) fn is_native_alias(self) -> bool {
-        matches!(
-            self,
-            Self::OrdinaryNativeAlias | Self::OrdinaryUnmarkedNativeAlias
-        )
-    }
-
-    #[inline]
-    pub(crate) fn is_function_layout(self) -> bool {
-        matches!(
-            self,
-            Self::Function
-                | Self::FunctionBoundCall
-                | Self::FunctionBoundApply
-                | Self::FunctionBound
-        )
-    }
-
-    /// A non-`GC_TYPE_OBJECT` receiver kind: minted in the exotic band.
-    #[inline]
-    pub(crate) fn is_exotic(self) -> bool {
-        matches!(
-            self,
-            ShapeObjectKind::Function
-                | ShapeObjectKind::FunctionDictionary
-                | ShapeObjectKind::FunctionBoundCall
-                | ShapeObjectKind::FunctionBoundApply
-                | ShapeObjectKind::FunctionBound
-        )
-    }
-
-    /// The ordinary object LAYOUT: every kind whose receiver reads exactly as
-    /// an `Ordinary` one. What every layout / read consumer asks; only the
-    /// store admission asks `== Ordinary`.
-    #[inline]
-    pub(crate) fn is_ordinary_layout(self) -> bool {
-        matches!(
-            self,
-            ShapeObjectKind::Ordinary
-                | ShapeObjectKind::OrdinaryUnmarked
-                | ShapeObjectKind::OrdinaryNumericProof
-                | ShapeObjectKind::NativeNamespace
-                | ShapeObjectKind::OrdinaryNativeAlias
-                | ShapeObjectKind::CallableOrdinary
-                | ShapeObjectKind::OrdinaryUnmarkedNativeAlias
-        )
-    }
-
-    /// The discriminant `facts_key` folds and `ShapeRecord` stores. Stable:
-    /// it is written into a record field, so the values may not be reordered.
-    #[inline]
-    pub(crate) fn code(self) -> u64 {
-        match self {
-            ShapeObjectKind::Ordinary => 0,
-            ShapeObjectKind::Class => 1,
-            ShapeObjectKind::Function => 2,
-            ShapeObjectKind::FunctionDictionary => 3,
-            ShapeObjectKind::OrdinaryUnmarked => 4,
-            ShapeObjectKind::OrdinaryNumericProof => 5,
-            ShapeObjectKind::NativeNamespace => 6,
-            ShapeObjectKind::FunctionBoundCall => 7,
-            ShapeObjectKind::FunctionBoundApply => 8,
-            ShapeObjectKind::FunctionBound => 9,
-            ShapeObjectKind::OrdinaryNativeAlias => 10,
-            ShapeObjectKind::CallableOrdinary => 11,
-            ShapeObjectKind::OrdinaryUnmarkedNativeAlias => 12,
-        }
-    }
-}
+perry_abi::define_shape_object_kind!(pub(crate));
 
 struct ShapeTableInner {
-    indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
+    /// Slot indices of OWNED keys arrays, keyed by heap address. A canonical
+    /// backing's index lives on its owner node ([`ListShapes::index`]); a
+    /// shared array is never indexed here.
+    owned_indices: crate::fast_hash::PtrHashMap<usize, ShapeIndex>,
     /// Exact-facts accelerator (#9706): the 64-bit fold of a descriptor's six
     /// identity facts (`shapes_store::facts_key`) -> the ids carrying those
     /// facts. Almost always one id; more than one is legal when a worker
@@ -968,8 +988,14 @@ struct ShapeTableInner {
     ///
     /// The key is a fold of internal shape state (never program input), so
     /// `PtrHasher` (#8125) is the right hasher: the word is already mixed.
+    /// The fold names a canonical list by its trie node and an owned list by
+    /// its heap address, never an image address (CKI S2), so the buckets do
+    /// not depend on the link layout.
     by_facts: crate::fast_hash::PtrHashMap<u64, IdList>,
-    /// Keys-array address -> every descriptor id currently indexed under it.
+    /// OWNED keys-array address -> every descriptor id currently indexed
+    /// under it. A canonical list's family is on its trie node
+    /// ([`ListShapes::family`]): its backing never moves, and its address may
+    /// be an image address.
     /// Same-address retirement, squeeze rekeying and GC relocation all work
     /// per family instead of per descriptor, and the family is what the
     /// metadata scan probes ONCE per keys array.
@@ -985,7 +1011,11 @@ struct ShapeTableInner {
     /// descriptors alive until the array died.
     ///
     /// Single-word key, so `PtrHasher` (#8125).
-    families: crate::fast_hash::PtrHashMap<u64, IdList>,
+    owned_families: crate::fast_hash::PtrHashMap<u64, IdList>,
+    /// The family of the empty list without a backing (keys word 0): the
+    /// keyless shapes. It is the trie root's list, held here because it
+    /// needs no trie (CKI S2).
+    keyless_family: IdList,
     /// #9754: keys-array addresses a minor can act on — the families and
     /// slot indices whose keys array is not (yet) old. A minor-scoped
     /// `scan_shape_table_rekey_mut` visits only these; see `gc/young_log.rs`.
@@ -1042,38 +1072,110 @@ impl ShapeTableInner {
         }
     }
 
+    /// Run `f` on the canonical family of the list `(node, keys)`: the keyless
+    /// family this table holds (the empty list has no backing, and seeding
+    /// the keyless intrinsic shapes must not build a trie), or the family on
+    /// the list's trie node. `None` for an owned list, whose family is keyed
+    /// by its heap address.
+    #[inline]
+    fn with_canonical_family<R>(
+        &mut self,
+        node: u32,
+        keys: u64,
+        f: impl FnOnce(&mut IdList) -> R,
+    ) -> Option<R> {
+        if node == NO_NODE {
+            return None;
+        }
+        if keys == 0 {
+            return Some(f(&mut self.keyless_family));
+        }
+        crate::object::canonical_keys::with_list_shapes(node, |l| f(&mut l.family))
+    }
+
     #[inline]
     // #9976 removed the production rekey caller deliberately (see the
     // scanner-internal rekey note below); `shapes_test_support` is the only
     // remaining consumer, and it is `#[cfg(test)]`.
     #[cfg(test)]
-    fn family_push_back(&mut self, keys: u64, id: u32) {
+    fn family_push_back(&mut self, node: u32, keys: u64, id: LayoutWord) {
+        if self
+            .with_canonical_family(node, keys, |f| f.push_back(id))
+            .is_some()
+        {
+            return;
+        }
         self.note_young_keys(keys);
-        self.families.entry(keys).or_default().push_back(id);
+        self.owned_families.entry(keys).or_default().push_back(id);
     }
 
     /// Append a FRESHLY allocated id (see [`IdList::append_unchecked`]): the
     /// id came from `alloc_shape_id`, which never reuses a value, so the
     /// membership scan `family_push_back` would run is dead work that is
     /// linear in the number of descriptors this keys array has ever had.
+    ///
+    /// `node` is the record's list node: a canonical family is one push on
+    /// the node, with no hash.
     #[inline]
-    fn family_append_fresh(&mut self, keys: u64, id: u32) {
+    fn family_append_fresh(&mut self, node: u32, keys: u64, id: LayoutWord) {
+        if self
+            .with_canonical_family(node, keys, |f| f.append_unchecked(id))
+            .is_some()
+        {
+            return;
+        }
         self.note_young_keys(keys);
-        self.families.entry(keys).or_default().append_unchecked(id);
+        self.owned_families
+            .entry(keys)
+            .or_default()
+            .append_unchecked(id);
     }
 
     #[inline]
-    fn family_push_front(&mut self, keys: u64, id: u32) {
+    fn family_push_front(&mut self, node: u32, keys: u64, id: LayoutWord) {
+        if self
+            .with_canonical_family(node, keys, |f| f.push_front(id))
+            .is_some()
+        {
+            return;
+        }
         self.note_young_keys(keys);
-        self.families.entry(keys).or_default().push_front(id);
+        self.owned_families.entry(keys).or_default().push_front(id);
     }
 
-    /// Drop `id` from the family under `keys`, removing an emptied family.
+    /// Replace `old` by `new` where it stands in its family.
     #[inline]
-    fn family_remove(&mut self, keys: u64, id: u32) -> bool {
-        let Some(ids) = self.families.get_mut(&keys) else {
-            return false;
-        };
+    fn family_replace(&mut self, node: u32, keys: u64, old: LayoutWord, new: LayoutWord) -> bool {
+        if let Some(replaced) = self.with_canonical_family(node, keys, |f| f.replace(old, new)) {
+            return replaced;
+        }
+        self.owned_families
+            .get_mut(&keys)
+            .is_some_and(|ids| ids.replace(old, new))
+    }
+
+    /// A copy of the family of the list `(node, keys)`.
+    fn family_ids(&self, node: u32, keys: u64) -> Vec<LayoutWord> {
+        if node != NO_NODE {
+            if keys == 0 {
+                return self.keyless_family.as_slice().to_vec();
+            }
+            if let Some(ids) = crate::object::canonical_keys::with_list_shapes(node, |l| {
+                l.family.as_slice().to_vec()
+            }) {
+                return ids;
+            }
+        }
+        self.owned_families
+            .get(&keys)
+            .map(|ids| ids.as_slice().to_vec())
+            .unwrap_or_default()
+    }
+
+    /// Drop `id` from the family of `(node, keys)`, removing an emptied owned
+    /// family.
+    #[inline]
+    fn family_remove(&mut self, node: u32, keys: u64, id: LayoutWord) -> bool {
         // UNORDERED: a family's readers are set-valued (see `IdList`'s type
         // doc), and the ordered removal was memmoving the whole tail of a list
         // measured at up to 514,030 entries, from position ~0.31, 3.7 M times
@@ -1081,32 +1183,44 @@ impl ShapeTableInner {
         // (`prune_dead_owner_side_tables_post_trace` ->
         // `remove_descriptor_indexed_under`); `retire_owned_shape_siblings`
         // never sees a family longer than 16.
+        if self.with_canonical_family(node, keys, |f| f.remove_unordered(id)) == Some(true) {
+            return true;
+        }
+        let Some(ids) = self.owned_families.get_mut(&keys) else {
+            return false;
+        };
         let removed = ids.remove_unordered(id);
         if ids.is_empty() {
-            self.families.remove(&keys);
+            self.owned_families.remove(&keys);
         }
         removed
     }
 
     #[inline]
-    fn facts_push_back(&mut self, facts: u64, id: u32) {
+    fn facts_push_back(&mut self, facts: u64, id: LayoutWord) {
         self.by_facts.entry(facts).or_default().push_back(id);
     }
 
     /// Fresh-id twin of [`ShapeTableInner::facts_push_back`]; same argument.
     #[inline(always)]
-    fn facts_append_fresh(&mut self, facts: u64, id: u32) {
+    fn facts_append_fresh(&mut self, facts: u64, id: LayoutWord) {
         self.by_facts.entry(facts).or_default().append_unchecked(id);
     }
 
     #[inline]
-    fn facts_push_front(&mut self, facts: u64, id: u32) {
+    fn facts_push_front(&mut self, facts: u64, id: LayoutWord) {
         self.by_facts.entry(facts).or_default().push_front(id);
+    }
+
+    /// [`ShapeTableInner::facts_push_front`] for a freshly published word.
+    #[inline(always)]
+    fn facts_push_front_fresh(&mut self, facts: u64, id: LayoutWord) {
+        self.by_facts.entry(facts).or_default().push_front_fresh(id);
     }
 
     /// Drop `id` from the accelerator bucket `facts`, removing it if emptied.
     #[inline]
-    fn facts_remove(&mut self, facts: u64, id: u32) -> bool {
+    fn facts_remove(&mut self, facts: u64, id: LayoutWord) -> bool {
         let Some(ids) = self.by_facts.get_mut(&facts) else {
             return false;
         };
@@ -1123,7 +1237,7 @@ impl ShapeTableInner {
 }
 
 pub(crate) struct ShapeTable {
-    /// The by-id store, outside the `RefCell` on purpose: `shape_descriptor_by_id`
+    /// The by-id store, outside the `RefCell` on purpose: `shape_descriptor_for_word`
     /// is on the hot property path (profiling a dynamic-property loop put it
     /// and `shape_descriptor_ensure_with_generation` at ~13% of main-thread
     /// samples between them), and the collector reads and writes records
@@ -1134,19 +1248,23 @@ pub(crate) struct ShapeTable {
 }
 
 impl ShapeTable {
-    pub(crate) fn new() -> Self {
-        let table = ShapeTable {
-            slab: std::cell::UnsafeCell::new(ShapeSlab::new_agent()),
-            inner: RefCell::new(ShapeTableInner {
-                indices: crate::fast_hash::new_ptr_hash_map(),
-                by_facts: crate::fast_hash::new_ptr_hash_map(),
-                families: crate::fast_hash::new_ptr_hash_map(),
-                young_keys: crate::gc::young_log::YoungLog::new(),
-            }),
-        };
+    /// Builds the agent's table in place and seeds it there.
+    ///
+    /// # Safety
+    ///
+    /// `slot` is valid for writes and holds no live value.
+    pub(crate) unsafe fn init_in(slot: *mut Self) {
+        (&raw mut (*slot).slab).write(std::cell::UnsafeCell::new(ShapeSlab::new_agent()));
+        (&raw mut (*slot).inner).write(RefCell::new(ShapeTableInner {
+            owned_indices: crate::fast_hash::new_ptr_hash_map(),
+            by_facts: crate::fast_hash::new_ptr_hash_map(),
+            owned_families: crate::fast_hash::new_ptr_hash_map(),
+            keyless_family: IdList::default(),
+            young_keys: crate::gc::young_log::YoungLog::new(),
+        }));
+        let table = &*slot;
         table.seed_function_shapes();
         table.seed_native_birth_layouts();
-        table
     }
 
     #[cold]
@@ -1157,8 +1275,93 @@ impl ShapeTable {
         // records have no GC edges; the external-carrier flag retains them
         // through full pruning. The ordinary intern sees the same records.
         for (id, kind, proto, summary) in crate::closure::shape::intrinsic_shapes() {
-            self.seed_function_shape(&mut inner, id, kind, proto, summary);
+            self.seed_function_shape(&mut inner, ShapeId(id), kind, proto, summary);
         }
+    }
+
+    /// Gives the nine function family records their own keys `[length,
+    /// name]` (INFO entries: `layout_probe::info_value` answers them from the
+    /// closure's info). Once per agent at realm set-up, after the table and
+    /// the image atoms exist and before user code runs: inside table
+    /// creation the list allocation would re-enter it.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn key_function_families(&self) {
+        let _no_gc = crate::gc::GcSuppressScope::new();
+        // SAFETY: the table exists; collection is suppressed.
+        let Some(keys) = (unsafe { super::static_shapes::function_family_keys(false) }) else {
+            return;
+        };
+        let Some(ctor_keys) = (unsafe { super::static_shapes::function_family_keys(true) }) else {
+            return;
+        };
+        let mut inner = self.inner.borrow_mut();
+        for (id, kind, proto, summary) in crate::closure::shape::intrinsic_shapes() {
+            let index = id.wrapping_sub(crate::codegen_abi::FUNCTION_SHAPE_BASE);
+            let keys = if crate::closure::shape::family_lists_prototype(index) {
+                ctor_keys
+            } else {
+                keys
+            };
+            self.key_function_shape(&mut inner, ShapeId(id), kind, proto, summary, keys);
+        }
+    }
+
+    #[inline(never)]
+    fn key_function_shape(
+        &self,
+        inner: &mut ShapeTableInner,
+        id: ShapeId,
+        kind: ShapeObjectKind,
+        proto: u64,
+        summary: u8,
+        keys: super::ObjectKeys,
+    ) {
+        let rep = super::field_rep::REP_ANY;
+        let index = if id == ShapeId(crate::codegen_abi::FUNCTION_DICTIONARY_SHAPE) {
+            4
+        } else {
+            id.0 - crate::codegen_abi::FUNCTION_SHAPE_BASE
+        };
+        let word = LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(index));
+        let Some(r) = self.slab().handle_record_ptr(word) else {
+            return;
+        };
+        let facts = |node: u32, list: u64, count: u32, summary: u8| {
+            shapes_store::integrity_facts_key(
+                shapes_store::facts_key_proto_with_special(
+                    shapes_store::list_identity(node, list),
+                    count,
+                    0,
+                    0,
+                    kind,
+                    0,
+                    proto,
+                    summary,
+                    rep,
+                    &[],
+                    &[],
+                ),
+                0,
+            )
+        };
+        let root = crate::object::canonical_keys::ROOT_NODE;
+        inner.facts_remove(facts(root, 0, 0, summary), word);
+        inner.family_remove(root, 0, word);
+        let list = keys.arr() as u64;
+        // SAFETY: the record is this table's published family record; no
+        // reference into the slab is held.
+        let keyed = unsafe {
+            let keyed = summary | super::key_attrs::keys_summary(keys.arr(), keys.count());
+            (*r).keys = list;
+            (*r).logical_key_count = keys.count();
+            (*r).set_keys_node(keys.node());
+            (*r).probe = 0;
+            std::ptr::write(r, std::ptr::read(r).with_summary(keyed));
+            keyed
+        };
+        inner.facts_append_fresh(facts(keys.node(), list, keys.count(), keyed), word);
+        inner.family_append_fresh(keys.node(), list, word);
     }
 
     // Keep one installer for all nine records: constant iteration facts must
@@ -1167,7 +1370,7 @@ impl ShapeTable {
     fn seed_function_shape(
         &self,
         inner: &mut ShapeTableInner,
-        id: u32,
+        id: ShapeId,
         kind: ShapeObjectKind,
         proto: u64,
         summary: u8,
@@ -1179,10 +1382,19 @@ impl ShapeTable {
             .with_special_facts(rep, &[], &[]);
         record.set(RECORD_FLAG_EXTERNAL_CARRIER, true);
         // SAFETY: no reference into the slab is held while seeding.
-        unsafe { self.slab_mut().insert(id, record) };
+        let index = if id == ShapeId(crate::codegen_abi::FUNCTION_DICTIONARY_SHAPE) {
+            4
+        } else {
+            id.0 - crate::codegen_abi::FUNCTION_SHAPE_BASE
+        };
+        let word = LayoutWord(crate::codegen_abi::intrinsic_function_layout_word(index));
+        let id = unsafe { self.slab_mut().publish_static(id, word, record) }
+            .expect("intrinsic layout publication")
+            .word
+            .0;
         let facts = shapes_store::integrity_facts_key(
             shapes_store::facts_key_proto_with_special(
-                0,
+                shapes_store::list_identity(crate::object::canonical_keys::ROOT_NODE, 0),
                 0,
                 0,
                 0,
@@ -1196,8 +1408,8 @@ impl ShapeTable {
             ),
             0,
         );
-        inner.facts_append_fresh(facts, id);
-        inner.family_append_fresh(0, id);
+        inner.facts_append_fresh(facts, LayoutWord(id));
+        inner.family_append_fresh(crate::object::canonical_keys::ROOT_NODE, 0, LayoutWord(id));
     }
 
     /// Shared view of the slab. Sound under the single-threaded agent
@@ -1239,11 +1451,11 @@ pub(crate) const SITE_SHAPE_ID_END: u32 = 0xB000_0000;
 /// The EXOTIC band, `[EXOTIC_SHAPE_ID_BASE, SHAPE_ID_END)`: ShapeIds of
 /// receivers that are not `GC_TYPE_OBJECT` (function objects today; arrays,
 /// Map/Set, ... as their stages land). Like the dictionary band it is outside
-/// `is_site_matchable_shape_id`, so no own-inline-slot site word (read PIC,
+/// `is_site_matchable_layout_word`, so no own-inline-slot site word (read PIC,
 /// store PIC, key-add memo) can ever hold one: those caches load `recv + 16 +
 /// 8*slot`, which is not a slot of these receivers. A consumer that only
 /// needs the shape's IDENTITY (its prototype, its absence of own keys) opts in
-/// explicitly with [`is_exotic_shape_id`].
+/// explicitly with [`is_exotic_layout_word`].
 pub(crate) const EXOTIC_SHAPE_ID_BASE: u32 = 0xB800_0000;
 /// # The static band: ShapeIds the compiler assigned (design step 4)
 ///
@@ -1266,8 +1478,8 @@ const _: () = assert!(STATIC_SHAPE_ID_END < SITE_SHAPE_ID_END);
 /// Is `v` in the compiler-assigned band ([`STATIC_SHAPE_ID_END`])? A fact of
 /// the value alone.
 #[inline]
-pub(crate) fn is_static_shape_id(v: u32) -> bool {
-    (SHAPE_ID_BASE..STATIC_SHAPE_ID_END).contains(&v)
+pub(crate) fn is_static_shape_id(v: ShapeId) -> bool {
+    (SHAPE_ID_BASE..STATIC_SHAPE_ID_END).contains(&v.0)
 }
 
 const _: () = assert!(SITE_SHAPE_ID_END < EXOTIC_SHAPE_ID_BASE);
@@ -1355,7 +1567,7 @@ const _: () = assert!(SHAPE_ID_END % SHAPE_ID_KIND_GROUP == 0);
 /// only the mixed kind names (`layout_desc::family_desc_of` trusts that).
 #[inline]
 pub(crate) fn shape_id_kind_admits(id: u32, proto_id: u64) -> bool {
-    let kind = shape_word_kind(id);
+    let kind = (id & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT;
     let identity = proto_id_kind(proto_id);
     kind == identity || (kind == SHAPE_ID_KIND_WORD && identity != SHAPE_ID_KIND_MIXED)
 }
@@ -1364,7 +1576,7 @@ pub(crate) fn shape_id_kind_admits(id: u32, proto_id: u64) -> bool {
 /// whatever else it holds) carries in its kind bits.
 #[inline(always)]
 pub(crate) fn shape_word_kind(header_word: u32) -> u32 {
-    (header_word & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT
+    (header_word & crate::codegen_abi::LAYOUT_KIND_MASK) >> crate::codegen_abi::LAYOUT_KIND_SHIFT
 }
 
 /// Does `header_word` possibly name a linked prototype identity (a word or
@@ -1373,7 +1585,7 @@ pub(crate) fn shape_word_kind(header_word: u32) -> u32 {
 /// reading the shape record.
 #[inline(always)]
 pub(crate) fn shape_word_may_be_linked(header_word: u32) -> bool {
-    header_word & SHAPE_ID_KIND_MASK != 0
+    header_word & crate::codegen_abi::LAYOUT_KIND_MASK != 0
 }
 
 /// The ShapeId kind ([`SHAPE_ID_KIND_SHIFT`]) of prototype identity
@@ -1397,11 +1609,20 @@ pub(crate) fn proto_id_kind(proto_id: u64) -> u32 {
     }
 }
 
-static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+/// The semantic generation of the lineage a runtime intrinsic prototype
+/// holder is born on ([`stamp_born_prototype_root`]). It lies in the counter
+/// namespace below [`SHAPE_SEMANTIC_NEXT`]'s first value, so the counter never
+/// hands it out: only those holders carry a shape of this lineage.
+pub(crate) const BORN_PROTOTYPE_GENERATION: u64 = 1;
+
+static SHAPE_SEMANTIC_NEXT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(BORN_PROTOTYPE_GENERATION + 1);
 
 #[inline]
-pub(crate) fn is_shape_id(v: u32) -> bool {
-    (SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+pub(crate) fn is_layout_word(v: u32) -> bool {
+    v & (crate::codegen_abi::LAYOUT_TAG | crate::codegen_abi::LAYOUT_SHADOW_BIT)
+        == crate::codegen_abi::LAYOUT_TAG
+        && LayoutWord(v).band() < 3
 }
 
 /// May a per-site cache word hold this id? True exactly for an ORDINARY-band
@@ -1409,23 +1630,23 @@ pub(crate) fn is_shape_id(v: u32) -> bool {
 /// for a class id, never for 0. Every site-word writer publishes only ids this
 /// accepts, so an emitted compare can never equal a dictionary receiver's word.
 #[inline]
-pub(crate) fn is_site_matchable_shape_id(v: u32) -> bool {
-    (SHAPE_ID_BASE..SITE_SHAPE_ID_END).contains(&v)
+pub(crate) fn is_site_matchable_layout_word(v: u32) -> bool {
+    crate::codegen_abi::is_ordinary_record_word(v)
 }
 
-/// [`is_site_matchable_shape_id`] for a per-site PIC TOKEN
+/// [`is_site_matchable_layout_word`] for a per-site PIC TOKEN
 /// (`PIC_ID_TOKEN_BIT | ShapeId`): the exact token form over a matchable id.
 #[inline]
 pub(crate) fn is_site_matchable_token(token: u64) -> bool {
     token == (PIC_ID_TOKEN_BIT | u64::from(token as u32))
-        && is_site_matchable_shape_id(token as u32)
+        && is_site_matchable_layout_word(token as u32)
 }
 
 /// Is this an exotic-receiver ShapeId ([`EXOTIC_SHAPE_ID_BASE`])? A fact of
 /// the value alone.
 #[inline]
-pub(crate) fn is_exotic_shape_id(v: u32) -> bool {
-    (EXOTIC_SHAPE_ID_BASE..SHAPE_ID_END).contains(&v)
+pub(crate) fn is_exotic_layout_word(v: u32) -> bool {
+    crate::codegen_abi::is_exotic_or_family_word(v)
 }
 
 /// Lifts a ShapeId into the per-site PIC token space. MUST match the literal
@@ -1447,7 +1668,7 @@ pub(crate) enum ShapeDescriptorError {
 fn alloc_shape_id_from(
     next: &std::sync::atomic::AtomicU32,
     end: u32,
-) -> Result<u32, ShapeIdExhausted> {
+) -> Result<ShapeId, ShapeIdExhausted> {
     use std::sync::atomic::Ordering;
     loop {
         let id = next.load(Ordering::Relaxed);
@@ -1463,7 +1684,7 @@ fn alloc_shape_id_from(
             .compare_exchange_weak(id, id + 1, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
-            return Ok(id);
+            return Ok(ShapeId(id));
         }
     }
 }
@@ -1476,12 +1697,12 @@ fn alloc_shape_id_of_kind(
     next: &std::sync::atomic::AtomicU32,
     end: u32,
     kind: u32,
-) -> Result<u32, ShapeIdExhausted> {
+) -> Result<ShapeId, ShapeIdExhausted> {
     use std::sync::atomic::Ordering;
     loop {
         let current = next.load(Ordering::Relaxed);
         let mut id = current;
-        if shape_word_kind(id) != kind {
+        if (id & SHAPE_ID_KIND_MASK) >> SHAPE_ID_KIND_SHIFT != kind {
             // This kind's granule in the current group, or the next group's.
             id = (id & !(SHAPE_ID_KIND_GROUP - 1)) | (kind << SHAPE_ID_KIND_SHIFT);
             if id < current {
@@ -1496,14 +1717,14 @@ fn alloc_shape_id_of_kind(
             .compare_exchange_weak(current, id + 1, Ordering::Relaxed, Ordering::Relaxed)
             .is_ok()
         {
-            return Ok(id);
+            return Ok(ShapeId(id));
         }
     }
 }
 
 /// An ORDINARY-band ShapeId for a shape whose identity is `proto_id`: every
 /// mint except a dictionary or exotic shape's.
-fn alloc_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
+fn alloc_shape_id(proto_id: u64) -> Result<ShapeId, ShapeIdExhausted> {
     let kind = proto_id_kind(proto_id);
     #[cfg(test)]
     note_thread_mint();
@@ -1511,7 +1732,7 @@ fn alloc_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
 }
 
 /// An exotic-band ShapeId ([`EXOTIC_SHAPE_ID_BASE`]).
-fn alloc_exotic_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
+fn alloc_exotic_shape_id(proto_id: u64) -> Result<ShapeId, ShapeIdExhausted> {
     let kind = proto_id_kind(proto_id);
     #[cfg(test)]
     note_thread_mint();
@@ -1521,7 +1742,7 @@ fn alloc_exotic_shape_id(proto_id: u64) -> Result<u32, ShapeIdExhausted> {
 fn alloc_shape_id_for_generation(
     _semantic_generation: u64,
     proto_id: u64,
-) -> Result<u32, ShapeIdExhausted> {
+) -> Result<ShapeId, ShapeIdExhausted> {
     alloc_shape_id(proto_id)
 }
 
@@ -1558,16 +1779,17 @@ pub(crate) fn test_shape_id_counter() -> u32 {
 /// its exhaustion tests remain reviewable.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_generation(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
     object_kind: ShapeObjectKind,
     proto_id: u64,
     receiver: ReceiverFacts,
-) -> Result<u32, ShapeDescriptorError> {
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_holes(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1582,7 +1804,7 @@ pub(crate) fn shape_descriptor_ensure_with_generation(
 /// A static id the driver assigned by content was refused by the ordinary
 /// mint (see [`shape_descriptor_ensure_with_holes`]).
 #[cold]
-fn static_shape_id_refused_abort(requested: u32, proto_id: u64) -> ! {
+fn static_shape_id_refused_abort(requested: ShapeId, proto_id: u64) -> ! {
     eprintln!(
         "Perry internal error: the static ShapeId {requested:#x} (proto {proto_id:#x}) \
          was refused by the shape mint (it is outside the static band or already \
@@ -1623,7 +1845,7 @@ fn static_shape_id_refused_abort(requested: u32, proto_id: u64) -> ! {
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure_with_holes(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1631,10 +1853,11 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
     hole_count: u32,
     proto_id: u64,
     receiver: ReceiverFacts,
-    requested: Option<u32>,
-) -> Result<u32, ShapeDescriptorError> {
+    requested: Option<ShapeId>,
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1662,7 +1885,7 @@ pub(crate) fn shape_descriptor_ensure_with_holes(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 #[inline(always)]
 pub(crate) fn shape_descriptor_ensure_with_rep(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1671,11 +1894,14 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
     proto_id: u64,
     receiver: ReceiverFacts,
     rep: u64,
-    requested: Option<u32>,
-) -> Result<u32, ShapeDescriptorError> {
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+    requested: Option<ShapeId>,
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
@@ -1690,7 +1916,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
             unsafe { crate::object::key_attrs::keys_summary_checked(keys, logical_key_count) }
         };
     shape_descriptor_intern_with_rep(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1710,7 +1936,7 @@ pub(crate) fn shape_descriptor_ensure_with_rep(
 /// [`shape_descriptor_intern_with_rep`]).
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn shape_descriptor_find_with_rep(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1721,14 +1947,16 @@ pub(crate) fn shape_descriptor_find_with_rep(
     rep: u64,
     brands: &[u64],
     integrity_flags: u16,
-) -> Option<u32> {
+) -> Option<LayoutWord> {
     if !super::field_rep::is_valid(rep) {
         return None;
     }
-    let keys_id = keys as usize as u64;
+    let shape_keys: ShapeKeys = keys.into();
+    let keys_id = shape_keys.arr() as usize as u64;
+    let keys_node = shape_keys.resolved_node(logical_key_count);
     let facts = shapes_store::integrity_facts_key(
         shapes_store::facts_key_proto_with_special(
-            keys_id,
+            shapes_store::list_identity(keys_node, keys_id),
             logical_key_count,
             live_inline_slot_count,
             semantic_generation,
@@ -1747,7 +1975,7 @@ pub(crate) fn shape_descriptor_find_with_rep(
     let ids = inner.by_facts.get(&facts)?;
     let slab = table.slab();
     ids.as_slice().iter().copied().find(|&id| {
-        slab.record_ptr(id).is_some_and(|record| {
+        slab.handle_record_ptr(id).is_some_and(|record| {
             // SAFETY: live slab record, read immediately.
             let record = unsafe { *record };
             record.has(RECORD_FLAG_FACTS_INDEXED)
@@ -1769,6 +1997,101 @@ pub(crate) fn shape_descriptor_find_with_rep(
     })
 }
 
+/// A shape's key list as the mint receives it: the keys array and the
+/// canonical trie node its holder carries (`canonical_keys::NO_NODE` for an
+/// owned list or a holder without one). The node is recorded on a minted
+/// record (`ShapeRecord::keys_node`); it never enters identity, which folds
+/// and compares the array word.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShapeKeys {
+    arr: *const ArrayHeader,
+    /// The count the node names; a node is recorded only for that count.
+    count: u32,
+    node: u32,
+}
+
+impl ShapeKeys {
+    #[inline]
+    pub(crate) fn arr(self) -> *const ArrayHeader {
+        self.arr
+    }
+
+    /// The trie node of the list of `count` keys of this array, if the holder
+    /// carried that list's node, else `canonical_keys::NO_NODE`.
+    #[inline]
+    pub(crate) fn node_for(self, count: u32) -> u32 {
+        if self.count == count {
+            self.node
+        } else {
+            crate::object::canonical_keys::NO_NODE
+        }
+    }
+
+    /// The trie node of the list of `count` keys of this array (CKI S2): the
+    /// node its holder carried or, for a holder that brought none, the node
+    /// that publishes exactly this list, found from the list's content.
+    /// `NO_NODE` for an owned list. The mint records it, and it is the list's
+    /// word in the exact-facts fold and its family's home, so it must not
+    /// depend on the holder: every spelling of one list answers the same
+    /// node. A carried node is trusted: a holder keeps its array live, and a
+    /// node is freed or rewitnessed only after its array dies
+    /// (`canonical_keys::CanonicalKeys`'s invariant), so the node a live
+    /// holder carries still publishes its list. Debug builds check it.
+    #[inline]
+    pub(crate) fn resolved_node(self, count: u32) -> u32 {
+        let carried = self.node_for(count);
+        if carried != NO_NODE {
+            debug_assert!(
+                crate::object::canonical_keys::node_publishes(self.arr, count, carried),
+                "a live holder carried a node that no longer publishes its list"
+            );
+            return carried;
+        }
+        // SAFETY: a mint's keys array is live with at least `count` slots.
+        unsafe { crate::object::canonical_keys::published_node_of(self.arr, count) }
+    }
+}
+
+impl From<*const ArrayHeader> for ShapeKeys {
+    #[inline]
+    fn from(arr: *const ArrayHeader) -> Self {
+        ShapeKeys {
+            arr,
+            count: u32::MAX,
+            node: crate::object::canonical_keys::NO_NODE,
+        }
+    }
+}
+
+impl From<*mut ArrayHeader> for ShapeKeys {
+    #[inline]
+    fn from(arr: *mut ArrayHeader) -> Self {
+        ShapeKeys::from(arr as *const ArrayHeader)
+    }
+}
+
+impl From<crate::object::canonical_keys::CanonicalKeys> for ShapeKeys {
+    #[inline]
+    fn from(keys: crate::object::canonical_keys::CanonicalKeys) -> Self {
+        ShapeKeys {
+            arr: keys.as_const_ptr(),
+            count: keys.len(),
+            node: keys.node(),
+        }
+    }
+}
+
+impl From<crate::object::ObjectKeys> for ShapeKeys {
+    #[inline]
+    fn from(keys: crate::object::ObjectKeys) -> Self {
+        ShapeKeys {
+            arr: keys.arr(),
+            count: keys.count(),
+            node: keys.node(),
+        }
+    }
+}
+
 /// The twin of an existing shape that differs only in `object_kind` (charter
 /// step 3: the store facts are kinds). Every other fact, the attribute summary
 /// included, is copied from `source`'s record, whose summary was derived from
@@ -1781,13 +2104,16 @@ pub(crate) fn shape_descriptor_find_with_rep(
 /// the owner store funnel, which must remain non-collecting, so the
 /// twin mint must touch only the shape table's own Rust storage.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKind) -> Option<u32> {
-    let d = shape_descriptor_by_id(source)?;
+pub(crate) fn shape_descriptor_kind_twin(
+    source: LayoutWord,
+    object_kind: ShapeObjectKind,
+) -> Option<LayoutWord> {
+    let d = shape_descriptor_for_word(source)?;
     if d.object_kind == object_kind {
         return Some(source);
     }
     shape_descriptor_intern_with_rep(
-        d.keys as usize as *const ArrayHeader,
+        d.keys_view(),
         d.logical_key_count,
         d.live_inline_slot_count,
         d.semantic_generation,
@@ -1815,7 +2141,7 @@ pub(crate) fn shape_descriptor_kind_twin(source: u32, object_kind: ShapeObjectKi
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_intern_with_rep(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1825,14 +2151,16 @@ pub(crate) fn shape_descriptor_intern_with_rep(
     summary: u8,
     rep: u64,
     brands: &[u64],
-    requested: Option<u32>,
+    requested: Option<ShapeId>,
     integrity_flags: u16,
-) -> Result<u32, ShapeDescriptorError> {
-    if !super::field_rep::is_valid(rep) {
-        return Err(ShapeDescriptorError::InvalidFacts);
-    }
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    // I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    // (`field_rep::i32_lane_slots`). Before I32 lanes existed every path that
+    // reached an interner with such a lane aborted
+    // (`shape_descriptor_error_abort`), so none relies on it being refused.
     shape_descriptor_intern_with_special(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1853,7 +2181,7 @@ pub(crate) fn shape_descriptor_intern_with_rep(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_intern_with_special(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1864,11 +2192,12 @@ pub(crate) fn shape_descriptor_intern_with_special(
     rep: u64,
     infos: &[shapes_store::ConstFnSlotInfo],
     brands: &[u64],
-    requested: Option<u32>,
+    requested: Option<ShapeId>,
     integrity_flags: u16,
-) -> Result<u32, ShapeDescriptorError> {
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_intern_with_special_mode(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -1880,6 +2209,7 @@ pub(crate) fn shape_descriptor_intern_with_special(
         infos,
         brands,
         requested,
+        None,
         false,
         integrity_flags,
     )
@@ -1891,7 +2221,7 @@ pub(crate) fn shape_descriptor_intern_with_special(
 #[allow(clippy::too_many_arguments)]
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 fn shape_descriptor_intern_with_special_mode(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -1902,11 +2232,14 @@ fn shape_descriptor_intern_with_special_mode(
     rep: u64,
     infos: &[shapes_store::ConstFnSlotInfo],
     brands: &[u64],
-    requested: Option<u32>,
+    requested: Option<ShapeId>,
+    static_request: Option<crate::codegen_abi::PublishedShape>,
     static_constfn: bool,
     integrity_flags: u16,
-) -> Result<u32, ShapeDescriptorError> {
-    let Some(mask) = shapes_store::constfn_mask(infos) else {
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
+    let Some(mask) = shapes_store::constfn_mask(infos, live_inline_slot_count) else {
         return Err(ShapeDescriptorError::InvalidFacts);
     };
     if !shapes_store::brands_are_sorted(brands) {
@@ -1915,19 +2248,20 @@ fn shape_descriptor_intern_with_special_mode(
     if !super::field_rep::is_valid_with_special(rep, mask) {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
-    // Every SPECIAL lane in Step 5C names a ConstFn body. P5's optional
-    // NoPointer producer needs its own mask and remains gated by census.
-    // A requested ConstFn id is only legal through the body-aware static
-    // birth/seed entry points; generic dynamic callers fail closed.
-    if mask != super::field_rep::special_lane_slots(rep)
-        || (requested.is_some() && mask != 0 && !static_constfn)
-    {
+    // A SPECIAL lane names a ConstFn body (`mask`) or is an I32 lane (I32
+    // at rest, PR C: the complement, `field_rep::i32_lane_slots`). P5's
+    // optional NoPointer producer needs its own mask beside these and
+    // remains gated by census. A requested ConstFn id is only legal through
+    // the body-aware static birth/seed entry points; generic dynamic callers
+    // fail closed.
+    if requested.is_some() && !infos.is_empty() && !static_constfn {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     let keys_id = keys as usize as u64;
     if keys_id == 0 && logical_key_count != 0 {
         return Err(ShapeDescriptorError::InvalidFacts);
     }
+    let keys_node = shape_keys.resolved_node(logical_key_count);
     // #10868 attribution, compiled out entirely without `shape-mint-diag`.
     // When it IS compiled in, both halves are gated on one relaxed atomic
     // load, and the key-list hash is resolved BEFORE the table borrow because
@@ -1956,7 +2290,7 @@ fn shape_descriptor_intern_with_special_mode(
     };
     let facts = shapes_store::integrity_facts_key(
         shapes_store::facts_key_proto_with_special(
-            keys_id,
+            shapes_store::list_identity(keys_node, keys_id),
             logical_key_count,
             live_inline_slot_count,
             semantic_generation,
@@ -1970,16 +2304,32 @@ fn shape_descriptor_intern_with_special_mode(
         ),
         integrity_flags,
     );
+    if let Some(request) = static_request {
+        let mut record = ShapeRecord::new(
+            keys_id,
+            logical_key_count,
+            live_inline_slot_count,
+            semantic_generation,
+            object_kind,
+            hole_count,
+        )
+        .with_proto_id(proto_id)
+        .with_summary(summary)
+        .with_special_facts(rep, infos, brands)
+        .with_keys_node(keys_node);
+        record.set_integrity_flags(integrity_flags);
+        return publish_static_record(request, record, facts).map(|p| p.word);
+    }
     let table = &crate::state::state().shapes;
     let inner = table.inner.borrow();
     if let Some(ids) = inner.by_facts.get(&facts) {
         let slab = table.slab();
         for &id in ids.as_slice() {
-            let Some(record) = slab.record_ptr(id) else {
+            let Some(record_ptr) = slab.handle_record_ptr(id) else {
                 continue;
             };
             // SAFETY: live slab record, read immediately.
-            let record = unsafe { *record };
+            let record = unsafe { *record_ptr };
             // The bucket is a 64-bit fold: validate the facts on every hit.
             if record.has(RECORD_FLAG_FACTS_INDEXED)
                 && record.integrity_flags() == integrity_flags
@@ -1999,6 +2349,10 @@ fn shape_descriptor_intern_with_special_mode(
             {
                 #[cfg(any(test, feature = "shape-mint-diag"))]
                 crate::object::shape_mint_census::note_memo_hit();
+                // The fold named the list by `keys_node`, and a record is
+                // minted with the node it was folded under, so a hit already
+                // carries it.
+                debug_assert_eq!(record.keys_node(), keys_node);
                 return Ok(id);
             }
         }
@@ -2007,6 +2361,7 @@ fn shape_descriptor_intern_with_special_mode(
     shape_descriptor_mint_fresh(
         facts,
         keys_id,
+        keys_node,
         logical_key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -2039,6 +2394,7 @@ fn shape_descriptor_intern_with_special_mode(
 fn shape_descriptor_mint_fresh(
     facts: u64,
     keys_id: u64,
+    keys_node: u32,
     logical_key_count: u32,
     live_inline_slot_count: u32,
     semantic_generation: u64,
@@ -2049,10 +2405,10 @@ fn shape_descriptor_mint_fresh(
     rep: u64,
     infos: &[shapes_store::ConstFnSlotInfo],
     brands: &[u64],
-    requested: Option<u32>,
+    requested: Option<ShapeId>,
     #[cfg(any(test, feature = "shape-mint-diag"))] census: (bool, u64, u64, &'static str, u32),
     integrity_flags: u16,
-) -> Result<u32, ShapeDescriptorError> {
+) -> Result<LayoutWord, ShapeDescriptorError> {
     #[cfg(any(test, feature = "shape-mint-diag"))]
     let (census_on, census_list_hash, census_layout_hash, census_file, census_line) = census;
     let table = &crate::state::state().shapes;
@@ -2101,7 +2457,8 @@ fn shape_descriptor_mint_fresh(
     )
     .with_proto_id(proto_id)
     .with_summary(summary)
-    .with_special_facts(rep, infos, brands);
+    .with_special_facts(rep, infos, brands)
+    .with_keys_node(keys_node);
     let mut record = record;
     if integrity_flags != 0 {
         record.set_integrity_flags(integrity_flags);
@@ -2111,10 +2468,10 @@ fn shape_descriptor_mint_fresh(
         // Every descriptor already indexed under this keys ADDRESS, copied out
         // so no slab reference is alive across `slab_mut()` below.
         let mut family_facts: Vec<crate::object::shape_mint_census::MintFacts> = Vec::new();
-        if let Some(ids) = inner.families.get(&keys_id) {
+        {
             let slab = table.slab();
-            for &fid in ids.as_slice() {
-                if let Some(record) = slab.get(fid) {
+            for fid in inner.family_ids(keys_node, keys_id) {
+                if let Some(record) = slab.get_handle(fid) {
                     family_facts.push(crate::object::shape_mint_census::MintFacts::of(
                         &record.lift(std::ptr::null_mut()),
                     ));
@@ -2139,13 +2496,20 @@ fn shape_descriptor_mint_fresh(
     // stamped only after this function returns, so a visible id always has a
     // complete descriptor.
     // SAFETY: no slab reference is held; `slab()` above went out of scope.
-    unsafe { table.slab_mut().insert(id, record) };
+    let id = unsafe { table.slab_mut().publish_dynamic(id, record) }
+        .map_err(|_error| {
+            #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+            snap22::snapshot("publish_error", _error as u64 + 1);
+            ShapeDescriptorError::IdExhausted
+        })?
+        .word
+        .0;
     // `id` was just handed out by `alloc_shape_id`, which never reuses a
     // value, so neither accelerator can already hold it: append without the
     // membership scan, whose cost is linear in this keys array's descriptor
     // history (see `IdList::append_unchecked`).
-    inner.facts_append_fresh(facts, id);
-    inner.family_append_fresh(keys_id, id);
+    inner.facts_append_fresh(facts, LayoutWord(id));
+    inner.family_append_fresh(keys_node, keys_id, LayoutWord(id));
     // #10905: every shape of the transition tree below a keyless birth shape
     // is minted exactly once, here, so this is where the birth shape learns
     // how wide its descendants grow (`shapes_birth_width`).
@@ -2157,17 +2521,18 @@ fn shape_descriptor_mint_fresh(
             logical_key_count,
         );
     }
-    Ok(id)
+    Ok(LayoutWord(id))
 }
 
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) fn shape_descriptor_ensure(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
-) -> Result<u32, ShapeDescriptorError> {
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_generation(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         0,
@@ -2186,12 +2551,13 @@ pub(crate) fn shape_descriptor_ensure(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn shape_descriptor_ensure_for_object(
     obj: *const crate::object::ObjectHeader,
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     logical_key_count: u32,
     live_inline_slot_count: u32,
-) -> Result<u32, ShapeDescriptorError> {
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     shape_descriptor_ensure_with_generation(
-        keys,
+        shape_keys,
         logical_key_count,
         live_inline_slot_count,
         0,
@@ -2335,7 +2701,7 @@ pub(crate) unsafe fn receiver_facts(obj: *const crate::object::ObjectHeader) -> 
         brands: if obj.is_null() {
             BrandList::NONE
         } else {
-            BrandList::copy_of(shape_brands_by_id(object_shape_stamp(obj)).unwrap_or(&[]))
+            BrandList::copy_of(shape_brands_for_word(object_shape_stamp(obj)).unwrap_or(&[]))
         },
     }
 }
@@ -2350,7 +2716,7 @@ pub(crate) unsafe fn receiver_brands(obj: *const crate::object::ObjectHeader) ->
     if obj.is_null() {
         return Vec::new();
     }
-    shape_brands_by_id(object_shape_stamp(obj)).map_or_else(Vec::new, <[u64]>::to_vec)
+    shape_brands_for_word(object_shape_stamp(obj)).map_or_else(Vec::new, <[u64]>::to_vec)
 }
 
 /// [`receiver_facts`] for a mint that already holds `current`, the
@@ -2384,8 +2750,8 @@ pub(crate) unsafe fn receiver_facts_of_current(
 /// The brand list of shape `id` in this agent, borrowed from its live record.
 /// `None` for an id with no record here.
 #[inline]
-pub(crate) fn shape_brands_by_id(id: u32) -> Option<&'static [u64]> {
-    let record = ShapeSlab::agent_record_present(id)?;
+pub(crate) fn shape_brands_for_word(id: LayoutWord) -> Option<&'static [u64]> {
+    let record = ShapeSlab::agent_record_for_word_present(id)?;
     // SAFETY: a present record of this agent; its extension lives as long as
     // the record, which the caller's receiver keeps stamped.
     Some(unsafe { (*record).brands() })
@@ -2406,13 +2772,17 @@ pub(crate) unsafe fn receiver_extra_summary(_obj: *const crate::object::ObjectHe
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn shape_id_exhausted_abort() -> ! {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    snap22::snapshot("abort", 0);
     eprintln!("Perry ShapeId space exhausted; refusing to publish an untracked object shape");
     std::process::abort()
 }
 
 #[cold]
+#[optimize(size)]
 #[inline(never)]
 fn invalid_shape_facts_abort() -> ! {
     eprintln!("Perry internal error: refusing to publish invalid object shape facts");
@@ -2428,7 +2798,7 @@ fn shape_descriptor_error_abort(error: ShapeDescriptorError) -> ! {
 }
 
 #[inline]
-pub(crate) fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) -> u32 {
+pub(crate) fn publish_shape_result(result: Result<LayoutWord, ShapeDescriptorError>) -> LayoutWord {
     match result {
         Ok(id) => id,
         Err(error) => shape_descriptor_error_abort(error),
@@ -2438,33 +2808,45 @@ pub(crate) fn publish_shape_result(result: Result<u32, ShapeDescriptorError>) ->
 /// Compatibility mint for canonical shapes whose key and live-slot counts are
 /// identical. New object-aware paths use [`shape_descriptor_ensure`] directly.
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
-pub(crate) fn shape_id_for_keys_ensure(keys: *const ArrayHeader, key_count: u32) -> u32 {
-    publish_shape_result(shape_descriptor_ensure(keys, key_count, key_count))
+pub(crate) fn layout_for_keys_ensure(keys: impl Into<ShapeKeys>, key_count: u32) -> LayoutWord {
+    let shape_keys: ShapeKeys = keys.into();
+    publish_shape_result(shape_descriptor_ensure(shape_keys, key_count, key_count))
 }
 
 /// One FIELD of a shape's descriptor, without lifting the whole record.
 ///
-/// [`shape_descriptor_by_id`] returns `ShapeDescriptor` **by value**, so every
+/// [`shape_descriptor_for_word`] returns `ShapeDescriptor` **by value**, so every
 /// caller that wants a single `u32` still copies the entire record out of the
 /// table. That is most of them: `object_live_slot_count` — the slot bound
 /// consulted on essentially every property read and write — throws away all
 /// of it but `live_inline_slot_count`.
 #[inline]
-fn shape_descriptor_field_by_id<T>(shape_id: u32, read: impl Fn(&ShapeRecord) -> T) -> Option<T> {
-    let record = ShapeSlab::agent_record_present(shape_id)?;
+fn shape_descriptor_field_for_word<T>(
+    shape_id: LayoutWord,
+    read: impl Fn(&ShapeRecord) -> T,
+) -> Option<T> {
+    let record = ShapeSlab::agent_record_for_word_present(shape_id)?;
     // SAFETY: `agent_record_present` only returns a live slab record.
     Some(read(unsafe { &*record }))
 }
 
-/// The live inline-slot bound for `shape_id`, without copying its descriptor.
-pub(crate) fn shape_live_inline_slot_count_by_id(shape_id: u32) -> Option<u32> {
-    shape_descriptor_field_by_id(shape_id, |d| d.live_inline_slot_count)
+/// The live inline-slot bound for a HELD `shape_id`, without copying its
+/// descriptor (checked).
+pub(crate) fn shape_live_inline_slot_count_for_word(shape_id: LayoutWord) -> Option<u32> {
+    shape_descriptor_field_for_word(shape_id, |d| d.live_inline_slot_count)
+}
+
+/// The same for a live receiver's own header word (unchecked).
+pub(crate) fn shape_live_inline_slot_count_of_receiver(shape_id: u32) -> Option<u32> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    // SAFETY: a present record named by a live receiver's word.
+    Some(unsafe { (*record).live_inline_slot_count })
 }
 
 /// The key list, logical key count and prototype identity of `shape_id`,
 /// without copying its descriptor.
-pub(crate) fn shape_keys_and_proto_by_id(shape_id: u32) -> Option<(u64, u32, u64)> {
-    shape_descriptor_field_by_id(shape_id, |d| (d.keys, d.logical_key_count, d.proto_id))
+pub(crate) fn shape_keys_and_proto_for_word(shape_id: LayoutWord) -> Option<(u64, u32, u64)> {
+    shape_descriptor_field_for_word(shape_id, |d| (d.keys, d.logical_key_count, d.proto_id))
 }
 
 /// The descriptor named by `shape_id`, or `None` when the id names no
@@ -2477,17 +2859,48 @@ pub(crate) fn shape_keys_and_proto_by_id(shape_id: u32) -> Option<(u64, u32, u64
 /// that used to front the hash map is gone because the slab IS that cache:
 /// a hit was "mask, compare, deref" and a probe is "shift, index, deref".
 #[inline]
-pub(crate) fn shape_descriptor_by_id(shape_id: u32) -> Option<ShapeDescriptor> {
-    let record = ShapeSlab::agent_record_present(shape_id)?;
+pub(crate) fn shape_descriptor_for_word(shape_id: LayoutWord) -> Option<ShapeDescriptor> {
+    let record = ShapeSlab::agent_record_for_word_present(shape_id)?;
     // SAFETY: `agent_record_present` only returns a live slab record.
     Some(unsafe { (*record).lift(record) })
 }
 
-/// The record named by `shape_id`, borrowed in place: the same slab probe as
-/// [`shape_descriptor_by_id`], without lifting a copy (#10362).
+/// [`shape_descriptor_for_word`] for a live receiver's own header word: the
+/// receiver carries the row, so no committed-row check is made.
 #[inline]
-pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
-    let record = ShapeSlab::agent_record_present(shape_id)?;
+pub(crate) fn shape_descriptor_of_receiver(shape_id: u32) -> Option<ShapeDescriptor> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    // SAFETY: a present record named by a live receiver's word.
+    Some(unsafe { (*record).lift(record) })
+}
+
+/// The record named by `shape_id`, borrowed in place: the same slab probe as
+/// [`shape_descriptor_for_word`], without lifting a copy (#10362).
+#[inline]
+pub(crate) fn shape_record_for_word(shape_id: LayoutWord) -> Option<ShapeRecordRef> {
+    let record = ShapeSlab::agent_record_for_word_present(shape_id)?;
+    std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// [`shape_record_for_word`] for a runtime layout word (no function family
+/// word): the flat rows only.
+#[inline]
+pub(crate) fn shape_record_for_runtime_layout_word(shape_id: LayoutWord) -> bool {
+    ShapeSlab::agent_record_for_flat_word_present(shape_id).is_some()
+}
+
+/// [`shape_record_for_word`] for a live receiver's own header word (unchecked).
+#[inline(always)]
+pub(crate) fn shape_record_of_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
+    let record = ShapeSlab::agent_record_for_receiver_present(shape_id)?;
+    std::ptr::NonNull::new(record).map(ShapeRecordRef)
+}
+
+/// [`shape_record_of_receiver`] for a live closure's own header word: one
+/// in-line read for every band (function words are not band 0).
+#[inline(always)]
+pub(crate) fn shape_record_of_function_receiver(shape_id: u32) -> Option<ShapeRecordRef> {
+    let record = ShapeSlab::agent_record_for_function_receiver_present(shape_id)?;
     std::ptr::NonNull::new(record).map(ShapeRecordRef)
 }
 
@@ -2496,10 +2909,19 @@ pub(crate) fn shape_record_by_id(shape_id: u32) -> Option<ShapeRecordRef> {
 /// ordinary-directory probe rejects them with its page bound, avoiding the
 /// general lookup's band selection. No prototype word or pointer is memoized.
 #[inline(always)]
-pub(crate) fn plain_birth_rep_by_id(shape_id: u32, field_count: u32) -> Option<u64> {
+pub(crate) fn plain_birth_rep_for_word(shape_id: LayoutWord, field_count: u32) -> Option<u64> {
+    // Unchecked on purpose (it runs on every object-literal birth): the callers'
+    // words come from the carried keyless-birth memo or from published literal
+    // layouts, both of which keep their records alive.
     // SAFETY: the directory is this agent's live published ordinary band.
     let record =
         unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) }?;
+    // A word that names no ordinary row is rejected above; one that names a
+    // row must name a live record.
+    debug_assert!(
+        crate::codegen_abi::LayoutWord((shape_id).0).row().0 == 0 || record.present(),
+        "plain-birth word {shape_id:#x} names no live record"
+    );
     record
         .admits_plain_birth(field_count)
         .then(|| ShapeRecordRef(std::ptr::NonNull::from(record)).rep())
@@ -2507,13 +2929,13 @@ pub(crate) fn plain_birth_rep_by_id(shape_id: u32, field_count: u32) -> Option<u
 
 /// The record of an ordinary-band layout, read from this agent's ordinary
 /// directory with no band select; any other id answers through
-/// [`shape_record_by_id`].
+/// [`shape_record_for_word`].
 #[inline(always)]
-pub(crate) fn layout_record(shape_id: u32) -> Option<ShapeRecordRef> {
+pub(crate) fn layout_record(shape_id: LayoutWord) -> Option<ShapeRecordRef> {
     // SAFETY: the directory is this agent's live published ordinary band.
     match unsafe { ShapeSlab::ordinary_record_in(ShapeSlab::ordinary_dir_addr(), shape_id) } {
         Some(record) if record.present() => Some(ShapeRecordRef(std::ptr::NonNull::from(record))),
-        _ => shape_record_by_id(shape_id),
+        _ => shape_record_for_word(shape_id),
     }
 }
 
@@ -2522,8 +2944,48 @@ pub(crate) fn layout_record(shape_id: u32) -> Option<ShapeRecordRef> {
 /// cannot compete with a live one in a read cache.
 /// Miss paths only; hit paths validate their existing shape/holder/lane facts.
 #[cfg(test)]
-pub(crate) fn shape_is_retired(shape_id: u32) -> bool {
-    ShapeSlab::agent_record_present(shape_id).is_none()
+pub(crate) fn shape_is_retired(shape_id: LayoutWord) -> bool {
+    // A test may retain a scalar after its owner dies. Inspect the identity
+    // directory census; never dereference that retired Region address.
+    let mut found = false;
+    crate::state::state()
+        .shapes
+        .slab()
+        .for_each_handle(|word, _| {
+            found |= word == shape_id;
+        });
+    !found
+}
+
+/// Test-only: a word a test kept after its owner died. Production holders are
+/// carriers (never retired while named), so only tests may ask this question.
+#[cfg(test)]
+pub(crate) fn test_descriptor_for_retained_word(shape_id: LayoutWord) -> Option<ShapeDescriptor> {
+    if shape_is_retired(shape_id) {
+        None
+    } else {
+        shape_descriptor_for_word(shape_id)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn test_worker_seed_len() -> usize {
+    shapes_worker_seed::worker_shape_seed().test_len()
+}
+#[cfg(test)]
+pub(crate) fn test_row_committed(word: u32) -> bool {
+    crate::state::state()
+        .shapes
+        .slab()
+        .region_row_committed(crate::codegen_abi::LayoutWord(word).row().0 as usize)
+}
+#[cfg(test)]
+pub(crate) fn test_region_rows_per_page() -> usize {
+    crate::state::state().shapes.slab().region_rows_per_page()
+}
+#[cfg(test)]
+pub(crate) fn test_record_count() -> usize {
+    crate::state::state().shapes.slab().len()
 }
 
 /// The field-representation word (`field_rep`) of `shape_id` in this agent,
@@ -2532,8 +2994,18 @@ pub(crate) fn shape_is_retired(shape_id: u32) -> bool {
 /// answer for a receiver with no shape record — so there is no presence
 /// test: the step 5 store check asks this on every checked store.
 #[inline]
-pub(crate) fn shape_rep_by_id(shape_id: u32) -> u64 {
-    let record = ShapeSlab::agent_record(shape_id);
+pub(crate) fn shape_rep_for_word(shape_id: LayoutWord) -> u64 {
+    shape_rep_of_record(ShapeSlab::agent_record_for_word(shape_id))
+}
+
+/// [`shape_rep_for_word`] for a live receiver's own header word (unchecked).
+#[inline]
+pub(crate) fn shape_rep_of_receiver(shape_id: u32) -> u64 {
+    shape_rep_of_record(ShapeSlab::agent_record_for_receiver(shape_id))
+}
+
+#[inline]
+fn shape_rep_of_record(record: *mut ShapeRecord) -> u64 {
     // SAFETY: `agent_record` never returns null; `rep` is an 8-aligned u64 of
     // a `#[repr(C)]` record (asserted 8-aligned), read the way
     // `ShapeRecordRef::rep` reads it because a published record's word is
@@ -2548,8 +3020,22 @@ pub(crate) fn shape_rep_by_id(shape_id: u32) -> u64 {
 /// The authoritative kind of a live shape in this agent. Presence and kind
 /// come from the same slab record; retirement needs no separate invalidation.
 #[inline]
-pub(crate) fn shape_object_kind_by_id(shape_id: u32) -> Option<ShapeObjectKind> {
-    shape_record_by_id(shape_id).map(ShapeRecordRef::object_kind)
+pub(crate) fn shape_object_kind_for_word(shape_id: LayoutWord) -> Option<ShapeObjectKind> {
+    shape_record_for_word(shape_id).map(ShapeRecordRef::object_kind)
+}
+
+/// [`shape_object_kind_for_word`] for a live receiver's own header word.
+#[inline(always)]
+pub(crate) fn shape_object_kind_of_receiver(shape_id: u32) -> Option<ShapeObjectKind> {
+    shape_record_of_receiver(shape_id).map(ShapeRecordRef::object_kind)
+}
+
+/// "The receiver's present record is of kind `kind`", on the stored field
+/// ([`ShapeRecord::kind_is`]): no decode, so the test folds with the
+/// presence bit into one masked compare.
+#[inline(always)]
+pub(crate) fn shape_kind_of_receiver_is(shape_id: u32, kind: ShapeObjectKind) -> bool {
+    shape_record_of_receiver(shape_id).is_some_and(|r| r.kind_is(kind))
 }
 
 /// Record that a shape is carried by an OLD-generation receiver.
@@ -2611,6 +3097,16 @@ pub(crate) unsafe fn note_full_trace_carrier(record: Option<ShapeRecordRef>) {
 }
 
 #[inline]
+pub(crate) unsafe fn note_external_carrier_of_word(id: u32) {
+    // The flag lives on the record: no descriptor is lifted to set it.
+    if let Some(record) =
+        ShapeSlab::agent_record_for_word_present(crate::codegen_abi::LayoutWord(id))
+    {
+        (*record).set(RECORD_FLAG_EXTERNAL_CARRIER, true);
+    }
+}
+
+/// [`note_external_carrier_of_word`] for a descriptor already in hand.
 pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescriptor>) {
     let Some(descriptor) = descriptor else {
         return;
@@ -2626,7 +3122,18 @@ pub(crate) unsafe fn note_external_shape_carrier(descriptor: Option<ShapeDescrip
 /// (`array_tail_transition::recompute_cache_carriers_after_full_trace`), so a
 /// descriptor whose last entry was evicted stops being rooted at the next full
 /// trace — the same cadence as `old_carrier`.
+/// [`note_cache_carrier`] for a live record handle.
 #[inline]
+pub(crate) unsafe fn note_cache_carrier_record(record: ShapeRecordRef) {
+    let ptr = record.0.as_ptr();
+    let newly_armed = !(*ptr).has(RECORD_FLAG_CACHE_CARRIER);
+    // GC_STORE_AUDIT(POINTER_FREE): liveness bookkeeping bit, never a heap reference.
+    (*ptr).set(RECORD_FLAG_CACHE_CARRIER, true);
+    if newly_armed {
+        note_shape_carrier_candidate((*ptr).keys);
+    }
+}
+
 pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
     let Some(descriptor) = descriptor else {
         return;
@@ -2671,7 +3178,7 @@ pub(crate) unsafe fn note_cache_carrier(descriptor: Option<ShapeDescriptor>) {
 #[inline(always)]
 pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
-    id: u32,
+    id: LayoutWord,
 ) {
     stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Write)
 }
@@ -2681,7 +3188,7 @@ pub(crate) unsafe fn stamp_object_shape_id_with_carrier_note(
 #[inline(always)]
 pub(crate) unsafe fn stamp_birth_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
-    id: u32,
+    id: LayoutWord,
 ) {
     stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Carry)
 }
@@ -2693,7 +3200,7 @@ pub(crate) unsafe fn stamp_birth_shape_id_with_carrier_note(
 #[inline(always)]
 pub(crate) unsafe fn stamp_same_keys_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
-    id: u32,
+    id: LayoutWord,
 ) {
     stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::Carry)
 }
@@ -2705,7 +3212,7 @@ pub(crate) unsafe fn stamp_same_keys_shape_id_with_carrier_note(
 #[inline(always)]
 pub(crate) unsafe fn stamp_key_add_shape_id_with_carrier_note(
     obj: *mut crate::object::ObjectHeader,
-    id: u32,
+    id: LayoutWord,
     key: *const crate::StringHeader,
 ) {
     stamp_object_shape_id_with_carrier_note_impl(obj, id, Publish::KeyAdd(key))
@@ -2725,28 +3232,55 @@ enum Publish {
 #[inline(always)]
 unsafe fn stamp_object_shape_id_with_carrier_note_impl(
     obj: *mut crate::object::ObjectHeader,
-    id: u32,
+    id: LayoutWord,
     publish: Publish,
 ) {
     // Charter step 3 (R5): a receiver carrying the Array-subclass numeric
     // proof loses it on every stamp but its own proof shape's.
     store_kind::retire_proof_before_stamp(obj, id);
     let previous = (*obj).parent_class_id;
-    debug_assert_brands_carried(super::layout_desc::layout_id_of_word(previous), id);
+    debug_assert_brands_carried(
+        LayoutWord(super::layout_desc::layout_id_of_word(previous)),
+        id,
+    );
+    // DEC 250: a MARKED object's structural change is reported before the
+    // stamp (a locked built-in refuses an image write while nothing has
+    // changed yet) and published after it (the shadow bit follows the stamp).
+    let marked = crate::object::proto_validity::note_object_shape_stamping(
+        obj as usize,
+        previous,
+        id.0,
+        match publish {
+            Publish::KeyAdd(key) => Some(key),
+            Publish::Carry | Publish::Write => None,
+        },
+    );
+    // The report may withdraw a sealed prototype (its shadow bit on the word
+    // still in place): the publication carries the bit from the word the
+    // report left, not the one read before it.
+    let previous = if marked {
+        (*obj).parent_class_id
+    } else {
+        previous
+    };
     (*obj).parent_class_id = match publish {
         Publish::Carry => super::layout_desc::carry_shadow(previous, id),
         Publish::Write => super::shadow::publish_word(obj, previous, id),
         Publish::KeyAdd(key) => super::shadow::publish_key_add_word(obj, previous, id, key),
-    };
+    }
+    .0;
     // A structural change to an object somebody INHERITS from is invisible to
     // every instance below it: no instance is touched, no epoch moves, and the
     // instances' own ShapeIds are unchanged. This is the one place every such
     // change publishes, which is why the validity bump lives here rather than
     // in a list of mutation entry points that would have to be kept complete.
     // Until something is marked as a prototype this is one relaxed `bool` load.
-    crate::object::proto_validity::note_object_shape_stamped(obj as usize, previous, id);
+    if marked {
+        crate::object::proto_validity::note_marked_object_shape_stamped(obj as usize);
+    }
     if !crate::arena::pointer_in_nursery(obj as usize) {
-        let record = shape_record_by_id(id);
+        // The header store above made `obj` the carrier of `id`.
+        let record = shape_record_of_receiver((id).0);
         note_old_generation_carrier(record);
         // This stamp is the structural-mutation publication funnel. Re-arm
         // even when the descriptor was already an old carrier: an owned
@@ -2763,10 +3297,13 @@ unsafe fn stamp_object_shape_id_with_carrier_note_impl(
 
 /// Clear every `cache_carrier` bit ahead of the post-full-trace recompute.
 pub(crate) fn clear_all_cache_carriers() {
-    crate::state::state().shapes.slab().for_each(|_, record| {
-        // SAFETY: live slab record, single-threaded agent.
-        unsafe { (*record).set(RECORD_FLAG_CACHE_CARRIER, false) };
-    });
+    crate::state::state()
+        .shapes
+        .slab()
+        .for_each_handle(|_, record| {
+            // SAFETY: live slab record, single-threaded agent.
+            unsafe { (*record).set(RECORD_FLAG_CACHE_CARRIER, false) };
+        });
 }
 
 /// Recompute the old-carrier gate from the trace that just finished.
@@ -2778,16 +3315,19 @@ pub(crate) fn clear_all_cache_carriers() {
 /// rotation. Budgeted full cycles clear it without retiring because their
 /// sliced trace is not a complete carrier census.
 pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
-    crate::state::state().shapes.slab().for_each(|_, record| {
-        // SAFETY: live slab record, single-threaded agent.
-        unsafe {
-            let seen = (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN);
-            (*record).set(RECORD_FLAG_OLD_CARRIER, seen);
-            (*record).set(RECORD_FLAG_OLD_CARRIER_SEEN, false);
-            (*record).set(RECORD_FLAG_CARRIED_SEEN, false);
-            (*record).set(RECORD_FLAG_BIRTH_OWNER, false);
-        }
-    });
+    crate::state::state()
+        .shapes
+        .slab()
+        .for_each_handle(|_, record| {
+            // SAFETY: live slab record, single-threaded agent.
+            unsafe {
+                let seen = (*record).has(RECORD_FLAG_OLD_CARRIER_SEEN);
+                (*record).set(RECORD_FLAG_OLD_CARRIER, seen);
+                (*record).set(RECORD_FLAG_OLD_CARRIER_SEEN, false);
+                (*record).set(RECORD_FLAG_CARRIED_SEEN, false);
+                (*record).set(RECORD_FLAG_BIRTH_OWNER, false);
+            }
+        });
 }
 
 /// Mint (or retrieve) the ShapeId paired with canonical keys and equal
@@ -2798,20 +3338,20 @@ pub(crate) fn rotate_old_carrier_epoch_after_full_trace() {
 /// rather than `*const ArrayHeader`: Perry's textual LLVM ABI represents the
 /// rooted keys global as an integer heap word on every target.
 #[no_mangle]
-pub extern "C" fn js_object_shape_id_for_keys(keys: u64, key_count: u32) -> u32 {
-    let id = shape_id_for_keys_ensure(keys as usize as *const ArrayHeader, key_count);
+pub extern "C" fn js_object_layout_for_keys(keys: u64, key_count: u32) -> u32 {
+    let id = layout_for_keys_ensure(keys as usize as *const ArrayHeader, key_count);
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
-    id
+    unsafe { note_external_carrier_of_word((id).0) };
+    id.0
 }
 
-/// [`js_object_shape_id_for_keys`] for a class's birth shape: codegen passes
+/// [`js_object_layout_for_keys`] for a class's birth shape: codegen passes
 /// the class id, because the shape names the prototype that class implies,
 /// and the birth `rep` (charter step 5, T1): `F64` for exactly the slots the
 /// class's typed layout declares raw-f64 at allocation. The rep is codegen's
 /// decision, made once from the class source; the runtime never re-derives it.
 #[no_mangle]
-pub extern "C" fn js_object_shape_id_for_class_keys(
+pub extern "C" fn js_object_layout_for_class_keys(
     keys: u64,
     key_count: u32,
     class_id: u32,
@@ -2826,8 +3366,8 @@ pub extern "C" fn js_object_shape_id_for_class_keys(
         None,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
-    id
+    unsafe { note_external_carrier_of_word((id).0) };
+    id.0
 }
 
 /// The birth ShapeId of a class born WIDE: its canonical keys with a live
@@ -2836,7 +3376,7 @@ pub extern "C" fn js_object_shape_id_for_class_keys(
 /// stamps it on an object with exactly `max(live, INLINE_SLOT_FLOOR)` slots,
 /// and the outlined one matches it for any allocation of that width.
 #[no_mangle]
-pub extern "C" fn js_object_shape_id_for_class_keys_live(
+pub extern "C" fn js_object_layout_for_class_keys_live(
     keys: u64,
     key_count: u32,
     live: u32,
@@ -2852,8 +3392,8 @@ pub extern "C" fn js_object_shape_id_for_class_keys_live(
         None,
     ));
     // SAFETY: `id` was resolved from this agent's live slab record above.
-    unsafe { note_external_shape_carrier(shape_descriptor_by_id(id)) };
-    id
+    unsafe { note_external_carrier_of_word((id).0) };
+    id.0
 }
 
 /// A class's birth shape with its codegen-declared rep. An `F64` lane past
@@ -2861,13 +3401,14 @@ pub extern "C" fn js_object_shape_id_for_class_keys_live(
 /// is the driver's static id for these facts (design step 4), whose content
 /// includes the rep.
 pub(crate) fn class_birth_shape_ensure(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live: u32,
     class_id: u32,
     rep: u64,
-    requested: Option<u32>,
-) -> Result<u32, ShapeDescriptorError> {
+    requested: Option<ShapeId>,
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
     let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
         u64::MAX
     } else {
@@ -2877,7 +3418,7 @@ pub(crate) fn class_birth_shape_ensure(
         return Err(ShapeDescriptorError::InvalidFacts);
     }
     shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         key_count,
         live.max(key_count),
         0,
@@ -2897,14 +3438,16 @@ pub(crate) fn class_birth_shape_ensure(
 /// A seed and post-construction finalizer enter with identical facts.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn final_shape_ensure_constfn(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live: u32,
     class_id: u32,
     rep: u64,
     infos: &[shapes_store::ConstFnSlotInfo],
-    requested: Option<u32>,
-) -> Result<u32, ShapeDescriptorError> {
+    requested: Option<ShapeId>,
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     let key_lanes = if key_count >= super::field_rep::REP_SLOTS {
         u64::MAX
     } else {
@@ -2917,7 +3460,7 @@ pub(crate) fn final_shape_ensure_constfn(
     // canonical keys rather than trusting a caller-supplied summary.
     let summary = unsafe { crate::object::key_attrs::keys_summary_checked(keys, key_count) };
     shape_descriptor_intern_with_special_mode(
-        keys,
+        shape_keys,
         key_count,
         live.max(key_count),
         0,
@@ -2929,6 +3472,7 @@ pub(crate) fn final_shape_ensure_constfn(
         infos,
         &[],
         requested,
+        None,
         true,
         0,
     )
@@ -2962,7 +3506,8 @@ pub(crate) fn final_shape_ensure_constfn(
 /// array costs a short scan and a `-1` rather than a spin.
 #[no_mangle]
 pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits: u64) -> i32 {
-    let Some(descriptor) = shape_descriptor_by_id(shape_id) else {
+    let shape_id = LayoutWord(shape_id);
+    let Some(descriptor) = shape_descriptor_for_word(shape_id) else {
         return -1;
     };
     if !descriptor.object_kind.is_ordinary_layout()
@@ -3007,8 +3552,8 @@ pub extern "C" fn js_shape_ordinary_inline_slot_for_key(shape_id: u32, key_bits:
 }
 
 /// Step 4b loop regions: where objects of an ORDINARY, generation-0,
-/// hole-free shape (the caller checked all three) keep `key` — `(false,
-/// slot)` in the inline block, or `(true, position)` in the spill buffer: a
+/// tombstone-free shape (the caller checked all three) keep `key` — `(false,
+/// slot)`, the key's storage slot, in the inline block, or `(true, position)` in the spill buffer: a
 /// position at or past the live inline bound IS the key's index in the
 /// buffer. Answered the inline range front to back, then the spill range
 /// back to front (#10595: a
@@ -3037,10 +3582,18 @@ fn region_key_location(keys: u64, count: u32, inline: u32, key_bits: u64) -> Opt
             stored.bits() == key_bits
                 || crate::string::js_string_key_bytes(stored, &mut stored_buf) == Some(wanted)
         };
+        // A key list with attributes keeps each key's storage slot apart from
+        // its position (a class family instance whose keys were stored out of
+        // declaration order lists them in insertion order over the family's
+        // slots): the word names the storage slot. A spill key is addressed
+        // by its position, so a list that moved one is not served.
+        let list = keys as usize as *const ArrayHeader;
         if let Some(i) = (0..lo).find(|&i| matches(i)) {
-            return Some((false, i));
+            let slot = super::key_attrs::key_storage_slot(list, i as u32) as usize;
+            return (slot < inline as usize).then_some((false, slot));
         }
-        (lo..hi).rev().find(|&i| matches(i)).map(|i| (true, i))
+        let i = (lo..hi).rev().find(|&i| matches(i))?;
+        (super::key_attrs::key_storage_slot(list, i as u32) as usize == i).then_some((true, i))
     }
 }
 
@@ -3099,6 +3652,8 @@ const REGION_GUARD_SLOT_BITS: u32 = 6;
 /// classification, and every covered key must be requested as an inline
 /// Number read. A Number read (R) on a lane that is not an identity F64 lane
 /// sets [`REGION_LOOP_WORD_VALUE_TEST`]: the guard then tests the value.
+/// A layout whose keys may hold the hole sets
+/// [`REGION_LOOP_WORD_PRESENCE_TEST`]: the guard then tests each key's slot.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn js_region_loop_pack(
@@ -3112,6 +3667,7 @@ pub extern "C" fn js_region_loop_pack(
     stored_mask: u32,
     boxed_mask: u32,
 ) -> u64 {
+    let shape_id = LayoutWord(shape_id);
     region_loop_pack(
         shape_id,
         n,
@@ -3129,7 +3685,8 @@ pub extern "C" fn js_region_loop_pack(
 enum RegionRefusal {
     /// Not an ordinary-band ShapeId (dictionary / exotic), or a bad key count.
     Band,
-    /// A key is an accessor or not writable/enumerable/configurable data.
+    /// A key is an accessor, private, or not writable/enumerable/configurable
+    /// data (a key that may hold the hole is served with a presence test).
     Summary,
     /// Ineligible receiver/read kind, non-zero semantic generation, or tombstones.
     Kind,
@@ -3153,7 +3710,7 @@ enum RegionRefusal {
 #[inline(never)]
 #[optimize(size)]
 fn region_loop_pack(
-    shape_id: u32,
+    shape_id: LayoutWord,
     n: u32,
     keys: [u64; 5],
     stored_mask: u32,
@@ -3161,21 +3718,28 @@ fn region_loop_pack(
     r_mask: u32,
 ) -> Result<u64, RegionRefusal> {
     use RegionRefusal::*;
-    if !is_site_matchable_shape_id(shape_id) || n == 0 || n > REGION_GUARD_MAX_KEYS {
+    if !is_site_matchable_layout_word(shape_id.0) || n == 0 || n > REGION_GUARD_MAX_KEYS {
         return Err(Band);
     }
-    let record = shape_record_by_id(shape_id).ok_or(Band)?;
-    if record.summary() != 0 {
-        return Err(Summary);
-    }
+    let record = shape_record_for_word(shape_id).ok_or(Band)?;
+    // A layout whose keys may hold the hole (every class family's, for life)
+    // is served: the shape says "may have holes", the object proves "has this
+    // key" (object model §3.2, `key_view`). The word then carries
+    // `REGION_LOOP_WORD_PRESENCE_TEST` and the emitted guard tests each key's
+    // slot on the object. Every other summary bit still refuses.
+    let holes = match record.summary() {
+        0 => false,
+        crate::object::key_attrs::SUMMARY_HOLES => true,
+        _ => return Err(Summary),
+    };
     // Borrow the same record throughout priming; no descriptor clone or
     // second slab probe, and no allocation/callback in this operation.
     let descriptor = unsafe { &*record.0.as_ptr() };
-    let unmarked_numeric_read = descriptor.object_kind() == ShapeObjectKind::OrdinaryUnmarked
+    let unmarked_numeric_read = descriptor.kind_is(ShapeObjectKind::OrdinaryUnmarked)
         && stored_mask == 0
         && boxed_mask == 0
         && r_mask == (1 << n) - 1;
-    if (descriptor.object_kind() != ShapeObjectKind::Ordinary && !unmarked_numeric_read)
+    if (!descriptor.kind_is(ShapeObjectKind::Ordinary) && !unmarked_numeric_read)
         || descriptor.proto_id == PROTO_ID_PER_OBJECT
         || descriptor.semantic_generation != 0
         || descriptor.hole_count != 0
@@ -3197,6 +3761,10 @@ fn region_loop_pack(
             if stored_mask & (1 << i) != 0 {
                 return Err(SpillStored);
             }
+            // The guard's presence test reads inline slots only.
+            if holes {
+                return Err(SpillUnservable);
+            }
             if position >= super::SPILL_MAX_FIELD_INDEX {
                 return Err(SpillUnservable);
             }
@@ -3209,21 +3777,21 @@ fn region_loop_pack(
     // one receiver's spill word while the other's word is all-inline, and
     // that copy reads each field the same way.
     let id = if any_spill {
-        shape_id ^ crate::object::field_get_set::PACKED_SPILL_FLIP
+        shape_id.0 ^ crate::object::field_get_set::PACKED_SPILL_FLIP
     } else {
-        shape_id
+        shape_id.0
     };
     let mut word = u64::from(id);
-    let mut value_test = false;
+    // An R key's value test rejects the hole too, so on a holey layout every
+    // R key is value-tested, whatever its lane.
+    let mut value_test = holes && r_mask & ((1u32 << n) - 1) != 0;
     for (i, &(spilled, n_at)) in at.iter().enumerate().take(n as usize) {
         // A canonical Number cannot preserve a ConstFn body identity. Every
         // SPECIAL write must use the checked slot funnel before storing;
         // numeric writes to other lanes and read-only SPECIAL keys are safe.
         if !spilled
             && stored_mask & (1 << i) != 0
-            && n_at < super::field_rep::REP_SLOTS as usize
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32)
-                == super::field_rep::REP_SPECIAL
+            && descriptor.lane(n_at as u32) == super::field_rep::REP_SPECIAL
         {
             return Err(Rep);
         }
@@ -3249,8 +3817,7 @@ fn region_loop_pack(
         }
         if !spilled
             && boxed_mask & (1 << i) != 0
-            && (n_at as u32) < super::field_rep::REP_SLOTS
-            && super::field_rep::slot_rep(descriptor.rep, n_at as u32) != super::field_rep::REP_ANY
+            && descriptor.lane(n_at as u32) != super::field_rep::REP_ANY
         {
             return Err(F64Stored);
         }
@@ -3264,6 +3831,9 @@ fn region_loop_pack(
     }
     if value_test {
         word |= REGION_LOOP_WORD_VALUE_TEST;
+    }
+    if holes {
+        word |= REGION_LOOP_WORD_PRESENCE_TEST;
     }
     Ok(word)
 }
@@ -3282,6 +3852,20 @@ pub const REGION_LOOP_WORD_RETIRED: u64 = u64::MAX;
 /// id half is a ShapeId, so a word carrying it is never
 /// [`REGION_LOOP_WORD_RETIRED`].
 pub const REGION_LOOP_WORD_VALUE_TEST: u64 = 1 << 63;
+
+/// Bit 62 of a published loop-region word: the shape's keys may hold the
+/// hole (`SUMMARY_HOLES`, every class family's layout), so the emitted guard
+/// tests, on the object, that each key it does not value-test holds no
+/// `TAG_HOLE` before F runs (an R key's value test already rejects it).
+/// Field indices end at bit 61, so the bit is free.
+///
+/// The guard proves presence once, and inside F no JS runs. A present key of
+/// a holey layout becomes absent only through a delete, which moves the
+/// object to its overflow and so changes its word (`overflow::delete` sets
+/// the shadow bit). A re-check after JS does not re-test presence: a word
+/// with this bit fails the re-check (as a value-tested learned word does),
+/// so F is entered only through the full guard.
+pub const REGION_LOOP_WORD_PRESENCE_TEST: u64 = 1 << 62;
 
 /// Compute a loop region's word ([`js_region_loop_pack`]) and publish it; the
 /// loop-region publisher, with a single atomic word for the id and slots.
@@ -3306,6 +3890,8 @@ pub unsafe extern "C" fn js_region_loop_prime(
     boxed_mask: u32,
     r_mask: u32,
 ) -> u64 {
+    let shape_id = LayoutWord(shape_id);
+
     let verdict = region_loop_pack(
         shape_id,
         n,
@@ -3385,7 +3971,7 @@ static KEEP_JS_REGION_LOOP_PRIME: unsafe extern "C" fn(
 //
 // The gate is gone. The rule is now, for every receiver kind:
 //
-//     the word is a ShapeId  <=>  is_shape_id(word)
+//     the word is a ShapeId  <=>  is_layout_word(word)
 //
 // which is exactly what emitted PICs test: the ShapeId range and value, never a
 // moving keys address or an ObjectHeader compatibility mirror.
@@ -3401,8 +3987,8 @@ pub(crate) unsafe fn shape_word_is_writable(obj: *const crate::object::ObjectHea
 }
 
 /// The receiver's ShapeId, or 0 when it is not a shaped object.
-#[inline]
-pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> u32 {
+#[inline(always)]
+pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader) -> LayoutWord {
     // A shadowed word (`layout_desc` documents bit 30) stamps as its FULL
     // word when an overflow is installed (object model step 4: its own
     // contents are not its layout's, so every cache keyed by this stamp
@@ -3410,13 +3996,13 @@ pub(crate) unsafe fn object_shape_stamp(obj: *const crate::object::ObjectHeader)
     // bit alone it stamps as the layout id, which still changes with every
     // own-key or [[Prototype]] change of the object.
     let word = (*obj).parent_class_id;
-    if is_shape_id(word) {
+    LayoutWord(if is_layout_word(word) {
         word
     } else if crate::object::layout_desc::word_is_shadowed(word) {
         (*obj).shape_word()
     } else {
         0
-    }
+    })
 }
 
 #[cfg(test)]
@@ -3437,8 +4023,8 @@ thread_local! {
 #[inline]
 pub(crate) unsafe fn install_cached_object_shape_transition(
     obj: *mut crate::object::ObjectHeader,
-    expected_predecessor_shape_id: u32,
-    target_shape_id: u32,
+    expected_predecessor_shape_id: LayoutWord,
+    target_shape_id: LayoutWord,
     target_keys: crate::object::ObjectKeys,
 ) -> bool {
     install_cached_object_shape_version(
@@ -3457,8 +4043,8 @@ pub(crate) unsafe fn install_cached_object_shape_transition(
 #[inline]
 pub(crate) unsafe fn install_cached_object_shape_version(
     obj: *mut crate::object::ObjectHeader,
-    expected_predecessor_shape_id: u32,
-    target_shape_id: u32,
+    expected_predecessor_shape_id: LayoutWord,
+    target_shape_id: LayoutWord,
     _target_keys: *mut ArrayHeader,
     _target_key_count: u32,
 ) -> bool {
@@ -3478,8 +4064,8 @@ pub(crate) unsafe fn install_cached_object_shape_version(
 #[inline]
 pub(crate) unsafe fn install_cached_object_shape_key_add(
     obj: *mut crate::object::ObjectHeader,
-    expected_predecessor_shape_id: u32,
-    target_shape_id: u32,
+    expected_predecessor_shape_id: LayoutWord,
+    target_shape_id: LayoutWord,
     target_keys: crate::object::ObjectKeys,
     key: *const crate::StringHeader,
 ) -> bool {
@@ -3506,8 +4092,8 @@ pub(crate) unsafe fn install_cached_object_shape_key_add(
 #[inline]
 pub(crate) unsafe fn install_cache_carried_object_shape_version(
     obj: *mut crate::object::ObjectHeader,
-    expected_predecessor_shape_id: u32,
-    target_shape_id: u32,
+    expected_predecessor_shape_id: LayoutWord,
+    target_shape_id: LayoutWord,
     _target_keys: *mut ArrayHeader,
     _target_key_count: u32,
 ) -> bool {
@@ -3525,8 +4111,8 @@ pub(crate) unsafe fn install_cache_carried_object_shape_version(
 #[inline]
 unsafe fn install_cached_object_shape_version_impl(
     obj: *mut crate::object::ObjectHeader,
-    expected_predecessor_shape_id: u32,
-    target_shape_id: u32,
+    expected_predecessor_shape_id: LayoutWord,
+    target_shape_id: LayoutWord,
     _target_keys: *mut ArrayHeader,
     _target_key_count: u32,
     target_is_cache_carried: bool,
@@ -3535,7 +4121,7 @@ unsafe fn install_cached_object_shape_version_impl(
     if obj.is_null()
         || !shape_word_is_writable(obj)
         || object_shape_stamp(obj) != expected_predecessor_shape_id
-        || !is_shape_id(target_shape_id)
+        || !is_layout_word(target_shape_id.0)
     {
         return false;
     }
@@ -3546,7 +4132,7 @@ unsafe fn install_cached_object_shape_version_impl(
     // and the cache's rooted target edge keeps its descriptor live.
     #[cfg(debug_assertions)]
     {
-        if !shape_descriptor_by_id(target_shape_id).is_some_and(|descriptor| {
+        if !shape_descriptor_for_word(target_shape_id).is_some_and(|descriptor| {
             descriptor.keys == _target_keys as u64
                 && descriptor.logical_key_count == _target_key_count
                 && (!target_is_cache_carried || descriptor.cache_carrier)
@@ -3566,8 +4152,8 @@ unsafe fn install_cached_object_shape_version_impl(
         store_kind::retire_proof_before_stamp(obj, target_shape_id);
         let previous = (*obj).parent_class_id;
         (*obj).parent_class_id = match added_key {
-            Some(key) => super::shadow::publish_key_add_word(obj, previous, target_shape_id, key),
-            None => super::shadow::publish_word(obj, previous, target_shape_id),
+            Some(key) => super::shadow::publish_key_add_word(obj, previous, target_shape_id, key).0,
+            None => super::shadow::publish_word(obj, previous, target_shape_id).0,
         };
     } else if let Some(key) = added_key {
         stamp_key_add_shape_id_with_carrier_note(obj, target_shape_id, key);
@@ -3616,16 +4202,19 @@ pub(crate) fn test_cached_transition_stamps() -> u64 {
 #[inline]
 pub(crate) unsafe fn stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_count: u32,
     live_inline_slot_count: u32,
-) -> u32 {
+) -> LayoutWord {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
     if !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let Some(lineage) = object_shape_descriptor(obj) else {
-        let id = shape_descriptor_ensure_for_object(obj, keys, key_count, live_inline_slot_count)
-            .unwrap_or_else(|error| shape_descriptor_error_abort(error));
+        let id =
+            shape_descriptor_ensure_for_object(obj, shape_keys, key_count, live_inline_slot_count)
+                .unwrap_or_else(|error| shape_descriptor_error_abort(error));
         stamp_object_shape_id_with_carrier_note(obj, id);
         debug_assert_object_shape_parity(obj);
         return id;
@@ -3652,7 +4241,7 @@ pub(crate) unsafe fn stamp_object_shape(
         store_kind::mint_kind(lineage.object_kind, obj)
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-        keys,
+        shape_keys,
         key_count,
         lineage.live_inline_slot_count,
         lineage.semantic_generation,
@@ -3665,7 +4254,7 @@ pub(crate) unsafe fn stamp_object_shape(
         rep,
         None,
     ));
-    if id != (*obj).shape_word() {
+    if id != LayoutWord((*obj).shape_word()) {
         // Read-side lookup_ways also calls `stamp_object_shape` to populate its
         // field cache. Preserve a proved Array-subclass prefix when that call
         // merely republishes the exact current descriptor; retire it only for
@@ -3705,7 +4294,7 @@ pub(crate) unsafe fn stamp_object_shape(
 #[inline]
 pub(crate) unsafe fn birth_stamp_object_shape(
     obj: *mut crate::object::ObjectHeader,
-    runtime_shape_id: u32,
+    runtime_shape_id: LayoutWord,
     live_inline_slot_count: u32,
     rep: u64,
 ) {
@@ -3718,20 +4307,21 @@ pub(crate) unsafe fn birth_stamp_object_shape(
     });
     let keys = current.keys as usize as *mut ArrayHeader;
     let key_count = current.logical_key_count;
-    let supplied_id_is_local =
-        (descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
-            && shape_descriptor_field_by_id(runtime_shape_id, |d| {
+    let supplied_id_is_local = (descriptor_matches_object(runtime_shape_id, obj, live_inline_slot_count)
+            && shape_descriptor_field_for_word(runtime_shape_id, |d| {
                 super::field_rep::identity_with_special(d.rep) == rep
             }) == Some(true))
-            || shapes_slot_list::install_external_shape_id(
-                runtime_shape_id,
+            // The installer speaks identities; the supplied word names this
+            // agent's row, whose identity (if any) is what may conflict.
+            || shape_record_for_word(runtime_shape_id).is_some_and(|r| shapes_slot_list::install_external_shape_id(
+                r.identity(),
                 keys,
                 key_count,
                 live_inline_slot_count,
                 object_proto_id(obj),
                 store_kind::receiver_ordinary_kind(obj),
                 rep,
-            );
+            ));
     if supplied_id_is_local {
         stamp_object_shape_id_with_carrier_note(obj, runtime_shape_id);
         debug_assert_object_shape_parity(obj);
@@ -3787,14 +4377,14 @@ pub(crate) unsafe fn birth_stamp_object_shape(
 #[inline]
 pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
     obj: *mut crate::object::ObjectHeader,
-    runtime_shape_id: u32,
+    runtime_shape_id: LayoutWord,
     keys: crate::object::ObjectKeys,
     live_inline_slot_count: u32,
 ) -> bool {
     if obj.is_null() {
         return false;
     }
-    let Some(descriptor) = shape_descriptor_by_id(runtime_shape_id) else {
+    let Some(descriptor) = shape_descriptor_for_word(runtime_shape_id) else {
         return false;
     };
     if descriptor.keys != keys.arr() as u64
@@ -3802,7 +4392,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         || descriptor.live_inline_slot_count != live_inline_slot_count
         || descriptor.semantic_generation != 0
         || descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
-        || descriptor.proto_id != object_proto_id(obj)
+        || !shapes_class_role::newborn_proto_matches(obj, descriptor.proto_id)
     {
         if descriptor.object_kind.is_ordinary_layout()
             && descriptor.object_kind != store_kind::receiver_ordinary_kind(obj)
@@ -3812,7 +4402,7 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
         return false;
     }
     (*obj).parent_class_id =
-        super::layout_desc::carry_shadow((*obj).parent_class_id, runtime_shape_id);
+        super::layout_desc::carry_shadow((*obj).parent_class_id, runtime_shape_id).0;
     if !crate::arena::pointer_in_nursery(obj as usize) {
         note_old_generation_carrier(descriptor.record_ref());
     }
@@ -3834,8 +4424,25 @@ pub(crate) unsafe fn try_birth_stamp_preinstalled_shape(
 pub(crate) unsafe fn birth_publish_object_shape(
     obj: *mut crate::object::ObjectHeader,
     live_inline_slot_count: u32,
-) -> u32 {
+) -> LayoutWord {
     synchronize_object_shape_descriptor_from(obj, None, live_inline_slot_count)
+}
+
+/// [`birth_publish_object_shape`] of a keyless newborn whose allocator names
+/// its [[Prototype]] identity (a born-null record: `PROTO_ID_NULL`).
+pub(crate) unsafe fn birth_publish_object_shape_as(
+    obj: *mut crate::object::ObjectHeader,
+    live_inline_slot_count: u32,
+    proto_id: u64,
+) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        None,
+        crate::object::ObjectKeys::NONE,
+        live_inline_slot_count,
+        super::field_rep::REP_ANY,
+        Some(proto_id),
+    )
 }
 
 /// Publish a new live inline-slot bound for an ALREADY PUBLISHED object.
@@ -3849,7 +4456,7 @@ pub(crate) unsafe fn birth_publish_object_shape(
 pub(crate) unsafe fn publish_object_live_slot_count(
     obj: *mut crate::object::ObjectHeader,
     live_inline_slot_count: u32,
-) -> u32 {
+) -> LayoutWord {
     publish_object_live_slot_count_rep(obj, live_inline_slot_count, None)
 }
 
@@ -3860,15 +4467,15 @@ pub(crate) unsafe fn publish_object_live_slot_count_rep(
     obj: *mut crate::object::ObjectHeader,
     live_inline_slot_count: u32,
     rep: Option<u64>,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let predecessor = object_shape_descriptor(obj);
     if let Some(current) = predecessor {
         if current.live_inline_slot_count == live_inline_slot_count {
             debug_assert_object_shape_parity(obj);
-            return object_shape_stamp(obj);
+            return LayoutWord(object_shape_stamp(obj).0);
         }
     }
     match predecessor {
@@ -3900,7 +4507,7 @@ pub(crate) unsafe fn publish_object_live_slot_count_rep(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn synchronize_object_shape_descriptor(
     obj: *mut crate::object::ObjectHeader,
-) -> u32 {
+) -> LayoutWord {
     let predecessor = object_shape_descriptor(obj);
     let live = predecessor
         .map(|descriptor| descriptor.live_inline_slot_count)
@@ -3920,9 +4527,9 @@ pub(crate) unsafe fn synchronize_object_shape_descriptor_from(
     obj: *mut crate::object::ObjectHeader,
     predecessor: Option<ShapeDescriptor>,
     live_inline_slot_count: u32,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() {
-        return 0;
+        return LayoutWord(0);
     }
     let keys = predecessor
         .map(|descriptor| descriptor.keys_view())
@@ -3943,7 +4550,7 @@ pub(crate) unsafe fn publish_object_shape_from(
     predecessor: Option<ShapeDescriptor>,
     keys_view: crate::object::ObjectKeys,
     live_inline_slot_count: u32,
-) -> u32 {
+) -> LayoutWord {
     publish_object_shape_from_rep(
         obj,
         predecessor,
@@ -3964,9 +4571,32 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     keys_view: crate::object::ObjectKeys,
     live_inline_slot_count: u32,
     rep: u64,
-) -> u32 {
+) -> LayoutWord {
+    publish_object_shape_from_rep_born(
+        obj,
+        predecessor,
+        keys_view,
+        live_inline_slot_count,
+        rep,
+        None,
+    )
+}
+
+/// [`publish_object_shape_from_rep`] for an unstamped newborn whose allocator
+/// knows its [[Prototype]] identity (`Some`): a born-null record names
+/// `PROTO_ID_NULL` in its first shape, the one place that fact is kept. A
+/// receiver with a lineage carries the lineage's identity either way.
+#[cfg_attr(feature = "shape-mint-diag", track_caller)]
+pub(crate) unsafe fn publish_object_shape_from_rep_born(
+    obj: *mut crate::object::ObjectHeader,
+    predecessor: Option<ShapeDescriptor>,
+    keys_view: crate::object::ObjectKeys,
+    live_inline_slot_count: u32,
+    rep: u64,
+    birth_proto: Option<u64>,
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     // Generic structural publication may add/delete/reorder a named field.
     // The learned exact numeric-tail installer has its own entry point and
@@ -3980,7 +4610,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // shared array must have cloned before push; otherwise siblings already
     // observe mutated bytes and no descriptor can make that state sound.
     let old_id = object_shape_stamp(obj);
-    let old_shape = shape_descriptor_by_id(old_id);
+    let old_shape = shape_descriptor_of_receiver((old_id).0);
     let mut retire_owned_history = false;
     if let Some(old) = old_shape {
         // #9064: an owned ordinary receiver that already entered stable-
@@ -3996,7 +4626,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
             live_inline_slot_count,
             old.hole_count,
         ) {
-            return id;
+            return LayoutWord(id);
         }
         if old.keys == keys as u64 && old.logical_key_count != key_count {
             // #8113: these three arms are unreachable-by-construction defenses
@@ -4008,7 +4638,7 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
             else {
                 return old_id;
             };
-            if (*gc.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_not_array!((*gc.as_ptr()).obj_type) {
                 return old_id;
             }
             let shared = (*gc.as_ptr()).gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0;
@@ -4061,10 +4691,10 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
     // receiver with no lineage (an unstamped newborn) reads its own.
     let proto_id = match lineage {
         Some(descriptor) => descriptor.proto_id,
-        None => object_proto_id(obj),
+        None => birth_proto.unwrap_or_else(|| object_proto_id(obj)),
     };
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-        keys,
+        keys_view,
         key_count,
         live_inline_slot_count,
         semantic_generation,
@@ -4103,29 +4733,29 @@ pub(crate) unsafe fn publish_object_shape_from_rep(
 /// Sound because `GC_FLAG_SHAPE_SHARED` is sticky: an array without it has
 /// had exactly one owner for its whole life, and that owner now carries
 /// `keep`. A stale IC token already misses on the stamp compare and
-/// `shape_descriptor_by_id` of a retired id is `None`, so nothing can observe
+/// `shape_descriptor_for_word` of a retired id is `None`, so nothing can observe
 /// the retired versions — with one exception: a descriptor an optimization
 /// cache permanently owns (`cache_carrier`) may be reinstalled by that cache
 /// while no live object carries it, so it stays.
-fn retire_owned_shape_siblings(keys: u64, keep: u32) {
+fn retire_owned_shape_siblings(keys: u64, keep: LayoutWord) {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
-    let stale: Vec<u32> = inner
-        .families
-        .get(&keys)
-        .map(|ids| {
-            ids.as_slice()
-                .iter()
-                .copied()
-                .filter(|&id| {
-                    id != keep
-                        && table.slab().get(id).is_some_and(|record| {
-                            !record.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
-                        })
+    // An owned array's family is keyed by its heap address; `keep` names the
+    // list's node should the array be canonical after all.
+    let node = table
+        .slab()
+        .get_handle(keep)
+        .map_or(NO_NODE, |record| record.keys_node());
+    let stale: Vec<LayoutWord> = inner
+        .family_ids(node, keys)
+        .into_iter()
+        .filter(|&id| {
+            id != keep
+                && table.slab().get_handle(id).is_some_and(|record| {
+                    !record.has(RECORD_FLAG_CACHE_CARRIER | RECORD_FLAG_EXTERNAL_CARRIER)
                 })
-                .collect()
         })
-        .unwrap_or_default();
+        .collect();
     for id in stale {
         remove_descriptor_and_reverse_indices(&mut inner, id);
     }
@@ -4147,9 +4777,9 @@ fn retire_owned_shape_siblings(keys: u64, keep: u32) {
 pub(crate) unsafe fn transition_object_shape_accessor_replaced(
     obj: *mut crate::object::ObjectHeader,
     key_bytes: &[u8],
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     if crate::object::overflow::has_overflow(obj) {
         return transition_object_shape_semantics(obj);
@@ -4162,7 +4792,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
     // SplitMix64 over (predecessor, key, a tag no other transition uses).
     // Bit 63 keeps it disjoint from the counter namespace (which aborts far
     // below 2^62) and from the dictionary namespace (bit 62 alone).
-    let mut x = key_hash ^ (u64::from(prev) << 32 | u64::from(prev)) ^ 0xACCE_5500_0000_0000;
+    let mut x = key_hash ^ (u64::from(prev.0) << 32 | u64::from(prev.0)) ^ 0xACCE_5500_0000_0000;
     x ^= x >> 30;
     x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
     x ^= x >> 27;
@@ -4170,7 +4800,7 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
     x ^= x >> 31;
     let generation = mutation_generation(x);
     let id = publish_shape_result(shape_descriptor_ensure_with_holes(
-        current.keys as usize as *mut ArrayHeader,
+        current.keys_view(),
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
@@ -4192,15 +4822,14 @@ pub(crate) unsafe fn transition_object_shape_accessor_replaced(
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn transition_object_shape_semantics(
     obj: *mut crate::object::ObjectHeader,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
-    let keys = current.keys as usize as *mut ArrayHeader;
     let key_count = current.logical_key_count;
     // A dictionary receiver's identity lives in its own namespace, disjoint
     // from both ordinary ones (see `object/dictionary.rs`).
@@ -4209,7 +4838,7 @@ pub(crate) unsafe fn transition_object_shape_semantics(
         shape_id_exhausted_abort();
     }
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
-        keys,
+        current.keys_view(),
         key_count,
         current.live_inline_slot_count,
         generation,
@@ -4220,6 +4849,56 @@ pub(crate) unsafe fn transition_object_shape_semantics(
     stamp_object_shape_id_with_carrier_note(obj, id);
     debug_assert_object_shape_parity(obj);
     id
+}
+
+/// Move `obj`, a keyless newborn the runtime is about to build into an
+/// intrinsic prototype holder, to the born-prototype lineage
+/// ([`BORN_PROTOTYPE_GENERATION`]): its keyless shape at that generation. Every
+/// shape it takes while it is built descends from that root, so none is
+/// carried by an ordinary object, and its builder's prototype mark
+/// (`proto_validity::ensure_meta_for_mark`) mints no private lineage: the one
+/// it would mint is the one it already has. The builder marks every holder it
+/// births here before the holder is exposed; the holders share the lineage,
+/// as the births on one prototype layout share theirs.
+///
+/// # Safety
+/// `obj` is a live, unexposed, keyless `ObjectHeader`, or null; collection is
+/// suppressed by the caller.
+pub(crate) unsafe fn stamp_born_prototype_root(obj: *mut crate::object::ObjectHeader) {
+    if obj.is_null() || !shape_word_is_writable(obj) {
+        return;
+    }
+    let Some(current) = object_shape_descriptor(obj) else {
+        return;
+    };
+    debug_assert_eq!(
+        current.logical_key_count, 0,
+        "a born prototype root is keyless"
+    );
+    if current.logical_key_count != 0 || current.semantic_generation != 0 {
+        return;
+    }
+    let id = publish_shape_result(shape_descriptor_ensure_with_generation(
+        current.keys_view(),
+        0,
+        current.live_inline_slot_count,
+        BORN_PROTOTYPE_GENERATION,
+        store_kind::mint_kind(current.object_kind, obj),
+        current.proto_id,
+        receiver_facts_of_current(obj, &current),
+    ));
+    stamp_object_shape_id_with_carrier_note(obj, id);
+    debug_assert_object_shape_parity(obj);
+}
+
+/// Is `obj`'s shape on the born-prototype lineage ([`stamp_born_prototype_root`])?
+///
+/// # Safety
+/// `obj` is a live `ObjectHeader`.
+pub(crate) unsafe fn object_on_born_prototype_lineage(
+    obj: *const crate::object::ObjectHeader,
+) -> bool {
+    object_shape_descriptor(obj).is_some_and(|d| d.semantic_generation == BORN_PROTOTYPE_GENERATION)
 }
 
 /// Give `obj`'s current shape a ConstFn lane for every inline slot `claims`
@@ -4244,7 +4923,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
         return false;
     };
     if current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
+        || current.deprecation_pending()
         || super::field_rep::has_deprecated(current.rep)
     {
         return false;
@@ -4253,8 +4932,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     let read = |slot: u32| std::ptr::read(base.add(slot as usize * 8) as *const u64);
     let lanes = current
         .live_inline_slot_count
-        .min(current.logical_key_count)
-        .min(super::field_rep::REP_SLOTS);
+        .min(current.logical_key_count);
     let mut infos: Vec<shapes_store::ConstFnSlotInfo> = Vec::new();
     let mut added = false;
     for slot in 0..lanes {
@@ -4270,10 +4948,7 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
                 if super::field_rep::slot_rep(current.rep, slot) == super::field_rep::REP_ANY
                     && claims(slot, bits) =>
             {
-                infos.push(shapes_store::ConstFnSlotInfo {
-                    slot: slot as u8,
-                    info,
-                });
+                infos.push(shapes_store::ConstFnSlotInfo { slot, info });
                 added = true;
             }
             _ => {}
@@ -4282,15 +4957,20 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
     if !added {
         return false;
     }
+    // An I32 lane (I32 at rest, PR C) would become `Any` below while its
+    // word stays I32: a shape with one learns no ConstFn lane.
+    if super::field_rep::i32_lane_slots(current.rep, current.special_constfn_mask) != 0 {
+        return false;
+    }
     // The other lanes keep their representation; every ConstFn lane is SPECIAL.
     let mut rep = current.rep;
-    for slot in 0..lanes {
+    for slot in 0..lanes.min(super::field_rep::REP_SLOTS) {
         if super::field_rep::slot_rep(rep, slot) == super::field_rep::REP_SPECIAL {
             rep = super::field_rep::with_slot_rep(rep, slot, super::field_rep::REP_ANY);
         }
     }
     let rep = infos.iter().fold(rep, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+        super::field_rep::with_special_lane(rep, i.slot)
     });
     let keys = current.keys as usize as *const ArrayHeader;
     let summary = receiver_extra_summary(obj)
@@ -4341,17 +5021,14 @@ pub(crate) unsafe fn learn_object_constfn_lanes(
 /// `obj` is a live `ObjectHeader`, or null.
 pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
     obj: *mut crate::object::ObjectHeader,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) || crate::object::overflow::has_overflow(obj) {
         return transition_object_shape_semantics(obj);
     }
     let Some(current) = object_shape_descriptor(obj) else {
         return transition_object_shape_semantics(obj);
     };
-    if current.special_constfn_mask == 0
-        || current.hole_count != 0
-        || current.deprecation_targets() != (0, 0)
-    {
+    if !current.has_constfn_lane() || current.hole_count != 0 || current.deprecation_pending() {
         return transition_object_shape_semantics(obj);
     }
     let base = (obj as *const u8).add(std::mem::size_of::<crate::object::ObjectHeader>());
@@ -4360,9 +5037,9 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         .iter()
         .copied()
         .filter(|i| {
-            u32::from(i.slot) < current.live_inline_slot_count
+            i.slot < current.live_inline_slot_count
                 && super::field_rep_store::constfn_store_info(std::ptr::read(
-                    base.add(usize::from(i.slot) * 8) as *const u64,
+                    base.add(i.slot as usize * 8) as *const u64,
                 )) == Some(i.info)
         })
         .collect();
@@ -4370,7 +5047,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
         return transition_object_shape_semantics(obj);
     }
     let rep = infos.iter().fold(super::field_rep::REP_ANY, |rep, i| {
-        super::field_rep::with_slot_rep(rep, u32::from(i.slot), super::field_rep::REP_SPECIAL)
+        super::field_rep::with_special_lane(rep, i.slot)
     });
     let keys = current.keys as usize as *const ArrayHeader;
     let generation = SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4385,7 +5062,7 @@ pub(crate) unsafe fn transition_object_shape_semantics_keeping_constfn(
             crate::object::key_attrs::keys_summary_checked(keys, current.logical_key_count)
         };
     let Ok(id) = shape_descriptor_intern_with_special(
-        keys,
+        current.keys_view(),
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
@@ -4427,7 +5104,7 @@ pub(crate) unsafe fn transition_object_shape_prototype(
     obj: *mut crate::object::ObjectHeader,
     proto_id: u64,
     proto_bits: u64,
-) -> u32 {
+) -> LayoutWord {
     transition_object_shape_prototype_with_holder(obj, proto_id, proto_bits, 0)
 }
 
@@ -4445,9 +5122,9 @@ pub(crate) unsafe fn transition_object_shape_prototype_with_holder(
     proto_id: u64,
     proto_bits: u64,
     holder_brand: u64,
-) -> u32 {
+) -> LayoutWord {
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
@@ -4462,7 +5139,7 @@ pub(crate) unsafe fn transition_object_shape_prototype_with_holder(
         if holder_brand != 0 {
             transition_object_shape_add_brand(obj, holder_brand);
         }
-        return object_shape_stamp(obj);
+        return LayoutWord(object_shape_stamp(obj).0);
     }
     let generation = if crate::object::overflow::has_overflow(obj) {
         SHAPE_SEMANTIC_NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -4481,7 +5158,7 @@ pub(crate) unsafe fn transition_object_shape_prototype_with_holder(
     // lanes below it), so a class instance linked to its evaluation's
     // prototype keeps its class's numeric lanes.
     let id = publish_shape_result(shape_descriptor_ensure_with_rep(
-        current.keys as usize as *mut ArrayHeader,
+        current.keys_view(),
         current.logical_key_count,
         current.live_inline_slot_count,
         generation,
@@ -4512,7 +5189,7 @@ pub(crate) unsafe fn transition_object_shape_prototype_with_holder(
 /// is a present record of this agent whose identity is `proto_id`.
 pub(crate) unsafe fn stamp_known_prototype_transition(
     obj: *mut crate::object::ObjectHeader,
-    linked: u32,
+    linked: LayoutWord,
     proto_id: u64,
     proto_bits: u64,
 ) {
@@ -4537,11 +5214,12 @@ pub(crate) unsafe fn class_object_first_key_is(
     obj: *const crate::object::ObjectHeader,
     key: &[u8],
 ) -> bool {
-    let Some(record) = ShapeSlab::agent_record_present(object_shape_stamp(obj)) else {
+    let Some(record) = ShapeSlab::agent_record_for_receiver_present(object_shape_stamp(obj).0)
+    else {
         return false;
     };
     let record = &*record;
-    record.object_kind() == ShapeObjectKind::Class
+    record.kind_is(ShapeObjectKind::Class)
         && record.logical_key_count > 0
         && record.live_inline_slot_count > 0
         && record.hole_count == 0
@@ -4580,7 +5258,7 @@ pub(crate) fn proto_id_links_class_instance(linked: u64, class_default: u64) -> 
 /// # Safety
 /// `obj` is a live `ObjectHeader`, or null.
 pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHeader) -> u32 {
-    if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == 0 {
+    if obj.is_null() || !shape_word_is_writable(obj) || object_shape_stamp(obj) == LayoutWord(0) {
         return 0;
     }
     let proto_id = object_proto_id(obj);
@@ -4598,7 +5276,7 @@ pub(crate) unsafe fn restamp_object_proto_id(obj: *mut crate::object::ObjectHead
     // prototype transition re-derives it, but an unchanged prototype
     // identity mints nothing, so re-derive explicitly.
     store_kind::restamp_object_store_kind(obj);
-    object_shape_stamp(obj)
+    object_shape_stamp(obj).0
 }
 
 // ---------------------------------------------------------------------------
@@ -4649,7 +5327,7 @@ pub(crate) const PROTO_ID_PER_OBJECT: u64 = PROTO_ID_UNIQUE;
 /// hands it out.
 pub(crate) const PROTO_ID_RECORD_HELD: u64 = PROTO_ID_NULL - 1;
 /// Serial bits a MIXED identity can carry beside a 32-bit class id.
-const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
+pub(crate) const PROTO_ID_MIXED_SERIAL_BITS: u32 = 30;
 
 static PROTO_ID_UNIQUE_NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
@@ -4674,19 +5352,18 @@ fn vtable_class(class_id: u32) -> u32 {
     {
         return 0;
     }
-    // Module-local anonymous ids may collide with declarations. Project the
-    // existing reflective precedence when minting the shape, so a CLASS
-    // link remains a shape fact instead of a registry check on every read.
-    if crate::object::class_registry::anonymous_class_role(class_id) == Some(false) {
+    // The descriptor's compiler-owned role precedes the first shape birth.
+    // Later receiver operations carry this prototype fact on the shape.
+    if crate::object::class_registry::declarations::class_declaration(class_id)
+        .is_some_and(|d| d.is_anonymous() && !d.is_declared())
+    {
         return 0;
     }
     crate::object::class_generic_origin(class_id).unwrap_or(class_id)
 }
 
-/// The CLASS word of a class identity, including a closed-literal id that
-/// later collides with a declaration. Receiver birth classification is a
-/// separate fact: an anon receiver can have DEFAULT while its class acquires
-/// a holder, and probes must observe that publication.
+/// The CLASS word of a class identity. A receiver's actual prototype role
+/// lives on its shape; a native holder publication remains observable there.
 pub(crate) fn class_identity_proto_id(class_id: u32) -> u64 {
     if class_id == 0 {
         return PROTO_ID_DEFAULT;
@@ -4707,15 +5384,18 @@ pub(crate) fn class_proto_id(class_id: u32) -> u64 {
 ///
 /// # Safety
 /// `bits` are a recorded `ObjectMeta.prototype` word.
-unsafe fn prototype_serial(bits: u64) -> u64 {
+pub(crate) unsafe fn prototype_serial(bits: u64) -> u64 {
     let value = crate::value::JSValue::from_bits(bits);
     if !value.is_pointer() {
         return 0;
     }
     let addr = value.as_pointer::<u8>() as usize;
     match crate::value::addr_class::try_read_gc_header(addr) {
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT => {
-            let meta = (*(addr as *const crate::object::ObjectHeader)).meta;
+        Some(header) if crate::object_has_meta_word!(header.obj_type) => {
+            let meta = crate::meta_read!(crate::meta_obj_from_type!(
+                addr as *const crate::object::ObjectHeader as *mut _,
+                header.obj_type,
+            ));
             if meta.is_null() {
                 0
             } else {
@@ -4726,23 +5406,41 @@ unsafe fn prototype_serial(bits: u64) -> u64 {
     }
 }
 
-/// The [[Prototype]] identity of an ordinary object of class `class_id` whose
-/// meta record links prototype `bits` (NaN-boxed, or `TAG_NULL`): the rule
-/// [`object_proto_id`] applies to a recorded prototype. `None` when that link
-/// has no stable identity (a prototype with no serial, or a serial past the
-/// mixed band), which `object_proto_id` answers with a fresh unique id.
+/// The linked prototype identity of an already-proven declared class.
+/// The caller has the class's template holder, so its declared identity is
+/// authoritative; reconstructing anonymous membership here would lock once
+/// per template instantiation. Ordinary receiver transitions instead carry
+/// their role from the predecessor shape in `object_proto_id_for`.
 ///
 /// # Safety
-/// `bits` is a live prototype value or `TAG_NULL`.
-pub(crate) unsafe fn stable_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+/// `bits` is a live prototype value or `TAG_NULL`, and `class_id` belongs to
+/// the declared class holder the caller has already validated.
+pub(crate) unsafe fn stable_declared_linked_proto_id(class_id: u32, bits: u64) -> Option<u64> {
+    let class = if class_id == 0
+        || class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
+    {
+        0
+    } else {
+        crate::object::class_generic_origin(class_id).unwrap_or(class_id)
+    };
+    stable_linked_proto_id_for_class(class, bits)
+}
+
+/// The [[Prototype]] identity a function's shape names for a link to `bits`
+/// (null, or a prototype that already has its stable serial): the class-less
+/// rule an ordinary receiver's link takes.
+pub(crate) fn stable_function_link_identity(bits: u64) -> Option<u64> {
+    stable_linked_proto_id_for_class(0, bits)
+}
+
+fn stable_linked_proto_id_for_class(class: u32, bits: u64) -> Option<u64> {
     if bits == crate::value::TAG_NULL {
         return Some(PROTO_ID_NULL);
     }
-    let serial = prototype_serial(bits);
+    let serial = unsafe { prototype_serial(bits) };
     if serial == 0 {
         return None;
     }
-    let class = vtable_class(class_id);
     if class == 0 {
         return Some(serial);
     }
@@ -4766,8 +5464,8 @@ pub(crate) unsafe fn object_proto_id(obj: *const crate::object::ObjectHeader) ->
 /// of a construction's birth shape (#10507's birth record)? One directory
 /// read; no descriptor copy.
 #[inline]
-pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool {
-    let Some(record) = ShapeSlab::agent_record_present(id) else {
+pub(crate) fn shape_is_keyless_birth(id: LayoutWord, proto_id: u64, slots: u32) -> bool {
+    let Some(record) = ShapeSlab::agent_record_for_word_present(id) else {
         return false;
     };
     // SAFETY: a present record of this agent, read immediately.
@@ -4786,7 +5484,7 @@ pub(crate) fn shape_is_keyless_birth(id: u32, proto_id: u64, slots: u32) -> bool
 /// the remaining facts that publication derives from a newborn.
 #[inline]
 pub(crate) fn shape_is_keyless_birth_of(
-    id: u32,
+    id: LayoutWord,
     proto_id: u64,
     slots: u32,
     kind: ShapeObjectKind,
@@ -4794,13 +5492,13 @@ pub(crate) fn shape_is_keyless_birth_of(
     if !shape_is_keyless_birth(id, proto_id, slots) {
         return false;
     }
-    let Some(record) = ShapeSlab::agent_record_present(id) else {
+    let Some(record) = ShapeSlab::agent_record_for_word_present(id) else {
         return false;
     };
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
-        r.object_kind() == kind && r.summary() == 0 && r.rep == 0 && r.special_constfn_mask() == 0
+        r.kind_is(kind) && r.summary() == 0 && r.rep == 0 && r.constfn_infos().is_empty()
     }
 }
 
@@ -4815,7 +5513,7 @@ pub(crate) fn shape_is_keyless_birth_of(
 /// directory read; no descriptor copy.
 #[inline]
 pub(crate) fn shape_is_filled_birth(
-    id: u32,
+    id: LayoutWord,
     proto_id: u64,
     count: u32,
     kind: ShapeObjectKind,
@@ -4834,7 +5532,7 @@ pub(crate) fn shape_is_filled_birth(
 /// (the construction's realm singletons) as the object that minted it.
 #[inline]
 pub(crate) fn shape_is_attributed_filled_birth(
-    id: u32,
+    id: LayoutWord,
     proto_id: u64,
     count: u32,
     kind: ShapeObjectKind,
@@ -4844,27 +5542,27 @@ pub(crate) fn shape_is_attributed_filled_birth(
 
 #[inline]
 fn filled_birth(
-    id: u32,
+    id: LayoutWord,
     proto_id: u64,
     count: u32,
     kind: ShapeObjectKind,
     attributed: bool,
 ) -> bool {
-    let Some(record) = ShapeSlab::agent_record_present(id) else {
+    let Some(record) = ShapeSlab::agent_record_for_word_present(id) else {
         return false;
     };
     // SAFETY: a present record of this agent, read immediately.
     unsafe {
         let r = &*record;
         r.proto_id == proto_id
-            && r.object_kind() == kind
+            && r.kind_is(kind)
             && kind.is_ordinary_layout()
             && r.logical_key_count == count
             && r.live_inline_slot_count == count
             && (attributed || r.semantic_generation == 0)
             && r.hole_count == 0
             && (attributed || r.summary() == 0)
-            && r.special_constfn_mask() == 0
+            && r.constfn_infos().is_empty()
             && r.keys != 0
     }
 }
@@ -4875,13 +5573,12 @@ fn filled_birth(
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
 #[inline]
-pub(crate) unsafe fn object_shape_identity(obj: *const crate::object::ObjectHeader) -> u64 {
-    (*ShapeSlab::agent_record(object_shape_stamp(obj))).proto_id
+pub(crate) unsafe fn object_proto_identity(obj: *const crate::object::ObjectHeader) -> u64 {
+    (*ShapeSlab::agent_record_for_receiver((object_shape_stamp(obj)).0)).proto_id
 }
 
 /// The first synthetic class id (`class_registry::prototype_objects`): a
 /// plain function constructor's instances.
-#[cfg(test)]
 pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
     crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE;
 
@@ -4898,38 +5595,48 @@ pub(crate) const SYNTHETIC_CLASS_ID_BASE: u32 =
 /// `obj` is a live `ObjectHeader`.
 ///
 /// A null [[Prototype]] is the identity `PROTO_ID_NULL` and reads back as
-/// `TAG_NULL` — except on a cell BORN null (`Object.create(null)`,
-/// `OBJ_FLAG_NULL_PROTO`), which answers 0 as it always has: every reader
-/// tests that header bit for the born-null case, and a recorded null would
-/// send it down the re-prototyped-receiver paths instead.
+/// `TAG_NULL`, however the cell came to have it (born null, as
+/// `Object.create(null)`, or linked to null later): the shape is the one
+/// authority ([`object_prototype_is_null`]).
 #[inline(always)]
 pub(crate) unsafe fn object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).prototype != 0 {
         return (*meta).prototype;
     }
     // A default, class or per-object identity answers 0 from the id alone,
-    // and a null link from the header. The link is the layout's (an overflow
+    // and a null identity `TAG_NULL`. The link is the layout's (an overflow
     // never holds [[Prototype]]), so the layout id answers under the bit.
     let word = super::layout_desc::layout_id_of_word((*obj).parent_class_id);
     match shape_word_kind(word) {
         SHAPE_ID_KIND_PLAIN => 0,
-        SHAPE_ID_KIND_NULL if is_shape_id(word) => null_linked_prototype_word(obj),
+        SHAPE_ID_KIND_NULL if is_layout_word(word) => crate::value::TAG_NULL,
         _ => linked_object_prototype_word(obj),
     }
 }
 
-/// [`object_prototype_word`] of a meta-less receiver whose ShapeId names the
-/// null identity: `TAG_NULL`, or 0 on a cell born null.
+/// Is `obj`'s [[Prototype]] null? Its recorded prototype, else its shape's
+/// identity: the one authority, whatever made the link null. Allocation-free.
 ///
 /// # Safety
 /// `obj` is a live `ObjectHeader`.
-#[inline(never)]
-unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+#[inline(always)]
+pub(crate) unsafe fn object_prototype_is_null(obj: *const crate::object::ObjectHeader) -> bool {
+    object_prototype_word(obj) == crate::value::TAG_NULL
+}
+
+/// [`object_prototype_is_null`] for an arbitrary heap address: false for
+/// anything that is not a live, unforwarded ordinary object cell.
+///
+/// # Safety
+/// `addr` is any word; it is proven a GC cell before it is read.
+pub(crate) unsafe fn cell_prototype_is_null(addr: usize) -> bool {
+    crate::value::addr_class::try_read_gc_header(addr).is_some_and(|header| {
+        header.obj_type == crate::gc::GC_TYPE_OBJECT
+            && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
+            && object_prototype_is_null(addr as *const crate::object::ObjectHeader)
+    })
 }
 
 /// [`object_prototype_word`] of a meta-less receiver whose ShapeId may name
@@ -4942,7 +5649,7 @@ unsafe fn null_linked_prototype_word(obj: *const crate::object::ObjectHeader) ->
 unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) -> u64 {
     // The agent directory read: never null, an absent id reads the empty
     // record (identity 0, the default).
-    let record = &*ShapeSlab::agent_record(object_shape_stamp(obj));
+    let record = &*ShapeSlab::agent_record_for_receiver((object_shape_stamp(obj)).0);
     let proto_id = record.proto_id;
     if (PROTO_ID_CLASS..PROTO_ID_MIXED).contains(&proto_id) {
         // CLASS is an implied link, rather than an instance override.
@@ -4954,10 +5661,7 @@ unsafe fn linked_object_prototype_word(obj: *const crate::object::ObjectHeader) 
     if proto_id != PROTO_ID_NULL {
         return record.prototype_word();
     }
-    match crate::value::addr_class::try_read_gc_header(obj as usize) {
-        Some(header) if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 => 0,
-        _ => crate::value::TAG_NULL,
-    }
+    crate::value::TAG_NULL
 }
 
 /// The prototype identity `obj` has when its recorded [[Prototype]] is
@@ -4974,12 +5678,17 @@ pub(crate) unsafe fn object_proto_id_for(
     // A namespace's vtable/override registry can answer before its physical
     // own slots. Project that read classification into the shape, as for
     // process.env and arguments below; an own-slot region cannot admit it.
-    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID
-        || (*super::gc_header_for(obj))._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0
-    {
+    // Only a MAPPED arguments object is exotic (its aliased elements read the
+    // parameter bindings); an unmapped one (strict, non-simple parameters, or
+    // no parameter the body names) is an ordinary object (ES CreateUnmapped-
+    // ArgumentsObject) and takes the ordinary prototype identity.
+    // A mapped arguments object's aliased elements are inline elements read
+    // through their cells (never named slots), so it keeps its layout identity.
+    if (*obj).class_id == crate::object::NATIVE_MODULE_CLASS_ID {
         return PROTO_ID_PER_OBJECT;
     }
-    let meta = (*obj).meta;
+    // A1_UNPROVEN: record-first: shape word (kind-A/B question for S0f).
+    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     // Read semantics take precedence over every prototype link, including
     // null. Changing an exotic receiver's prototype cannot turn its virtual
     // reads into physical own-slot reads.
@@ -4987,18 +5696,12 @@ pub(crate) unsafe fn object_proto_id_for(
     {
         return PROTO_ID_PER_OBJECT;
     }
-    // A recorded prototype outranks the born-null header bit, which is
-    // sticky: `Object.setPrototypeOf(Object.create(null), p)` keeps the bit
-    // and its shape must still name `p`.
-    if recorded == 0 {
-        if let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) {
-            if header._reserved & crate::gc::OBJ_FLAG_NULL_PROTO != 0 {
-                return PROTO_ID_NULL;
-            }
-        }
+    // A null link (born null or linked to null later) is the null identity.
+    if recorded == crate::value::TAG_NULL {
+        return PROTO_ID_NULL;
     }
     let class_id = (*obj).class_id;
-    let class = vtable_class(class_id);
+    let class = shapes_class_role::receiver_vtable_class(obj);
     if recorded != 0 {
         if let Some(pid) = shapes_linked_birth::declaration_parent_identity(obj, recorded) {
             return pid;
@@ -5017,7 +5720,7 @@ pub(crate) unsafe fn object_proto_id_for(
                 return PROTO_ID_CLASS | u64::from(class);
             }
         }
-        if let Some(id) = stable_linked_proto_id(class_id, recorded) {
+        if let Some(id) = stable_linked_proto_id_for_class(class, recorded) {
             return id;
         }
         // A prototype with no stable identity gets one per link, carried by
@@ -5065,7 +5768,7 @@ unsafe fn bits_name_object_of_class(bits: u64, class: u32) -> bool {
     let addr = value.as_pointer::<u8>() as usize;
     matches!(
         crate::value::addr_class::try_read_gc_header(addr),
-        Some(header) if header.obj_type == crate::gc::GC_TYPE_OBJECT
+        Some(header) if crate::gc_type_is_object!(header.obj_type)
             && (*(addr as *const crate::object::ObjectHeader)).class_id == class
     )
 }
@@ -5073,9 +5776,9 @@ unsafe fn bits_name_object_of_class(bits: u64, class: u32) -> bool {
 /// The prototype identity recorded in shape `id`, or `None` for an id with no
 /// descriptor. One slab read; no descriptor copy.
 #[inline]
-pub(crate) fn shape_proto_id(id: u32) -> Option<u64> {
+pub(crate) fn shape_proto_id(id: LayoutWord) -> Option<u64> {
     let table = &crate::state::state().shapes;
-    let record = table.slab().record_ptr(id)?;
+    let record = table.slab().handle_record_ptr(id)?;
     // SAFETY: live slab record, read immediately on this agent.
     Some(unsafe { (*record).proto_id })
 }
@@ -5093,7 +5796,7 @@ pub(crate) fn shape_proto_id(id: u32) -> Option<u64> {
 #[cfg_attr(feature = "shape-mint-diag", track_caller)]
 pub(crate) unsafe fn transition_object_shape_to_class(
     obj: *mut crate::object::ObjectHeader,
-) -> u32 {
+) -> LayoutWord {
     publish_callable_object_kind(obj, ShapeObjectKind::Class)
 }
 
@@ -5102,23 +5805,23 @@ pub(crate) unsafe fn transition_object_shape_to_class(
 pub(crate) unsafe fn publish_callable_object_kind(
     obj: *mut crate::object::ObjectHeader,
     kind: ShapeObjectKind,
-) -> u32 {
+) -> LayoutWord {
     assert!(matches!(
         kind,
         ShapeObjectKind::Class | ShapeObjectKind::CallableOrdinary
     ));
     if obj.is_null() || !shape_word_is_writable(obj) {
-        return 0;
+        return LayoutWord(0);
     }
     let current = object_shape_descriptor(obj).unwrap_or_else(|| {
         synchronize_object_shape_descriptor(obj);
         object_shape_descriptor(obj).expect("shape synchronization must publish a descriptor")
     });
     if current.object_kind == kind {
-        return object_shape_stamp(obj);
+        return LayoutWord(object_shape_stamp(obj).0);
     }
     let id = publish_shape_result(shape_descriptor_ensure_with_generation(
-        current.keys as usize as *const ArrayHeader,
+        current.keys_view(),
         current.logical_key_count,
         current.live_inline_slot_count,
         current.semantic_generation,
@@ -5176,7 +5879,7 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
     // through its handle before the stamp.
     let (id, obj) = handle.across_mut::<crate::object::ObjectHeader, _>(|| {
         publish_shape_result(shape_descriptor_ensure_with_rep(
-            current.keys as usize as *const ArrayHeader,
+            current.keys_view(),
             current.logical_key_count,
             current.live_inline_slot_count,
             current.semantic_generation,
@@ -5203,7 +5906,7 @@ pub(crate) unsafe fn transition_object_shape_add_brand(
 /// `obj` is a live `ObjectHeader`.
 #[inline]
 pub(crate) unsafe fn object_has_brand(obj: *const crate::object::ObjectHeader, brand: u64) -> bool {
-    shape_brands_by_id(object_shape_stamp(obj))
+    shape_brands_for_word(object_shape_stamp(obj))
         .is_some_and(|brands| brands.binary_search(&brand).is_ok())
 }
 
@@ -5211,9 +5914,10 @@ pub(crate) unsafe fn object_has_brand(obj: *const crate::object::ObjectHeader, b
 /// carries the brands of the one it leaves (#11791). Checked at the one stamp
 /// funnel, so a mint site that drops `receiver_facts` fails here.
 #[inline]
-fn debug_assert_brands_carried(previous: u32, next: u32) {
-    if cfg!(debug_assertions) && previous != next && is_shape_id(previous) {
-        let (Some(before), Some(after)) = (shape_brands_by_id(previous), shape_brands_by_id(next))
+fn debug_assert_brands_carried(previous: LayoutWord, next: LayoutWord) {
+    if cfg!(debug_assertions) && previous != next && is_layout_word(previous.0) {
+        let (Some(before), Some(after)) =
+            (shape_brands_for_word(previous), shape_brands_for_word(next))
         else {
             return;
         };
@@ -5237,22 +5941,22 @@ fn debug_assert_brands_carried(previous: u32, next: u32) {
 pub(crate) unsafe fn object_shape_descriptor(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeDescriptor> {
-    shape_descriptor_by_id(object_shape_stamp(obj))
+    shape_descriptor_of_receiver((object_shape_stamp(obj)).0)
 }
 
 /// [`object_shape_descriptor`]'s record, borrowed in place (#10362).
-#[inline]
+#[inline(always)]
 pub(crate) unsafe fn object_shape_record(
     obj: *const crate::object::ObjectHeader,
 ) -> Option<ShapeRecordRef> {
-    shape_record_by_id(object_shape_stamp(obj))
+    shape_record_of_receiver((object_shape_stamp(obj)).0)
 }
 
 #[inline]
-pub(crate) unsafe fn object_shape_id(obj: *const crate::object::ObjectHeader) -> u32 {
+pub(crate) unsafe fn object_layout_stamp(obj: *const crate::object::ObjectHeader) -> LayoutWord {
     object_shape_descriptor(obj)
         .map(|_| object_shape_stamp(obj))
-        .unwrap_or(0)
+        .unwrap_or(LayoutWord(0))
 }
 
 /// Retire `id` from the by-id store and the family index (#9706).
@@ -5262,9 +5966,9 @@ pub(crate) unsafe fn object_shape_id(obj: *const crate::object::ObjectHeader) ->
 /// metadata scan moving the family, the two can name different addresses; a
 /// removal in that window leaves the id in the stale family, where every
 /// walk skips it (`record_ptr` is `None`) and the next scan drops it.
-fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
+fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: LayoutWord) {
     let table = &crate::state::state().shapes;
-    let Some(indexed) = table.slab().get(id).map(|record| record.keys) else {
+    let Some(indexed) = table.slab().get_handle(id).map(|record| record.keys) else {
         return;
     };
     remove_descriptor_indexed_under(inner, id, indexed);
@@ -5274,18 +5978,19 @@ fn remove_descriptor_and_reverse_indices(inner: &mut ShapeTableInner, id: u32) {
 /// address the id is indexed under — the metadata scan, which retires a
 /// family whose keys address was recycled while a live edge may already have
 /// rewritten the records to the forwarded address.
-fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed: u64) {
+fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: LayoutWord, indexed: u64) {
     let table = &crate::state::state().shapes;
     // SAFETY: no slab reference is held by the caller across this call.
-    let Some(record) = (unsafe { table.slab_mut().remove(id) }) else {
+    let Some(record) = (unsafe { table.slab_mut().remove_handle(id) }) else {
         return;
     };
     #[cfg(any(test, feature = "shape-mint-diag"))]
-    crate::object::shape_mint_census::note_retire(id);
+    // The census is keyed by the minted identity, not the layout word.
+    crate::object::shape_mint_census::note_retire(record.shape_id);
     if record.has(RECORD_FLAG_FACTS_INDEXED) {
         inner.facts_remove(record.facts_key_with_keys(indexed), id);
     }
-    inner.family_remove(indexed, id);
+    inner.family_remove(record.keys_node(), indexed, id);
     // Unlike the two rekey paths, retirement does not transfer this record.
     // SAFETY: slab removal returned the unique owner of the extension.
     unsafe { record.release_extras() };
@@ -5295,11 +6000,11 @@ fn remove_descriptor_indexed_under(inner: &mut ShapeTableInner, id: u32, indexed
 /// header facts. #8113: the live bound is a PARAMETER — the header no longer
 /// mirrors it, so the caller supplies the bound it is claiming.
 fn descriptor_matches_object(
-    shape_id: u32,
+    shape_id: LayoutWord,
     obj: *const crate::object::ObjectHeader,
     live_inline_slot_count: u32,
 ) -> bool {
-    let Some(d) = shape_descriptor_by_id(shape_id) else {
+    let Some(d) = shape_descriptor_for_word(shape_id) else {
         return false;
     };
     unsafe {
@@ -5351,9 +6056,9 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
         return;
     }
     let id = object_shape_stamp(obj);
-    if id != 0 {
+    if id != LayoutWord(0) {
         debug_assert!(
-            shape_descriptor_by_id(id).is_some_and(|d| {
+            shape_descriptor_for_word(id).is_some_and(|d| {
                 d.keys == keys.arr() as u64 && d.logical_key_count == keys.count()
             }),
             "published ShapeId disagrees with authoritative ObjectHeader facts"
@@ -5383,7 +6088,7 @@ pub(crate) unsafe fn debug_assert_object_shape_parity_for_keys(
 #[cfg(test)]
 #[inline]
 pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHeader) -> bool {
-    if is_shape_id((*obj).shape_word()) {
+    if is_layout_word((*obj).shape_word()) {
         (*obj).parent_class_id = 0;
         true
     } else {
@@ -5397,8 +6102,7 @@ pub(crate) unsafe fn clear_object_shape_stamp(obj: *mut crate::object::ObjectHea
 /// copies first. So one index serves every list on it.
 pub(crate) unsafe fn keys_prefix_is_immutable(keys: *const ArrayHeader) -> bool {
     crate::value::addr_class::try_read_gc_header(keys as usize).is_some_and(|gc| {
-        gc.obj_type == crate::gc::GC_TYPE_ARRAY
-            && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
+        crate::gc_type_is_array!(gc.obj_type) && gc.gc_flags & crate::gc::GC_FLAG_SHAPE_SHARED != 0
     })
 }
 
@@ -5440,7 +6144,7 @@ pub(crate) enum KeysIndexVerdict {
 }
 
 pub(crate) unsafe fn shape_slot_lookup(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_bytes: &[u8],
     key_hash: u64,
     key_count: u32,
@@ -5452,21 +6156,51 @@ pub(crate) unsafe fn shape_slot_lookup(
     }
 }
 
+/// The slot index of a canonical list lives on the node that owns its
+/// backing (CKI S2): a holder that carries the list's node reaches it with
+/// one validated node read and no hash. An owned list, or a holder without a
+/// node, uses the heap-address map.
 pub(crate) unsafe fn shape_slot_lookup_verdict(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     key_bytes: &[u8],
     key_hash: u64,
     key_count: u32,
     build: bool,
 ) -> KeysIndexVerdict {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
+    let node = shape_keys.node_for(key_count);
+    if node != NO_NODE {
+        let verdict =
+            crate::object::canonical_keys::with_backing_shapes(keys, key_count, node, |list| {
+                let shape = match &mut list.index {
+                    Some(shape) => shape,
+                    None if !build => return KeysIndexVerdict::Unindexed,
+                    index @ None => index.insert(Box::new(ShapeIndex {
+                        indexed_len: 0,
+                        slots: SlotIndex::new(),
+                    })),
+                };
+                consult_shape_index(shape, keys, key_bytes, key_hash, key_count)
+            });
+        if let Some(verdict) = verdict {
+            return verdict;
+        }
+    }
+    // A shared (canonical or cache-published) array's index has one home,
+    // its backing's owner node; a holder without the node scans. Only an
+    // OWNED array, whose heap address is its identity, is indexed here.
+    if keys_prefix_is_immutable(keys) {
+        return KeysIndexVerdict::Unindexed;
+    }
     let keys_id = keys as usize;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    let shape = match inner.indices.get_mut(&keys_id) {
+    let shape = match inner.owned_indices.get_mut(&keys_id) {
         Some(s) => {
             if s.indexed_len > key_count && !keys_prefix_is_immutable(keys) {
                 // An owned array that shrank (delete/compaction): slots are
                 // untrustworthy.
-                inner.indices.remove(&keys_id);
+                inner.owned_indices.remove(&keys_id);
                 return KeysIndexVerdict::Unindexed;
             }
             // A canonical backing's index covers its longest list, and a
@@ -5480,12 +6214,24 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
                 return KeysIndexVerdict::Unindexed;
             }
             inner.note_young_keys(keys_id as u64);
-            inner.indices.entry(keys_id).or_insert(ShapeIndex {
+            inner.owned_indices.entry(keys_id).or_insert(ShapeIndex {
                 indexed_len: 0,
                 slots: SlotIndex::new(),
             })
         }
     };
+    consult_shape_index(shape, keys, key_bytes, key_hash, key_count)
+}
+
+/// Answer `key_bytes` from `shape`, the index of `keys`' backing, extending it
+/// to `key_count` slots first.
+unsafe fn consult_shape_index(
+    shape: &mut ShapeIndex,
+    keys: *const ArrayHeader,
+    key_bytes: &[u8],
+    key_hash: u64,
+    key_count: u32,
+) -> KeysIndexVerdict {
     if shape.indexed_len < key_count {
         index_range(shape, keys, key_count);
     }
@@ -5538,28 +6284,55 @@ pub(crate) unsafe fn shape_slot_lookup_verdict(
 #[cfg(test)]
 pub(crate) fn indexed_slots_for_test() -> u64 {
     let inner = crate::state::state().shapes.inner.borrow();
-    inner
-        .indices
+    let mut slots: u64 = inner
+        .owned_indices
         .values()
         .map(|ix| u64::from(ix.indexed_len))
-        .sum()
+        .sum();
+    crate::object::canonical_keys::for_each_list_shapes(|_, _, list| {
+        slots += list
+            .index
+            .as_ref()
+            .map_or(0, |ix| u64::from(ix.indexed_len));
+    });
+    slots
 }
 
 /// Record a freshly appended key: `keys` (the POST-append array — a clone
 /// or grow-realloc lands under its new identity, or nowhere if no entry
 /// exists yet) grew to `new_count` with `key_hash` at `slot`.
+///
+/// A canonical backing's index is only reached through a carried node; a
+/// holder without one leaves it to catch up on its next lookup
+/// (`consult_shape_index` extends a short index incrementally).
 pub(crate) fn shape_note_append(
-    keys: *const ArrayHeader,
+    keys: impl Into<ShapeKeys>,
     new_count: u32,
     key_hash: u64,
     slot: u32,
 ) {
-    let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
+    let shape_keys: ShapeKeys = keys.into();
+    let keys = shape_keys.arr();
+    let node = shape_keys.node_for(new_count);
+    let note = |shape: &mut ShapeIndex| {
         if shape.indexed_len + 1 == new_count {
             shape.indexed_len = new_count;
             shape.slots.push(key_hash, slot);
         }
+    };
+    if node != NO_NODE
+        && crate::object::canonical_keys::with_backing_shapes(keys, new_count, node, |list| {
+            if let Some(shape) = list.index.as_deref_mut() {
+                note(shape);
+            }
+        })
+        .is_some()
+    {
+        return;
+    }
+    let mut inner = crate::state::state().shapes.inner.borrow_mut();
+    if let Some(shape) = inner.owned_indices.get_mut(&(keys as usize)) {
+        note(shape);
     }
 }
 
@@ -5567,7 +6340,7 @@ pub(crate) fn shape_note_append(
 /// next lookup_ways builds it wholesale at the caller's threshold).
 pub(crate) fn shape_note_hit(keys: *const ArrayHeader, key_hash: u64, slot: u32) {
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(shape) = inner.indices.get_mut(&(keys as usize)) {
+    if let Some(shape) = inner.owned_indices.get_mut(&(keys as usize)) {
         shape.slots.push(key_hash, slot);
     }
 }
@@ -5591,9 +6364,9 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
         return;
     }
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    if let Some(shape) = inner.indices.remove(&old_keys) {
+    if let Some(shape) = inner.owned_indices.remove(&old_keys) {
         inner.note_young_keys(new_id as u64);
-        inner.indices.insert(new_id, shape);
+        inner.owned_indices.insert(new_id, shape);
     }
 }
 
@@ -5604,7 +6377,7 @@ pub(crate) fn shape_keys_grown(old_keys: usize, new_keys: *const ArrayHeader) {
 pub(crate) fn shape_drop(keys: *const ArrayHeader) {
     let keys = keys as usize;
     let mut inner = crate::state::state().shapes.inner.borrow_mut();
-    inner.indices.remove(&keys);
+    inner.owned_indices.remove(&keys);
 }
 
 /// True when a shape's keys address is currently occupied by another GC type.
@@ -5621,7 +6394,7 @@ fn shape_keys_address_is_recycled(addr: usize) -> bool {
     unsafe {
         crate::value::addr_class::try_read_tracked_gc_header(addr).is_some_and(|header| {
             let obj_type = (*header.as_ptr()).obj_type;
-            obj_type != crate::gc::GC_TYPE_ARRAY && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
+            crate::gc_type_is_not_array!(obj_type) && obj_type != crate::gc::GC_TYPE_LAZY_ARRAY
         })
     }
 }
@@ -5637,7 +6410,7 @@ pub(crate) fn prune_uncarried_shape_descriptors_after_full_trace() {
     let table = &crate::state::state().shapes;
     let mut inner = table.inner.borrow_mut();
     let mut stale = Vec::new();
-    table.slab().for_each(|id, record| {
+    table.slab().for_each_handle(|id, record| {
         // SAFETY: live slab record, read immediately under agent ownership.
         let record = unsafe { &*record };
         // #10905: a keyless birth shape an allocation consulted this epoch
@@ -5671,22 +6444,22 @@ pub(crate) fn prune_dead_shape_keys(is_dead_owner: &dyn Fn(usize) -> bool) {
     // Guard the retain with a type check: if the object at the key address
     // is not an array/lazy-array, the keys array is dead regardless of what
     // `is_dead_owner` says about the recycled tenant.
-    if !inner.indices.is_empty() {
-        inner.indices.retain(|keys_id, _| {
+    if !inner.owned_indices.is_empty() {
+        inner.owned_indices.retain(|keys_id, _| {
             !is_dead_owner(*keys_id) && !shape_keys_address_is_recycled(*keys_id)
         });
     }
     let mut stale: Vec<u32> = Vec::new();
-    table.slab().for_each(|id, record| {
+    table.slab().for_each_handle(|id, record| {
         // SAFETY: live slab record, read immediately.
         let descriptor = unsafe { *record };
         let keys = descriptor.keys as usize;
         if is_dead_owner(descriptor.keys as usize) || shape_keys_address_is_recycled(keys) {
-            stale.push(id);
+            stale.push(id.0);
         }
     });
     for id in stale {
-        remove_descriptor_and_reverse_indices(&mut inner, id);
+        remove_descriptor_and_reverse_indices(&mut inner, LayoutWord(id));
     }
 }
 
@@ -5761,9 +6534,9 @@ fn shape_keys_address_left_heap(keys: u64) -> bool {
 /// Remove everything indexed under a dead keys address: its slot index and
 /// every descriptor in its family.
 fn retire_shape_keys_entries(inner: &mut ShapeTableInner, keys: u64) {
-    inner.indices.remove(&(keys as usize));
-    let ids: Vec<u32> = inner
-        .families
+    inner.owned_indices.remove(&(keys as usize));
+    let ids: Vec<LayoutWord> = inner
+        .owned_families
         .get(&keys)
         .map(|ids| ids.as_slice().to_vec())
         .unwrap_or_default();
@@ -5825,13 +6598,13 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     for keys in drained {
         relog_or_retire_shape_keys(table, &mut inner, &mut relogged, keys);
     }
-    let table_len = (inner.families.len() + inner.indices.len()) as u64;
+    let table_len = (inner.owned_families.len() + inner.owned_indices.len()) as u64;
     let mut moved_families: Vec<(u64, u64)> = Vec::new();
-    let mut dead_descriptor_ids: Vec<(u32, u64)> = Vec::new();
+    let mut dead_descriptor_ids: Vec<(LayoutWord, u64)> = Vec::new();
     // The shared slab view is scoped to the probe loop: retirement below
     // takes the slab mutably, and nothing after the loop may still hold it.
     let slab = table.slab();
-    for (&indexed, ids) in inner.families.iter() {
+    for (&indexed, ids) in inner.owned_families.iter() {
         if indexed == 0 {
             // Keyless shapes hold no edge.
             continue;
@@ -5848,7 +6621,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         // one (its duty is the strongest), else any present member.
         let mut descriptor: Option<ShapeDescriptor> = None;
         for &id in ids.as_slice() {
-            if let Some(lifted) = slab.lift(id) {
+            if let Some(lifted) = slab.lift_handle(id) {
                 if lifted.old_carrier || lifted.cache_carrier {
                     descriptor = Some(lifted);
                     break;
@@ -5880,7 +6653,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
         if moved {
             for &id in ids.as_slice() {
-                if let Some(record) = slab.record_ptr(id) {
+                if let Some(record) = slab.handle_record_ptr(id) {
                     // SAFETY: live slab record, single-threaded agent. A live
                     // receiver's edge may already have written the same
                     // forwarded address here; the store is idempotent.
@@ -5895,6 +6668,7 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     for (id, indexed) in dead_descriptor_ids {
         remove_descriptor_indexed_under(&mut inner, id, indexed);
     }
+    scan_list_families_full(visitor, table);
     for (old, new) in moved_families {
         move_shape_family(table, &mut inner, old, new);
         if new != 0 {
@@ -5902,9 +6676,9 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         }
     }
 
-    if rewrite_phase && !inner.indices.is_empty() {
+    if rewrite_phase && !inner.owned_indices.is_empty() {
         let moved: Vec<(usize, usize)> = inner
-            .indices
+            .owned_indices
             .keys()
             .filter_map(|&keys_id| {
                 let mut addr = keys_id;
@@ -5913,8 +6687,8 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
             })
             .collect();
         for (old, new) in moved {
-            if let Some(shape) = inner.indices.remove(&old) {
-                inner.indices.insert(new, shape);
+            if let Some(shape) = inner.owned_indices.remove(&old) {
+                inner.owned_indices.insert(new, shape);
                 relogged.push(new as u64);
             }
         }
@@ -5926,13 +6700,13 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
         // not classify the address. Either way the keys array is dead; remove
         // the stale entry so property lookups don't resolve the wrong shape.
         let recycled: Vec<usize> = inner
-            .indices
+            .owned_indices
             .keys()
             .filter(|&&keys_id| shape_keys_address_is_recycled(keys_id))
             .copied()
             .collect();
         for old in recycled {
-            inner.indices.remove(&old);
+            inner.owned_indices.remove(&old);
         }
     }
 
@@ -5944,7 +6718,9 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     relogged.dedup();
     let mut kept = Vec::with_capacity(relogged.len());
     for keys in relogged {
-        if inner.families.contains_key(&keys) || inner.indices.contains_key(&(keys as usize)) {
+        if inner.owned_families.contains_key(&keys)
+            || inner.owned_indices.contains_key(&(keys as usize))
+        {
             relog_or_retire_shape_keys(table, &mut inner, &mut kept, keys);
         }
     }
@@ -5966,17 +6742,50 @@ fn scan_shape_table_keys_mut(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
     );
 }
 
+/// The full walk's #8112 gate for canonical lists (CKI S2): a family on a
+/// trie node with a carrier roots the list's backing, exactly as an owned
+/// family's carrier roots its array above. A canonical backing is old and
+/// never moves (old-page defrag skips `GC_FLAG_SHAPE_SHARED`), so the visit
+/// only marks; there is no rewrite, no recycled-address case (the dead-key
+/// prune retires a dead list's descriptors before the trie frees its node),
+/// and no minor duty: an old array is never minor-relevant.
+fn scan_list_families_full(visitor: &mut crate::gc::RuntimeRootVisitor<'_>, table: &ShapeTable) {
+    let slab = table.slab();
+    let mut carried: Vec<usize> = Vec::new();
+    crate::object::canonical_keys::for_each_list_shapes(|_, addr, list| {
+        if addr == 0 {
+            return;
+        }
+        // The root's family also holds the keyless records (keys 0): only a
+        // record of the list on this backing roots it.
+        let carrier = list.family.as_slice().iter().any(|&id| {
+            slab.get_handle(id).is_some_and(|record| {
+                record.keys as usize == addr
+                    && (record.has(RECORD_FLAG_OLD_CARRIER) || record.cache_carrier())
+            })
+        });
+        if carrier {
+            carried.push(addr);
+        }
+    });
+    for addr in carried {
+        let mut slot = addr;
+        visitor.visit_usize_slot(&mut slot);
+        debug_assert_eq!(slot, addr, "a canonical backing never moves");
+    }
+}
+
 /// Re-index a family that the collector moved from `old` to `new` (`new ==
 /// 0`: every member retired, drop it).
 fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, new: u64) {
-    let Some(ids) = inner.families.remove(&old) else {
+    let Some(ids) = inner.owned_families.remove(&old) else {
         return;
     };
     if new == 0 {
         return;
     }
     for &id in ids.as_slice() {
-        let Some(record) = table.slab().get(id) else {
+        let Some(record) = table.slab().get_handle(id) else {
             continue;
         };
         // The accelerator was keyed with the OLD address; the other five
@@ -5989,15 +6798,16 @@ fn move_shape_family(table: &ShapeTable, inner: &mut ShapeTableInner, old: u64, 
         // relevance result (or the full walk rebuilds the log). Re-entering
         // the writer funnel here would enqueue the same family mid-walk and
         // price it twice in one minor.
-        inner.families.entry(new).or_default().push_back(id);
+        inner.owned_families.entry(new).or_default().push_back(id);
     }
 }
 
 /// Every keys address a minor can act on, re-derived from the authoritative
 /// tables (families and slot indices whose keys array is not old).
+#[cfg(any(debug_assertions, test))]
 fn relevant_shape_keys(table: &ShapeTable, inner: &ShapeTableInner) -> Vec<u64> {
-    let mut relevant: Vec<u64> = inner.families.keys().copied().collect();
-    relevant.extend(inner.indices.keys().copied().map(|keys| keys as u64));
+    let mut relevant: Vec<u64> = inner.owned_families.keys().copied().collect();
+    relevant.extend(inner.owned_indices.keys().copied().map(|keys| keys as u64));
     relevant.sort_unstable();
     relevant.dedup();
     relevant.retain(|&keys| shape_keys_entry_is_minor_relevant(table, inner, keys));
@@ -6045,7 +6855,7 @@ fn shape_keys_entry_is_minor_relevant(
         let Some(header) = crate::value::addr_class::try_read_tracked_gc_header(addr) else {
             return false;
         };
-        if (*header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header.as_ptr()).obj_type) {
             return false;
         }
         let (slots, len) = super::keys_array_dense_slots(addr as *const ArrayHeader);
@@ -6056,11 +6866,11 @@ fn shape_keys_entry_is_minor_relevant(
 }
 
 fn family_has_root_carrier(table: &ShapeTable, inner: &ShapeTableInner, keys: u64) -> bool {
-    inner.families.get(&keys).is_some_and(|ids| {
+    inner.owned_families.get(&keys).is_some_and(|ids| {
         ids.as_slice().iter().any(|&id| {
             table
                 .slab()
-                .get(id)
+                .get_handle(id)
                 .is_some_and(|record| record.has(RECORD_FLAG_OLD_CARRIER) || record.cache_carrier())
         })
     })
@@ -6076,7 +6886,7 @@ fn scan_shape_table_young(
     inner: &mut ShapeTableInner,
     rewrite_phase: bool,
 ) {
-    let table_len = (inner.families.len() + inner.indices.len()) as u64;
+    let table_len = (inner.owned_families.len() + inner.owned_indices.len()) as u64;
     #[cfg(any(debug_assertions, test))]
     {
         let relevant = relevant_shape_keys(table, inner);
@@ -6104,7 +6914,7 @@ fn scan_shape_table_young(
             // copies the keys array) while the slot index is re-keyed only in
             // the REWRITE pass, so between the two the index still sits under
             // the from-space address: keep that key logged as well.
-            if post != keys && inner.indices.contains_key(&(keys as usize)) {
+            if post != keys && inner.owned_indices.contains_key(&(keys as usize)) {
                 kept.push(keys);
             }
         }
@@ -6138,8 +6948,8 @@ fn scan_shape_keys_address(
         return indexed;
     }
     let mut post = indexed;
-    let ids: Vec<u32> = inner
-        .families
+    let ids: Vec<LayoutWord> = inner
+        .owned_families
         .get(&indexed)
         .map(|ids| ids.as_slice().to_vec())
         .unwrap_or_default();
@@ -6147,7 +6957,7 @@ fn scan_shape_keys_address(
         let slab = table.slab();
         let mut descriptor: Option<ShapeDescriptor> = None;
         for &id in &ids {
-            if let Some(lifted) = slab.lift(id) {
+            if let Some(lifted) = slab.lift_handle(id) {
                 if lifted.old_carrier || lifted.cache_carrier {
                     descriptor = Some(lifted);
                     break;
@@ -6174,7 +6984,7 @@ fn scan_shape_keys_address(
                 } else {
                     if moved {
                         for &id in &ids {
-                            if let Some(record) = slab.record_ptr(id) {
+                            if let Some(record) = slab.handle_record_ptr(id) {
                                 // SAFETY: live slab record, single-threaded agent;
                                 // the store is idempotent (see the full walk).
                                 unsafe { (*record).keys = addr as u64 };
@@ -6189,17 +6999,17 @@ fn scan_shape_keys_address(
             }
         }
     }
-    if rewrite_phase && inner.indices.contains_key(&(indexed as usize)) {
+    if rewrite_phase && inner.owned_indices.contains_key(&(indexed as usize)) {
         let mut addr = indexed as usize;
         visitor.visit_metadata_usize_slot(&mut addr);
         if addr != indexed as usize {
-            if let Some(shape) = inner.indices.remove(&(indexed as usize)) {
-                inner.indices.insert(addr, shape);
+            if let Some(shape) = inner.owned_indices.remove(&(indexed as usize)) {
+                inner.owned_indices.insert(addr, shape);
             }
             post = addr as u64;
         }
         if shape_keys_address_is_recycled(addr) {
-            inner.indices.remove(&addr);
+            inner.owned_indices.remove(&addr);
         }
     }
     post
@@ -6237,198 +7047,1165 @@ mod shapes_tests;
 #[path = "region_numeric_read_tests.rs"]
 mod region_numeric_read_tests;
 
-/// #9612: release the capacity that pruning left behind.
-///
-/// hashbrown never shrinks on `remove`/`retain`, so the shape tables keep the
-/// allocation of their startup PEAK for the life of the process. Measured on
-/// the compiled claude-code TUI at idle: `ids_by_facts` held 30.8 MB at 12.3%
-/// fill and `descriptors` 13.8 MB at 10.5% fill, i.e. sized for a peak that
-/// `prune_dead_shape_keys` had already discarded.
-///
-/// Called once per MAJOR collection, right after the prune, where a rehash is
-/// already amortized against a full heap walk. #9706: the by-id store is a
-/// slab now, so this also releases its all-dead chunks; the family and slot
-/// index maps are shrunk to `len + len / 4`, one growth step of headroom.
-pub(crate) fn shrink_shape_tables() {
-    fn worth_shrinking(len: usize, capacity: usize) -> bool {
-        // Only when the table is holding real slack and is less than half
-        // used; a small or well-packed table is left alone.
-        capacity > 4096 && capacity > len.saturating_mul(2)
-    }
-    let table = &crate::state::state().shapes;
-    let mut inner = table.inner.borrow_mut();
-    if worth_shrinking(inner.indices.len(), inner.indices.capacity()) {
-        let target = inner.indices.len() + inner.indices.len() / 4;
-        inner.indices.shrink_to(target);
-    }
-    if worth_shrinking(inner.by_facts.len(), inner.by_facts.capacity()) {
-        let target = inner.by_facts.len() + inner.by_facts.len() / 4;
-        inner.by_facts.shrink_to(target);
-    }
-    if worth_shrinking(inner.families.len(), inner.families.capacity()) {
-        let target = inner.families.len() + inner.families.len() / 4;
-        inner.families.shrink_to(target);
-    }
-    // SAFETY: the prune that precedes this call holds no slab reference, and
-    // neither does anything else while the major collection owns the agent.
-    unsafe { table.slab_mut().release_empty_chunks() };
-}
+#[cfg(test)]
+#[path = "shapes_list_identity_tests.rs"]
+mod shapes_list_identity_tests;
 
-/// `PERRY_GC_CENSUS`: the by-id slab, the per-shape key indices, the
-/// exact-facts accelerator and the keys-address family index.
-pub(crate) fn shape_table_census() -> Vec<crate::gc::census::SideTableRow> {
-    use crate::gc::census::map_bytes;
-    let table = &crate::state::state().shapes;
-    let inner = table.inner.borrow();
-    let slab = table.slab();
-    let mut rows = Vec::new();
-    rows.push(("shapes.descriptors", slab.len(), slab.estimated_bytes()));
-    let index_inner: usize = inner.indices.values().map(|ix| ix.slots.heap_bytes()).sum();
-    rows.push((
-        "shapes.indices",
-        inner.indices.len(),
-        map_bytes(&inner.indices) + index_inner,
-    ));
-    let facts_inner: usize = inner.by_facts.values().map(IdList::heap_bytes).sum();
-    rows.push((
-        "shapes.by_facts",
-        inner.by_facts.len(),
-        map_bytes(&inner.by_facts) + facts_inner,
-    ));
-    let families_inner: usize = inner.families.values().map(IdList::heap_bytes).sum();
-    rows.push((
-        "shapes.families",
-        inner.families.len(),
-        map_bytes(&inner.families) + families_inner,
-    ));
-    // Ids ever minted by this process: the slab is indexed by id, so the gap
-    // between this and `shapes.descriptors` is what chunk release reclaims.
-    let minted = SHAPE_ID_NEXT
-        .iter()
-        .map(|next| next.load(std::sync::atomic::Ordering::Relaxed) - STATIC_SHAPE_ID_END)
-        .sum::<u32>();
-    rows.push(("shapes.ids_minted(process)", minted as usize, 0));
-    // How the descriptor population splits by [[Prototype]] identity kind,
-    // and how many distinct prototype identities it names: what the
-    // prototype-in-shape rule costs in shapes.
-    let mut by_kind = [0usize; 6];
-    let mut extensions = (0, 0, 0, 0);
-    let mut distinct = std::collections::HashSet::new();
-    slab.for_each(|_, record| {
-        // SAFETY: live slab record, read immediately under agent ownership.
-        let owned = unsafe { (*record).extension_census() };
-        extensions.0 += owned.0;
-        extensions.1 += owned.1;
-        extensions.2 += owned.2;
-        extensions.3 += owned.3;
-        let proto_id = unsafe { (*record).proto_id };
-        distinct.insert(proto_id);
-        let kind = match proto_id {
-            PROTO_ID_DEFAULT => 0,
-            PROTO_ID_NULL => 1,
-            id if id >> PROTO_ID_TAG_SHIFT == 0 => 2,
-            id if id & PROTO_ID_UNIQUE == PROTO_ID_CLASS => 3,
-            id if id & PROTO_ID_UNIQUE == PROTO_ID_MIXED => 4,
-            _ => 5,
-        };
-        by_kind[kind] += 1;
-    });
-    for (name, count) in [
-        "shapes.proto(object_prototype)",
-        "shapes.proto(null)",
-        "shapes.proto(object_serial)",
-        "shapes.proto(class_default)",
-        "shapes.proto(class_recorded)",
-        "shapes.proto(unique)",
-    ]
-    .into_iter()
-    .zip(by_kind)
-    {
-        rows.push((name, count, 0));
-    }
-    rows.push(("shapes.proto.distinct_identities", distinct.len(), 0));
-    rows.push((
-        "shapes.extensions(native owned)",
-        extensions.0,
-        extensions.1,
-    ));
-    // A subset of extension bytes, so this informational row adds no bytes
-    // to the census total a second time.
-    rows.push(("shapes.store_chain(facts)", extensions.2, 0));
-    rows.push((
-        "shapes.store_chain(bytes included in extensions)",
-        extensions.3,
-        0,
-    ));
-    rows
-}
-
-/// `PERRY_GC_CENSUS`: how the descriptor population relates to the live heap
-/// (#9706). `live_ids` is the sorted, deduplicated set of ShapeIds stamped on
-/// live shaped objects, collected by the census walk.
-///
-/// * `shapes.descriptors.carried` — descriptors some live object is stamped
-///   with: the population V8's "object shape" bucket corresponds to.
-/// * `shapes.descriptors.uncarried` — descriptors no live object carries:
-///   transition history a cache may reinstall (`cache_carrier`), versions
-///   kept for an old receiver since the last full trace, and shapes whose
-///   keys array is still alive on some other descriptor.
-/// * `shapes.families.multi` — keys arrays with more than one descriptor,
-///   and the descriptors they hold beyond the first: the duplication the
-///   family walk pays for.
-pub(crate) fn shape_table_liveness_census(
-    live_ids: &[u32],
-) -> Vec<crate::gc::census::SideTableRow> {
-    let table = &crate::state::state().shapes;
-    let inner = table.inner.borrow();
-    let slab = table.slab();
-    let mut carried = 0usize;
-    let mut uncarried = 0usize;
-    let mut uncarried_cache = 0usize;
-    let mut uncarried_old = 0usize;
-    slab.for_each(|id, record| {
-        if live_ids.binary_search(&id).is_ok() {
-            carried += 1;
-            return;
-        }
-        uncarried += 1;
-        // SAFETY: live slab record, read immediately.
-        let record = unsafe { *record };
-        if record.cache_carrier() {
-            uncarried_cache += 1;
-        } else if record.has(RECORD_FLAG_OLD_CARRIER) {
-            uncarried_old += 1;
-        }
-    });
-    let mut multi_families = 0usize;
-    let mut multi_extra = 0usize;
-    let mut largest = 0usize;
-    for ids in inner.families.values() {
-        let n = ids.len();
-        largest = largest.max(n);
-        if n > 1 {
-            multi_families += 1;
-            multi_extra += n - 1;
-        }
-    }
-    vec![
-        ("shapes.descriptors.carried(live objects)", carried, 0),
-        ("shapes.descriptors.uncarried", uncarried, 0),
-        (
-            "shapes.descriptors.uncarried.cache_carrier",
-            uncarried_cache,
-            0,
-        ),
-        ("shapes.descriptors.uncarried.old_carrier", uncarried_old, 0),
-        (
-            "shapes.families.multi(families,extra descriptors)",
-            multi_families,
-            multi_extra,
-        ),
-        ("shapes.families.largest", largest, 0),
-    ]
-}
+#[path = "shapes_census.rs"]
+mod census;
+pub(crate) use census::shape_table_census;
+pub(crate) use census::shape_table_liveness_census;
+pub(crate) use census::shrink_shape_tables;
 
 #[path = "shapes_integrity.rs"]
 mod integrity;
 pub(crate) use integrity::{transition_object_integrity, INTEGRITY_FLAGS};
+
+/// Resolve an unchanged global identity. Absent IDs never address the Region.
+pub(crate) fn record_by_identity(identity: ShapeId) -> Option<ShapeRecordRef> {
+    std::ptr::NonNull::new(ShapeSlab::agent_record_present(identity)?).map(ShapeRecordRef)
+}
+#[cfg(test)]
+pub(crate) fn handle_by_identity(identity: ShapeId) -> Option<LayoutWord> {
+    record_by_identity(identity).map(|r| unsafe { (*r.0.as_ptr()).layout_word })
+}
+pub(crate) fn shape_descriptor_by_id(identity: ShapeId) -> Option<ShapeDescriptor> {
+    let r = record_by_identity(identity)?;
+    Some(unsafe { (*r.0.as_ptr()).lift(r.0.as_ptr()) })
+}
+pub(crate) fn shape_record_by_id(identity: ShapeId) -> Option<ShapeRecordRef> {
+    record_by_identity(identity)
+}
+/// Publish a static request before generic exact-facts canonicalization.
+/// `facts` is the record's exact-facts key, which the caller already
+/// computed for its request (`record.facts_key_with_keys(record.keys)`).
+pub(crate) fn publish_static_record(
+    request: crate::codegen_abi::PublishedShape,
+    record: ShapeRecord,
+    facts: u64,
+) -> Result<crate::codegen_abi::PublishedShape, ShapeDescriptorError> {
+    debug_assert_eq!(facts, record.facts_key_with_keys(record.keys));
+    if request.word.0 == crate::codegen_abi::EMPTY_ORDINARY_BIRTH_LAYOUT_WORD {
+        // The compiler names the declared empty ordinary row for a program
+        // `{}` content (`ProgramLayoutOrdinals::empty_ordinary`): that row is
+        // the agent's seed, published at agent creation, and answers the
+        // request when its facts are the request's. No second record, no
+        // second identity on the row.
+        let seed = ShapeSlab::agent_record_for_word_present(request.word)
+            .expect("declared empty ordinary layout is seeded at agent creation");
+        // SAFETY: a present record of this agent, read immediately.
+        let seed_facts = unsafe { (*seed).facts_key_with_keys((*seed).keys) };
+        if seed_facts != facts {
+            panic!("static layout publication mismatch: {request:?}: facts {facts:#x} != seed {seed_facts:#x}");
+        }
+        return Ok(crate::codegen_abi::PublishedShape {
+            identity: ShapeId(shapes_branded_birth::EMPTY_ORDINARY_BIRTH_LAYOUT),
+            word: request.word,
+        });
+    }
+    let keys = record.keys;
+    let keys_node = record.keys_node();
+    let table = &crate::state::state().shapes;
+    // A repeated agreeing request publishes nothing new (the slab's record
+    // count does not move): its word is already in the indexes, and pushing
+    // it again would duplicate the bucket entry.
+    let before = table.slab().len();
+    let published = unsafe {
+        table
+            .slab_mut()
+            .publish_static(request.identity, request.word, record)
+    }
+    .unwrap_or_else(|error| panic!("static layout publication mismatch: {request:?}: {error:?}"));
+    if table.slab().len() != before {
+        let mut inner = table.inner.borrow_mut();
+        inner.facts_push_front_fresh(facts, published.word);
+        // Families are set-valued and the word is new here: append (a push to
+        // the front of a spilled list is O(n) and re-indexes the whole list).
+        inner.family_append_fresh(keys_node, keys, published.word);
+    }
+    Ok(published)
+}
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn intern_static_layout(
+    keys: impl Into<ShapeKeys>,
+    count: u32,
+    live: u32,
+    generation: u64,
+    kind: ShapeObjectKind,
+    holes: u32,
+    proto: u64,
+    summary: u8,
+    rep: u64,
+    infos: &[shapes_store::ConstFnSlotInfo],
+    brands: &[u64],
+    request: crate::codegen_abi::PublishedShape,
+    integrity: u16,
+) -> Result<LayoutWord, ShapeDescriptorError> {
+    let shape_keys: ShapeKeys = keys.into();
+    shape_descriptor_intern_with_special_mode(
+        shape_keys,
+        count,
+        live,
+        generation,
+        kind,
+        holes,
+        proto,
+        summary,
+        rep,
+        infos,
+        brands,
+        Some(request.identity),
+        Some(request),
+        true,
+        integrity,
+    )
+}
+
+/// The word of a static layout request THIS agent has already published.
+///
+/// A request's identity cell and its compiler-authored word never change once
+/// the identity is reserved, so a present row of this agent that carries the
+/// request's identity IS that request's publication: its facts were compared
+/// when it was published. A repeated request (every birth site that names the
+/// layout asks again) answers with one checked read of its own word instead
+/// of rebuilding and re-comparing a record. `None`: not reserved yet, or not
+/// published by this agent (a fresh worker publishes its own row).
+///
+/// # Safety
+/// `request` is null or a live static layout request.
+#[inline]
+pub(crate) unsafe fn published_static_request(
+    request: *const crate::codegen_abi::PerryStaticLayoutRequestV1,
+    key_count: u32,
+) -> Option<u32> {
+    if request.is_null() {
+        return None;
+    }
+    let identity =
+        std::sync::atomic::AtomicU32::from_ptr(std::ptr::addr_of!((*request).shape_id).cast_mut())
+            .load(std::sync::atomic::Ordering::Acquire);
+    if identity == 0 {
+        return None;
+    }
+    let word = (*request).layout_word;
+    let record = ShapeSlab::agent_record_for_word_present(crate::codegen_abi::LayoutWord(word))?;
+    if (*record).shape_id != crate::codegen_abi::ShapeId(identity) {
+        return None;
+    }
+    debug_assert_eq!(
+        (*record).logical_key_count,
+        key_count,
+        "static layout request {word:#x} republished with other facts"
+    );
+    Some(word)
+}
+
+fn identity_of_published_word(word: LayoutWord) -> u32 {
+    shape_record_for_word(word).map_or(0, |r| unsafe { ((*r.0.as_ptr()).shape_id).0 })
+}
+#[no_mangle]
+pub extern "C" fn js_object_shape_id_for_keys(keys: u64, count: u32) -> u32 {
+    identity_of_published_word(LayoutWord(js_object_layout_for_keys(keys, count)))
+}
+#[no_mangle]
+pub extern "C" fn js_object_shape_id_for_class_keys(
+    keys: u64,
+    count: u32,
+    class_id: u32,
+    rep: u64,
+) -> u32 {
+    identity_of_published_word(LayoutWord(js_object_layout_for_class_keys(
+        keys, count, class_id, rep,
+    )))
+}
+#[no_mangle]
+pub extern "C" fn js_object_shape_id_for_class_keys_live(
+    keys: u64,
+    count: u32,
+    live: u32,
+    class_id: u32,
+    rep: u64,
+) -> u32 {
+    identity_of_published_word(LayoutWord(js_object_layout_for_class_keys_live(
+        keys, count, live, class_id, rep,
+    )))
+}
+
+pub(crate) fn is_static_layout_word(word: u32) -> bool {
+    word & crate::codegen_abi::LAYOUT_TAG != 0
+        && LayoutWord(word).band() < 3
+        && LayoutWord(word).row().0 < super::class_image::agent_layout_image().static_rows
+}
+
+#[cfg(test)]
+pub(crate) fn shape_rep_by_id(id: ShapeId) -> u64 {
+    shape_record_by_id(id).map_or(0, ShapeRecordRef::rep)
+}
+#[cfg(test)]
+pub(crate) fn shape_object_kind_by_id(id: ShapeId) -> Option<ShapeObjectKind> {
+    shape_record_by_id(id).map(ShapeRecordRef::object_kind)
+}
+
+pub(crate) fn is_shape_id(identity: u32) -> bool {
+    (SHAPE_ID_BASE..SHAPE_ID_END).contains(&identity)
+}
+
+/// Close existing carrier ownership over record-owned handles before retirement.
+/// The worklist is transient GC work; the existing CACHE_CARRIER bit breaks cycles.
+pub(crate) fn recompute_record_handle_carriers() {
+    let table = &crate::state::state().shapes;
+    let mut pending = Vec::new();
+    table.slab().for_each_handle(|_, ptr| unsafe {
+        let r = &*ptr;
+        // Exactly the survivors of the prune that follows
+        // (`prune_uncarried_shape_descriptors_after_full_trace`). An old-carrier
+        // mark alone only roots keys during the trace; it does not keep the
+        // record, so it must not keep the record's owned handles either.
+        if r.has(RECORD_FLAG_CARRIED_SEEN | RECORD_FLAG_BIRTH_OWNER) || r.cache_carrier() {
+            pending.extend(
+                r.owned_handles()
+                    .into_iter()
+                    .filter(|&w| is_layout_word(w.0)),
+            );
+        }
+    });
+    while let Some(word) = pending.pop() {
+        // A handle is weak: the record it names may have been retired by an
+        // earlier prune. An absent word answers the shared read-only
+        // `EMPTY_RECORD`, which must never be written; it carries nothing.
+        let Some(ptr) = ShapeSlab::agent_record_for_word_present(word) else {
+            continue;
+        };
+        unsafe {
+            let r = &*ptr;
+            if !r.has(RECORD_FLAG_CACHE_CARRIER) {
+                note_cache_carrier(Some(r.lift(ptr)));
+                pending.extend(
+                    r.owned_handles()
+                        .into_iter()
+                        .filter(|&w| is_layout_word(w.0)),
+                );
+            }
+        }
+    }
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+#[path = "shapes_snap22.rs"]
+pub(crate) mod snap22;
+
+/// Image run: the shape state at one point, for the exact begin-to-cut accounting
+/// (`snap_image_shape_delta`): every present record's identity and state bytes in id
+/// order, and the id and generation counters.
+pub(crate) struct SnapShapeState {
+    records: Vec<(u32, Vec<u8>)>,
+    next: [u32; 4],
+    exotic: [u32; 4],
+    semantic: u64,
+    /// The counters of the unique prototype identities and of the prototype serials.
+    unique: u64,
+    serial: u64,
+}
+
+/// What changed in the shape state between two [`SnapShapeState`]s. A record is minted
+/// when its id is absent at begin, changed when it exists at both and its state bytes
+/// differ, retired when it is absent at the cut.
+#[cfg_attr(test, derive(Clone, Copy, Default, PartialEq, Eq, Debug))]
+pub(crate) struct SnapShapeDelta {
+    /// Minted records by id band: static (compile-time ids), ordinary, dictionary, exotic.
+    pub minted: [u32; 4],
+    pub changed: u32,
+    pub retired: u32,
+    /// Ids drawn from the ordinary and the exotic counters (a counter that moved to
+    /// another kind granule counts from the granule start), and semantic generations.
+    pub drawn: u32,
+    pub generations: u32,
+}
+
+pub(crate) fn snap_image_delta_minted_total(d: &SnapShapeDelta) -> u32 {
+    d.minted.iter().sum()
+}
+
+/// Any shape state changed: the image has no form for it.
+pub(crate) fn snap_image_delta_any(d: &SnapShapeDelta) -> bool {
+    snap_image_delta_minted_total(d) != 0
+        || d.changed != 0
+        || d.retired != 0
+        || d.drawn != 0
+        || d.generations != 0
+}
+
+fn snap_image_id_band(id: u32) -> usize {
+    if id < STATIC_SHAPE_ID_END {
+        0
+    } else if id < SITE_SHAPE_ID_END {
+        1
+    } else if id < EXOTIC_SHAPE_ID_BASE {
+        2
+    } else {
+        3
+    }
+}
+
+pub(crate) fn snap_image_shape_state() -> SnapShapeState {
+    use std::sync::atomic::Ordering::Relaxed;
+    let slab = crate::state::state().shapes.slab();
+    let mut records = Vec::with_capacity(slab.len());
+    slab.for_each(|id, p| {
+        // SAFETY: a present record of this agent's slab.
+        records.push((id.0, unsafe { &*p }.snap_image_state()));
+    });
+    records.sort_by_key(|r| r.0);
+    SnapShapeState {
+        records,
+        next: std::array::from_fn(|i| SHAPE_ID_NEXT[i].load(Relaxed)),
+        exotic: std::array::from_fn(|i| EXOTIC_SHAPE_ID_NEXT[i].load(Relaxed)),
+        semantic: SHAPE_SEMANTIC_NEXT.load(Relaxed),
+        unique: PROTO_ID_UNIQUE_NEXT.load(Relaxed),
+        serial: super::proto_validity::snap_image_prototype_serial_next(),
+    }
+}
+
+/// How a minted record was born, from its id band, its row and whether its word is a runtime layout's.
+pub(crate) fn snap_image_mint_route_of(id: u32, row: u32, runtime: bool) -> u8 {
+    use crate::snap_image::format as f;
+    if snap_image_id_band(id) == 0 {
+        return f::MINT_ROUTE_STATIC;
+    }
+    if row >= DYNAMIC_BASE_ROWS {
+        return f::MINT_ROUTE_DYNAMIC;
+    }
+    if runtime {
+        return f::MINT_ROUTE_RUNTIME;
+    }
+    f::MINT_ROUTE_LAZY
+}
+
+pub(crate) fn snap_image_mint_route(id: u32, word: u32) -> u8 {
+    snap_image_mint_route_of(
+        id,
+        LayoutWord(word).row().0,
+        super::layout_desc::snap_image_runtime_layout_word(word),
+    )
+}
+
+/// Whether two dynamic rows in mint order leave a gap: the next row follows, or a chunk ended
+/// (rows are claimed in chunks that start at multiples of the chunk size from the first dynamic row).
+pub(crate) fn snap_image_mint_row_jumps(prev: u32, row: u32) -> bool {
+    row != prev + 1
+        && !(row > prev
+            && (prev + 1).wrapping_sub(DYNAMIC_BASE_ROWS) % shapes_store::DYNAMIC_CHUNK_ROWS == 0
+            && row.wrapping_sub(DYNAMIC_BASE_ROWS) % shapes_store::DYNAMIC_CHUNK_ROWS == 0)
+}
+
+/// A record minted by a slot-list successor: it has holes, or the family of its key list is not
+/// exactly the set of records that carry the keys (both sorted).
+pub(crate) fn snap_image_mint_successor(holes: u32, family: &[u32], carriers: &[u32]) -> bool {
+    holes != 0 || family != carriers
+}
+
+/// Per record of the mint record (`MINT_FLAG_*`): minted by a successor, keys a canonical list,
+/// leaves a row gap behind the dynamic row before it.
+pub(crate) fn snap_image_mint_replay_flags(recs: &[crate::snap_image::format::MintRec]) -> Vec<u8> {
+    use crate::snap_image::format as f;
+    let table = &crate::state::state().shapes;
+    let mut carriers: Vec<(u64, u32)> = Vec::new();
+    table.slab().for_each(|_, p| {
+        // SAFETY: a present record of this agent's slab.
+        let r = unsafe { &*p };
+        carriers.push((
+            shapes_store::list_identity(r.keys_node(), r.keys),
+            r.layout_word.0,
+        ));
+    });
+    carriers.sort_unstable();
+    let inner = table.inner.borrow();
+    let mut out = Vec::new();
+    let mut prev: Option<u32> = None;
+    for r in recs {
+        let mut flags = 0u8;
+        let identity = shapes_store::list_identity(r.node, r.keys);
+        let mut family: Vec<u32> = Vec::new();
+        snap_image_family_words(&inner, r.node, r.keys, &mut family);
+        family.sort_unstable();
+        let mut set: Vec<u32> = Vec::new();
+        let mut j = carriers.partition_point(|c| c.0 < identity);
+        while j < carriers.len() && carriers[j].0 == identity {
+            set.push(carriers[j].1);
+            j += 1;
+        }
+        if snap_image_mint_successor(r.holes, &family, &set) {
+            flags |= f::MINT_FLAG_SUCCESSOR;
+        }
+        if r.node != NO_NODE {
+            flags |= f::MINT_FLAG_CANONICAL;
+        }
+        if r.route == f::MINT_ROUTE_DYNAMIC {
+            let row = LayoutWord(r.word).row().0;
+            if prev.is_some_and(|p| snap_image_mint_row_jumps(p, row)) {
+                flags |= f::MINT_FLAG_ROW_GAP;
+            }
+            prev = Some(row);
+        }
+        out.push(flags);
+    }
+    out
+}
+
+/// The words of the family of the list (node, keys), appended to out. A free function
+/// beside ShapeTableInner::family_ids, so that method keeps its two callers.
+#[inline(never)]
+fn snap_image_family_words(inner: &ShapeTableInner, node: u32, keys: u64, out: &mut Vec<u32>) {
+    if node != NO_NODE {
+        if keys == 0 {
+            for w in inner.keyless_family.as_slice() {
+                out.push(w.0);
+            }
+            return;
+        }
+        let found = crate::object::canonical_keys::with_list_shapes(node, |l| {
+            for w in l.family.as_slice() {
+                out.push(w.0);
+            }
+        });
+        if found.is_some() {
+            return;
+        }
+    }
+    if let Some(ids) = inner.owned_families.get(&keys) {
+        for w in ids.as_slice() {
+            out.push(w.0);
+        }
+    }
+}
+
+/// How far the unique-prototype and prototype-serial counters moved since `a`.
+pub(crate) fn snap_image_mint_counters_moved(a: &SnapShapeState) -> (u64, u64) {
+    let now = snap_image_shape_state_counters();
+    (now.0.wrapping_sub(a.unique), now.1.wrapping_sub(a.serial))
+}
+
+fn snap_image_shape_state_counters() -> (u64, u64) {
+    (
+        PROTO_ID_UNIQUE_NEXT.load(std::sync::atomic::Ordering::Relaxed),
+        super::proto_validity::snap_image_prototype_serial_next(),
+    )
+}
+
+/// Ids drawn between two readings of one counter (a counter that moved to another kind
+/// granule counts from the granule start). Not inlined: the eight calls stay scalar, since
+/// a vectorised form leaves 16-byte constants in the constant section of every binary that
+/// links the runtime.
+#[inline(never)]
+fn snap_image_id_steps(old: u32, new: u32) -> u32 {
+    if old >> SHAPE_ID_KIND_SHIFT == new >> SHAPE_ID_KIND_SHIFT {
+        new.wrapping_sub(old)
+    } else {
+        new - (new >> SHAPE_ID_KIND_SHIFT << SHAPE_ID_KIND_SHIFT)
+    }
+}
+
+pub(crate) fn snap_image_shape_delta(a: &SnapShapeState, b: &SnapShapeState) -> SnapShapeDelta {
+    let mut d = SnapShapeDelta {
+        minted: [0; 4],
+        changed: 0,
+        retired: 0,
+        drawn: 0,
+        generations: 0,
+    };
+    let (mut i, mut j) = (0, 0);
+    while i < a.records.len() || j < b.records.len() {
+        let ka = a.records.get(i).map(|r| r.0);
+        let kb = b.records.get(j).map(|r| r.0);
+        match (ka, kb) {
+            (Some(x), Some(y)) if x == y => {
+                d.changed += u32::from(a.records[i].1 != b.records[j].1);
+                i += 1;
+                j += 1;
+            }
+            (Some(x), Some(y)) if x < y => {
+                d.retired += 1;
+                i += 1;
+            }
+            (Some(_), None) => {
+                d.retired += 1;
+                i += 1;
+            }
+            (_, Some(y)) => {
+                d.minted[snap_image_id_band(y)] += 1;
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    d.drawn = snap_image_id_steps(a.next[0], b.next[0])
+        + snap_image_id_steps(a.next[1], b.next[1])
+        + snap_image_id_steps(a.next[2], b.next[2])
+        + snap_image_id_steps(a.next[3], b.next[3])
+        + snap_image_id_steps(a.exotic[0], b.exotic[0])
+        + snap_image_id_steps(a.exotic[1], b.exotic[1])
+        + snap_image_id_steps(a.exotic[2], b.exotic[2])
+        + snap_image_id_steps(a.exotic[3], b.exotic[3]);
+    d.generations = b.semantic.wrapping_sub(a.semantic) as u32;
+    d
+}
+
+/// The records minted since `a`, in mint order: dynamic rows by row (rows only grow, so row
+/// order is mint order), then static records by id.
+pub(crate) fn snap_image_mint_collect(
+    a: &SnapShapeState,
+) -> Vec<crate::snap_image::format::MintRec> {
+    let mut v = Vec::new();
+    crate::state::state().shapes.slab().for_each(|id, p| {
+        if a.records.binary_search_by_key(&id.0, |r| r.0).is_err() {
+            // SAFETY: a present record of this agent's slab.
+            v.push(unsafe { &*p }.snap_image_mint());
+        }
+    });
+    let mut keys: Vec<(u32, u32)> = Vec::new();
+    for m in &v {
+        keys.push((m.id, LayoutWord(m.word).row().0));
+    }
+    let order = snap_image_mint_order(&keys);
+    let mut slots: Vec<Option<crate::snap_image::format::MintRec>> =
+        v.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(order.len());
+    for i in order {
+        if let Some(m) = slots[i].take() {
+            out.push(m);
+        }
+    }
+    out
+}
+
+/// The counter family of a non-static id: the ordinary kinds, then the exotic kinds.
+fn snap_image_mint_family(id: u32) -> usize {
+    (id & SHAPE_ID_KIND_MASK) as usize >> SHAPE_ID_KIND_SHIFT
+        | usize::from(snap_image_id_band(id) == 3) << 2
+}
+
+/// Mint order of records given as (id, row). A record whose row comes from the dynamic
+/// allocator (row at or above the first dynamic row) is placed by row. A lazy image row
+/// (a lower row, taken from its descriptor) is placed by its draw: directly before the
+/// first dynamic record of its own counter family with a larger id, or at the end of the
+/// non-static records. Static-id records come last, by id.
+fn snap_image_mint_order(keys: &[(u32, u32)]) -> Vec<usize> {
+    let mut dynamic: Vec<usize> = Vec::new();
+    let mut lazy: [Vec<usize>; 8] = Default::default();
+    let mut statics: Vec<usize> = Vec::new();
+    for (i, &(id, row)) in keys.iter().enumerate() {
+        if snap_image_id_band(id) == 0 {
+            statics.push(i);
+        } else if row >= DYNAMIC_BASE_ROWS {
+            dynamic.push(i);
+        } else {
+            lazy[snap_image_mint_family(id)].push(i);
+        }
+    }
+    dynamic.sort_by_key(|&i| keys[i].1);
+    statics.sort_by_key(|&i| keys[i].0);
+    for l in lazy.iter_mut() {
+        l.sort_by_key(|&i| keys[i].0);
+    }
+    let mut cursor = [0usize; 8];
+    let mut out = Vec::with_capacity(keys.len());
+    for &d in &dynamic {
+        let f = snap_image_mint_family(keys[d].0);
+        while cursor[f] < lazy[f].len() && keys[lazy[f][cursor[f]]].0 < keys[d].0 {
+            out.push(lazy[f][cursor[f]]);
+            cursor[f] += 1;
+        }
+        out.push(d);
+    }
+    for f in 0..8 {
+        while cursor[f] < lazy[f].len() {
+            out.push(lazy[f][cursor[f]]);
+            cursor[f] += 1;
+        }
+    }
+    out.extend(statics);
+    out
+}
+
+/// The first (id, row, descriptor names its word) in record order that breaks the mint
+/// sequence: ids strictly increase within a counter family over every non-static record,
+/// rows strictly increase over the dynamic-row records only, and a lazy image row's
+/// descriptor must name its word. Returns the index and the reason.
+fn snap_image_mint_sequence_bad(seq: &[(u32, u32, bool)]) -> Option<(usize, u32)> {
+    use crate::snap_image::format as f;
+    let mut last_row = 0u32;
+    let mut last_id = [0u32; 8];
+    for (i, &(id, row, named)) in seq.iter().enumerate() {
+        let band = snap_image_id_band(id);
+        if band == 0 || band == 2 {
+            continue;
+        }
+        let family = snap_image_mint_family(id);
+        if id <= last_id[family] {
+            return Some((i, f::MINT_BAD_ORDER));
+        }
+        last_id[family] = id;
+        if row >= DYNAMIC_BASE_ROWS {
+            if row <= last_row {
+                return Some((i, f::MINT_BAD_ORDER));
+            }
+            last_row = row;
+        } else if !named {
+            return Some((i, f::MINT_BAD_LAZY_ROW));
+        }
+    }
+    None
+}
+
+/// Whether a table rebuilt from the mint record equals the live one: the first record that
+/// differs and why (`format::MINT_BAD_*`), or `None`. A record is rebuilt through the
+/// runtime's own identity lookup (the probe half of the mint: its facts reach the recorded
+/// word) and its recorded state is read against the live record's.
+pub(crate) fn snap_image_mint_check(
+    recs: &[crate::snap_image::format::MintRec],
+) -> Option<(usize, u32)> {
+    use crate::snap_image::format as f;
+    let slab = crate::state::state().shapes.slab();
+    let mut seq: Vec<(u32, u32, bool)> = Vec::with_capacity(recs.len());
+    for (i, r) in recs.iter().enumerate() {
+        let band = snap_image_id_band(r.id);
+        if band == 2 {
+            return Some((i, f::MINT_BAD_DICTIONARY));
+        }
+        // A ConstFn lane is part of the lookup key the probe does not take.
+        if r.constfn.is_empty() {
+            let found = shape_descriptor_find_with_rep(
+                r.keys as usize as *const ArrayHeader,
+                r.logical,
+                r.live,
+                r.generation,
+                shapes_store::snap_image_kind_of_code(r.kind),
+                r.holes,
+                r.proto_id,
+                r.summary,
+                r.rep,
+                &r.brands,
+                r.integrity,
+            );
+            if found != Some(LayoutWord(r.word)) {
+                return Some((i, f::MINT_BAD_IDENTITY));
+            }
+        }
+        let Some(p) = slab.record_ptr(ShapeId(r.id)) else {
+            return Some((i, f::MINT_BAD_FIELDS));
+        };
+        // SAFETY: a present record of this agent's slab.
+        let live = unsafe { &*p };
+        if live.snap_image_mint() != *r {
+            return Some((i, f::MINT_BAD_FIELDS));
+        }
+        let row = LayoutWord(r.word).row().0;
+        let named = row >= DYNAMIC_BASE_ROWS
+            || super::layout_desc::snap_image_static_row_names_word(r.word);
+        seq.push((r.id, row, named));
+    }
+    snap_image_mint_sequence_bad(&seq)
+}
+
+#[cfg(test)]
+mod snap_image_delta_tests {
+    use super::*;
+
+    const DYN0: u32 = DYNAMIC_BASE_ROWS;
+    const ORD0: u32 = 0x8040_0000;
+
+    #[test]
+    fn snap_image_mint_order_places_a_lazy_row_by_its_draw() {
+        // dynamic ids 3 and 0x61 with a lazy row (low row) whose id lies between them.
+        let keys = [(ORD0 + 0x61, DYN0 + 1), (ORD0 + 3, DYN0), (ORD0 + 0x60, 12)];
+        assert_eq!(snap_image_mint_order(&keys), vec![1, 2, 0]);
+        // A lazy row above every dynamic id of its family goes last; another family does not move it.
+        let keys = [
+            (ORD0 + 3, DYN0),
+            (0x8020_0009, DYN0 + 1),
+            (ORD0 + 0x60, 12),
+            (0x0000_0005, 7),
+        ];
+        assert_eq!(snap_image_mint_order(&keys), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn snap_image_mint_check_exempts_lazy_rows_from_row_order() {
+        let seq = [
+            (ORD0 + 3, DYN0, true),
+            (ORD0 + 0x60, 12, true),
+            (ORD0 + 0x61, DYN0 + 1, true),
+        ];
+        assert_eq!(snap_image_mint_sequence_bad(&seq), None);
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_lazy_row_out_of_draw_order() {
+        let seq = [(ORD0 + 0xa4, 20, true), (ORD0 + 2, DYN0, true)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
+        // Dynamic rows still must grow.
+        let seq = [(ORD0 + 2, DYN0 + 1, true), (ORD0 + 3, DYN0, true)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_ORDER))
+        );
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_lazy_row_with_a_foreign_word() {
+        let seq = [(ORD0 + 2, DYN0, true), (ORD0 + 0x60, 12, false)];
+        assert_eq!(
+            snap_image_mint_sequence_bad(&seq),
+            Some((1, crate::snap_image::format::MINT_BAD_LAZY_ROW))
+        );
+        // No descriptor at all names no word.
+        assert!(!super::super::layout_desc::snap_image_static_row_names_word(0x7fff_ffff));
+    }
+
+    fn st(recs: &[(u32, u8)]) -> SnapShapeState {
+        SnapShapeState {
+            records: recs.iter().map(|&(i, b)| (i, vec![b])).collect(),
+            next: [0; 4],
+            exotic: [0; 4],
+            semantic: 0,
+            unique: 0,
+            serial: 0,
+        }
+    }
+    const S: u32 = SHAPE_ID_BASE + 5;
+    const O: u32 = STATIC_SHAPE_ID_END + 7;
+    const D: u32 = SITE_SHAPE_ID_END + 3;
+    const X: u32 = EXOTIC_SHAPE_ID_BASE + 9;
+
+    #[test]
+    fn snap_image_delta_counts_records_per_band() {
+        let a = st(&[(S, 0)]);
+        let b = st(&[
+            (S, 0),
+            (S + 1, 0),
+            (O, 0),
+            (O + 1, 0),
+            (O + 2, 0),
+            (D, 0),
+            (X, 0),
+        ]);
+        let d = snap_image_shape_delta(&a, &b);
+        assert_eq!((d.minted, d.changed, d.retired), ([1, 3, 1, 1], 0, 0));
+        assert_eq!(snap_image_delta_minted_total(&d), 6);
+        assert!(snap_image_delta_any(&d));
+        assert!(!snap_image_delta_any(&snap_image_shape_delta(&b, &b)));
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_changed_pre_existing_record() {
+        let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O, 0), (O + 1, 1)]));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 1, 0)
+        );
+        assert!(snap_image_delta_any(&d));
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_retired_record() {
+        let d = snap_image_shape_delta(&st(&[(O, 0), (O + 1, 0)]), &st(&[(O + 1, 0)]));
+        assert_eq!(
+            (snap_image_delta_minted_total(&d), d.changed, d.retired),
+            (0, 0, 1)
+        );
+        assert!(snap_image_delta_any(&d));
+    }
+
+    #[test]
+    fn snap_image_delta_sees_a_static_id_birth_that_moves_no_counter() {
+        let d = snap_image_shape_delta(&st(&[]), &st(&[(S, 0)]));
+        assert_eq!((d.minted, d.drawn, d.generations), ([1, 0, 0, 0], 0, 0));
+        assert!(snap_image_delta_any(&d));
+    }
+
+    #[test]
+    fn snap_image_delta_counts_exotic_band_records_and_counter() {
+        let mut b = st(&[(X, 0)]);
+        b.exotic[1] = 2;
+        let d = snap_image_shape_delta(&st(&[]), &b);
+        assert_eq!((d.minted, d.drawn), ([0, 0, 0, 1], 2));
+        let mut c = st(&[]);
+        c.exotic[3] = 4;
+        assert_eq!(snap_image_shape_delta(&st(&[]), &c).drawn, 4);
+    }
+
+    #[test]
+    fn snap_image_delta_counts_an_id_space_jump_as_steps_not_the_granule() {
+        let a = st(&[]);
+        let mut a = a;
+        a.next[2] = STATIC_SHAPE_ID_END;
+        let mut b = st(&[]);
+        b.next[2] = SHAPE_ID_BASE + (2 << SHAPE_ID_KIND_SHIFT) + 1;
+        b.semantic = 3;
+        let d = snap_image_shape_delta(&a, &b);
+        assert_eq!((d.drawn, d.generations), (1, 3));
+    }
+
+    fn fresh_key(tag: &str) -> *const crate::StringHeader {
+        use std::sync::atomic::{AtomicU32, Ordering::Relaxed};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let s = format!("{tag}{}", N.fetch_add(1, Relaxed));
+        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
+    }
+
+    #[test]
+    fn snap_image_delta_live_mint_is_a_few_records_not_an_id_jump() {
+        let o = crate::object::js_object_alloc(0, 0);
+        let before = snap_image_shape_state();
+        crate::object::js_object_set_field_by_name(o, fresh_key("snapimgmint"), 1.0);
+        let d = snap_image_shape_delta(&before, &snap_image_shape_state());
+        assert!(
+            snap_image_delta_any(&d)
+                && snap_image_delta_minted_total(&d) >= 1
+                && snap_image_delta_minted_total(&d) < 8,
+            "{d:?}"
+        );
+        assert!(d.drawn >= 1 && d.drawn < 100, "{d:?}");
+    }
+
+    #[test]
+    fn snap_image_delta_live_freeze_changes_the_existing_record() {
+        let o = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(o, fresh_key("snapimgfrz"), 1.0);
+        let before = snap_image_shape_state();
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
+        let d = snap_image_shape_delta(&before, &snap_image_shape_state());
+        assert!(d.changed >= 1, "{d:?}");
+    }
+
+    /// Live shapes minted after a baseline, one of them with attached state (a freeze
+    /// leaves integrity targets in its extension).
+    fn live_mints(tag: &str) -> (SnapShapeState, Vec<crate::snap_image::format::MintRec>) {
+        let before = snap_image_shape_state();
+        let o = crate::object::js_object_alloc(0, 0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 1.0);
+        crate::object::js_object_set_field_by_name(o, fresh_key(tag), 2.0);
+        crate::object::js_object_freeze(crate::value::js_nanbox_pointer(o as i64));
+        let recs = snap_image_mint_collect(&before);
+        (before, recs)
+    }
+
+    fn through_the_file(
+        recs: &[crate::snap_image::format::MintRec],
+    ) -> Vec<crate::snap_image::format::MintRec> {
+        let blob = crate::snap_image::format::mint_blob(recs);
+        let (back, used) = crate::snap_image::format::parse_mint_blob(&blob).expect("parses");
+        assert_eq!(used, blob.len());
+        back
+    }
+
+    #[test]
+    fn snap_image_mint_record_holds_only_the_new_records_and_rebuilds_equal() {
+        let (before, recs) = live_mints("snapmintrec");
+        assert!(recs.len() >= 2, "{}", recs.len());
+        assert!(recs
+            .iter()
+            .all(|r| before.records.binary_search_by_key(&r.id, |x| x.0).is_err()));
+        let back = through_the_file(&recs);
+        assert_eq!(back, recs);
+        assert_eq!(snap_image_mint_check(&back), None);
+    }
+
+    #[test]
+    fn snap_image_mint_record_carries_the_attached_state_of_a_record() {
+        let (_, recs) = live_mints("snapmintext");
+        assert!(
+            recs.iter().any(|r| r.handles.iter().any(|&h| h != 0)),
+            "{recs:?}"
+        );
+        assert!(recs.iter().any(|r| !r.edges.is_empty()), "{recs:?}");
+        // The state read back from the file is what the live record holds.
+        assert_eq!(snap_image_mint_check(&through_the_file(&recs)), None);
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_recorded_field_differs() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintfld");
+        let mut back = through_the_file(&recs);
+        let i = back
+            .iter()
+            .position(|r| r.handles.iter().any(|&h| h != 0))
+            .expect("a record with a handle");
+        let h = back[i].handles.iter().position(|&h| h != 0).unwrap_or(0);
+        back[i].handles[h] ^= 1 << 8;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_route_names_each_birth() {
+        use crate::snap_image::format::*;
+        assert_eq!(
+            snap_image_mint_route_of(S, DYN0 + 3, false),
+            MINT_ROUTE_STATIC
+        );
+        assert_eq!(snap_image_mint_route_of(S, 12, true), MINT_ROUTE_STATIC);
+        assert_eq!(
+            snap_image_mint_route_of(O, DYN0 + 3, false),
+            MINT_ROUTE_DYNAMIC
+        );
+        assert_eq!(snap_image_mint_route_of(O, 12, true), MINT_ROUTE_RUNTIME);
+        assert_eq!(snap_image_mint_route_of(O, 12, false), MINT_ROUTE_LAZY);
+        let (_, recs) = live_mints("snapmintroute");
+        assert!(
+            recs.iter().all(|r| r.route == MINT_ROUTE_DYNAMIC),
+            "{recs:?}"
+        );
+    }
+
+    #[test]
+    fn snap_image_mint_row_jumps_names_a_gap_and_allows_a_chunk_boundary() {
+        let c = shapes_store::DYNAMIC_CHUNK_ROWS;
+        assert!(!snap_image_mint_row_jumps(DYN0, DYN0 + 1));
+        assert!(snap_image_mint_row_jumps(DYN0, DYN0 + 2));
+        assert!(snap_image_mint_row_jumps(DYN0 + 5, DYN0 + 5));
+        // A chunk ended: the next chunk starts at another multiple of the chunk size.
+        assert!(!snap_image_mint_row_jumps(DYN0 + c - 1, DYN0 + 3 * c));
+        assert!(snap_image_mint_row_jumps(DYN0 + c - 2, DYN0 + 3 * c));
+        assert!(snap_image_mint_row_jumps(DYN0 + c - 1, DYN0 + 3 * c + 1));
+        assert!(snap_image_mint_row_jumps(DYN0 + 2 * c - 1, DYN0 + c));
+    }
+
+    #[test]
+    fn snap_image_mint_successor_names_holes_and_a_family_that_is_not_the_carriers() {
+        assert!(!snap_image_mint_successor(0, &[1, 2], &[1, 2]));
+        assert!(snap_image_mint_successor(1, &[1, 2], &[1, 2]));
+        assert!(snap_image_mint_successor(0, &[1], &[1, 2]));
+        assert!(snap_image_mint_successor(0, &[1, 2], &[1]));
+    }
+
+    #[test]
+    fn snap_image_mint_flags_see_a_fresh_shape_as_plain() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintflags");
+        let flags = snap_image_mint_replay_flags(&recs);
+        assert_eq!(flags.len(), recs.len());
+        for (r, f) in recs.iter().zip(&flags) {
+            assert_eq!(f & (MINT_FLAG_SUCCESSOR | MINT_FLAG_ROW_GAP), 0, "{r:?}");
+            assert_eq!(f & MINT_FLAG_CANONICAL != 0, r.node != NO_NODE, "{r:?}");
+        }
+    }
+
+    #[test]
+    fn snap_image_mint_flags_name_a_row_gap_and_the_node_of_a_live_record() {
+        use crate::snap_image::format::*;
+        let word = |row: u32| {
+            LayoutWord::new(perry_abi::layouts::LayoutRow(row), 1, SHAPE_ID_KIND_PLAIN)
+                .expect("a word")
+                .0
+        };
+        let mk = |row: u32| MintRec {
+            route: MINT_ROUTE_DYNAMIC,
+            node: NO_NODE,
+            keys: 0x1000_0000,
+            word: word(row),
+            ..MintRec::default()
+        };
+        let flags = snap_image_mint_replay_flags(&[mk(DYN0), mk(DYN0 + 1), mk(DYN0 + 3)]);
+        assert_eq!(
+            flags
+                .iter()
+                .map(|f| f & MINT_FLAG_ROW_GAP)
+                .collect::<Vec<_>>(),
+            vec![0, 0, MINT_FLAG_ROW_GAP]
+        );
+        // A static-id record leaves the row sequence alone.
+        let mut s = mk(DYN0 + 9);
+        s.route = MINT_ROUTE_STATIC;
+        let flags = snap_image_mint_replay_flags(&[mk(DYN0), s, mk(DYN0 + 1)]);
+        assert_eq!(flags[2] & MINT_FLAG_ROW_GAP, 0);
+        let (_, recs) = live_mints("snapmintnode");
+        let slab = crate::state::state().shapes.slab();
+        for r in &recs {
+            let p = slab.record_ptr(ShapeId(r.id)).expect("a present record");
+            assert_eq!(r.node, unsafe { &*p }.keys_node());
+        }
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_descriptor_index_differs() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintdesc");
+        let mut back = through_the_file(&recs);
+        back[0].family_desc += 1;
+        assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_FIELDS)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_a_record_whose_facts_do_not_reach_its_word() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintid");
+        let mut back = through_the_file(&recs);
+        let i = back.len() - 1;
+        back[i].proto_cell ^= 8;
+        back[i].generation += 1;
+        assert_eq!(snap_image_mint_check(&back), Some((i, MINT_BAD_IDENTITY)));
+    }
+
+    #[test]
+    fn snap_image_mint_check_names_records_out_of_mint_order() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintord");
+        let mut back = through_the_file(&recs);
+        back.reverse();
+        let got = snap_image_mint_check(&back);
+        assert!(matches!(got, Some((_, MINT_BAD_ORDER))), "{got:?}");
+    }
+
+    #[test]
+    fn snap_image_mint_check_refuses_a_dictionary_band_record() {
+        use crate::snap_image::format::*;
+        let (_, recs) = live_mints("snapmintdict");
+        let mut back = through_the_file(&recs);
+        back[0].id = SITE_SHAPE_ID_END + 1;
+        assert_eq!(snap_image_mint_check(&back), Some((0, MINT_BAD_DICTIONARY)));
+    }
+}
+
+/// Image replay (R1): position the id counter of `id`'s family so that its next draw is `id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_id_next(id: u32) -> bool {
+    let f = snap_image_mint_family(id);
+    let c = match f.checked_sub(4) {
+        None => SHAPE_ID_NEXT.get(f),
+        Some(e) => EXOTIC_SHAPE_ID_NEXT.get(e),
+    };
+    c.map(|c| c.store(id, std::sync::atomic::Ordering::Relaxed))
+        .is_some()
+}
+
+/// Image replay (R1): position the semantic-generation counter so that its next draw is `generation`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_semantic_next(generation: u64) {
+    SHAPE_SEMANTIC_NEXT.store(generation, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Image replay (R1): whether this agent's table holds a record with id `id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_id_present(id: u32) -> bool {
+    shape_descriptor_by_id(ShapeId(id)).is_some()
+}
+
+/// Image replay (R1): mint the dynamic (or, `requested`, static-id) record `r` on the key list at
+/// `keys` through the runtime's mint; the word it returns.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_mint_dynamic(
+    r: &crate::snap_image::format::MintRec,
+    keys: usize,
+    requested: Option<ShapeId>,
+) -> Option<u32> {
+    let kind = shapes_store::snap_image_kind_of_code(r.kind);
+    let word = if r.constfn.is_empty() {
+        shape_descriptor_ensure_with_rep(
+            keys as *const ArrayHeader,
+            r.logical,
+            r.live,
+            r.generation,
+            kind,
+            r.holes,
+            r.proto_id,
+            ReceiverFacts {
+                integrity_flags: r.integrity,
+                extra_summary: r.summary,
+                brands: BrandList::copy_of(&r.brands),
+            },
+            r.rep,
+            requested,
+        )
+    } else {
+        let infos: Vec<shapes_store::ConstFnSlotInfo> = r
+            .constfn
+            .iter()
+            .map(|&(slot, info)| shapes_store::ConstFnSlotInfo { slot, info })
+            .collect();
+        shape_descriptor_intern_with_special(
+            keys as *const ArrayHeader,
+            r.logical,
+            r.live,
+            r.generation,
+            kind,
+            r.holes,
+            r.proto_id,
+            r.summary,
+            r.rep,
+            &infos,
+            &r.brands,
+            requested,
+            r.integrity,
+        )
+    };
+    word.ok().map(|w| w.0)
+}
+
+/// Image replay (R1): the live record of `word` as a mint-record entry.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_mint_of_word(word: u32) -> Option<crate::snap_image::format::MintRec> {
+    let rec = shape_record_for_word(LayoutWord(word))?;
+    // SAFETY: a live record of this agent's slab.
+    Some(unsafe { &*rec.0.as_ptr() }.snap_image_mint())
+}
+
+/// Image replay (R1, pass 2): set the six handles of the record of `word`; false when it is gone.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_set_handles(word: u32, handles: [u32; 6]) -> bool {
+    let Some(rec) = shape_record_for_word(LayoutWord(word)) else {
+        return false;
+    };
+    // SAFETY: a live record of this agent's slab; one agent, one thread.
+    unsafe { (*rec.0.as_ptr()).snap_image_set_handles(handles.map(LayoutWord)) };
+    true
+}
+
+/// Image replay (R1): write the prototype identity word of `proto_id`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_write_identity_word(proto_id: u64, bits: u64) {
+    shapes_prototype::write_identity_word(proto_id, bits);
+}
+
+/// Image replay (R1): the process counters the shape mints draw from, as (name, address, bytes).
+/// The image's changed data words hold their values at the cut.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn snap_image_counter_cells() -> Vec<(String, usize, usize)> {
+    let mut v = Vec::new();
+    for (i, c) in SHAPE_ID_NEXT.iter().enumerate() {
+        v.push((format!("shape id next {i}"), c.as_ptr() as usize, 4));
+    }
+    for (i, c) in EXOTIC_SHAPE_ID_NEXT.iter().enumerate() {
+        v.push((format!("exotic shape id next {i}"), c.as_ptr() as usize, 4));
+    }
+    v.push((
+        "semantic generation next".to_string(),
+        SHAPE_SEMANTIC_NEXT.as_ptr() as usize,
+        8,
+    ));
+    v.push((
+        "unique prototype id next".to_string(),
+        PROTO_ID_UNIQUE_NEXT.as_ptr() as usize,
+        8,
+    ));
+    v.push((
+        "shape chunk next".to_string(),
+        shapes_store::snap_image_chunks_next_cell(),
+        4,
+    ));
+    v.push((
+        "prototype serial next".to_string(),
+        super::proto_validity::snap_image_prototype_serial_cell(),
+        8,
+    ));
+    v
+}
+
+/// Test: draw one id from the counter of `proto_id`'s kind and drop it (a gap).
+#[cfg(test)]
+pub(crate) fn snap_image_test_waste_id(proto_id: u64) -> u32 {
+    alloc_shape_id(proto_id).map_or(0, |i| i.0)
+}

@@ -11,12 +11,11 @@
 //! NAMES never identify a shape: an importer's stub keys can differ from the
 //! definer's (#5094), and then the two contents simply get two ids.
 //!
-//! Adoption is the runtime's: module init hands the id to the ordinary mint
-//! as `requested` (`js_object_shape_id_for_class_keys_static`,
-//! `js_object_shape_id_for_class_keys`), which mints it on a by-facts miss and
-//! otherwise returns the existing id; a refused id aborts (ids are by
-//! content, so a refusal is an invariant violation). Births stamp what the
-//! mint RETURNED; only guards compare against the static id as an immediate.
+//! Module init requests publication with a declaration containing this identity
+//! and the independently planned static LayoutWord. Static publication precedes
+//! dynamic by-facts canonicalization and must return the requested word.
+//! Receiver stamps and guards consume LayoutWords; identities remain at seed,
+//! declaration and diagnostic boundaries.
 //!
 //! The content of a birth comes from ONE function, [`class_birth`], which the
 //! string pool uses to emit the mint and the driver's pre-pass uses (through
@@ -51,7 +50,7 @@ pub struct TypedMasks {
 /// resolves it to the one `JsFunctionInfo` for that body in every agent.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ConstFnBirth {
-    pub slot: u8,
+    pub slot: u32,
     pub symbol: String,
 }
 
@@ -86,6 +85,24 @@ pub struct BirthShape {
 }
 
 impl BirthShape {
+    /// The facts of the declared empty ordinary layout (native row
+    /// `EMPTY_ORDINARY_LAYOUT_ROW`, seeded by the runtime at agent creation):
+    /// a literal with no key, no live slot, no typed lane, no rep, no
+    /// ConstFn/private/brand/attribute fact. A literal whose late keys are
+    /// holes of its family names those keys and is not this content.
+    pub fn is_empty_ordinary(&self) -> bool {
+        self.keys.is_empty()
+            && self.key_count == 0
+            && self.live == 0
+            && matches!(self.proto, BirthProto::Literal)
+            && self.typed.is_none()
+            && self.rep == 0
+            && self.constfn.is_empty()
+            && self.private.is_empty()
+            && self.brands.is_empty()
+            && self.attrs.is_empty()
+    }
+
     /// A completed (final) content: ConstFn lanes or private facts. Never an
     /// allocation's birth.
     pub fn is_completed(&self) -> bool {
@@ -96,12 +113,12 @@ impl BirthShape {
     }
 
     /// A literal content without a typed layout: the runtime seed mints it
-    /// from its key names and its birth rep (`js_shape_seed_plain`), the
+    /// from its key names and its birth rep (`js_layout_seed_plain`), the
     /// same facts the literal's own mint names, so the seed and a lazy mint
     /// are one ShapeId. Class contents are seeded by their class
     /// registration, typed ones by their typed install.
     pub fn is_seedable(&self) -> bool {
-        self.proto == BirthProto::Literal && self.typed.is_none()
+        self.proto == BirthProto::Literal && self.typed.is_none() && self.key_count != 0
     }
 
     /// The facts the runtime mints for this content, without the masks: a
@@ -166,7 +183,15 @@ impl BirthShape {
             eat(&[4]);
             eat(&(self.constfn.len() as u32).to_le_bytes());
             for entry in &self.constfn {
-                eat(&[entry.slot]);
+                // One byte below 255 keeps every existing content hash (and so
+                // every static id); a larger slot escapes through 255.
+                match u8::try_from(entry.slot) {
+                    Ok(b) if b != 255 => eat(&[b]),
+                    _ => {
+                        eat(&[255]);
+                        eat(&entry.slot.to_le_bytes());
+                    }
+                }
                 eat(&(entry.symbol.len() as u32).to_le_bytes());
                 eat(entry.symbol.as_bytes());
             }
@@ -385,18 +410,30 @@ impl ClassIdsByKeysName {
     pub(crate) fn get(&self, encoded_class: &str) -> u32 {
         self.0.get(encoded_class).copied().unwrap_or(0)
     }
+
+    /// The class id of the class whose keys global is `keys_global`: the
+    /// defining class itself for one of this module's classes (a repeated
+    /// class name gets a suffixed global, `unique_class_keys_global`, and the
+    /// name-keyed map names only one of the classes), else by name.
+    pub(crate) fn of_keys_global(&self, keys_global: &str, encoded_class: &str) -> u32 {
+        MODULE_KEYS_CLASS_IDS
+            .with(|m| m.borrow().get(keys_global).copied())
+            .unwrap_or_else(|| self.get(encoded_class))
+    }
 }
 
 /// One class keys global's birth, as the string pool mints it.
 pub(crate) struct ClassBirth {
-    /// The class id the mint names (0 = none; such a birth has no content).
+    /// The class id the mint names (0 = none: the birth is on the plain
+    /// prototype, like a literal's).
     pub class_id: u32,
     /// Live inline bound when the class is born wide, else 0.
     pub wide_live: u32,
     /// Its content, when it is nameable.
     pub shape: Option<BirthShape>,
-    /// An anonymous object-literal class (`__AnonShape_*`): its birth names
-    /// the plain prototype ([`BirthProto::Literal`]), never a class one.
+    /// An anonymous object-literal class (`__AnonShape_*`) or a keys global of
+    /// no class: its birth names the plain prototype ([`BirthProto::Literal`]),
+    /// never a class one.
     pub literal: bool,
 }
 
@@ -416,7 +453,7 @@ pub(crate) fn class_birth(
     let (global_name, packed, field_count, _raw_mask_words, _pointer_mask_words) = entry;
     let prefix = crate::symbol_names::class_keys_prefix(module_prefix);
     let encoded_class = global_name.strip_prefix(&prefix).unwrap_or("");
-    let class_id = class_ids.get(encoded_class);
+    let class_id = class_ids.of_keys_global(global_name, encoded_class);
     let image = class_header_image_inits.get(global_name);
     let wide_live = match image {
         Some(&(_, _, birth_live)) if birth_live > *field_count => birth_live,
@@ -426,8 +463,13 @@ pub(crate) fn class_birth(
     // mints at startup before any seed or module init: it can never adopt a
     // static id (its mint would only ever by-facts hit the counter id), so it
     // is not given one.
-    let literal = encoded_class.starts_with("__AnonShape_");
-    let shape = (class_id != 0 && !(literal && *field_count == 0)).then(|| BirthShape {
+    // A keys global whose class resolves to no class id (an imported
+    // object-literal receiver stub, `__ImportedObject_*`) is minted with class
+    // id 0, i.e. on the plain prototype: like a literal's, that content is
+    // compile-time known, so it carries a static ordinal too and never a
+    // runtime-minted word in agent-shared module state.
+    let literal = encoded_class.starts_with("__AnonShape_") || class_id == 0;
+    let shape = Some(BirthShape {
         keys: packed.as_bytes().to_vec(),
         key_count: *field_count,
         live: if wide_live > 0 {
@@ -456,6 +498,10 @@ pub(crate) fn class_birth(
 }
 
 thread_local! {
+    /// This module's own classes by keys global: the class each global was
+    /// reserved for (`lower_module`). Compiler-internal; nothing of it is
+    /// emitted.
+    static MODULE_KEYS_CLASS_IDS: RefCell<HashMap<String, u32>> = RefCell::new(HashMap::new());
     /// This module's static id per class keys global: the id its mint
     /// requests and its guards compare as an immediate (the definer's id for
     /// a structural stub of the definer's facts, see
@@ -477,6 +523,11 @@ thread_local! {
     static MODULE_SEEDS: RefCell<BTreeMap<u32, BirthShape>> = RefCell::new(BTreeMap::new());
     /// This module's slice of the program-wide map (foreign shape globals).
     static MODULE_PROGRAM_IDS: RefCell<ProgramClassShapeIds> = RefCell::new(ProgramClassShapeIds::default());
+}
+
+/// Install the class each of this module's own class keys globals belongs to.
+pub(crate) fn set_module_keys_class_ids(map: HashMap<String, u32>) {
+    MODULE_KEYS_CLASS_IDS.with(|m| *m.borrow_mut() = map);
 }
 
 /// Install this module's static id maps: for each class keys global whose
@@ -551,13 +602,13 @@ pub(crate) fn static_birth_content(keys_global: &str) -> Option<BirthShape> {
 }
 
 /// Final ids are requested only after construction, never by allocation guards.
-pub(crate) fn static_content_id(shape: &BirthShape) -> Option<u32> {
+pub(crate) fn static_content_word(shape: &BirthShape) -> Option<u32> {
     let id = MODULE_CONTENT_IDS.with(|m| m.borrow().get(shape).copied())?;
     note_guard_id(id, Some(shape));
-    Some(id)
+    Some(crate::layout_ordinals::static_word(id))
 }
 
-pub(crate) fn static_final_shape_id(shape: &BirthShape) -> Option<u32> {
+pub(crate) fn static_final_shape_identity(shape: &BirthShape) -> Option<u32> {
     let id = MODULE_FINAL_IDS.with(|m| m.borrow().get(shape).copied())?;
     note_guard_id(id, Some(shape));
     MODULE_FINAL_USES.with(|s| {
@@ -602,7 +653,7 @@ pub(crate) fn module_seed_keys() -> Vec<String> {
 ///
 /// The static shape-seed object references each of these records, so the
 /// module must emit every one of them as a linkable (`hidden`) definition. A
-/// shape can join the seed set through a guard (`compatible_final_shapes`)
+/// shape can join the seed set through a guard (`compatible_final_layouts`)
 /// without being named by a finalizer, and [`module_final_seeds`] lists only
 /// the latter; requesting from this set instead keeps the seed table and the
 /// emitted records in agreement by construction.
@@ -685,8 +736,8 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
         let mut entries = Vec::new();
         for text in bodies.split(',') {
             let (slot, encoded) = text.split_once('@')?;
-            let slot: u8 = slot.parse().ok()?;
-            if slot >= 32 || encoded.is_empty() || encoded.len() % 2 != 0 {
+            let slot: u32 = slot.parse().ok()?;
+            if slot >= key_count || encoded.is_empty() || encoded.len() % 2 != 0 {
                 return None;
             }
             if entries
@@ -706,25 +757,17 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
             {
                 return None;
             }
-            if (rep >> (u32::from(slot) * 2)) & 3 != 3 {
+            // A body past word 0 has no bit in `rep`: the entry is its lane.
+            if slot < 32 && (rep >> (slot * 2)) & 3 != 3 {
                 return None;
             }
             entries.push(ConstFnBirth { slot, symbol });
         }
         entries
     };
-    let mut special = 0u32;
-    for slot in 0..32 {
-        if (rep >> (slot * 2)) & 3 == 3 {
-            special |= 1 << slot;
-        }
-    }
-    let covered = constfn
-        .iter()
-        .fold(0u32, |mask, entry| mask | (1 << entry.slot));
-    if special != covered {
-        return None;
-    }
+    // A `11` lane without a body entry is an I32 lane (`field_rep`: a `11`
+    // lane outside the ConstFn mask is I32 at rest), so a body needs a `11`
+    // lane (checked above) but a `11` lane does not need a body.
     Some((
         id,
         BirthShape {
@@ -745,7 +788,7 @@ pub fn decode_static_seed(line: &str) -> Option<(u32, BirthShape)> {
 /// The static id a GUARD compares against for the class whose keys global is
 /// `keys_global`, when the driver assigned one and the global belongs to this
 /// module. A literal content joins the module's seed set.
-pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
+pub(crate) fn static_layout_word_for_keys_global(keys_global: &str) -> Option<u32> {
     MODULE_STATIC_IDS.with(|m| {
         let m = m.borrow();
         let (id, shape) = m.get(keys_global)?;
@@ -753,7 +796,7 @@ pub(crate) fn static_shape_id_for_keys_global(keys_global: &str) -> Option<u32> 
             return None;
         }
         note_guard_id(*id, Some(shape));
-        Some(*id)
+        Some(crate::layout_ordinals::static_word(*id))
     })
 }
 
@@ -775,6 +818,18 @@ pub(crate) fn slot_may_be_constfn(keys_global: &str, slot: u32) -> bool {
     })
 }
 
+/// Does any completed shape hold a constant function at `slot` under the key
+/// `key`? The family-layout twin of `slot_may_be_constfn`: a family class's
+/// birth keys are not in constructor order, so the key names the slot.
+pub(crate) fn key_may_be_constfn_at(key: &str, slot: u32) -> bool {
+    MODULE_FINAL_IDS.with(|m| {
+        m.borrow().keys().any(|s| {
+            s.constfn.iter().any(|i| i.slot as u32 == slot)
+                && s.keys.split(|&b| b == 0).nth(slot as usize) == Some(key.as_bytes())
+        })
+    })
+}
+
 /// Does any completed shape of the program name `body` (a JS body symbol) in
 /// a ConstFn lane? Such a body is the target of static method-lane calls.
 pub(crate) fn body_has_constfn_lane(body: &str) -> bool {
@@ -789,8 +844,8 @@ pub(crate) fn body_has_constfn_lane(body: &str) -> bool {
 /// Guard-only compatible completed identities. Allocation suppliers continue
 /// returning the ordinary birth id. Match all structural facts and preserve
 /// every base representation; a written SPECIAL slot cannot use a raw store.
-pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) -> Vec<u32> {
-    let mut ids: Vec<u32> = compatible_final_shapes(expected, written_slots)
+pub(crate) fn compatible_final_layout_words(expected: &str, written_slots: &[u32]) -> Vec<u32> {
+    let mut ids: Vec<u32> = compatible_final_layouts(expected, written_slots)
         .into_iter()
         .map(|(id, _)| id)
         .collect();
@@ -799,9 +854,9 @@ pub(crate) fn compatible_final_shape_ids(expected: &str, written_slots: &[u32]) 
     ids
 }
 
-/// [`compatible_final_shape_ids`] with each id's content, sorted by id. Every
+/// [`compatible_final_layout_words`] with each id's content, sorted by id. Every
 /// returned id joins the module's seed set exactly as a guard immediate does.
-pub(crate) fn compatible_final_shapes(
+pub(crate) fn compatible_final_layouts(
     expected: &str,
     written_slots: &[u32],
 ) -> Vec<(u32, BirthShape)> {
@@ -812,7 +867,7 @@ pub(crate) fn compatible_final_shapes(
         .with(|m| {
             m.borrow()
                 .values()
-                .find(|(id, _)| *id == expected)
+                .find(|(id, _)| crate::layout_ordinals::static_word(*id) == expected)
                 .map(|(_, s)| s.clone())
         })
         .or_else(|| {
@@ -820,7 +875,7 @@ pub(crate) fn compatible_final_shapes(
                 m.borrow()
                     .0
                     .values()
-                    .find(|d| d.id == expected)
+                    .find(|d| crate::layout_ordinals::static_word(d.id) == expected)
                     .map(|d| d.shape.clone())
             })
         });
@@ -841,6 +896,7 @@ pub(crate) fn compatible_final_shapes(
                 let ordinary_rep = shape
                     .constfn
                     .iter()
+                    .filter(|entry| entry.slot < 32)
                     .fold(shape.rep, |rep, entry| rep & !(3u64 << (2 * entry.slot)));
                 let ordinary_rep = if shape.private.is_empty() {
                     ordinary_rep
@@ -863,7 +919,7 @@ pub(crate) fn compatible_final_shapes(
     let mut out = Vec::new();
     for (shape, id) in candidates {
         note_guard_id(id, Some(&shape));
-        out.push((id, shape));
+        out.push((crate::layout_ordinals::static_word(id), shape));
     }
     out.sort_by_key(|(id, _)| *id);
     out.dedup_by_key(|(id, _)| *id);
@@ -928,7 +984,7 @@ pub(crate) fn static_region_slots(
             }
         });
         note_guard_id(*id, Some(shape));
-        Some((*id, slots, r_mask))
+        Some((crate::layout_ordinals::static_word(*id), slots, r_mask))
     })
 }
 
@@ -936,8 +992,19 @@ pub(crate) fn static_region_slots(
 /// key-cache builder already mints its plain layout before the class mint, so
 /// it needs a startup seed even when no guard embeds this id. Declared-class
 /// prototypes differ from the plain key-cache layout and do not need a seed.
+///
+/// In an image build every class keys global names a compiler-known birth
+/// layout, and the driver assigns every such content a static identity and
+/// ordinal (`assign_static_shape_ids` over the same `class_birth`
+/// derivation), so the class's shape-word global is a compile-time constant.
+/// A missing identity there is a compiler bug, never a reason to store a
+/// runtime-minted word in module state: module-state globals are shared by
+/// every agent of the image (perry/thread workers never run module init),
+/// while a dynamic LayoutWord names a row of the minting agent only. `None`
+/// is returned only outside an image build (the births pre-pass, or a
+/// codegen compile without a program plan).
 pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u32> {
-    MODULE_STATIC_IDS.with(|m| {
+    let id = MODULE_STATIC_IDS.with(|m| {
         m.borrow()
             .get(keys_global)
             .filter(|(_, shape)| shape.constfn.is_empty())
@@ -945,30 +1012,15 @@ pub(crate) fn requested_shape_id_for_keys_global(keys_global: &str) -> Option<u3
                 note_guard_id(*id, Some(shape));
                 *id
             })
-    })
-}
-
-/// The static id behind ANOTHER module's shape-id global `shape_id_global`
-/// for class `class_id`: the defining module's id, when the program map names
-/// that class and the global is the definer's.
-pub(crate) fn static_shape_id_for_foreign_global(
-    class_id: u32,
-    shape_id_global: &str,
-) -> Option<u32> {
-    MODULE_PROGRAM_IDS.with(|m| {
-        let program = m.borrow();
-        let d = program.0.get(&class_id)?;
-        if crate::typed_shape::shape_id_global_name_from_keys_global(&d.keys_global)
-            != shape_id_global
-        {
-            return None;
-        }
-        if !d.shape.constfn.is_empty() {
-            return None;
-        }
-        note_guard_id(d.id, Some(&d.shape));
-        Some(d.id)
-    })
+    });
+    if id.is_none() && crate::layout_ordinals::image_plan_active() {
+        panic!(
+            "class keys global {keys_global} has no static layout identity in the image plan: \
+             a compiler-known class layout must carry a static ordinal, and a dynamic \
+             LayoutWord must not enter agent-shared module state"
+        );
+    }
+    id
 }
 
 /// The class births of one module (the driver's pre-pass). The first
@@ -1009,7 +1061,7 @@ pub(crate) fn module_births(
 mod tests;
 
 /// A prototype candidate from the program-wide completed content set.
-pub(crate) fn static_prototype_shape(cid: u32) -> Option<(u32, BirthShape)> {
+pub(crate) fn static_prototype_identity(cid: u32) -> Option<(u32, BirthShape)> {
     MODULE_FINAL_IDS.with(|m| {
         m.borrow().iter().find_map(|(shape, id)| {
             matches!(shape.proto, BirthProto::Prototype(c, _) if c == cid)
@@ -1018,23 +1070,52 @@ pub(crate) fn static_prototype_shape(cid: u32) -> Option<(u32, BirthShape)> {
     })
 }
 
-/// Can any complete prototype contribute this named method to a static family
-/// table? A compile-time exclusion only; a possible hit still probes the live
-/// receiver and all holder words. This reads the same immutable contents that
-/// the family table emitter consumes.
-pub(crate) fn has_prototype_method(name: &str) -> bool {
-    MODULE_FINAL_IDS.with(|m| {
-        m.borrow().keys().any(|shape| {
-            matches!(shape.proto, BirthProto::Prototype(..))
-                && shape
-                    .keys
-                    .split(|b| *b == 0)
-                    .take(shape.key_count as usize)
-                    .enumerate()
-                    .any(|(slot, key)| {
-                        key == name.as_bytes()
-                            && shape.constfn.iter().any(|f| f.slot as usize == slot)
-                    })
-        })
-    })
+pub(crate) fn static_prototype_layout(cid: u32) -> Option<(u32, BirthShape)> {
+    static_prototype_identity(cid)
+        .map(|(id, shape)| (crate::layout_ordinals::static_word(id), shape))
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState {
+    module_content_ids: HashMap<BirthShape, u32>,
+    module_keys_class_ids: HashMap<String, u32>,
+    module_final_ids: HashMap<BirthShape, u32>,
+    module_static_ids: HashMap<String, (u32, BirthShape)>,
+    module_program_ids: ProgramClassShapeIds,
+}
+pub(crate) fn callable_state() -> CallableState {
+    CallableState {
+        module_content_ids: MODULE_CONTENT_IDS.with(|s| s.borrow().clone()),
+        module_keys_class_ids: MODULE_KEYS_CLASS_IDS.with(|s| s.borrow().clone()),
+        module_final_ids: MODULE_FINAL_IDS.with(|s| s.borrow().clone()),
+        module_static_ids: MODULE_STATIC_IDS.with(|s| s.borrow().clone()),
+        module_program_ids: MODULE_PROGRAM_IDS.with(|s| s.borrow().clone()),
+    }
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CONTENT_IDS.with(|s| *s.borrow_mut() = self.module_content_ids.clone());
+        MODULE_KEYS_CLASS_IDS.with(|s| *s.borrow_mut() = self.module_keys_class_ids.clone());
+        MODULE_FINAL_IDS.with(|s| *s.borrow_mut() = self.module_final_ids.clone());
+        MODULE_STATIC_IDS.with(|s| *s.borrow_mut() = self.module_static_ids.clone());
+        MODULE_PROGRAM_IDS.with(|s| *s.borrow_mut() = self.module_program_ids.clone());
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().clear());
+        MODULE_SEEDS.with(|s| s.borrow_mut().clear());
+    }
+}
+pub(crate) struct CallableEffects {
+    module_final_uses: BTreeMap<u32, BirthShape>,
+    module_seeds: BTreeMap<u32, BirthShape>,
+}
+pub(crate) fn take_callable_effects() -> CallableEffects {
+    CallableEffects {
+        module_final_uses: MODULE_FINAL_USES.with(|s| std::mem::take(&mut *s.borrow_mut())),
+        module_seeds: MODULE_SEEDS.with(|s| std::mem::take(&mut *s.borrow_mut())),
+    }
+}
+impl CallableEffects {
+    pub(crate) fn merge(self) {
+        MODULE_FINAL_USES.with(|s| s.borrow_mut().extend(self.module_final_uses));
+        MODULE_SEEDS.with(|s| s.borrow_mut().extend(self.module_seeds));
+    }
 }

@@ -121,7 +121,9 @@ pub extern "C" fn js_node_stream_is_array_buffer_view(value: f64) -> f64 {
         && (!crate::buffer::is_any_array_buffer(addr)
             || crate::buffer::is_uint8array_buffer(addr)
             || crate::buffer::is_data_view(addr));
-    bool_value(registered_view || crate::typedarray::lookup_typed_array_kind(addr).is_some())
+    bool_value(
+        registered_view || crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some(),
+    )
 }
 
 /// #2685: `stream._isUint8Array(value)` returns true for Buffer as well as
@@ -136,8 +138,8 @@ pub extern "C" fn js_node_stream_is_uint8_array(value: f64) -> f64 {
             || (!crate::buffer::is_any_array_buffer(addr) && !crate::buffer::is_data_view(addr)));
     bool_value(
         registered_uint8
-            || crate::typedarray::lookup_typed_array_kind(addr)
-                == Some(crate::typedarray::KIND_UINT8),
+            || crate::typedarray_hook_slots::lookup_typed_array_kind(addr)
+                == Some(crate::typedarray_hook_slots::KIND_UINT8),
     )
 }
 
@@ -189,7 +191,7 @@ pub extern "C" fn js_node_stream_set_default_hwm(object_mode: f64, value: f64) -
 }
 
 pub(crate) fn attach_abort_signal(signal: f64, stream: f64) {
-    if !crate::url::abort::is_abort_signal_value(signal) {
+    if !crate::event_target_hook_slots::is_abort_signal_value(signal) {
         let message = format!(
             "The \"signal\" argument must be an instance of AbortSignal. Received {}",
             crate::fs::validate::describe_received(signal)
@@ -208,7 +210,7 @@ pub(crate) fn attach_abort_signal(signal: f64, stream: f64) {
         1,
     );
     js_closure_set_capture_ptr(listener, 0, stream.to_bits() as i64);
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         signal_obj,
         literal_string_value(b"abort"),
         box_pointer(listener as *const u8),

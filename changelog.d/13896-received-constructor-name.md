@@ -1,0 +1,1 @@
+ERR_INVALID_ARG_TYPE now describes a received object like node 26.12 (node 6b84ee66fa): it reads `value.constructor?.name` once per property, names the value only by a non-empty string, and otherwise prints `{}` for an object with no enumerable own keys and `[Object]` for one with keys (a non-enumerable key such as a defined `constructor` accessor no longer counts).

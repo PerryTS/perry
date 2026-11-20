@@ -117,6 +117,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::New {
+                byte_end: 0,
                 class_name: "Array".to_string(),
                 args: vec![Expr::Integer(4)],
                 type_args: vec![],
@@ -130,6 +131,9 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
             },
@@ -140,6 +144,7 @@ fn hir_inferred_static_type_provides_codegen_fallback_facts() {
         hir_inferred_static_type_from_locals(
             &local_types,
             &Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::Object(vec![(
                     "answer".to_string(),
@@ -188,6 +193,7 @@ fn hir_inferred_types_reuse_imported_function_return_facts() {
         enums: &enums,
     };
     let call = Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
             name: "readName".to_string(),
             param_types: vec![],
@@ -296,6 +302,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -370,6 +377,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -422,6 +430,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "label".to_string(),
@@ -433,7 +442,9 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::Call {
+                byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
                     byte_offset: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     property: "score".to_string(),

@@ -82,7 +82,7 @@ jobs:
           python3 scripts/actions_plan.py "${args[@]}"
   gc-ratchet__gc-ratchet:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-ratchet'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     permissions:
       contents: read
@@ -112,7 +112,7 @@ jobs:
           fi
       - name: Harness unit tests and artifact validation
         run: |
-          python3 -m unittest discover -s tests -p 'test*gc_ratchet.py' -v
+          python3 -m unittest discover -s tests/tooling/infrastructure -p 'test*gc_ratchet.py' -v
           python3 benchmarks/gc_ratchet/gc_ratchet.py validate --scope structural
       - name: Decide whether this change can affect the collector
         id: relevance
@@ -135,7 +135,7 @@ jobs:
           # deliberately broad; it exists only to spare docs-only PRs a build.
           # If the listing is empty or the API failed, `set -e` already aborted
           # — the job does not silently fall through to "not relevant".
-          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/(gc-ratchet|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet)\.py$)' changed.txt; then
+          if grep -qE '^(crates/|benchmarks/gc_ratchet/|Cargo\.(toml|lock)$|\.github/workflows/(gc-ratchet|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$|tests/(test_gc_ratchet|test_large_eden_gc_ratchet|test_measurement_runtime_gc_ratchet)\.py$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; measuring."
           else
@@ -172,6 +172,8 @@ jobs:
           # is identical to the set used to capture the baseline.
           cargo build-perry --release
           scripts/gc_call_effects/sidecars.sh target/release
+          # Timing uses ordinary archives; separate trace runs need instruments.
+          PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh
           for artifact in perry libperry_runtime.a libperry_stdlib.a libperry_runtime.a.gc-effects; do
             test -s "target/release/$artifact" \
               || { echo "::error::target/release/$artifact was not produced"; exit 1; }
@@ -368,7 +370,7 @@ jobs:
           # The filter exists only to spare docs-only PRs a compiler build. If
           # the listing is empty or the API failed, `set -e` already aborted, so
           # the job cannot silently fall through to "not relevant".
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|test-files/test_gap_gc_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|scripts/gc_matrix_fixture_env(_test)?\.py$|tests/fixtures/programs/test_gap_gc_|tests/parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-moving-witnesses|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches collector-relevant paths; running the witnesses."
           else
@@ -443,8 +445,10 @@ jobs:
 
           cells = report.get("cells", [])
           seen = {c["test"] for c in cells}
-          on_disk = {os.path.basename(p)[:-3]
-                     for p in glob.glob("test-files/test_gap_gc_*.ts")}
+          sys.path.insert(0, "scripts")
+          from gc_corpus_sources import resolve_patterns
+          on_disk = {name for name, _ in resolve_patterns(
+              os.getcwd(), ["test_gap_gc_*.ts"], require_each=False)}
 
           problems = []
 
@@ -452,7 +456,7 @@ jobs:
           for name in unregistered:
               problems.append(
                   "%s exists but was not run: register it in "
-                  "test-parity/gc_repsel_corpus.txt. The matrix only "
+                  "tests/parity/gc_repsel_corpus.txt. The matrix only "
                   "auto-detects the test_gap_repsel_*/test_gap_specabi_* "
                   "prefixes, so a test_gap_gc_* witness that is not registered "
                   "is silently dark (#6925 is the precedent)." % name)
@@ -463,7 +467,7 @@ jobs:
               if result == "PASS":
                   continue
               if result == "XFAIL":
-                  # Triaged in test-parity/gc_repsel_triage.txt, which requires
+                  # Triaged in tests/parity/gc_repsel_triage.txt, which requires
                   # an issue number and a written reason. Loud, but not fatal.
                   print("::warning::%s is a triaged expected-red on this arm: %s"
                         % (name, ev))
@@ -560,7 +564,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: macos-14
+          - os: macos-15
             arch: aarch64
             format: Mach-O
           - os: ubuntu-latest
@@ -611,6 +615,28 @@ jobs:
           shared-key: gc-native-roots
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
+          set -euo pipefail
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # The vendored OpenSSL's Configure needs Locale::Maketext::Simple,
+            # which Git Bash's msys perl lacks, and Git's perl comes first on
+            # this shell's PATH (pwsh inherits it). Take the first perl on
+            # PATH, then Strawberry's, that loads the module.
+            OPENSSL_SRC_PERL=
+            while IFS= read -r perl_exe; do
+              perl_exe=${perl_exe%$'\r'}
+              [ -n "$perl_exe" ] || continue
+              if "$(cygpath -u "$perl_exe")" -MLocale::Maketext::Simple -e1 2>/dev/null; then
+                OPENSSL_SRC_PERL=$perl_exe
+                break
+              fi
+            done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+            if [ -z "$OPENSSL_SRC_PERL" ]; then
+              echo "::error::no Windows perl with Locale::Maketext::Simple for the vendored OpenSSL Configure"
+              exit 1
+            fi
+            export OPENSSL_SRC_PERL
+            echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          fi
           export RUSTFLAGS="-C force-unwind-tables=yes"
           cargo build-perry --profile perry-dev
           scripts/gc_call_effects/sidecars.sh target/perry-dev
@@ -641,6 +667,8 @@ jobs:
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
+          # The runtime runs below require verifier and trace instruments.
+          export PERRY_GC_INSTRUMENTS=1
 
           # `opt` and `clang` MUST come from the same LLVM install. RS4GC pipes
           # each module through `opt` and hands the result to `clang`, so a
@@ -651,14 +679,14 @@ jobs:
           # a Mac. Anyone enabling this knob hits that; pin both here.
           exe=""
           if [ "$RUNNER_OS" = "macOS" ]; then
-            brew list llvm >/dev/null 2>&1 || brew install llvm
-            llvm_bin="$(brew --prefix llvm)/bin"
+            # Reuse setup-llvm22's checked >=22.1.5 pair, including on macOS.
+            llvm_bin="$LLVM_SYS_221_PREFIX/bin"
           elif [ "$RUNNER_OS" = "Windows" ]; then
             # windows-latest ships clang (the NSIS LLVM build) but NOT `opt`;
             # the matched pair comes from the official clang+llvm release
             # archive — one directory, so opt and clang cannot skew.
             exe=".exe"
-            llvm_ver=22.1.3
+            llvm_ver=22.1.8
             # Git Bash exposes RUNNER_TEMP as a native `D:\...` path. Convert
             # it before any Unix tool sees it: the runner's bsdtar still treats
             # `D:` as a remote host even when passed GNU tar's --force-local.
@@ -912,6 +940,8 @@ jobs:
           set -euo pipefail
           export PERRY_RUNTIME_DIR="$PWD/target/perry-dev"
           export PERRY_NO_AUTO_OPTIMIZE=1
+          # The runtime runs below require verifier and trace instruments.
+          export PERRY_GC_INSTRUMENTS=1
           unset PERRY_LLVM_OPT PERRY_LLVM_CLANG
           # Keep LLVM_SYS_221_PREFIX from setup-llvm22. The stock-toolchain
           # assertion removes the external opt/clang overrides; the in-process
@@ -1036,7 +1066,7 @@ jobs:
           PY
   gc-root-dominance__gc-root-dominance:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
@@ -1198,7 +1228,7 @@ jobs:
     name: gc-root-dominance / gc-root-dominance
   gc-root-dominance__gc-root-dominance-statepoints:
     if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gc-root-dominance'] && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'run-extended-tests')) }}
-    runs-on: macos-14
+    runs-on: macos-15
     timeout-minutes: 90
     steps:
       - name: Checkout repository (inline git)
@@ -1576,7 +1606,7 @@ jobs:
           # anything under crates/ can move the collector or change how JSON
           # parses, and the filter exists only to spare docs-only PRs a
           # compiler build.
-          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|scripts/fixtures/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/(gc-parse-churn-gate|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_parse_churn_layout_(gate\.sh|check\.py)$|tests/fixtures/scripts/gc_parse_churn_layout_state\.ts$|Cargo\.(toml|lock)$|\.github/workflows/(gc-parse-churn-gate|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches a collector- or JSON-parse-relevant path; running the gate."
           else
@@ -1702,7 +1732,7 @@ jobs:
           # method-call lowering resolves to, not just the Ptr<Shape>
           # collectors themselves — #6984's defect lived in
           # lower_call/scalar_method.rs, three files away from ptr_shape.rs.
-          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|test-files/test_gap_repsel_|test-parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-ptr-shape-off-witness|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
+          if grep -qE '^(crates/|scripts/gc_repsel_matrix\.sh$|tests/fixtures/programs/test_gap_repsel_|tests/parity/gc_repsel_|Cargo\.(toml|lock)$|\.node-version$|\.github/workflows/(gc-ptr-shape-off-witness|gc)\.yml$|scripts/(actions_catalog\.json|actions_plan\.py|check_actions_topology\.py|test_actions_plan\.py)$)' changed.txt; then
             echo "run=true" >> "$GITHUB_OUTPUT"
             echo "Change touches representation-selection-relevant paths; running the witness."
           else

@@ -61,11 +61,22 @@ pub(crate) fn emit_bind_call(
         let base = blk.icmp_eq(
             I32,
             &shape,
-            &(crate::runtime_abi::FUNCTION_SHAPE as i32).to_string(),
+            &(crate::runtime_abi::FUNCTION_LAYOUT_WORD as i32).to_string(),
         );
+        let base_nonctor = blk.icmp_eq(
+            I32,
+            &shape,
+            &((crate::runtime_abi::FUNCTION_LAYOUT_WORD
+                + crate::runtime_abi::NON_CONSTRUCTOR_FAMILY_INDEX) as i32)
+                .to_string(),
+        );
+        let base = blk.or(I1, &base, &base_nonctor);
         blk.and(I1, &is_closure, &base)
     };
     let ok = if ctx.wpfacts.fnproto_bind_unwritten {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::FunctionBind, || {
+            serde_json::json!({})
+        });
         if ctx.wpfacts.interp_guard {
             let blk = ctx.block();
             let w = blk.load(I32, "@PERRY_INTERP_PROTO_WRITTEN");

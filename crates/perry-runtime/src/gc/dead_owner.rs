@@ -275,7 +275,7 @@ pub(super) fn prune_dead_owner_side_tables_copied_minor() -> String {
         owner_is_dead_copied_minor_from_space(addr, Some(GC_TYPE_STRING))
     });
     let mut detail = String::new();
-    let diag = super::gc_diag_enabled();
+    let diag = super::diagnostic_hooks::enabled();
     if diag {
         detail.push('[');
     }
@@ -411,6 +411,16 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::prune_dead_transition_cache_entries,
         full_only: false,
         young_prune: Some(crate::object::prune_dead_transition_cache_entries_young),
+    },
+    // A Node-API reference at count 0 holds its object weakly in its own
+    // record; a dead target is cleared to undefined (napi_get_reference_value
+    // then answers NULL, as in node).
+    DeadKeyPrune {
+        table: "NODE_API_WEAK_REFERENCES",
+        owner: DeadKeyOwner::Any,
+        prune: crate::feature_hooks::prune_dead_node_api_weak_references,
+        full_only: false,
+        young_prune: None,
     },
 ];
 

@@ -1,0 +1,1 @@
+Fix worker message transfer-list normalization for direct and options-based iterables. Preserve iterator errors and transactional ArrayBuffer detachment, keep Worker constructor admission separate, and ignore BroadcastChannel's extra argument.

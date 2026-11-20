@@ -36,11 +36,13 @@ impl SH for Module {
             extern_funcs,
             init_was_unrolled,
             has_top_level_await,
+            async_init_function,
             init_kind,
             async_step_closures,
             closure_display_names,
             class_display_names,
             closure_source_text,
+            non_constructor_funcs,
             class_source_text,
             async_generator_funcs,
             // Observational source metadata does not affect emitted code and
@@ -48,6 +50,7 @@ impl SH for Module {
             local_source_spans: _,
             gen_param_prologue_len,
             requested_modules,
+            locally_redeclared_imports,
         } = self;
         name.hash(h);
         match class_family_syntax {
@@ -71,11 +74,13 @@ impl SH for Module {
                     class.hash(h);
                 }
                 syntax.module_capability_uses.hash(h);
+                syntax.descriptor_capability_uses.hash(h);
             }
         }
         imports.hash(h);
         exports.hash(h);
         requested_modules.hash(h);
+        locally_redeclared_imports.hash(h);
         classes.hash(h);
         interfaces.hash(h);
         type_aliases.hash(h);
@@ -108,6 +113,7 @@ impl SH for Module {
         extern_funcs.hash(h);
         init_was_unrolled.hash(h);
         has_top_level_await.hash(h);
+        async_init_function.hash(h);
         init_kind.hash(h);
         // HashSet has nondeterministic iteration order; sort for stable hashing.
         let mut ids: Vec<u32> = async_step_closures.iter().copied().collect();
@@ -118,6 +124,9 @@ impl SH for Module {
         let mut async_gen_ids: Vec<u32> = async_generator_funcs.iter().copied().collect();
         async_gen_ids.sort_unstable();
         async_gen_ids.hash(h);
+        let mut method_ids: Vec<u32> = non_constructor_funcs.iter().copied().collect();
+        method_ids.sort_unstable();
+        method_ids.hash(h);
         // HashMap has nondeterministic iteration order; sort by key.
         let mut display_pairs: Vec<(u32, &String)> =
             closure_display_names.iter().map(|(k, v)| (*k, v)).collect();
@@ -173,6 +182,7 @@ impl SH for ModuleInitKind {
         match self {
             ModuleInitKind::Eager => tag(h, 0),
             ModuleInitKind::Deferred => tag(h, 1),
+            ModuleInitKind::OnDemand => tag(h, 2),
         }
     }
 }
@@ -200,6 +210,7 @@ impl SH for Import {
             type_only,
             runtime_erased,
             is_dynamic,
+            is_deferred,
             is_dynamic_target,
             is_deferred_require,
             is_adopted_require,
@@ -217,6 +228,9 @@ impl SH for Import {
             tag(h, 0x5254);
         }
         is_dynamic.hash(h);
+        if *is_deferred {
+            tag(h, 0x4446);
+        }
         is_dynamic_target.hash(h);
         is_deferred_require.hash(h);
         is_adopted_require.hash(h);

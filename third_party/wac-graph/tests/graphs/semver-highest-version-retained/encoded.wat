@@ -1,0 +1,47 @@
+(component
+  (type (;0;)
+    (instance
+      (export (;0;) "w" (type (sub resource)))
+      (type (;1;) (record (field "x" u32)))
+      (export (;2;) "x" (type (eq 1)))
+      (type (;3;) (func (param "x" 2)))
+      (export (;0;) "y" (func (type 3)))
+      (export (;4;) "z" (type (sub resource)))
+    )
+  )
+  (import "foo:bar/types@0.2.1" (instance (;0;) (type 0)))
+  (type (;1;)
+    (component
+      (type (;0;)
+        (instance
+          (export (;0;) "w" (type (sub resource)))
+        )
+      )
+      (import "foo:bar/types@0.2.1" (instance (;0;) (type 0)))
+    )
+  )
+  (import "unlocked-dep=<test:higher>" (component (;0;) (type 1)))
+  (instance (;1;) (instantiate 0
+      (with "foo:bar/types@0.2.1" (instance 0))
+    )
+  )
+  (type (;2;)
+    (component
+      (type (;0;)
+        (instance
+          (type (;0;) (record (field "x" u32)))
+          (export (;1;) "x" (type (eq 0)))
+          (type (;2;) (func (param "x" 1)))
+          (export (;0;) "y" (func (type 2)))
+          (export (;3;) "z" (type (sub resource)))
+        )
+      )
+      (import "foo:bar/types@0.2.0" (instance (;0;) (type 0)))
+    )
+  )
+  (import "unlocked-dep=<test:lower>" (component (;1;) (type 2)))
+  (instance (;2;) (instantiate 1
+      (with "foo:bar/types@0.2.0" (instance 0))
+    )
+  )
+)

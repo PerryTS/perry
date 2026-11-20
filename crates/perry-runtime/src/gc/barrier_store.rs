@@ -76,64 +76,19 @@ pub(crate) unsafe fn runtime_write_barrier_resolved_slot(
     runtime_write_barrier_slot(parent_addr, slot_addr, child_bits);
 }
 
-/// Canonicalize an INT32-boxed Number into the raw-f64 representation its
-/// shape lane requires. FFI/native stores can supply boxed integers; storing
-/// the equal raw double preserves the shape's tracing proof. ClassRef shares
-/// INT32_TAG but is not a Number, so it keeps its tag.
-#[inline]
-fn canonicalize_typed_slot_store_bits(
-    parent_user: usize,
-    slot_index: usize,
-    value_bits: u64,
-) -> u64 {
-    if value_bits & TAG_MASK != crate::value::INT32_TAG {
-        return value_bits;
-    }
-    if !slot_holds_raw_f64(parent_user, slot_index) {
-        return value_bits;
-    }
-    match crate::array::value_bits_to_number(value_bits) {
-        Some(number) => number.to_bits(),
-        None => value_bits,
-    }
-}
-
-/// Whether `parent_user`'s slot `slot_index` holds a raw double: for an
-/// object, the lane of its shape (charter step 5: the shape is the
-/// authority). No other payload keeps raw doubles in a boxed-value slot.
-#[inline]
-fn slot_holds_raw_f64(parent_user: usize, slot_index: usize) -> bool {
-    unsafe {
-        let Some(header) = super::layout::layout_header_for_user(parent_user) else {
-            return false;
-        };
-        if (*header).obj_type == GC_TYPE_OBJECT {
-            if (*header).gc_flags & GC_FLAG_FORWARDED != 0 {
-                return false;
-            }
-            let rep = crate::object::field_rep_store::object_slot_rep(
-                parent_user as *const crate::object::ObjectHeader,
-                slot_index,
-            );
-            return rep == crate::object::field_rep::REP_F64
-                || rep == crate::object::field_rep::REP_F64_DEPRECATED;
-        }
-    }
-    false
-}
-
 /// Newborn object slot store: canonicalize representation, demote a heap
 /// string alias and publish the generational/incremental barrier. Object
 /// tracing uses ShapeId rep, so no per-slot layout note is needed. The
 /// returned pointer classification is retained for construction witnesses.
+/// `_slot_index` named the lane an INT32-boxed Number was canonicalized for;
+/// a Number has one encoding now (P3 B4b), so no store rewrites its value.
 #[inline]
 pub(crate) fn runtime_store_jsvalue_slot_layout_deferred(
     parent_user: usize,
     slot_addr: usize,
-    slot_index: usize,
+    _slot_index: usize,
     value_bits: u64,
 ) -> bool {
-    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }
@@ -172,7 +127,6 @@ pub(crate) fn runtime_store_jsvalue_slot(
     slot_index: usize,
     value_bits: u64,
 ) {
-    let value_bits = canonicalize_typed_slot_store_bits(parent_user, slot_index, value_bits);
     unsafe {
         std::ptr::write(slot_addr as *mut u64, value_bits);
     }
@@ -321,6 +275,9 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
         bump_write_barrier_trace_counter(BarrierTraceCounter::NonPointerParentSkips);
         return;
     }
+    // Escape evidence precedes every cached exit: the cache never looks at the
+    // child, so a leaf stored into an already-dirty page would be missed.
+    super::leaf_escape::probe_store(parent_user as usize, child_addr);
     // Leaf exit for the common repeated store into one old page — see
     // `inline_slot_store_on_cached_dirty_page`.
     if super::barrier::inline_slot_store_on_cached_dirty_page(
@@ -331,6 +288,36 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
         return;
     }
     write_barrier_decoded_parent(parent_user as usize, slot_addr as usize, child_addr, false);
+}
+
+/// The GC obligations of a slot store that compiled code made inline, for a
+/// value whose bits may carry a heap pointer (codegen gates the call on
+/// `emit_may_carry_heap_pointer_check`): a heap string aliased into the slot
+/// is demoted to shared, and the parent takes the slot barrier unless it is
+/// an arena object outside the old generation while no incremental cycle is
+/// live ([`newborn_parent_needs_barrier`], the gate the store site used to
+/// emit inline). Out of line, so a store site carries one call instead of
+/// the tag tests, the addref call and the barrier gate.
+///
+/// GC leaf: no allocation, no collection, no user code.
+///
+/// # Safety
+/// `parent_user` is the raw user pointer of a live, non-forwarded
+/// `GC_TYPE_OBJECT` the caller just stored into at `slot_addr` (the
+/// validated-parent contract of [`js_write_barrier_slot_validated_parent`]).
+#[no_mangle]
+pub unsafe extern "C" fn js_slot_store_obligations(
+    parent_user: u64,
+    slot_addr: u64,
+    value_bits: u64,
+) {
+    if value_bits & TAG_MASK == STRING_TAG {
+        crate::string::js_string_addref((value_bits & POINTER_MASK) as *mut crate::StringHeader);
+    }
+    if !newborn_parent_needs_barrier(parent_user as usize) {
+        return;
+    }
+    js_write_barrier_slot_validated_parent(parent_user, slot_addr, value_bits);
 }
 
 /// The write barriers of one literal birth: the `count` slots from `slots`
@@ -348,12 +335,7 @@ pub extern "C" fn js_write_barrier_slot_validated_parent(
 /// point lies between the stores and this call: shading and remembering after
 /// the last store is what each per-slot barrier did after its own store.
 #[no_mangle]
-pub extern "C" fn js_write_barrier_birth_slots(
-    parent_user: u64,
-    slots: u64,
-    count: u32,
-    raw: u32,
-) {
+pub extern "C" fn js_write_barrier_birth_slots(parent_user: u64, slots: u64, count: u32, raw: u32) {
     if parent_user == 0 || slots == 0 {
         return;
     }

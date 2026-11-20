@@ -372,9 +372,9 @@ fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
 pub(crate) unsafe fn build_error_object(msg: &str) -> f64 {
     let parts = libuv_message_parts(msg);
     let obj: *mut ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(std::ptr::addr_of!(
-            perry_ffi::runtime_layouts::RECORD_F21_0
-        ))
+        perry_ffi::runtime_layouts::alloc_runtime_record(
+            perry_ffi::runtime_layouts::RECORD_F21_0::desc(),
+        )
     };
     if obj.is_null() {
         // Fall back to the bare string so the listener still receives

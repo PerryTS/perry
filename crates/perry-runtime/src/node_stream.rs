@@ -39,9 +39,7 @@ mod readable_from_promises;
 mod event_emitter;
 use event_emitter::{
     add_stream_listener_for_event, call_listener_args, emit_stream_event,
-    emit_stream_event_from_array, is_callable_value, ns_event_names, ns_get_max_listeners,
-    ns_listener_count, ns_listeners, ns_off2, ns_on2, ns_once2, ns_prepend_listener2,
-    ns_prepend_once_listener2, ns_raw_listeners, ns_remove_listener2, ns_set_max_listeners,
+    emit_stream_event_from_array, emit_stream_event_via_method, is_callable_value, ns_once2,
     remove_stream_listener_for_event, stream_listener_count_for_event,
 };
 pub(crate) use event_emitter::{emit_stream_event_rooted, RootedArgs};
@@ -153,7 +151,7 @@ const STREAM_EMIT_CLOSE_KEY: Slot = Slot::EmitClose;
 const STREAM_PIPELINE_CALLBACK_DONE_KEY: Slot = Slot::PipelineCallbackDone;
 const STREAM_READABLE_LIVE_PUSH_KEY: Slot = Slot::ReadableLivePush;
 
-use destroy_state::{destroy_stream, ns_destroy1};
+use destroy_state::destroy_stream;
 pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_destroyed};
 
 // ─────────────────────────────────────────────────────────────────
@@ -165,7 +163,7 @@ pub use destroy_state::{js_node_stream_method_destroy, js_node_stream_method_des
 // ─────────────────────────────────────────────────────────────────
 
 #[inline]
-fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+fn method_receiver(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
     // Slot 0 was set by `build_object` to the NaN-boxed bits of the
     // host object value cast to i64; reverse the cast.
     if !closure.is_null() {
@@ -180,10 +178,22 @@ fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f6
         // captures a real object pointer, so existing instance-bound closures
         // never hit this branch.
         if bits != crate::value::TAG_UNDEFINED {
-            return constructors::ensure_lazy_stream(f64::from_bits(bits));
+            return f64::from_bits(bits);
         }
     }
-    constructors::ensure_lazy_stream(this.as_f64())
+    this.as_f64()
+}
+
+#[inline]
+fn this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    constructors::ensure_lazy_stream(method_receiver(closure, this))
+}
+
+/// Emitter methods also serve stream receivers. Only a stream owner can
+/// create lazy stream state, and that owner installs the existing hook.
+#[inline]
+fn emitter_this_value(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
+    crate::stream_hooks::ensure_lazy_stream(method_receiver(closure, this))
 }
 
 extern "C" fn ns_chain1(
@@ -353,24 +363,30 @@ extern "C" fn ns_readable_resume_microtask(
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream =
         scope.root_nanbox_f64(f64::from_bits(js_closure_get_capture_ptr(closure, 0) as u64));
-    let s = || stream.get_nanbox_f64();
     set_hidden_value(
-        s(),
+        stream.get_nanbox_f64(),
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_FALSE),
     );
-    if readable_is_flowing(s()) && !stream_destroyed(s()) {
+    if readable_is_flowing(stream.get_nanbox_f64()) && !stream_destroyed(stream.get_nanbox_f64()) {
         // node's `resume_`: `read(0)` unless a `_read` is in flight, then
         // 'resume', the flow, and `read(0)` again while flowing.
-        let hook = has_read_hook(s());
-        if hook && !read_in_flight(s()) {
-            invoke_read_once(s());
+        let hook = has_read_hook(stream.get_nanbox_f64());
+        if hook && !read_in_flight(stream.get_nanbox_f64()) {
+            invoke_read_once(stream.get_nanbox_f64());
         }
-        let _ = emit_stream_event(s(), literal_string_value(b"resume"), &[]);
-        flush_pending_readable_chunks(s());
-        schedule_readable_from_drain(s());
-        if !hook || (readable_is_flowing(s()) && !read_in_flight(s())) {
-            invoke_read_once(s());
+        let _ = emit_stream_event(
+            stream.get_nanbox_f64(),
+            literal_string_value(b"resume"),
+            &[],
+        );
+        flush_pending_readable_chunks(stream.get_nanbox_f64());
+        schedule_readable_from_drain(stream.get_nanbox_f64());
+        if !hook
+            || (readable_is_flowing(stream.get_nanbox_f64())
+                && !read_in_flight(stream.get_nanbox_f64()))
+        {
+            invoke_read_once(stream.get_nanbox_f64());
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -440,13 +456,17 @@ extern "C" fn ns_finished_signal_abort(
     let callback = js_closure_get_capture_f64(closure, 1);
     let signal = js_closure_get_capture_f64(closure, 3);
     if let Some(signal_obj) = object_ptr_from_value(signal) {
-        crate::url::js_abort_signal_remove_listener(
+        crate::event_target_hook_slots::js_abort_signal_remove_listener(
             signal_obj,
             literal_string_value(b"abort"),
             box_pointer(closure as *const u8),
         );
     }
-    call_listener_args(stream, callback, &[crate::url::js_abort_error_value()]);
+    call_listener_args(
+        stream,
+        callback,
+        &[crate::event_target_hook_slots::js_abort_error_value()],
+    );
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -474,7 +494,7 @@ extern "C" fn ns_writable_finish_microtask(
         if is_callable_value(callback) {
             call_listener_args(stream, callback, &[]);
         }
-        let _ = emit_stream_event(stream, literal_string_value(b"finish"), &[]);
+        emit_stream_event_via_method(stream, literal_string_value(b"finish"));
         let readable_done = get_hidden_value(stream, hidden_readable_flag_key()).is_none()
             || has_truthy_hidden(stream, hidden_end_emitted_key());
         if readable_done {
@@ -545,7 +565,7 @@ extern "C" fn ns_emit_rest(
     rest: f64,
 ) -> f64 {
     emit_stream_event_from_array(
-        this_value(closure, this),
+        emitter_this_value(closure, this),
         event,
         raw_ptr_from_value(rest) as *const _,
     )
@@ -564,7 +584,7 @@ unsafe extern "C" fn ns_emit_args(
     } else {
         std::slice::from_raw_parts(args, len)
     };
-    let target = this_value(closure, this);
+    let target = emitter_this_value(closure, this);
     match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
@@ -615,7 +635,7 @@ pub(crate) unsafe fn emitter_emit_call(
     };
     // No allocation precedes the read of the closure's receiver capture; the
     // emit roots everything it holds before it allocates.
-    let target = this_value(closure, crate::closure::JsThis::from_f64(recv));
+    let target = emitter_this_value(closure, crate::closure::JsThis::from_f64(recv));
     Some(match args.split_first() {
         Some((event, rest)) => event_emitter::emit_stream_event(target, *event, rest),
         None => event_emitter::emit_stream_event(target, f64::from_bits(TAG_UNDEFINED), &[]),
@@ -673,6 +693,9 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         flush_readable_decoder(stream);
         mark_stream_ended(stream);
         refresh_readable_aborted_flag(stream);
+        // node's `onEofChunk`: a reader waiting in `readable` learns of EOF
+        // while data it has not drained is still buffered.
+        schedule_readable_event(stream);
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
@@ -1102,7 +1125,7 @@ fn schedule_pipe_destination_finish_check(dest: f64) {
         1,
     );
     js_closure_set_capture_f64(closure, 0, dest);
-    crate::timer::js_set_immediate_callback(closure as i64);
+    crate::timer::schedule_native_immediate(closure as i64, &[], "Immediate");
 }
 
 fn request_pipe_destination_finish(dest: f64) {
@@ -1202,12 +1225,7 @@ extern "C" fn ns_uncork0(closure: *const ClosureHeader, this: crate::closure::Js
     uncork_stream(this_value(closure, this))
 }
 
-extern "C" fn writable_write_callback_noop(
-    _closure: *const ClosureHeader,
-    _this: crate::closure::JsThis,
-) -> f64 {
-    f64::from_bits(TAG_UNDEFINED)
-}
+use crate::closure::body_call::native_noop0 as writable_write_callback_noop;
 
 fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -1293,8 +1311,7 @@ fn push_callback_value(stream: f64, value: f64) {
 fn throw_missing_stream_method(message: &str) -> ! {
     let s = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_METHOD_NOT_IMPLEMENTED");
-    let err = crate::error::js_error_new_with_message(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(s))
 }
 
 #[cold]
@@ -1302,8 +1319,7 @@ fn throw_writable_null_chunk() -> ! {
     let msg = b"May not write null values to stream";
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
     crate::node_submodules::register_error_code_pub(s, "ERR_STREAM_NULL_VALUES");
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 #[cold]
@@ -1481,7 +1497,7 @@ fn stream_value_from_handle(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_emit(stream_handle: i64, event: f64, arg: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, arg) {
         return result;
     }
     let mut args = crate::array::js_array_alloc(0);
@@ -1508,7 +1524,7 @@ pub extern "C" fn js_node_stream_method_emit_args(
             f64::from_bits(TAG_UNDEFINED)
         }
     };
-    if let Some(result) = crate::fs::utf8_stream_emit_value(stream, event, first_arg) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_emit_value(stream, event, first_arg) {
         return result;
     }
     emit_stream_event_from_array(stream, event, args_ptr as *const crate::array::ArrayHeader)
@@ -1563,7 +1579,8 @@ pub extern "C" fn js_node_stream_method_readable(stream_handle: i64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_readable_ended(stream_handle: i64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if stream_hidden_ended(stream) {
+    // Node's `readableEnded` is `endEmitted`; "EOF pushed" is `ended`.
+    if has_truthy_hidden(stream, hidden_end_emitted_key()) {
         f64::from_bits(TAG_TRUE)
     } else {
         f64::from_bits(TAG_FALSE)
@@ -1762,7 +1779,7 @@ pub extern "C" fn js_node_stream_method_write(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_write_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_write_value(stream, chunk) {
         return result;
     }
     write_writable_chunk(stream, chunk, enc, cb)
@@ -1781,7 +1798,7 @@ pub extern "C" fn js_node_stream_method_write3(
 #[no_mangle]
 pub extern "C" fn js_node_stream_method_end(stream_handle: i64, chunk: f64) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(
@@ -1801,7 +1818,7 @@ pub extern "C" fn js_node_stream_method_end3(
     cb: f64,
 ) -> f64 {
     let stream = stream_value_from_handle(stream_handle);
-    if let Some(result) = crate::fs::utf8_stream_end_value(stream, chunk) {
+    if let Some(result) = crate::fs_hook_slots::utf8_stream_end_value(stream, chunk) {
         return result;
     }
     finish_stream_with_args(stream, chunk, encoding, cb);
@@ -1869,6 +1886,7 @@ pub(crate) use json_stream::*;
 
 #[path = "node_stream_constructors.rs"]
 mod constructors;
+pub(crate) use constructors::note_birth_carriers;
 pub use constructors::*;
 
 #[path = "node_stream_keepalive.rs"]
@@ -1883,18 +1901,20 @@ mod state_record;
 pub(crate) use constructors::instance_birth;
 pub(crate) use proto_methods::{
     build_legacy_stream_prototype, build_passthrough_prototype, build_stream_prototype,
-    stream_prototype_value, user_hook_value, StreamProto,
+    is_builtin_stream_method, stream_prototype_value, user_hook_value, StreamProto,
 };
 use state_record::*;
-pub(crate) use state_record::{
-    is_stream_record_word, record_alias_word, record_payload_cell, store_record_alias_word,
-    store_record_payload_cell,
-};
 #[cfg(test)]
-pub(crate) use state_record::{test_read_inert_slot, test_record_slot_bits, test_write_inert_slot};
+pub(crate) use state_record::{
+    is_stream_record_word, test_read_inert_slot, test_record_slot_bits, test_write_inert_slot,
+};
+pub(crate) use state_record::{record_alias_word, store_record_alias_word};
 mod write_state;
 pub use constructors::{init_transform_in_place, init_writable_payload_in_place};
 use write_state::*;
+
+#[cfg(test)]
+mod readable_eof_tests;
 
 #[cfg(test)]
 #[path = "node_stream_tests.rs"]
@@ -1919,6 +1939,13 @@ pub(super) fn bound_method(stream: f64, name: &'static [u8]) -> f64 {
         hidden_key(name),
     );
     unsafe { crate::closure::js_function_bind(method, [stream].as_ptr(), 1) }
+}
+
+/// The bytes of a stream chunk (Buffer, typed array or string), for runtime
+/// consumers outside node:stream (child_process exec output).
+#[cfg(unix)]
+pub(crate) fn chunk_bytes(value: f64, out: &mut Vec<u8>) {
+    append_chunk_bytes(value, out, 0);
 }
 
 /// Test seams for `gc::tests::native_payload_streams`.

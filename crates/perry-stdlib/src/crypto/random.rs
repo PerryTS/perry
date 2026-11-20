@@ -1,5 +1,7 @@
 use super::*;
 
+use perry_runtime::validators::{validate_integer, validate_string};
+
 /// Issue #2013 — Node throws on `crypto.randomBytes` for the same
 /// bad-input shapes the fs/process surface already covers: a
 /// non-number (`{}`, `'abc'`, `true`) raises `TypeError
@@ -11,18 +13,14 @@ use super::*;
 /// call return an empty buffer instead of throwing.
 fn validate_random_bytes_size(size: f64) -> usize {
     let jv = JSValue::from_bits(size.to_bits());
-    if !jv.is_number() && !jv.is_int32() {
+    if !jv.is_number() {
         let message = format!(
             "The \"size\" argument must be of type number. Received {}",
             perry_runtime::fs::validate::describe_received(size)
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        size
-    };
+    let n = size;
     // Node truncates a fractional `randomBytes(1.5)` to 1 (no throw)
     // but rejects NaN/Infinity/negative/out-of-range with
     // ERR_OUT_OF_RANGE — fractional integers are NOT in the reject set.
@@ -50,21 +48,63 @@ fn validate_random_bytes_size(size: f64) -> usize {
 /// Generate random bytes and return as a Buffer
 /// crypto.randomBytes(size) -> Buffer
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_bytes_buffer(
     size: f64,
 ) -> *mut perry_runtime::buffer::BufferHeader {
-    let size = validate_random_bytes_size(size);
-    let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
-        perry_runtime::buffer::bytes::Brand::Buffer,
-        size,
-        perry_runtime::buffer::bytes::Init::Uninit,
-    );
-    unsafe {
-        rand::rng().fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.bytes",
+            &format!("{:?}", (size,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let size = validate_random_bytes_size(size);
+                let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+                    perry_runtime::buffer::bytes::Brand::Buffer,
+                    size,
+                    perry_runtime::buffer::bytes::Init::Uninit,
+                );
+                unsafe {
+                    rand::rng()
+                        .fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+                    perry_runtime::census_inputs! {
+                    perry_runtime::snap_census::record_input_value(
+                        "crypto.random.bytes",
+                        &std::slice::from_raw_parts(pin.as_ptr(), pin.len()).to_vec(),
+                    ); }
+                }
+                JSValue::from_bits(value.to_bits())
+                    .as_pointer::<perry_runtime::buffer::BufferHeader>()
+                    .cast_mut()
+            },
+        );
     }
-    JSValue::from_bits(value.to_bits())
-        .as_pointer::<perry_runtime::buffer::BufferHeader>()
-        .cast_mut()
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let size = validate_random_bytes_size(size);
+        let (value, pin) = perry_runtime::buffer::bytes::new_bytes(
+            perry_runtime::buffer::bytes::Brand::Buffer,
+            size,
+            perry_runtime::buffer::bytes::Init::Uninit,
+        );
+        unsafe {
+            rand::rng().fill_bytes(std::slice::from_raw_parts_mut(pin.as_mut_ptr(), pin.len()));
+            perry_runtime::census_inputs! {
+            perry_runtime::snap_census::record_input_value(
+                "crypto.random.bytes",
+                &std::slice::from_raw_parts(pin.as_ptr(), pin.len()).to_vec(),
+            ); }
+        }
+        JSValue::from_bits(value.to_bits())
+            .as_pointer::<perry_runtime::buffer::BufferHeader>()
+            .cast_mut()
+    }
 }
 
 /// `crypto.randomBytes(size, callback)` — callback form.
@@ -81,6 +121,7 @@ pub extern "C" fn js_crypto_random_bytes_buffer(
 /// callback dispatch is deferred.
 #[no_mangle]
 pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: f64) -> f64 {
+    perry_runtime::effect!(host_read, random);
     let buf = js_crypto_random_bytes_buffer(size);
     let value = if buf.is_null() {
         f64::from_bits(JSValue::undefined().bits())
@@ -110,33 +151,98 @@ pub unsafe extern "C" fn js_crypto_random_bytes_async(size: f64, callback_bits: 
 /// Generate random bytes and return as hex string
 /// crypto.randomBytes(size).toString('hex') -> string
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_bytes_hex(size: f64) -> *mut StringHeader {
-    let size = validate_random_bytes_size(size);
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.hex",
+            &format!("{:?}", (size,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let size = validate_random_bytes_size(size);
 
-    let mut bytes = vec![0u8; size];
-    rand::rng().fill_bytes(&mut bytes);
-    let hex_str = perry_hex::encode(&bytes);
+                let mut bytes = vec![0u8; size];
+                rand::rng().fill_bytes(&mut bytes);
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value("crypto.random.bytes", &bytes); }
+                let hex_str = perry_hex::encode(&bytes);
 
-    js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+                js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let size = validate_random_bytes_size(size);
+
+        let mut bytes = vec![0u8; size];
+        rand::rng().fill_bytes(&mut bytes);
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.bytes", &bytes); }
+        let hex_str = perry_hex::encode(&bytes);
+
+        js_string_from_bytes(hex_str.as_ptr(), hex_str.len() as u32)
+    }
 }
 
 /// Generate a random UUID v4 using crypto-secure random
 /// crypto.randomUUID([options]) -> string
 ///
-/// #10523: served from perry-uuid's per-thread entropy cache (one
+/// #10523: served from the crypto uuid module's per-thread entropy cache (one
 /// `getrandom` per 128 UUIDs, like Node) unless the caller passes
 /// `{ disableEntropyCache: true }`, which draws fresh OS entropy.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut StringHeader {
-    let uuid = if validate_random_uuid_options(options_bits) {
-        perry_uuid::v4_uncached()
-    } else {
-        perry_uuid::v4()
-    };
-    // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
-    // UTF-8 on every UUID only for the string constructor to copy them.
-    let uuid_bytes = uuid.as_bytes();
-    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.uuid",
+            &format!("{:?}", (options_bits,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let uuid = if validate_random_uuid_options(options_bits) {
+                    super::uuid::v4_uncached()
+                } else {
+                    super::uuid::v4()
+                };
+                // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+                // UTF-8 on every UUID only for the string constructor to copy them.
+                let uuid_bytes = uuid.as_bytes();
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value(
+                    "crypto.random.uuid",
+                    &uuid_bytes.to_vec(),
+                ); }
+                js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let uuid = if validate_random_uuid_options(options_bits) {
+            super::uuid::v4_uncached()
+        } else {
+            super::uuid::v4()
+        };
+        // The bytes directly: `as_str` would re-validate 36 known-ASCII bytes as
+        // UTF-8 on every UUID only for the string constructor to copy them.
+        let uuid_bytes = uuid.as_bytes();
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.uuid", &uuid_bytes.to_vec()); }
+        js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    }
 }
 
 /// Generate an RFC 9562 version 7 UUID — a 48-bit millisecond Unix
@@ -146,10 +252,39 @@ pub unsafe extern "C" fn js_crypto_random_uuid(options_bits: f64) -> *mut String
 /// optional `options` object (Node's `{ disableEntropyCache }`) is
 /// accepted for shape parity but does not change the generated value.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_uuidv7() -> *mut StringHeader {
-    let uuid = perry_uuid::v7();
-    let uuid_bytes = uuid.as_bytes();
-    js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.uuidv7",
+            &format!("{:?}", ()),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let uuid = super::uuid::v7();
+                let uuid_bytes = uuid.as_bytes();
+                perry_runtime::census_inputs! {
+                perry_runtime::snap_census::record_input_value(
+                    "crypto.random.uuid",
+                    &uuid_bytes.to_vec(),
+                ); }
+                js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+            },
+        );
+    }
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let uuid = super::uuid::v7();
+        let uuid_bytes = uuid.as_bytes();
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value("crypto.random.uuid", &uuid_bytes.to_vec()); }
+        js_string_from_bytes(uuid_bytes.as_ptr(), uuid_bytes.len() as u32)
+    }
 }
 
 /// Validates `randomUUID`'s options bag and returns `disableEntropyCache`.
@@ -175,14 +310,14 @@ unsafe fn validate_random_uuid_options(options_bits: f64) -> bool {
     }
     let header =
         &*(ptr.sub(perry_runtime::gc::GC_HEADER_SIZE) as *const perry_runtime::gc::GcHeader);
-    if header.obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+    if perry_runtime::gc_type_is_array!(header.obj_type) {
         let message = format!(
             "The \"options\" argument must be of type object. Received {}",
             perry_runtime::fs::validate::describe_received(options_bits)
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    if header.obj_type != perry_runtime::gc::GC_TYPE_OBJECT {
+    if perry_runtime::gc_type_is_not_object!(header.obj_type) {
         return false;
     }
     let key = js_string_from_bytes(b"disableEntropyCache".as_ptr(), 19);
@@ -210,7 +345,7 @@ const MAX_SAFE_INTEGER: f64 = 9_007_199_254_740_991.0;
 /// accepts for randomInt's `min`/`max`.
 fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
     let jv = JSValue::from_bits(value.to_bits());
-    if !jv.is_number() && !jv.is_int32() {
+    if !jv.is_number() {
         let message = format!(
             "The \"{}\" argument must be of type number. Received {}",
             arg_name,
@@ -218,11 +353,7 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        value
-    };
+    let n = value;
     if !n.is_finite() || n.fract() != 0.0 {
         let message = format!(
             "The \"{}\" argument must be a safe integer. Received {}",
@@ -244,25 +375,62 @@ fn validate_random_int_arg(value: f64, arg_name: &str) -> i64 {
 /// `crypto.randomInt(max)` / `crypto.randomInt(min, max)` synchronous form.
 /// Returns a uniformly distributed integer in `[min, max)`.
 #[no_mangle]
+#[allow(unexpected_cfgs)] // `perry_gc_instruments` is check-cfg-declared only by perry-runtime's build script
 pub extern "C" fn js_crypto_random_int(min_bits: f64, max_bits: f64) -> f64 {
-    let min = validate_random_int_arg(min_bits, "min");
-    let max = validate_random_int_arg(max_bits, "max");
-    if max <= min {
-        let message = format!(
+    perry_runtime::census_inputs! {
+        return perry_runtime::snap_census::input_call(
+            "random.crypto.int",
+            &format!("{:?}", (min_bits, max_bits,)),
+            || {
+                perry_runtime::effect!(host_read, random);
+                let min = validate_random_int_arg(min_bits, "min");
+                let max = validate_random_int_arg(max_bits, "max");
+                if max <= min {
+                    let message = format!(
             "The value of \"max\" is out of range. It must be greater than the value of \"min\" ({}). Received {}",
             min, max
         );
-        perry_runtime::fs::validate::throw_range_error_with_code(&message);
-    }
-    let range = max as i128 - min as i128;
-    if range > RANDOM_INT_MAX_RANGE as i128 {
-        let message = format!(
-            "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
-            RANDOM_INT_MAX_RANGE, range
+                    perry_runtime::fs::validate::throw_range_error_with_code(&message);
+                }
+                let range = max as i128 - min as i128;
+                if range > RANDOM_INT_MAX_RANGE as i128 {
+                    let message = format!(
+                        "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
+                        RANDOM_INT_MAX_RANGE, range
+                    );
+                    perry_runtime::fs::validate::throw_range_error_with_code(&message);
+                }
+                rand::rng().random_range(min..max) as f64
+            },
         );
-        perry_runtime::fs::validate::throw_range_error_with_code(&message);
     }
-    rand::rng().random_range(min..max) as f64
+
+    // On the linux instrumented cohort the census arm above returns, leaving
+    // this tail unreachable there; on every other configuration it is the only
+    // live path. Both states are intentional.
+    #[allow(unreachable_code)]
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        perry_runtime::effect!(host_read, random);
+        let min = validate_random_int_arg(min_bits, "min");
+        let max = validate_random_int_arg(max_bits, "max");
+        if max <= min {
+            let message = format!(
+                "The value of \"max\" is out of range. It must be greater than the value of \"min\" ({}). Received {}",
+                min, max
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        let range = max as i128 - min as i128;
+        if range > RANDOM_INT_MAX_RANGE as i128 {
+            let message = format!(
+                "The value of \"max - min\" is out of range. It must be <= {}. Received {}",
+                RANDOM_INT_MAX_RANGE, range
+            );
+            perry_runtime::fs::validate::throw_range_error_with_code(&message);
+        }
+        rand::rng().random_range(min..max) as f64
+    }
 }
 
 /// One-shot `crypto.hash(alg, data, encoding = "hex")` uses the same
@@ -340,6 +508,10 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
     };
     match method {
+        "__adopt_hash_prototype" | "__adopt_hmac_prototype" => {
+            super::hash_handles::adopt_digest_prototype(method == "__adopt_hmac_prototype", arg(0));
+            undefined
+        }
         "convertKey" => js_crypto_ecdh_convert_key(arg(0), arg(1), arg(2), arg(3), arg(4)),
         "createHash" => js_crypto_create_hash(str_ptr(0)),
         // #11617: one-shot `crypto.hash(alg, data, enc = "hex")` reached
@@ -391,13 +563,7 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
         }
         "generateKeyPair" => js_crypto_generate_key_pair_async(str_ptr(0), arg(1), arg(2)),
         "generateKeyPairSync" => {
-            let alg = bytes_from_ptr(str_ptr(0));
-            let pair = match alg.as_slice() {
-                b"ec" => js_crypto_generate_key_pair_sync_ec_p256(arg(1)),
-                b"ed25519" => js_crypto_generate_key_pair_sync_ed25519(arg(1)),
-                b"x25519" => js_crypto_generate_key_pair_sync_x25519(arg(1)),
-                _ => js_crypto_generate_key_pair_sync_rsa(arg(1)),
-            };
+            let pair = js_crypto_generate_key_pair_sync_named(str_ptr(0), arg(1));
             pointer_value(pair as *mut u8)
         }
         "generateKey" => js_crypto_generate_key_async(str_ptr(0), arg(1), arg(2)),
@@ -502,6 +668,39 @@ pub unsafe extern "C" fn js_crypto_native_dispatch(
             };
             js_crypto_pbkdf2_async_alg(bytes_ptr(0), bytes_ptr(1), arg(2), arg(3), digest, callback)
         }
+        // #13619: `pbkdf2Sync` reached as a VALUE — `import { pbkdf2Sync }
+        // from "node:crypto"` in a program that also imports `node:module`, a
+        // detached reference, or `util.promisify`. The direct call site is
+        // lowered to `js_crypto_pbkdf2_bytes` with codegen-emitted validation;
+        // here the arguments arrive raw, so run the same checks first and
+        // derive from the numbers `validate_integer` returns — codegen hands
+        // some registers over INT32-tagged, where casting the boxed bits would
+        // read NaN and derive with zero rounds. Node rejects a missing digest
+        // instead of defaulting to SHA-256, so the fifth argument is always
+        // validated rather than defaulted here.
+        "pbkdf2Sync" => {
+            let iterations = validate_integer(arg(2), "iterations", 1.0, i32::MAX as f64);
+            let keylen = validate_integer(arg(3), "keylen", 0.0, i32::MAX as f64);
+            validate_string(arg(4), "digest");
+            pointer_value(js_crypto_pbkdf2_bytes(
+                bytes_ptr(0),
+                bytes_ptr(1),
+                iterations,
+                keylen,
+                str_ptr(4),
+            ) as *mut u8)
+        }
+        // #13619: the same for argon2. The algorithm is validated as a string
+        // first: `str_ptr` on an object returns the object pointer, which
+        // `bytes_from_ptr` would then read as a `StringHeader`.
+        "argon2Sync" => {
+            validate_string(arg(0), "algorithm");
+            pointer_value(js_crypto_argon2_sync(str_ptr(0), arg(1)) as *mut u8)
+        }
+        "argon2" => {
+            validate_string(arg(0), "algorithm");
+            js_crypto_argon2_async(str_ptr(0), arg(1), arg(2))
+        }
         "scrypt" => {
             let options = if args_len >= 5 { arg(3) } else { undefined };
             let callback = if args_len >= 5 { arg(4) } else { arg(3) };
@@ -573,13 +772,14 @@ pub extern "C" fn js_crypto_random_fill_sync(
     size_bits: f64,
 ) -> f64 {
     let raw = raw_addr_from_value(buf_bits);
-    let elem_size = if let Some(kind) = perry_runtime::typedarray::lookup_typed_array_kind(raw) {
-        perry_runtime::typedarray::elem_size_for_kind(kind).max(1)
-    } else if perry_runtime::buffer::is_registered_buffer(raw) {
-        1
-    } else {
-        throw_invalid_random_fill_buffer(buf_bits);
-    };
+    let elem_size =
+        if let Some(kind) = perry_runtime::typedarray_hook_slots::lookup_typed_array_kind(raw) {
+            perry_runtime::typedarray_hook_slots::elem_size_for_kind(kind).max(1)
+        } else if perry_runtime::buffer::is_registered_buffer(raw) {
+            1
+        } else {
+            throw_invalid_random_fill_buffer(buf_bits);
+        };
     let value = f64::from_bits(JSValue::pointer(raw as *const u8).bits());
     let byte_len = perry_runtime::buffer::bytes::no_gc(|scope| {
         perry_runtime::buffer::bytes::bytes(value, scope).map(<[u8]>::len)
@@ -602,6 +802,11 @@ pub extern "C" fn js_crypto_random_fill_sync(
     perry_runtime::buffer::bytes::no_gc(|scope| unsafe {
         let data = perry_runtime::buffer::bytes::bytes_mut(value, scope)?;
         rand::rng().fill_bytes(&mut data[start..start + count]);
+        perry_runtime::census_inputs! {
+        perry_runtime::snap_census::record_input_value(
+            "crypto.random.fill",
+            &data[start..start + count].to_vec(),
+        ); }
         #[cfg(test)]
         if b2c_sabotage("random_fill_range") && count > 0 {
             // Make the wrong-window witness deterministic rather than depend
@@ -636,7 +841,7 @@ fn random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
     if js.is_undefined() {
         return None;
     }
-    if !js.is_number() && !js.is_int32() {
+    if !js.is_number() {
         let message = format!(
             "The \"{}\" argument must be of type number. Received {}",
             name,
@@ -644,11 +849,7 @@ fn random_fill_number_arg(value: f64, name: &str) -> Option<f64> {
         );
         perry_runtime::fs::validate::throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
-    Some(if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    })
+    Some(value)
 }
 
 fn validate_random_fill_range(total: usize, offset_bits: f64, size_bits: f64) -> (usize, usize) {
@@ -709,18 +910,9 @@ pub unsafe extern "C" fn js_crypto_random_fill_async(
 /// `undefined`, `null`, NaN, negatives → `None` (caller picks default).
 pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
     let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
     // Undefined / null / false / true sentinels.
     if matches!(raw, 0x7FFC_0000_0000_0001 | 0x7FFC_0000_0000_0002) {
         return None;
-    }
-    // Int32 tag (0x7FFE).
-    if top16 == 0x7FFE {
-        let i = (raw & 0xFFFF_FFFF) as u32 as i32;
-        if i < 0 {
-            return None;
-        }
-        return Some(i as usize);
     }
     // Otherwise treat as plain f64.
     if bits.is_nan() || bits.is_sign_negative() || bits.is_infinite() {
@@ -731,23 +923,6 @@ pub(super) fn nanboxed_to_usize(bits: f64) -> Option<usize> {
 
 pub(super) unsafe fn crypto_value_bytes(bits: f64) -> Vec<u8> {
     let raw = bits.to_bits();
-    let top16 = (raw >> 48) as u16;
-    if top16 == 0x7FFE {
-        let i = (raw & 0xFFFF_FFFF) as u32 as i32;
-        if i < 0 {
-            return Vec::new();
-        }
-        let n = i as u64;
-        return if n <= 0xff {
-            vec![n as u8]
-        } else if n <= 0xffff {
-            (n as u16).to_be_bytes().to_vec()
-        } else if n <= 0xffff_ffff {
-            (n as u32).to_be_bytes().to_vec()
-        } else {
-            n.to_be_bytes().to_vec()
-        };
-    }
     let ptr = (raw & 0x0000_FFFF_FFFF_FFFF) as i64;
     bytes_from_ptr(ptr)
 }
@@ -781,11 +956,6 @@ pub(super) unsafe fn object_field_bool(obj_bits: u64, name: &[u8]) -> Option<boo
 
 pub(super) unsafe fn object_field_u128(obj_bits: u64, name: &[u8]) -> Option<u128> {
     let bits = object_field_bits(obj_bits, name)?;
-    let top16 = (bits >> 48) as u16;
-    if top16 == 0x7FFE {
-        let i = (bits & 0xFFFF_FFFF) as u32 as i32;
-        return (i >= 0).then_some(i as u128);
-    }
     bytes_to_u128(&crypto_value_bytes(f64::from_bits(bits)))
 }
 
@@ -919,7 +1089,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(96);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             8,
             64,
         );
@@ -955,7 +1125,7 @@ mod tests {
         let owner = perry_runtime::native_arena::js_native_arena_alloc(16);
         let view = perry_runtime::native_arena::js_native_arena_view(
             owner as u64,
-            perry_runtime::typedarray::KIND_UINT8 as i32,
+            perry_runtime::typedarray_hook_slots::KIND_UINT8 as i32,
             0,
             16,
         );
@@ -1077,7 +1247,10 @@ mod tests {
 
     impl OwnAgent {
         fn enter() -> Self {
-            Self(perry_runtime::agent::enter_worker_agent())
+            let agent = perry_runtime::agent::enter_worker_agent();
+            perry_runtime::feature_hooks::js_runtime_install_turnloop();
+            perry_runtime::feature_hooks::js_runtime_install_async_hooks();
+            Self(agent)
         }
     }
 
@@ -1122,7 +1295,7 @@ mod tests {
         // the key eagerly but must still defer delivery, because the callback has
         // to execute inside its own `PBKDF2REQUEST` async resource so
         // `async_hooks` observes init -> before -> after -> destroy around it
-        // (`test-parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
+        // (`tests/parity/node-suite/async_hooks/hooks/provider-pbkdf2-lifecycle.ts`).
         assert!(
             !CB_FIRED.with(|f| f.get()),
             "pbkdf2 callback must not fire synchronously"
@@ -1194,5 +1367,154 @@ mod tests {
             CB_VALUE_PTR.with(|f| f.get()),
             "randomBytes callback must deliver a Buffer pointer"
         );
+    }
+
+    fn dispatch(method: &str, args: &[f64]) -> f64 {
+        unsafe {
+            js_crypto_native_dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len())
+        }
+    }
+
+    fn to_hex(bytes: &[u8]) -> String {
+        bytes.iter().map(|b| format!("{b:02x}")).collect()
+    }
+
+    fn int32(value: i32) -> f64 {
+        f64::from(value)
+    }
+
+    /// The bytes behind a `Buffer` the dispatcher returned, or empty when it
+    /// returned `undefined` instead of a key.
+    fn derived_bytes(result: f64) -> Vec<u8> {
+        unsafe { bytes_from_ptr(perry_runtime::js_nanbox_get_pointer(result)) }
+    }
+
+    /// `argon2Sync`/`argon2` parameters for the vector Node derives below.
+    unsafe fn argon2_params() -> f64 {
+        let obj = js_object_alloc(0, 6);
+        set_object_string_field(obj, b"message", "password");
+        set_object_string_field(obj, b"nonce", "0123456789abcdef");
+        set_object_value_field(obj, b"parallelism", 1.0);
+        set_object_value_field(obj, b"tagLength", 16.0);
+        set_object_value_field(obj, b"memory", 8.0);
+        set_object_value_field(obj, b"passes", 1.0);
+        nanbox_pointer(obj)
+    }
+
+    /// #13619: `pbkdf2Sync` is also reached as a VALUE through this dispatcher
+    /// — `import { pbkdf2Sync } from "node:crypto"` in any program that also
+    /// imports `node:module`, a detached reference, or `util.promisify`. With
+    /// no arm the call fell to `_ => undefined`, so `@effect/sql-pg`'s
+    /// SCRAM-SHA-256 login threw `pbkdf2Sync is not a function` while the
+    /// namespace form kept working. The arm must validate the way the direct
+    /// lowering does, and must derive from the validated numbers.
+    #[test]
+    fn native_dispatch_pbkdf2_sync_value_form_validates_and_derives() {
+        let call = |iterations: f64, keylen: f64, digest: Option<f64>| {
+            let mut args = vec![js_str("password"), js_str("salt"), iterations, keylen];
+            args.extend(digest);
+            derived_bytes(dispatch("pbkdf2Sync", &args))
+        };
+        // Node's own output for pbkdf2Sync("password", "salt", 1, 32, "sha256").
+        assert_eq!(
+            to_hex(&call(1.0, 32.0, Some(js_str("sha256")))),
+            "120fb6cffcf8b32c43e7225256c4f837a86548c92ccc35480805987cb70be17b"
+        );
+        // Codegen hands some numbers over INT32-tagged (`i32_to_nanbox`).
+        // `iterations as u32` / `keylen as usize` on those bits derive with
+        // ZERO rounds and an empty key, so the arm has to use what
+        // `validate_integer` returns, not the boxed argument.
+        assert_eq!(
+            to_hex(&call(int32(2), int32(16), Some(js_str("sha1")))),
+            "ea6c014dc72d6f8ccd1ed92ace1d41f0"
+        );
+        // Node validates before deriving: an omitted digest is an error, not
+        // SHA-256, and both integers are range-checked.
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 32.0, None);
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(0.0, 32.0, Some(js_str("sha256")));
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 32.0, Some(256.0));
+        }));
+        // Node accepts the digests Perry implements and rejects the rest:
+        // an unknown (or empty) name must not silently derive SHA-256.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("md5")))),
+            "f31afb6d931392daa5e3130f47f9a9b6"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("SHA512-256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("not-a-digest")));
+        }));
+        assert!(catch_runtime_throw(|| {
+            call(1.0, 16.0, Some(js_str("")));
+        }));
+        // node accepts only OpenSSL's registered spellings, case-insensitively;
+        // deleting hyphens would accept `m-d5` and `sha-512-256`.
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha2-512/256")))),
+            "4b6a63117d3ec0032624616082c1c191"
+        );
+        assert_eq!(
+            to_hex(&call(1.0, 16.0, Some(js_str("sha-256")))),
+            "120fb6cffcf8b32c43e7225256c4f837"
+        );
+        for rejected in ["m-d5", "sha-512-256", "sha512256", "sha--256"] {
+            assert!(
+                catch_runtime_throw(|| {
+                    call(1.0, 16.0, Some(js_str(rejected)));
+                }),
+                "{rejected} must be rejected like node does"
+            );
+        }
+    }
+
+    /// #13619: the two argon2 VALUE arms must reach the real KDF, not
+    /// `_ => undefined`. `argon2Sync` returns Node's bytes and both arms
+    /// validate the algorithm argument as a string first, so a non-string
+    /// reports a type error instead of being read as a `StringHeader`.
+    #[test]
+    fn native_dispatch_argon2_value_forms_reach_the_kdf() {
+        unsafe {
+            let params = argon2_params();
+            assert_eq!(
+                to_hex(&derived_bytes(dispatch(
+                    "argon2Sync",
+                    &[js_str("argon2id"), params]
+                ))),
+                "83947cb26635e8b2500b348925b220dc"
+            );
+            for method in ["argon2Sync", "argon2"] {
+                assert!(
+                    catch_runtime_throw(|| {
+                        dispatch(method, &[params, params]);
+                    }),
+                    "{method} must reject a non-string algorithm"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn native_dispatch_argon2_value_form_fires_callback() {
+        let _agent = OwnAgent::enter();
+        reset_record();
+        let cb = make_record_callback();
+        let params = unsafe { argon2_params() };
+        dispatch("argon2", &[js_str("argon2id"), params, cb]);
+        assert!(
+            !CB_FIRED.with(|f| f.get()),
+            "argon2 callback must not fire synchronously"
+        );
+        pump_event_loop_until_fired();
+        assert!(CB_FIRED.with(|f| f.get()), "argon2 callback must fire");
+        assert!(CB_ERR_NULLISH.with(|f| f.get()));
+        assert!(CB_VALUE_PTR.with(|f| f.get()));
     }
 }

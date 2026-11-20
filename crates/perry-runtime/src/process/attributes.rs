@@ -126,7 +126,7 @@ pub extern "C" fn js_process_set_title(value: f64) {
         }
     };
     #[cfg(target_os = "linux")]
-    {
+    if !super::worker_restrictions::in_node_worker() {
         let mut buf = [0i8; 16];
         let src = s.as_bytes();
         let copy_len = std::cmp::min(src.len(), 15);
@@ -183,6 +183,7 @@ pub extern "C" fn js_process_umask_set(mask: f64) -> f64 {
     if JSValue::from_bits(mask.to_bits()).is_undefined() {
         return js_process_umask();
     }
+    super::worker_restrictions::ensure_worker_operation_allowed("umask");
     let parsed = parse_umask_mask(mask);
     #[cfg(unix)]
     unsafe {
@@ -249,11 +250,7 @@ fn parse_umask_mask(mask: f64) -> u32 {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
             "The value of \"mask\" is out of range. It must be an integer. Received {}",

@@ -1,0 +1,25 @@
+{
+  "reference": "dcc57549822d0b8f33048fdfbd2e857ac62371a5",
+  "initial_candidate": "adb17b606aee0184c175929eea87591a7b4ad7c2",
+  "adjusted_candidate": "initial candidate minus optimize(size) on read_cold_entry, read_cold_dispatch and array::append::grow",
+  "scan_binaries": {
+    "reference": {
+      "bytes": 5634688,
+      "sha256": "f7ce1a1a9ee6e8d578092e4c315a09fde663319e4bc7bb820c2b3f745c640632"
+    },
+    "cold": {
+      "bytes": 5602272,
+      "sha256": "7ffbfe88eed105ede0cffa1499158b83894ecac634807bac0f2baf15df1249ea"
+    },
+    "adjusted": {
+      "bytes": 5602256,
+      "sha256": "27a3e76803082cd2b4e29ca6bd986ebe88f38d83a16b80031d4db2bb1e9664a3"
+    }
+  },
+  "platform": "macOS 26.5 / Apple M1 Max / ARM64",
+  "timing_conditions": "Unrelated work continued. Experiment builds, timing runs and profiles ran separately. No quiet-host claim.",
+  "trace_template": "CPU Counters, Guided / CPU Bottlenecks, Xcode Instruments 16.0 (17F113)",
+  "trace_scope": "Single-process launch of the same search workload; scheduler CSVs contain only that process main thread, in 10 ms buckets. They include startup, warmup and teardown.",
+  "features": "perry-runtime/keepalive-anchors,perry-runtime/regex-engine,perry-runtime/temporal,perry-stdlib/async-bridge",
+  "profile": "issue-o2 (runtime/stdlib O2, fat LTO); application O2, specialized ABI 1; system allocator; unchanged unwind settings"
+}

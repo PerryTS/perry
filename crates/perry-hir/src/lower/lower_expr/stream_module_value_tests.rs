@@ -81,12 +81,30 @@ fn new_of_a_stream_constructor_binding_constructs_the_export_value() {
         import { Stream as Aliased } from "node:stream";
         const fromDefault = new Stream();
         const fromAlias = new Aliased();
+        import BareDefault from "stream";
+        import { Stream as BareAliased } from "stream";
+        const fromBareDefault = new BareDefault("default argument");
+        const fromBareAlias = new BareAliased("named argument");
     "#,
     );
-    for binding in ["fromDefault", "fromAlias"] {
-        let Expr::NewDynamic { callee, .. } = let_init(&hir, binding) else {
+    // Default imports read the canonical CommonJS default; named imports
+    // read the named Stream export. Both values are the legacy constructor.
+    for (binding, export, argument) in [
+        ("fromDefault", "default", None),
+        ("fromAlias", "Stream", None),
+        ("fromBareDefault", "default", Some("default argument")),
+        ("fromBareAlias", "Stream", Some("named argument")),
+    ] {
+        let Expr::NewDynamic { callee, args, .. } = let_init(&hir, binding) else {
             panic!("`{binding}` must construct through NewDynamic");
         };
-        assert!(is_stream_export_read(callee, "Stream"), "{binding}");
+        assert!(is_stream_export_read(callee, export), "{binding}");
+        match argument {
+            Some(expected) => assert!(
+                matches!(args.as_slice(), [Expr::String(value)] if value == expected),
+                "{binding} must forward its constructor argument"
+            ),
+            None => assert!(args.is_empty(), "{binding}"),
+        }
     }
 }

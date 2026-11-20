@@ -18,7 +18,7 @@ use perry_hir::Expr;
 // (file-size gate). Re-exported here so existing `type_analysis::*` call
 // sites keep resolving, and brought into scope for local callers.
 pub(crate) use crate::type_analysis_class_fields::{
-    class_field_declared_type, class_field_global_index,
+    class_field_declared_type, class_field_global_index, class_field_slot,
 };
 
 // The body of this module was split into topical sub-modules to keep each
@@ -33,7 +33,7 @@ mod strings;
 
 pub(crate) use numeric::{
     expr_produces_canonical_raw_f64, is_bigint_expr, is_bool_expr, is_declared_number_expr,
-    is_integer_valued_expr, is_numeric_expr, is_provably_not_bigint,
+    is_integer_valued_expr, is_literal_number_selection, is_numeric_expr, is_provably_not_bigint,
     iterator_record_primitive_type, local_is_number,
 };
 pub(crate) use pod::{

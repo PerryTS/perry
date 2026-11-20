@@ -29,6 +29,13 @@ pub fn class_uses_this_as_value(
     class: &perry_hir::Class,
     classes: &std::collections::HashMap<String, &perry_hir::Class>,
 ) -> bool {
+    // A value-bearing `return` anywhere on the constructor chain (or a base the
+    // compiler cannot see) replaces `this` with a foreign object; the
+    // per-field allocas of scalar replacement would then answer reads for an
+    // object that never held them.
+    if crate::lower_call::ctor_chain_can_replace_this(classes, &class.name) {
+        return true;
+    }
     // Collect all instance fields from this class + parent chain so the
     // "is this.X a field?" check honors inheritance.
     let mut field_names: HashSet<String> = HashSet::new();
@@ -280,6 +287,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_use_this_as_value(body, fields)
                     || catch
@@ -348,6 +356,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             object,
             value,
             property,
+            ..
         } => {
             let obj_unsafe = if matches!(object.as_ref(), Expr::This) {
                 !fields.contains(property)
@@ -465,13 +474,14 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 .is_some_and(|o| expr_uses_this_as_value(o, fields))
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }
-        Expr::IndexGet { object, index } => {
+        Expr::IndexGet { object, index, .. } => {
             expr_uses_this_as_value(object, fields) || expr_uses_this_as_value(index, fields)
         }
         Expr::IndexSet {
             object,
             index,
             value,
+            ..
         } => {
             expr_uses_this_as_value(object, fields)
                 || expr_uses_this_as_value(index, fields)
@@ -490,7 +500,8 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             .any(|(_, v)| expr_uses_this_as_value(v, fields)),
         Expr::ObjectSpread { parts } => parts
             .iter()
-            .any(|(_, e)| expr_uses_this_as_value(e, fields)),
+            .flatten()
+            .any(|e| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
         Expr::NewDynamic { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)
@@ -595,6 +606,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             static_accessor_names: Vec::new(),
@@ -607,11 +619,12 @@ mod tests {
         let mut child = class("A", Some("B"));
         child.constructor = Some(function(
             "constructor",
-            vec![Stmt::Return(Some(Expr::PropertyGet {
+            vec![Stmt::Expr(Expr::PropertyGet {
+                byte_end: 0,
                 byte_offset: 0,
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
-            }))],
+            })],
         ));
 
         let mut parent = class("B", Some("A"));
@@ -634,9 +647,12 @@ mod tests {
                 object: Box::new(Expr::This),
                 property: "parse".to_string(),
                 value: Box::new(Expr::Call {
+                    byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
                             byte_offset: 0,
                             object: Box::new(Expr::This),
                             property: "parse".to_string(),
@@ -647,6 +663,8 @@ mod tests {
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
+                byte_offset: 0,
+                byte_end: 0,
             })],
         )
     }

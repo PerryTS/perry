@@ -1,0 +1,10 @@
+10
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+10
+1 2
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+10
+true
+DEC 250: Cannot redefine built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+call:true,get-next:true,step:true,step:true,step:true,step:true,step:true

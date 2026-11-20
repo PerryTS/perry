@@ -4,11 +4,16 @@
 //! records in linear memory and enumerate their addresses through constructors
 //! instead. WASI's command/reactor initialization runs these before JS starts.
 //! These are immutable image addresses, never pointers into the managed heap.
+//!
+//! This covers the runtime's own images, which live outside the `perry_strings`
+//! section. Program string literals, atoms, descriptors and realm cells use
+//! ordinary linear-memory sections and linker-synthesized `__start_/__stop_`
+//! bounds. This inventory enumerates runtime records only; program records
+//! never need constructors or a runtime address registry.
 
 #[cfg(target_family = "wasm")]
 mod records {
     pub(crate) struct Atom(pub *const crate::object::layout_desc::StaticAtom);
-    pub(crate) struct Layout(pub *mut crate::object::layout_desc::PerryLayoutDesc);
     pub(crate) struct Image {
         pub start: *const u8,
         pub len: usize,
@@ -16,10 +21,8 @@ mod records {
     // The pointed-to image outlives the instance. Layout ids are published using
     // the same atomic registration protocol as native image descriptors.
     unsafe impl Sync for Atom {}
-    unsafe impl Sync for Layout {}
     unsafe impl Sync for Image {}
     inventory::collect!(Atom);
-    inventory::collect!(Layout);
     inventory::collect!(Image);
 
     /// Return the exact static allocation containing the candidate string header.
@@ -31,7 +34,7 @@ mod records {
                 .into_iter()
                 .map(|image| (image.start as usize, image.start as usize + image.len))
                 .collect();
-            ranges.sort_unstable();
+            crate::cold_sort::sort_by(&mut ranges, |a, b| a.cmp(b));
             ranges.dedup();
             ranges.into_boxed_slice()
         });
@@ -49,12 +52,6 @@ macro_rules! wasm_atom {
     ($name:ident) => {
         #[cfg(target_family = "wasm")]
         inventory::submit! { crate::wasm_image::Atom(std::ptr::addr_of!($name)) }
-    };
-}
-macro_rules! wasm_layout {
-    ($name:ident) => {
-        #[cfg(target_family = "wasm")]
-        inventory::submit! { crate::wasm_image::Layout(std::ptr::addr_of_mut!($name)) }
     };
 }
 macro_rules! wasm_string_image {

@@ -1,0 +1,35 @@
+(component
+  (import "wasi:filesystem/types@0.2.0" (instance $types
+    (export "descriptor" (type (sub resource)))))
+  (alias export $types "descriptor" (type $descriptor))
+  (import "wasi:filesystem/preopens@0.2.0" (instance $preopens
+    (alias outer 1 $descriptor (type $descriptor))
+    (type $entry (tuple (own $descriptor) string))
+    (export "get-directories" (func (result (list $entry))))))
+  (alias export $preopens "get-directories" (func $get))
+  (core module $allocation
+    (memory (export "memory") 1)
+    (global $next (mut i32) (i32.const 64))
+    (func (export "realloc") (param i32 i32) (param $align i32) (param $size i32) (result i32)
+      (local $ptr i32)
+      (local.set $ptr (i32.and
+        (i32.add (global.get $next) (i32.sub (local.get $align) (i32.const 1)))
+        (i32.sub (i32.const 0) (local.get $align))))
+      (global.set $next (i32.add (local.get $ptr) (local.get $size)))
+      (local.get $ptr)))
+  (core instance $allocation (instantiate $allocation))
+  (alias core export $allocation "memory" (core memory $memory))
+  (alias core export $allocation "realloc" (core func $realloc))
+  (core func $lower (canon lower (func $get) (memory $memory) (realloc $realloc)))
+  (core module $forward
+    (import "env" "get" (func $get (param i32)))
+    (func (export "directories") (result i32)
+      (call $get (i32.const 0))
+      (i32.const 0)))
+  (core instance $env (export "get" (func $lower)))
+  (core instance $forward (instantiate $forward (with "env" (instance $env))))
+  (alias core export $forward "directories" (core func $forward))
+  (export "descriptor" (type $descriptor))
+  (type $entry (tuple (own $descriptor) string))
+  (func (export "directories") (result (list $entry))
+    (canon lift (core func $forward) (memory $memory))))

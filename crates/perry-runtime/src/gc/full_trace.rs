@@ -102,6 +102,47 @@ pub extern "C" fn perry_ffi_gc_register_pool_handle_trace(
     POOL_TRACE.with(|hook| hook.set(Some(PoolTrace { phase, observe })));
 }
 
+crate::perry_thread_local! {
+    /// The pool provider's answer for a handle-band word during an armed full
+    /// trace: does a word naming this id keep it (not parked, parked young,
+    /// or reached by this trace)? Weak and ephemeron keys ask it, so the trace
+    /// that releases an id also deletes every weak entry keyed by it.
+    static POOL_LIVENESS: Cell<Option<extern "C" fn(u64) -> bool>> = const { Cell::new(None) };
+}
+
+/// Install this thread's shared-pool liveness predicate (see
+/// [`POOL_LIVENESS`]), beside its [`perry_ffi_gc_register_pool_handle_trace`].
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_register_pool_handle_liveness(is_live: extern "C" fn(u64) -> bool) {
+    POOL_LIVENESS.with(|hook| hook.set(Some(is_live)));
+}
+
+/// A weak or ephemeron key that is a boxed shared-pool handle (`HANDLE_TAG`
+/// or `POINTER_TAG` over an id in `[1, 0x40000)`) has no heap object to be
+/// marked: `Some(dead)` gives the pool's verdict instead. Outside an armed
+/// trace no id can be released, so the key is live. `None` for every other
+/// word.
+pub(crate) fn pool_handle_key_is_dead(bits: u64) -> Option<bool> {
+    if !matches!(bits >> 48, 0xFFF9 | 0x7FFD) || !is_pool_handle_word(bits) {
+        return None;
+    }
+    if !POOL_TRACE_ARMED.with(Cell::get) {
+        return Some(false);
+    }
+    Some(
+        POOL_LIVENESS
+            .with(Cell::get)
+            .is_some_and(|is_live| !is_live(bits)),
+    )
+}
+
+/// Whether the calling thread is a mutator: it initialized its collector, so
+/// its full traces can decide the handle ids it parks.
+#[no_mangle]
+pub extern "C" fn perry_ffi_gc_thread_is_mutator() -> bool {
+    super::thread_gc_initialized()
+}
+
 /// Whether a traced word must be offered to [`observe_handle`]: a proxy, a
 /// Fetch, or a shared-pool handle trace is running on this thread.
 #[inline]
@@ -115,7 +156,7 @@ pub(crate) fn handle_trace_active() -> bool {
 /// their own observer gates independently of this source-word contract.
 #[inline(always)]
 pub(super) unsafe fn object_words_may_name_handles(header: *const super::GcHeader) -> bool {
-    if (*header).obj_type != super::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & super::GC_FLAG_SHAPE_SHARED == 0
     {
         return true;

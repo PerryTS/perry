@@ -47,6 +47,7 @@ mod closure_analysis;
 #[cfg(test)]
 mod closure_call_arity_tests;
 mod console_promise;
+pub(crate) mod field_read_call;
 pub(crate) use console_promise::{
     emit_method_args_buffer, emit_native_method_str_dispatch, lower_split_method_call,
     try_lower_optional_method_call,
@@ -55,6 +56,9 @@ pub(crate) use console_promise::{
 /// repaired (#7649) — see the module header for why these assert on IR.
 #[cfg(test)]
 mod console_rooting_tests;
+/// A console call binds the intrinsic only at a facts-proven native site.
+#[cfg(test)]
+mod console_site_facts_tests;
 #[cfg(test)]
 mod ctor_prologue_store_tests;
 mod ctor_prologue_stores;
@@ -68,8 +72,12 @@ mod extern_func;
 mod extern_timers;
 mod field_init;
 mod func_ref;
+pub(crate) mod index_split;
 #[cfg(test)]
 mod pipeline_call_tests;
+pub(crate) mod proven_call;
+#[cfg(test)]
+mod proven_call_tests;
 /// #8770: an under-applied same-module direct call must pad the missing
 /// trailing parameters with `TAG_UNDEFINED` (the cross-module arm always did).
 #[cfg(test)]
@@ -135,7 +143,7 @@ mod ui_styling;
 mod ui_tables;
 mod web_storage;
 
-use buffer_intrinsic::try_emit_buffer_read_intrinsic;
+use buffer_intrinsic::{try_emit_buffer_equals_intrinsic, try_emit_buffer_read_intrinsic};
 use builtin::lower_builtin_new;
 use jsx::try_rewrite_perry_tui_jsx_intrinsic;
 // `options/` (#1099): the options-object-literal lowering family,
@@ -197,7 +205,7 @@ pub(crate) use new_ctor_args::{
 pub(crate) use new_helpers::{
     ctor_body_calls_super, ctor_body_closure_calls_super, ctor_body_has_value_return,
     ctor_body_lexically_contains_arrow, ctor_body_uses_this, ctor_chain_can_replace_this,
-    default_ctor_dynamic_parent_owner,
+    ctor_chain_has_value_return, default_ctor_dynamic_parent_owner,
 };
 // #6325 / #6326: the class-chain walk to a native base whose surface perry
 // stamps onto the instance, plus its init emitter. Shared by the implicit
@@ -588,6 +596,91 @@ pub(crate) fn lower_rest_call_args_rooted<'a>(
 /// 2. `console.log(expr)` where `expr` lowers to a double — emits a
 ///    `js_console_log_number` call and returns `0.0` as the statement value.
 pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        if !ctx.wpfacts_off
+            && matches!(object.as_ref(), Expr::LocalGet(_))
+            && ctx
+                .wpfacts
+                .method_calls
+                .get(&(*byte_offset, property.clone()))
+                .is_some_and(|record| record.5)
+        {
+            let value = property_get::try_lower_proven_method_call(ctx, callee, args)?;
+            debug_assert!(
+                value.is_some(),
+                "imported receiver must have a materialized public entry"
+            );
+            if let Some(value) = value {
+                return Ok(value);
+            }
+        }
+    }
+    if let Some(value) = property_get::try_lower_certified_map(ctx, callee, args)? {
+        return Ok(value);
+    }
+    if let Some(value) = crate::lower_string_method::try_lower_certified_string(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
+    if let Expr::PropertyGet {
+        object,
+        property,
+        byte_offset,
+        ..
+    } = callee
+    {
+        use perry_hir::folded_call::{
+            direct_array_call, Site, SITE_ARRAY_MEMBER, SITE_DIRECT_ARRAY,
+        };
+        if !ctx.wpfacts_off
+            && direct_array_call(callee, args.len())
+            && ctx
+                .wpfacts
+                .method_sites
+                .get(&(Site::Callee(*byte_offset), property.clone()))
+                .is_some_and(|flags| flags & SITE_DIRECT_ARRAY != 0)
+        {
+            debug_assert!(
+                ctx.wpfacts.method_sites[&(Site::Callee(*byte_offset), property.clone())]
+                    & SITE_ARRAY_MEMBER
+                    != 0
+            );
+            return crate::lower_array_method::lower_array_method(ctx, object, property, args);
+        }
+    }
+    // b1: a call the facts prove a field element read is that read.
+    if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // DESIGN-p4l4 VR-3b: a typed call of a record `$sig` (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_lower_value_call(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).
+    if let Some(value) =
+        crate::codegen::signature_entry::try_lower_typed_method_call(ctx, callee, args)?
+    {
+        return Ok(value);
+    }
+    // ONCHANGE2: a call the facts prove runs one class method body calls it.
+    if let Some(value) = property_get::try_lower_proven_method_call(ctx, callee, args)? {
+        return Ok(value);
+    }
+    // The call's site offset, for every route that consults the call-site
+    // argument intervals (`index_split::with_call_site`).
+    let value = index_split::with_call_site(callee, || lower_call_routes(ctx, callee, args))?;
+    // Check mode: a call the facts prove a Number returns a canonical double.
+    crate::codegen::facts_rep::witness_number_call(ctx, callee, &value);
+    Ok(value)
+}
+
+fn lower_call_routes(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> Result<String> {
     let _callee_cause = crate::fallback_diag::callee_cause(ctx, callee);
     // A static field used as a callee remains a property Reference:
     // P.f() binds P. Read-only StaticFieldGet lowering otherwise loses it.
@@ -597,6 +690,7 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     } = callee
     {
         let reference = Expr::PropertyGet {
+            byte_end: 0,
             object: Box::new(Expr::ClassRef(class_name.clone())),
             property: field_name.clone(),
             byte_offset: ctx.strings.pending_call_offset(),
@@ -626,9 +720,28 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
         if name == "js_native_module_named_esm_export_value"
             && !ctx.import_function_prefixes.contains_key(name)
         {
+            if let [Expr::String(module), Expr::String(property)] = args {
+                if let Some(export) =
+                    crate::native_export_value::prepare(ctx.strings, module, property, false)
+                {
+                    return Ok(export.emit(ctx.block()));
+                }
+            }
             if let Some(Expr::String(module)) = args.first() {
                 if let Some(install) = crate::nm_install::nm_install_symbol(module) {
                     ctx.block().call_void(install, &[]);
+                }
+                // The parent bucket does not install object-valued submodules.
+                // Populate the named cell only after its concrete value exists;
+                // otherwise fs.promises snapshots an unresolved stub.
+                if module.strip_prefix("node:").unwrap_or(module) == "fs"
+                    && matches!(args.get(1), Some(Expr::String(property)) if property == "promises")
+                {
+                    if let Some(install) =
+                        crate::nm_install::nm_submod_install_symbol("fs_promises")
+                    {
+                        ctx.block().call_void(install, &[]);
+                    }
                 }
             }
         }
@@ -671,6 +784,16 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(v) = early_branches::try_lower_current_step_closure_call(ctx, callee, args)? {
         return Ok(v);
     }
+    // FVA: a call whose callee set the facts prove is a call of its bodies.
+    if let Some(v) = proven_call::try_lower_proven_value_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_field_call(ctx, callee, args)? {
+        return Ok(v);
+    }
+    if let Some(v) = proven_call::try_lower_proven_static_call(ctx, callee, args)? {
+        return Ok(v);
+    }
     if let Some(v) = early_branches::try_lower_closure_typed_local_call(ctx, callee, args)? {
         return Ok(v);
     }
@@ -711,7 +834,9 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
 
     // String / array / class / Map / Set / Promise / fetch / static /
     // instance method dispatch — the big PropertyGet branch.
-    if let Some(v) = property_get::try_lower_property_get_method_call(ctx, callee, args)? {
+    if let Some(v) = crate::codegen::signature_entry::with_method_site(callee, || {
+        property_get::try_lower_property_get_method_call(ctx, callee, args)
+    })? {
         return Ok(v);
     }
 

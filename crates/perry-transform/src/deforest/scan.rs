@@ -101,6 +101,7 @@ fn scan_stmt_call_sites(
             body,
             catch,
             finally,
+            ..
         } => {
             scan_unsafe_call_sites(body, candidates, out);
             if let Some(c) = catch {
@@ -231,6 +232,7 @@ fn scan_stmt_for_closures(
             body,
             catch,
             finally,
+            ..
         } => {
             scan_producers_used_in_closures(body, candidates, out);
             if let Some(c) = catch {
@@ -396,6 +398,7 @@ impl StmtRefAllWalker<'_> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     self.visit_stmt(s);
@@ -521,6 +524,7 @@ fn scan_stmt_funcrefs(
             body,
             catch,
             finally,
+            ..
         } => {
             scan_funcref_misuses(body, candidates, out);
             if let Some(c) = catch {

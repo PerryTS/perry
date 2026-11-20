@@ -408,7 +408,7 @@ fn register_to_array_abort(stream: f64, opts: f64, result: f64) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),
@@ -600,7 +600,8 @@ fn consume_settle(state: *const ClosureHeader, value: f64, fulfil: bool) {
     let value = scope.root_nanbox_f64(value);
     consume_close_iter(raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader);
     let state = raw_ptr_from_value(state.get_nanbox_f64()) as *const ClosureHeader;
-    let result = js_closure_get_capture_ptr(state, SC_RESULT) as *mut crate::promise::Promise;
+    let result =
+        crate::closure::closure_capture_ref(state, SC_RESULT) as *mut crate::promise::Promise;
     if result.is_null() {
         return;
     }
@@ -659,7 +660,7 @@ extern "C" fn consume_on_next(
     js_closure_set_capture_f64(state as *mut ClosureHeader, SC_CUR, value);
 
     let iter = js_closure_get_capture_f64(state, SC_ITER);
-    let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
+    let reject = crate::closure::closure_capture_ref(state, SC_REJECT) as *const ClosureHeader;
     let cb = callback_closure(js_closure_get_capture_f64(state, SC_CB));
     if cb.is_null() {
         // No callback: still consume to the end (matches the old skip-loop,
@@ -694,8 +695,10 @@ extern "C" fn consume_on_next(
             // Wrapping the result creates a promise, which can collect.
             let p = crate::promise::js_promise_resolved(result);
             let state = raw_ptr_from_value(state_h.get_nanbox_f64()) as *const ClosureHeader;
-            let on_cb = js_closure_get_capture_ptr(state, SC_ON_CB) as *const ClosureHeader;
-            let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
+            let on_cb =
+                crate::closure::closure_capture_ref(state, SC_ON_CB) as *const ClosureHeader;
+            let reject =
+                crate::closure::closure_capture_ref(state, SC_REJECT) as *const ClosureHeader;
             crate::promise::js_promise_then(p, on_cb, reject);
         }
         Err(err) => {
@@ -717,7 +720,7 @@ extern "C" fn consume_on_cb(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *const ClosureHeader;
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -742,7 +745,7 @@ extern "C" fn consume_on_cb(
     }
 
     let iter = js_closure_get_capture_f64(state, SC_ITER);
-    let reject = js_closure_get_capture_ptr(state, SC_REJECT) as *const ClosureHeader;
+    let reject = crate::closure::closure_capture_ref(state, SC_REJECT) as *const ClosureHeader;
     consume_drive_next(iter, state, reject);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -757,7 +760,7 @@ extern "C" fn consume_reject(
     }
     // Capture slot 0 is the consume state (not the bare result promise) so the
     // iterator is closed before the rejection settles.
-    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *const ClosureHeader;
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -811,17 +814,25 @@ fn consume_stream(stream: f64, callback: f64, op: f64, initial: f64, opts: f64) 
     let reject = closure(crate::fn_info!(consume_reject, 1; with_declared(1)), 1);
     let ptr = |h: &crate::gc::RuntimeHandle<'_>| raw_ptr_from_value(h.get_nanbox_f64());
 
-    js_closure_set_capture_ptr(ptr(&reject) as *mut ClosureHeader, 0, ptr(&state) as i64);
-    js_closure_set_capture_ptr(ptr(&on_cb) as *mut ClosureHeader, 0, ptr(&state) as i64);
+    crate::closure::closure_set_capture_ref(
+        ptr(&reject) as *mut ClosureHeader,
+        0,
+        ptr(&state) as i64,
+    );
+    crate::closure::closure_set_capture_ref(
+        ptr(&on_cb) as *mut ClosureHeader,
+        0,
+        ptr(&state) as i64,
+    );
 
     let st = ptr(&state) as *mut ClosureHeader;
-    js_closure_set_capture_ptr(st, SC_RESULT, ptr(&result) as i64);
+    crate::closure::closure_set_capture_ref(st, SC_RESULT, ptr(&result) as i64);
     js_closure_set_capture_f64(st, SC_ITER, iter.get_nanbox_f64());
     js_closure_set_capture_f64(st, SC_CB, callback.get_nanbox_f64());
     js_closure_set_capture_f64(st, SC_OP, op);
     js_closure_set_capture_f64(st, SC_ACC, acc.get_nanbox_f64());
-    js_closure_set_capture_ptr(st, SC_REJECT, ptr(&reject) as i64);
-    js_closure_set_capture_ptr(st, SC_ON_CB, ptr(&on_cb) as i64);
+    crate::closure::closure_set_capture_ref(st, SC_REJECT, ptr(&reject) as i64);
+    crate::closure::closure_set_capture_ref(st, SC_ON_CB, ptr(&on_cb) as i64);
     js_closure_set_capture_f64(st, SC_CUR, f64::from_bits(TAG_UNDEFINED));
     js_closure_set_capture_f64(st, SC_HAS_ACC, bool_bits(has_initial));
 
@@ -858,7 +869,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let state = scope.root_nanbox_f64(box_pointer(state as *const u8));
     let sig = scope.root_nanbox_f64(sig);
     let abort_cl = js_closure_alloc(crate::fn_info!(ns_consume_abort, 0; with_declared(0)), 1);
-    js_closure_set_capture_ptr(
+    crate::closure::closure_set_capture_ref(
         abort_cl,
         0,
         raw_ptr_from_value(state.get_nanbox_f64()) as i64,
@@ -867,7 +878,7 @@ fn register_consume_abort(stream: f64, opts: f64, state: *const ClosureHeader) {
     let Some(sig_obj) = object_ptr_from_value(sig.get_nanbox_f64()) else {
         return;
     };
-    crate::url::js_abort_signal_add_listener(
+    crate::event_target_hook_slots::js_abort_signal_add_listener(
         sig_obj,
         literal_string_value(b"abort"),
         abort_cl.get_nanbox_f64(),
@@ -884,7 +895,7 @@ pub(super) extern "C" fn ns_consume_abort(
     if closure.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    let state = js_closure_get_capture_ptr(closure, 0) as *const ClosureHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *const ClosureHeader;
     if state.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
@@ -1080,7 +1091,10 @@ fn take_source_done_result() -> f64 {
 fn finish_take_source(iterator: f64, reason: Option<f64>, close_source: bool) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let iterator = scope.root_nanbox_f64(iterator);
-    let reason = reason.map(|reason| scope.root_nanbox_f64(reason));
+    let reason = match reason {
+        Some(reason) => Some(scope.root_nanbox_f64(reason)),
+        None => None,
+    };
     let iterator_value = iterator.get_nanbox_f64();
     if has_truthy_hidden(
         iterator_value,
@@ -1406,7 +1420,7 @@ mod take_tests {
             if has_truthy_hidden(source, crate::runtime_state_key!(b"rejectAfterLimit")) {
                 return rejected_promise(9.0);
             }
-            crate::exception::js_throw(9.0);
+            crate::exception::test_throw(9.0);
         }
         let done = get_hidden_value(source, crate::runtime_state_key!(b"doneAfter"))
             .is_some_and(|done_after| value > done_after);

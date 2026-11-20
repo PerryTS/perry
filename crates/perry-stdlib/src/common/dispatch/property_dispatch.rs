@@ -34,6 +34,19 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     let _ = property_name;
     let _ = handle;
 
+    // An own property stored in the handle's bag (`handle.colors = [...]`,
+    // `res.writeHead = hook`, a `defineProperty` accessor) shadows every
+    // typed member below, exactly as an own property shadows a prototype
+    // method in ordinary [[Get]]. Typed setters claim their own names first
+    // (set dispatch), so the bag only ever holds program-assigned properties.
+    if let Some(v) = perry_runtime::object::handle_expando::handle_own_property_get(
+        handle,
+        property_name_ptr,
+        property_name_len,
+    ) {
+        return v;
+    }
+
     try_arm!(PROP_TLS, handle, property_name);
 
     try_arm!(PROP_STREAMS, handle, property_name);
@@ -78,19 +91,6 @@ pub unsafe extern "C" fn js_handle_property_dispatch(
     }
 
     try_arm!(PROP_CRYPTO, handle, property_name);
-
-    // Generic per-handle expando read: an arbitrary user-assigned own property
-    // (`handle.colors = [...]`) stored by the set-dispatch fallback below. This
-    // is the read half that makes native HANDLE values (Blob / fetch Response /
-    // Web-Streams readers) freely extensible like Node's, so the `debug`
-    // package's `createDebug.colors[...]` reads back the array it assigned
-    // instead of `undefined`. Specific typed properties were all tried above, so
-    // a hit here is always a genuine user expando.
-    if let Some(v) =
-        perry_runtime::object::handle_expando::handle_expando_get(handle, property_name)
-    {
-        return v;
-    }
 
     // Unknown handle type - return undefined
     f64::from_bits(0x7FFC_0000_0000_0001)
@@ -259,6 +259,7 @@ unsafe fn prop_http_server(handle: i64, property_name: &str) -> Option<f64> {
             "statusCode"
                 | "statusMessage"
                 | "headersSent"
+                | "writable"
                 | "writableEnded"
                 | "writableFinished"
                 | "finished"
@@ -434,13 +435,13 @@ unsafe fn prop_fetch(handle: i64, property_name: &str) -> Option<f64> {
 
 #[cfg(feature = "crypto")]
 unsafe fn prop_crypto(handle: i64, property_name: &str) -> Option<f64> {
-    if matches!(property_name, "update" | "sign")
+    if matches!(property_name, "update" | "write" | "end" | "sign")
         && with_handle::<crate::crypto::SignHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_sign_property(handle, property_name));
     }
 
-    if matches!(property_name, "update" | "verify")
+    if matches!(property_name, "update" | "write" | "end" | "verify")
         && with_handle::<crate::crypto::VerifyHandle, bool, _>(handle, |_| true).unwrap_or(false)
     {
         return Some(crate::crypto::dispatch_verify_property(

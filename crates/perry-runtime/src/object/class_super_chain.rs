@@ -31,7 +31,7 @@ pub unsafe extern "C" fn js_class_method_home(mut owner: f64, is_static: i32) ->
     if is_static != 0 {
         return owner;
     }
-    if let Some(cid) = super::class_prototype_ref_id(owner) {
+    if let Some(cid) = super::class_method_home_id(owner) {
         return super::class_registry::class_decl_prototype_value(cid);
     }
     if let Some(cid) = constructor {
@@ -71,8 +71,8 @@ pub(super) unsafe fn super_call_with_lookup(
     let callable = value.filter(|v| {
         let boxed = f64::from_bits(v.bits());
         (v.is_reference())
-            && ((crate::proxy::js_proxy_is_proxy(boxed) == 1
-                && crate::proxy::proxy_wraps_callable(boxed))
+            && ((crate::proxy_hooks::proxy_is_proxy(boxed) == 1
+                && crate::proxy_hooks::proxy_wraps_callable(boxed))
                 || crate::closure::is_closure_ptr(
                     crate::value::js_nanbox_get_pointer(boxed) as usize
                 ))
@@ -89,8 +89,8 @@ pub(super) unsafe fn super_call_with_lookup(
     };
     let method_handle = scope.root_nanbox_f64(f64::from_bits(method.bits()));
     let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
-    if crate::proxy::js_proxy_is_proxy(method_handle.get_nanbox_f64()) == 1 {
-        return crate::proxy::call_proxy_value_with_this(
+    if crate::proxy_hooks::proxy_is_proxy(method_handle.get_nanbox_f64()) == 1 {
+        return crate::proxy_hooks::call_proxy_value_with_this(
             method_handle.get_nanbox_f64(),
             this_handle.get_nanbox_f64(),
             &args,

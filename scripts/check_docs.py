@@ -28,6 +28,7 @@ INLINE_LINK_RE = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 REFERENCE_LINK_RE = re.compile(r"^\s*\[[^\]]+\]:\s*(\S+)", re.MULTILINE)
 INCLUDE_RE = re.compile(r"\{\{#(?:rustdoc_)?include\s+([^}\s]+)")
 HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+HEADING_ATTR_RE = re.compile(r"\s*\{([^{}]*)\}\s*$")
 HTML_ID_RE = re.compile(r"\bid=[\"']([^\"']+)[\"']")
 RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
@@ -191,7 +192,17 @@ def anchors_for(path: Path) -> set[str]:
         match = HEADING_RE.match(line)
         if not match:
             continue
-        base = slugify_heading(match.group(2))
+        title = match.group(2)
+        attrs = HEADING_ATTR_RE.search(title)
+        if attrs:
+            # mdBook heading attributes (`## Title {#id .class}`): an explicit
+            # id replaces the generated slug.
+            title = title[: attrs.start()]
+            explicit = [a[1:] for a in attrs.group(1).split() if a.startswith("#")]
+            if explicit:
+                anchors.add(explicit[0])
+                continue
+        base = slugify_heading(title)
         if not base:
             continue
         count = seen[base]

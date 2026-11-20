@@ -28,7 +28,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                 // "this read needs the rooted accessor" signal — unambiguous,
                 // because a hole is never a value a read yields — and covers
                 // cold elements, descriptors, out-of-bounds, growth-forwarding
-                // stubs and a stale `cached_length` mirror, all of which fall
+                // stubs and materialized (flipped) values, all of which fall
                 // through to the unchanged accessor below.
                 //
                 // The `GC_FLAG_FORWARDED` test is load-bearing, not defensive:
@@ -65,7 +65,7 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                         return byte;
                     }
                 }
-                if header.obj_type == crate::gc::GC_TYPE_ARRAY
+                if crate::gc_type_is_array!(header.obj_type)
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let arr = raw as *const crate::array::ArrayHeader;
@@ -78,17 +78,26 @@ pub extern "C" fn js_packed_arraylike_index_get(receiver: f64, index: f64) -> f6
                 }
                 if matches!(
                     header.obj_type,
-                    crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+                    crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
                 ) {
                     return crate::array::js_array_get_f64(
                         raw as *const crate::array::ArrayHeader,
                         index_u32,
                     );
                 }
-                if header.obj_type == crate::gc::GC_TYPE_OBJECT
+                if crate::gc_type_is_object!(header.obj_type)
                     && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 {
                     let obj = raw.cast::<ObjectHeader>();
+                    // An arguments object: its born elements answer here
+                    // from the object kind, like a dense array's.
+                    if header._reserved & crate::gc::OBJ_FLAG_ARGUMENTS != 0 {
+                        if let Some(value) = unsafe {
+                            crate::object::arguments_object_index_of_flagged(obj, index_u32)
+                        } {
+                            return value;
+                        }
+                    }
                     // Elements-backed instance: an in-bounds non-hole element
                     // answers directly; a hole continues to the complete
                     // dispatcher (prototype chain).

@@ -138,8 +138,8 @@ fn assert_initial_prototype_lookup_survives(empty: bool) {
 /// there would move `obj` — a bare local here — out from under the setup.
 unsafe fn probe_object(_trigger_guard: &GcTriggerThresholdTestGuard) -> *mut crate::ObjectHeader {
     let obj = crate::object::js_object_alloc(0, 3);
-    let when = crate::date::alloc_date_cell(0.0);
-    let also = crate::date::alloc_date_cell(86_400_000.0);
+    let when = crate::date_hook_slots::alloc_date_cell(0.0);
+    let also = crate::date_hook_slots::alloc_date_cell(86_400_000.0);
     let when_key = crate::string::js_string_from_bytes(b"when".as_ptr(), 4);
     crate::object::js_object_set_field_by_name(obj, when_key, when);
     let answer_key = crate::string::js_string_from_bytes(b"answer".as_ptr(), 6);
@@ -298,18 +298,23 @@ fn stringify_shape_cache_keys_array_is_marked_and_rewritten() {
     crate::json::test_clear_parse_roots();
 }
 
-/// A scanner that is not in the registry is documentation. `scan_parse_roots_mut`
-/// rides on the registered `json_parse_mutable_root_scanner`; this asserts the
-/// shape cache is covered by a REGISTERED scanner rather than by one only this
-/// file calls.
+/// Formatting alone must root the stringify cache, even without a parser.
 #[test]
 fn stringify_shape_cache_scanner_is_registered() {
     crate::gc::gc_init();
+    // Test gc_init installs all features. Remove that registration so this
+    // assertion observes the formatting installer itself.
+    let previous = crate::gc::roots::MUTABLE_ROOT_SCANNERS
+        .with(|scanners| std::mem::take(&mut *scanners.borrow_mut()));
+    crate::feature_hooks::js_runtime_install_json_format();
     let registered = crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
         scanners.borrow().iter().any(|entry| {
             entry.scanner as usize
                 == crate::gc::roots::json_parse_mutable_root_scanner as MutableRootScanner as usize
         })
+    });
+    crate::gc::roots::MUTABLE_ROOT_SCANNERS.with(|scanners| {
+        *scanners.borrow_mut() = previous;
     });
     assert!(
         registered,

@@ -65,7 +65,7 @@ pub(crate) fn parse_env(content: &str) -> Vec<(String, String)> {
     // Node's C++ parser stores into a sorted map, so the result object's keys
     // come out byte-lexicographically sorted (e.g. `A`,`M`,`Z`,`m`), NOT in
     // insertion order. Match that.
-    out.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    crate::cold_sort::sort_by(&mut out, |a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
     out
 }
 

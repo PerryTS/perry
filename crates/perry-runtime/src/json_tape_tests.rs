@@ -321,9 +321,11 @@ fn lazy_array_header_stays_small_regardless_of_tape_size() {
     assert_eq!(scan_flip_threshold(10), 64);
 }
 
-/// A disowned tape reads as EMPTY rather than as freed memory. Every reader
-/// checks `materialized` first, but the null guard is what makes a stale read
-/// safe instead of a use-after-free, so pin it directly.
+/// A disowned tape reads as EMPTY rather than as freed memory. The flip turns
+/// the value into an ordinary array in place and hole-fills the lazy fields
+/// (the tape pointer word included), so the field alone cannot tell a stale
+/// `TapeSource::Lazy` that the tape is gone: the type test in `tape_slice` /
+/// `blob_bytes` is what makes the stale read safe, so pin it directly.
 #[test]
 fn disowned_tape_reads_as_empty() {
     let input = b"[1,2,3]";
@@ -334,16 +336,25 @@ fn disowned_tape_reads_as_empty() {
     .expect("valid JSON should build a tape");
 
     assert!(!unsafe { LazyArrayHeader::tape_slice(lazy) }.is_empty());
+    assert!(!unsafe { LazyArrayHeader::blob_bytes(lazy) }.is_empty());
     let arr = unsafe { force_materialize_lazy(lazy) };
+    assert_eq!(arr as usize, lazy as usize, "materialization is in place");
     assert_eq!(unsafe { (*arr).length }, 3);
 
     unsafe {
-        assert!((*lazy).tape.is_null());
+        assert!(!is_lazy_array(lazy));
+        assert_eq!(
+            (*lazy).tape as u64,
+            crate::value::TAG_HOLE,
+            "premise: the flipped tape word is hole-filled reserve, not null"
+        );
         assert!(LazyArrayHeader::tape_slice(lazy).is_empty());
+        assert!(LazyArrayHeader::blob_bytes(lazy).is_empty());
         let scope = crate::gc::RuntimeHandleScope::new();
         let source = TapeSource::Lazy {
             hdr_handle: scope.root_raw_mut_ptr(lazy),
         };
+        assert_eq!(source.len(), 0, "a disowned tape has no length");
         assert!(
             source.entry(0).is_none(),
             "a disowned tape must yield no entries"
@@ -389,9 +400,9 @@ fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
 
     unsafe {
         let cached = crate::string::js_string_from_bytes(b"cached".as_ptr(), 6);
-        *(*lazy).materialized_elements.add(1) =
-            JSValue::string_ptr(cached as *mut crate::StringHeader);
-        *(*lazy).materialized_bitmap |= 1u64 << 1;
+        crate::json_tape::lazy_slot(lazy, 1)
+            .write(JSValue::string_ptr(cached as *mut crate::StringHeader).bits());
+        (*lazy).cached_count += 1;
     }
 
     let before = reparse_materializations();
@@ -412,6 +423,75 @@ fn force_materialize_lazy_array_cache_downgrades_for_pointer_values() {
     );
 }
 
+/// A reparse with nothing cached copies the parser's slots verbatim, so the
+/// flip installs the parser's all-pointer proof instead of re-scanning; the
+/// proof is the parser's, so a scalar payload must not inherit it.
+#[test]
+fn force_materialize_verbatim_reparse_installs_the_layout_the_slots_prove() {
+    fn forced(input: &[u8]) -> *mut crate::array::ArrayHeader {
+        let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+        let lazy = with_built_tape(input, |tape| unsafe {
+            alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+        })
+        .expect("valid JSON should build a tape");
+        let before = reparse_materializations();
+        let arr = unsafe { force_materialize_lazy(lazy) };
+        assert_eq!(
+            reparse_materializations(),
+            before + 1,
+            "nothing cached: reparse"
+        );
+        assert_eq!(arr as usize, lazy as usize, "materialization is in place");
+        unsafe {
+            assert_eq!(
+                (*arr).ek_prefix,
+                (*arr).length,
+                "a JSON value is never a hole: the flipped array is one dense prefix"
+            );
+        }
+        arr
+    }
+    let objects = forced(br#"[{"a":1},{"a":2},{"a":3}]"#);
+    assert_eq!(
+        crate::gc::test_layout_pointer_slot_count(objects as usize, 3),
+        Some(3),
+        "every element of an object payload is traced"
+    );
+    let numbers = forced(br#"[1,2,3,4]"#);
+    assert_ne!(
+        crate::gc::test_layout_pointer_slot_count(numbers as usize, 4),
+        Some(4),
+        "a scalar payload must not be traced as pointers"
+    );
+}
+
+/// `delete parsed[i]` on an unmaterialized lazy array is an own-property
+/// write: it materializes in place through the array funnel and deletes the
+/// element (a hole), instead of reading the lazy header as an ordinary
+/// object (which panicked in the overflow-table install).
+#[test]
+fn delete_on_a_lazy_array_materializes_in_place_and_leaves_a_hole() {
+    let input = br#"[{"a":1},{"a":2},{"a":3}]"#;
+    let text = crate::string::js_string_from_bytes(input.as_ptr(), input.len() as u32);
+    let lazy = with_built_tape(input, |tape| unsafe {
+        alloc_lazy_array(tape, 0, count_array_length(tape, 0), text)
+    })
+    .expect("valid JSON should build a tape");
+    assert!(unsafe { is_lazy_array(lazy) }, "probe must start lazy");
+    let key = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
+    let deleted = crate::object::js_object_delete_field(lazy as *mut crate::ObjectHeader, key);
+    assert_eq!(deleted, 1);
+    unsafe {
+        assert!(!is_lazy_array(lazy), "the delete materialized the value");
+        let arr = lazy as *const crate::array::ArrayHeader;
+        assert_eq!((*arr).length, 3);
+        let slots = crate::array::array_elements_ptr(arr) as *const u64;
+        assert_eq!(*slots.add(1), crate::value::TAG_HOLE);
+        assert_ne!(*slots.add(2), crate::value::TAG_HOLE);
+        assert!((*arr).ek_prefix <= 1, "the hole leaves the dense prefix");
+    }
+}
+
 /// #7478 crossover. Once MOST elements are already in the sparse cache
 /// the element-wise merge is the cheap producer — it copies the cached
 /// JSValues and materializes only the remainder — so a reparse would
@@ -428,9 +508,9 @@ fn force_materialize_majority_cached_uses_the_merge_walk_not_a_reparse() {
     .expect("valid JSON should build a tape");
 
     unsafe {
-        *(*lazy).materialized_elements.add(0) = JSValue::number(1.5);
-        *(*lazy).materialized_elements.add(1) = JSValue::number(2.5);
-        *(*lazy).materialized_bitmap |= 0b11;
+        crate::json_tape::lazy_slot(lazy, 0).write(JSValue::number(1.5).bits());
+        crate::json_tape::lazy_slot(lazy, 1).write(JSValue::number(2.5).bits());
+        (*lazy).cached_count += 2;
     }
 
     let before = reparse_materializations();
@@ -498,7 +578,7 @@ fn a_sequential_scan_flips_to_the_batch_parser_part_way_through() {
     let mut flipped_at = None;
     for i in 0..n {
         unsafe { lazy_get(lazy, i as u32) };
-        if flipped_at.is_none() && unsafe { !(*lazy).materialized.is_null() } {
+        if flipped_at.is_none() && unsafe { !crate::json_tape::is_lazy_array(lazy) } {
             flipped_at = Some(i);
         }
     }
@@ -536,7 +616,7 @@ fn an_array_whose_streak_can_only_complete_late_does_not_flip() {
         unsafe { lazy_get(lazy, i as u32) };
     }
     assert!(
-        unsafe { (*lazy).materialized.is_null() },
+        unsafe { crate::json_tape::is_lazy_array(lazy) },
         "a late-completing streak must not trigger a redundant batch parse"
     );
     assert_eq!(reparse_materializations(), before);
@@ -555,7 +635,7 @@ fn a_short_prefix_read_does_not_flip() {
         unsafe { lazy_get(lazy, i) };
     }
     assert!(
-        unsafe { (*lazy).materialized.is_null() },
+        unsafe { crate::json_tape::is_lazy_array(lazy) },
         "10 reads out of 200 must stay lazy"
     );
     assert_eq!(
@@ -587,7 +667,7 @@ fn a_strided_walk_does_not_trip_the_scan_flip() {
          of length one, and 61 of them must not add up to a streak"
     );
     assert!(
-        unsafe { (*lazy).materialized.is_null() },
+        unsafe { crate::json_tape::is_lazy_array(lazy) },
         "a strided walk must not flip"
     );
     assert_eq!(reparse_materializations(), before);
@@ -611,14 +691,14 @@ fn element_identity_survives_the_scan_flip() {
     let scope = crate::gc::RuntimeHandleScope::new();
     let early = scope.root_nanbox_u64(unsafe { lazy_get(lazy, 5) }.bits());
     assert!(
-        unsafe { (*lazy).materialized.is_null() },
+        unsafe { crate::json_tape::is_lazy_array(lazy) },
         "one read must not flip"
     );
     for i in 0..n {
         unsafe { lazy_get(lazy, i as u32) };
     }
     assert!(
-        unsafe { !(*lazy).materialized.is_null() },
+        unsafe { !crate::json_tape::is_lazy_array(lazy) },
         "the scan must have flipped"
     );
     let late = unsafe { lazy_get(lazy, 5) };
@@ -628,7 +708,7 @@ fn element_identity_survives_the_scan_flip() {
         "the pre-flip element must stay identical across the flip"
     );
     // And the batch-produced elements must carry the right values.
-    let arr = unsafe { (*lazy).materialized };
+    let arr = lazy as *mut crate::array::ArrayHeader;
     assert_eq!(unsafe { (*arr).length }, n as u32);
 }
 
@@ -664,7 +744,7 @@ fn the_flip_counts_the_whole_cache_not_just_the_scanned_prefix() {
         unsafe { lazy_get(lazy, i) };
     }
     assert!(
-        unsafe { !(*lazy).materialized.is_null() },
+        unsafe { !crate::json_tape::is_lazy_array(lazy) },
         "the streak completes at index 63 and the cache is still under half"
     );
     assert_eq!(
@@ -674,7 +754,7 @@ fn the_flip_counts_the_whole_cache_not_just_the_scanned_prefix() {
     );
     // Every element still has to read back correctly, including the one that
     // was cached before the flip and patched back over the reparsed slot.
-    let arr = unsafe { (*lazy).materialized };
+    let arr = lazy as *mut crate::array::ArrayHeader;
     assert_eq!(unsafe { (*arr).length }, n as u32);
 }
 

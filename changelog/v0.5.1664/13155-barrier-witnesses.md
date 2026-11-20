@@ -1,0 +1,1 @@
+Extend the live write-barrier IR census and sabotage matrix to compact array append, family stores, and both coloured-key store arms. Track both witnesses for a shared source file and remove the stale store-IC marker binding.

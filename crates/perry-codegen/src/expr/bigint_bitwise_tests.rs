@@ -36,6 +36,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut module = Module::new(name);
     module.init.push(Stmt::Expr(Expr::Call {
+        byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
         args: params.iter().map(|_| Expr::Undefined).collect(),
         type_args: Vec::new(),
@@ -196,6 +197,25 @@ fn unproven_bitwise_operands_take_a_guarded_int32_arm() {
                 "{op:?} must mask its shift count to 5 bits:\n{ir}"
             );
         }
+        // N4: the guard says which arm is the likely one (`PERRY_COLD_PATHS`).
+        let guard = ir
+            .lines()
+            .find(|l| l.contains("label %guarded_arith.numeric"))
+            .unwrap_or_else(|| panic!("{op:?} has no guard branch:\n{ir}"));
+        let cond = guard
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .trim_end_matches(',');
+        let expected = ir.lines().any(|l| {
+            l.contains(&format!("{cond} = call i1 @llvm.expect.i1(i1 "))
+                && l.ends_with(", i1 true)")
+        });
+        assert_eq!(
+            expected,
+            crate::module::cold_paths_enabled(),
+            "{op:?} guard `{guard}` expects two Numbers exactly under the switch:\n{ir}"
+        );
     }
 }
 
