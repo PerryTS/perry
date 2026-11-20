@@ -2422,8 +2422,7 @@ const __memDispatch = {
   // `F.prototype = proto`. A class's `prototype` is read-only: the store is ignored,
   // or a TypeError in strict code.
   function_set_prototype: (fn, proto, strict) => {
-    const isClass = typeof fn === 'function' && fn[__classRefName] !== undefined;
-    if ((isClass || !__holdsProperties(fn) || !Reflect.set(fn, 'prototype', proto)) && strict) {
+    if ((__perryClassCtors.has(fn) || !__holdsProperties(fn) || !Reflect.set(fn, 'prototype', proto)) && strict) {
       throw new TypeError(`Cannot assign to read only property 'prototype' of ${typeof fn}`);
     }
     return proto;
