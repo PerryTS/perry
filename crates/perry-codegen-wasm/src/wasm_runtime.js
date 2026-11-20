@@ -2521,8 +2521,9 @@ const __memDispatch = {
     const result = fn(...closure.captures, ...padded);
     return result === undefined ? undefined : __bitsToJsValue(result);
   },
-  // `obj.name(...xs)` / `obj[key](...xs)`: dispatched by name as a call with a fixed argument list is.
-  method_call_spread: (obj, name, args) => __classDispatch(obj, name, Array.isArray(args) ? args : []),
+  // `obj.name(...xs)` / `obj[key](...xs)`: the member is read and invoked as the async
+  // path does, so an own property wins and a non-callable one throws.
+  method_call_spread: (obj, name, args) => __jsMethodInvoke(__jsMethodGet(obj, name), args),
 
   // Array higher-order methods — WASM callbacks use i64 (BigInt) params/returns.
   array_map: (arr, cb) => {
