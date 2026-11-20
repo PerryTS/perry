@@ -1691,6 +1691,17 @@ function __holdsProperties(v) {
   return v !== null && (typeof v === 'object' || typeof v === 'function');
 }
 
+// The Set/Map `for...of` cursors (see `collection_cursor_next`), by collection and
+// then by loop id. Kept beside the collection so a frozen one iterates too.
+const __collectionCursors = new WeakMap();
+let __collectionCursorSeq = 0;
+let __collectionCursorLast = 0;
+function __collectionCursorValue(coll, slot) {
+  const loops = __collectionCursors.get(coll);
+  const cur = loops && loops.get(slot);
+  return cur ? cur.value : undefined;
+}
+
 // A class used as a value (`const K2 = K`, `{ K }`): one host constructor per class,
 // so `new` on it builds what `new K()` builds — an instance (see __classInstance) run
 // through the compiled constructor. `ctorIdx` is the constructor's
@@ -2859,6 +2870,66 @@ const __memDispatch = {
   set_size: (s) => (s instanceof Set) ? s.size : 0,
   set_clear: (s) => { if (s instanceof Set) s.clear(); },
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
+  // The Set/Map `for...of` fast path steps `slot = cursor_next(coll, slot + 1, ep)`,
+  // then `ep = compaction_epoch(coll)`, and reads the entry with `*_at(coll, slot)`;
+  // -1 ends the loop. A host collection has no slots, so each loop owns a live iterator:
+  // `ep` carries its id (0 before the first step) and the slot is that same id, so a
+  // nested loop over the same collection cannot move it, and entries added or deleted
+  // mid-loop behave as in a host loop.
+  // The emitters release a loop's cursor around it (`cursor_release`): a loop that
+  // ends by `break`, `return` or `throw` still holds it, so its iterator is closed.
+  collection_cursor_next: (coll, _slot, ep) => {
+    __collectionCursorLast = 0;
+    if (!(coll instanceof Set || coll instanceof Map)) return -1;
+    let loops = __collectionCursors.get(coll);
+    if (!loops) __collectionCursors.set(coll, (loops = new Map()));
+    let id = ep;
+    let cur = loops.get(id);
+    if (!cur) {
+      id = ++__collectionCursorSeq;
+      const iter = coll[Symbol.iterator]();
+      cur = { iter, next: iter.next, value: undefined };
+      loops.set(id, cur);
+    }
+    // A step that throws ends the loop without closing the iterator, as a host loop does.
+    // User code in `next` may step another loop, so only a successful step publishes `id`.
+    try {
+      const step = Reflect.apply(cur.next, cur.iter, []);
+      if (Object(step) !== step) throw new TypeError('Iterator result is not an object');
+      if (step.done) {
+        loops.delete(id);
+        __collectionCursorLast = 0;
+        return -1;
+      }
+      cur.value = step.value;
+    } catch (error) {
+      loops.delete(id);
+      __collectionCursorLast = 0;
+      throw error;
+    }
+    __collectionCursorLast = id;
+    return id;
+  },
+  // Read right after `cursor_next`: the id of the loop it stepped.
+  collection_cursor_epoch: () => __collectionCursorLast,
+  // After a `throw` (`threw`), the body's error wins over any from closing (IteratorClose).
+  collection_cursor_release: (coll, ep, threw) => {
+    const loops = __collectionCursors.get(coll);
+    const cur = loops && loops.get(ep);
+    if (!cur) return;
+    loops.delete(ep);
+    try {
+      const close = cur.iter.return;
+      if (close == null) return;
+      const result = Reflect.apply(close, cur.iter, []);
+      if (Object(result) !== result) throw new TypeError('Iterator result is not an object');
+    } catch (error) {
+      if (!threw) throw error;
+    }
+  },
+  set_value_at: (s, slot) => __collectionCursorValue(s, slot),
+  map_entry_key_at: (m, slot) => (__collectionCursorValue(m, slot) || [])[0],
+  map_entry_value_at: (m, slot) => (__collectionCursorValue(m, slot) || [])[1],
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),

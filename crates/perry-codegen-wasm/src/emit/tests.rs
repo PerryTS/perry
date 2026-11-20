@@ -110,7 +110,9 @@ await bootPerryWasm("{b64}");
 #[test]
 fn splice_inserts_and_evaluates_item_side_effects() {
     assert_eq!(
-        run_web_source("const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"),
+        run_web_source(
+            "const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"
+        ),
         "1,1,2\n1"
     );
 }
@@ -2228,6 +2230,9 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 
 #[path = "class_eval_tests.rs"]
 mod class_eval;
+
+#[path = "collection_for_of_tests.rs"]
+mod collection_for_of;
 
 #[path = "static_method_tests.rs"]
 mod static_method;
