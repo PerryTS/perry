@@ -1,0 +1,1 @@
+- CI: every Rust job uses `.github/actions/perry-rust-cache`, with one saving job per cache family, saves that survive a failing job, a key that ignores the runner's preinstalled stable toolchain, and no sccache tarballs. PR jobs restore warm dependencies from `main` instead of compiling cold (#15106).
