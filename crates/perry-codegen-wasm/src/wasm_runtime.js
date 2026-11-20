@@ -6024,11 +6024,8 @@ function __classDispatch(objVal, mname, rawArgs) {
   // Only a null/undefined receiver throws: this function is also mem_call's fallback
   // for bridge names it does not know, where an absent method still yields undefined.
   if (objVal === null || objVal === undefined) __throwNullReceiver(objVal, mname);
-  if (typeof objVal === 'string') {
-    const fn = String.prototype[mname];
-    if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
-  } else if (typeof objVal === 'number') {
-    const fn = Number.prototype[mname];
+  if (typeof objVal !== 'object' && typeof objVal !== 'function') {
+    const fn = Object.getPrototypeOf(objVal)[mname];
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   } else if (Array.isArray(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
