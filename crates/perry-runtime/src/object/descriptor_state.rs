@@ -871,21 +871,15 @@ pub(crate) fn set_property_attrs(obj: usize, key: String, attrs: PropertyAttrs) 
     );
     note_element_install(obj, &[AttrsEdit::Data(key.as_bytes(), attrs.bits)]);
     let byte_edit = HolderEdit::new(obj);
-    let mut slot_keeps_attrs = false;
+    // A function's `prototype` slot implies its birth attributes, so the bag
+    // records nothing for them: a bag entry would shadow the slot's value.
+    // Other attributes live with the key in the bag, which the slot gives
+    // the key up to before they are recorded there.
+    let birth_attrs = attrs.bits == PropertyAttrs::new(true, false, false).bits;
+    let slot_keeps_attrs = birth_attrs && unsafe { prototype_slot_attrs(obj, key.as_bytes()) };
     if let Some(edit) = &byte_edit {
-        // Other attributes for a function's `prototype` live with its key in
-        // its bag: the slot gives the key up before they are recorded there.
-        // The birth attributes stay with a slot that holds the key, so the bag
-        // records nothing: a bag entry would shadow the slot's value.
-        if key == "prototype" {
-            if attrs.bits != PropertyAttrs::new(true, false, false).bits {
-                edit.prototype_leaves_slot();
-            } else {
-                slot_keeps_attrs = unsafe {
-                    crate::closure::is_closure_ptr(obj)
-                        && crate::closure::props::prototype_slot_holds_key(obj)
-                };
-            }
+        if key == "prototype" && !birth_attrs {
+            edit.prototype_leaves_slot();
         }
     }
     let target = HolderEdit::target_of(&byte_edit, obj);
