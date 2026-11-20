@@ -177,6 +177,7 @@ pub use char_ops::{
     js_string_end_index_to_i32, js_string_from_char_code, js_string_from_char_code_array,
     js_string_from_code_point, js_string_from_code_point_array, js_string_index_get,
     js_string_index_get_boxed, js_string_index_to_i32, js_string_to_char_array,
+    js_string_utf16_unit_at_cursor,
 };
 // The one-UTF-16-code-unit string builder `charAt` uses. `split("")` needs the
 // same constructor: both cut a string at code-unit boundaries, so both have to

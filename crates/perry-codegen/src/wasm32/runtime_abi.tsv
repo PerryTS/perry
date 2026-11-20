@@ -4198,6 +4198,7 @@ js_string_to_well_formed	ptr	ptr
 js_string_trim	ptr	ptr
 js_string_trim_end	ptr	ptr
 js_string_trim_start	ptr	ptr
+js_string_utf16_unit_at_cursor	i32s	ptr,i32s,ptr
 js_string_warn	void	ptr
 js_structured_clone	f64	f64
 js_structured_clone_with_options	f64	f64,f64
