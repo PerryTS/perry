@@ -128,7 +128,8 @@ not a larger timeout. Keep
 `RUST_TEST_THREADS=1` for `perry-runtime`: its tests share process-global GC,
 arena, timer, and notification state. Keep `CARGO_BUILD_JOBS=1` for the
 runtime-linked test binaries until runner memory measurements support increasing
-it. Mr Boxington-backed release jobs use mbx's default cache policy; local `make build-dev` and `make build-prod` leave
+it. Mr Boxington-backed release jobs use mbx's default cache policy; local
+`make build-dev` and `make build-prod` leave
 `MBX_INCREMENTAL` unset so mbx can keep private incremental state for edited
 crates while sharing unchanged compilations.
 
