@@ -1341,92 +1341,6 @@ console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " +
     );
 }
 
-// `new` on a class value hands its arguments to the compiled constructor as Perry
-// values: a closure argument stays a closure the array bridges can call.
-#[test]
-fn a_class_value_constructor_receives_a_closure_argument() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
-const MM: any = M;
-console.log(new MM((n: number) => n * 10).out.join(","));
-"#
-        ),
-        "10,20"
-    );
-}
-
-// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
-#[test]
-fn host_instanceof_on_a_class_value_walks_the_class_chain() {
-    assert_eq!(
-        run_web_source_then(
-            r#"
-class P { }
-class Q extends P { }
-const refs: any[] = [P, Q];
-console.log(refs.length);
-"#,
-            r#"
-const P = __classRef("P", -1), Q = __classRef("Q", -1);
-console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
-  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
-"#
-        ),
-        "2\ntrue true false false false"
-    );
-}
-
-// A class value's static fields are its own enumerable keys, as in Node: declared ones,
-// one a subclass declares (not its parent's), and one assigned later through the value.
-// A field replaces a static method of its name; a computed member's hidden key slot is
-// not a key.
-#[test]
-fn a_class_values_static_fields_are_its_own_keys() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class A { static x = 1; static y = "s"; static m() { return 1; } z = 3; }
-class B extends A { static w = 2; }
-const C = class { static k = 5; };
-const K: any = A;
-const D: any = class {};
-D.dyn = 7;
-console.log(JSON.stringify(Object.keys(A)) + " " + JSON.stringify(Object.keys(B)) + " " + JSON.stringify(Object.keys(C)));
-console.log(JSON.stringify(Object.entries(K)) + " " + JSON.stringify(Object.keys(D)));
-console.log(("x" in K) + " " + Object.prototype.hasOwnProperty.call(K, "y"));
-K.x = 10;
-console.log(A.x + " " + K.x + " " + JSON.stringify(Object.keys(new A())));
-class I { ["k" + 1] = 1; static t = 3; }
-console.log(JSON.stringify(Object.keys(I)) + " " + JSON.stringify(Object.keys(new I())));
-const mk = "m";
-class M { static m() { return 0; } static [mk] = 1; }
-console.log(JSON.stringify(Object.keys(M)) + " " + (M as any).m);
-"#
-        ),
-        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]\n[\"t\"] [\"k1\"]\n[\"m\"] 1"
-    );
-}
-
-// `new` on a class value yields what [[Construct]] yields: the instance, unless the
-// constructor returns an object. A bare `return;` keeps the initialized instance.
-#[test]
-fn a_class_value_constructor_returning_no_object_yields_the_instance() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
-class O { v = 1; constructor() { return { v: 5 } as any; } }
-const EE: any = E, OO: any = O;
-const e = new EE(1);
-console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
-"#
-        ),
-        "1 1 true 2 5 false"
-    );
-}
-
 // `fetchWithAuth` / `fetchPostWithAuth` build their headers object between
 // evaluating their arguments; the bridge must receive each argument in its own
 // slot, evaluated in source order, and the module must validate at all.
@@ -1922,27 +1836,6 @@ try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name
 }
 
 #[test]
-fn a_class_value_holds_static_side_properties_and_a_prototype() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class T {}
-(T as any).key = "class";
-console.log((T as any).key);
-const k = "dyn";
-(T as any)[k] = 2;
-console.log((T as any)[k]);
-const base = { tag: "base" };
-class U {}
-Object.setPrototypeOf(U, base);
-console.log((U as any).tag);
-"#
-        ),
-        "class\n2\nbase"
-    );
-}
-
-#[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(
         run_web_source(
@@ -2343,6 +2236,9 @@ mod collection_for_of;
 
 #[path = "static_method_tests.rs"]
 mod static_method;
+
+#[path = "class_value_tests.rs"]
+mod class_value;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {

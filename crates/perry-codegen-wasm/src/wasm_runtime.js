@@ -1664,6 +1664,8 @@ const classStaticTable = {};
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
+// A user parent class's constructor slot (`class_set_parent`), for its class value.
+const classCtorSlotTable = Object.create(null);
 
 // Core bridge dispatch table — maps bridge function names to their implementations.
 // Args are decoded from NaN-boxed BigInt bits to plain JS values by __bitsToJsValue before dispatch.
@@ -1709,15 +1711,30 @@ function __collectionCursorValue(coll, slot) {
 const __classRefs = new Map();
 const __classRefName = Symbol('perry.classRef');
 const __perryClassCtors = new WeakSet();
+// The class a class value names. Own only: a subclass evaluation reaches its
+// parent's name through [[Prototype]] (see __linkClassParent) and is not that class.
+function __classNameOfValue(fn) {
+  return Object.prototype.hasOwnProperty.call(fn, __classRefName) ? fn[__classRefName] : undefined;
+}
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
   if (!ctor) {
     ctor = __classCtor(className, ctorIdx, undefined);
+    __linkClassParent(className, ctor);
     __classRefs.set(className, ctor);
     Object.defineProperty(ctor, __classRefName, { value: className });
     for (const key of Reflect.ownKeys(classStaticTable[className] || {})) __classExposeStatic(className, key);
   }
   return ctor;
+}
+
+// `class B extends A` with a user class A: B's class value has A's as its
+// [[Prototype]], so it inherits A's static side.
+function __linkClassParent(className, ctor) {
+  const parent = classParentTable[className];
+  if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
+    Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
+  }
 }
 
 // A static field lives in `classStaticTable`. The class value has it as an own
@@ -1734,7 +1751,12 @@ function __classExposeStatic(className, key) {
   if (own && (own.enumerable || !own.configurable)) return;
   Object.defineProperty(ctor, key, {
     get() { return classStaticTable[className][key]; },
-    set(value) { classStaticTable[className][key] = value; },
+    // Reached through a subclass's [[Prototype]], an assignment gives the subclass
+    // its own field, as with an inherited data property.
+    set(value) {
+      if (this === ctor) classStaticTable[className][key] = value;
+      else Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true });
+    },
     enumerable: true,
     configurable: true,
   });
@@ -1824,6 +1846,7 @@ function __classTemplate(className) {
 }
 function __classEvaluate(className, ctorIdx, caps) {
   const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+  __linkClassParent(className, ctor);
   const t = __classTemplate(className);
   if (t.first === undefined) t.first = ctor;
   return ctor;
@@ -2650,7 +2673,7 @@ const __memDispatch = {
     const mname = stringTable[methodNameId | 0];
     // A static member of a class value.
     if (typeof obj === 'function') {
-      const member = __classStaticGet(obj[__classRefName], mname, obj, obj);
+      const member = __classStaticGet(__classNameOfValue(obj), mname, obj, obj);
       if (typeof member === 'function') return __callHostFunction(member, Array.isArray(argsArr) ? argsArr : [], obj);
     }
     if (obj && __classOf(obj)) {
@@ -2722,7 +2745,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
-    if (typeof obj === 'function') return __classStaticGet(obj[__classRefName], String(name), obj, obj);
+    if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt)
@@ -2752,7 +2775,7 @@ const __memDispatch = {
   class_set_field: (obj, name, value) => {
     if (typeof obj === 'function') {
       const fname = String(name);
-      const cls = obj[__classRefName];
+      const cls = __classNameOfValue(obj);
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
       if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) {
         statics[fname] = value;
@@ -2802,7 +2825,10 @@ const __memDispatch = {
     const ctor = globalThis[target];
     return typeof ctor === 'function' && obj instanceof ctor ? 1 : 0;
   },
-  class_set_parent: (childId, parentId) => { classParentTable[String(childId)] = String(parentId); },
+  class_set_parent: (childId, parentId, parentCtorIdx) => {
+    classParentTable[String(childId)] = String(parentId);
+    if (parentCtorIdx !== undefined) classCtorSlotTable[String(parentId)] = parentCtorIdx | 0;
+  },
   // `super[key]` in an instance method of `cls`, with the receiver as `this`.
   class_super_get: (obj, cls, mname) => __superGet({ __classHome__: String(cls), isStatic: false }, mname, obj),
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
@@ -6016,7 +6042,7 @@ function __classDispatch(objVal, mname, rawArgs) {
     try {
       // A class value's statics include its chain's (see __classStaticGet).
       const method = typeof objVal === 'function'
-        ? __classStaticGet(objVal[__classRefName], mname, objVal, objVal)
+        ? __classStaticGet(__classNameOfValue(objVal), mname, objVal, objVal)
         : objVal[mname];
       if (typeof method === 'function') return __callHostFunction(method, rawArgs, objVal);
       if (__isPerryClosure(method)) return __callClosureMethod(method, objVal, rawArgs);
