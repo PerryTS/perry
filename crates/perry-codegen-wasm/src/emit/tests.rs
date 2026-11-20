@@ -1206,6 +1206,30 @@ inAsync().then((v) => console.log(v));
     );
 }
 
+// In an async body `delete` removes the property, throws on a nullish receiver, and
+// still evaluates an operand that is not a property reference.
+#[test]
+fn async_delete_reaches_the_property_reference() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let n = 0;
+function bump() { n++; return n; }
+async function del() {
+  const o: any = { a: 1, b: 2 }; const k = "b";
+  delete o.a; delete o[k];
+  let caught = "no";
+  try { const z: any = null; delete z.x; } catch (e) { caught = "yes"; }
+  delete (bump() as any);
+  return JSON.stringify(o) + " " + caught + " " + n;
+}
+del().then((v) => console.log(v));
+"#
+        ),
+        "{} yes 1"
+    );
+}
+
 // `.message` is an ordinary property read: only an Error's message comes from the
 // Error itself.
 #[test]
