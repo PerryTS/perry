@@ -402,6 +402,9 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
 /// field[1] = registry `id`. NOT cached (every `new` must be a fresh instance).
 unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     crate::object::install_native_module_vtable();
+    // `new v8.Serializer()` lowers straight to its factory without reading the
+    // namespace, so arm the v8 attach hook before the constructor below is minted.
+    crate::object::nm_register_v8_constructor_hooks();
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = crate::object::bound_native_callable_export_value(
         "v8",
