@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn filehandle_fd_moves_with_the_owner_metadata() {
-    check_owned_fd(false);
+    check_owned_fd();
 }
-#[test]
-#[ignore = "negative control: erase the moved FileHandle's private fd"]
-fn negative_control_objtables_filehandle_fd() {
-    check_owned_fd(true);
-}
-fn check_owned_fd(erase: bool) {
+fn check_owned_fd() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::object::js_object_alloc(crate::fs::CLASS_ID_FS_FILEHANDLE, 0);
@@ -22,11 +17,6 @@ fn check_owned_fd(erase: bool) {
     let moved =
         (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
     assert_ne!(owner, moved);
-    if erase {
-        unsafe {
-            (*(*moved).meta).native_state = 0;
-        }
-    }
     assert_eq!(
         crate::fs::filehandle_object_fd(f64::from_bits(js_shadow_slot_get(0))),
         Some(4242)

@@ -212,18 +212,6 @@ fn a_changed_data_word_naming_a_cell_is_a_root_word() {
     unsafe { probe.write_volatile(0x1234_5678) };
 }
 
-/// The dump tool: `PERRY_SNAP_IMAGE_DUMP=<file> cargo test -- --ignored
-/// print_image_file --nocapture` prints the summary of an image file.
-#[test]
-#[ignore]
-fn print_image_file() {
-    let Some(p) = std::env::var_os("PERRY_SNAP_IMAGE_DUMP") else {
-        return;
-    };
-    let img = decode(&std::fs::read(p).unwrap()).unwrap();
-    println!("\n{}", dump(&img));
-}
-
 fn probe_where() -> Where {
     Where {
         cells: Vec::new(),

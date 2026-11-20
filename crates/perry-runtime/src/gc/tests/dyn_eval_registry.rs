@@ -37,14 +37,9 @@ fn function_owner(old: bool) -> (usize, f64) {
 }
 #[test]
 fn interpreted_function_cell_survives_copying_owner_and_dies_with_owner() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: remove the closure's parsed-function capture"]
-fn negative_control_objtables_dyn_eval_owners() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -54,13 +49,6 @@ fn check(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as *mut crate::closure::ClosureHeader;
     assert_ne!(moved as usize, live);
-    if erase {
-        crate::closure::js_closure_set_capture_f64(
-            moved,
-            0,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-    }
     js_gc_collect();
     assert!(
         weak.upgrade().is_some(),

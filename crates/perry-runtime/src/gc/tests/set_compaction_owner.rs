@@ -4,16 +4,10 @@ use super::support::*;
 
 #[test]
 fn set_compaction_history_survives_owner_evacuation() {
-    check_objtables_set_cursor(false);
+    check_objtables_set_cursor();
 }
 
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_set_cursor() {
-    check_objtables_set_cursor(true);
-}
-
-fn check_objtables_set_cursor(erase_invariant: bool) {
+fn check_objtables_set_cursor() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -32,11 +26,6 @@ fn check_objtables_set_cursor(erase_invariant: bool) {
     assert!(copying_minor_cycles() > cycles);
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as *mut crate::set::SetHeader;
     assert_ne!(moved, set);
-    if erase_invariant {
-        unsafe {
-            crate::set::test_remove_compaction_history(moved);
-        }
-    }
     let boxed = f64::from_bits(js_shadow_slot_get(0));
     assert_eq!(
         crate::set::js_set_cursor_next(boxed, 5.0, epoch as f64),

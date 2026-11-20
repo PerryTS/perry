@@ -6,7 +6,7 @@
 use super::*;
 
 /// Intrinsics that evaluate every argument once, in order: one bridge each.
-const EAGER: &[&str] = &[
+pub(in crate::emit) const EAGER: &[&str] = &[
     "arrayRecordNeedsIterator",
     "arrayRecordLength",
     "arrayRecordLiteral",

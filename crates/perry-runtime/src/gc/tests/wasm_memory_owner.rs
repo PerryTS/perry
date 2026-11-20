@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn wasm_memory_binding_follows_moving_wrapper_and_is_collectible() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: erase the context's published-buffer edge"]
-fn negative_control_objtables_wasm_memory_bindings() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -39,12 +34,6 @@ fn check(erase: bool) {
     let context = crate::wasm_instance_state::from_owner(moved);
     let span = crate::wasm_instance_state::memory_span(context).unwrap();
     assert_eq!((span.data, span.len, span.rebound), (37, 5, true));
-    if erase {
-        crate::wasm_instance_state::set_buffer(
-            context,
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-        );
-    }
     js_gc_collect();
     assert_eq!(
         crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1))).to_bits(),

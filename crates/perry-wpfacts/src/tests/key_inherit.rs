@@ -99,19 +99,3 @@ fn k3_control_json_key_admits_members() {
     let r = recv(&pf, "x");
     assert!(r.contains("Array.prototype"), "{r}");
 }
-
-#[test]
-fn k2_diag_variants() {
-    for src in [
-        "const o = { a: 1, toString: 2 };\nconst o2: any = { a: { x: 1 } };\nfor (const p in o) { const v = o2[p]; console.log(v.x); }\n",
-        "const o = { a: 1, c: 2 };\nconst o2: any = { a: { x: 1 } };\nfor (const p in o) { const v = o2[p]; console.log(v.x); }\n",
-        "const o = { a: 1, toString: 2 };\nconst o2: any = { a: { x: 1 } };\nfor (const p in o) { const v = o2[p]; console.log(typeof v, v.y); }\n",
-        "const o2: any = { a: { x: 1 } };\nconst k: any = Math.random() < 0.5 ? \"a\" : \"toString\";\nconst v = o2[k]; console.log(v.x);\n",
-    ] {
-        let pf = one(src);
-        for key in ["x", "y"] {
-            let v: Vec<String> = pf.sites.iter().filter(|s| s.key == key).map(|s| format!("{:?} {:?}", s.verdict, s.receivers)).collect();
-            eprintln!("KDIAG {key}: {v:?}");
-        }
-    }
-}

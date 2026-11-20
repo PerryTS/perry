@@ -820,43 +820,74 @@ mod tests {
         }
     }
 
-    /// A streamed transfer must not be fetched twice — once to read its status
-    /// and once to stream it. The first shipped version did exactly that, which
-    /// doubled the transfer AND measured the discarded copy against `max_body`;
-    /// for the one caller (a release artifact of tens of megabytes against a
-    /// 32 MiB default) that is a refusal, not an inefficiency.
-    ///
-    /// The property is checked where it is decidable without a socket: `run`'s
-    /// loop issues exactly one `one_hop` per redirect hop and returns that
-    /// hop's response, so the source must contain no second `one_hop` call
-    /// guarded on the sink.
-    #[test]
-    fn a_streamed_request_issues_one_hop_per_redirect_and_no_more() {
-        let source = include_str!("http.rs");
-        let body = source
-            .split("fn run(")
-            .nth(1)
-            .expect("run() is in this file");
-        let body = body.split("\nfn ").next().expect("run() has an end");
-        assert_eq!(
-            body.matches("one_hop(").count(),
-            1,
-            "run() must call one_hop exactly once per iteration; a second call \
-             is the re-issue that fetched the final response twice"
-        );
-        assert!(
-            body.contains("sink.as_deref_mut()"),
-            "the sink must ride along on every hop, not be attached to a re-issue"
-        );
+    /// Serve every connection with `respond(path)` and record the paths
+    /// requested, in order. One response per connection, as the client expects.
+    fn serve(
+        respond: fn(&str) -> String,
+    ) -> (String, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let paths = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = paths.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let mut stream = stream.unwrap();
+                let mut head = Vec::new();
+                let mut byte = [0u8];
+                while !head.ends_with(b"\r\n\r\n") && stream.read(&mut byte).unwrap() == 1 {
+                    head.push(byte[0]);
+                }
+                let line = String::from_utf8_lossy(&head).into_owned();
+                let path = line.split(' ').nth(1).unwrap_or_default().to_string();
+                seen.lock().unwrap().push(path.clone());
+                stream.write_all(respond(&path).as_bytes()).unwrap();
+            }
+        });
+        (base, paths)
     }
 
+    fn local_options() -> Options {
+        Options {
+            timeout: Duration::from_secs(10),
+            use_proxy_environment: false,
+            ..Options::default()
+        }
+    }
+
+    fn redirect_to(location: &str) -> String {
+        format!("HTTP/1.1 302 Found\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n")
+    }
+
+    fn reply(status: &str, body: &str) -> String {
+        format!(
+            "HTTP/1.1 {status}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+            body.len()
+        )
+    }
+
+    /// A streamed transfer must not be fetched twice — once to read its status
+    /// and once to stream it: that doubles the transfer AND measures the
+    /// discarded copy against `max_body`, which for the one caller (a release
+    /// artifact of tens of megabytes) is a refusal.
     #[test]
-    fn a_sink_is_offered_a_head_and_its_chunks() {
+    fn a_streamed_redirect_chain_fetches_each_hop_once() {
+        let (base, paths) = serve(|path| match path {
+            "/start" => redirect_to("/final"),
+            _ => reply("200 OK", "hello"),
+        });
         let mut sink = RecordingSink::default();
-        sink.on_head(200, Some(5)).unwrap();
-        sink.on_chunk(b"hello").unwrap();
+        let response = execute_streaming(
+            &local_options(),
+            Request::get(&format!("{base}/start")),
+            &mut sink,
+        )
+        .unwrap();
+        assert_eq!(*paths.lock().unwrap(), ["/start", "/final"]);
         assert_eq!(sink.heads, vec![(200, Some(5))]);
         assert_eq!(sink.bytes, b"hello");
+        assert_eq!(response.status, 200);
+        assert!(response.body.is_empty());
     }
 
     /// `Content-Encoding` is a LIST, and `turnloop_http::compression` matches a
@@ -918,40 +949,31 @@ mod tests {
     }
 
     /// reqwest's default redirect policy was `Policy::limited(10)` and every
-    /// CLI call site took the default; turnloop's constant is 20, so reading it
-    /// would have widened the ceiling silently.
+    /// CLI call site took the default; the chain gives up after ten redirects.
     #[test]
-    fn the_redirect_ceiling_matches_the_one_reqwest_used() {
-        let source = include_str!("http.rs");
-        let body = source
-            .split("fn run(")
-            .nth(1)
-            .expect("run() is in this file");
-        let body = body.split("\nfn ").next().expect("run() has an end");
-        assert_ne!(
-            10,
-            turnloop_http::client::DEFAULT_MAX_REDIRECTS,
-            "turnloop's default is now 10 as well, so this test no longer \
-             discriminates between the two — delete it or re-point it"
-        );
-        assert!(
-            body.contains("let max_redirects = 10;"),
-            "the ceiling must stay at reqwest's 10, not turnloop's DEFAULT_MAX_REDIRECTS"
-        );
+    fn a_redirect_chain_is_followed_ten_times_and_no_more() {
+        let (base, paths) = serve(|_| redirect_to("/loop"));
+        assert!(execute(&local_options(), Request::get(&format!("{base}/loop"))).is_err());
+        assert_eq!(paths.lock().unwrap().len(), 11);
     }
 
-    /// A 4xx body must not reach the sink: `reqwest::send()` returned on the
-    /// head, so `error_for_status()` always ran before a byte was copied, and
-    /// the one caller writes into a file it then hashes against a signed
-    /// manifest.
+    /// A 4xx body must not reach the sink: the one caller writes into a file it
+    /// then hashes against a signed manifest, so `error_for_status()` has to
+    /// see the error page before a byte is written.
     #[test]
     fn only_a_2xx_response_streams_to_the_sink() {
-        let source = include_str!("http.rs");
-        assert!(
-            source.contains("streaming = sink.is_some() && (200..300).contains(&status);"),
-            "the sink gate must be 2xx-only; a 3xx belongs to a discarded hop and a \
-             4xx/5xx is an error page error_for_status() has not seen yet"
-        );
+        let (base, _) = serve(|_| reply("404 Not Found", "nope"));
+        let mut sink = RecordingSink::default();
+        let response = execute_streaming(
+            &local_options(),
+            Request::get(&format!("{base}/missing")),
+            &mut sink,
+        )
+        .unwrap();
+        assert!(sink.heads.is_empty());
+        assert!(sink.bytes.is_empty());
+        assert_eq!(response.status, 404);
+        assert_eq!(response.body, b"nope");
     }
 
     #[test]

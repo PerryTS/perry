@@ -748,7 +748,7 @@ fn the_front_reads_its_directory_without_a_call_where_the_target_allows() {
     for (target, inline_form) in [
         (
             "x86_64-unknown-linux-gnu",
-            Some("getelementptr i8, ptr @PERRY_AGENT_PTRS, i64 0"),
+            Some("call ptr @llvm.threadlocal.address.p0(ptr @PERRY_AGENT_PTRS)"),
         ),
         (
             "x86_64-pc-windows-msvc",

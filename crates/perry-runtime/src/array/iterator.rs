@@ -1049,6 +1049,23 @@ fn spread_values_into(
         );
     }
 
+    // A compiled class instance whose `@@iterator` the ordinary [[Get]]
+    // finds as a generator function on its declared prototype chain
+    // (`class_instance_generator_symbol_method`: no own key, no recorded
+    // prototype, a data property): GetIterator is that method, so no probe
+    // below can claim the operand: each one serves a builtin receiver or
+    // defers to a user `@@iterator` member, which this is.
+    let iter_sym = crate::symbol::well_known_symbol("iterator");
+    if !iter_sym.is_null() {
+        let sym = f64::from_bits(crate::value::JSValue::pointer(iter_sym as *const u8).bits());
+        if let Some(method) = unsafe {
+            crate::symbol::class_instance_generator_symbol_method(value.get_nanbox_f64(), sym)
+        } {
+            let method_h = scope.root_nanbox_f64(method);
+            return spread_through_iterator_method(value, &method_h, dest);
+        }
+    }
+
     // #7542: `Array.prototype[Symbol.iterator] = fn` must drive the spread, as
     // it already drives `for…of` over a literal and destructuring.
     //
@@ -1264,69 +1281,7 @@ fn spread_values_into(
         // `clone_closure_rebind_this` (an allocation) and the factory call.
         let method_h = scope.root_nanbox_f64(method);
         if method_h.get_nanbox_f64().to_bits() != crate::value::TAG_UNDEFINED {
-            if !is_callable_value(method_h.get_nanbox_f64()) {
-                throw_iterator_method_not_callable();
-            }
-            let rebound = crate::closure::clone_closure_rebind_this(
-                method_h.get_nanbox_u64(),
-                value.get_nanbox_f64(),
-            );
-            let rebound_h = scope.root_nanbox_u64(rebound);
-            if js_nanbox_get_pointer(rebound_h.get_nanbox_f64()) == 0 {
-                throw_iterator_method_not_callable();
-            }
-            // Spec `GetIterator(obj)` → `Call(method, obj)`: the
-            // `[Symbol.iterator]()` factory runs with `this === obj`. A canonical
-            // bound class method (#5128's `@@iterator` wrapper) takes its
-            // receiver from the call, so pass it — mirroring `js_get_iterator`.
-            // Without it the wrapper saw a stale `this` and the generator
-            // yielded nothing (empty spread).
-            // These roots belong to this frame, so the trap pad's restore
-            // leaves them intact and reading them here is sound. Runs under
-            // the trap shim (`exception::trap`); the rethrow below runs after
-            // the trap returned, so it targets the enclosing handler.
-            let outcome = crate::exception::trap(|| {
-                crate::closure::js_closure_call0(
-                    js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
-                        as *const crate::closure::ClosureHeader,
-                    crate::closure::JsThis::from_f64(value.get_nanbox_f64()),
-                )
-            });
-            let iter = match outcome {
-                Some(iter) => iter,
-                None => {
-                    // Factory threw: re-propagate to the enclosing handler.
-                    let exc = crate::exception::pending_exception();
-                    crate::exception::js_clear_exception();
-                    crate::exception::rethrow_caught(exc)
-                }
-            };
-            let iter_h = scope.root_nanbox_f64(iter);
-            if crate::array::js_array_is_array(iter_h.get_nanbox_f64()).to_bits()
-                == crate::value::TAG_TRUE
-            {
-                return (
-                    js_iterator_to_array(crate::array::array_values_iter(iter_h.get_nanbox_f64())),
-                    false,
-                );
-            }
-            if !object_like_iterator_result(iter_h.get_nanbox_f64()) {
-                let msg = b"Result of the Symbol.iterator method is not an object";
-                let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-                crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
-            }
-            // The operand's own protocol: drained onto the spread's array
-            // when there is one (no second array to copy from).
-            if let Some(dest) = dest {
-                return (
-                    drain_iterator_into(
-                        dest.get_raw_mut_ptr::<ArrayHeader>(),
-                        iter_h.get_nanbox_f64(),
-                    ),
-                    true,
-                );
-            }
-            return (js_iterator_to_array(iter_h.get_nanbox_f64()), false);
+            return spread_through_iterator_method(value, &method_h, dest);
         }
     }
 
@@ -1340,6 +1295,81 @@ fn spread_values_into(
         return (js_iterator_to_array(value.get_nanbox_f64()), false);
     }
     throw_not_iterable(value.get_nanbox_f64());
+}
+
+/// The rest of GetIterator once the operand's `@@iterator` is `method_h`
+/// (not undefined): IsCallable, `Call(method, value)`, the result checked,
+/// then drained onto `dest` when there is one (`(dest's head, true)`), else
+/// into a fresh array.
+fn spread_through_iterator_method(
+    value: &crate::gc::RuntimeHandle<'_>,
+    method_h: &crate::gc::RuntimeHandle<'_>,
+    dest: Option<&crate::gc::RuntimeHandle<'_>>,
+) -> (*mut ArrayHeader, bool) {
+    use crate::value::js_nanbox_get_pointer;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    if !is_callable_value(method_h.get_nanbox_f64()) {
+        throw_iterator_method_not_callable();
+    }
+    let rebound = crate::closure::clone_closure_rebind_this(
+        method_h.get_nanbox_u64(),
+        value.get_nanbox_f64(),
+    );
+    let rebound_h = scope.root_nanbox_u64(rebound);
+    if js_nanbox_get_pointer(rebound_h.get_nanbox_f64()) == 0 {
+        throw_iterator_method_not_callable();
+    }
+    // Spec `GetIterator(obj)` → `Call(method, obj)`: the
+    // `[Symbol.iterator]()` factory runs with `this === obj`. A canonical
+    // bound class method (#5128's `@@iterator` wrapper) takes its
+    // receiver from the call, so pass it — mirroring `js_get_iterator`.
+    // Without it the wrapper saw a stale `this` and the generator
+    // yielded nothing (empty spread).
+    // These roots belong to this frame, so the trap pad's restore
+    // leaves them intact and reading them here is sound. Runs under
+    // the trap shim (`exception::trap`); the rethrow below runs after
+    // the trap returned, so it targets the enclosing handler.
+    let outcome = crate::exception::trap(|| {
+        crate::closure::js_closure_call0(
+            js_nanbox_get_pointer(rebound_h.get_nanbox_f64())
+                as *const crate::closure::ClosureHeader,
+            crate::closure::JsThis::from_f64(value.get_nanbox_f64()),
+        )
+    });
+    let iter = match outcome {
+        Some(iter) => iter,
+        None => {
+            // Factory threw: re-propagate to the enclosing handler.
+            let exc = crate::exception::pending_exception();
+            crate::exception::js_clear_exception();
+            crate::exception::rethrow_caught(exc)
+        }
+    };
+    let iter_h = scope.root_nanbox_f64(iter);
+    if crate::array::js_array_is_array(iter_h.get_nanbox_f64()).to_bits() == crate::value::TAG_TRUE
+    {
+        return (
+            js_iterator_to_array(crate::array::array_values_iter(iter_h.get_nanbox_f64())),
+            false,
+        );
+    }
+    if !object_like_iterator_result(iter_h.get_nanbox_f64()) {
+        let msg = b"Result of the Symbol.iterator method is not an object";
+        let msg_str = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_str));
+    }
+    // The operand's own protocol: drained onto the spread's array
+    // when there is one (no second array to copy from).
+    if let Some(dest) = dest {
+        return (
+            drain_iterator_into(
+                dest.get_raw_mut_ptr::<ArrayHeader>(),
+                iter_h.get_nanbox_f64(),
+            ),
+            true,
+        );
+    }
+    (js_iterator_to_array(iter_h.get_nanbox_f64()), false)
 }
 
 // This helper runs the user-observable iterator protocol and can therefore

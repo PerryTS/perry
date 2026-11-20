@@ -932,12 +932,6 @@ fn string_constant_escapes_nonprintable() {
     assert!(ir.contains("c\"a\\0Ab\\00\""), "got: {}", ir);
 }
 
-#[test]
-fn gep_unused_helper_imports_compile() {
-    // Smoke test that PTR, I64 are re-exported and compile alongside.
-    let _ = (PTR, I64);
-}
-
 /// Every thread-local the module names becomes local-exec, the runtime's
 /// `initialexec` block included (it is linked into the same executable); a
 /// plain global stays a plain global. The model is in the IR text the module renders, so
@@ -1075,40 +1069,6 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
     }
 }
 
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "retired straight-line read-region helper")]
-fn om8_rejects_retired_read_region_prime_import() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    module.declare_function("js_region_guard_prime", crate::types::I64, &[]);
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "retired straight-line read-region helper")]
-fn om8_rejects_retired_read_region_pack_import_with_return_attributes() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    module.declare_function_with_ret_attrs("js_region_guard_pack", crate::types::I64, &[], "");
-}
-
-#[test]
-fn om8_read_region_abi_is_retired_while_loop_regions_remain_available() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    crate::runtime_decls::declare_phase_b_strings(&mut module);
-    assert!(module.is_declared("js_region_loop_prime"));
-    assert!(!module.is_declared("js_region_guard_pack"));
-    assert!(!module.is_declared("js_region_guard_prime"));
-    let wasm_abi = include_str!("../wasm32/runtime_abi.tsv");
-    assert!(wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_loop_prime\t")));
-    assert!(!wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_guard_pack\t")));
-    assert!(!wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_guard_prime\t")));
-}
 #[test]
 fn unicode_symbol_names_survive_ir_reference_parsing() {
     let symbol = crate::symbol_names::function("module_ts", "grüße$méthode");

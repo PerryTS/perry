@@ -43,19 +43,6 @@ fn witness(s: &str) -> (bool, String) {
 }
 
 #[test]
-fn option_name_merge_report() {
-    for (tag, n, tail) in [
-        ("n3", 3, "console.log(`${result}`);"),
-        ("n12", 12, "console.log(`${result}`);"),
-        ("n12-noprim", 12, ""),
-    ] {
-        let (ok, d) = witness(&src(n, tail));
-        let esc: Vec<&str> = d.lines().filter(|l| l.contains("escape")).take(8).collect();
-        eprintln!("SEED2 {tag}: facts_kept={ok}\n  {}", esc.join("\n  "));
-    }
-}
-
-#[test]
 fn constant_option_names_past_eight_store_named_slots() {
     // Control within the old bound, then tsc's case past it.
     for n in [3, 12, 40] {

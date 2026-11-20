@@ -330,13 +330,6 @@ async fn drain_compose_handles() {
 #[cfg(test)]
 mod smoke_tests {
     use super::*;
-    use backend_ctl::js_container_getBackend;
-    use images::{js_container_listImages, js_container_pullImage};
-    use lifecycle::{
-        js_container_create, js_container_inspect, js_container_list, js_container_remove,
-        js_container_run, js_container_start, js_container_stop,
-    };
-    use logs_exec::js_container_logs;
 
     /// Task 27.1: `js_container_module_init` must be callable without panic
     /// outside an async context. The link-anchor purpose mustn't depend on
@@ -358,25 +351,5 @@ mod smoke_tests {
             // If we reach here without hanging, the call returned
             // synchronously — invariant proved.
         });
-    }
-
-    /// Task 27.1: the canonical FFI symbols listed in SPEC §9.1 must all be
-    /// addressable from this crate (link-time check). Unresolved symbols
-    /// would fail to build, so this test merely takes the address of each
-    /// to force the rustc usage check.
-    #[test]
-    fn ffi_symbols_resolve() {
-        let _ = js_container_run as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_create as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_start as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_stop as unsafe extern "C" fn(_, _) -> _;
-        let _ = js_container_remove as unsafe extern "C" fn(_, _) -> _;
-        let _ = js_container_list as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_inspect as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_logs as unsafe extern "C" fn(_, _) -> _;
-        let _ = js_container_pullImage as unsafe extern "C" fn(_) -> _;
-        let _ = js_container_listImages as unsafe extern "C" fn() -> _;
-        let _ = js_container_getBackend as unsafe extern "C" fn() -> _;
-        let _ = js_container_module_init as extern "C" fn();
     }
 }

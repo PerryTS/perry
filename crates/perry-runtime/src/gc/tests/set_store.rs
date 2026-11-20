@@ -4,16 +4,10 @@ use super::support::*;
 
 #[test]
 fn set_owned_store_retains_values_after_moving_owner() {
-    owned_edge(false);
+    owned_edge();
 }
 
-#[test]
-#[ignore = "negative control: erase the Set's sole owning store edge"]
-fn negative_control_objtables_set_registry() {
-    owned_edge(true);
-}
-
-fn owned_edge(erase: bool) {
+fn owned_edge() {
     let _guard = CopyingNurseryTestGuard::new(3);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -39,12 +33,6 @@ fn owned_edge(erase: bool) {
         "the store moves too"
     );
     assert!(crate::set::is_registered_set(moved as usize));
-    if erase {
-        // GC_STORE_AUDIT(TEST): intentionally delete the edge for this control.
-        unsafe {
-            std::ptr::write((moved as *mut u8).add(32).cast::<usize>(), 0);
-        }
-    }
     js_gc_collect();
     let retained = crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1)));
     assert_ne!(

@@ -41,8 +41,6 @@ crates/perry-runtime/src/typed_feedback.rs	2450
 crates/perry-runtime/src/snap_census/runner.rs	4942
 # Native ABI proof cases; test organization is a separate follow-up.
 crates/perry-codegen/tests/native_proof_regressions.rs	15875
-# Representation feedback regression cases; test organization is a separate follow-up.
-crates/perry-runtime/src/typed_feedback/tests.rs	2300
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.

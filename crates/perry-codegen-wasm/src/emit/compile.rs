@@ -1584,53 +1584,62 @@ impl WasmModuleEmitter {
                         .unwrap_or(0);
                     let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
 
-                    // Register instance methods in classMethodTable (including getters/setters)
-                    if let Some(methods) = self.class_method_map.get(&class.name) {
-                        for (method_name, &func_idx) in methods {
-                            let real_name = method_name.as_str();
-                            let method_name_id =
-                                self.string_map.get(real_name).copied().unwrap_or(0);
-                            let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
-                            let table_idx = self
-                                .func_to_table_idx
-                                .get(&func_idx)
-                                .copied()
-                                .unwrap_or(func_idx);
-                            // Store args to memory for mem_call (Firefox NaN-safe: use I64Store)
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::I64Const(class_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            func.instruction(&Instruction::I32Const(0xFF08));
-                            func.instruction(&Instruction::I64Const(method_bits as i64));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            func.instruction(&Instruction::I32Const(0xFF10));
-                            func.instruction(&Instruction::I64Const(
-                                (table_idx as f64).to_bits() as i64
-                            ));
-                            func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                                offset: 0,
-                                align: 3,
-                                memory_index: 0,
-                            }));
-                            let csm_id = self
-                                .string_map
-                                .get("class_set_method")
-                                .copied()
-                                .unwrap_or(0);
-                            func.instruction(&f64_const(csm_id as f64));
-                            func.instruction(&f64_const(3.0));
-                            func.instruction(&Instruction::I32Const(0xFF00));
-                            func.instruction(&Instruction::Call(rt.mem_call));
-                            func.instruction(&Instruction::Drop);
-                        }
+                    // Register instance methods in classMethodTable (including getters/setters),
+                    // and named static methods, which a class value carries as properties.
+                    let methods = self.class_method_map.get(&class.name).into_iter().flatten();
+                    // A static block (`__perry_static_init_N`) is not a property of the class.
+                    let statics = self
+                        .class_static_map
+                        .get(&class.name)
+                        .into_iter()
+                        .flatten()
+                        .filter(|(name, _)| !name.starts_with("__perry_static_init_"));
+                    let registrations: Vec<(&str, String, u32)> = methods
+                        .map(|(name, &idx)| ("class_set_method", name.clone(), idx))
+                        .chain(
+                            statics
+                                .map(|(name, &idx)| ("class_set_static_method", name.clone(), idx)),
+                        )
+                        .collect();
+                    for (bridge, method_name, func_idx) in registrations {
+                        let real_name = method_name.as_str();
+                        let method_name_id = self.string_map.get(real_name).copied().unwrap_or(0);
+                        let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
+                        let table_idx = self
+                            .func_to_table_idx
+                            .get(&func_idx)
+                            .copied()
+                            .unwrap_or(func_idx);
+                        // Store args to memory for mem_call (Firefox NaN-safe: use I64Store)
+                        func.instruction(&Instruction::I32Const(0xFF00));
+                        func.instruction(&Instruction::I64Const(class_bits as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        func.instruction(&Instruction::I32Const(0xFF08));
+                        func.instruction(&Instruction::I64Const(method_bits as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        func.instruction(&Instruction::I32Const(0xFF10));
+                        func.instruction(&Instruction::I64Const(
+                            (table_idx as f64).to_bits() as i64
+                        ));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
+                        let csm_id = self.string_map.get(bridge).copied().unwrap_or(0);
+                        func.instruction(&f64_const(csm_id as f64));
+                        func.instruction(&f64_const(3.0));
+                        func.instruction(&Instruction::I32Const(0xFF00));
+                        func.instruction(&Instruction::Call(rt.mem_call));
+                        func.instruction(&Instruction::Drop);
                     }
 
                     // Set up inheritance

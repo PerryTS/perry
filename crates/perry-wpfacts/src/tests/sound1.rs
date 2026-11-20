@@ -52,54 +52,6 @@ fn control_store_on_host_held_object() {
     ));
 }
 
-/// SOUND1 probe (diagnostic, not a gate): which hosted value makes V escape.
-#[test]
-fn sound1_probe_variants() {
-    for host in [
-        "",
-        "(globalThis as any).hostTake({ a: 1 });",
-        "(globalThis as any).hostTake(Object.prototype);",
-        "(globalThis as any).hostTake(Object);",
-        "(globalThis as any).hostTake(Object.prototype.toString);",
-        "(globalThis as any).hostTake(Object.getPrototypeOf({ a: 1 }).toString);",
-        "(globalThis as any).hostTake(() => 1);",
-        "(globalThis as any).hostTake(globalThis);",
-    ] {
-        eprintln!("SOUND1 v_escapes={} host={host}", v_escapes(host));
-    }
-}
-
-/// SOUND1 probe: escape-first records of the failing control.
-#[test]
-fn sound1_probe_records() {
-    let src = r#"
-        class V { zz = 1; probe() { return this.zz; } }
-        const json: any = JSON.parse(process.argv[2] ?? "{}");
-        const cache: any = {};
-        const k = json.nodes[0];
-        const node: any = cache[k] !== undefined ? cache[k] : { userData: {} };
-        if (node.userData.pivot !== undefined) { node.pivot = new V(); }
-        (globalThis as any).hostTake({ a: 1 });
-        console.log(new V().probe());
-        "#;
-    let pf = facts_with(
-        src,
-        FactsConfig {
-            diagnostics: true,
-            ..Default::default()
-        },
-    );
-    for l in pf.diagnostics.iter().flat_map(|d| d.1.iter()) {
-        if l.contains("escape-first")
-            || [2, 3, 27, 28, 37, 47, 48]
-                .iter()
-                .any(|i| l.contains(&format!("\"record\":\"token\",\"id\":{i},")))
-        {
-            eprintln!("SOUND1REC {}", &l[..l.len().min(400)]);
-        }
-    }
-}
-
 /// SOUND1 RED (real hole, verdict 3). The model: unknown code holds what it
 /// is handed, every field of what it holds and the prototypes on its chain
 /// (solve/escape.rs `escape_body`: `all_fields` / `any_key_node` / `proto_node`
@@ -259,17 +211,6 @@ fn control_heldmem_map_no_unknown_code() {
         "console.log(new Map().size);",
         "Map.prototype as any"
     ));
-}
-
-/// Precision (4): unknown code is called with a primitive only. Recorded,
-/// see NOTE ## HELDMEM: the model's "unknown code already holds them"
-/// (runtime-owned objects) says unknown code holds every intrinsic.
-#[test]
-fn probe_heldmem_primitive_only() {
-    eprintln!(
-        "SOUND1 primitive_only v_escapes={}",
-        v_escapes_argv("(globalThis as any).hostTake(1);")
-    );
 }
 
 /// Precision (4): an object escapes, another program object W never reaches

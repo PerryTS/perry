@@ -3,14 +3,9 @@ use super::super::*;
 use super::support::*;
 #[test]
 fn symbol_description_moves_with_its_symbol_owner() {
-    check_description(false);
+    check_description();
 }
-#[test]
-#[ignore = "negative control: detach the moved symbol's description edge"]
-fn negative_control_objtables_symbol_description() {
-    check_description(true);
-}
-fn check_description(erase: bool) {
+fn check_description() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let desc = crate::string::js_string_from_bytes(b"owned-symbol".as_ptr(), 12);
@@ -22,11 +17,6 @@ fn check_description(erase: bool) {
     assert_ne!(moved, owner);
     let desc_after = unsafe { (*moved).description };
     assert_ne!(desc_after, desc);
-    if erase {
-        unsafe {
-            (*moved).description = std::ptr::null_mut();
-        }
-    }
     assert_eq!(
         unsafe { crate::symbol::symbol_description_text(moved) }.as_deref(),
         Some(b"owned-symbol".as_slice())
