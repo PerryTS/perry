@@ -9,6 +9,19 @@ impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_calls(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
             Expr::Call { callee, args, .. } => {
+                // A direct callee's rest parameter receives its arguments as one array.
+                let direct_idx = match callee.as_ref() {
+                    Expr::FuncRef(id) => self.emitter.func_map.get(id).copied(),
+                    Expr::ExternFuncRef { name, .. } => self
+                        .emitter
+                        .imported_func_indices
+                        .get(&(self.emitter.current_mod_idx, name.clone()))
+                        .or_else(|| self.emitter.func_name_map.get(name))
+                        .copied(),
+                    _ => None,
+                };
+                let packed = self.with_rest_packed(direct_idx, args);
+                let args: &[Expr] = &packed;
                 // Check for method call patterns: obj.method(args)
                 if let Expr::PropertyGet {
                     object, property, ..
@@ -28,6 +41,8 @@ impl<'a> FuncEmitCtx<'a> {
                         if let Some(&idx) =
                             self.emitter.imported_ns_funcs.get(&key).copied().as_ref()
                         {
+                            let packed = self.with_rest_packed(Some(idx), args);
+                            let args: &[Expr] = &packed;
                             for arg in args {
                                 self.emit_expr(func, arg);
                             }
@@ -80,7 +95,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 &Expr::StaticMethodCall {
                                     class_name: class_name.clone(),
                                     method_name: property.clone(),
-                                    args: args.clone(),
+                                    args: args.to_vec(),
                                 },
                             );
                             return true;
@@ -311,5 +326,24 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// The arguments a direct call of WASM function `idx` passes: a rest parameter
+    /// receives the source arguments from its slot on as one array.
+    pub(super) fn with_rest_packed<'e>(
+        &self,
+        idx: Option<u32>,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = idx.and_then(|idx| self.emitter.rest_params.get(&idx)) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
     }
 }

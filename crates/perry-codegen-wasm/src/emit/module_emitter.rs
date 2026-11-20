@@ -75,6 +75,11 @@ pub(super) struct WasmModuleEmitter {
     /// WASM function index → expected parameter count.
     /// Used to pad missing arguments with TAG_UNDEFINED for optional params.
     pub(super) func_param_counts: BTreeMap<u32, usize>,
+    /// WASM function index → the parameter slot of its rest parameter, counting
+    /// `this` and captures. A direct call packs the arguments from that slot on into
+    /// one array; the module exports the slot as `__wasm_rest_<idx>` for the runtime,
+    /// which packs them for a call through the function table.
+    pub(super) rest_params: BTreeMap<u32, usize>,
     /// Issue #1071: cross-module imported VARIABLE resolution.
     /// Maps `(consumer_mod_idx, imported_local_name)` → WASM global index
     /// of the source module's `Stmt::Let` that backs the export. Pre-fix
@@ -133,6 +138,7 @@ impl WasmModuleEmitter {
             module_func_maps: Vec::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
+            rest_params: BTreeMap::new(),
             async_js_code: Vec::new(),
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),

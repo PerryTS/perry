@@ -27,7 +27,18 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 // Without this, V8/SpiderMonkey auto-coerce `undefined` via BigInt(undefined) and
 // throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
 // args already on the call (e.g. 1 for the receiver, or closure capture count).
+// A function with a rest parameter exports its slot as `__wasm_rest_<index>`; the
+// arguments from that slot on become one array, as a direct call packs them.
 function __padBigintArgs(fn, prefix, bigintArgs) {
+  const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
+  if (rest) {
+    const at = Math.max(0, rest.value - (prefix | 0));
+    while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
+    bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
+  }
+  return __padMissingArgs(fn, prefix, bigintArgs);
+}
+function __padMissingArgs(fn, prefix, bigintArgs) {
   const need = Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1902,7 +1913,7 @@ function __arrayCallback(cb) {
   }
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
   const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-  return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
+  return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...__padBigintArgs(fn, cb.captures.length, bits)));
 }
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
@@ -3444,8 +3455,9 @@ function uiAlloc(el) {
 }
 function uiGet(h) { return uiHandles.get(h); }
 
+// Its callers have already packed a rest parameter's arguments.
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
+  const result = fn(...__padMissingArgs(fn, 0, bigintArgs));
   __memDispatch.propagate_exception(true);
   return result;
 }
