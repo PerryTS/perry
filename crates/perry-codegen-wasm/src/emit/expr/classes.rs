@@ -17,6 +17,10 @@ const BUILTIN_ERROR_PARENTS: &[&str] = &[
     "URIError",
 ];
 
+/// Built-in constructors whose instances hold internal state (entries, a length, a
+/// time value). A user class extending one is instantiated as the built-in object.
+const HOST_BASE_PARENTS: &[&str] = &["Map", "Set", "WeakMap", "WeakSet", "Array", "Date"];
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_classes(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
@@ -116,27 +120,37 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "generator_new", 2);
             }
             Expr::LinkGeneratorPrototype { obj, .. } => self.emit_expr(func, obj),
+            Expr::SetFunctionPrototype {
+                func: f,
+                proto,
+                strict,
+            } => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, f);
+                self.emit_store_arg(func, 1, proto);
+                self.emit_store_const(func, 2, f64::from(u8::from(*strict)));
+                self.emit_memcall(func, "function_set_prototype", 3);
+            }
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
-                    // Create a closure wrapper with 0 captures for function reference
+                    // The function's one value (see `function_value`)
                     let table_idx = self
                         .emitter
                         .func_to_table_idx
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: an `ExternFuncRef` used as a value can resolve
-                // either to (a) a cross-module function — wrap as closure with
-                // 0 captures, or (b) a cross-module exported variable — read
+                // either to (a) a cross-module function — its one value
+                // (`function_value`), or (b) a cross-module exported variable — read
                 // the source module's promoted-let global directly. Variables
                 // win when both apply (a let with the same name is closer to
                 // the user's intent than a like-named function); in practice
@@ -151,7 +165,7 @@ impl<'a> FuncEmitCtx<'a> {
                     .get(&mod_key)
                     .or_else(|| self.emitter.func_name_map.get(name))
                 {
-                    // Create a closure wrapper with 0 captures (like FuncRef).
+                    // The function's one value, as for FuncRef.
                     // Consumer import table first — bare names collide.
                     let table_idx = self
                         .emitter
@@ -159,10 +173,9 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
+                    self.emit_frame_begin(func, 1);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, 0.0);
-                    self.emit_memcall(func, "closure_new", 2);
+                    self.emit_memcall(func, "function_value", 1);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -308,15 +321,41 @@ impl<'a> FuncEmitCtx<'a> {
                     .copied()
                     .unwrap_or(0);
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
-                self.emit_frame_begin(func, 2);
+                let host_base = self.host_base_parent(class_name);
+                self.emit_frame_begin(func, if host_base.is_some() { 3 } else { 2 });
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
-                self.emit_memcall(func, "class_new", 2);
+                // The constructor slot, so the prototype's `constructor` is the class value.
+                let ctor_slot = if self.emitter.user_classes.contains(class_name.as_str()) {
+                    self.class_ctor_slot(class_name)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                self.emit_store_const(func, 1, ctor_slot);
+                match host_base {
+                    // The instance is the built-in object itself, so it has the internal
+                    // state (a Map's entries, an Array's length) the built-in's methods use.
+                    Some(base) => {
+                        self.emit_store_arg(func, 2, &Expr::String(base.to_string()));
+                        self.emit_memcall(func, "class_new_host", 3);
+                    }
+                    None => self.emit_memcall(func, "class_new", 2),
+                }
                 let ctor = self
                     .emitter
                     .class_ctor_map
                     .get(class_name.as_str())
                     .copied();
+                // An implicit constructor forwards its args to the built-in's; a
+                // synthesized one (field initializers only) then takes none.
+                let forwarded = host_base.is_some()
+                    && (ctor.is_none()
+                        || self
+                            .emitter
+                            .implicit_ctor_classes
+                            .contains(class_name.as_str()));
+                if forwarded {
+                    self.emit_host_super_init(func, args);
+                }
                 if self.extends_builtin_error(class_name) {
                     // An Error's message is "" until a `super(msg)` sets it. With no
                     // compiled constructor, the implicit one forwards its args there.
@@ -326,7 +365,8 @@ impl<'a> FuncEmitCtx<'a> {
                 // Call the compiled constructor if it exists
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
-                    for arg in args {
+                    let ctor_args: &[Expr] = if forwarded { &[] } else { args };
+                    for arg in ctor_args {
                         self.emit_expr(func, arg);
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
@@ -334,7 +374,7 @@ impl<'a> FuncEmitCtx<'a> {
                     // evaluated args so they don't outlive the `call` and
                     // accumulate on the enclosing block's stack (#183).
                     if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                        let provided = args.len() + 1;
+                        let provided = ctor_args.len() + 1;
                         for _ in provided..expected {
                             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                         }
@@ -393,13 +433,26 @@ impl<'a> FuncEmitCtx<'a> {
                     // Look up parent class name
                     if let Some(parent_name) = self.emitter.class_parent_map.get(current_class) {
                         if let Some(&ctor_idx) = self.emitter.class_ctor_map.get(parent_name) {
+                            // A declared constructor's args pass through a parent with only
+                            // synthesized constructors to the built-in's. Its own implicit
+                            // `super()` then forwards nothing, so the built-in is set up once.
+                            let implicit = &self.emitter.implicit_ctor_classes;
+                            let forwarded = implicit.contains(parent_name)
+                                && !implicit.contains(current_class)
+                                && self.host_base_parent(current_class).is_some();
+                            if forwarded {
+                                func.instruction(&Instruction::LocalGet(0));
+                                self.emit_host_super_init(func, args);
+                                func.instruction(&Instruction::Drop);
+                            }
+                            let ctor_args: &[Expr] = if forwarded { &[] } else { args };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
-                            for arg in args {
+                            for arg in ctor_args {
                                 self.emit_expr(func, arg);
                             }
                             if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                                let provided = args.len() + 1;
+                                let provided = ctor_args.len() + 1;
                                 for _ in provided..expected {
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                                 }
@@ -419,10 +472,19 @@ impl<'a> FuncEmitCtx<'a> {
                         .current_class
                         .as_ref()
                         .is_some_and(|c| self.extends_builtin_error(c));
+                let host_parent = !called
+                    && self
+                        .current_class
+                        .as_ref()
+                        .is_some_and(|c| self.host_base_parent(c).is_some());
                 if error_parent {
                     // `super(msg)` into a built-in Error sets this.message.
                     func.instruction(&Instruction::LocalGet(0));
                     self.emit_error_super_init(func, args);
+                    func.instruction(&Instruction::Drop);
+                } else if host_parent {
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_host_super_init(func, args);
                     func.instruction(&Instruction::Drop);
                 } else if !called {
                     // No parent constructor found, drop args
@@ -572,13 +634,23 @@ impl<'a> FuncEmitCtx<'a> {
                     &[&Expr::Bool(*is_static)],
                 );
             }
-            // Only a literal `extends null` is recorded; other dynamic heritage keeps
-            // the class table's static parent.
+            // A literal `extends null` is recorded; any other dynamic heritage keeps the
+            // class table's static parent, and a function parent also lends its
+            // `prototype` to the class's (`class_extends_value`).
             Expr::RegisterClassParentDynamic {
                 class_name,
                 parent_expr,
-            } if matches!(parent_expr.as_ref(), Expr::Null) => {
-                self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+            } => {
+                if matches!(parent_expr.as_ref(), Expr::Null) {
+                    self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+                } else {
+                    self.emit_class_bridge(
+                        func,
+                        "class_extends_value",
+                        class_name,
+                        &[parent_expr.as_ref()],
+                    );
+                }
             }
             Expr::ClassRef(class_name) => {
                 let ctor_slot = self.class_ctor_slot(class_name);
@@ -791,13 +863,8 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
     pub(in crate::emit) fn class_ctor_slot(&self, class_name: &str) -> f64 {
-        self.emitter
-            .class_ctor_map
-            .get(class_name)
-            .and_then(|idx| self.emitter.func_to_table_idx.get(idx))
-            .map_or(-1.0, |&slot| slot as f64)
+        self.emitter.class_ctor_slot(class_name)
     }
 
     /// The receiver a class-environment node resolves its evaluation from: `this`
@@ -890,6 +957,38 @@ impl FuncEmitCtx<'_> {
             name = parent;
         }
         false
+    }
+
+    /// The built-in at the end of `class_name`'s chain of user classes, when it is one
+    /// whose instances carry internal state that a plain object lacks.
+    fn host_base_parent(&self, class_name: &str) -> Option<&'static str> {
+        let mut name = class_name;
+        while let Some(parent) = self.emitter.class_parent_map.get(name) {
+            if !self.emitter.user_classes.contains(parent) {
+                return HOST_BASE_PARENTS
+                    .iter()
+                    .copied()
+                    .find(|base| *base == parent.as_str());
+            }
+            name = parent;
+        }
+        None
+    }
+
+    /// Stack: [instance] -> [instance], with the built-in's constructor applied to
+    /// `args` on the instance, as `super(...args)` does.
+    fn emit_host_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_frame_begin(func, 2);
+        func.instruction(&Instruction::LocalSet(self.temp_local));
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_store_arg(func, 1, &Expr::Array(args.to_vec(), None));
+        self.emit_memcall(func, "host_super_init", 2);
     }
 
     /// Stack: [instance] -> [instance], with the instance's message set from `args[0]`

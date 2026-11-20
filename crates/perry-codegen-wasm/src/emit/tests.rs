@@ -110,7 +110,9 @@ await bootPerryWasm("{b64}");
 #[test]
 fn splice_inserts_and_evaluates_item_side_effects() {
     assert_eq!(
-        run_web_source("const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"),
+        run_web_source(
+            "const a = [1, 2]; let n = 0; a.splice(1, 0, ++n); console.log(a.join(',')); console.log(n);"
+        ),
         "1,1,2\n1"
     );
 }
@@ -394,6 +396,23 @@ console.log(inner());
     );
 }
 
+// A spread takes any iterable, and `forEach`, which is dispatched by name, runs over a
+// Set or a Map as well as an array. Expected output is Node's.
+#[test]
+fn spread_and_for_each_visit_a_set_or_a_maps_entries() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function spreads() { const s = new Set<number>([1, 2, 3]); const a: any = new Set(["x"]); const m = new Map<string, number>([["a", 1], ["b", 2]]); return [...s].join(",") + " " + [0, ...a].join(",") + " " + [...m].map((e) => e[0] + e[1]).join(",") + " " + [...m.keys()].join(",") + [...m.values()].join(","); }
+function each() { const out: string[] = []; const s = new Set<string>(["x", "y"]); s.forEach((v, k, set) => out.push(v + k + set.size)); const m: any = new Map([["a", 1], ["b", 2]]); m.forEach((v: number, k: string) => out.push(k + "=" + v)); return out.join(","); }
+const big = new Set<number>(); for (let i = 0; i < 200000; i++) big.add(i);
+console.log(spreads() + " | " + each() + " | " + [..."ab"].join("-") + " | " + [...big].length);
+"#
+        ),
+        "1,2,3 0,x a1,b2 a,b1,2 | xx2,yy2,a=1,b=2 | a-b | 200000"
+    );
+}
+
 // `==` / `!=` (and the `?.` guard, which is `base == null`) follow JS loose equality.
 #[test]
 fn loose_equality_follows_js() {
@@ -624,6 +643,39 @@ try {
 "#
         ),
         "absent threw TypeError\nbuild rejected boom"
+    );
+}
+
+// An async body computes `**`, the bitwise and shift operators (compound assignments
+// included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
+// whose lowering uses `&` and `in`; `in` evaluates its property before its object in
+// both bodies. Expected output is Node's.
+#[test]
+fn async_body_operators_and_for_in_match_sync_code() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function ops(a: number, b: number, u: any, o: any): Promise<string> {
+  let k = "a";
+  let x = 12; x &= 10; let y = 1; y <<= 3; let z = 5; z |= 2; let w = 6; w ^= 3;
+  return [a & b, a | b, a ^ b, a << 2, a >> 1, -a >>> 28, ~a, 2 ** 10, +u, u & 7, x, y, z, w].join(",")
+    + " " + ["a" in o, "z" in o, 0 in [5], 1 in [5], k in (k = "b", { a: 1 })].join(",");
+}
+async function keys(): Promise<string> {
+  const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = [];
+  for (const k in o) ks.push(k + "=" + o[k]);
+  for (const k in [7, 8]) ks.push(k);
+  for (const k in "xy") ks.push(k);
+  for (const k in null as any) ks.push(k);
+  return ks.join(",");
+}
+ops(12, 10, "13", { a: 1 }).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+keys().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+function syncIn(): boolean { let k = "a"; return k in (k = "b", { a: 1 }); }
+console.log(syncIn());
+"#
+        ),
+        "true\n8,14,6,48,6,15,-13,1024,13,5,8,8,7,5 true,false,true,false,true\na=1,b=2,c=3,0,1,0,1"
     );
 }
 
@@ -1064,6 +1116,27 @@ console.log(new B().m());
     );
 }
 
+// `super.x` in a static method reads the parent's static methods, as `Parent.x`
+// does, and keeps the subclass as `this`. Expected output is Node's.
+#[test]
+fn super_in_a_static_method_reaches_the_parents_static_methods() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static f() { return "f"; } static g() { return "g:" + this.name; } }
+class B extends A { static h() { return super.f() + "h"; } static i() { return super.g(); } }
+class C extends B {}
+console.log("B.f(): " + B.f());
+console.log("C.f(): " + C.f());
+console.log("B.h() (super.f()): " + B.h());
+console.log("B.i() (super.g() keeps this): " + B.i());
+console.log("C.h(): " + C.h());
+"#
+        ),
+        "B.f(): f\nC.f(): f\nB.h() (super.f()): fh\nB.i() (super.g() keeps this): g:B\nC.h(): fh"
+    );
+}
+
 // A getter that returns a non-callable makes `super.m()` throw a TypeError.
 #[test]
 fn a_super_method_call_of_a_non_callable_getter_result_throws_type_error() {
@@ -1319,92 +1392,6 @@ console.log(typeof r.K + " " + new r.K(9).twice() + " " + new r.Bare().w + " " +
 "#
         ),
         "function 7 14 true 3\nfunction 18 4 true"
-    );
-}
-
-// `new` on a class value hands its arguments to the compiled constructor as Perry
-// values: a closure argument stays a closure the array bridges can call.
-#[test]
-fn a_class_value_constructor_receives_a_closure_argument() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class M { out: number[]; constructor(cb: (n: number) => number) { this.out = [1, 2].map(cb); } }
-const MM: any = M;
-console.log(new MM((n: number) => n * 10).out.join(","));
-"#
-        ),
-        "10,20"
-    );
-}
-
-// Host `instanceof` on a class value walks the class table, as compiled `instanceof` does.
-#[test]
-fn host_instanceof_on_a_class_value_walks_the_class_chain() {
-    assert_eq!(
-        run_web_source_then(
-            r#"
-class P { }
-class Q extends P { }
-const refs: any[] = [P, Q];
-console.log(refs.length);
-"#,
-            r#"
-const P = __classRef("P", -1), Q = __classRef("Q", -1);
-console.log([__classInstance("Q") instanceof P, __classInstance("Q") instanceof Q,
-  __classInstance("P") instanceof Q, ({}) instanceof P, 1 instanceof P].join(" "));
-"#
-        ),
-        "2\ntrue true false false false"
-    );
-}
-
-// A class value's static fields are its own enumerable keys, as in Node: declared ones,
-// one a subclass declares (not its parent's), and one assigned later through the value.
-// A field replaces a static method of its name; a computed member's hidden key slot is
-// not a key.
-#[test]
-fn a_class_values_static_fields_are_its_own_keys() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class A { static x = 1; static y = "s"; static m() { return 1; } z = 3; }
-class B extends A { static w = 2; }
-const C = class { static k = 5; };
-const K: any = A;
-const D: any = class {};
-D.dyn = 7;
-console.log(JSON.stringify(Object.keys(A)) + " " + JSON.stringify(Object.keys(B)) + " " + JSON.stringify(Object.keys(C)));
-console.log(JSON.stringify(Object.entries(K)) + " " + JSON.stringify(Object.keys(D)));
-console.log(("x" in K) + " " + Object.prototype.hasOwnProperty.call(K, "y"));
-K.x = 10;
-console.log(A.x + " " + K.x + " " + JSON.stringify(Object.keys(new A())));
-class I { ["k" + 1] = 1; static t = 3; }
-console.log(JSON.stringify(Object.keys(I)) + " " + JSON.stringify(Object.keys(new I())));
-const mk = "m";
-class M { static m() { return 0; } static [mk] = 1; }
-console.log(JSON.stringify(Object.keys(M)) + " " + (M as any).m);
-"#
-        ),
-        "[\"x\",\"y\"] [\"w\"] [\"k\"]\n[[\"x\",1],[\"y\",\"s\"]] [\"dyn\"]\ntrue true\n10 10 [\"z\"]\n[\"t\"] [\"k1\"]\n[\"m\"] 1"
-    );
-}
-
-// `new` on a class value yields what [[Construct]] yields: the instance, unless the
-// constructor returns an object. A bare `return;` keeps the initialized instance.
-#[test]
-fn a_class_value_constructor_returning_no_object_yields_the_instance() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class E { v = 1; constructor(x: number) { if (x > 0) return; this.v = 2; } get() { return this.v; } }
-class O { v = 1; constructor() { return { v: 5 } as any; } }
-const EE: any = E, OO: any = O;
-const e = new EE(1);
-console.log(e.v + " " + e.get() + " " + (e instanceof E) + " " + new EE(0).v + " " + new OO().v + " " + (new OO() instanceof O));
-"#
-        ),
-        "1 1 true 2 5 false"
     );
 }
 
@@ -1927,27 +1914,6 @@ try { cm(); console.log("1: no throw"); } catch (e) { console.log("1: " + e.name
 }
 
 #[test]
-fn a_class_value_holds_static_side_properties_and_a_prototype() {
-    assert_eq!(
-        run_web_source(
-            r#"
-class T {}
-(T as any).key = "class";
-console.log((T as any).key);
-const k = "dyn";
-(T as any)[k] = 2;
-console.log((T as any)[k]);
-const base = { tag: "base" };
-class U {}
-Object.setPrototypeOf(U, base);
-console.log((U as any).tag);
-"#
-        ),
-        "class\n2\nbase"
-    );
-}
-
-#[test]
 fn a_closure_used_as_a_value_is_a_function() {
     assert_eq!(
         run_web_source(
@@ -2244,6 +2210,71 @@ console.log(Reflect.apply(A.prototype.echo, new A(), { 0: 7, length: 1 } as any)
     );
 }
 
+// A call with spread arguments passes the elements, in a sync and in an async body: to a
+// function (a void one too), a closure, a method (a computed key too), `push`, `Math.max` /
+// `Math.min`, a host static and `console.log`. Expected output is Node's.
+#[test]
+fn a_spread_call_passes_the_spread_elements() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function sum3(a: number, b: number, c: number): number { return a + b + c; }
+const add = (a: number, b: number) => a + b;
+class K { base = 100; plus(a: number, b: number) { return this.base + a + b; } }
+function note(a: number, b: number): void { console.log("note " + (a + b)); }
+const o: any = { base: 10, m(a: number, b: number) { return this.base + a + b; } };
+const xs: number[] = [1, 2, 3];
+const anyXs: any = [4, 5, 6];
+const arr: number[] = [0];
+const n = arr.push(...xs, 9);
+console.log(sum3(...(xs as [number, number, number])) + " " + sum3(0, ...(xs.slice(1) as [number, number])) + " " + add(...(xs as [number, number])) + " " + new K().plus(...(xs as [number, number])));
+console.log(n + " " + arr.join(",") + " " + Math.max(...xs) + " " + Math.min(...anyXs) + " " + Math.max(0, ...xs) + " " + String.fromCharCode(...[72, 105]));
+console.log(...["a", "b"], 1);
+note(...(xs as [number, number]));
+const key = "m";
+console.log(o[key](...(xs as [number, number])));
+async function inAsync(): Promise<string> { const ys = [1, 2, 3]; const a2: number[] = []; a2.push(...ys); note(...(ys as [number, number])); return Math.max(...ys) + ":" + a2.length + ":" + sum3(...(ys as [number, number, number])) + ":" + add(...(ys as [number, number])) + ":" + o[key](...(ys as [number, number])); }
+inAsync().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "6 5 3 103\n5 0,1,2,3,9 3 4 3 Hi\na b 1\nnote 3\n13\nnote 3\n3:3:6:3:13"
+    );
+}
+
+// A spread call on a UI handle reaches the UI method, as a call with fixed arguments does.
+#[test]
+fn a_spread_call_on_a_ui_handle_runs_the_ui_method() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Text } from "perry/ui";
+const t: any = Text("hi");
+t.setWidth(...[10]);
+"#,
+            r#"
+const el = [...uiHandles.values()].find(e => e.textContent === "hi");
+console.log(el.style.width);
+"#
+        ),
+        "10px"
+    );
+}
+
+// A static method called with spread arguments receives the closure itself, not a host wrapper.
+#[test]
+fn a_spread_call_to_a_static_method_passes_closures_unchanged() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const g = () => 1;
+class C { static same(f: any) { return f === g; } }
+console.log(C.same(g) + " " + C.same(...[g]));
+"#
+        ),
+        "true true"
+    );
+}
+
 // B's setter-only `x` shadows A's getter, so `super.x` from C reads undefined.
 #[test]
 fn a_super_read_stops_at_a_setter_only_accessor() {
@@ -2343,8 +2374,32 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 #[path = "class_eval_tests.rs"]
 mod class_eval;
 
+#[path = "collection_for_of_tests.rs"]
+mod collection_for_of;
+
 #[path = "static_method_tests.rs"]
 mod static_method;
+
+#[path = "class_value_tests.rs"]
+mod class_value;
+
+#[path = "function_value_tests.rs"]
+mod function_value;
+
+#[path = "get_prototype_of_tests.rs"]
+mod get_prototype_of;
+
+#[path = "object_create_tests.rs"]
+mod object_create;
+
+#[path = "object_prototype_method_tests.rs"]
+mod object_prototype_method;
+
+#[path = "class_prototype_tests.rs"]
+mod class_prototype;
+
+#[path = "builtin_subclass_tests.rs"]
+mod builtin_subclass;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {

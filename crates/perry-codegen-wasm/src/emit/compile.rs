@@ -805,6 +805,9 @@ impl WasmModuleEmitter {
         for (_, module) in modules {
             for class in &module.classes {
                 self.user_classes.insert(class.name.clone());
+                if declares_no_constructor(class, &classes) {
+                    self.implicit_ctor_classes.insert(class.name.clone());
+                }
                 // Record parent class relationship
                 if let Some(parent) = &class.extends_name {
                     self.class_parent_map
@@ -1664,13 +1667,28 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        // A user parent's constructor slot, as `Expr::ClassRef` passes it, so
+                        // the child's class value inherits from the parent's; undefined for a
+                        // built-in parent (`extends Error`), which has no class value here.
+                        let parent_slot = if self.user_classes.contains(parent_name) {
+                            self.class_ctor_slot(parent_name).to_bits()
+                        } else {
+                            TAG_UNDEFINED
+                        };
+                        func.instruction(&Instruction::I32Const(0xFF10));
+                        func.instruction(&Instruction::I64Const(parent_slot as i64));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csp_id = self
                             .string_map
                             .get("class_set_parent")
                             .copied()
                             .unwrap_or(0);
                         func.instruction(&f64_const(csp_id as f64));
-                        func.instruction(&f64_const(2.0));
+                        func.instruction(&f64_const(3.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);
