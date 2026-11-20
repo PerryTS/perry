@@ -1,0 +1,1 @@
+Fix `perry/tui` text layout and rendering to preserve complete Unicode graphemes and use terminal display columns. CJK characters and wide emoji reserve continuation cells, combining-mark changes redraw their base, clipped graphemes remain whole, and replacing wide text clears obsolete columns.

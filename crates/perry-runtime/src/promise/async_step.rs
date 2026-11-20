@@ -1263,7 +1263,10 @@ const AFA_THIS_ARG: u32 = 6;
 const AFA_INDEX: u32 = 7;
 const AFA_VALUE_CLOSURE: u32 = 8;
 const AFA_MAPPED_CLOSURE: u32 = 9;
-const AFA_STATE_CAPTURES: u32 = 10;
+/// The result `Construct(C)` built for a constructor receiver; `undefined`
+/// when the result is the plain `AFA_RESULT_ARRAY` accumulator.
+const AFA_CONSTRUCTED: u32 = 10;
+const AFA_STATE_CAPTURES: u32 = 11;
 
 #[inline]
 fn undefined_value() -> f64 {
@@ -1365,6 +1368,13 @@ fn iterator_value_for_from_async(input: f64) -> Option<f64> {
 /// conversion stack as `Array.from`.
 #[no_mangle]
 pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) -> f64 {
+    array_from_async_full(undefined_value(), input, map_fn, this_arg)
+}
+
+/// [`js_array_from_async`] called with `c` as its receiver: a constructor
+/// `c` builds the result (`Construct(C)` for an iterable, `Construct(C,
+/// «len»)` for an array-like), anything else leaves it a plain array.
+pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f64) -> f64 {
     use crate::array::{js_array_alloc, ArrayHeader};
     use crate::closure::{js_closure_alloc, js_closure_set_capture_f64};
 
@@ -1377,7 +1387,14 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
         Err(reason) => return boxed_promise(js_promise_rejected(reason)),
     };
 
-    let iter_value = iterator_value_for_from_async(input);
+    // The iterator probes and `Construct(C)` run user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let input = scope.root_nanbox_f64(input);
+    let map_fn = scope.root_nanbox_f64(map_fn);
+    let this_arg = scope.root_nanbox_f64(this_arg);
+    let c = scope.root_nanbox_f64(c);
+    let iter_value = iterator_value_for_from_async(input.get_nanbox_f64());
+    let input = input.get_nanbox_f64();
     let source_arr = if iter_value.is_some() {
         std::ptr::null_mut()
     } else if let Some(arr) = array_value_ptr(input) {
@@ -1387,7 +1404,26 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
             crate::value::js_nanbox_get_pointer(input) as *const ArrayHeader
         )
     };
-    let iter_value = iter_value.unwrap_or_else(undefined_value);
+    let iter_value = scope.root_nanbox_f64(iter_value.unwrap_or_else(undefined_value));
+    let source = scope.root_nanbox_f64(if source_arr.is_null() {
+        undefined_value()
+    } else {
+        crate::value::js_nanbox_pointer(source_arr as i64)
+    });
+    let c = c.get_nanbox_f64();
+    let constructed = if crate::object::js_value_is_constructor(c) {
+        let len = (!source_arr.is_null()).then(|| unsafe { (*source_arr).length as f64 });
+        let args = len.as_slice();
+        match crate::exception::catch_js_throw(|| unsafe {
+            crate::object::js_new_function_construct(c, args.as_ptr(), args.len())
+        }) {
+            Ok(target) => target,
+            Err(reason) => return boxed_promise(js_promise_rejected(reason)),
+        }
+    } else {
+        undefined_value()
+    };
+    let constructed = scope.root_nanbox_f64(constructed);
 
     let result_promise = js_promise_new();
     let result_arr = js_array_alloc(0);
@@ -1409,12 +1445,18 @@ pub extern "C" fn js_array_from_async(input: f64, map_fn: f64, this_arg: f64) ->
 
     crate::closure::closure_set_capture_ref(state, AFA_RESULT_PROMISE, result_promise as i64);
     crate::closure::closure_set_capture_ref(state, AFA_RESULT_ARRAY, result_arr as i64);
+    let source_arr = match source.get_nanbox_f64() {
+        s if s.to_bits() == crate::value::TAG_UNDEFINED => std::ptr::null_mut(),
+        s => crate::value::js_nanbox_get_pointer(s) as *mut ArrayHeader,
+    };
+    let iter_value = iter_value.get_nanbox_f64();
     crate::closure::closure_set_capture_ref(state, AFA_SOURCE_ARRAY, source_arr as i64);
     js_closure_set_capture_f64(state, AFA_ITERATOR_VALUE, iter_value);
     crate::closure::closure_set_capture_ref(state, AFA_REJECT_CLOSURE, reject_closure as i64);
-    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn);
-    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg);
+    js_closure_set_capture_f64(state, AFA_MAP_FN, map_fn.get_nanbox_f64());
+    js_closure_set_capture_f64(state, AFA_THIS_ARG, this_arg.get_nanbox_f64());
     js_closure_set_capture_f64(state, AFA_INDEX, 0.0);
+    js_closure_set_capture_f64(state, AFA_CONSTRUCTED, constructed.get_nanbox_f64());
     crate::closure::closure_set_capture_ref(state, AFA_VALUE_CLOSURE, value_closure as i64);
     crate::closure::closure_set_capture_ref(state, AFA_MAPPED_CLOSURE, mapped_closure as i64);
 
@@ -1514,9 +1556,7 @@ extern "C" fn array_from_async_step(
     };
 
     if result_obj_ptr.is_null() {
-        // No more values — resolve the output promise with the collected array.
-        let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        array_from_async_finish(closure);
         return 0.0;
     }
 
@@ -1529,9 +1569,7 @@ extern "C" fn array_from_async_step(
     let value_f64 = f64::from_bits(value_jv.bits());
 
     if crate::value::js_is_truthy(done_f64) != 0 {
-        // Iteration complete — resolve with the accumulated array.
-        let arr_f64 = crate::value::js_nanbox_pointer(result_arr as i64);
-        js_promise_resolve(result_promise, arr_f64);
+        array_from_async_finish(closure);
         return 0.0;
     }
 
@@ -1555,14 +1593,39 @@ fn array_from_async_array_next(closure: *const crate::closure::ClosureHeader) {
     let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
     let length = unsafe { (*source_arr).length as usize };
     if index >= length {
-        js_promise_resolve(
-            result_promise,
-            crate::value::js_nanbox_pointer(result_arr as i64),
-        );
+        array_from_async_finish(closure);
         return;
     }
     let value = crate::array::js_array_get_f64(source_arr, index as u32);
     array_from_async_await_value(closure, value);
+}
+
+/// Resolves the result promise with the collected values: the accumulator,
+/// or the constructed result once `Set(A, "length", k, true)` closed it.
+fn array_from_async_finish(closure: *const crate::closure::ClosureHeader) {
+    let result_promise = crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
+    let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
+    if constructed.to_bits() == crate::value::TAG_UNDEFINED {
+        let result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY);
+        js_promise_resolve(
+            result_promise as *mut Promise,
+            crate::value::js_nanbox_pointer(result_arr),
+        );
+        return;
+    }
+    let len = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) as usize;
+    // A `length` setter on the result runs user code.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let result_promise = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(result_promise));
+    let settled = crate::exception::catch_js_throw(|| {
+        crate::array::finish_constructed_length(constructed, len)
+    });
+    let result_promise =
+        crate::value::js_nanbox_get_pointer(result_promise.get_nanbox_f64()) as *mut Promise;
+    match settled {
+        Ok(result) => js_promise_resolve(result_promise, result),
+        Err(reason) => js_promise_reject(result_promise, reason),
+    }
 }
 
 fn array_from_async_await_value(closure: *const crate::closure::ClosureHeader, value: f64) {
@@ -1624,16 +1687,49 @@ extern "C" fn array_from_async_mapped_step(
     0.0
 }
 
-fn array_from_async_push_and_continue(closure: *const crate::closure::ClosureHeader, value: f64) {
-    let mut result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
-        as *mut crate::array::ArrayHeader;
-    if result_arr.is_null() {
-        return;
+fn array_from_async_push_and_continue(
+    mut closure: *const crate::closure::ClosureHeader,
+    value: f64,
+) {
+    let index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX);
+    let constructed = crate::closure::js_closure_get_capture_f64(closure, AFA_CONSTRUCTED);
+    if constructed.to_bits() == crate::value::TAG_UNDEFINED {
+        let mut result_arr = crate::closure::closure_capture_ref(closure, AFA_RESULT_ARRAY)
+            as *mut crate::array::ArrayHeader;
+        if result_arr.is_null() {
+            return;
+        }
+        result_arr = crate::array::js_array_push_f64(result_arr, value);
+        crate::closure::closure_set_capture_ref(
+            closure as *mut _,
+            AFA_RESULT_ARRAY,
+            result_arr as i64,
+        );
+    } else {
+        // The define reaches the result's own traps and setters: user code.
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(closure as i64));
+        let defined = crate::exception::catch_js_throw(|| {
+            crate::array::define_constructed_index(constructed, index as usize, value)
+        });
+        closure = crate::value::js_nanbox_get_pointer(state.get_nanbox_f64())
+            as *const crate::closure::ClosureHeader;
+        match defined {
+            Ok(result) => crate::closure::js_closure_set_capture_f64(
+                closure as *mut _,
+                AFA_CONSTRUCTED,
+                result,
+            ),
+            Err(reason) => {
+                let result_promise =
+                    crate::closure::closure_capture_ref(closure, AFA_RESULT_PROMISE);
+                js_promise_reject(result_promise as *mut Promise, reason);
+                return;
+            }
+        }
     }
-    result_arr = crate::array::js_array_push_f64(result_arr, value);
-    crate::closure::closure_set_capture_ref(closure as *mut _, AFA_RESULT_ARRAY, result_arr as i64);
 
-    let next_index = crate::closure::js_closure_get_capture_f64(closure, AFA_INDEX) + 1.0;
+    let next_index = index + 1.0;
     crate::closure::js_closure_set_capture_f64(closure as *mut _, AFA_INDEX, next_index);
 
     let source_arr = crate::closure::closure_capture_ref(closure, AFA_SOURCE_ARRAY)
