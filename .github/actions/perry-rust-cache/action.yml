@@ -26,6 +26,17 @@ runs:
         # Steps outside the checkout no longer have a default without this.
         pinned=$(sed -n 's/^channel = "\(.*\)"/\1/p' rust-toolchain.toml)
         rustup default "$pinned"
+    # .cargo/config.toml builds std from rust-src, a path source that Cargo
+    # fingerprints by mtime. A fresh toolchain install is newer than every
+    # restored artifact, so std and every crate above it would rebuild.
+    - name: Pin rust-src mtimes
+      shell: bash
+      run: |
+        set -euo pipefail
+        src="$(rustc --print sysroot)/lib/rustlib/src"
+        if [ -d "$src" ]; then
+          find "$src" -exec touch -h -t 200001010000 {} +
+        fi
     - uses: ./.github/actions/perry/Swatinem/rust-cache
       with:
         prefix-key: v1-rust
