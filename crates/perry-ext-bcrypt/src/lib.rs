@@ -12,8 +12,8 @@
 //! around with a deferred converter and this crate had not. Under v2 the split
 //! is a trait bound: `work` is `Send`, `JsPromise` never crosses.
 //!
-//! Functionally identical to `crates/perry-stdlib/src/bcrypt.rs` modulo the
-//! eprintln! debug lines that have been on the perry-stdlib copy since v0.5.0.
+//! The bundled stdlib build re-exports this crate (`perry-stdlib/src/bcrypt.rs`),
+//! so both link modes share one provider per symbol.
 
 use perry_ffi::{
     alloc_string, pool, read_string, JsPromise, JsString, JsValue, Promise, StringHeader,
@@ -109,7 +109,7 @@ fn rounds_or_default(rounds: f64) -> u32 {
 }
 
 /// A salt for `cost`. The `bcrypt` crate doesn't expose salt generation
-/// directly, so we follow perry-stdlib's existing trick: hash an empty string
+/// directly, so hash an empty string
 /// with the requested cost and keep the 29-character prefix
 /// (`$2b$XX$<22-char-salt>`).
 fn gen_salt(cost: u32) -> Result<String, String> {
