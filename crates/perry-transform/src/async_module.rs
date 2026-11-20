@@ -23,6 +23,7 @@ pub fn lower_async_module_body(module: &mut Module) {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module.async_init_function = Some(id);
 }

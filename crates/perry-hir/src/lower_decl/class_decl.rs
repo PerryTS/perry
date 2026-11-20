@@ -1226,6 +1226,7 @@ pub fn lower_class_decl(
                     is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                     is_exported: false,
                     captures: Vec::new(),
                     decorators: Vec::new(),

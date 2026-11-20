@@ -1,0 +1,1 @@
+`--target web`: an object rest element (`const { x, ...o } = src`) builds a new object without the keys named before it, instead of aliasing `src` in synchronous code and evaluating to `undefined` inside an `async` function (#15019).

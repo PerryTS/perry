@@ -13,6 +13,7 @@ fn closure(id: u32, this: bool) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: this,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: !this,
         is_async: false,
@@ -321,6 +322,7 @@ fn anonymous_record_admission_uses_the_full_constructor_proof() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     assert!(anon_props(&class, &[]).is_none());
     class.constructor.as_mut().unwrap().body.clear();
@@ -379,6 +381,7 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     assert!(
         class.is_literal_shape(),
@@ -458,6 +461,7 @@ fn constructor(body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 

@@ -472,6 +472,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         is_async: arrow.is_async,
         is_generator: false,
         is_strict,
+        construct_only: false,
     })
 }
 
@@ -580,6 +581,7 @@ fn lower_named_fn_expr(
             mutable_captures,
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1440,6 +1442,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         mutable_captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: fn_expr.function.is_async,

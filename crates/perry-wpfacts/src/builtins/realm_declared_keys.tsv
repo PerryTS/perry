@@ -3417,6 +3417,7 @@ native	URLSearchParams	propertyIsEnumerable	Object.prototype.propertyIsEnumerabl
 native	URLSearchParams	toLocaleString	Object.prototype.toLocaleString
 native	URLSearchParams	toString	Function.prototype.toString
 native	URLSearchParams	valueOf	Object.prototype.valueOf
+native	URLSearchParams.prototype	@@iterator	URLSearchParams.prototype.entries
 native	URLSearchParams.prototype	append	URLSearchParams.prototype.append
 native	URLSearchParams.prototype	constructor	URLSearchParams
 native	URLSearchParams.prototype	delete	URLSearchParams.prototype.delete

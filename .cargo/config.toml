@@ -48,15 +48,19 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes"]
 # real program: std aborts in `LazyKey::lazy_init` the first time one more is
 # touched (a Bloom app on a Pixel 4a, inside the collector). With
 # `has-thread-local`, std (built from source below, so it takes the flag too)
-# uses `#[thread_local]` statics in the emulated model rustc's Android target
-# already selects: one emutls key for every thread-local in the process.
+# uses `#[thread_local]` statics. rustc's Android target spec selects the
+# emulated model for them (`"tls-model": "emulated"`: every access a call to
+# `__emutls_get_address`); `tls-model=global-dynamic` makes them native ELF
+# thread-locals (TLSDESC on AArch64), which bionic supports from API 29, the
+# level Perry targets (`android_api_level!`). The program's own thread-locals
+# take the same model (`inprocess::optimize_emit::emulated_tls`).
 # `perry_thread_local!`'s Android pool (tls_os_pool.rs) is unaffected. The
 # `[build]` flags are repeated, as above requires.
 [target.aarch64-linux-android]
-rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes"]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes", "-Z", "tls-model=global-dynamic"]
 
 [target.x86_64-linux-android]
-rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes"]
+rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z", "has-thread-local=yes", "-Z", "tls-model=global-dynamic"]
 
 # std built from source without its optional backtrace support, for every
 # cargo build of this workspace: release, dev, test, check/clippy, every
@@ -99,6 +103,16 @@ rustflags = ["-C", "force-unwind-tables=yes", "-Z", "use-sync-unwind=yes", "-Z",
 build-std = ["std", "panic_abort"]
 build-std-features = []
 panic-abort-tests = true
+
+# Standalone fixture workspaces inherit this config, but not the root
+# Cargo.toml's profiles. Keep their panic strategy paired with the std build
+# above: an unwinding std would load the sysroot panic_unwind and its core
+# alongside the rebuilt core (E0152).
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
 
 # The bundled SQLite is built as node's is in this one respect: node compiles
 # it with SQLITE_DEFAULT_MEMSTATUS=0 (`PRAGMA compile_options` on node 26),

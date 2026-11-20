@@ -4,6 +4,17 @@
 //! `clang -c` to build an object file linked against `libperry_runtime.a`.
 //! This is Perry's sole native code generation backend (since v0.5.0).
 
+/// The Android API level Perry compiles and links for (the NDK `<triple><api>`
+/// spelling, the versioned LLVM triple, the app templates' `minSdk`). 29
+/// (Android 10) is the first with native ELF thread-locals; below it LLVM and
+/// rustc lower every thread-local through `__emutls_get_address`.
+#[macro_export]
+macro_rules! android_api_level {
+    () => {
+        "29"
+    };
+}
+
 mod array_storage;
 pub mod block;
 pub(crate) mod boxed_vars;

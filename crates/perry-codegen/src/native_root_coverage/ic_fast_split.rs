@@ -96,6 +96,7 @@ fn split_module() -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         })
         .collect();
     module.functions.push(Function {
@@ -162,6 +163,7 @@ fn split_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module
 }
