@@ -100,6 +100,14 @@ fn callable_workers_preserve_serial_ir() {
 /// the same compile emits an inactive body as a trap or in full.
 #[test]
 fn callable_workers_keep_dead_body_removal() {
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::verify_facts::DCE_FOR_TESTS.with(|d| d.set(false));
+        }
+    }
+    crate::verify_facts::DCE_FOR_TESTS.with(|d| d.set(true));
+    let _restore = Restore;
     let hir = module();
     let bodies: std::collections::BTreeMap<(u32, String), bool> = hir
         .functions

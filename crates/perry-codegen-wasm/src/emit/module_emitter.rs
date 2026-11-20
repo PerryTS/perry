@@ -155,6 +155,14 @@ impl WasmModuleEmitter {
         id
     }
 
+    /// The table slot of `class_name`'s compiled constructor, or -1 without one.
+    pub(super) fn class_ctor_slot(&self, class_name: &str) -> f64 {
+        self.class_ctor_map
+            .get(class_name)
+            .and_then(|idx| self.func_to_table_idx.get(idx))
+            .map_or(-1.0, |&slot| slot as f64)
+    }
+
     /// Get or create a function type index for the given signature.
     pub(super) fn get_type_idx(&mut self, params: Vec<ValType>, results: Vec<ValType>) -> u32 {
         let key = (params.clone(), results.clone());
