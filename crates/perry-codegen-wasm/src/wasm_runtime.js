@@ -1630,9 +1630,10 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
   constructor(funcIdx, captureCount) {
-    this.funcIdx = funcIdx;
-    this.captures = new Array(captureCount | 0);
+    __defineHidden(this, 'funcIdx', funcIdx);
+    __defineHidden(this, 'captures', new Array(captureCount | 0));
   }
 }
 // A function expression whose body reads its own `this`: its body takes the
@@ -5741,8 +5742,8 @@ function __classMethodValue(cls, mname, evaluation) {
   let fn = byName.get(mname);
   if (!fn || fn.funcIdx !== funcIdx) {
     fn = function (...args) { return __classMemberCall(funcIdx, evaluation, this, args); };
-    fn.funcIdx = funcIdx;
-    fn.captures = [TAG_UNDEFINED];
+    __defineHidden(fn, 'funcIdx', funcIdx);
+    __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
     __classMethodFns.add(fn);
     byName.set(mname, fn);
   }

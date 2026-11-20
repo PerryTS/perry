@@ -1380,7 +1380,7 @@ fn property_update_stores_and_returns_the_old_or_new_value() {
 
 // `for...in` visits the enumerable string keys of an object and its prototype chain:
 // a literal, an array, a class instance, a boxed string, a key deleted before its
-// turn is skipped. Expected output is Node's.
+// turn is skipped, a closure and a method value have none. Expected output is Node's.
 #[test]
 fn for_in_visits_enumerable_keys_of_the_object_and_its_prototypes() {
     assert_eq!(
@@ -1394,9 +1394,11 @@ function deleted() { const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = [
 function letHead() { const o: any = { p: 1, q: 2 }; let k: string; let s = ""; for (k in o) s = s + k + o[k]; return s; }
 console.log(typed() + " | " + keysIn({ u: 1, v: 2 }) + " | " + keysIn([10, 20]) + " | " + keysIn(new P()) + " | " + keysIn("ab"));
 console.log(inherited() + " | " + deleted() + " | " + letHead() + " | [" + keysIn(null) + keysIn(undefined) + keysIn(5) + "]");
+const g: any = () => 0; g.w = 1;
+console.log("[" + keysIn(() => 1) + "] [" + keysIn(new P().m) + "] [" + keysIn(g) + "]");
 "#
         ),
-        "a,b | u,v | 0,1 | x,y | 0,1\nb,a | a,c | p1q2 | []"
+        "a,b | u,v | 0,1 | x,y | 0,1\nb,a | a,c | p1q2 | []\n[] [] [w]"
     );
 }
 
