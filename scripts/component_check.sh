@@ -50,14 +50,14 @@ cargo build --locked --profile perry-dev -p perry -p perry-runtime-static \
   --features perry/target-wasi
 cargo build --locked --profile perry-dev -p perry-wit --example componentize
 cargo build --locked --profile perry-dev -p perry-component-host --example component_wat
-# The guest suite's wasm32 archive is the last build on target/. Everything
-# until its join compiles Perry programs (PERRY_NO_AUTO_OPTIMIZE) or builds in
-# target-instr; the command suite's one cargo build waits for target/'s lock.
-background wasm python3 scripts/wasi_build_runtime.py --gc-instruments
 export GC_EFFECTS_BIN="$CARGO_TARGET_DIR/perry-dev/perry-gc-effects"
 scripts/gc_call_effects/sidecars.sh "$CARGO_TARGET_DIR/perry-dev"
 finish instr
 PERRY_INSTR_PACKAGES=runtime scripts/build_instr_runtime.sh '' perry-dev
+# The guest suite's wasm32 archive is the last build. The native suites below
+# compile Perry programs (PERRY_NO_AUTO_OPTIMIZE) beside it; their one cargo
+# build waits for target/'s lock.
+background wasm python3 scripts/wasi_build_runtime.py --gc-instruments
 for suite in persistent async reader producer; do
   python3 "scripts/component_${suite}_acceptance.py" \
     --perry "$CARGO_TARGET_DIR/perry-dev/perry" \
