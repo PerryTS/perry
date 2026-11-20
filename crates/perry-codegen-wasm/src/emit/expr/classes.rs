@@ -433,13 +433,26 @@ impl<'a> FuncEmitCtx<'a> {
                     // Look up parent class name
                     if let Some(parent_name) = self.emitter.class_parent_map.get(current_class) {
                         if let Some(&ctor_idx) = self.emitter.class_ctor_map.get(parent_name) {
+                            // A declared constructor's args pass through a parent with only
+                            // synthesized constructors to the built-in's. Its own implicit
+                            // `super()` then forwards nothing, so the built-in is set up once.
+                            let implicit = &self.emitter.implicit_ctor_classes;
+                            let forwarded = implicit.contains(parent_name)
+                                && !implicit.contains(current_class)
+                                && self.host_base_parent(current_class).is_some();
+                            if forwarded {
+                                func.instruction(&Instruction::LocalGet(0));
+                                self.emit_host_super_init(func, args);
+                                func.instruction(&Instruction::Drop);
+                            }
+                            let ctor_args: &[Expr] = if forwarded { &[] } else { args };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
-                            for arg in args {
+                            for arg in ctor_args {
                                 self.emit_expr(func, arg);
                             }
                             if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                                let provided = args.len() + 1;
+                                let provided = ctor_args.len() + 1;
                                 for _ in provided..expected {
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                                 }

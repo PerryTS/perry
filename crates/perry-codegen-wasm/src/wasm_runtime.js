@@ -1720,13 +1720,20 @@ function __classFunctionParentProto(className) {
   return __classFunctionParentProtos.has(className) ? __classFunctionParentProtos.get(className) : Object.prototype;
 }
 // A collection constructor's adder (`set` or `add`), read as `obj.set` reads it, so
-// through a compiled getter too, and which must be callable.
+// through a compiled getter too, as a function that calls it on `obj`. It must be
+// callable: a host function or a Perry closure.
 function __hostAdder(obj, name) {
   const fn = __memDispatch.class_get_field(obj, name);
   // A getter's throw is pending, not thrown: construction stops with it.
   __memDispatch.propagate_exception(true);
+  if (__isPerryClosure(fn)) {
+    return (...args) => {
+      __callClosureMethod(fn, obj, args);
+      __memDispatch.propagate_exception(true);
+    };
+  }
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
-  return fn;
+  return (...args) => fn.apply(obj, args);
 }
 // The class name, after recording its constructor slot the first time `new` sees it.
 function __classNoteCtorSlot(className, ctorIdx) {
@@ -2668,13 +2675,13 @@ const __memDispatch = {
         const set = __hostAdder(obj, 'set');
         for (const e of a[0]) {
           if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
-          set.call(obj, e[0], e[1]);
+          set(e[0], e[1]);
         }
       }
     } else if (obj instanceof Set || obj instanceof WeakSet) {
       if (a[0] != null) {
         const add = __hostAdder(obj, 'add');
-        for (const v of a[0]) add.call(obj, v);
+        for (const v of a[0]) add(v);
       }
     } else if (Array.isArray(obj)) {
       const made = Array(...a);
@@ -2898,11 +2905,13 @@ const __memDispatch = {
     if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
-    // Check for compiled getter method — WASM uses i64 (BigInt)
+    // Check for compiled getter method — WASM uses i64 (BigInt). A nearer class's
+    // method of that name hides a farther class's getter.
     if (__classOf(obj)) {
       let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
+        if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) break;
         if (methods && ('__get_' + fname) in methods) {
           const fn = wasmInstance?.exports.__indirect_function_table?.get(methods['__get_' + fname]);
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));

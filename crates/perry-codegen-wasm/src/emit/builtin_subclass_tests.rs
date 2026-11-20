@@ -103,3 +103,44 @@ try { new NotFn([1]); console.log("built"); } catch (e) { console.log((e as Erro
         "blocked\nTypeError"
     );
 }
+
+// A declared constructor's `super(...)` through field-only parents reaches the
+// built-in's constructor once, and the parents' implicit `super()` does not reset it.
+// Expected output is Node's.
+#[test]
+fn super_through_a_field_only_parent_reaches_the_builtin() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class B extends Map<string, number> { label = "b"; }
+class B2 extends B { more = 1; }
+class C extends B2 { constructor(e: any) { super(e); } }
+class L extends Array<number> { tag = "l"; }
+class L2 extends L { constructor() { super(1, 2, 3); } }
+const c = new C([["k", 1]]);
+const l = new L2();
+console.log(c.size + " " + c.get("k") + " " + c.label + c.more + " " + l.length + " " + l.join("-") + " " + l.tag);
+"#
+        ),
+        "1 1 b1 3 1-2-3 l"
+    );
+}
+
+// The adder is the nearest definition of `set`/`add`: a subclass method hides an
+// ancestor's getter, and a getter may return a closure, which is called with the
+// instance as `this`. Expected output is Node's.
+#[test]
+fn the_adder_is_the_nearest_definition_and_may_be_a_closure() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Guarded extends Map<string, number> { get set(): any { throw new Error("blocked"); } }
+class Open extends Guarded { set(k: string, v: number): any { return Map.prototype.set.call(this, k, v); } }
+const seen: string[] = [];
+class Via extends Map<string, number> { get set(): any { return (k: string, v: number) => { seen.push(k + v); }; } }
+console.log(new Open([["k", 1]]).size + " " + new Via([["a", 1], ["b", 2]]).size + " " + seen.join(","));
+"#
+        ),
+        "1 0 a1,b2"
+    );
+}
