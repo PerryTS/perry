@@ -66,3 +66,40 @@ console.log(b.length + " " + Object.prototype.hasOwnProperty.call(b, "0"));
         "mine0 fl true\n7\nTypeError\n2\n0\n2 true"
     );
 }
+
+// A class with field initializers but no declared constructor, or one below it, still
+// forwards `new`'s arguments to the built-in's constructor before its fields run.
+// Expected output is Node's.
+#[test]
+fn a_field_only_builtin_subclass_forwards_its_arguments() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class F extends Map<string, number> { label = "m"; }
+class G extends F { extra = 2; }
+const f = new F([["k", 1]]);
+const g = new G([["a", 1], ["b", 2]]);
+console.log(f.size + " " + f.get("k") + " " + f.label + " " + g.size + " " + g.label + g.extra);
+"#
+        ),
+        "1 1 m 2 m2"
+    );
+}
+
+// The collection constructor reads its adder through a compiled getter too: a getter
+// that throws stops construction, and one that returns a non-callable is a TypeError.
+// Expected output is Node's.
+#[test]
+fn a_builtin_subclass_reads_its_adder_through_a_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Blocked extends Map<string, number> { get set(): any { throw new Error("blocked"); } }
+class NotFn extends Set<number> { get add(): any { return 5; } }
+try { new Blocked([]); console.log("built"); } catch (e) { console.log((e as Error).message); }
+try { new NotFn([1]); console.log("built"); } catch (e) { console.log((e as Error).constructor.name); }
+"#
+        ),
+        "blocked\nTypeError"
+    );
+}

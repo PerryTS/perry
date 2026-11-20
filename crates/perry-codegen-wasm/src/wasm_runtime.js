@@ -1719,9 +1719,12 @@ const __classFunctionParentProtos = new Map();
 function __classFunctionParentProto(className) {
   return __classFunctionParentProtos.has(className) ? __classFunctionParentProtos.get(className) : Object.prototype;
 }
-// A collection constructor's adder (`set` or `add`), which must be callable.
+// A collection constructor's adder (`set` or `add`), read as `obj.set` reads it, so
+// through a compiled getter too, and which must be callable.
 function __hostAdder(obj, name) {
-  const fn = obj[name];
+  const fn = __memDispatch.class_get_field(obj, name);
+  // A getter's throw is pending, not thrown: construction stops with it.
+  __memDispatch.propagate_exception(true);
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
   return fn;
 }

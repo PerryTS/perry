@@ -345,8 +345,15 @@ impl<'a> FuncEmitCtx<'a> {
                     .class_ctor_map
                     .get(class_name.as_str())
                     .copied();
-                if host_base.is_some() && ctor.is_none() {
-                    // The implicit constructor forwards its args to the built-in's.
+                // An implicit constructor forwards its args to the built-in's; a
+                // synthesized one (field initializers only) then takes none.
+                let forwarded = host_base.is_some()
+                    && (ctor.is_none()
+                        || self
+                            .emitter
+                            .implicit_ctor_classes
+                            .contains(class_name.as_str()));
+                if forwarded {
                     self.emit_host_super_init(func, args);
                 }
                 if self.extends_builtin_error(class_name) {
@@ -358,7 +365,8 @@ impl<'a> FuncEmitCtx<'a> {
                 // Call the compiled constructor if it exists
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
-                    for arg in args {
+                    let ctor_args: &[Expr] = if forwarded { &[] } else { args };
+                    for arg in ctor_args {
                         self.emit_expr(func, arg);
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
@@ -366,7 +374,7 @@ impl<'a> FuncEmitCtx<'a> {
                     // evaluated args so they don't outlive the `call` and
                     // accumulate on the enclosing block's stack (#183).
                     if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
-                        let provided = args.len() + 1;
+                        let provided = ctor_args.len() + 1;
                         for _ in provided..expected {
                             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                         }
