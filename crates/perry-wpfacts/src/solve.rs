@@ -1094,6 +1094,7 @@ impl Model {
                     && !self.settle_define()
                     && !self.settle_proto_first()
                     && !self.settle_record_entry()
+                    && !self.settle_ta_len()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;

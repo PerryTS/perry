@@ -972,11 +972,30 @@ fn record(ctx: &FnCtx<'_>, site: u64, what: &str, property: &str, p: &FieldProof
     }
 }
 
-fn pack_cids(ids: &[u32]) -> (String, String) {
-    let at = |i: usize| ids.get(i).copied().unwrap_or(u32::MAX) as u64;
-    let a = (at(0) | (at(1) << 32)) as i64;
-    let b = (at(2) | (at(3) << 32)) as i64;
-    (a.to_string(), b.to_string())
+/// The witness's receiver set: every proven class id of the site, as one
+/// private `[N x i32]` constant next to it (check builds only; the witness
+/// admits a receiver by membership in the whole set, however many classes
+/// the proof admits). Returns the address and count operands.
+fn class_ids_operand(ctx: &mut FnCtx<'_>, ids: &[u32]) -> (String, String) {
+    if ids.is_empty() {
+        return ("0".to_string(), "0".to_string());
+    }
+    let ordinal = ctx.ic_site_counter;
+    ctx.ic_site_counter += 1;
+    let global = format!(
+        "perry_wpfacts_cids_{}__{ordinal}",
+        ctx.strings.module_prefix()
+    );
+    let words: Vec<_> = ids.iter().map(|&c| format!("i32 {}", c as i32)).collect();
+    ctx.typed_parse_rodata.push(format!(
+        "@{global} = private constant [{} x i32] [{}], align 4",
+        ids.len(),
+        words.join(", ")
+    ));
+    (
+        format!("ptrtoint (ptr @{global} to i64)"),
+        ids.len().to_string(),
+    )
 }
 
 /// The contract witness of one elided access (contract builds only).
@@ -1009,7 +1028,7 @@ pub(crate) fn emit_witness(
             crate::verify_facts::raw_site(ctx, "field", Some(property), &p.class_ids, &what);
         let (key, key_len) =
             crate::verify_facts::raw_bytes(ctx.strings.module_prefix(), property.as_bytes());
-        let (c01, c23) = pack_cids(&p.class_ids);
+        let (cids, ncids) = class_ids_operand(ctx, &p.class_ids);
         let (triple, form) = (ctx.target_triple, p.form());
         let off_of = |s: u32| crate::target_layout::layout_key_off(triple, form, s).to_string();
         let (slot, off) = if p.agrees() {
@@ -1046,8 +1065,8 @@ pub(crate) fn emit_witness(
                 (DOUBLE, value),
                 (I64, &key),
                 (I64, &key_len),
-                (I64, &c01),
-                (I64, &c23),
+                (I64, &cids),
+                (I64, &ncids),
                 (I32, &slot),
                 (I32, &off),
                 (I32, &(p.kind_mask as i32).to_string()),
@@ -1062,7 +1081,7 @@ pub(crate) fn emit_witness(
         crate::verify_facts::site_arg(ctx, &what, crate::verify_facts::Fact::Slot, &p.class_ids);
     let key_idx = ctx.strings.intern(property);
     let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-    let (c01, c23) = pack_cids(&p.class_ids);
+    let (cids, ncids) = class_ids_operand(ctx, &p.class_ids);
     // The slot names the key (F3); its byte offset is the address the
     // access used, which the witness reads.
     let (triple, form) = (ctx.target_triple, p.form());
@@ -1104,8 +1123,8 @@ pub(crate) fn emit_witness(
             (DOUBLE, recv_box),
             (DOUBLE, value),
             (I64, &key_handle),
-            (I64, &c01),
-            (I64, &c23),
+            (I64, &cids),
+            (I64, &ncids),
             (I32, &slot),
             (I32, &off),
             (I32, &(p.kind_mask as i32).to_string()),

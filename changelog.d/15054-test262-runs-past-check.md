@@ -1,0 +1,1 @@
+CI: the nightly `test262` shards run whenever the plan and `gap-suite-build` succeeded and the run was not cancelled, so a failed `check` no longer skips them. `check` stays in the job's `needs` for ordering only (#15038).

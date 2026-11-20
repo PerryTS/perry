@@ -15,15 +15,17 @@ fn reloc_mode_for(effective_target: &str, wasm_static_opt_in: bool) -> RelocMode
     }
 }
 
-/// Whether `effective_target`'s thread-locals are emulated: Android and
-/// OpenHarmony, where rustc builds the runtime archive with
-/// `tls-model = emulated` (its target specs), so the runtime's own
-/// thread-locals exist only as `__emutls_v.<name>` control variables. Emitted
-/// code that names one of them natively finds no TLS symbol to bind to, and
-/// the program's own thread-locals (module state of a program that starts a
-/// Worker) take the same model as the runtime it is linked with.
+/// Whether `effective_target`'s thread-locals are emulated: OpenHarmony,
+/// where rustc builds the runtime archive with `tls-model = emulated` (its
+/// target spec), so the runtime's own thread-locals exist only as
+/// `__emutls_v.<name>` control variables. Emitted code that names one of them
+/// natively finds no TLS symbol to bind to, and the program's own
+/// thread-locals (module state of a program that starts a Worker) take the
+/// same model as the runtime it is linked with. Android (API 29,
+/// `android_api_level!`) builds its runtime with native thread-locals
+/// (`.cargo/config.toml`: `tls-model=global-dynamic`), so it is not emulated.
 pub(crate) fn emulated_tls(effective_target: &str) -> bool {
-    effective_target.contains("android") || effective_target.contains("ohos")
+    effective_target.contains("ohos")
 }
 
 pub(super) fn optimize_and_emit(
@@ -355,19 +357,15 @@ entry:
         String::from_utf8(asm).expect("utf-8 assembly")
     }
 
-    /// Android and OpenHarmony thread-locals take the model rustc builds
-    /// their runtime archives with (`tls-model = emulated`): every access goes
-    /// through `__emutls_get_address` on the `__emutls_v.<name>` control
-    /// variable the runtime defines, and no native TLS relocation is left
-    /// for a `-shared` link to reject. Linux keeps native TLS.
+    /// OpenHarmony thread-locals take the model rustc builds its runtime
+    /// archive with (`tls-model = emulated`): every access goes through
+    /// `__emutls_get_address` on the `__emutls_v.<name>` control variable the
+    /// runtime defines, and no native TLS relocation is left for a `-shared`
+    /// link to reject. Linux and Android (API 29, runtime built with
+    /// `tls-model=global-dynamic`) keep native TLS.
     #[test]
     fn emulated_tls_matches_the_runtime_archive_model() {
-        for triple in [
-            "aarch64-linux-android",
-            "x86_64-linux-android",
-            "aarch64-unknown-linux-ohos",
-            "x86_64-unknown-linux-ohos",
-        ] {
+        for triple in ["aarch64-unknown-linux-ohos", "x86_64-unknown-linux-ohos"] {
             assert!(emulated_tls(triple), "{triple}");
             let asm = tls_access_asm(triple);
             assert!(asm.contains("__emutls_get_address"), "{triple}:\n{asm}");
@@ -383,7 +381,12 @@ entry:
                 );
             }
         }
-        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-unknown-linux-android29",
+            "x86_64-unknown-linux-android29",
+        ] {
             assert!(!emulated_tls(triple), "{triple}");
             let asm = tls_access_asm(triple);
             assert!(!asm.contains("__emutls"), "{triple}:\n{asm}");
