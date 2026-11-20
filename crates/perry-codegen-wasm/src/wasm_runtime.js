@@ -5999,8 +5999,9 @@ function __classDispatch(objVal, mname, rawArgs) {
 
 // Convert raw u64 BigInt bits to a JS value, decoding NaN-boxed tags directly.
 // Never reads NaN-boxed values as f64 (Firefox canonicalizes NaN through Float64Array).
+// A void WASM function returns JS `undefined` rather than tagged bits.
 function __bitsToJsValue(bits) {
-  if (bits === TAG_UNDEFINED) return undefined;
+  if (bits === undefined || bits === TAG_UNDEFINED) return undefined;
   if (bits === TAG_NULL) return null;
   if (bits === TAG_TRUE) return true;
   if (bits === TAG_FALSE) return false;

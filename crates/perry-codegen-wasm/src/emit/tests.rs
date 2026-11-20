@@ -870,7 +870,8 @@ console.log(bump(5) + " " + total);
 }
 
 // A call through a closure or function value runs the callee with every argument, for any
-// argument count, and evaluates each argument once. Expected output is Node's.
+// argument count, evaluates each argument once, and a void callee yields `undefined`.
+// Expected output is Node's.
 #[test]
 fn a_dynamic_call_passes_every_argument_once() {
     assert_eq!(
@@ -893,9 +894,13 @@ n = 0; a2(tick(), tick()); counts.push(n);
 n = 0; f4(tick(), 0, 0, 0); counts.push(n);
 n = 0; t1(tick()); counts.push(n);
 console.log(counts.join(","));
+let sunk = 0;
+function sink(a: number, b?: number, c?: number, d?: number): void { sunk += a; }
+const sv: any = sink;
+console.log(sv(1) + " " + sv(1, 2, 3, 4) + " " + sunk);
 "#
         ),
-        "label: 1234 12345 5678 10\n1,2,1,1"
+        "label: 1234 12345 5678 10\n1,2,1,1\nundefined undefined 2"
     );
 }
 
