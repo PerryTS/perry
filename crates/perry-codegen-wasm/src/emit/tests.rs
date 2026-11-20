@@ -1378,6 +1378,30 @@ fn property_update_stores_and_returns_the_old_or_new_value() {
     );
 }
 
+// `for...in` visits the enumerable string keys of an object and its prototype chain:
+// a literal, an array, a class instance, a boxed string, a key deleted before its
+// turn is skipped, a closure and a method value have none. Expected output is Node's.
+#[test]
+fn for_in_visits_enumerable_keys_of_the_object_and_its_prototypes() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const keysIn = (o: any) => { const ks: string[] = []; for (const k in o) ks.push(k); return ks.join(","); };
+class P { x = 1; y = 2; m() { return 0; } }
+function typed() { const o = { a: 1, b: 2 }; const ks: string[] = []; for (const k in o) ks.push(k); return ks.join(","); }
+function inherited() { const o: any = { b: 2 }; Object.setPrototypeOf(o, { a: 1 }); Object.defineProperty(o, "h", { value: 3, enumerable: false }); return keysIn(o); }
+function deleted() { const o: any = { a: 1, b: 2, c: 3 }; const ks: string[] = []; for (const k in o) { ks.push(k); delete o.b; } return ks.join(","); }
+function letHead() { const o: any = { p: 1, q: 2 }; let k: string; let s = ""; for (k in o) s = s + k + o[k]; return s; }
+console.log(typed() + " | " + keysIn({ u: 1, v: 2 }) + " | " + keysIn([10, 20]) + " | " + keysIn(new P()) + " | " + keysIn("ab"));
+console.log(inherited() + " | " + deleted() + " | " + letHead() + " | [" + keysIn(null) + keysIn(undefined) + keysIn(5) + "]");
+const g: any = () => 0; g.w = 1;
+console.log("[" + keysIn(() => 1) + "] [" + keysIn(new P().m) + "] [" + keysIn(g) + "]");
+"#
+        ),
+        "a,b | u,v | 0,1 | x,y | 0,1\nb,a | a,c | p1q2 | []\n[] [] [w]"
+    );
+}
+
 #[test]
 fn member_update_on_this_computed_keys_and_elements() {
     assert_eq!(
