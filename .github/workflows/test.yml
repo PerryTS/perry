@@ -444,8 +444,8 @@ jobs:
       - name: Type-check Windows runtime and stdlib
         if: ${{ !cancelled() }}
         env:
-          # Keep cross-target objects out of lint's shared Linux Rust cache.
-          CARGO_TARGET_DIR: /tmp/perry-windows-typecheck
+          # Inside target/ so lint's cache family keeps the Windows dependencies.
+          CARGO_TARGET_DIR: target/windows-typecheck
         run: |
           rustup target add x86_64-pc-windows-msvc
           export PATH="$LLVM_SYS_221_PREFIX/bin:$PATH"
