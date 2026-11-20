@@ -80,6 +80,10 @@ NON_HANDLE_TABLES = {
     ("crates/perry-runtime/src/gc/image_cells.rs", "IMAGE_REMEMBERED"),
     ("crates/perry-runtime/src/gc/fromspace_scan.rs", "SNAPSHOT_PAGES"),
     ("crates/perry-runtime/src/gc/diag_sites.rs", "CHARGES"),
+    # LIFE I3d's mark-parent record (PERRY_LIFE_REGIONS_WHY, instrumented
+    # runtime only: the module is #[cfg(perry_gc_instruments)]): header address
+    # -> the parent that marked it during the one armed full, cleared on arm.
+    ("crates/perry-runtime/src/gc/life_why.rs", "MAP"),
     # Compiled code/literal/site metadata, not heap object identity.
     # `builtins/fn_metadata.rs` used to hold `REGISTRY` and `OVERRIDES` here; #13442
     # replaced both modules' tables with stable function-metadata identity, so the
@@ -117,7 +121,6 @@ EXTRA_TABLES: dict[tuple[str, str], int] = {
     ("crates/perry-runtime/src/geisterhand_registry.rs", "REGISTRY"): 1,
     ("crates/perry-runtime/src/tui/hooks.rs", "SLOTS"): 1,
     ("crates/perry-runtime/src/tui/state.rs", "SLOTS"): 1,
-    ("crates/perry-runtime/src/tui/tree.rs", "REGISTRY"): 1,
     ("crates/perry-ffi/src/handle_lifecycle.rs", "ORPHANS"): 1,
     ("crates/perry-stdlib/src/readline/mod.rs", "READLINE_INTERFACES"): 1,
 }
@@ -262,6 +265,10 @@ LEDGER_PATH_MOVES = {
     # perry-ffi with the GC-proven id reuse; the file no longer exists in stdlib.
     "crates/perry-stdlib/src/common/handle_lifecycle.rs":
         "crates/perry-ffi/src/handle_lifecycle.rs",
+    # The npm `typescript` binding was removed and its crate renamed to
+    # perry-ext-bun; the Bun transpiler/build registries moved with the file.
+    "crates/perry-ext-typescript/src/bun.rs":
+        "crates/perry-ext-bun/src/bun.rs",
 }
 
 

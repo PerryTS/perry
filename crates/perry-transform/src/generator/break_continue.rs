@@ -87,6 +87,7 @@ pub fn rewrite_break_continue_in_stmt(stmt: &mut Stmt, state_id: LocalId, next_l
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_break_continue_in_stmts(body, state_id, next_local_id);
             if let Some(c) = catch.as_mut() {
@@ -207,6 +208,7 @@ pub fn fix_break_continue_sentinels_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             fix_break_continue_sentinels_in_stmts(body, state_id, break_target, continue_target);
             if let Some(c) = catch.as_mut() {
@@ -368,6 +370,7 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if body_contains_yield(body) {
                     return true;
@@ -399,16 +402,49 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
 /// Collect variable declarations that need to be hoisted to the outer scope.
 pub fn collect_hoisted_vars(stmts: &[Stmt]) -> Vec<(LocalId, String, Type)> {
     let mut vars = Vec::new();
-    collect_vars_recursive(stmts, &mut vars);
+    collect_vars_recursive(stmts, &mut |stmt| {
+        if let Stmt::Let { id, name, ty, .. } = stmt {
+            vars.push((*id, name.clone(), ty.clone()));
+        }
+    });
     vars
 }
 
-pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, Type)>) {
+/// What a hoisted binding's own declaration says about the binding, read
+/// from the source body before the state split: `immutable` holds the
+/// `const` declarations (`Stmt::Let { mutable: false }`), `tdz` the lexical
+/// bindings whose storage the HIR seeds with the TDZ sentinel
+/// (`Stmt::PreallocateTdzBoxes`). The transform keeps each declaration in its
+/// state body; the outer wrapper only reserves the storage, and it must not
+/// end a dead zone that only the declaration ends.
+pub struct HoistedDeclFacts {
+    pub immutable: std::collections::HashSet<LocalId>,
+    pub tdz: std::collections::HashSet<LocalId>,
+}
+
+pub fn collect_hoisted_decl_facts(stmts: &[Stmt]) -> HoistedDeclFacts {
+    let mut facts = HoistedDeclFacts {
+        immutable: Default::default(),
+        tdz: Default::default(),
+    };
+    collect_vars_recursive(stmts, &mut |stmt| match stmt {
+        Stmt::Let {
+            id, mutable: false, ..
+        } => {
+            facts.immutable.insert(*id);
+        }
+        Stmt::PreallocateTdzBoxes(ids) => facts.tdz.extend(ids.iter().copied()),
+        _ => {}
+    });
+    facts
+}
+
+/// Visit every statement of the function's own hoisting scope: the body and
+/// every nested control-flow body, never a nested closure.
+fn collect_vars_recursive(stmts: &[Stmt], vars: &mut dyn FnMut(&Stmt)) {
     for stmt in stmts {
+        vars(stmt);
         match stmt {
-            Stmt::Let { id, name, ty, .. } => {
-                vars.push((*id, name.clone(), ty.clone()));
-            }
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -442,6 +478,7 @@ pub fn collect_vars_recursive(stmts: &[Stmt], vars: &mut Vec<(LocalId, String, T
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_vars_recursive(body, vars);
                 if let Some(c) = catch {
@@ -496,6 +533,7 @@ fn stmts_have_loop_level_continue(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_have_loop_level_continue(body)
                 || catch
@@ -692,6 +730,7 @@ fn stmt_may_break_switch(s: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_may_break_switch)
                 || catch
@@ -727,6 +766,7 @@ fn rewrite_switch_breaks_in_stmt(s: &Stmt, done_id: LocalId) -> Stmt {
             body,
             catch,
             finally,
+            forof_completion,
         } => Stmt::Try {
             body: guarded(body),
             catch: catch.as_ref().map(|c| CatchClause {
@@ -734,6 +774,7 @@ fn rewrite_switch_breaks_in_stmt(s: &Stmt, done_id: LocalId) -> Stmt {
                 body: guarded(&c.body),
             }),
             finally: finally.as_ref().map(|f| guarded(f)),
+            forof_completion: *forof_completion,
         },
         other => other.clone(),
     }
@@ -771,6 +812,7 @@ pub fn prefix_loop_continues(stmts: &mut Vec<Stmt>, prefix: &[Stmt]) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 prefix_loop_continues(body, prefix);
                 if let Some(c) = catch {
@@ -820,6 +862,7 @@ pub fn stmts_have_continue_inside_try_finally(stmts: &[Stmt]) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             if finally.is_some()
                 && (stmts_have_loop_level_continue(body)
@@ -939,6 +982,7 @@ fn stmt_can_escape_to_label(s: &Stmt, label: &str) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts_can_escape_to_label(body, label)
                 || catch
@@ -994,6 +1038,7 @@ pub fn desugar_labeled_escape_across_nested_loops(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 desugar_labeled_escape_across_nested_loops(body, label, next_local_id);
                 if let Some(c) = catch.as_mut() {
@@ -1106,6 +1151,7 @@ fn rewrite_escape_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 rewrite_escape_in_stmts(body, label, carrier, next_local_id);
                 if let Some(c) = catch.as_mut() {

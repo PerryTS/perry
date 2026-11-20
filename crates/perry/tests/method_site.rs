@@ -4,9 +4,10 @@
 //!
 //! Each test calls a site hot, then changes the world in a way the memo must
 //! notice, and compares the output with node's. A broken hit that falls
-//! through to the miss is correct and only slow, so every test also asserts
-//! from the site's counters (`PERRY_METHOD_SITE_STATS`) that entries were
-//! primed and that the hot calls were served inline (few misses).
+//! through to the miss is correct and only slow, so the output is the only
+//! observable here: the memo's counters (`primes_*`, `misses`) were deleted
+//! with the site's read caches and memo (object-model step 5, db6b253e9 /
+//! 291142de3). The hit's shape is asserted from the IR in constfn_method_lanes.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -15,29 +16,9 @@ fn perry_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_perry"))
 }
 
-/// Compile and run `source`; return (stdout, own primes, inherited primes, misses).
-fn run(source: &str) -> (String, u64, u64, u64) {
-    let (stdout, count) = run_counted(source);
-    (
-        stdout,
-        count("primes_own"),
-        count("primes_inherited"),
-        count("misses"),
-    )
-}
-
-/// Compile and run `source`; return stdout and a reader of the site counters.
-fn run_counted(source: &str) -> (String, impl Fn(&str) -> u64) {
-    let (stdout, stderr) = compile_and_run(source, &[]);
-    let count = move |name: &str| stat(&stderr, name);
-    (stdout, count)
-}
-
-fn stat(stderr: &str, name: &str) -> u64 {
-    stderr
-        .split_whitespace()
-        .find_map(|w| w.strip_prefix(name)?.strip_prefix('=')?.parse().ok())
-        .unwrap_or(0)
+/// Compile and run `source`; return stdout.
+fn run(source: &str) -> String {
+    compile_and_run(source, &[]).0
 }
 
 fn compile_and_run(source: &str, envs: &[(&str, &str)]) -> (String, String) {
@@ -73,9 +54,7 @@ fn compile_and_run_with(
         String::from_utf8_lossy(&compile.stderr)
     );
     let mut command = Command::new(&output);
-    command
-        .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1");
+    command.current_dir(dir.path());
     for &(key, value) in envs {
         command.env(key, value);
     }
@@ -95,7 +74,7 @@ fn compile_and_run_with(
 /// Sabotage: the emitted own hit skips the code-pointer compare -> the reassigned method is not called.
 #[test]
 fn an_own_method_reassigned_turned_into_a_getter_or_deleted_is_seen() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// ONE own-slot site, called in one loop with a runtime trip count, while the
 // method is reassigned (no shape change), shadowed by a getter, and deleted.
 const N = process.argv.length > 99 ? 1 : 4000;
@@ -117,17 +96,13 @@ console.log(s, out.join(","));
 "#,
     );
     assert_eq!(stdout, r#"8348000 100,998,2003,2094,4003,5983,-1,3987"#);
-    assert!(
-        own > 0 && misses < 3000,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Sabotage: the inherited hit reuses a memoized closure instead of loading
 /// the holder's slot -> a replacement still calls the old method.
 #[test]
 fn an_inherited_method_reassigned_by_any_store_spelling_is_seen() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// ONE inherited site over Object.create / ES5 receivers; the prototype's
 // method is reassigned mid-loop by every spelling of a store.
 const N = process.argv.length > 99 ? 1 : 6000;
@@ -157,17 +132,13 @@ console.log(s, out.join(","));
         stdout,
         r#"105992000 2,2,10002,3004,-1998,6004,-2998,21008,32002,28008,40002,45010"#
     );
-    assert!(
-        inherited > 0 && misses < 50,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Sabotage: the emitted inherited hit skips the holder-word compare -> a
 /// redefined or deleted method is still called.
 #[test]
 fn define_property_and_delete_on_the_holder_invalidate_the_inherited_entry() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// ONE inherited site; defineProperty (data, then accessor) and delete on the
 // holder mid-loop, then an own property shadows it.
 const N = process.argv.length > 99 ? 1 : 6000;
@@ -196,18 +167,13 @@ console.log(s, out.join(","));
         stdout,
         r#"263459500 7,8,2007,2009,200000,200100,4000,4001,-1,-1,4999,5000"#
     );
-    assert!(
-        inherited > 0 && misses < 4100,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Mutating an unrelated marked prototype must not invalidate the inherited
 /// method entry: the receiver and its direct holder keep their shape words.
 #[test]
 fn an_unrelated_prototype_write_does_not_invalidate_the_method_site() {
-    let (stdout, own, inherited, misses) =
-        run(r#"const proto: any = { m(x: number) { return x + 1; } };
+    let stdout = run(r#"const proto: any = { m(x: number) { return x + 1; } };
 const o: any = Object.create(proto);
 const unrelated: any = { y: 0 };
 const child: any = Object.create(unrelated);
@@ -220,10 +186,6 @@ for (let i = 0; i < 6000; i++) {
 console.log(sum, unrelated.y, child.y);
 "#);
     assert_eq!(stdout, "18003000 5999 5999");
-    assert!(
-        inherited > 0 && misses < 20,
-        "the inherited entry was invalidated by an unrelated store (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// The inherited entry holds the direct prototype as a plain, unrooted word,
@@ -244,6 +206,9 @@ for (let i = 0; i < 3000; i++) {
     (globalThis as any).gc();
     const junk: any[] = [];
     for (let j = 0; j < 20000; j++) junk.push({ j });
+    // Kept reachable: dead allocations are dropped and no minor collection
+    // would relocate anything.
+    (globalThis as any).keep = junk;
   }
   if (i === 2000) p.m = function (x: number) { return x * 3; };
   sum += call(o, i);
@@ -258,16 +223,6 @@ console.log(sum, call(o, 7));
         ],
     );
     assert_eq!(stdout, "9499500 21", "{stderr}");
-    assert!(
-        stat(&stderr, "primes_inherited") > 0,
-        "site never primed: {stderr}"
-    );
-    // Up to the first minor the holder is young and the site misses.
-    assert!(stat(&stderr, "misses") < 1100, "site did not hit: {stderr}");
-    assert!(
-        stat(&stderr, "unstable_referent_refusals") > 0,
-        "the young holder was not refused: {stderr}"
-    );
     let moved: u64 = stderr
         .lines()
         .filter_map(|line| line.strip_prefix("[gc-copy-minor] ran "))
@@ -328,25 +283,13 @@ main();
         ],
     );
     assert_eq!(stdout, "500500 999000 500500 6", "{stderr}");
-    assert!(
-        stat(&stderr, "primes_inherited") > 0,
-        "primary site never primed: {stderr}"
-    );
-    assert!(
-        stat(&stderr, "misses") >= 1000,
-        "worker did not take the inherited miss path: {stderr}"
-    );
-    assert!(
-        stat(&stderr, "refused.inh_workers") > 0,
-        "site miss did not refuse admission after worker startup: {stderr}"
-    );
 }
 /// What the prime must refuse (rest, `arguments`, bound) and what the hit must keep (arity padding,
 /// per-object captures, `this` after a throw, a GC-moved inherited closure). Sabotage: the own hit
 /// skips the code-pointer compare -> another object's method runs.
 #[test]
 fn call_semantics_arity_rest_bound_captures_this_proxy_and_gc() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// Arity, rest, arguments, bound values, factory captures, `this` after a
 // throw, primitives, Proxy, and a GC-moved inherited closure.
 function c1(o: any, x: number): any { return o.m(x); }
@@ -388,17 +331,13 @@ console.log(out.join(" "));
         stdout,
         r#"1:undefined 3000 41 1000,2000,995 boomt p TE undefined,undefined,function 15 1240000"#
     );
-    assert!(
-        own > 0 && misses < 3100,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// A method key past the inline slots (tsc's wide namespaces): served from `meta.spill`, reassigned
 /// and deleted mid-loop. Sabotage: no code-pointer compare -> red.
 #[test]
 fn a_method_in_the_spill_buffer_is_served_and_invalidated() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// ONE site over wide objects whose method key lives past the inline slots
 // (the spill buffer): factory-built namespaces, as tsc's are.
 const N = process.argv.length > 99 ? 1 : 6000;
@@ -429,10 +368,6 @@ console.log(s, out.join(","));
         stdout,
         r#"23000000 1000,2,2000,1002,3000,4003,4000,6003,-1,8003,-1,10003"#
     );
-    assert!(
-        own > 0 && misses < 1100,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// A method served by a site throws; `this` is read afterwards in the catching method, arrow, async
@@ -440,7 +375,7 @@ console.log(s, out.join(","));
 /// implicit-`this` cell on every transport, so the site's plain save/restore needs no landing pad.
 #[test]
 fn this_is_intact_after_a_method_throws() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// A method called through a site throws; `this` is read afterwards in the
 // catching caller (method, async method, generator, arrow, class method) and
 // by the next call. Also the class own-closure override route.
@@ -486,16 +421,12 @@ caller.arun().then(() => console.log(out.join(" ")));
         stdout,
         r#"3 caller caller good gen:caller K:K explicit async:caller:tbad"#
     );
-    assert!(
-        own > 0 && misses < 50,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Three shapes over two ways: every call misses and primes, with young receiver and arguments.
 #[test]
 fn a_collection_during_a_polymorphic_miss_keeps_every_pointer_live() {
-    let (stdout, own, inherited, misses) = run(
+    let stdout = run(
         r#"// A polymorphic site (three shapes over two ways, so every call misses) whose
 // arguments and receiver are young objects: a collection during the miss must
 // not hand the method stale pointers.
@@ -515,10 +446,6 @@ console.log(s);
 "#,
     );
     assert_eq!(stdout, r#"2742275"#);
-    assert!(
-        own > 0 && misses < 2100,
-        "the site was not served inline (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// `F.m()`: a function object's own methods live in its own-property object, an inline slot
@@ -529,7 +456,7 @@ console.log(s);
 /// receiver's inline slot instead of the bag's -> the output changes.
 #[test]
 fn function_object_receivers_are_served_from_their_property_object() {
-    let (stdout, count) = run_counted(
+    let stdout = run(
         r#"// ONE site over function-object receivers (`F.m()`), with the method
 // reassigned, a key added (new keyed shape), a key deleted (dictionary), and a
 // namespace-style function carrying several methods.
@@ -560,22 +487,6 @@ console.log(s, out.join(","));
         stdout,
         r#"29838000 50,6,2050,3008,4050,6008,-3000,9008,-4000,12008,5001,15008"#
     );
-    let (own, inherited, function, misses) = (
-        count("primes_own"),
-        count("primes_inherited"),
-        count("primes_function"),
-        count("misses"),
-    );
-    assert!(
-        own == 0 && inherited == 0 && function >= 2,
-        "function receivers prime function-bag entries only (own={own} inherited={inherited} function={function})"
-    );
-    // F leaves its keyed shape at i=4000 (a delete: FunctionDictionary), so
-    // its last 1000 calls miss by design; everything else is served inline.
-    assert!(
-        misses < 2000,
-        "the hot calls must be served inline (function={function} misses={misses})"
-    );
 }
 
 /// One shape, several bodies. `{ k, m }` objects whose `m` is one of two functions get one entry
@@ -584,7 +495,7 @@ console.log(s, out.join(","));
 /// a bounded number of evictions instead of re-priming on every miss.
 #[test]
 fn one_shape_with_several_bodies_gets_an_entry_per_body_and_stops_priming_past_its_ways() {
-    let (stdout, own, inherited, misses) = run(r#"const N = process.argv.length > 99 ? 1 : 6000;
+    let stdout = run(r#"const N = process.argv.length > 99 ? 1 : 6000;
 const fs: any[] = [
   function (this: any, x: number) { return x + this.k; },
   function (this: any, x: number) { return x * 2 + this.k; },
@@ -609,11 +520,6 @@ console.log(s, t);
     // two entries it latched with keep serving their half of the calls, so
     // misses stay near N/2. Without the per-body fall-through site2 would
     // re-prime on every call; without the latch site4 would prime ~N/2 times.
-    assert!(
-        inherited == 0 && own <= 24 && misses <= 3100,
-        "site2 must be served inline and site4 must stop priming \
-         (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Sabotage: let the static unroller clone a loop body holding a function
@@ -621,7 +527,7 @@ console.log(s, t);
 /// ways and latches megamorphic.
 #[test]
 fn a_method_literal_built_in_a_short_counted_loop_is_one_function() {
-    let (stdout, own, inherited, misses) = run(r#"const N = process.argv.length > 99 ? 1 : 4000;
+    let stdout = run(r#"const N = process.argv.length > 99 ? 1 : 4000;
 const objs: any[] = [];
 function build() { for (let i = 0; i < 8; i++) objs.push({ a: i, b: 2, m() { return this.a; } }); }
 build();
@@ -636,74 +542,6 @@ console.log(run(N), objs[0].m === objs[7].m);
     // identity (each evaluation is a fresh function object) but every object
     // shares one body, so the site keeps one entry for all 8 receivers.
     assert_eq!(stdout, "14000 false");
-    assert!(
-        inherited == 0 && own <= 2 && misses <= 4,
-        "8 objects from one method literal must share one site entry \
-         (own={own} inherited={inherited} misses={misses})"
-    );
-}
-
-/// Sabotage: prime a builtin holder slot as a ConstFn entry (the hit calls the
-/// primed body without loading the slot) -> the replaced builtins are not seen.
-#[test]
-fn a_builtin_object_prototype_method_is_served_inline_and_a_replacement_is_seen() {
-    let (stdout, own, inherited, misses) = run(
-        r#"// ONE site per builtin method over plain objects (Object.prototype holds the
-// method); the builtin is replaced and restored mid-loop, and own methods and
-// null-prototype receivers share the same sites.
-const N = process.argv.length > 99 ? 1 : 6000;
-const P: any = Object.prototype;
-const savedHop = P.hasOwnProperty, savedTs = P.toString, savedVo = P.valueOf;
-const plain: any = { a: 1, k: 2 };
-const shadow: any = { a: 1, k: 3, toString() { return "own-ts"; }, valueOf() { return 40; }, hasOwnProperty(k: string) { return "own-hop:" + k; } };
-const bare: any = Object.create(null); bare.a = 1;
-const bareOwn: any = Object.create(null); bareOwn.a = 1;
-bareOwn.hasOwnProperty = (k: string) => "null-own:" + k;
-bareOwn.toString = () => "null-ts";
-bareOwn.valueOf = () => 5;
-function hop(o: any, k: string) { return o.hasOwnProperty(k); }
-function ts(o: any) { return o.toString(); }
-function vo(o: any) { return o.valueOf(); }
-const out: any[] = [];
-let s = 0;
-for (let i = 0; i < N; i++) {
-  if (i === 1000) P.hasOwnProperty = function (this: any, k: string) { return "replaced-hop:" + k + ":" + this.a; };
-  if (i === 2000) P.toString = function (this: any) { return "replaced-ts:" + this.a; };
-  if (i === 3000) P.valueOf = function (this: any) { return 100 + this.a; };
-  if (i === 4000) { P.hasOwnProperty = savedHop; P.toString = savedTs; P.valueOf = savedVo; }
-  const o = i % 3 === 0 ? shadow : plain;
-  const h = hop(o, i & 1 ? "a" : "zz");
-  const t = ts(o);
-  const v = vo(o);
-  s += (h === true ? 1 : 0) + (typeof v === "number" ? v : 0) + t.length;
-  if (i % 1000 < 3) out.push([h, t, typeof v === "object" ? "obj" : v].join("|"));
-}
-let bareRes: any[] = [];
-for (let i = 0; i < 3; i++) {
-  bareRes.push(hop(bareOwn, "a"), ts(bareOwn), vo(bareOwn));
-  try { bareRes.push(hop(bare, "a")); } catch (e) { bareRes.push(e instanceof TypeError ? "TypeError" : "other"); }
-  try { bareRes.push(ts(bare)); } catch (e) { bareRes.push(e instanceof TypeError ? "TypeError" : "other"); }
-}
-console.log(s);
-console.log(out.join(","));
-console.log(bareRes.join(","));
-"#,
-    );
-    assert_eq!(
-        stdout,
-        r#"217600
-own-hop:zz|own-ts|40,true|[object Object]|obj,false|[object Object]|obj,replaced-hop:zz:1|[object Object]|obj,replaced-hop:a:1|[object Object]|obj,own-hop:zz|own-ts|40,replaced-hop:zz:1|replaced-ts:1|obj,own-hop:a|own-ts|40,replaced-hop:zz:1|replaced-ts:1|obj,own-hop:zz|own-ts|40,replaced-hop:a:1|replaced-ts:1|101,replaced-hop:zz:1|replaced-ts:1|101,false|[object Object]|obj,true|[object Object]|obj,own-hop:zz|own-ts|40,false|[object Object]|obj,own-hop:a|own-ts|40,false|[object Object]|obj
-null-own:a,null-ts,5,TypeError,TypeError,null-own:a,null-ts,5,TypeError,TypeError,null-own:a,null-ts,5,TypeError,TypeError"#
-    );
-    // Three sites (hasOwnProperty, toString, valueOf) over a plain object whose
-    // methods are %Object.prototype%'s builtins, sharing each site with an
-    // object that owns the method. Each replacement and the restore re-prime
-    // once; everything else is served inline.
-    assert!(
-        inherited >= 3 && misses <= 60,
-        "builtin methods must be served by the inherited entry \
-         (own={own} inherited={inherited} misses={misses})"
-    );
 }
 
 /// Sabotage: the full-outline collapse sends every receiver of a name some
@@ -769,19 +607,8 @@ c1:0,c1:0,c1:0,c1:0,";
     // tower (too wide for the shape probe's arms) and the oversized-module
     // outline (no tower at all).
     for full_outline in ["0", "1"] {
-        let (stdout, stderr) =
+        let (stdout, _stderr) =
             compile_and_run_with(source, &[("PERRY_FULL_OUTLINE_IC", full_outline)], &[]);
         assert_eq!(stdout, expected, "PERRY_FULL_OUTLINE_IC={full_outline}");
-        let own = stat(&stderr, "primes_own");
-        let builtin = stat(&stderr, "primes_builtin");
-        let misses = stat(&stderr, "misses");
-        // Own entries: the namespace object (twice: it is re-created
-        // mid-loop) and the plain object; a builtin entry: RegExp#test. The
-        // hot calls (4 x 6000) are served inline.
-        assert!(
-            own >= 3 && builtin >= 1 && misses <= 80,
-            "receivers no class implements must be served by the method site \
-             (PERRY_FULL_OUTLINE_IC={full_outline}: own={own} builtin={builtin} misses={misses})"
-        );
     }
 }

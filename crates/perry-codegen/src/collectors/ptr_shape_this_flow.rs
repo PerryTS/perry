@@ -277,6 +277,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(|s| self.stmt_this_safe(s, ctx))
                     && catch
@@ -346,6 +347,8 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 args.iter().all(|a| self.expr_this_safe(a, ctx))
             }
             Expr::PrivateBrandCheck { object, .. } if matches!(object.as_ref(), Expr::This) => true,
+            // The `this.F` hoist's compile-time version test: reads nothing.
+            Expr::ThisProvenClass(_) => true,
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => self.fields.contains(property),
@@ -603,6 +606,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     stmt_visit(s, found);

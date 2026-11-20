@@ -1,0 +1,1 @@
+Whole-program facts take the compile's one activation pass from dynamic reach instead of running it a second time (a program with dynamic `import()` now solves its activation once), and the dynamic reach line counts its dynamic edges without `PERRY_DYNAMIC_REACH_REPORT`.

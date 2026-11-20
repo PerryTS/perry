@@ -348,6 +348,7 @@ fn pin_reason(s: &Stmt, facts: &ModuleFacts) -> Option<&'static str> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 any(body, loops, switches, labels)
                     || catch
@@ -1134,6 +1135,7 @@ fn try_extract(
             });
             for (k, id) in outs.iter().enumerate() {
                 let get = Expr::IndexGet {
+                    element_offset: 0,
                     byte_offset: 0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp)),
@@ -1307,6 +1309,7 @@ fn split_list(
                 body,
                 catch,
                 finally,
+                ..
             } if weight > target => {
                 if sh.cost.body(body) > target {
                     split_list(body, ctx, sh, &dom, proofs);
@@ -1592,11 +1595,11 @@ fn split_body(
     // Constructor capture params are also read by member/field closures,
     // which are stored outside this body. Preserve their shared cells using
     // lowering's reserved capture names, just like captures found in-body.
-    captured.extend(params.iter().filter_map(|p| {
-        p.name
-            .starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
-            .then_some(p.id)
-    }));
+    captured.extend(
+        params
+            .iter()
+            .filter_map(|p| perry_hir::cap_fields::is_cap_field_name(&p.name).then_some(p.id)),
+    );
     let boxed: HashSet<u32> = captured
         .iter()
         .filter(|id| facts.writes.contains(id))
@@ -1779,6 +1782,7 @@ fn split_closures_in(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 split_closures_in(body, names, facts, sh);
                 if let Some(c) = catch {

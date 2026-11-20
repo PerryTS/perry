@@ -87,6 +87,7 @@ fn return_before_start_does_not_enter_finally() {
             0,
             Box::new(Expr::Number(1.0)),
         ))]),
+        forof_completion: None,
     }];
     module.functions.push(function);
     transform_generators(&mut module);

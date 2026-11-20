@@ -171,11 +171,8 @@ pub(crate) fn try_lower(
     }
     ctx.current_block = info_idx;
     let expected = ctx.block().fn_info_ref(&method.target);
-    let ip = emit_field_ptr(
-        ctx.block(),
-        &callee_bias,
-        crate::runtime_abi::CLOSURE_INFO_OFFSET as i64,
-    );
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
+    let ip = emit_field_ptr(ctx.block(), &callee_bias, info_offset as i64);
     let actual = ctx.block().load(PTR, &ip);
     let same = ctx.block().icmp_eq(PTR, &actual, &expected);
     let closure = emit_handle(ctx.block(), &callee_bias);

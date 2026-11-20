@@ -1,0 +1,1 @@
+Preserve an object literal's nominal receiver class when it is copied onto a prototype image. Fixed-slot reads now select the correct field when a receiver can be one of several literal prototypes with different field orders, and the existing receiver-fact diagnostic accepts the preserved class.

@@ -1,0 +1,1 @@
+- wpfacts: storing the global object onto its own `globalThis` / `global` key no longer holds the realm; any other value stored there still escapes, and the realm-all census prints each hold source once.

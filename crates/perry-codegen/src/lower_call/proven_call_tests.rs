@@ -1,7 +1,9 @@
 //! FVA's codegen consumer (`proven_call.rs`): a call through a value whose
 //! callee set the facts prove makes no runtime dispatch. One body is a
-//! direct call; several plain bodies are one load of the callee's info word,
-//! one of its code word and an indirect call. Without the facts each site
+//! direct call; two to four bodies are one load of the callee's info word
+//! and a direct call of the body it names (one compare per body but the
+//! last, no other arm); more are one load of the info word, one of its code
+//! word and an indirect call. Without the facts each site
 //! keeps the dispatcher, so every test here can fail. (The class method
 //! tower's proven arm and calls through a field need the program's layouts
 //! and prototype census: `crates/perry/tests/proven_calls.rs`.)
@@ -120,41 +122,120 @@ fn a_proven_one_body_value_call_is_a_direct_call() {
     );
     let twice = body(&with, "twice");
     assert!(!twice.contains("js_closure_call"), "{twice}");
-    let direct = format!("__{inc}(");
+    // A known body is called through its typed entry (the entry contract
+    // inline, the generic body on a miss), as the closure-typed local's
+    // direct arm calls it.
+    let typed = format!("__{inc}$typed_f64(");
     assert_eq!(
-        twice.matches(&direct).count(),
+        twice.matches(&typed).count(),
         2,
-        "both calls are direct calls of the body:\n{twice}"
+        "both calls are direct calls of the body's typed entry:\n{twice}"
     );
 }
 
-#[test]
-fn a_proven_set_of_plain_bodies_is_one_load_and_an_indirect_call() {
-    let m = lower(VALUE);
-    let g = param_id(&m, "twice", 0);
-    let (inc, dec) = (closure_id(&m, "inc"), closure_id(&m, "dec"));
-    let bodies = [inc, dec]
+const FIVE: &str = r#"
+    const b0 = (x: number) => x + 1;
+    const b1 = (x: number) => x - 1;
+    const b2 = (x: number) => x * 2;
+    const b3 = (x: number, y: number) => x * 3 + (y === undefined ? 0 : y);
+    const b4 = (x: number) => x * 4;
+    function once(g: (x: number) => number, x: number) { return g(x); }
+    console.log(once(b0, 1), once(b1, 1), once(b2, 1), once(b3, 1), once(b4, 1));
+"#;
+
+fn once_with(n: usize) -> (String, Vec<u32>) {
+    let m = lower(FIVE);
+    let g = param_id(&m, "once", 0);
+    let ids: Vec<u32> = (0..n).map(|i| closure_id(&m, &format!("b{i}"))).collect();
+    let bodies = ids
         .iter()
         .map(|&func_id| FactsBody {
             func_id,
-            params: 1,
+            params: if Some(&func_id) == ids.get(3) { 2 } else { 1 },
             closure: true,
         })
         .collect();
     let with = ir(&m, facts_for(g, bodies));
-    let twice = body(&with, "twice");
-    assert!(!twice.contains("js_closure_call"), "{twice}");
-    // No switch, no test: the info word, its code word, the call.
-    assert!(!twice.contains("switch "), "{twice}");
-    let indirect = twice
-        .lines()
+    (body(&with, "once").to_string(), ids)
+}
+
+fn indirect_calls(f: &str) -> usize {
+    f.lines()
         .filter(|l| l.contains("call double %") || l.contains("call fastcc double %"))
-        .count();
-    assert_eq!(indirect, 2, "one indirect call per site:\n{twice}");
-    assert!(
-        twice.matches("load ptr, ptr").count() >= 4,
-        "each site loads the info word and the code word:\n{twice}"
-    );
+        .count()
+}
+
+#[test]
+fn a_proven_set_of_up_to_four_bodies_calls_the_body_its_info_names() {
+    for n in 2..=4 {
+        let (once, ids) = once_with(n);
+        assert!(!once.contains("js_closure_call"), "{once}");
+        assert_eq!(
+            indirect_calls(&once),
+            0,
+            "no indirect call (n={n}):\n{once}"
+        );
+        // One info load, no code-word load: the arms are direct calls.
+        let compares: Vec<&str> = once
+            .lines()
+            .filter(|l| l.contains("icmp eq ptr") && l.contains("$info"))
+            .collect();
+        assert_eq!(
+            compares.len(),
+            n - 1,
+            "one info compare per body but the last (n={n}):\n{once}"
+        );
+        for (i, id) in ids.iter().enumerate() {
+            // The body's typed entry, or its public entry where the call
+            // has no typed entry (b3: one argument for two parameters).
+            let sym = format!("__{id}(");
+            let typed = format!("__{id}$typed_f64(");
+            let calls: Vec<&str> = once
+                .lines()
+                .filter(|l| l.contains("call ") && (l.contains(&sym) || l.contains(&typed)))
+                .collect();
+            assert_eq!(
+                calls.len(),
+                1,
+                "one direct call of body {i} (n={n}):\n{once}"
+            );
+            // Each arm passes its own body's parameters: b3 declares two,
+            // the call passes one, so its arm pads with undefined.
+            let doubles = calls[0].matches("double ").count();
+            let want = if i == 3 { 3 } else { 2 };
+            assert_eq!(doubles, want, "body {i}'s arguments (n={n}): {}", calls[0]);
+            if i + 1 < n {
+                assert!(
+                    compares.iter().any(|c| c.contains(&format!("__{id}$info"))),
+                    "body {i} is compared (n={n}):\n{once}"
+                );
+            } else {
+                assert!(
+                    !compares.iter().any(|c| c.contains(&format!("__{id}$info"))),
+                    "the last body is the arm no compare matched (n={n}):\n{once}"
+                );
+            }
+        }
+        // The set is complete: no arm reaches a dispatcher or a trap.
+        for gone in ["switch ", "unreachable", "js_closure_call", "js_throw"] {
+            assert!(!once.contains(gone), "{gone} (n={n}):\n{once}");
+        }
+    }
+}
+
+#[test]
+fn a_proven_set_of_five_bodies_is_one_load_and_an_indirect_call() {
+    let (once, ids) = once_with(5);
+    assert!(!once.contains("js_closure_call"), "{once}");
+    assert!(!once.contains("switch "), "{once}");
+    assert_eq!(indirect_calls(&once), 1, "one indirect call:\n{once}");
+    assert!(!once.contains("icmp eq ptr"), "no info compare:\n{once}");
+    for id in ids {
+        assert!(
+            !once.contains(&format!("__{id}(")),
+            "no direct call:\n{once}"
+        );
+    }
 }
 
 #[test]

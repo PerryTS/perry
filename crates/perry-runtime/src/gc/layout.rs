@@ -234,7 +234,7 @@ pub(crate) unsafe fn gc_object_yields_no_child_slots(header: *const GcHeader) ->
     // uncovered sibling would simply not be admitted here, costing a walk it
     // could have skipped. `the_array_type_still_pairs_with_the_prefix_free_
     // layout_kind` pins the two table facts this leans on.
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return false;
     }
     let array =
@@ -396,7 +396,7 @@ unsafe fn layout_all_pointer_array_append(
     parent_user: usize,
     slot_index: usize,
 ) -> bool {
-    if (*header).obj_type != GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return false;
     }
     let arr = parent_user as *const crate::array::ArrayHeader;
@@ -424,7 +424,7 @@ pub(crate) fn layout_note_slot(parent_user: usize, slot_index: usize, value_bits
             if crate::gc_type_is_object!((*header).obj_type) {
                 return;
             }
-            let needs_element_note = (*header).obj_type == GC_TYPE_ARRAY
+            let needs_element_note = crate::gc_type_is_array!((*header).obj_type)
                 && (*header)._reserved & GC_ARRAY_ELEMENT_SHAPE != 0;
             let state = (*header)._reserved & GC_LAYOUT_STATE_MASK;
             if !needs_element_note
@@ -469,7 +469,7 @@ unsafe fn layout_note_slot_transition(
     // all-pointer array is marked unknown on its first generic write,
     // and costs one `obj_type` compare on the header word the next line
     // reads anyway.
-    if (*header).obj_type == GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!((*header).obj_type) {
         crate::array::note_element_store_resolved_flags(
             parent_user as *mut crate::array::ArrayHeader,
             slot_index,
@@ -518,7 +518,7 @@ unsafe fn layout_note_slot_transition(
     // representations are mutually exclusive, and generated append code
     // uses their absence as part of its admission test.
     if pointer
-        && (*header).obj_type == GC_TYPE_ARRAY
+        && crate::gc_type_is_array!((*header).obj_type)
         && (*header)._reserved & GC_LAYOUT_STATE_MASK == GC_LAYOUT_POINTER_FREE
     {
         let arr = parent_user as *const crate::array::ArrayHeader;
@@ -569,7 +569,7 @@ pub(crate) fn layout_note_slot_aware(
                 }
                 return;
             }
-            if (*header).obj_type == GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*header).obj_type) {
                 crate::array::note_element_store_resolved_flags(
                     parent_user as *mut crate::array::ArrayHeader,
                     slot_index,
@@ -662,6 +662,17 @@ pub(crate) unsafe fn layout_init_from_slots(
         },
     );
     any_pointer
+}
+
+/// I32 at rest (PR B, `layout_slot::js_array_rest_encode`): the payload of
+/// an array whose every slot is an I32 word holds no pointer.
+///
+/// # Safety
+/// `user_ptr` is a live array head.
+pub(crate) unsafe fn mark_payload_pointer_free(user_ptr: usize) {
+    if let Some(header) = layout_header_for_user(user_ptr) {
+        set_layout_state(header, GC_LAYOUT_POINTER_FREE);
+    }
 }
 
 pub(super) fn layout_visit_pointer_slots<F: FnMut(usize)>(

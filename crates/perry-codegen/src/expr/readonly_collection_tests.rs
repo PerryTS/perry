@@ -88,6 +88,7 @@ fn archetype_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -160,6 +161,7 @@ fn executor_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -325,6 +327,7 @@ fn compile_nested_map_get_ir() -> String {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });

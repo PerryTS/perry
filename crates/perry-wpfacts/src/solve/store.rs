@@ -114,45 +114,6 @@ impl Model {
         own
     }
 
-    /// Every builtin function value may have been written: every property
-    /// read of one is ⊤ from now on.
-    pub(super) fn write_builtin_fns(&mut self, r: u32) {
-        if self.bf_written.is_some() {
-            return;
-        }
-        self.bf_written = Some(r);
-        self.note_shared(SharedWrite::Store(Shared::BuiltinFn, None));
-        self.bf_stores.clear();
-        for dst in std::mem::take(&mut self.bf_reads) {
-            self.add_top(dst, |_| {
-                "property of a written builtin function value".into()
-            });
-        }
-    }
-
-    /// The stores into a builtin function value, once the worklist is
-    /// empty: one at a node without ⊤ wrote one (true: solve on). A node
-    /// that holds ⊤ keeps it, so its stores are stores into ⊤ for good. So
-    /// does one holding a bare marker: another unit's argument whole, which
-    /// every rule reads as ⊤ (DECISIONS 119).
-    pub(super) fn settle_bf_written(&mut self) -> bool {
-        if self.bf_written.is_some() || self.bf_stores.is_empty() {
-            return false;
-        }
-        let stores = std::mem::take(&mut self.bf_stores);
-        let holds_top = |m: &Self, n: NodeId| {
-            let pts = &m.nodes[n as usize].pts;
-            pts.contains_tok(TOP) || pts.to_sorted().into_iter().any(|t| m.bare_marker(t))
-        };
-        match stores.iter().find(|&&(n, _)| !holds_top(self, n)) {
-            Some(&(_, r)) => {
-                self.write_builtin_fns(r);
-                true
-            }
-            None => false,
-        }
-    }
-
     /// DECISIONS 193: the readers argument marker `x` stands for gain
     /// `new` (a marker below it, or a keyed reach of one, `arg_readers`):
     /// the stores made on `x` and on its keyed reaches reach them, and so do
@@ -173,9 +134,8 @@ impl Model {
             if fresh.is_empty() {
                 continue;
             }
-            self.work += fresh.len() as u64;
-            if self.max_work != 0 && self.work > self.max_work {
-                self.aborted = true;
+            self.charge_work(fresh.len() as u64);
+            if self.past_work_bound() {
                 return;
             }
             self.arg_readers
@@ -258,7 +218,7 @@ impl Model {
             (Some(_), Some(_)) => return,
         };
         for &(key, src, site) in ss {
-            self.work += 1;
+            self.charge_work(1);
             self.store_into(y, key, src, site);
         }
     }
@@ -319,6 +279,54 @@ impl Model {
         }
     }
 
+    /// A typed array element store (`store_into`): the element field holds
+    /// the Number (BigInt) TypedArraySetElement converts `src` to; the
+    /// conversion's ToPrimitive runs `src`'s `@@toPrimitive` / `valueOf` /
+    /// `toString` (once per value and site).
+    /// What an element of typed array (Buffer) `t` is: a Number, or a
+    /// BigInt for a BigInt64Array / BigUint64Array (ECMA-262 10.4.5.15
+    /// TypedArrayGetElement, 23.2.7 element types); a Buffer's is a Number.
+    /// A template whose kind the model does not keep may be either.
+    pub(crate) fn typed_array_elem_prim(&self, t: Tok) -> u16 {
+        match self.toks[t as usize] {
+            TokKind::Obj(tm, _) => match self.tmpls[tm as usize].kind {
+                TmplKind::BObj { what: "Buffer", .. } => prim::NUM,
+                _ => match self.ta_elem.get(&tm).copied() {
+                    Some(
+                        perry_hir::TYPED_ARRAY_KIND_BIGINT64
+                        | perry_hir::TYPED_ARRAY_KIND_BIGUINT64,
+                    ) => prim::BIGINT,
+                    Some(_) => prim::NUM,
+                    None => prim::NUM | prim::BIGINT,
+                },
+            },
+            _ => prim::NUM | prim::BIGINT,
+        }
+    }
+
+    /// `t` is the host object of a `values = string` declaration
+    /// (`Model::host_string_record`).
+    pub(crate) fn string_record(&self, t: Tok) -> bool {
+        matches!(self.toks[t as usize], TokKind::Obj(tm, _)
+            if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "stringrecord", .. }))
+    }
+
+    fn typed_array_element_store(&mut self, t: Tok, src: NodeId, site: SiteId) {
+        let f = match self.is_elem_array(t) {
+            true => self.field_any(t),
+            false => self.numeric_field(t),
+        };
+        let p = self.typed_array_elem_prim(t);
+        self.add_prim(f, p);
+        if self.ta_store_done.insert((src, site)) {
+            builtins::string_methods::to_prim(
+                self,
+                src,
+                "typed array element store's ToNumber / ToBigInt",
+            );
+        }
+    }
+
     /// Does `tm` descend from a class whose code this unit does not see:
     /// another unit's class, or a parent that is no class of this unit
     /// when it was generated (`parent_value`, §17.2). That code runs on
@@ -359,7 +367,7 @@ impl Model {
                     n
                 }
             },
-            Key::Any => match self.fn_stored_any.get(&t) {
+            Key::Any(_) => match self.fn_stored_any.get(&t) {
                 Some(&n) => n,
                 None => {
                     let n = self.node_named("fnstored", || format!("fnstoredany({t})"));
@@ -371,7 +379,67 @@ impl Model {
         self.edge(src, n);
     }
 
+    /// Rule BD-A: `a` is a birth key of `tm` (definite) that a constructor
+    /// on its chain defined non-writable and non-configurable
+    /// (`Model::birth_attrs`).
+    pub(crate) fn birth_immutable(&self, tm: TmplId, a: Atom) -> bool {
+        if self.birth_attrs.is_empty() || !self.tmpls[tm as usize].definite.contains(&a) {
+            return false;
+        }
+        let mut cur = Some(tm);
+        while let Some(c) = cur {
+            if let Some(&attrs) = self.birth_attrs.get(&(c, a)) {
+                let fixed =
+                    perry_abi::LAYOUT_KEY_NON_WRITABLE | perry_abi::LAYOUT_KEY_NON_CONFIGURABLE;
+                return attrs & fixed == fixed;
+            }
+            cur = self.tmpls[c as usize].parent;
+        }
+        false
+    }
+
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // A host object of strings (`process.env`): the runtime's [[Set]]
+        // hook (`process_env_set_field` -> `js_setenv`) runs before any
+        // other step and stores ToString(v), never `v` (a program
+        // `toString` / `@@toPrimitive` runs); no setter of the chain is met.
+        if self.string_record(t) {
+            let f = match key {
+                Key::Named(a) => self.field(t, a),
+                Key::Any(_) => self.field_any(t),
+            };
+            self.add_prim(f, prim::STR);
+            if self.ta_store_done.insert((src, site)) {
+                builtins::string_methods::to_prim(
+                    self,
+                    src,
+                    "a host string record's [[Set]] ToString",
+                );
+            }
+            return;
+        }
+        // SKINROOT12: a same-key copy's named `__proto__` store runs into
+        // `t` only once the copy's own store into `t` may name `__proto__`
+        // (its key is the copy's key: B.2.2.1.2 applies under that key only).
+        if let Some(copy) = self.stores.get(site as usize).and_then(|s| s.proto_of) {
+            if !self.proto_copy_hit.contains(&(copy, t)) {
+                self.proto_copy_wait
+                    .entry((copy, t))
+                    .or_default()
+                    .push((src, site));
+                return;
+            }
+        }
+        // A call binding its rest array's argument at a known position
+        // (`Model::rest_elem_node`), or a store under one constant index
+        // (`Cons::StoreIndexed`): an element store, into index slot `i` of
+        // a rest array.
+        let slot = match key {
+            Key::Named(a) => self.index_slot_atom(a),
+            _ => None,
+        };
+        let key = if slot.is_some() { self.elem_key() } else { key };
+        let slot = slot.filter(|_| self.is_rest_arr(t));
         // A class private field: what its class's code stores (`private_field`);
         // on an object of this unit, its own field too.
         if let Key::Named(a) = key {
@@ -383,12 +451,82 @@ impl Model {
                 }
             }
         }
+        // A String key set on a declared object whose prototype declares a
+        // `strkey(this)` store (a Web Storage object): that store instead
+        // (`effects::strkey_set`: WebIDL 3.9.2, the named property setter).
+        let (key, src) = if !self.unit_mode && builtins::declared_box(self, t) {
+            match builtins::strkey_set(self, t, key, src) {
+                Some(Some(ks)) => ks,
+                Some(None) => return,
+                None => (key, src),
+            }
+        } else {
+            (key, src)
+        };
         // An element store (`push`, `unshift`, `splice`: the element key) is
         // an index store: on an Array it writes its elements only, which no
-        // named non-index key reads (`is_elem_array`); on anything else it
-        // is a store under a computed key.
-        let elem = self.is_elem_key(key);
-        let key = if elem { Key::Any } else { key };
+        // named non-index key reads (`is_elem_array`); on another holder
+        // it writes the numeric range, never an arbitrary string key.
+        // ECMA-262 10.4.5.5 with 7.1.19: a Number-or-BigInt key (`DIGITS`)
+        // on a typed array is a CanonicalNumericIndexString (an element
+        // store, below) or a BigInt's digits that are none: an
+        // OrdinarySet of a digit-only name, the numeric range (`#num`,
+        // `numeric_field`), never another name. On any other holder
+        // (10.4.2.1 an Array, 10.1.9 an ordinary object) it names an index
+        // or another Number::toString / BigInt::toString form: the
+        // numeric range of that holder (`num_only`, below), never a
+        // non-numeric name. Which index it is stays unknown: the length,
+        // the hole and the chain's setters are the unknown key's.
+        let digits_key = self.is_digits_key(key);
+        let digits = digits_key && self.typed_array_elements(t);
+        if digits {
+            self.typed_array_element_store(t, src, site);
+        }
+        let digits_other = digits_key && !digits;
+        // Rule C1 (`ta_length_getter`) under the runtime lock: a BufferHeader
+        // view (a Node Buffer, a plain Uint8Array) takes a [[Set]] of a
+        // non-index name as an own data property (`buffer_set_own_prop`, from
+        // `js_object_set_field_by_name` and the computed-key path, without
+        // the inherited accessor that ECMA-262 10.1.9.2 finds), and a typed
+        // array's template does not keep its kind: a [[Set]] that may name
+        // `length` may make an own `length`. A Number-or-BigInt key never
+        // names `length` (its ToString is digits, NaN or Infinity).
+        if !self.is_elem_key(key)
+            && !digits_key
+            && match key {
+                Key::Named(a) => self.atoms[a as usize] == "length",
+                Key::Any(_) => true,
+            }
+        {
+            self.ta_len_open(t);
+        }
+        let key = if digits_key { Key::any() } else { key };
+        let elem = self.is_elem_key(key) || digits;
+        // The key names a number only: the numeric range's field.
+        let num_only = elem || digits_other;
+        let key = if elem { Key::any() } else { key };
+        // ECMA-262 10.4.5.5 / 10.4.5.16: an integer-indexed exotic object's
+        // [[Set]] under a numeric key (an element-key store is one: a Number
+        // key, an index string, an append) runs TypedArraySetElement, which
+        // stores ToNumber(v), or ToBigInt(v) on a BigInt64/BigUint64 array,
+        // never `v`; no prototype setter is met.
+        if elem && !digits && self.typed_array_elements(t) {
+            self.typed_array_element_store(t, src, site);
+            return;
+        }
+        // A computed key that may be a String (ECMA-262 10.4.5.5 [[Set]]):
+        // when it is a CanonicalNumericIndexString (7.1.21, `"0"`, `"1.5"`,
+        // `"-0"`), the store is TypedArraySetElement (10.4.5.16:
+        // ToNumber(v) or ToBigInt(v) runs, `valueOf` / `@@toPrimitive` of an
+        // object included); any other String is an OrdinarySet (below).
+        if !elem && !digits_key && matches!(key, Key::Any(_)) && self.typed_array_elements(t) {
+            self.typed_array_element_store(t, src, site);
+        }
+        // A computed store may be a runtime helper's write of a Map's
+        // contents (`solve/map_vals.rs`).
+        if matches!(key, Key::Any(_)) {
+            self.map_open(t);
+        }
         // DECISIONS 242(2): a [[Set]] of a key the object does not own
         // definitely meets the chain's setters (and may add the key).
         if t != TOP {
@@ -400,12 +538,12 @@ impl Model {
         // escaped instance (`top_store`).
         match key {
             Key::Named(a) => self.virt_store(t, a, src),
-            Key::Any => self.virt_revoke(t, None),
+            Key::Any(_) => self.virt_revoke(t, None),
         }
         if t == TOP {
             self.top_store(match key {
                 Key::Named(a) => Some(a),
-                Key::Any => None,
+                Key::Any(_) => None,
             });
         }
         // DECISIONS 210: a store into another unit's function (a stand-in)
@@ -415,41 +553,129 @@ impl Model {
         if let TokKind::Func(f, _) = self.toks[t as usize] {
             let proto = match key {
                 Key::Named(a) => self.atoms[a as usize] == "prototype",
-                Key::Any => true,
+                Key::Any(_) => true,
             };
             if proto && self.foreign_ctor.contains_key(&f) {
                 self.fn_touched.insert(t);
             }
         }
-        // A store into a builtin function value is decided once the
-        // worklist is empty (`settle_bf_written`): `write_builtin_fns` notes it.
         // The boundary's store for other units' code is theirs to publish.
         let theirs = self.store_at.is_some() && self.store_at == self.other_units_store;
-        if let Some(s) = self
-            .shared_of(t)
-            .filter(|s| *s != Shared::BuiltinFn && !theirs)
-        {
+        if let Some(s) = self.shared_of(t).filter(|_| !theirs) {
             let k = match key {
                 Key::Named(a) => Some(self.atoms[a as usize].clone()),
-                Key::Any if elem => Some(NUM_KEY.to_string()),
-                Key::Any => None,
+                Key::Any(_) if num_only => Some(NUM_KEY.to_string()),
+                Key::Any(_) => None,
             };
             self.note_shared(SharedWrite::Store(s, k));
         }
-        // A program-owned global: an ordinary field of the global object.
-        if let (TokKind::Builtin(BuiltinNs::GlobalThis), Key::Named(a)) =
-            (&self.toks[t as usize], key)
-        {
-            if builtins::global_user_key(&self.atoms[a as usize])
+        // GLOBK G2: a store on the global object under a String key the
+        // solver cannot name (a nonzero key shape never names a symbol;
+        // `Cons::StoreIndexed`) creates or replaces one string-named own
+        // property of the global object (ECMA-262 10.1.9 OrdinarySet,
+        // 10.1.6.3) and writes no other object: its value goes into the
+        // global's any-key field, which every global binding read takes
+        // (`global_any_read`) whose name the key's shape can spell (GLOBS4;
+        // shape 0, a Number key, spells every name). OPTIMISTIC (owner): an unknown String key
+        // never names `__proto__`; a key whose known strings do keeps the
+        // path below.
+        // A Number key (`num_only`: an element or digits key) names an
+        // index property of the global object (ToString, 7.1.19): a String
+        // key no global binding read names, the same field.
+        if let Key::Any(shape) = key {
+            if (shape != 0 || num_only)
+                && !theirs
+                && !self.unit_mode
+                && !self.global_any_off
+                && builtins::global_object(self, t)
+                && !self.key_names_known_str(key, "__proto__")
+            {
+                let ga = builtins::global_any_field(self, shape);
+                self.edge(src, ga);
+                self.global_any_stores.push((t, key, src, site));
+                return;
+            }
+        }
+        // A program-owned global: an ordinary field of the global object
+        // (one field per key, whichever token stored it).
+        if let Key::Named(a) = key {
+            if builtins::global_object(self, t)
+                && (builtins::global_user_key(self, &self.atoms[a as usize])
+                    || builtins::program_global_fn(self, &self.atoms[a as usize]))
                 && !builtins::native_written(self, t, a)
             {
-                let f = builtins::global_field(self, t, a);
+                let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                let f = builtins::global_field(self, g, a);
                 self.edge(src, f);
                 return;
             }
         }
+        // `undefined`, `NaN` and `Infinity` are non-writable,
+        // non-configurable own data properties of the global object
+        // (ECMA-262 19.1.1-19.1.4; the runtime installs them so, populate.rs):
+        // a [[Set]] of one writes nothing (10.1.9.2 OrdinarySetWithOwnDescriptor
+        // step 2.a; a strict store throws the runtime's TypeError) and no
+        // code can make it writable again (10.1.6.3 step 5), as for a store
+        // under an unknown String key (`global_any_names`). The entries loop
+        // of rule EK stores its done branch's `undefined` key so.
+        if let Key::Named(a) = key {
+            if !elem
+                && !theirs
+                && !self.unit_mode
+                && builtins::global_object(self, t)
+                && matches!(
+                    self.atoms[a as usize].as_str(),
+                    "undefined" | "NaN" | "Infinity"
+                )
+            {
+                return;
+            }
+        }
+        // A [[Set]] that meets the realm's accessor without a setter
+        // (`navigator` on the global object) writes nothing; in strict code
+        // it throws the runtime's TypeError (`Model::thrown`). Until a
+        // native write may have replaced the accessor: then the store runs
+        // again on the ordinary path (`NativeMiss::Store`). A definition's
+        // value (`Gen::define_property`, `define_by_data`: a store site of
+        // `defineProperty`) is no [[Set]]: [[DefineOwnProperty]] replaces
+        // the accessor (ECMA-262 10.1.6.3 step 2-3, ValidateAndApply...
+        // with a data descriptor over a configurable accessor), so it takes
+        // the ordinary path: a write of that key and no other.
+        if let Key::Named(a) = key {
+            let define = self
+                .stores
+                .get(site as usize)
+                .is_some_and(|s| s.desc.starts_with("defineProperty"));
+            if !elem
+                && !theirs
+                && !define
+                && !self.unit_mode
+                && builtins::getter_only(self, t, &self.atoms[a as usize])
+                && !builtins::native_written(self, t, a)
+            {
+                self.native_missing
+                    .push((t, a, NativeMiss::Store(src, site)));
+                return;
+            }
+        }
+        // Native function values use ordinary fields below. Constructors
+        // and namespaces retain the realm-declared boundary: the runtime
+        // itself consumes some declared statics (Error.prepareStackTrace),
+        // even when the program never hands the constructor to an operand
+        // protocol. Only their undeclared keys are program-owned (R1).
+        if !theirs {
+            if let Some(f) = self.builtin_field(t, key) {
+                self.edge(src, f);
+                self.accessor_walk(t, t, key, ChainAct::Store(src));
+                let cp = self.cp(t);
+                if self.callthis_done.insert((cp, u32::MAX, t)) {
+                    self.cons(cp, Cons::StoreTopProto { origin: t, src });
+                }
+                return;
+            }
+        }
         // An element store writes an index of a builtin prototype at most.
-        let wkey = match elem {
+        let wkey = match num_only {
             true => Key::Named(self.atom(NUM_KEY)),
             false => key,
         };
@@ -471,7 +697,11 @@ impl Model {
                     .funcs
                     .get(func as usize)
                     .map_or("(no function)", |f| f.name.as_str());
-                format!("store `{desc}` in {f} (receiver: {})", self.top_origin(n))
+                format!(
+                    "store `{desc}` in {f} (receiver: {}; path {})",
+                    self.top_origin(n),
+                    self.top_path(n, 24)
+                )
             }
             _ => "store".to_string(),
         };
@@ -479,20 +709,62 @@ impl Model {
         // into ⊤ they publish (`SharedWrite::Store(Top, _)`; a unit past the
         // bound publishes every key), and every unit replays it under its key.
         if !theirs {
-            builtins::note_native_write(self, t, Some(wkey), &what);
+            self.census_store_ctx(Some((site, self.store_at)));
+            if !builtins::builtin_function(self, t) {
+                builtins::note_native_data_write(
+                    self,
+                    t,
+                    Some(wkey),
+                    &what,
+                    builtins::WriteValue::Value(src),
+                );
+            }
+            self.census_store_ctx(None);
+        }
+        // OPTIMISTIC (`json_key_optimistic`): the key names no built-in
+        // member, so no `__proto__`: the store writes an own property.
+        let json_key = self.json_key_optimistic(t, key);
+        if json_key {
+            self.json_key_fired.push((true, src));
         }
         // An element store's key is a number: it never names `__proto__`.
-        if matches!(key, Key::Any) && !elem
+        // OPTIMISTIC (owner 2026-11-16): an unknown string key of a store is
+        // never "__proto__" (DECISIONS 217, as for computed reads). Only a
+        // key whose KNOWN strings include it runs the setter.
+        if key.is_any() && !num_only && !json_key && self.key_names_known_str(key, "__proto__")
             || matches!(key, Key::Named(a) if self.atoms[a as usize] == "__proto__")
         {
             self.super_relink.insert(t);
-            if let TokKind::ClassObj(tm) = self.toks[t as usize] {
-                self.cons(src, Cons::ParentGiven { of: t });
-                let parent = self.proto_node(t);
-                self.edge(src, parent);
-                let instance = self.tok(TokKind::Obj(tm, NO_CTX));
-                let reason = self.reason("E6 possible computed superclass write");
-                self.mark_hard(instance, Hard::E6SetPrototypeOf, reason);
+            // SKINROOT11: a same-key copy's `__proto__` case is its own
+            // named store `D["__proto__"] = S["__proto__"]` (gen).
+            let named_copy = self
+                .stores
+                .get(site as usize)
+                .is_some_and(|s| s.proto_named);
+            if named_copy && self.proto_copy_hit.insert((site, t)) {
+                let pk = Key::Named(self.atom("__proto__"));
+                for (s, ps) in self.proto_copy_wait.remove(&(site, t)).unwrap_or_default() {
+                    self.store_into(t, pk, s, ps);
+                }
+            }
+            // The setter (B.2.2.1.2) runs O.[[SetPrototypeOf]](V) on every
+            // ordinary object: a builtin prototype, a `JSON.parse` object, a
+            // class object, a class instance or prototype, a literal. Each
+            // store gives `src`'s objects (or null) as `t`'s prototype, which
+            // every lookup on `t`'s chain then walks (10.1.8.1), the call
+            // lookup included: the same as `Object.setPrototypeOf`. A
+            // parameter marker's store reaches its arguments by replay.
+            let json = matches!(&self.toks[t as usize], &TokKind::Obj(tm, _)
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what: "json", .. }));
+            if !named_copy
+                && t != TOP
+                && !self.is_marker(t)
+                && !(self.unit_mode && self.is_builtin_proto(t))
+            {
+                if json {
+                    self.json_relink.insert(t);
+                }
+                self.given_prototype(t, src);
             }
         }
         if t == TOP {
@@ -501,23 +773,16 @@ impl Model {
                 return;
             }
             let r = self.reason("stored into a value from unmodeled code");
+            // `hold_ledger`: what the store sinks belongs to the receiver's
+            // ⊤ root, not to a root of its own.
+            let origin = match self.ledger {
+                Some(_) => self.store_at.and_then(|n| self.top_origin_id(n)),
+                None => None,
+            };
+            let saved = self.ledger.as_mut().map(|l| l.enter_top(origin));
             self.sink_node(src, r);
-            return;
-        }
-        if matches!(self.toks[t as usize], TokKind::BuiltinFn) {
-            // A builtin function value is opaque: it has no field storage
-            // here. The value is gone to the runtime, and every property
-            // read of such a value is ⊤ from now on (`load_from`).
-            let r = self.reason("stored into a builtin function value");
-            self.sink_node(src, r);
-            // Beside ⊤ the value is that ⊤ (`Model::top_beside`), but it may
-            // reach the node before ⊤ does: the node decides once the
-            // worklist is empty. A store from no rule's node decides now.
-            if self.bf_written.is_none() {
-                match self.store_at {
-                    Some(n) => self.bf_stores.push((n, r)),
-                    None => self.write_builtin_fns(r),
-                }
+            if let (Some(l), Some(c)) = (self.ledger.as_mut(), saved) {
+                l.leave(c);
             }
             return;
         }
@@ -543,7 +808,7 @@ impl Model {
             if self.aborted {
                 return;
             }
-            if key == Key::Any {
+            if key.is_any() {
                 self.mark_escape_why(t, &|_| "store: under a computed key".into());
             }
             if self.arg_store_done.insert((t, key, src)) {
@@ -586,7 +851,7 @@ impl Model {
                         // of another unit runs it on the reader's object.
                         self.store_flow_out(t, t, f, u32::MAX, false, key, src);
                     }
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.this_open.insert(f);
                     }
                 }
@@ -631,7 +896,7 @@ impl Model {
             if !self.reach_marker.contains(&t) && !self.closed_params.contains_key(&f) {
                 match key {
                     Key::Named(_) => unreachable!("a named store is a flow (DECISIONS 118)"),
-                    Key::Any => {
+                    Key::Any(_) => {
                         self.param_open.insert((f, i));
                     }
                 }
@@ -658,6 +923,20 @@ impl Model {
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) | TokKind::Proto(tm) => Some(tm),
             _ => None,
         };
+        // Rule BD-A: a key the constructor defined non-writable AND
+        // non-configurable is an own data property of every instance from
+        // birth on that no delete (10.1.10.1 step 4) or redefinition
+        // (10.1.6.3 step 5) can change; [[Set]] finds it first and stores
+        // nothing (10.1.9.2 OrdinarySetWithOwnDescriptor step 2.a: no setter
+        // runs, strict code throws a TypeError). A configurable one may be
+        // redefined writable or deleted (by code the object escapes to as
+        // well): its stores flow as any store's.
+        if let (Key::Named(a), TokKind::Obj(otm, _)) = (&key, &self.toks[t as usize]) {
+            let define = self.stores.get(site as usize).and_then(|s| s.define_attrs);
+            if define.is_none() && self.birth_immutable(*otm, *a) {
+                return;
+            }
+        }
         // A store into an existing data field of another unit's literal
         // layout opens nothing (§5): a store effect its defining unit
         // performs (decision 17) with what the stored value's contract
@@ -696,7 +975,7 @@ impl Model {
             // `cjsInstall`); published under `*`, it opens the keys there as
             // the whole program does. Any other layout a computed key opens:
             // a census report (§5).
-            (Some(facts), Key::Any) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
+            (Some(facts), Key::Any(_)) if matches!(self.toks[t as usize], TokKind::Obj(..)) => {
                 facts.kind == "class" && facts.fields.iter().any(|f| f.declared)
             }
             _ => false,
@@ -708,7 +987,7 @@ impl Model {
                 Key::Named(a) if effect => {
                     self.foreign_stores.insert((tm, a, src));
                 }
-                Key::Any if effect => {
+                Key::Any(_) if effect => {
                     let a = self.atom(crate::STAR_KEY);
                     self.foreign_stores.insert((tm, a, src));
                 }
@@ -716,6 +995,49 @@ impl Model {
                     self.foreign_written.insert(tm);
                 }
             }
+        }
+        if self.is_arr(t) {
+            self.arr_len_store(t, key, elem, site);
+            // A store under one fixed index of a rest array writes that
+            // index only (`index_slot`) and moves no other element.
+            let fixed = match key {
+                Key::Named(a) if self.is_rest_arr(t) => self.atoms[a as usize]
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|i| i.to_string() == self.atoms[a as usize]),
+                _ => None,
+            };
+            if let Some(i) = fixed {
+                let s = self.index_slot(t, i);
+                self.edge(src, s);
+            }
+            // DEADFN15: the front (`rest_front`) gets index 0's stores and
+            // the stores at an index not known; a `length` store may move
+            // index 0 (C1).
+            if self.is_rest_arr(t) {
+                if self.is_array_length(t, key) {
+                    self.rest_front_widen(t);
+                } else if matches!(
+                    (slot, fixed, key),
+                    (Some(0), _, _) | (_, Some(0), _) | (None, None, Key::Any(_))
+                ) {
+                    let n = self.rest_front(t);
+                    self.edge(src, n);
+                }
+            }
+            match slot.is_some() || fixed.is_some() {
+                true => self.arr_written_at(t),
+                false => self.arr_written(t),
+            }
+        }
+        // An index past the end, a computed key or a `length` store may
+        // leave a hole; an append (`elem`) never does (`hole`).
+        let index = match key {
+            Key::Named(a) => numeric_key(&self.atoms[a as usize]) || self.is_array_length(t, key),
+            Key::Any(_) => !elem,
+        };
+        if index {
+            self.mark_hole(t);
         }
         if self.is_array_length(t, key) {
             let r = self.reason("ToNumber of an array length store");
@@ -746,10 +1068,24 @@ impl Model {
         }
         match key {
             Key::Named(a) => {
-                let f = self.field(t, a);
+                // A BD-A define of a non-enumerable key makes no for-in key
+                // (`field_r`, as a method definition).
+                let hidden = self
+                    .stores
+                    .get(site as usize)
+                    .and_then(|s| s.define_attrs)
+                    .is_some_and(|attrs| attrs & perry_abi::LAYOUT_KEY_NON_ENUMERABLE != 0);
+                let f = match slot {
+                    Some(i) => self.index_slot(t, i),
+                    None if hidden => self.field_r(t, a),
+                    None => self.field(t, a),
+                };
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let ctor = self.stores[site as usize].birth || self.is_ctor_phase(site, tm);
+                    if matches!(self.toks[t as usize], TokKind::Obj(..)) {
+                        self.tok_writers.entry((tm, a)).or_default().insert(t);
+                    }
                     // Writers per object: an instance's, the class object's,
                     // the prototype's.
                     let w = match self.toks[t as usize] {
@@ -766,17 +1102,42 @@ impl Model {
                         w.post.push(site);
                     }
                     // A store effect's key exists in the defining unit's layout.
-                    if !self.tmpls[tm as usize].birth_keys.contains(&a) && !ctor && !effect {
+                    // A rule 3 store (`gen::proto_first`) makes its key on the
+                    // prototype while the class is evaluated, before any
+                    // instance or any other code can reach the prototype
+                    // (15.7.14): the chain every instance has holds it from
+                    // the first instance on, so it adds no key to a layout.
+                    let first = matches!(self.toks[t as usize], TokKind::Proto(_))
+                        && self.stores[site as usize].proto_first == Some(tm);
+                    if !self.tmpls[tm as usize].birth_keys.contains(&a)
+                        && !ctor
+                        && !effect
+                        && !first
+                    {
                         *self.adds_keys.entry(tm).or_default() += 1;
                         *self.adds_named.entry((tm, a)).or_default() += 1;
                     }
                 }
             }
-            Key::Any => {
-                let f = match elem && self.is_elem_array(t) {
-                    true => self.field_any(t),
-                    false => self.any_key_node(t),
+            Key::Any(_) => {
+                // A rest array's argument at its position (`slot`): its index
+                // slot, which flows into its elements (`index_slot`).
+                let f = if let Some(i) = slot {
+                    self.index_slot(t, i)
+                } else if num_only && self.is_elem_array(t) {
+                    self.field_any(t)
+                } else if num_only {
+                    self.numeric_field(t)
+                } else {
+                    self.key_store_node(t, key)
                 };
+                // Relations: a store under a key not known here writes the
+                // object's any-key (or numeric) field node.
+                let (sf, sm) = (
+                    self.stores[site as usize].func,
+                    self.stores[site as usize].module,
+                );
+                self.rel(|| format!("anystore {t} {src} {f} site={site} fn={sf} m={sm}"));
                 self.edge(src, f);
                 if let Some(tm) = tm {
                     let birth = self.stores[site as usize].birth;
@@ -784,7 +1145,9 @@ impl Model {
                     if birth {
                         w.ctor.push(site);
                     } else {
-                        w.post.push(site);
+                        if !w.post.contains(&(site, key)) {
+                            w.post.push((site, key));
+                        }
                         // A store effect (DECISIONS 188): its defining unit
                         // opens the key set, performing it.
                         if !effect {
@@ -794,7 +1157,11 @@ impl Model {
                 }
             }
         }
-        // Setters on the chain (and own accessors).
+        // Setters on the chain (and own accessors), including an accessor
+        // installed through another token that may denote this native.
+        self.builtin_field_use(t, key, ChainAct::Store(src));
+        // A setter a declaration made the receiver with (`onabort`).
+        self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
         self.accessor_walk(t, t, key, ChainAct::Store(src));
         if !self.is_array_like(t) {
             let cp = self.cp(t);
@@ -802,6 +1169,29 @@ impl Model {
                 self.cons(cp, Cons::StoreTopProto { origin: t, src });
             }
         }
-        self.with_b(|m| builtins::tok_store(m, t, key, src));
+        // A callable namespace's own property is the realm's only under a
+        // static the realm itself reads (`realm_reads_store`). Every other
+        // key is a field of the function graph (above), which program
+        // reads and the protocols run on it read.
+        let namespace = matches!(self.toks[t as usize], TokKind::Builtin(ns)
+            if !matches!(ns, BuiltinNs::ObjectProtoOwn(_) | BuiltinNs::ObjectProtoMethod));
+        // A number key names no declared static (the realm declares no
+        // index) and the runtime reads no index of a built-in function or
+        // namespace: an element store there writes that object's own
+        // numeric field (above), which its reads see; no E20 sink. Not the
+        // global object's (its indices are globals unmodeled code reads),
+        // not a prototype's (the lock's, `note_native_write`).
+        let own_index = elem
+            && match self.toks[t as usize] {
+                _ if builtins::global_object(self, t) => false,
+                TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
+                _ => false,
+            };
+        if (!builtins::builtin_function(self, t)
+            || (namespace && builtins::realm_reads_store(self, t, key)))
+            && !own_index
+        {
+            self.with_b(|m| builtins::tok_store(m, t, key, src));
+        }
     }
 }

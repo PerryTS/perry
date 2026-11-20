@@ -774,3 +774,47 @@ pub(crate) const fn runtime_layout_image() -> crate::codegen_abi::PerryLayoutIma
 #[cfg(test)]
 #[path = "multi_image_memo_tests.rs"]
 mod multi_image_memo_tests;
+
+/// Logical size of this agent's class tables: every filled table's row count
+/// (image run capture; a word diff cannot see heap growth behind the pointer).
+pub(crate) fn snap_image_table_sizes() -> [usize; crate::snap_image::format::CLASS_TABLE_COUNT] {
+    macro_rules! n {
+        ($f:expr) => {
+            $f.read()
+                .unwrap_or_else(|p| p.into_inner())
+                .as_ref()
+                .map_or(0, |m| m.len())
+        };
+    }
+    let t = current();
+    let decls = t
+        .declarations
+        .read()
+        .unwrap_or_else(|p| p.into_inner())
+        .snap_image_len();
+    let dense = t.parent_dense.get().map_or(0, |d| {
+        d.iter().filter(|x| x.load(Ordering::Relaxed) != 0).count()
+    });
+    [
+        decls,
+        dense,
+        n!(t.static_methods),
+        n!(t.static_accessors),
+        n!(t.string_member_orders),
+        n!(t.method_bind_lengths),
+        n!(t.static_method_bind_lengths),
+        n!(t.registered_class_ids),
+        n!(t.parents),
+        n!(t.fetch_parent_kind),
+        n!(t.generic_origin),
+        n!(t.extends_error),
+        n!(t.has_instance),
+        n!(t.to_string_tag),
+        n!(t.constructors),
+        n!(t.constructor_flags),
+        n!(t.extends_data_view),
+        n!(t.extends_typed_array),
+        n!(t.names),
+        n!(t.lengths),
+    ]
+}

@@ -75,6 +75,7 @@ fn collect_flat_const_row_aliases(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_flat_const_row_aliases(body, id, out);
                 if let Some(catch) = catch {
@@ -156,6 +157,7 @@ fn flat_const_stmts_are_safe(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 flat_const_stmts_are_safe(body, id, row_aliases)
                     && catch
@@ -354,6 +356,7 @@ fn any_top_level_expr(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 if any_top_level_expr(body, pred) {
                     return true;
@@ -618,6 +621,7 @@ mod tests {
 
     fn index(object: Expr, index: i64) -> Expr {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(object),
@@ -663,6 +667,7 @@ mod tests {
             object: Box::new(index(Expr::LocalGet(7), 0)),
             index: Box::new(Expr::Integer(1)),
             value: Box::new(Expr::Integer(99)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         };
@@ -703,6 +708,7 @@ mod tests {
             value: Box::new(Expr::String("changed".to_string())),
             receiver: Box::new(Expr::LocalGet(8)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         };

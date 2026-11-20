@@ -61,7 +61,7 @@ pub(crate) fn bind_inline_constructor_params(
     let param_proofs: Vec<Option<HirType>> = params
         .iter()
         .map(|param| {
-            if param.name.starts_with("__perry_cap_")
+            if perry_hir::cap_fields::is_cap_field_name(&param.name)
                 || param.is_rest
                 || param.arguments_object.is_some()
             {
@@ -93,7 +93,7 @@ pub(crate) fn bind_inline_constructor_params(
         crate::expr::emit_shadow_slot_bind_for_local(ctx, param.id);
         ctx.local_types.insert(param.id, param.ty.clone());
         ctx.proven_local_types.remove(&param.id);
-        if let Some(proof) = proof {
+        if let Some(proof) = proof.filter(|proof| ctx.admits_contents_proof(param.id, proof)) {
             ctx.proven_local_types.insert(param.id, proof);
         }
     }
@@ -212,7 +212,9 @@ fn inline_constructor_param_values_with_class(
         params
             .iter()
             .filter(|p| {
-                p.name.starts_with("__perry_cap_") && !p.is_rest && p.arguments_object.is_none()
+                perry_hir::cap_fields::is_cap_field_name(&p.name)
+                    && !p.is_rest
+                    && p.arguments_object.is_none()
             })
             .count()
             .min(lowered_args.len())
@@ -228,7 +230,7 @@ fn inline_constructor_param_values_with_class(
     // declaration order, which is the same order they appear here).
     let mut cap_slot = 0u32;
     for param in params {
-        if param.name.starts_with("__perry_cap_")
+        if perry_hir::cap_fields::is_cap_field_name(&param.name)
             && !param.is_rest
             && param.arguments_object.is_none()
         {

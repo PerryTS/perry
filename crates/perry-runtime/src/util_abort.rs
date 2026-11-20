@@ -22,14 +22,18 @@ fn set_field(obj: *mut crate::object::ObjectHeader, key: &[u8], value: f64) {
 }
 
 fn type_error_value(message: &str, code: &'static str) -> f64 {
-    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    js_nanbox_pointer(err as i64)
+    type_error(message, code).value()
 }
 
-fn invalid_signal_error(signal: f64) -> f64 {
-    type_error_value(
+fn type_error(message: &str, code: &'static str) -> crate::error::CoreError {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, code);
+    let err = crate::error::CoreError::type_error(msg);
+    err
+}
+
+fn invalid_signal_core_error(signal: f64) -> crate::error::CoreError {
+    type_error(
         &format!(
             "The \"signal\" argument must be an instance of AbortSignal. Received {}",
             crate::fs::validate::describe_received(signal)
@@ -123,7 +127,7 @@ pub extern "C" fn js_util_transferable_abort_controller() -> f64 {
 #[no_mangle]
 pub extern "C" fn js_util_transferable_abort_signal(signal: f64) -> f64 {
     if !crate::event_target_hook_slots::is_abort_signal_value(signal) {
-        crate::exception::js_throw(invalid_signal_error(signal));
+        crate::exception::throw_core(invalid_signal_core_error(signal));
     }
     signal
 }

@@ -278,12 +278,20 @@ fn allocate_class_instance(class_cid: u32, args: &[f64]) -> (*mut ObjectHeader, 
 unsafe fn construct_object_with_new_target(new_target: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let new_target = scope.root_nanbox_f64(new_target);
+    let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
+        .or_else(global_object_prototype_bits);
+    ordinary_object_from_new_target(new_target.get_nanbox_f64(), prototype)
+}
+
+/// An ordinary object born from `new_target` (its class id and evaluation
+/// brand) whose [[Prototype]] is `prototype`, already read from `new_target`.
+unsafe fn ordinary_object_from_new_target(new_target: f64, prototype: Option<u64>) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let new_target = scope.root_nanbox_f64(new_target);
+    let prototype = prototype.map(|bits| scope.root_nanbox_u64(bits));
     let instance_cid = new_target_class_id(new_target.get_nanbox_f64()).unwrap_or(0);
     let instance = allocate_class_instance(instance_cid, &[]).0;
     let instance = scope.root_raw_mut_ptr(instance);
-    let prototype = new_target_custom_object_prototype(new_target.get_nanbox_f64())
-        .or_else(global_object_prototype_bits)
-        .map(|bits| scope.root_nanbox_u64(bits));
     if let Some(prototype) = prototype {
         instance.with_mut_ptr::<ObjectHeader, _>(|instance| {
             super::super::prototype_chain::object_set_static_prototype(

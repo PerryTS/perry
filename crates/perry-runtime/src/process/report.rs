@@ -260,7 +260,102 @@ fn process_report_header_object(trigger: &str, filename: Option<&str>) -> f64 {
         JSValue::from_bits((module_string_value(std::env::consts::ARCH)).to_bits()),
     );
     obj.set(20, JSValue::from_bits((module_string_value("")).to_bits()));
-    module_object_value(obj.finish())
+    let header = module_object_value(obj.finish());
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    let header = with_glibc_versions(header);
+    header
+}
+
+/// The header keys in Node order up to `nodejsVersion`'s successor: glibc
+/// Linux inserts `glibcVersionRuntime` and `glibcVersionCompiler` after
+/// `nodejsVersion` (index 10).
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+const HEADER_KEYS: [&str; 21] = [
+    "reportVersion",
+    "event",
+    "trigger",
+    "filename",
+    "dumpEventTime",
+    "dumpEventTimeStamp",
+    "processId",
+    "threadId",
+    "cwd",
+    "commandLine",
+    "nodejsVersion",
+    "wordSize",
+    "arch",
+    "platform",
+    "componentVersions",
+    "release",
+    "osName",
+    "osRelease",
+    "osVersion",
+    "osMachine",
+    "cpus",
+];
+
+/// Node prints `glibcVersionRuntime` and `glibcVersionCompiler` right after
+/// `nodejsVersion` on glibc Linux and omits them elsewhere. Packages that
+/// ship glibc and musl builds read `header.glibcVersionRuntime` and take the
+/// musl build when it is absent (the `detect-libc` / napi-rs loader
+/// convention). The two keys are interned here, when the report is built,
+/// like any string created at run time: they are not in the startup seed.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn with_glibc_versions(header: f64) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let source = scope.root_nanbox_f64(header);
+    let out = scope.root_raw_mut_ptr(crate::object::js_object_alloc(0, 23));
+    for (index, name) in HEADER_KEYS.iter().enumerate() {
+        let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
+        let value = module_object_ptr(source.get_nanbox_f64()).map_or(f64::NAN, |record| {
+            crate::object::js_object_get_field_by_name_f64(record, key)
+        });
+        out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+            module_set_field(object, name, value)
+        });
+        if index == 10 {
+            let runtime = module_string_value(&glibc_version_runtime());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionRuntime", runtime)
+            });
+            let compiler = module_string_value(&glibc_version_compiler());
+            out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| {
+                module_set_field(object, "glibcVersionCompiler", compiler)
+            });
+        }
+    }
+    out.with_mut_ptr(|object: *mut crate::object::ObjectHeader| module_object_value(object))
+}
+
+/// The glibc the process runs on, as `major.minor`.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_runtime() -> String {
+    // SAFETY: glibc returns a pointer to a static NUL-terminated string.
+    unsafe { std::ffi::CStr::from_ptr(libc::gnu_get_libc_version()) }
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// The glibc the program was linked against, as `major.minor`. The compiler
+/// defines `perry_glibc_version_compiler` as the absolute symbol
+/// `major * 1000 + minor` in every glibc link it drives: the target
+/// sysroot's glibc when cross-linking, the link host's when linking
+/// natively (`link/glibc_version.rs`). Only a link Perry does not drive lacks
+/// it: the runtime crate's own test binaries, which cargo links natively, so
+/// the glibc they run on is the one they were linked against.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn glibc_version_compiler() -> String {
+    extern "C" {
+        #[linkage = "extern_weak"]
+        static perry_glibc_version_compiler: *const u8;
+    }
+    // SAFETY: an extern_weak static reads as the symbol's address, or null;
+    // the link defines this one as an absolute value.
+    let encoded = unsafe { perry_glibc_version_compiler as usize };
+    if encoded == 0 {
+        return glibc_version_runtime();
+    }
+    format!("{}.{}", encoded / 1000, encoded % 1000)
 }
 
 fn process_report_javascript_stack_object() -> f64 {
@@ -496,6 +591,25 @@ pub(crate) fn process_report_json_string(trigger: &str, filename: Option<&str>) 
         "sharedObjects": []
     });
 
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        let header = value["header"]
+            .as_object_mut()
+            .expect("header is an object");
+        let mut ordered = serde_json::Map::new();
+        for (key, item) in std::mem::take(header) {
+            let after_node = key == "nodejsVersion";
+            ordered.insert(key, item);
+            if after_node {
+                ordered.insert("glibcVersionRuntime".into(), glibc_version_runtime().into());
+                ordered.insert(
+                    "glibcVersionCompiler".into(),
+                    glibc_version_compiler().into(),
+                );
+            }
+        }
+        *header = ordered;
+    }
     #[cfg(windows)]
     if let Some(value) = value.as_object_mut() {
         value.remove("userLimits");

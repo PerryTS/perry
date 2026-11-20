@@ -2,6 +2,16 @@ use super::*;
 use perry_hir::types::Type;
 use perry_hir::{Function, Param, TYPED_ARRAY_KIND_FLOAT64};
 
+// These cases hold no proven method site: the module scan and the statement
+// probe over an empty proven set.
+fn buffer_exposure(m: &Module) -> BufferExposure {
+    super::buffer_exposure(m, &BTreeSet::new())
+}
+
+fn stmt_may_expose(stmt: &Stmt, id: u32) -> bool {
+    super::stmt_may_expose(stmt, id, &BTreeSet::new())
+}
+
 fn let_stmt(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -34,6 +44,7 @@ fn call(fid: u32, args: Vec<Expr>) -> Expr {
 
 fn get(recv: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(recv)),
@@ -277,6 +288,7 @@ fn a_sloppy_element_store_keeps_the_seal() {
             value: Box::new(Expr::Integer(2)),
             receiver: Box::new(Expr::LocalGet(receiver)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })

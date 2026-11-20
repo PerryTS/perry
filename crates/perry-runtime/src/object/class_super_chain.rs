@@ -31,7 +31,7 @@ pub unsafe extern "C" fn js_class_method_home(mut owner: f64, is_static: i32) ->
     if is_static != 0 {
         return owner;
     }
-    if let Some(cid) = super::class_prototype_ref_id(owner) {
+    if let Some(cid) = super::class_method_home_id(owner) {
         return super::class_registry::class_decl_prototype_value(cid);
     }
     if let Some(cid) = constructor {

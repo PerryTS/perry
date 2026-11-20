@@ -1,0 +1,1 @@
+A static method called on a class declared inside a function that runs more than once now sees the evaluation it was called on: `D.read()` in the second call of `g` read the first call's captured variables, because the guard-free static call bound `this` to the first evaluation's class object.

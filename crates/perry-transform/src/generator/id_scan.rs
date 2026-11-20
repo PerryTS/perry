@@ -220,6 +220,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_local(body, max_id);
             if let Some(c) = catch {
@@ -461,6 +462,7 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
             body,
             catch,
             finally,
+            ..
         } => {
             scan_stmts_for_max_func(body, max_id);
             if let Some(c) = catch {
@@ -639,6 +641,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         }

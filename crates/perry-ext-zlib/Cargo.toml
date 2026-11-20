@@ -26,7 +26,7 @@ adler2 = "2"
 zstd.workspace = true
 # Brotli stream + one-shot support (#1843). Matches the version the
 # `compression` feature pulls into perry-stdlib.
-brotli = "9.0"
+brotli = "9.1.1"
 
 # One zlib per target: zlib-ng (C, built with cmake) natively, and on wasm32 the
 # pure-Rust libz-rs-sys, through the `stream/zsys.rs` facade.

@@ -1,14 +1,17 @@
 /* Environment teardown work that reports when it runs.
  *
- * `hold(referenced)` creates one thread-safe function with no JS callback and
- * no worker thread, and registers one environment cleanup hook. The function's
- * finalizer writes "finalized" to stdout and the hook writes "cleanup". With
- * `referenced` false the function is unref'd, so it does not keep the event
- * loop alive.
+ * `hold(referenced)` registers, in this order, an environment cleanup hook
+ * ("cleanup-first"), one thread-safe function with no JS callback and no
+ * worker thread (its finalizer writes "finalized"), an async cleanup hook
+ * without a removal handle ("async-cleanup") and a second cleanup hook
+ * ("cleanup"). With `referenced` false the function is unref'd, so it does
+ * not keep the event loop alive.
  *
- * Node runs both when the environment is torn down (the natural end of the
- * event loop). `process.exit()` does not tear the environment down, so there
- * neither runs.
+ * Node runs all of them when the environment is torn down (the natural end
+ * of the event loop): the cleanup queue newest first (the thread-safe
+ * function's own entry only closes it), then the finalizer of the closed
+ * function. `process.exit()` does not tear the environment down, so there
+ * none runs.
  */
 #include <stdint.h>
 #include <stddef.h>
@@ -39,6 +42,11 @@ NAPI_IMPORT napi_status napi_create_threadsafe_function(
     napi_threadsafe_function_call_js, napi_threadsafe_function*);
 NAPI_IMPORT napi_status napi_unref_threadsafe_function(napi_env, napi_threadsafe_function);
 NAPI_IMPORT napi_status napi_add_env_cleanup_hook(napi_env, void (*)(void*), void*);
+typedef void* napi_async_cleanup_hook_handle;
+NAPI_IMPORT napi_status napi_add_async_cleanup_hook(
+    napi_env, void (*)(napi_async_cleanup_hook_handle, void*), void*,
+    napi_async_cleanup_hook_handle*);
+NAPI_IMPORT napi_status napi_remove_async_cleanup_hook(napi_async_cleanup_hook_handle);
 
 static void call_js(napi_env env, napi_value js_callback, void* context, void* data) {
   (void)env;
@@ -55,10 +63,20 @@ static void finalize(napi_env env, void* data, void* hint) {
   (void)!write(1, line, sizeof line - 1);
 }
 
+static void say(const char* line) {
+  size_t length = 0;
+  while (line[length]) length++;
+  (void)!write(1, line, length);
+}
+
 static void cleanup(void* argument) {
-  static const char line[] = "cleanup\n";
+  say(argument ? "cleanup-first\n" : "cleanup\n");
+}
+
+static void async_cleanup(napi_async_cleanup_hook_handle handle, void* argument) {
   (void)argument;
-  (void)!write(1, line, sizeof line - 1);
+  say("async-cleanup\n");
+  (void)napi_remove_async_cleanup_hook(handle);
 }
 
 static napi_value hold(napi_env env, napi_callback_info info) {
@@ -71,8 +89,10 @@ static napi_value hold(napi_env env, napi_callback_info info) {
   if (napi_get_cb_info(env, info, &argc, argv, 0, 0) != 0 || argc != 1 ||
       napi_get_value_bool(env, argv[0], &referenced) != 0 ||
       napi_create_string_utf8(env, "fixture-exit-finalizer", (size_t)-1, &name) != 0 ||
+      napi_add_env_cleanup_hook(env, cleanup, (void*)1) != 0 ||
       napi_create_threadsafe_function(env, 0, 0, name, 0, 1, 0, finalize, 0, call_js, &tsfn) != 0 ||
       (!referenced && napi_unref_threadsafe_function(env, tsfn) != 0) ||
+      napi_add_async_cleanup_hook(env, async_cleanup, 0, 0) != 0 ||
       napi_add_env_cleanup_hook(env, cleanup, 0) != 0 ||
       napi_get_undefined(env, &result) != 0) {
     return 0;

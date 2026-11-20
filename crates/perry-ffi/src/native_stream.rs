@@ -6,7 +6,7 @@
 //! payload cell's vtable names: the cell's `finalizer` word is a
 //! `&'static` [`PayloadVTable`] `{ drop, stream }`, so a family declares one
 //! static vtable per payload type ([`payload_vtable`]) and the runtime finds
-//! the hooks from the object it already holds (`meta.native_state` -> cell
+//! the hooks from the object it already holds (the payload slot -> cell
 //! -> vtable), with no name lookup, table or class switch. Every write,
 //! `pipe`, `pipeline` and async iteration then goes through the runtime's
 //! one stream state machine: its writable buffer, its readable queue, its

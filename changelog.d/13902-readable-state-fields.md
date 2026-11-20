@@ -1,0 +1,1 @@
+A stream's `_readableState` now carries node 26.12's `fastChunk`, `pipeOnData` and `pipePause` fields (born null, between `length` and `pipes`), so programs that list or serialize the readable state match node 26.12.

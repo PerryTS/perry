@@ -53,7 +53,7 @@ def main():
     host = frozen / ("async_guest_cancel" + suffix)
     caller = out / "caller"
     caller.mkdir()
-    fixture = root / "test-wasi/components/async-guest-cancel"
+    fixture = root / "tests/integration/wasi/components/async-guest-cancel"
     for name in ["world.wit", "supervisor.c"]:
         shutil.copyfile(fixture / name, caller / name)
     generated = caller / "generated"

@@ -58,13 +58,23 @@ pub enum FamilyKey {
     /// definition is the runtime's claim (`js_private_field_add`), which
     /// fills the slot's hole.
     Private(String),
+    /// A string-named property its constructor defines with a literal data
+    /// descriptor (`Object.defineProperty(this, "k", {value, ...})`), whose
+    /// attributes are not all default: the byte is the key's
+    /// `ENTRY_NON_WRITABLE | ENTRY_NON_ENUMERABLE | ENTRY_NON_CONFIGURABLE`
+    /// (`perry_abi::LAYOUT_KEY_*`), the attributes the key has when present.
+    /// Only that definition fills its hole (the runtime's
+    /// `layout_desc::family_define_own`); a `[[Set]]` add of the key leaves
+    /// the layout. A store compiled for the layout reads the byte
+    /// ([`FamilyKey::plain`]).
+    Defined(String, u8),
 }
 
 impl FamilyKey {
     /// The property name, when the key is a property.
     pub fn name(&self) -> Option<&str> {
         match self {
-            FamilyKey::Name(n) => Some(n),
+            FamilyKey::Name(n) | FamilyKey::Defined(n, _) => Some(n),
             FamilyKey::Private(_) => None,
         }
     }
@@ -73,8 +83,23 @@ impl FamilyKey {
     /// qualified storage name.
     pub fn spelling(&self) -> &str {
         match self {
-            FamilyKey::Name(n) | FamilyKey::Private(n) => n,
+            FamilyKey::Name(n) | FamilyKey::Private(n) | FamilyKey::Defined(n, _) => n,
         }
+    }
+
+    /// The key's attribute byte when present (0 for a plain property and a
+    /// private element, whose byte is `LAYOUT_KEY_PRIVATE_FIELD`).
+    pub fn attrs(&self) -> u8 {
+        match self {
+            FamilyKey::Defined(_, a) => *a,
+            _ => 0,
+        }
+    }
+
+    /// Is the key a plain writable data property, which a raw slot store
+    /// compiled for the layout may write?
+    pub fn plain(&self) -> bool {
+        matches!(self, FamilyKey::Name(_))
     }
 
     pub fn is_private(&self) -> bool {
@@ -148,6 +173,13 @@ pub struct FamilyLayout {
     /// holds the constructor keys at the same slots as `keys`.
     pub discriminant: u32,
     pub variants: Vec<FamilyVariant>,
+    /// The class is born with its keys (`lower_call::new_alloc::
+    /// keys_defined_at_birth` of its declaration): its birth rep, not its
+    /// field definitions, would carry its I32 lanes, and a family birth has
+    /// none (`expr::rest_fields::class_lanes`). Decided once from the
+    /// defining module's class, so every module (the definer and each
+    /// importer, whose class is a stub without a constructor) reads the same.
+    pub born_with_keys: bool,
 }
 
 /// One layout of a family's creation split.
@@ -219,10 +251,15 @@ pub struct ProgramLayouts {
     /// Structurally run-once, closed-world evaluated declarations. Compile
     /// facts only; generated code adds no flag, table or observation state.
     pub run_once_evaluated: BTreeSet<u32>,
+    /// Templates some module evaluates per expression (`ClassExprFresh`).
+    pub fresh_templates: BTreeSet<u32>,
     /// By class id.
     pub families: BTreeMap<u32, FamilyLayout>,
     /// Literal prototype identity and source-ordered base slots; compile facts only.
     pub literal_families: BTreeSet<u32>,
+    /// Inlined anonymous classes share global descriptor symbols; only their
+    /// first module (`HirModule::name`) defines them.
+    pub family_owner: BTreeMap<u32, String>,
     /// Classes not admitted, counted once each by the first failed proof.
     pub refused: BTreeMap<String, u32>,
     pub digest: u64,
@@ -247,6 +284,13 @@ pub struct ProgramLayouts {
 }
 
 impl ProgramLayouts {
+    /// Without a program-wide owner, preserve module-local descriptor emission.
+    pub fn owns_family(&self, class_id: u32, module: &str) -> bool {
+        self.family_owner
+            .get(&class_id)
+            .is_none_or(|owner| owner == module)
+    }
+
     /// Does class `class_id`'s family layout put a key at a slot other than
     /// its constructor-order position (so codegen's class slot is not the
     /// instance's)?
@@ -371,6 +415,7 @@ fn visit_stmt<'a>(
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, on_stmt, on_expr);
             if let Some(c) = catch {
@@ -501,6 +546,16 @@ fn store_names_receiver_only(s: &Stmt) -> bool {
                 && !mentions_receiver(key)
                 && !mentions_receiver(value)
         }
+        // `Object.defineProperty(this, k, d)` / `Object.defineProperties`:
+        // the builtin defines own keys and hands the receiver to no code.
+        Stmt::Expr(Expr::ObjectDefineProperty(target, key, desc)) => {
+            matches!(target.as_ref(), Expr::This)
+                && !mentions_receiver(key)
+                && !mentions_receiver(desc)
+        }
+        Stmt::Expr(Expr::ObjectDefineProperties(target, props)) => {
+            matches!(target.as_ref(), Expr::This) && !mentions_receiver(props)
+        }
         _ => false,
     }
 }
@@ -596,7 +651,191 @@ fn node_event_emitter_heritage(class: &Class) -> bool {
 /// `fresh`: `class` is a per-evaluation template (`ClassExprFresh`), whose
 /// evaluations name their private elements per evaluation, never by the
 /// template's spelling.
-fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, String> {
+/// The program's literal-shape classes (the `__AnonShape_*` classes object
+/// literals lower to, named by their fields, so every module that writes the
+/// same literal shape declares the same name) by name; `None` for a name two
+/// classes with different field lists share.
+type Shapes<'a> = HashMap<&'a str, Option<&'a Class>>;
+
+fn literal_shapes<'a>(classes: impl Iterator<Item = &'a Class>) -> Shapes<'a> {
+    let names = |c: &Class| -> Vec<Option<String>> {
+        c.fields
+            .iter()
+            .map(|f| f.key_expr.is_none().then(|| f.name.clone()))
+            .collect()
+    };
+    let mut out: Shapes<'a> = HashMap::new();
+    for c in classes.filter(|c| c.is_literal_shape()) {
+        out.entry(c.name.as_str())
+            .and_modify(|e| {
+                if e.is_some_and(|x| names(x) != names(c)) {
+                    *e = None
+                }
+            })
+            .or_insert(Some(c));
+    }
+    out
+}
+
+/// The (name, value) fields of an object literal `e`, as written.
+fn literal_fields<'a>(e: &'a Expr, shapes: &Shapes<'a>) -> Option<Vec<(&'a str, &'a Expr)>> {
+    match e {
+        Expr::New {
+            class_name, args, ..
+        } => {
+            let c = (*shapes.get(class_name.as_str())?)?;
+            if c.fields.len() != args.len() || c.fields.iter().any(|f| f.key_expr.is_some()) {
+                return None;
+            }
+            Some(
+                c.fields
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .zip(args.iter())
+                    .collect(),
+            )
+        }
+        Expr::Object(props) => Some(props.iter().map(|(k, v)| (k.as_str(), v)).collect()),
+        _ => None,
+    }
+}
+
+/// One key a constructor statement defines on the receiver with a literal
+/// data descriptor: its name, its attribute byte (`FamilyKey::Defined`) and
+/// the descriptor's field values (evaluated before the definition).
+type DefineStore<'a> = (&'a str, u8, Vec<&'a Expr>);
+
+/// The keys statement `s` defines, when it is
+/// `Object.defineProperty(this, "k", L)` or
+/// `Object.defineProperties(this, {k: L, ...})` and every `L` is a literal
+/// data descriptor (`create_families::literal_descriptor_attrs`), in
+/// definition order, and whether the definition may run program code first
+/// (see [`define_call`]). `None` for any other statement, an accessor, a
+/// computed or array-index key (`defineProperties` defines index keys first).
+fn define_stores<'a>(s: &'a Stmt, shapes: &Shapes<'a>) -> Option<(Vec<DefineStore<'a>>, bool)> {
+    let one = |k: &'a str, d: &'a Expr| -> Option<DefineStore<'a>> {
+        if k.parse::<u32>().is_ok() {
+            return None;
+        }
+        let fields = literal_fields(d, shapes)?;
+        let attrs = crate::layout_desc::create_families::literal_descriptor_attrs(&fields)?;
+        if attrs & crate::runtime_abi::LAYOUT_KEY_ACCESSOR != 0 {
+            return None;
+        }
+        Some((k, attrs, fields.into_iter().map(|(_, v)| v).collect()))
+    };
+    let Stmt::Expr(e) = s else {
+        return None;
+    };
+    let (call, may_run_code) = define_call(e)?;
+    let defs = match call {
+        DefineCall::One(key, desc) => {
+            let Expr::String(k) = key else {
+                return None;
+            };
+            vec![one(k.as_str(), desc)?]
+        }
+        DefineCall::Many(props) => {
+            let fields = literal_fields(props, shapes)?;
+            let mut out: Vec<DefineStore<'a>> = Vec::with_capacity(fields.len());
+            for (k, d) in fields {
+                if out.iter().any(|(x, _, _)| *x == k) {
+                    return None;
+                }
+                out.push(one(k, d)?);
+            }
+            out
+        }
+    };
+    Some((defs, may_run_code))
+}
+
+/// The receiver definition a constructor statement makes: the key and
+/// descriptor of `Object.defineProperty(this, key, desc)`, or the property
+/// map of `Object.defineProperties(this, props)`.
+enum DefineCall<'a> {
+    One(&'a Expr, &'a Expr),
+    Many(&'a Expr),
+}
+
+/// The definition `e` makes on the receiver, and whether program code may
+/// run in its place:
+///
+/// * the intrinsic (`Expr::ObjectDefineProperty` / `ObjectDefineProperties`
+///   on `this`): no code runs;
+/// * the guarded pair `NamespacePatched("Object") ? <generic> : <intrinsic>`
+///   that a direct namespace call lowers to when a program write may replace
+///   a member of `Object` (`perry_hir::patched_builtins`), and the generic
+///   call `globalThis.Object.defineProperty(this, …)` the facts lowering
+///   keeps of such a pair: the member read may find a replacement, which
+///   runs with the receiver.
+///
+/// The layout's key is only where the definition lands when the original
+/// builtin defines it (the runtime fills the hole only for exactly those
+/// attributes and in key order, `layout_desc::family_define_own`); any
+/// other run of the statement adds its keys by the ordinary rules. So a
+/// definition that may run code keys the layout the same way, and the caller
+/// treats the statement as code that may observe the receiver.
+fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
+    match e {
+        Expr::ObjectDefineProperty(target, key, desc) if matches!(target.as_ref(), Expr::This) => {
+            Some((DefineCall::One(key, desc), false))
+        }
+        Expr::ObjectDefineProperties(target, props) if matches!(target.as_ref(), Expr::This) => {
+            Some((DefineCall::Many(props), false))
+        }
+        Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+        } if matches!(condition.as_ref(), Expr::NamespacePatched(ns) if ns == "Object") => {
+            let (call, _) = define_call(else_expr)?;
+            // The generic arm must be the same member's call on the same
+            // operands; otherwise the statement is not this definition.
+            generic_define_call(then_expr)?;
+            Some((call, true))
+        }
+        _ => generic_define_call(e).map(|call| (call, true)),
+    }
+}
+
+/// `globalThis.Object.defineProperty(this, key, desc)` or
+/// `globalThis.Object.defineProperties(this, props)`, the generic arm of a
+/// guarded namespace pair (`perry_hir::namespace_pairs::pair_callee`).
+fn generic_define_call(e: &Expr) -> Option<DefineCall<'_>> {
+    let Expr::Call { callee, args, .. } = e else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return None;
+    };
+    let Expr::PropertyGet {
+        object: g,
+        property: ns,
+        ..
+    } = object.as_ref()
+    else {
+        return None;
+    };
+    if !matches!(g.as_ref(), Expr::GlobalThisExpr) || ns != "Object" {
+        return None;
+    }
+    match (property.as_str(), args.as_slice()) {
+        ("defineProperty", [Expr::This, key, desc]) => Some(DefineCall::One(key, desc)),
+        ("defineProperties", [Expr::This, props]) => Some(DefineCall::Many(props)),
+        _ => None,
+    }
+}
+
+fn own_keys(
+    class: &Class,
+    has_parent: bool,
+    fresh: bool,
+    shapes: &Shapes<'_>,
+) -> Result<OwnKeys, String> {
     if class.is_literal_shape() {
         return literal::own_keys(class);
     }
@@ -622,6 +861,8 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
     // still an initialization (it defines; the chain is not consulted).
     let mut defined_open = true;
     let mut unobserved = true;
+    // The constructor-store reservations, in the class's order.
+    let mut reserved: Vec<String> = Vec::new();
     let receiver_free_init =
         |f: &perry_hir::ClassField| f.init.as_ref().is_none_or(|e| !mentions_receiver(e));
     for f in &class.fields {
@@ -629,12 +870,11 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // field-initialisation phase (`field_init` skips it): the
         // constructor's own `this.__perry_cap_* = <capture param>` stash
         // stores it, so it is a constructor key like any prologue store.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_capture()
             && f.key_expr.is_none()
             && f.init.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX)
         {
             continue;
         }
@@ -642,7 +882,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         // storage name. A brand (private methods or accessors) would move
         // the instance off its layout, and a specialized class's elements
         // carry another class's id.
-        if f.origin == ClassFieldOrigin::Definition
+        if f.origin.is_definition()
             && f.is_private
             && f.key_expr.is_none()
             && f.decorators.is_empty()
@@ -666,9 +906,23 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         let plain = f.key_expr.is_none()
             && !f.is_private
             && f.decorators.is_empty()
-            && !f.name.starts_with("__perry_cap_");
+            && !f.origin.is_capture();
         match f.origin {
-            ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {}
+            // A constructor-store reservation: a key of the family at its
+            // place in the class's reservation order (`settle_reservations`:
+            // the order the constructor creates the keys; a store nested in
+            // another store's value comes before that store), the one order
+            // the facts' birth (`compute_birth_keys`) and the class key index
+            // (`class_field_global_index`) read. Whether its store is an
+            // initialization, the body walk below says.
+            ClassFieldOrigin::ConstructorStore if plain && f.init.is_none() => {
+                if f.name == "__proto__" || f.name == "constructor" {
+                    return Err("reserved key".into());
+                }
+                if !reserved.contains(&f.name) {
+                    reserved.push(f.name.clone());
+                }
+            }
             // A declared key (`Class::is_declared_keys_record`): a key of the
             // family that no birth writes, so never an initialization.
             ClassFieldOrigin::Declared if plain && f.init.is_none() => {
@@ -702,7 +956,7 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
                     "private name (brand, fresh evaluation, specialized class or decorator)"
                 } else if !f.decorators.is_empty() {
                     "decorator"
-                } else if f.name.starts_with("__perry_cap_") {
+                } else if f.origin.is_capture() {
                     "class capture"
                 } else {
                     "reservation with an initializer"
@@ -766,6 +1020,18 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
         .map(|(k, eligible)| (k, eligible && fields_open))
         .collect();
     open &= defined_open;
+    // The body's stores in statement order, each with whether it is still
+    // an initialization; the keys join the family below, in the
+    // reservation order.
+    let mut stored: Vec<(&str, bool)> = Vec::new();
+    // The attribute byte each stored key is defined with: `None` when a
+    // statement also stores it by `[[Set]]` or defines it otherwise (the
+    // key is then a plain family key, and a definition with attributes
+    // leaves the layout at run time, as before).
+    let mut defined_attrs: HashMap<&str, Option<u8>> = HashMap::new();
+    // The keys a definition statement adds (HIR reserves only the keys
+    // `[[Set]]` stores create, `settle_reservations`).
+    let mut define_keys: BTreeSet<&str> = BTreeSet::new();
     for s in body {
         // A statement that never names the receiver (the class-capture
         // reloads the compiler puts first, a static counter bump) cannot
@@ -777,15 +1043,43 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             open &= inert(v, &params);
             continue;
         }
+        if let Some((defs, may_run_code)) = define_stores(s, shapes) {
+            // A definition whose member read may find a replacement runs
+            // that code with the receiver: the initialization ends here.
+            open &= !may_run_code;
+            // The descriptor literals are evaluated before any definition.
+            open &= defs
+                .iter()
+                .all(|(_, _, values)| values.iter().all(|v| inert(v, &params)));
+            for (k, attrs, _) in defs {
+                if k == "__proto__" || k == "constructor" {
+                    return Err("reserved key".into());
+                }
+                defined_attrs
+                    .entry(k)
+                    .and_modify(|a| {
+                        if *a != Some(attrs) {
+                            *a = None
+                        }
+                    })
+                    .or_insert((attrs != 0).then_some(attrs));
+                define_keys.insert(k);
+                if !stored.iter().any(|(x, _)| *x == k) {
+                    stored.push((k, open));
+                }
+            }
+            continue;
+        }
         if let Some((k, value_inert)) = prologue_store(s, &params) {
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
             }
+            defined_attrs.insert(k, None);
             // The store itself runs after its value: a value that may run
             // code ends the initialization at this key.
             open &= value_inert;
-            if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((FamilyKey::Name(k.to_string()), open));
+            if !stored.iter().any(|(x, _)| *x == k) {
+                stored.push((k, open));
             }
             continue;
         }
@@ -802,9 +1096,47 @@ fn own_keys(class: &Class, has_parent: bool, fresh: bool) -> Result<OwnKeys, Str
             if k == "__proto__" || k == "constructor" {
                 return Err("reserved key".into());
             }
-            if !keys.iter().any(|(x, _)| x == k) {
-                keys.push((FamilyKey::Name(k.to_string()), false));
+            defined_attrs.insert(k, None);
+            if !stored.iter().any(|(x, _)| *x == k) {
+                stored.push((k, false));
             }
+        }
+    }
+    let key_of = |k: &str| match defined_attrs.get(k) {
+        Some(Some(attrs)) => FamilyKey::Defined(k.to_string(), *attrs),
+        _ => FamilyKey::Name(k.to_string()),
+    };
+    // The reservations in the class's order: the order of the constructor's
+    // first stores, a store in a branch, `switch` case, loop body or `try`
+    // at its place in the text (`constructor_store_keys`), the order the
+    // facts' birth lists them in. A stored key that is no reservation (one
+    // HIR leaves to the chain: an inherited field, a method or accessor
+    // name, a computed string key) follows them, as an execution that adds
+    // it after every reservation orders it (one that adds it earlier gets
+    // the object's overflow). A reservation the walk sees in no statement
+    // position (stored inside another store's value) is no initialization.
+    let open_at = |k: &str| stored.iter().any(|(x, open)| *x == k && *open);
+    for k in &reserved {
+        // A key a definition adds goes where the definition runs: before the
+        // first reservation stored after it, so the execution adds the keys
+        // in layout order.
+        if let Some(at) = stored.iter().position(|(x, _)| *x == k.as_str()) {
+            for (d, open) in &stored[..at] {
+                if define_keys.contains(d)
+                    && !reserved.iter().any(|r| r == d)
+                    && !keys.iter().any(|(x, _)| x == *d)
+                {
+                    keys.push((key_of(d), *open));
+                }
+            }
+        }
+        if !keys.iter().any(|(x, _)| x == k.as_str()) {
+            keys.push((key_of(k), open_at(k)));
+        }
+    }
+    for (k, open) in &stored {
+        if !keys.iter().any(|(x, _)| x == *k) {
+            keys.push((key_of(k), *open));
         }
     }
     let leaks = !unobserved_all
@@ -859,6 +1191,7 @@ fn nested_this_stores<'a>(s: &'a Stmt, out: &mut Vec<&'a str>) {
             body,
             catch,
             finally,
+            ..
         } => {
             all(body, out);
             if let Some(c) = catch {
@@ -998,14 +1331,22 @@ fn filled_records(modules: &[&HirModule]) -> BTreeSet<String> {
 
 /// A static family before its late keys: the class, its runtime parent, its
 /// constructor keys in store order, the names its prototype chain defines
-/// (methods and accessors: a store of one may run a setter or shadow it, so
-/// it never gets a late slot), and the chain's class ids, leaf first.
+/// (methods and accessors), and the chain's class ids, leaf first. A member
+/// name gets no late slot ([`RawFamily::late_blocked`]) unless it is only a
+/// writable data member of the chain (an ordinary method): a `[[Set]]` on a
+/// receiver whose chain holds a writable data property creates an own data
+/// property (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor steps 2-3), so
+/// its slot is exact; a store of an accessor's name runs the setter.
 #[derive(Debug, Clone)]
 pub(crate) struct RawFamily {
     pub class_id: u32,
     pub parent: u32,
     pub keys: Vec<FamilyKey>,
     pub members: BTreeSet<String>,
+    /// The member names that are an ordinary method on some class of the
+    /// chain and an accessor on none: a store of one creates an own data
+    /// property (owner decision 2026-11-16: one fixed late slot per class).
+    pub data_methods: BTreeSet<String>,
     pub chain: Vec<u32>,
     /// [`FamilyLayout::init_count`].
     pub init: usize,
@@ -1017,6 +1358,16 @@ pub(crate) struct RawFamily {
     /// reads, and per constant the variant's keys in key order.
     pub discriminant: u32,
     pub variants: Vec<(f64, Vec<FamilyKey>)>,
+}
+
+impl RawFamily {
+    /// Does the chain keep `k` out of the late slots? An accessor (a store
+    /// runs it), and a generator or async method (kept out with the
+    /// accessors); an ordinary method is a writable data property, so a
+    /// store of its name creates an own data property: it may hold a slot.
+    pub(crate) fn late_blocked(&self, k: &str) -> bool {
+        self.members.contains(k) && !self.data_methods.contains(k)
+    }
 }
 
 /// A root class's constructor keys stored straight from a parameter, as
@@ -1060,8 +1411,78 @@ fn param_keys(class: &Class) -> Vec<(u32, String)> {
 
 mod parents;
 
+/// The class ids of every `ClassExprFresh` template in `modules`.
+fn fresh_template_ids<'a>(modules: impl Iterator<Item = &'a HirModule>) -> BTreeSet<u32> {
+    modules
+        .flat_map(|hir| {
+            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
+            hir.classes
+                .iter()
+                .filter(move |c| templates.contains(&c.name))
+                .map(|c| c.id)
+        })
+        .collect()
+}
+
 /// Every class chain is resolved over the whole program, with the owning
 /// module retained at every step (local ids and names are module scoped).
+/// The classes that are not families because `Reflect.construct(Q, args, P)`
+/// may name two different classes. ECMA-262 28.1.2 and 10.1.13: the object
+/// gets `P.prototype` (OrdinaryCreateFromConstructor on newTarget) and its
+/// keys are the stores Q's constructor chain runs, in that order: neither
+/// P's layout nor Q's. Such objects are ordinary objects, so neither class
+/// is a family (one layout per family class, D-CG1). Decided from the whole
+/// program: CLOSED-WORLD PREMISE (no eval / dynamic code): every
+/// `Reflect.construct` of the program is in its HIR. When the newTarget may
+/// be a class this cannot name, every class the program uses as a value is
+/// not a family. Without a newTarget, with the same class twice, or with a
+/// function expression as the newTarget (the object is the target's own,
+/// prototype relinked) the target stays a family.
+fn reflect_construct_classes(modules: &[(&str, &HirModule)]) -> BTreeSet<String> {
+    let mut named: BTreeSet<String> = BTreeSet::new();
+    let mut values: BTreeSet<String> = BTreeSet::new();
+    let mut unbounded = false;
+    for (_, hir) in modules {
+        let bindings = class_bindings(hir);
+        let class_of = |e: &Expr| match e {
+            Expr::ClassRef(n) => Some(n.clone()),
+            Expr::LocalGet(id) => bindings.get(id).cloned(),
+            _ => None,
+        };
+        for body in module_bodies(hir) {
+            visit_stmts(body, &mut |_| {}, &mut |e| match e {
+                Expr::ClassRef(n) => {
+                    values.insert(n.clone());
+                }
+                Expr::ReflectConstruct {
+                    target, new_target, ..
+                } => {
+                    if matches!(**new_target, Expr::Undefined | Expr::Closure { .. }) {
+                        return;
+                    }
+                    let t = class_of(target);
+                    let nt = class_of(new_target);
+                    if t.is_some() && t == nt {
+                        return;
+                    }
+                    named.extend(t);
+                    match nt {
+                        Some(n) => {
+                            named.insert(n);
+                        }
+                        None => unbounded = true,
+                    }
+                }
+                _ => {}
+            });
+        }
+    }
+    if unbounded {
+        named.extend(values);
+    }
+    named
+}
+
 fn program_families(
     modules: &[(&str, &HirModule)],
     reexports: &BTreeMap<(String, String), String>,
@@ -1078,18 +1499,15 @@ fn program_families(
     let accessor = |c: &Class, k: &str| {
         c.getters.iter().any(|(n, _)| n == k) || c.setters.iter().any(|(n, _)| n == k)
     };
-    let fresh: BTreeSet<u32> = modules
-        .iter()
-        .flat_map(|(_, hir)| {
-            let templates = crate::codegen::fresh_class_templates::fresh_class_templates(hir);
-            hir.classes
-                .iter()
-                .filter(move |c| templates.contains(&c.name))
-                .map(|c| c.id)
-        })
-        .collect();
+    let fresh = fresh_template_ids(modules.iter().map(|(_, hir)| *hir));
+    let shapes = literal_shapes(modules.iter().flat_map(|(_, hir)| &hir.classes));
+    let reflect_made = reflect_construct_classes(modules);
     let mut out = Vec::new();
     'class: for c in modules.iter().flat_map(|(_, hir)| &hir.classes) {
+        if reflect_made.contains(&c.name) {
+            refuse(c, "reflect-construct-new-target");
+            continue 'class;
+        }
         // The chain, leaf first.
         let mut chain: Vec<&Class> = vec![c];
         let mut cur = c;
@@ -1133,6 +1551,7 @@ fn program_families(
                 k,
                 depth + 1 < chain.len() || native.is_some(),
                 fresh.contains(&k.id),
+                &shapes,
             ) {
                 Ok(own) => own,
                 Err(why) => {
@@ -1147,6 +1566,14 @@ fn program_families(
         for own in owns {
             for (key, eligible) in own.keys {
                 open &= eligible;
+                // One constructor on the chain defines the key with
+                // attributes, another stores or defines it otherwise: the
+                // layout cannot give it one attribute byte.
+                if key.name().is_some() && keys.iter().any(|k| k.name() == key.name() && *k != key)
+                {
+                    refuse(c, "constructor-defined-key-redefined");
+                    continue 'class;
+                }
                 if !keys.contains(&key) {
                     keys.push(key);
                     if open {
@@ -1185,16 +1612,29 @@ fn program_families(
             );
         }
         let mut members = BTreeSet::new();
+        let mut accessors = BTreeSet::new();
+        let mut methods = BTreeSet::new();
         for x in &chain {
             members.extend(x.methods.iter().map(|m| m.name.clone()));
             members.extend(x.getters.iter().map(|(n, _)| n.clone()));
             members.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.getters.iter().map(|(n, _)| n.clone()));
+            accessors.extend(x.setters.iter().map(|(n, _)| n.clone()));
+            for m in &x.methods {
+                if m.is_generator || m.is_async {
+                    accessors.insert(m.name.clone());
+                } else {
+                    methods.insert(m.name.clone());
+                }
+            }
         }
+        let data_methods = methods.difference(&accessors).cloned().collect();
         out.push(RawFamily {
             class_id: c.id,
             parent,
             keys,
             members,
+            data_methods,
             chain: chain.iter().map(|x| x.id).collect(),
             init,
             params: if chain.len() == 1 && !c.is_literal_shape() {
@@ -1293,6 +1733,11 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
         return ProgramLayouts::default();
     }
     let mut reads: HashMap<String, u64> = HashMap::new();
+    // Keys a fixed-key store site names. The store form of the coloured site
+    // (`layout_read::begin_store`) asks the record's store mask, which holds
+    // a bit only for a coloured key: a key the program stores but never
+    // reads needs its colour as much as a read key does.
+    let mut stores: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut layouts: Vec<Vec<String>> = Vec::new();
     let mut by_id: HashMap<u32, &Class> = HashMap::new();
     for hir in modules {
@@ -1305,6 +1750,14 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
             visit_stmts(body, &mut |_| {}, &mut |e| match e {
                 Expr::PropertyGet { property, .. } => {
                     *reads.entry(property.clone()).or_default() += 1;
+                }
+                Expr::PropertySet { property, .. } | Expr::PropertyUpdate { property, .. } => {
+                    stores.insert(property.clone());
+                }
+                Expr::PutValueSet { key, .. } => {
+                    if let Expr::String(k) = key.as_ref() {
+                        stores.insert(k.clone());
+                    }
                 }
                 Expr::Object(props) => {
                     let mut keys: Vec<String> = Vec::new();
@@ -1352,7 +1805,9 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
         for (pos, k) in l.iter().enumerate() {
             // A key a layout holds twice (a redeclared field) has no one
             // position there.
-            if l.iter().filter(|x| *x == k).count() != 1 || !reads.contains_key(k) {
+            if l.iter().filter(|x| *x == k).count() != 1
+                || !(reads.contains_key(k) || stores.contains(k))
+            {
                 continue;
             }
             if k.is_empty() || k.len() > 64 || k == "__proto__" || k == "length" || k == "size" {
@@ -1389,14 +1844,18 @@ fn colouring(modules: &[&HirModule]) -> ProgramLayouts {
     out.mask_words = if out.colored.is_empty() { 0 } else { 2 };
     if explain() {
         for (k, (bit, slot)) in &out.colored {
-            eprintln!("perry: colour {k} bit {bit} slot {slot} reads {}", reads[k]);
+            eprintln!(
+                "perry: colour {k} bit {bit} slot {slot} reads {}",
+                reads.get(k).copied().unwrap_or(0)
+            );
         }
     }
     out
 }
 
 /// The keys that get a colour, at most [`MAX_COLOURED_KEYS`]: the most read
-/// first; among keys read as often, the one more layouts hold (a colour pays
+/// first (a key only stored counts as read zero times, so it never takes a
+/// read key's colour); among keys read as often, the one more layouts hold (a colour pays
 /// once per layout holding the key at its slot), then the name.
 fn colour_candidates<'a>(
     positions: &HashMap<&'a str, BTreeMap<u32, u32>>,
@@ -1560,6 +2019,7 @@ fn layouts_of(
                 init_count: own as u32,
                 discriminant,
                 variants: split,
+                born_with_keys: false,
             },
         );
     }
@@ -1681,6 +2141,7 @@ pub fn compute<'a>(
         }
     }
     literal::finish(&mut layouts, &literal_ids);
+    layouts.fresh_templates = fresh_template_ids(modules.iter().copied());
     layouts.late_total = late as u32;
     layouts.refused = refused;
     // A module body is once per record; exposing the CommonJS loader/cache
@@ -1748,7 +2209,7 @@ pub fn compute<'a>(
                     && !c.has_private_elements()
                     && c.native_extends.is_none()
                     && c.decorators.is_empty()
-                    && c.computed_members.is_empty()
+                    && !c.has_evaluated_members()
                     && candidates.contains(&c.name)
                     && layouts.families.get(&c.id).is_some_and(|family| {
                         family.parent_class_id != 0
@@ -1760,10 +2221,25 @@ pub fn compute<'a>(
             }
         }
     }
+    for (_, module) in &program {
+        for class in &module.classes {
+            if let Some(family) = layouts.families.get_mut(&class.id) {
+                family.born_with_keys = crate::lower_call::new_alloc::keys_defined_at_birth(class);
+                layouts
+                    .family_owner
+                    .entry(class.id)
+                    .or_insert_with(|| module.name.clone());
+            }
+        }
+    }
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     layouts.digest.hash(&mut hash);
     layouts.run_once_evaluated.hash(&mut hash);
+    layouts.family_owner.hash(&mut hash);
+    for f in layouts.families.values() {
+        (f.class_id, f.born_with_keys).hash(&mut hash);
+    }
     layouts.digest = hash.finish();
     if std::env::var_os("PERRY_LAYOUT_REPORT").is_some() {
         eprintln!("perry: canonical run-once evaluated classes: {} (closed module capabilities: {closed})", layouts.run_once_evaluated.len());
@@ -1780,192 +2256,8 @@ pub fn compute<'a>(
 mod admission_tests;
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn keys(v: &[&str]) -> Vec<FamilyKey> {
-        v.iter().map(|s| FamilyKey::from(*s)).collect()
-    }
-
-    #[test]
-    fn a_private_element_never_equals_a_property_name() {
-        let spelling = crate::codegen::static_private_class::private_storage_key(7, "#x");
-        let private = FamilyKey::Private(spelling.clone());
-        assert!(private != spelling.as_str());
-        assert!(private != spelling);
-        assert_eq!(private.name(), None);
-        assert_eq!(private.spelling(), spelling);
-        assert!(FamilyKey::from("x") == "x");
-        assert!(FamilyKey::Name(spelling.clone()) != private);
-    }
-
-    #[test]
-    fn a_fixed_state_generator_contributes_its_iterator_result_layout() {
-        // The resume body returns raw step values; the runtime births the
-        // protocol results on `{value, done}`. Reads of those keys through
-        // receivers nothing proves keep their colour slots.
-        let mut hir = HirModule::new("generator_results");
-        let get = |property: &str| {
-            Stmt::Expr(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: property.to_string(),
-            })
-        };
-        hir.init = vec![
-            Stmt::Expr(Expr::LinkGeneratorPrototype {
-                obj: Box::new(Expr::Undefined),
-                is_async: false,
-                fixed_state: true,
-                i32_controls: Vec::new(),
-                i1_controls: Vec::new(),
-            }),
-            get("value"),
-            get("done"),
-        ];
-        let colours = colouring(&[&hir]);
-        assert_eq!(colours.colored("value").map(|(_, slot)| slot), Some(0));
-        assert_eq!(colours.colored("done").map(|(_, slot)| slot), Some(1));
-    }
-
-    #[test]
-    fn a_colour_tie_goes_to_the_key_more_layouts_hold() {
-        // An enum object's members, each read once and held by one layout,
-        // fill the budget; a key read as often but held by thirty layouts
-        // (a base class and its subclasses) still gets its colour.
-        let names: Vec<String> = (0..MAX_COLOURED_KEYS)
-            .map(|i| format!("Kind{i:03}"))
-            .collect();
-        let mut positions: HashMap<&str, BTreeMap<u32, u32>> = HashMap::new();
-        let mut reads: HashMap<String, u64> = HashMap::new();
-        for (i, n) in names.iter().enumerate() {
-            positions.insert(n.as_str(), BTreeMap::from([(i as u32, 1)]));
-            reads.insert(n.clone(), 1);
-        }
-        positions.insert("spa", BTreeMap::from([(0, 30)]));
-        reads.insert("spa".into(), 1);
-        positions.insert("data", BTreeMap::from([(1, 1)]));
-        reads.insert("data".into(), 9);
-        let chosen = colour_candidates(&positions, &reads);
-        assert_eq!(chosen.len(), MAX_COLOURED_KEYS);
-        assert_eq!(chosen[0], "data");
-        assert_eq!(chosen[1], "spa");
-        assert!(!chosen.contains(&"Kind126"));
-    }
-
-    #[test]
-    fn a_subclass_agrees_with_its_base_on_inherited_slots() {
-        let raw = vec![
-            (
-                1,
-                0,
-                keys(&[
-                    "pos",
-                    "end",
-                    "kind",
-                    "id",
-                    "flags",
-                    "transformFlags",
-                    "parent",
-                    "emitNode",
-                ]),
-                8,
-            ),
-            (
-                2,
-                1,
-                keys(&[
-                    "pos",
-                    "end",
-                    "kind",
-                    "id",
-                    "flags",
-                    "transformFlags",
-                    "parent",
-                    "emitNode",
-                    "escapedText",
-                ]),
-                9,
-            ),
-        ];
-        let l = layouts_of(raw, HashMap::new(), ProgramLayouts::default());
-        let base = &l.families[&1];
-        let sub = &l.families[&2];
-        for (k, s) in &base.keys {
-            assert_eq!(sub.keys.iter().find(|(x, _)| x == k).unwrap().1, *s, "{k}");
-        }
-        assert_eq!(sub.slot_count, 9);
-        assert!(!l.slots_moved(2));
-    }
-
-    #[test]
-    fn a_coloured_key_takes_its_free_colour_slot() {
-        let raw = vec![
-            (1, 0, keys(&["a", "b", "kind"]), 3),
-            (2, 1, keys(&["a", "b", "kind", "x", "parent"]), 5),
-        ];
-        let mut colours = ProgramLayouts::default();
-        colours.colored.insert("kind".into(), (0, 0));
-        colours.colored.insert("parent".into(), (1, 3));
-        let l = layouts_of(raw, HashMap::new(), colours);
-        let base = &l.families[&1];
-        assert_eq!(
-            base.keys,
-            vec![("a".into(), 1), ("b".into(), 2), ("kind".into(), 0)]
-        );
-        let sub = &l.families[&2];
-        // Inherited slots agree; `parent` takes its colour 3, `x` slot 4.
-        assert_eq!(
-            sub.keys,
-            vec![
-                ("a".into(), 1),
-                ("b".into(), 2),
-                ("kind".into(), 0),
-                ("x".into(), 4),
-                ("parent".into(), 3)
-            ]
-        );
-    }
-
-    #[test]
-    fn late_keys_take_the_slots_after_the_constructor_keys() {
-        let raw = vec![
-            (1, 0, keys(&["a", "kind", "late1", "late2"]), 2),
-            (
-                2,
-                1,
-                keys(&["a", "kind", "b", "late1", "late2", "late3"]),
-                3,
-            ),
-        ];
-        let mut colours = ProgramLayouts::default();
-        colours.colored.insert("kind".into(), (0, 0));
-        colours.colored.insert("late2".into(), (1, 2));
-        let l = layouts_of(raw, HashMap::new(), colours);
-        let base = &l.families[&1];
-        assert_eq!(
-            base.keys,
-            vec![
-                ("a".into(), 1),
-                ("kind".into(), 0),
-                ("late1".into(), 3),
-                ("late2".into(), 2)
-            ]
-        );
-        assert_eq!(base.own_count, 2);
-        let sub = &l.families[&2];
-        // `b` cannot keep the parent's late slot 2: constructor keys stay in
-        // 0..3 and late keys in 3..6, so `late2` moves off its colour.
-        assert_eq!(sub.own_count, 3);
-        for (k, s) in &sub.keys[..3] {
-            assert!(*s < 3, "{k}");
-        }
-        for (k, s) in &sub.keys[3..] {
-            assert!(*s >= 3, "{k}");
-        }
-    }
-}
+#[path = "layout_families/tests.rs"]
+mod tests;
 
 impl ProgramLayouts {
     /// The header form predicted for the objects this record describes (`HeaderForm`:

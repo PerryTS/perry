@@ -195,13 +195,13 @@ impl<'a> Gen<'a> {
                 || fi.func_id == u32::MAX
                 || fi.ctor_of.is_some()
                 || fi.lexical_this
-                || fi.gen_step
+                || fi.gen_step()
             {
                 continue;
             }
             let token = fi.token;
             let n = fi.params.len();
-            let name = crate::contracts::fn_contract_name(self, f).0;
+            let name = crate::fn_contract_name(self, f).0;
             let broken = unit_in.broken(&format!("fn:{name}"));
             let runs = unit_in.ctor_runs.get(&name);
             if broken {
@@ -509,6 +509,8 @@ impl<'a> Gen<'a> {
                 TmplKind::Arr {
                     module: mi,
                     site: u32::MAX,
+                    hole_free: false,
+                    plain: false,
                 }
             },
             display: display.to_string(),
@@ -525,9 +527,14 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
             declared: vec![],
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
         });
         let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
         self.stand_in_arrs.insert(display.to_string(), t);
@@ -940,6 +947,8 @@ impl<'a> Gen<'a> {
             definite,
             declared: Vec::new(),
             reserved,
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(ctor),
             native_parent: c.native_parent.clone(),
@@ -951,7 +960,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.m.funcs[ctor as usize].ctor_of = Some(tm);
         self.m.foreign.insert(tm, c.facts.clone());
@@ -1325,6 +1337,16 @@ impl<'a> Gen<'a> {
         sink_args: bool,
     ) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            fx,
+            crate::summary::packet::Identity(
+                self.modules[mi as usize].0.into(),
+                u32::MAX,
+                name.into(),
+            ),
+            &[],
+        );
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
         let this = self.m.node_named("this", || format!("this({name})"));
@@ -1334,8 +1356,11 @@ impl<'a> Gen<'a> {
         self.m.own(this);
         self.m.cur_fn = outer_fn;
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: name.to_string(),
             params: Vec::new(),
             rest: None,
@@ -1343,17 +1368,23 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: true,
+            arguments: None,
+            own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: true,
-            gen_step: false,
+            foreign_params: true,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
             forwarded,
+            ret_param: None,
         });
         if sink_args {
             self.m.sink_node(args_all, reason);
@@ -1372,6 +1403,8 @@ impl<'a> Gen<'a> {
                 this: u32::MAX,
             },
         );
+        #[cfg(test)]
+        self.m.packet_end(packet_prior, true);
         fx
     }
 }

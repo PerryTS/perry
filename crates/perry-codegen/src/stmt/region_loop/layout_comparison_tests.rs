@@ -36,6 +36,7 @@ fn ir(body: Vec<Stmt>, in_loop: bool) -> String {
             body: Vec::new(),
         }),
         finally: None,
+        forof_completion: None,
     };
     let body = if in_loop {
         vec![Stmt::While {

@@ -76,7 +76,6 @@ mod client_dispatch_ext;
 mod client_events;
 mod client_incoming_read;
 mod client_surface;
-pub(crate) use client_surface::*;
 
 // Client OutgoingMessage write/end callback + backpressure + setTimeout
 // surface (#4909) — extracted to stay under the 2000-line lint cap.

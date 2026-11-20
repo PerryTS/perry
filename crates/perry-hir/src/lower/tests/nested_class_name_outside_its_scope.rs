@@ -56,3 +56,27 @@ fn new_outside_the_declaring_function_resolves_the_global_name() {
         "inside its scope the class must not be resolved through the global:\n{factory}"
     );
 }
+
+#[test]
+fn a_module_class_extending_a_factory_class_value_stays_in_scope() {
+    // `C` at module scope is a value (the class `make` returns), not the
+    // class `C` declared inside `make`. The name-keyed capture table must not
+    // hand `Child` the factory's locals: `Child` is declared at module scope,
+    // so `new Child()` there constructs it, never `globalThis.Child`.
+    let source = r#"
+        function make(n: number) {
+            class C { get value() { return n; } }
+            return C;
+        }
+        const C = make(1);
+        class Child extends C {}
+        export function build(): any {
+            return new Child();
+        }
+    "#;
+    let build = lowered_function_debug(source, "build");
+    assert!(
+        !build.contains("js_global_get_or_throw_unresolved"),
+        "`new Child()` must not resolve `Child` on globalThis:\n{build}"
+    );
+}

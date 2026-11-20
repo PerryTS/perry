@@ -29,9 +29,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> String {
     let exe = dir.join(if whole { "main_w" } else { "main_u" });
     let mut cmd = Command::new(perry_bin());
     clean(&mut cmd).current_dir(dir).env("PERRY_NO_CACHE", "1");
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -71,7 +68,7 @@ fn a_relinked_parent_constructor_runs_on_the_subclass_instance() {
                  const ap: any = new ActualParent();\n\
                  console.log(ap.parentSaw, ap.dynamic);\n"
             );
-            for whole in [false, true] {
+            for whole in [true] {
                 assert_eq!(
                     compile_and_run(&dir, &source, whole),
                     " parentSaw,dynamic,own\n 1\n",

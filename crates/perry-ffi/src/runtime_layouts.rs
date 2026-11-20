@@ -21,10 +21,20 @@ macro_rules! runtime_layout_refs {
         #[doc = concat!("The runtime layout `", stringify!($name), "`.")]
         #[allow(non_snake_case)]
         pub mod $name {
+            #[cfg(not(target_os = "windows"))]
             unsafe extern "C" {
                 #[linkage = "extern_weak"]
                 #[link_name = concat!("perry_runtime_layout_", stringify!($name))]
                 static DEFINITION: *const super::RuntimeLayout;
+            }
+            // COFF: the runtime is the one object that reads the weak
+            // symbol (perry-runtime `runtime_layout!`): a second weak
+            // external of it with another default fails the MSVC link
+            // (LNK1227). A wrapper calls the runtime's reader instead.
+            #[cfg(target_os = "windows")]
+            unsafe extern "C" {
+                #[link_name = concat!("perry_layout_reader_", stringify!($name))]
+                fn definition() -> *const super::RuntimeLayout;
             }
             // ELF: the reference is program-internal. A hidden undefined weak
             // symbol resolves at link time, to the program's descriptor or to
@@ -42,7 +52,11 @@ macro_rules! runtime_layout_refs {
             pub fn desc() -> *const super::RuntimeLayout {
                 // SAFETY: an extern_weak static reads as the symbol's
                 // address, or null when the program does not define it.
+                #[cfg(not(target_os = "windows"))]
                 let desc = unsafe { DEFINITION };
+                // SAFETY: the runtime's reader returns the same address.
+                #[cfg(target_os = "windows")]
+                let desc = unsafe { definition() };
                 if desc.is_null() {
                     super::undefined_runtime_layout(stringify!($name));
                 }

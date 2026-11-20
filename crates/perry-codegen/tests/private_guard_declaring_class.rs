@@ -56,6 +56,7 @@ fn class(id: u32, name: &str) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -104,10 +105,12 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -115,6 +118,7 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 

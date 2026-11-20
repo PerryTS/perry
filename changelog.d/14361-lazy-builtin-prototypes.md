@@ -1,0 +1,1 @@
+Builtin prototype families can now be created on first use instead of at startup. `Navigator.prototype` is the first: it is created on first use and has node's six getters (`hardwareConcurrency`, `locks`, `language`, `languages`, `userAgent`, `platform`). Host values are read when a getter is first used.

@@ -80,6 +80,7 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::LocalGet(2)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -95,6 +96,7 @@ fn store_class(receiver_selector: i64) -> Class {
             value: Box::new(Expr::Integer(0)),
             receiver: Box::new(call_get_data(receiver_selector)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })],
@@ -122,6 +124,7 @@ fn store_class(receiver_selector: i64) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

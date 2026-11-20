@@ -1,0 +1,1 @@
+A private method called as o.#m() on a receiver with no shape word (a Proxy, a Date) at a site that had not yet run now throws the TypeError node throws instead of running the method: a zero shape word never matches an unprimed call site.

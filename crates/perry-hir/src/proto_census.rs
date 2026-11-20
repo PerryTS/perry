@@ -147,12 +147,13 @@ impl ProtoCensus {
     /// only a definition of `name` (static, or one the scan cannot name), an
     /// integrity operation, a relink, or dynamic code can make one.
     pub fn create_add_free(&self, name: &str) -> bool {
-        !self.dynamic_code
-            && !self.relink
-            && !self.dynamic_define
-            && !self.integrity
-            && name != "__proto__"
-            && !self.defined.contains(name)
+        !self.create_add_blocked() && name != "__proto__" && !self.defined.contains(name)
+    }
+
+    /// Can every key's add be intercepted (dynamic code, a relink, a
+    /// definition the scan cannot name, an integrity operation)?
+    fn create_add_blocked(&self) -> bool {
+        self.dynamic_code || self.relink || self.dynamic_define || self.integrity
     }
 
     /// Can a dynamic write or a relink reach some object? Then a binding
@@ -677,6 +678,58 @@ impl Visit for CensusScanner<'_> {
 pub fn scan_module(module: &ast::Module, out: &mut ProtoCensus) {
     out.modules += 1;
     module.visit_with(&mut CensusScanner { out });
+}
+
+/// The part of the census a lowering reads: the [`ProtoCensus::create_add_free`]
+/// answers of the modules scanned so far.
+struct CreateAddView {
+    blocked: bool,
+    defined: BTreeSet<String>,
+}
+
+thread_local! {
+    /// Installed by the driver after a module's scan, before its lowering
+    /// (one copy per worker thread, as for the patched-builtin set).
+    static LOWERING_CREATE_ADD: std::cell::RefCell<Option<CreateAddView>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Install `census` (every module scanned so far, the one about to be
+/// lowered included) as the create-add answers lowering reads. True when an
+/// answer changed: a module lowered earlier may then hold a fold the final
+/// census forbids, and the driver re-walks every module.
+pub fn install_lowering_census(census: &ProtoCensus) -> bool {
+    LOWERING_CREATE_ADD.with(|view| {
+        let mut view = view.borrow_mut();
+        let blocked = census.create_add_blocked();
+        let (was_blocked, same_defined) = view.as_ref().map_or_else(
+            || (false, census.defined.is_empty()),
+            |v| (v.blocked, v.defined == census.defined),
+        );
+        if view.is_some() && was_blocked == blocked && same_defined {
+            return false;
+        }
+        *view = Some(CreateAddView {
+            blocked,
+            defined: census.defined.clone(),
+        });
+        was_blocked != blocked || !same_defined
+    })
+}
+
+/// Remove the installed census (a module lowered on its own is done).
+pub(crate) fn clear_lowering_census() {
+    LOWERING_CREATE_ADD.with(|view| *view.borrow_mut() = None);
+}
+
+/// [`ProtoCensus::create_add_free`] under the installed census; `None` when no
+/// driver installed one (a single module lowered on its own).
+pub(crate) fn lowering_create_add_free(name: &str) -> Option<bool> {
+    LOWERING_CREATE_ADD.with(|view| {
+        view.borrow()
+            .as_ref()
+            .map(|v| !v.blocked && name != "__proto__" && !v.defined.contains(name))
+    })
 }
 
 #[cfg(test)]

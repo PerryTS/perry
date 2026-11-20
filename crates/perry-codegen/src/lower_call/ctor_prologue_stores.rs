@@ -97,6 +97,99 @@ pub(super) struct PrologueStore {
     pub(super) family_key: Option<String>,
 }
 
+impl PrologueStore {
+    /// Must the stored value pass the plain-finite-number test before this
+    /// store may skip the constructor?
+    ///
+    /// * A raw-`f64` lane holds only plain finite doubles.
+    /// * A `<param> + <literal>` store lowers to one `fadd`, which is JS `+`
+    ///   only when the argument is a Number. The parameter's declared TS
+    ///   `number` type does not make it one: untyped code can pass a string,
+    ///   and `"s" + 1` is `"s1"`, while the `fadd` of a NaN-boxed string
+    ///   keeps the string's bits. A Number argument needs no test when the
+    ///   whole-program facts prove it (a numeric literal, or a local in
+    ///   `facts_number_locals` / `number_by_construction_locals`); any other
+    ///   argument is tested. A non-Number argument is a NaN box, `fadd`
+    ///   propagates a NaN, so the result fails the finite test and the
+    ///   construction takes the ordinary constructor.
+    ///
+    /// P3 B4b: a Number has one encoding, the plain double, so a value the
+    /// facts or its structure prove a Number
+    /// (`expr_produces_canonical_raw_f64`) is the word a raw-`f64` lane
+    /// holds and needs no test ([`proven_number`](Self::proven_number)).
+    /// Check mode tests it instead (`Fact::CanonicalNumber`).
+    pub(super) fn requires_number_check(&self, ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+        if self.proven_number(ctx, args) {
+            return false;
+        }
+        self.requires_raw_f64
+            || (self.numeric_addend.is_some()
+                && !addend_operand_is_proven_number(ctx, args.get(self.arg_index)))
+    }
+
+    /// This store writes a raw-`f64` lane with no number test because its
+    /// argument is a proven Number (P3 B4b; `PERRY_FACTS_NUMBER_BIRTHS=0`
+    /// keeps the test).
+    pub(super) fn proven_number(&self, ctx: &FnCtx<'_>, args: &[perry_hir::Expr]) -> bool {
+        self.requires_raw_f64
+            && number_births()
+            && !ctx.wpfacts_off
+            && args
+                .get(self.arg_index)
+                .is_some_and(|arg| crate::type_analysis::expr_produces_canonical_raw_f64(ctx, arg))
+    }
+}
+
+/// A raw-`f64` lane store took `value` with no number test
+/// ([`PrologueStore::proven_number`]): count the claim, and in check mode
+/// test that the value is a plain double (a miss exits 86,
+/// `Fact::CanonicalNumber`). Called before the allocation, where a call is
+/// allowed.
+pub(super) fn witness_proven_number(
+    ctx: &mut FnCtx<'_>,
+    value: &str,
+    slot: u32,
+) -> anyhow::Result<()> {
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::CanonicalNumber,
+        || serde_json::json!({ "birth_slot": slot }),
+    );
+    crate::facts_consumed::used();
+    crate::expr::facts_canonical::witness(
+        ctx,
+        value,
+        crate::expr::facts_canonical::Num::Number,
+        "birth lane",
+    )
+}
+
+/// `PERRY_FACTS_NUMBER_BIRTHS=0` (`off`, `false`): every raw-`f64` lane store
+/// of a birth keeps its plain-finite-number test.
+pub(crate) fn number_births() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_FACTS_NUMBER_BIRTHS").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// The facts prove `arg` a Number (a Number's representation is its raw
+/// double): a numeric literal, or a local the whole-program facts
+/// (`codegen/facts_number_locals.rs`) or its structure
+/// (`number_by_construction_locals`) prove holds only Numbers. Never the
+/// declared type.
+fn addend_operand_is_proven_number(ctx: &FnCtx<'_>, arg: Option<&perry_hir::Expr>) -> bool {
+    match arg {
+        Some(perry_hir::Expr::Number(_) | perry_hir::Expr::Integer(_)) => true,
+        Some(perry_hir::Expr::LocalGet(id)) => {
+            ctx.facts_number_locals.contains(id) || ctx.number_by_construction_locals.contains(id)
+        }
+        _ => false,
+    }
+}
+
 /// Can `new <class_name>(…)` skip its constructor call and store the fields
 /// inline? `Some(plan)` = yes, and `plan` is every store to emit, in source
 /// order; `None` = emit the unchanged call.
@@ -148,7 +241,7 @@ pub(super) fn prologue_store_plan(
         || !class.decorators.is_empty()
         || !class.getters.is_empty()
         || !class.setters.is_empty()
-        || !class.computed_members.is_empty()
+        || class.has_evaluated_members()
         || class.alloc_width_hint != 0
     {
         return None;
@@ -193,8 +286,24 @@ pub(super) fn prologue_store_plan(
             return None;
         }
         let arg_index = *param_slot.get(&param_id)?;
+        // Admission only: the store's correctness rests on
+        // `PrologueStore::requires_number_check`, not on this declared type.
         if numeric_addend.is_some()
             && !matches!(ctor.params[arg_index].ty, perry_hir::types::Type::Number)
+        {
+            return None;
+        }
+        // A reservation field is added by this `[[Set]]`, not defined before
+        // the body runs: an inherited setter or non-writable key decides it,
+        // so the store is a slot store only when no prototype can intercept
+        // the add (the census). A defined field is already own, and a
+        // literal's keys are definitions.
+        if !class.is_literal_shape()
+            && class
+                .fields
+                .iter()
+                .any(|f| f.name == property && f.origin.is_reservation())
+            && !crate::proto_constants::create_add_free(property)
         {
             return None;
         }

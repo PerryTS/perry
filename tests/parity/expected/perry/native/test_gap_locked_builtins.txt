@@ -1,0 +1,28 @@
+1 throw TypeError Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+1b push is the built-in: 3 3
+2 throw TypeError Cannot delete built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+3 throw TypeError Cannot redefine built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+4 no throw 30
+5 no throw 7
+5b throw TypeError Cannot delete built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+5c no throw 8 second
+6a no throw true
+6b no throw -1
+6d no throw 0.5
+6e no throw true
+6c Date.now and Math.max are the built-ins: true 2
+patched: via patched log
+7a no throw restored
+7b no throw my fetch
+7c no throw 1
+8a no throw installed 4
+8b no throw present 1
+9 throw TypeError Cannot change the prototype of built-in Array.prototype: built-in objects are read-only in a compiled program
+9b chain intact: true true
+10 throw TypeError Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+11a throw TypeError Cannot replace built-in member Object.prototype.toString: built-in objects are read-only in a compiled program
+11b throw TypeError Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+11c throw TypeError Cannot delete built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+11d throw TypeError Cannot replace built-in member String.prototype.slice: built-in objects are read-only in a compiled program (adding a new member is allowed)
+12 no throw 1 undefined
+done 3 6,7

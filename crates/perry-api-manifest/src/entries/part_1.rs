@@ -219,63 +219,33 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     method("inspector/promises", "post", true, Some("Session")),
     method("inspector/promises", "on", true, Some("Session")),
     method("inspector/promises", "once", true, Some("Session")),
-    method_sig("ws", "Server", false, None, &[p_any("p0")], TypeSpec::Any),
-    method_sig(
-        "ws",
+    // The global `WebSocket` client (perry-ext-ws), under the internal
+    // `__websocket__` key HIR tags it with — no JS import surface, like
+    // `__disposable__`. npm `ws` compiles from source; its `WebSocketServer`
+    // surface and module constants left with the native binding.
+    internal_method_sig(
+        "__websocket__",
         "WebSocket",
         false,
         None,
         &[p_str("p0")],
         TypeSpec::Any,
     ),
-    method("ws", "on", true, None),
-    method("ws", "send", true, None),
-    method("ws", "close", true, None),
-    method("ws", "ping", true, None),
-    method("ws", "pong", true, None),
-    method("ws", "terminate", true, None),
-    method("ws", "readyState", true, None),
-    // `WebSocketServer.clients` is a data getter. It is represented as a
-    // receiver method internally because native-handle getters dispatch
-    // through the same table as zero-argument methods.
-    internal_method("ws", "clients", true, None),
-    // Node-compatible WebSocket ready-state constants. The `ws` package
-    // exposes these on both the module/default export and WebSocket class:
-    // CONNECTING=0, OPEN=1, CLOSING=2, CLOSED=3.
-    property("ws", "CONNECTING"),
-    property("ws", "OPEN"),
-    property("ws", "CLOSING"),
-    property("ws", "CLOSED"),
-    // #1113 — `wss.handleUpgrade(req, socket, head, cb)` for a
-    // `new WebSocketServer({ noServer: true })`.
-    method("ws", "handleUpgrade", true, None),
-    method("ws", "address", true, None),
-    method("ws", "emit", true, None),
+    method("__websocket__", "on", true, None),
+    method("__websocket__", "send", true, None),
+    method("__websocket__", "close", true, None),
+    method("__websocket__", "ping", true, None),
+    method("__websocket__", "pong", true, None),
+    method("__websocket__", "terminate", true, None),
+    method("__websocket__", "readyState", true, None),
     // Issue #577 Phase 4 — Client-class methods for the upgrade-path wsId.
-    method("ws", "on", true, Some("Client")),
-    method("ws", "addListener", true, Some("Client")),
-    method("ws", "send", true, Some("Client")),
-    method("ws", "close", true, Some("Client")),
-    method("ws", "ping", true, Some("Client")),
-    method("ws", "pong", true, Some("Client")),
-    method("ws", "terminate", true, Some("Client")),
-    class("ws", "Client"),
-    method_sig(
-        "ws",
-        "sendToClient",
-        false,
-        None,
-        &[p_any("p0"), p_str("p1")],
-        TypeSpec::Void,
-    ),
-    method_sig(
-        "ws",
-        "closeClient",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Void,
-    ),
+    method("__websocket__", "on", true, Some("Client")),
+    method("__websocket__", "addListener", true, Some("Client")),
+    method("__websocket__", "send", true, Some("Client")),
+    method("__websocket__", "close", true, Some("Client")),
+    method("__websocket__", "ping", true, Some("Client")),
+    method("__websocket__", "pong", true, Some("Client")),
+    method("__websocket__", "terminate", true, Some("Client")),
     // node:dns is currently runtime-only and deterministic: inventory
     // helpers, constants, Resolver method shapes, and lookup/lookupService
     // for localhost/loopback. It does not perform external DNS IO.
@@ -922,16 +892,6 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
     class("async_hooks", "AsyncResource"),
     class("async_hooks", "AsyncLocalStorage"),
     method_sig(
-        "nodemailer",
-        "createTransport",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
-    method("nodemailer", "sendMail", true, None),
-    method("nodemailer", "verify", true, None),
-    method_sig(
         "argon2",
         "hash",
         false,
@@ -1200,20 +1160,4 @@ pub(crate) const API_MANIFEST_PART_1: &[ApiEntry] = &[
           ParamSpec::Named { name: "destructor", ty: TypeSpec::Any, optional: true }], TypeSpec::Any),
     method_sig("perry/component", "getComponentHostResourceValue", false, None,
         &[p_any("handle"), p_str("resourceType"), p_any("resource")], TypeSpec::Any),
-    method_sig(
-        "lodash",
-        "chunk",
-        false,
-        None,
-        &[p_any("p0"), p_any("p1")],
-        TypeSpec::Any,
-    ),
-    method_sig(
-        "lodash",
-        "compact",
-        false,
-        None,
-        &[p_any("p0")],
-        TypeSpec::Any,
-    ),
 ];

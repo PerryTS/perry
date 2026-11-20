@@ -30,68 +30,24 @@ static OUTPUT_FILENAME: Mutex<String> = Mutex::new(String::new());
 static RECORDING_SAMPLE_RATE: AtomicU64 = AtomicU64::new(0);
 
 // =============================================================================
-// A-weighting IIR filter
+// Sound level metering — shared A-weighting + Fast time weighting
+// (see perry_ui::sound_level). One meter per capture session; reset on
+// start/stop so a restart re-primes instead of decaying from stale energy.
 // =============================================================================
 
-struct AWeightState {
-    sections: [[f64; 4]; 3],
+static METER: Mutex<Option<perry_ui::sound_level::SoundLevelMeter>> = Mutex::new(None);
+
+fn reset_meter() {
+    *METER.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 
-impl AWeightState {
-    fn new() -> Self {
-        AWeightState {
-            sections: [[0.0; 4]; 3],
-        }
-    }
-}
-
-// A-weighting coefficients for 48kHz (default on modern Apple devices).
-const A_WEIGHT_SOS: [[f64; 6]; 3] = [
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.9746716508129498,
-        0.97504628855498883,
-    ],
-    [
-        1.0,
-        -2.0,
-        1.0,
-        1.0,
-        -1.1440825051498020,
-        0.20482985688498268,
-    ],
-    [
-        0.24649652853975498,
-        -0.49299305707950996,
-        0.24649652853975498,
-        1.0,
-        -0.48689808685150487,
-        0.0,
-    ],
-];
-
-const A_WEIGHT_GAIN: f64 = 0.11310782960598924;
-
-fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
-    let mut x = sample * A_WEIGHT_GAIN;
-    for (i, sos) in A_WEIGHT_SOS.iter().enumerate() {
-        let b0 = sos[0];
-        let b1 = sos[1];
-        let b2 = sos[2];
-        let a1 = sos[4];
-        let a2 = sos[5];
-        let s = &mut state.sections[i];
-        let y = b0 * x + b1 * s[0] + b2 * s[1] - a1 * s[2] - a2 * s[3];
-        s[1] = s[0];
-        s[0] = x;
-        s[3] = s[2];
-        s[2] = y;
-        x = y;
-    }
-    x
+/// Feed one buffer through the shared meter. Returns `(level_db, peak)`.
+fn meter_process(samples: &[f32], sample_rate: f64) -> (f64, f32) {
+    let mut guard = METER.lock().unwrap_or_else(|e| e.into_inner());
+    let meter =
+        guard.get_or_insert_with(|| perry_ui::sound_level::SoundLevelMeter::new(sample_rate));
+    meter.ensure_sample_rate(sample_rate);
+    meter.process(samples)
 }
 
 // =============================================================================
@@ -100,8 +56,6 @@ fn a_weight_filter(sample: f64, state: &mut AWeightState) -> f64 {
 
 thread_local! {
     static ENGINE: RefCell<Option<Retained<AnyObject>>> = RefCell::new(None);
-    static FILTER_STATE: RefCell<AWeightState> = RefCell::new(AWeightState::new());
-    static EMA_DB: RefCell<f64> = RefCell::new(0.0);
 }
 
 extern "C" {
@@ -119,6 +73,7 @@ pub fn start() -> i64 {
     if already_running {
         return 1;
     }
+    reset_meter();
 
     unsafe {
         // Configure audio session for recording
@@ -135,37 +90,66 @@ pub fn start() -> i64 {
             return 0;
         }
 
-        // Set category to Record
+        // Record category in Measurement mode. The default mode runs the
+        // voice-processing chain (AGC, high-pass, noise reduction) on the
+        // built-in mics, which compresses levels and makes any SPL reading
+        // meaningless. Measurement mode is Apple's documented "minimal
+        // system-supplied signal processing" mode for metering apps; it is
+        // what the watchOS backend already uses.
         let category = objc2_foundation::NSString::from_str("AVAudioSessionCategoryRecord");
+        let mode = objc2_foundation::NSString::from_str("AVAudioSessionModeMeasurement");
+        let options: usize = 0;
         let mut error: *mut AnyObject = std::ptr::null_mut();
-        let _: bool = msg_send![session, setCategory: &*category error: &mut error];
+        let _: bool = msg_send![session, setCategory: &*category
+                                          mode: &*mode
+                                          options: options
+                                          error: &mut error];
         if !error.is_null() {
-            crate::ws_log!("[audio] failed to set audio session category");
+            crate::ws_log!("[audio] failed to set audio session category/mode");
             return 0;
         }
 
         // Activate the session
         let _: bool = msg_send![session, setActive: true error: &mut error];
 
-        // Request microphone permission
-        // On iOS, this shows the system permission dialog if not yet determined.
-        // The block is called asynchronously with the result.
-        // For simplicity, we proceed optimistically — if denied, the engine will fail to start.
-        let record_permission: i64 = msg_send![session, recordPermission];
-        // 0 = undetermined, 1 = denied, 2 = granted
-        if record_permission == 1 {
+        // Microphone permission. `recordPermission` is a FourCC-coded
+        // NSInteger, not 0/1/2:
+        //   undetermined = 'undt' (0x756E_6474)
+        //   denied       = 'deny' (0x6465_6E79)
+        //   granted      = 'grnt' (0x6772_6E74)
+        // The old `== 0` / `== 1` checks never matched, so the explicit
+        // request was never issued and the engine started before the user
+        // answered the implicit prompt (first launch read silence). Same fix
+        // as the watchOS backend. Prefer AVAudioApplication (iOS 17+), the
+        // non-deprecated API; fall back to AVAudioSession on older systems.
+        const PERM_GRANTED: usize = 0x6772_6E74; // 'grnt'
+        const PERM_DENIED: usize = 0x6465_6E79; // 'deny'
+
+        let record_permission: usize;
+        if let Some(app_cls) = AnyClass::get(c"AVAudioApplication") {
+            let app: *mut AnyObject = msg_send![app_cls, sharedInstance];
+            record_permission = msg_send![app, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () =
+                    msg_send![app_cls, requestRecordPermissionWithCompletionHandler: &*block];
+            }
+        } else {
+            record_permission = msg_send![session, recordPermission];
+            if record_permission != PERM_GRANTED && record_permission != PERM_DENIED {
+                let block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {});
+                let _: () = msg_send![session, requestRecordPermission: &*block];
+            }
+        }
+        if record_permission == PERM_DENIED {
             crate::ws_log!("[audio] microphone permission denied");
             return 0;
         }
-        if record_permission == 0 {
-            // Request permission - this will show the system dialog.
-            // Use a no-op block; the user calls audioStart() again after granting.
-            let permission_block = block2::RcBlock::new(|_granted: objc2::runtime::Bool| {
-                // Permission result handled on next audioStart() call
-            });
-            let _: () = msg_send![session, requestRecordPermission: &*permission_block];
+        if record_permission != PERM_GRANTED {
+            // Prompt is showing; the caller retries audioStart() and picks up
+            // the grant on a later tick.
             crate::ws_log!("[audio] requesting microphone permission");
-            return 0; // Caller should retry after permission is granted
+            return 0;
         }
 
         // Create AVAudioEngine
@@ -229,6 +213,7 @@ pub fn start() -> i64 {
 }
 
 pub fn stop() {
+    reset_meter();
     ENGINE.with(|e| {
         if let Some(engine) = e.borrow_mut().take() {
             unsafe {
@@ -390,41 +375,8 @@ unsafe fn process_audio_buffer(buffer: *mut AnyObject, sample_rate: f64) {
         RECORDED_SAMPLES.lock().unwrap().extend_from_slice(slice);
     }
 
-    let mut sum_sq = 0.0f64;
-    let mut peak = 0.0f32;
-
-    FILTER_STATE.with(|fs| {
-        let mut state = fs.borrow_mut();
-        for i in 0..n {
-            let sample = *samples.add(i);
-            let abs_sample = sample.abs();
-            if abs_sample > peak {
-                peak = abs_sample;
-            }
-            let weighted = a_weight_filter(sample as f64, &mut state);
-            sum_sq += weighted * weighted;
-        }
-    });
-
-    let rms = (sum_sq / n as f64).sqrt();
-    // Map digital RMS to dB SPL. 0 dBFS ≈ 110 dB SPL (conservative;
-    // per-device calibration in calibration.ts refines this).
-    let db_raw = if rms > 1.0e-10 {
-        20.0 * rms.log10() + 110.0
-    } else {
-        0.0
-    };
-    let db_clamped = db_raw.max(0.0).min(140.0);
-
-    let dt = n as f64 / sample_rate;
-    let tau = 0.125;
-    let alpha = 1.0 - (-dt / tau).exp();
-
-    let smoothed = EMA_DB.with(|ema| {
-        let mut current = ema.borrow_mut();
-        *current += alpha * (db_clamped - *current);
-        *current
-    });
+    // A-weighted, Fast (125 ms) energy-domain level — see perry_ui::sound_level.
+    let (smoothed, peak) = meter_process(std::slice::from_raw_parts(samples, n), sample_rate);
 
     CURRENT_DB.store(smoothed.to_bits(), Ordering::Relaxed);
     CURRENT_PEAK.store((peak as f64).to_bits(), Ordering::Relaxed);

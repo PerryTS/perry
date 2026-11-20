@@ -574,14 +574,11 @@ pub(crate) fn lower(
         }
 
         // -------- Map.clear --------
-        Expr::MapClear(map) => {
-            let m_box = lower_expr(ctx, map)?;
-            let m_handle = super::unbox_collection_receiver(ctx, &m_box, "clear");
-            let blk = ctx.block();
-            blk.call_void("js_map_clear", &[(I64, &m_handle)]);
-            // Map.prototype.clear() returns undefined, not 0.
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-        }
+        Expr::MapClear(map) => super::collection_receiver::lower_collection_clear(
+            ctx,
+            map,
+            super::collection_receiver::ConstructedKind::Map,
+        ),
 
         // -------- Map.entries / Map.keys / Map.values --------
         // All three take a map pointer and return an array pointer.
@@ -1074,7 +1071,33 @@ pub(crate) fn lower(
                     MaterializationReason::FunctionAbi,
                 ));
             }
-            if !numeric_index_has_integer_array_index_proof(ctx, index) {
+            // A `TaPtr` parameter's entry-bound view: the same checked store
+            // `IndexSet` takes (expr/proven_view_access.rs) — a bounds compare
+            // against the hoisted length and one byte store, with no per-store
+            // receiver guard. That tier keeps ToUint8 with the guarded path
+            // below unless the value is a proven exact-i32 (its truncated low
+            // byte IS ToUint8 there), and an out-of-range index stays the
+            // silent no-op the spec requires.
+            if let Some(stored) =
+                super::try_lower_proven_view_checked_store(ctx, array, index, value)?
+            {
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(materialize_js_value(
+                    ctx,
+                    stored,
+                    MaterializationReason::FunctionAbi,
+                ));
+            }
+            // A value that needs ToNumber (an object, a string, a Boolean, a
+            // BigInt, ...) takes the runtime's element store with the JS
+            // value: it converts before its bounds test (the conversion can
+            // run program code, throw, detach or shrink the view) and the
+            // assignment's result is the value itself.
+            if !numeric_index_has_integer_array_index_proof(ctx, index)
+                || super::byte_store_value_needs_tonumber(ctx, value)
+            {
                 // A non-numeric key uses ordinary [[Set]] semantics (including
                 // typed-array named expandos and Symbol keys). The numeric-only
                 // polymorphic index helper can handle byte indices, but its
@@ -1090,32 +1113,49 @@ pub(crate) fn lower(
                         let key = vals[1].clone();
                         let val = vals[2].clone();
                         let strict = if ctx.is_strict_fn { "1" } else { "0" };
-                        let blk = ctx.block();
-                        let handle = unbox_to_i64(blk, &a);
-                        Ok(if key_maybe_string {
-                            // `Uint8ArraySet` is an assignment expression: use
-                            // the canonical receiver-aware setter so expando
-                            // keys, numeric-looking runtime strings, Symbols,
-                            // strictness, and the expression result all match
-                            // ordinary JavaScript property assignment.
-                            blk.call(
-                                DOUBLE,
-                                "js_put_value_set",
-                                &[
-                                    (DOUBLE, &a),
-                                    (DOUBLE, &key),
-                                    (DOUBLE, &val),
-                                    (DOUBLE, &a),
-                                    (I32, strict),
-                                ],
-                            )
-                        } else {
-                            blk.call(
-                                DOUBLE,
-                                "js_typed_array_index_set_dynamic",
-                                &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
-                            )
-                        })
+                        // The proofs above are static. An unproven key or value
+                        // (`u8[p++] = c` with `p` from a `number` parameter, which
+                        // could hold a BigInt) is still, at run time, usually a
+                        // plain Number index into a Uint8Array: the header-guarded
+                        // byte store tests exactly that, and a plain-Number value
+                        // has no conversion to order before the bounds test. Every
+                        // miss takes the complete runtime store below.
+                        if ctx.block().is_terminated() {
+                            // An operand threw: no block may branch on its
+                            // dropped values (#11450).
+                            return Ok(val);
+                        }
+                        super::u8_buffer_read::emit_u8_cached_dyn_set(ctx, &a, &key, &val, |ctx| {
+                            let blk = ctx.block();
+                            if key_maybe_string {
+                                // `Uint8ArraySet` is an assignment expression: use
+                                // the canonical receiver-aware setter so expando
+                                // keys, numeric-looking runtime strings, Symbols
+                                // and strictness all match ordinary JavaScript
+                                // property assignment.
+                                blk.call(
+                                    DOUBLE,
+                                    "js_put_value_set",
+                                    &[
+                                        (DOUBLE, &a),
+                                        (DOUBLE, &key),
+                                        (DOUBLE, &val),
+                                        (DOUBLE, &a),
+                                        (I32, strict),
+                                    ],
+                                );
+                            } else {
+                                let handle = unbox_to_i64(blk, &a);
+                                blk.call(
+                                    DOUBLE,
+                                    "js_typed_array_index_set_dynamic",
+                                    &[(I64, &handle), (DOUBLE, &key), (DOUBLE, &val)],
+                                );
+                            }
+                        });
+                        // Both runtime stores return the right-hand side, the
+                        // assignment's value on every arm.
+                        Ok(val)
                     })?;
                 if value_discarded {
                     return Ok(double_literal(0.0));
@@ -1153,6 +1193,9 @@ pub(crate) fn lower(
                 let i = lower_expr(ctx, index)?;
                 ctx.block().fptosi(DOUBLE, &i, I32)
             };
+            // `raw_value`: the assignment's result when the value is no exact
+            // int32 (`(u8[i] = 1.5)` is 1.5, not the stored 1).
+            let mut raw_value = None;
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
@@ -1160,7 +1203,11 @@ pub(crate) fn lower(
                 // poison outside int32 range (x86 yields 0x80000000), so
                 // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.toint32_wrap(&v)
+                let wrapped = ctx.toint32_wrap(&v);
+                if super::byte_store_tonumber_on() {
+                    raw_value = Some(v);
+                }
+                wrapped
             };
             // Slow path accepts either BufferHeader-backed Uint8Arrays or
             // NativeArena typed views.
@@ -1197,6 +1244,9 @@ pub(crate) fn lower(
             if value_discarded {
                 return Ok(double_literal(0.0));
             }
+            if let Some(v) = raw_value {
+                return Ok(v);
+            }
             Ok(materialize_js_value(ctx, slow, reason))
         }
         Expr::BufferIndexSet {
@@ -1219,6 +1269,28 @@ pub(crate) fn lower(
                     store.result,
                     MaterializationReason::FunctionAbi,
                 ));
+            }
+            // The same rule as `Uint8ArraySet`: a value that needs ToNumber
+            // takes the runtime's complete `[[Set]]` with the JS value.
+            if super::byte_store_value_needs_tonumber(ctx, value) {
+                let strict = if ctx.is_strict_fn { "1" } else { "0" };
+                let result =
+                    rooting::with_operands_rooted(ctx, &[buffer, index, value], |ctx, vals| {
+                        Ok(ctx.block().call(
+                            DOUBLE,
+                            "js_dyn_index_set_strict",
+                            &[
+                                (DOUBLE, &vals[0]),
+                                (DOUBLE, &vals[1]),
+                                (DOUBLE, &vals[2]),
+                                (I32, strict),
+                            ],
+                        ))
+                    })?;
+                if value_discarded {
+                    return Ok(double_literal(0.0));
+                }
+                return Ok(result);
             }
 
             let idx_is_i32 = can_lower_expr_as_i32(
@@ -1251,6 +1323,9 @@ pub(crate) fn lower(
                 let i = lower_expr(ctx, index)?;
                 ctx.block().fptosi(DOUBLE, &i, I32)
             };
+            // `raw_value`: the assignment's result when the value is no exact
+            // int32 (`(u8[i] = 1.5)` is 1.5, not the stored 1).
+            let mut raw_value = None;
             let val_i32 = if val_is_i32 {
                 lower_expr_as_i32(ctx, value)?
             } else {
@@ -1258,7 +1333,11 @@ pub(crate) fn lower(
                 // poison outside int32 range (x86 yields 0x80000000), so
                 // storing 4294967295 wrote 0 instead of 255.
                 let v = lower_expr(ctx, value)?;
-                ctx.toint32_wrap(&v)
+                let wrapped = ctx.toint32_wrap(&v);
+                if super::byte_store_tonumber_on() {
+                    raw_value = Some(v);
+                }
+                wrapped
             };
             let a = lower_expr(ctx, buffer)?;
             super::u8_buffer_read::emit_u8_cached_set_i32(
@@ -1291,6 +1370,9 @@ pub(crate) fn lower(
             );
             if value_discarded {
                 return Ok(double_literal(0.0));
+            }
+            if let Some(v) = raw_value {
+                return Ok(v);
             }
             Ok(materialize_js_value(ctx, slow, reason))
         }
@@ -1482,11 +1564,9 @@ pub(crate) fn lower(
         }
 
         // -------- ClassRef --------
-        // Lower to the class's runtime id NaN-boxed with INT32_TAG. The
-        // runtime distinguishes class refs from other values via the tag,
-        // letting `Object.prototype.hasOwnProperty.call(SomeClass, sym)`
-        // route through the class-static-symbol side table for drizzle's
-        // `is(value, type)`. Falls back to `0.0` when the class isn't in
+        // Fetch the class's constructor function object. Its own properties
+        // provide the static symbols used by drizzle's `is(value, type)`.
+        // Falls back to `0.0` when the class isn't in
         // class_ids (legacy callers checking truthiness). Refs #420.
         Expr::ClassRef(name) => {
             if let Some(&cid) = ctx.class_ids.get(name) {
@@ -1510,6 +1590,10 @@ pub(crate) fn lower(
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
 }
+
+#[cfg(test)]
+#[path = "uint8array_set_tonumber_tests.rs"]
+mod uint8array_set_tonumber_tests;
 
 #[cfg(test)]
 mod map_header_layout_tests {

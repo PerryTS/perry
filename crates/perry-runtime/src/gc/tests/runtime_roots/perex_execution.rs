@@ -38,7 +38,7 @@ fn compile<'s>(
 }
 
 #[test]
-fn perex_host_buffers_account_overlap_failure_and_unwind() {
+fn perex_host_buffers_account_overlap_and_failure() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     // #11549: operation scratch is bounded by its budget and released by the
@@ -61,11 +61,6 @@ fn perex_host_buffers_account_overlap_failure_and_unwind() {
         assert_eq!(memory.live_bytes(), 64);
         drop(replacement);
     }
-    let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let _live = Buffer::<u8>::new(&memory, 100).unwrap();
-        panic!("test callback unwind");
-    }));
-    assert!(unwind.is_err());
     assert_eq!(memory.live_bytes(), 0);
     assert_eq!(external_side_live_bytes(), before);
 }
@@ -435,35 +430,26 @@ fn perex_host_failures_release_scratch_and_preserve_consumed_work() {
         Err(EngineError::Storage(StorageError::Limit))
     ));
     assert_eq!(tiny.live_bytes(), 0);
-    for unwind in [false, true] {
+    {
         let mut work = Budget::new(100_000);
         let mut calls = 0;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            host::find(
-                &program,
-                &input,
-                0,
-                CaptureMode::All,
-                &mut work,
-                &memory,
-                1,
-                &mut || {
-                    calls += 1;
-                    if calls == 2 {
-                        if unwind {
-                            panic!("test search callback unwind");
-                        }
-                        return Err(EngineError::Cancelled);
-                    }
-                    Ok(())
-                },
-            )
-        }));
-        if unwind {
-            assert!(result.is_err());
-        } else {
-            assert!(matches!(result, Ok(Err(EngineError::Cancelled))));
-        }
+        let result = host::find(
+            &program,
+            &input,
+            0,
+            CaptureMode::All,
+            &mut work,
+            &memory,
+            1,
+            &mut || {
+                calls += 1;
+                if calls == 2 {
+                    return Err(EngineError::Cancelled);
+                }
+                Ok(())
+            },
+        );
+        assert!(matches!(result, Err(EngineError::Cancelled)));
         assert!(work.remaining() < 100_000);
         assert_eq!(memory.live_bytes(), 0);
         assert_eq!(external_side_live_bytes(), before);

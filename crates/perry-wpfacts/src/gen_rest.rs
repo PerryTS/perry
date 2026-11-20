@@ -22,6 +22,26 @@ mod nodes;
 mod reflection;
 mod web;
 
+/// `PERRY_PUSH_METHOD_TIERS=0` (`off`, `false`): the native array push
+/// (`perry_hir::folded_call::native_array_push`) is an element store with no
+/// method call, as codegen then lowers it (no test of the receiver).
+fn push_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_PUSH_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// `PERRY_ARRAY_METHOD_TIERS=0` (`off`, `false`): `Expr::ArrayPop` is the
+/// builtin's own effects with no method call, as codegen then lowers it (the
+/// builtin runs whatever `pop` the receiver holds).
+fn array_method_tiers() -> bool {
+    !matches!(
+        std::env::var("PERRY_ARRAY_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
 fn kids(e: &Expr) -> Vec<&Expr> {
     let mut v = Vec::new();
     perry_hir::walker::walk_expr_children(e, &mut |c| v.push(c));
@@ -84,12 +104,32 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
+        // A folded builtin-method node is the call it folds: the compiled
+        // code runs an own or inherited user method of that name, and the
+        // builtin's own effects are its declaration (perry_hir::folded_call).
+        if let Some(call) = perry_hir::folded_call::folded_call(e) {
+            return self.folded_call(fx, e, &call);
+        }
         match e {
             Expr::NativeModuleRef(m) => {
+                let name = m.strip_prefix("node:").unwrap_or(m);
+                // The `process` module is the global process object (node:
+                // `require("process") === globalThis.process`); HIR names
+                // the value of `require("process")` and of a namespace
+                // import `process.namespace`.
                 // node:module as a value hands out `Module._cache`.
-                if m.strip_prefix("node:").unwrap_or(m) == "module" {
+                if name == "module" {
                     let cache = self.m.cjs_cache;
                     self.to_sink(cache, "node:module names Module._cache");
+                }
+                // A module the realm declares is its namespace object.
+                let name = if name == "process.namespace" {
+                    "process"
+                } else {
+                    name
+                };
+                if let Some(t) = crate::builtins::builtin_module_tok(&mut self.m, name) {
+                    return self.tok_node(t);
                 }
                 self.m.top_val(&format!("native module ref {m}"))
             }
@@ -101,19 +141,100 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = object.as_ref().map(|o| self.expr(fx, o));
+                // A native step writes its own value binding (the
+                // `LocalSet(value, iteratorStepOutput())` among its
+                // arguments): that write reads this step's output only.
+                let outer = (module == "__perry_runtime" && method == "iteratorStep").then(|| {
+                    let n = self.tmp("iterout");
+                    self.step_out.replace(n)
+                });
                 let a: Vec<NodeId> = args.iter().map(|x| self.expr(fx, x)).collect();
                 let m0 = module.strip_prefix("node:").unwrap_or(module);
-                if module == "__perry_runtime" {
-                    self.runtime_glue(fx, method, o, a, args)
+                // R-HOSTREPORT: `process.on(event, listener)` lowers here (the
+                // HIR's receiver-less `NativeMethodCall` on module `process`).
+                // The runtime calls the listener with what it reports as
+                // uncaught and with the process events
+                // (`process_listener_registered`).
+                if object.is_none()
+                    && m0 == "process"
+                    && matches!(
+                        method.as_str(),
+                        "on" | "once" | "addListener" | "prependListener" | "prependOnceListener"
+                    )
+                {
+                    let (call, _) = self.new_call(ThisArg::Undef, a.clone(), vec![]);
+                    crate::builtins::process_listener_registered(&mut self.m, call);
+                }
+                let key = if m0 == "array"
+                    && matches!(method.as_str(), "push_single" | "push_field_single")
+                {
+                    "push"
+                } else {
+                    method
+                };
+                let guarded_push = module == "array"
+                    && o.is_some()
+                    && (method == "push_field_single"
+                        || (matches!(method.as_str(), "push_single" | "push")
+                            && push_method_tiers()
+                            && !self
+                                .push_fill
+                                .pushes
+                                .contains_key(&(e as *const Expr as usize))));
+                // A guarded push publishes its one route at folded_site below.
+                if !guarded_push || perry_hir::folded_call::native_array_push(e).is_none() {
+                    self.member_op(mi, e, key, o, o.is_none().then_some(m0), false);
+                }
+                if module == "__perry_borrowed_proof" {
+                    self.prim_node(prim::BOOL)
+                } else if module == "__perry_runtime" {
+                    let r = self.runtime_glue(fx, method, o, a, args);
+                    if let Some(p) = outer {
+                        self.step_out = p;
+                    }
+                    r
                 } else if m0 == "module" && method == "createRequire" && object.is_none() {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                     self.tok_node(t)
-                } else if let (true, Some(o)) =
-                    (module == "array" && method == "push_field_single", o)
-                {
+                } else if let (true, Some(o)) = (
+                    matches!(
+                        module.as_str(),
+                        "readable_stream" | "readable_stream_reader"
+                    ),
+                    o,
+                ) {
+                    // The HIR's dispatch of a member of a stream or reader it
+                    // tracked (`s.getReader()`, `r.read()`, `s.locked`): the
+                    // member access itself (node: a lookup on the receiver's
+                    // chain), which the realm's stream families declare. A
+                    // getter (`locked`, `closed`) is a read of the key.
+                    let key = Key::Named(self.m.atom(method));
+                    if matches!(method.as_str(), "locked" | "closed") && a.is_empty() {
+                        self.load(o, key)
+                    } else {
+                        self.mcall(o, key, a, vec![])
+                    }
+                } else if let (true, Some(o)) = (
+                    module == "array"
+                        && (method == "push_field_single"
+                            || (matches!(method.as_str(), "push_single" | "push")
+                                && push_method_tiers()
+                                && !self
+                                    .push_fill
+                                    .pushes
+                                    .contains_key(&(e as *const Expr as usize)))),
+                    o,
+                ) {
                     // `push_field_single` checks the receiver and runs its own
-                    // `push` otherwise, which is the method call itself.
+                    // `push` otherwise, which is the method call itself. So
+                    // does the native push arm (`perry_hir::folded_call::
+                    // native_array_push`), a fill push of a push-filled birth
+                    // excepted: its Array has no other holder yet.
                     let push = self.m.atom("push");
+                    self.list_push(o, Some(a.len() as u32));
+                    if let Some(call) = perry_hir::folded_call::native_array_push(e) {
+                        self.folded_site(fx, "NativeMethodCall", &call.receiver, push, o);
+                    }
                     self.mcall(o, Key::Named(push), a, vec![])
                 } else if module == "array" && matches!(method.as_str(), "push_single" | "push") {
                     // The array push the HIR folds for a receiver it proved an
@@ -123,8 +244,19 @@ impl<'a> Gen<'a> {
                     // holder stores the same array.
                     match o {
                         Some(o) => {
+                            self.list_push(o, Some(a.len() as u32));
+                            // A fill push (`push_fills`): its site is marked
+                            // before the store exists (the solve is online).
+                            let fill = self
+                                .push_fill
+                                .pushes
+                                .get(&(e as *const Expr as usize))
+                                .copied();
                             for v in a {
-                                self.elem_store(fx, o, v, "push");
+                                match fill {
+                                    Some(fill) => self.fill_push(fx, e, o, v, fill),
+                                    None => self.elem_store(fx, o, v, "push"),
+                                }
                             }
                         }
                         None => {
@@ -134,6 +266,59 @@ impl<'a> Gen<'a> {
                         }
                     }
                     self.prim_node(prim::NUM)
+                } else if let Some(recv) =
+                    o.filter(|_| perry_hir::folded_call::fs_receiver_dispatch(module, method))
+                {
+                    // A folded fs receiver's method no stream arm lowers is
+                    // the runtime dispatch on the receiver value: the method
+                    // call `recv.method(..args)`. The dispatch returns 0 for
+                    // a nullish receiver (no TypeError), reads a member of a
+                    // string or host handle for a call without arguments,
+                    // and gives undefined where it resolves no callee.
+                    let key = Key::Named(self.m.atom(method));
+                    let ret = self.mcall(recv, key, a, vec![]);
+                    let num = self.prim_node(prim::NUM);
+                    self.m.cons(
+                        recv,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: num,
+                            dst: ret,
+                        },
+                    );
+                    if args.is_empty() {
+                        let member = self.load(recv, key);
+                        self.m.edge(member, ret);
+                    }
+                    self.m.add_prim(ret, prim::UNDEF);
+                    ret
+                } else if let Some(ctor) = object
+                    .is_none()
+                    .then(|| self.native_construct_fold(module, method))
+                    .flatten()
+                {
+                    // The HIR's fold of `new <module>.<method>(..args)`:
+                    // `new` of the realm constructor itself, whatever the
+                    // program stored under the name (codegen calls its
+                    // runtime function directly). The construct runs what
+                    // the constructor's declaration says (`construct`).
+                    let callee = self.tok_node(ctor);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::New { call });
+                    ret
+                } else if let Some(t) = object
+                    .is_none()
+                    .then(|| self.namespace_member_callee(m0, method))
+                    .flatten()
+                {
+                    // A member the HIR calls directly (`import { createHook }
+                    // from "async_hooks"`) whose call the solver models by
+                    // its token: the call of that native value, as a call
+                    // through the namespace member runs.
+                    let callee = self.tok_node(t);
+                    let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                    self.m.cons(callee, Cons::Call { call });
+                    ret
                 } else {
                     if module == "vm" || module == "node:vm" {
                         crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
@@ -150,6 +335,7 @@ impl<'a> Gen<'a> {
                 self.prim_node(prim::UNDEF | prim::BOOL)
             }
             Expr::PrivateLexicalBrandPop => self.prim_node(prim::UNDEF),
+            Expr::ThisProvenClass(_) => self.prim_node(prim::BOOL),
             Expr::PrivateBrandCheck { object, .. } => {
                 let _ = self.expr(fx, object);
                 self.prim_node(prim::BOOL)
@@ -179,21 +365,12 @@ impl<'a> Gen<'a> {
                 key,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Load(dst),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Load(dst));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -204,22 +381,13 @@ impl<'a> Gen<'a> {
                 value,
                 receiver,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Store(v),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Store(v));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -230,23 +398,14 @@ impl<'a> Gen<'a> {
                 receiver,
                 args,
             } => match self.class_home_of(fx, home) {
-                Some(tm) => {
-                    let _ = self.expr(fx, key);
-                    let k = self.key_of(key);
+                Some(_) => {
+                    let k = self.super_key(fx, key);
                     let r = self.expr(fx, receiver);
                     let a = self.evaluate_all(fx, args);
                     let sp = Vec::new();
                     let (call, ret) = self.new_call(ThisArg::Node(r), a, sp);
-                    for start in self.super_starts_of(tm) {
-                        self.m.cons(
-                            r,
-                            Cons::Super {
-                                start,
-                                key: k,
-                                act: ChainAct::Call(call),
-                            },
-                        );
-                    }
+                    let homes = self.expr(fx, home);
+                    self.super_access(homes, r, k, ChainAct::Call(call));
                     ret
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -258,8 +417,42 @@ impl<'a> Gen<'a> {
                 "process.env key",
                 Protocol::ToPrimitive,
             ),
+            Expr::ProcessArgv => {
+                let n = self.m.node_l("process.argv");
+                self.m.own(n);
+                let argv = self.m.atom("argv");
+                match self.m.process_arrays.iter().find(|a| a.0 == argv) {
+                    Some(&(_, a, _)) => self.m.edge(a, n),
+                    None => {
+                        self.m.add_top(n, |_| "process.argv".into());
+                        self.m.add_prim(n, prim::ALL);
+                    }
+                }
+                n
+            }
+            // `process.env`: the one object the realm declares (`values =
+            // string`, `Model::process_arrays`), or what the program stored
+            // as `process.env`.
             Expr::ProcessEnv
-            | Expr::ProcessArgv
+                if self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .any(|a| self.m.atoms[a.0 as usize] == "env") =>
+            {
+                let n = self.m.node_l("process.env");
+                self.m.own(n);
+                let a = self
+                    .m
+                    .process_arrays
+                    .iter()
+                    .find(|a| self.m.atoms[a.0 as usize] == "env")
+                    .expect("guarded")
+                    .1;
+                self.m.edge(a, n);
+                n
+            }
+            Expr::ProcessEnv
             | Expr::ProcessMemoryUsage
             | Expr::ProcessVersions
             | Expr::ProcessHrtime(..)
@@ -312,7 +505,14 @@ impl<'a> Gen<'a> {
                 );
                 let (t, n) = self.bobj(mi, "arraybox");
                 let fa = self.m.field_any(t);
-                self.m.add_prim(fa, prim::STR | prim::SYMBOL);
+                // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
+                // Symbols; 28.1.11 Reflect.ownKeys: both.
+                let p = match e {
+                    Expr::ObjectGetOwnPropertySymbols(..) => prim::SYMBOL,
+                    Expr::ReflectOwnKeys(..) => prim::STR | prim::SYMBOL,
+                    _ => prim::STR,
+                };
+                self.m.add_prim(fa, p);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
@@ -321,7 +521,13 @@ impl<'a> Gen<'a> {
                 self.tok_node(t)
             }
             Expr::ProcessStdin | Expr::ProcessStdout | Expr::ProcessStderr => {
-                self.m.top_val("process stdio")
+                let ns = match e {
+                    Expr::ProcessStdin => BuiltinNs::Stdin,
+                    Expr::ProcessStdout => BuiltinNs::Stdout,
+                    _ => BuiltinNs::Stderr,
+                };
+                let t = self.m.tok(TokKind::Builtin(ns));
+                self.tok_node(t)
             }
             Expr::ProcessNextTick { callback, args } => {
                 let cb = self.expr(fx, callback);
@@ -358,7 +564,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessAvailableMemory
             | Expr::ProcessConstrainedMemory
             | Expr::ProcessPosixCredential(..)
-            | Expr::ProcessEmitWarning(..)
             | Expr::ProcessTitle
             | Expr::ProcessSetTitle(..)
             | Expr::ProcessStdinSetRawMode(..)
@@ -369,13 +574,6 @@ impl<'a> Gen<'a> {
             | Expr::ProcessStdoutColumns
             | Expr::ProcessStdoutRows
             | Expr::TtyIsAtty(..)
-            | Expr::FsReadFileSync(..)
-            | Expr::FsWriteFileSync(..)
-            | Expr::FsExistsSync(..)
-            | Expr::FsMkdirSync(..)
-            | Expr::FsUnlinkSync(..)
-            | Expr::FsAppendFileSync(..)
-            | Expr::FsRmRecursive(..)
             | Expr::PathJoin(..)
             | Expr::PathDirname(..)
             | Expr::PathBasename(..)
@@ -385,35 +583,24 @@ impl<'a> Gen<'a> {
             | Expr::PathIsAbsolute(..)
             | Expr::PathRelative(..)
             | Expr::PathNormalize(..)
-            | Expr::PathFormat(..)
             | Expr::PathSep
             | Expr::PathDelimiter
             | Expr::PathToNamespacedPath(..)
             | Expr::PathMatchesGlob(..)
             | Expr::PathResolveJoin(..)
             | Expr::PathWin32Join(..)
-            | Expr::PathWin32 { .. }
             | Expr::ObjectIsFrozen(..)
             | Expr::ObjectIsSealed(..)
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
-            | Expr::SymbolNew(..)
             | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)
             | Expr::SymbolToString(..)
-            | Expr::FileURLToPath(..)
             | Expr::RegExpExecIndex
             | Expr::JsonIsRawJson(..)
             | Expr::PerformanceNow
-            | Expr::WebAssemblyValidate(..)
-            | Expr::Atob(..)
-            | Expr::Btoa(..)
-            | Expr::EncodeURI(..)
-            | Expr::DecodeURI(..)
-            | Expr::EncodeURIComponent(..)
-            | Expr::DecodeURIComponent(..)
             | Expr::IterResultGetDone
             | Expr::CryptoRandomUUID
             | Expr::CryptoRandomUUIDv7
@@ -435,80 +622,133 @@ impl<'a> Gen<'a> {
             | Expr::OsEndianness
             | Expr::OsMachine
             | Expr::OsVersion
-            | Expr::BufferIsBuffer(..)
             | Expr::BufferIsEncoding(..)
+            | Expr::PodLayoutSizeOf { .. }
+            | Expr::PodLayoutAlignOf { .. }
+            | Expr::PodLayoutOffsetOf { .. }
+            | Expr::ChildProcessGetProcessStatus(..)
+            | Expr::ChildProcessKillProcess(..)
+            | Expr::StringAt { .. }
+            | Expr::StringCodePointAt { .. }
+            | Expr::ArrayIterationPatched
+            | Expr::ImportMetaUrl(..) => {
+                // These operations only convert an object operand to a primitive
+                // (the lowering ToString's / ToNumber's it, or the runtime reads
+                // an internal slot): ToPrimitive (`@@toPrimitive`, else
+                // `valueOf` / `toString`) runs on it; no other key is read and
+                // no function found under some key is called back.
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::ALL,
+                    "primitive builtin operand",
+                    Protocol::ToPrimitive,
+                )
+            }
+            // `Symbol(d)` is a Symbol (ECMA-262 20.4.1.1: ToString of `d`
+            // unless undefined).
+            Expr::SymbolNew(..) => self.prim_kids(
+                fx,
+                e,
+                prim::SYMBOL,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `atob` / `btoa` (HTML base64 utilities: a DOMString, ToString
+            // of the operand), `String.fromCharCode` / `fromCodePoint`
+            // (22.1.2.1, 22.1.2.2: ToNumber of each operand): a String.
+            Expr::Atob(..)
+            | Expr::Btoa(..)
+            | Expr::StringFromCharCode(..)
+            | Expr::StringFromCodePoint(..) => self.prim_kids(
+                fx,
+                e,
+                prim::STR,
+                "primitive builtin operand",
+                Protocol::ToPrimitive,
+            ),
+            // `String.raw` (22.1.2.4): `string_methods::string_raw`, a String.
+            Expr::StringRaw {
+                call_site,
+                substitutions,
+            } => {
+                let template = self.expr(fx, call_site);
+                let subs = self.tmp("String.raw-substitution");
+                for x in substitutions {
+                    let v = self.expr(fx, x);
+                    self.m.edge(v, subs);
+                }
+                crate::builtins::string_methods::string_raw(&mut self.m, template, subs);
+                let out = self.tmp("primop");
+                self.m.add_prim(out, prim::STR);
+                out
+            }
+            // A spread `fromCharCode` iterates its operand: a String.
+            Expr::StringFromCharCodeSpread(..) => {
+                self.prim_kids(fx, e, prim::STR, "primitive builtin operand", Protocol::Any)
+            }
+            Expr::PathFormat(..)
+            | Expr::PathWin32 { .. }
+            | Expr::FsReadFileSync(..)
+            | Expr::FsWriteFileSync(..)
+            | Expr::FsAppendFileSync(..)
+            | Expr::FileURLToPath(..)
+            | Expr::BufferIsBuffer(..)
             | Expr::BufferByteLength { .. }
             | Expr::BufferToString { .. }
             | Expr::BufferCopy { .. }
             | Expr::BufferWrite { .. }
             | Expr::BufferFill { .. }
             | Expr::BufferEquals { .. }
-            | Expr::PodLayoutSizeOf { .. }
-            | Expr::PodLayoutAlignOf { .. }
-            | Expr::PodLayoutOffsetOf { .. }
-            | Expr::ChildProcessGetProcessStatus(..)
-            | Expr::ChildProcessKillProcess(..)
-            | Expr::StringFromCharCode(..)
-            | Expr::StringFromCharCodeSpread(..)
-            | Expr::StringFromCodePoint(..)
-            | Expr::StringRaw { .. }
-            | Expr::StringAt { .. }
-            | Expr::StringCodePointAt { .. }
-            | Expr::MapHas { .. }
-            | Expr::MapDelete { .. }
             | Expr::MapSize(..)
-            | Expr::MapClear(..)
-            | Expr::ArrayIterationPatched
-            | Expr::ImportMetaUrl(..)
-            | Expr::ProxyRevoke(..) => {
-                // Mixed: element reads, `raw` / `toISOString` lookups, spreads.
+            | Expr::ProxyRevoke(..)
+            | Expr::WebAssemblyValidate(..)
+            | Expr::ProcessEmitWarning(..) => {
+                // The runtime reads named keys or elements of these operands
+                // (`raw`, a path object's parts, a file URL, an Error, a
+                // spread's elements) or takes a buffer; each is its own model.
                 self.prim_kids(fx, e, prim::ALL, "primitive builtin operand", Protocol::Any)
             }
-            Expr::DateGetTime(..) => self.receiver_method(fx, e, "getTime"),
-            Expr::DateGetFullYear(..) => self.receiver_method(fx, e, "getFullYear"),
-            Expr::DateGetMonth(..) => self.receiver_method(fx, e, "getMonth"),
-            Expr::DateGetDate(..) => self.receiver_method(fx, e, "getDate"),
-            Expr::DateGetDay(..) => self.receiver_method(fx, e, "getDay"),
-            Expr::DateGetHours(..) => self.receiver_method(fx, e, "getHours"),
-            Expr::DateGetMinutes(..) => self.receiver_method(fx, e, "getMinutes"),
-            Expr::DateGetSeconds(..) => self.receiver_method(fx, e, "getSeconds"),
-            Expr::DateGetMilliseconds(..) => self.receiver_method(fx, e, "getMilliseconds"),
-            Expr::DateGetUtcDay(..) => self.receiver_method(fx, e, "getUTCDay"),
-            Expr::DateGetUtcFullYear(..) => self.receiver_method(fx, e, "getUTCFullYear"),
-            Expr::DateGetUtcMonth(..) => self.receiver_method(fx, e, "getUTCMonth"),
-            Expr::DateGetUtcDate(..) => self.receiver_method(fx, e, "getUTCDate"),
-            Expr::DateGetUtcHours(..) => self.receiver_method(fx, e, "getUTCHours"),
-            Expr::DateGetUtcMinutes(..) => self.receiver_method(fx, e, "getUTCMinutes"),
-            Expr::DateGetUtcSeconds(..) => self.receiver_method(fx, e, "getUTCSeconds"),
-            Expr::DateGetUtcMilliseconds(..) => self.receiver_method(fx, e, "getUTCMilliseconds"),
-            Expr::DateValueOf(..) => self.receiver_method(fx, e, "valueOf"),
-            Expr::DateGetTimezoneOffset(..) => self.receiver_method(fx, e, "getTimezoneOffset"),
-            Expr::DateToISOString(..) => self.receiver_method(fx, e, "toISOString"),
-            Expr::DateToString(..) => self.receiver_method(fx, e, "toString"),
-            Expr::DateToDateString(..) => self.receiver_method(fx, e, "toDateString"),
-            Expr::DateToTimeString(..) => self.receiver_method(fx, e, "toTimeString"),
-            Expr::DateToUTCString(..) => self.receiver_method(fx, e, "toUTCString"),
-            Expr::DateToLocaleDateString(..) => self.receiver_method(fx, e, "toLocaleDateString"),
-            Expr::DateToLocaleTimeString(..) => self.receiver_method(fx, e, "toLocaleTimeString"),
-            Expr::DateToLocaleString(..) => self.receiver_method(fx, e, "toLocaleString"),
-            Expr::DateToJSON(..) => self.receiver_method(fx, e, "toJSON"),
-            Expr::DateSetUtcFullYear { .. } => self.receiver_method(fx, e, "setUTCFullYear"),
-            Expr::DateSetUtcMonth { .. } => self.receiver_method(fx, e, "setUTCMonth"),
-            Expr::DateSetUtcDate { .. } => self.receiver_method(fx, e, "setUTCDate"),
-            Expr::DateSetUtcHours { .. } => self.receiver_method(fx, e, "setUTCHours"),
-            Expr::DateSetUtcMinutes { .. } => self.receiver_method(fx, e, "setUTCMinutes"),
-            Expr::DateSetUtcSeconds { .. } => self.receiver_method(fx, e, "setUTCSeconds"),
-            Expr::DateSetUtcMilliseconds { .. } => {
-                self.receiver_method(fx, e, "setUTCMilliseconds")
+            Expr::FsExistsSync(path)
+            | Expr::FsMkdirSync(path)
+            | Expr::FsUnlinkSync(path)
+            | Expr::FsRmRecursive(path) => {
+                // A path operand is read as node's getValidatedPath reads it
+                // (a string or a Buffer as is, a file URL by its named keys,
+                // else ERR_INVALID_ARG_TYPE): the member's effects, declared
+                // at the runtime body its dispatch arm calls (`path(arg(0))`),
+                // run on it. The HIR variant is that member's call.
+                let member = match e {
+                    Expr::FsMkdirSync(..) => "node:fs.mkdirSync",
+                    Expr::FsUnlinkSync(..) => "node:fs.unlinkSync",
+                    Expr::FsRmRecursive(..) => "node:fs.rmSync",
+                    _ => "node:fs.existsSync",
+                };
+                self.declared_member_call(fx, member, &[path])
+                    .expect("an fs path member is declared at its runtime body")
             }
-            Expr::DateSetFullYear { .. } => self.receiver_method(fx, e, "setFullYear"),
-            Expr::DateSetMonth { .. } => self.receiver_method(fx, e, "setMonth"),
-            Expr::DateSetDate { .. } => self.receiver_method(fx, e, "setDate"),
-            Expr::DateSetHours { .. } => self.receiver_method(fx, e, "setHours"),
-            Expr::DateSetMinutes { .. } => self.receiver_method(fx, e, "setMinutes"),
-            Expr::DateSetSeconds { .. } => self.receiver_method(fx, e, "setSeconds"),
-            Expr::DateSetMilliseconds { .. } => self.receiver_method(fx, e, "setMilliseconds"),
-            Expr::DateSetTime { .. } => self.receiver_method(fx, e, "setTime"),
+            Expr::MapClear(map) => {
+                let recv = self.expr(fx, map);
+                let name = self.m.atom("clear");
+                self.mcall(recv, Key::Named(name), Vec::new(), Vec::new())
+            }
+            Expr::EncodeURI(..)
+            | Expr::DecodeURI(..)
+            | Expr::EncodeURIComponent(..)
+            | Expr::DecodeURIComponent(..) => {
+                // URI helpers only coerce their operand to a string; unrelated
+                // members are neither read nor called (builtins/globals.rs).
+                self.prim_kids(
+                    fx,
+                    e,
+                    prim::STR,
+                    "URI operand ToString",
+                    Protocol::ToPrimitive,
+                )
+            }
+            Expr::DateValueOf(..) => self.receiver_method(fx, e, "valueOf"),
+            Expr::DateToString(..) => self.receiver_method(fx, e, "toString"),
+            Expr::DateToUTCString(..) => self.receiver_method(fx, e, "toUTCString"),
             // Static Date conversions do not read a receiver. parse
             // ToString's one operand; UTC ToNumber's at most 7 components.
             Expr::DateNow => self.prim_node(prim::NUM),
@@ -526,31 +766,40 @@ impl<'a> Gen<'a> {
                 "ToNumber of Date.UTC component",
                 Protocol::ToPrimitive,
             ),
-            // Set queries compare keys by SameValueZero; size reads an
-            // internal slot and clear retains/calls no operand.
-            Expr::SetHas { .. } => self.receiver_method(fx, e, "has"),
-            Expr::SetDelete { .. } => self.receiver_method(fx, e, "delete"),
+            // Set clear retains/calls no operand; size reads an internal slot.
             Expr::SetClear(..) => self.receiver_method(fx, e, "clear"),
             Expr::SetSize(x) => {
                 let recv = self.expr(fx, x);
                 let a = self.m.atom("size");
                 self.load(recv, Key::Named(a))
             }
+            // A Math function with an integer rule: the Number result's
+            // interval (`model::range`).
+            Expr::MathAbs(x) => self.math_range(fx, crate::model::RangeOp::Abs, &[x.as_ref()]),
+            Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathRound(x) | Expr::MathTrunc(x) => {
+                self.math_range(fx, crate::model::RangeOp::Integral, &[x.as_ref()])
+            }
+            Expr::MathSign(x) => self.math_range(fx, crate::model::RangeOp::Sign, &[x.as_ref()]),
+            Expr::MathClz32(x) => self.math_range(fx, crate::model::RangeOp::Clz32, &[x.as_ref()]),
+            Expr::MathImul(a, b) => {
+                self.math_range(fx, crate::model::RangeOp::Imul, &[a.as_ref(), b.as_ref()])
+            }
+            Expr::MathMin(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Min, &xs)
+            }
+            Expr::MathMax(xs) if !xs.is_empty() => {
+                let xs: Vec<&Expr> = xs.iter().collect();
+                self.math_range(fx, crate::model::RangeOp::Max, &xs)
+            }
             // Every Math function returns a Number (ECMA-262 Math).
-            Expr::MathFloor(..)
-            | Expr::MathCeil(..)
-            | Expr::MathRound(..)
-            | Expr::MathTrunc(..)
-            | Expr::MathSign(..)
-            | Expr::MathAbs(..)
-            | Expr::MathSqrt(..)
+            Expr::MathSqrt(..)
             | Expr::MathLog(..)
             | Expr::MathLog2(..)
             | Expr::MathLog10(..)
             | Expr::MathPow(..)
             | Expr::MathMin(..)
             | Expr::MathMax(..)
-            | Expr::MathImul(..)
             | Expr::MathRandom
             | Expr::MathSin(..)
             | Expr::MathCos(..)
@@ -563,7 +812,6 @@ impl<'a> Gen<'a> {
             | Expr::MathHypot(..)
             | Expr::MathFround(..)
             | Expr::MathF16round(..)
-            | Expr::MathClz32(..)
             | Expr::MathExpm1(..)
             | Expr::MathLog1p(..)
             | Expr::MathSinh(..)
@@ -581,6 +829,23 @@ impl<'a> Gen<'a> {
             ),
             // The global conversions and predicates: the operation fixes the
             // kind of its result (ECMA-262; the HIR operation's contract).
+            // `Number(x)`: its interval follows the operand's Numbers and
+            // one-unit Strings (`RangeOp::ToNumber`).
+            Expr::NumberCoerce(x) if self.guard_ranges => {
+                let r = self.m.reason("ToNumber of a Number() operand");
+                let v = self.expr(fx, x);
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let out = self.tmp("primop");
+                self.range_rule(crate::model::RangeOp::ToNumber, v, None, out);
+                self.m.add_prim(out, prim::NUM);
+                out
+            }
             Expr::ParseInt { .. } | Expr::ParseFloat(..) | Expr::NumberCoerce(..) => self
                 .prim_kids(
                     fx,
@@ -603,44 +868,6 @@ impl<'a> Gen<'a> {
                 );
                 self.prim_node(prim::NUM)
             }
-            // ECMA-262 23.1.3.16 / .17 / .20: the receiver's `length` and
-            // elements are read (an index accessor runs), the search value
-            // is compared (IsStrictlyEqual, SameValueZero: no lookup on it),
-            // and `fromIndex` is ToIntegerOrInfinity'd (ToPrimitive).
-            Expr::ArrayIndexOf {
-                array,
-                value,
-                from_index,
-            }
-            | Expr::ArrayLastIndexOf {
-                array,
-                value,
-                from_index,
-            }
-            | Expr::ArrayIncludes {
-                array,
-                value,
-                from_index,
-            } => {
-                let a = self.expr(fx, array);
-                let _ = self.expr(fx, value);
-                let _ = self.elem_load(a);
-                if let Some(fi) = from_index {
-                    let _ = self.prim_op(
-                        fx,
-                        &[fi.as_ref()],
-                        prim::NUM,
-                        "fromIndex",
-                        Protocol::ToPrimitive,
-                    );
-                }
-                let p = if matches!(e, Expr::ArrayIncludes { .. }) {
-                    prim::BOOL
-                } else {
-                    prim::NUM
-                };
-                self.prim_node(p)
-            }
             Expr::BigIntCoerce(..) => self.prim_kids(
                 fx,
                 e,
@@ -648,50 +875,108 @@ impl<'a> Gen<'a> {
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            Expr::StringCoerce(..) | Expr::TemplateStringCoerce(..) => self.prim_kids(
+            // A template substitution `${ x }` (ECMA-262 13.2.8.6: ToString,
+            // 7.1.17): a String is itself, a Number its text, an object its
+            // ToPrimitive (hint string) result's ToString, a Symbol throws.
+            // Its Strings are those of `"" + x` (13.15.3, rule M3,
+            // `plus_strs`): the same for every primitive; for an object
+            // `"" + x` (hint default) holds every text hint string gives
+            // (`excl_parts`: any string, or a NativeFunction text whose
+            // valueOf / toString the program does not write). So
+            // `x '${ key }'` over constant keys is constants.
+            Expr::TemplateStringCoerce(x) => {
+                let v = self.expr(fx, x);
+                let r = self.m.reason("primitive builtin operand");
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::ToPrimitive,
+                    },
+                );
+                let empty = self.str_literal("");
+                let out = self.tmp("template-str");
+                let (nl, nr) = (self.tmp("plus-num"), self.tmp("plus-num"));
+                self.m.cons(
+                    empty,
+                    Cons::Plus {
+                        str: out,
+                        num: nl,
+                        other: v,
+                        right: false,
+                    },
+                );
+                self.m.cons(
+                    v,
+                    Cons::Plus {
+                        str: out,
+                        num: nr,
+                        other: empty,
+                        right: true,
+                    },
+                );
+                out
+            }
+            Expr::StringCoerce(..) => self.prim_kids(
                 fx,
                 e,
                 prim::STR,
                 "primitive builtin operand",
                 Protocol::ToPrimitive,
             ),
-            // The elements are read and each is ToString'd.
-            // ECMA-262 23.1.3.18: ToString(separator), then `length` and each
-            // element, ToString'd unless undefined or null.
-            Expr::ArrayJoin { array, separator } => {
-                let a = self.expr(fx, array);
-                if let Some(sep) = separator {
-                    let _ = self.prim_op(
-                        fx,
-                        &[sep.as_ref()],
-                        prim::STR,
-                        "array join operand",
-                        Protocol::ToPrimitive,
-                    );
+            // `Object.is(a, b)` is SameValue (ECMA-262 20.1.2.14, 7.2.10):
+            // it compares the operands as they are, by identity for objects,
+            // and converts nothing (no ToPrimitive, no valueOf/toString).
+            Expr::ObjectIs(a, b) => {
+                for o in [a, b] {
+                    let v = self.expr(fx, o);
+                    self.m.identity(v, IdentityRoute::ObjectIs);
                 }
-                let el = self.elem_load(a);
-                let r = self.m.reason("array join operand");
-                self.m.cons(
-                    el,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
-                self.prim_node(prim::STR)
+                self.prim_node(prim::BOOL)
             }
-            Expr::ObjectIs(..)
-            | Expr::ObjectHasOwn(..)
-            | Expr::ArrayIsArray(..)
+            // The predicates that convert nothing: `Array.isArray` reads only
+            // the operand's kind (ECMA-262 23.1.2.2, 7.2.2 IsArray: a Proxy's
+            // target, no trap), `Object.is` compares (20.1.2.13 SameValue),
+            // `Boolean` is ToBoolean (7.1.2, no call), the `Number.is*`
+            // predicates test the operand's type (21.1.2.2-21.1.2.5) and the
+            // undefined-or-NaN test compares. No key is read on an object
+            // operand and nothing is called on it.
+            Expr::ArrayIsArray(..)
             | Expr::BooleanCoerce(..)
-            | Expr::IsNaN(..)
             | Expr::IsUndefinedOrBareNan(..)
-            | Expr::IsFinite(..)
             | Expr::NumberIsNaN(..)
             | Expr::NumberIsFinite(..)
             | Expr::NumberIsInteger(..)
-            | Expr::NumberIsSafeInteger(..)
-            | Expr::ReflectHas { .. } => self.prim_kids(
+            | Expr::NumberIsSafeInteger(..) => {
+                for k in kids(e) {
+                    self.expr(fx, k);
+                }
+                self.prim_node(prim::BOOL)
+            }
+            // `isNaN` / `isFinite` ToNumber their operand (19.2.2, 19.2.3);
+            // `Object.hasOwn` and `Reflect.has` ToPropertyKey their key.
+            Expr::ObjectHasOwn(o, k) => {
+                let r = self.m.reason("primitive builtin operand");
+                let on = self.expr(fx, o);
+                let kn = self.expr(fx, k);
+                for n in [on, kn] {
+                    self.m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                        },
+                    );
+                }
+                // [[GetOwnProperty]] of the key: a Proxy's trap runs.
+                let (key, idx) = match k.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    _ => (Key::any(), kn),
+                };
+                self.m.cons(on, Cons::OwnProp { key, idx });
+                self.prim_node(prim::BOOL)
+            }
+            Expr::IsNaN(..) | Expr::IsFinite(..) | Expr::ReflectHas { .. } => self.prim_kids(
                 fx,
                 e,
                 prim::BOOL,
@@ -849,10 +1134,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyGet { .. }
-            | Expr::ProxySet { .. }
-            | Expr::ProxyHas { .. }
-            | Expr::ProxyDelete { .. }
             | Expr::ProxyApply { .. }
             | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
@@ -881,46 +1162,99 @@ impl<'a> Gen<'a> {
             | Expr::StringSplit { .. }
             | Expr::StringMatch { .. }
             | Expr::StringMatchAll { .. } => self.expr_rest_builtin_objects(fx, e),
-            Expr::ArrayPush { .. }
-            | Expr::ArrayUnshift { .. }
-            | Expr::ArrayPushSpread { .. }
-            | Expr::ArrayPop { .. }
-            | Expr::ArrayShift { .. }
-            | Expr::ArraySlice { .. }
-            | Expr::ArraySplice { .. }
-            | Expr::ArrayForEach { .. }
-            | Expr::ArrayMap { .. }
-            | Expr::ArrayFlatMap { .. }
+            // Handled before the match: a folded call is its method call.
+            Expr::ArrayAt { .. }
+            | Expr::ArrayCopyWithin { .. }
+            | Expr::ArrayEntries { .. }
+            | Expr::ArrayEvery { .. }
             | Expr::ArrayFilter { .. }
             | Expr::ArrayFind { .. }
-            | Expr::ArrayFindLast { .. }
             | Expr::ArrayFindIndex { .. }
+            | Expr::ArrayFindLast { .. }
             | Expr::ArrayFindLastIndex { .. }
-            | Expr::ArraySome { .. }
-            | Expr::ArrayEvery { .. }
-            | Expr::ArraySort { .. }
-            | Expr::ArrayToSorted { .. }
+            | Expr::ArrayFlat { .. }
+            | Expr::ArrayFlatMap { .. }
+            | Expr::ArrayForEach { .. }
+            | Expr::ArrayIncludes { .. }
+            | Expr::ArrayIndexOf { .. }
+            | Expr::ArrayJoin { .. }
+            | Expr::ArrayKeys { .. }
+            | Expr::ArrayLastIndexOf { .. }
+            | Expr::ArrayMap { .. }
+            | Expr::ArrayPush { .. }
             | Expr::ArrayReduce { .. }
             | Expr::ArrayReduceRight { .. }
-            | Expr::ArrayFlat { .. }
+            | Expr::ArrayShift { .. }
+            | Expr::ArraySlice { .. }
+            | Expr::ArraySome { .. }
+            | Expr::ArraySort { .. }
+            | Expr::ArraySplice { .. }
             | Expr::ArrayToReversed { .. }
-            | Expr::ArrayValues { .. }
+            | Expr::ArrayToSorted { .. }
             | Expr::ArrayToSpliced { .. }
+            | Expr::ArrayUnshift { .. }
+            | Expr::ArrayValues { .. }
             | Expr::ArrayWith { .. }
-            | Expr::ArrayAt { .. }
+            | Expr::DateGetDate { .. }
+            | Expr::DateGetDay { .. }
+            | Expr::DateGetFullYear { .. }
+            | Expr::DateGetHours { .. }
+            | Expr::DateGetMilliseconds { .. }
+            | Expr::DateGetMinutes { .. }
+            | Expr::DateGetMonth { .. }
+            | Expr::DateGetSeconds { .. }
+            | Expr::DateGetTime { .. }
+            | Expr::DateGetTimezoneOffset { .. }
+            | Expr::DateGetUtcDate { .. }
+            | Expr::DateGetUtcDay { .. }
+            | Expr::DateGetUtcFullYear { .. }
+            | Expr::DateGetUtcHours { .. }
+            | Expr::DateGetUtcMilliseconds { .. }
+            | Expr::DateGetUtcMinutes { .. }
+            | Expr::DateGetUtcMonth { .. }
+            | Expr::DateGetUtcSeconds { .. }
+            | Expr::DateSetDate { .. }
+            | Expr::DateSetFullYear { .. }
+            | Expr::DateSetHours { .. }
+            | Expr::DateSetMilliseconds { .. }
+            | Expr::DateSetMinutes { .. }
+            | Expr::DateSetMonth { .. }
+            | Expr::DateSetSeconds { .. }
+            | Expr::DateSetTime { .. }
+            | Expr::DateSetUtcDate { .. }
+            | Expr::DateSetUtcFullYear { .. }
+            | Expr::DateSetUtcHours { .. }
+            | Expr::DateSetUtcMilliseconds { .. }
+            | Expr::DateSetUtcMinutes { .. }
+            | Expr::DateSetUtcMonth { .. }
+            | Expr::DateSetUtcSeconds { .. }
+            | Expr::DateToDateString { .. }
+            | Expr::DateToISOString { .. }
+            | Expr::DateToJSON { .. }
+            | Expr::DateToLocaleDateString { .. }
+            | Expr::DateToLocaleString { .. }
+            | Expr::DateToLocaleTimeString { .. }
+            | Expr::DateToTimeString { .. }
+            | Expr::MapDelete { .. }
+            | Expr::MapGet { .. }
+            | Expr::MapHas { .. }
+            | Expr::MapSet { .. }
+            | Expr::SetAdd { .. }
+            | Expr::SetDelete { .. }
+            | Expr::SetHas { .. } => {
+                unreachable!(
+                    "internal compiler error: expr_rest: a folded call (perry_hir::folded_call)"
+                )
+            }
+            Expr::ArrayPushSpread { .. }
+            | Expr::ArrayPop { .. }
             | Expr::ArrayReverseValue { .. }
-            | Expr::ArrayCopyWithin { .. }
             | Expr::ArrayCopyWithinValue { .. }
-            | Expr::ArrayEntries { .. }
-            | Expr::ArrayKeys { .. }
             | Expr::ArrayLikeMethod { .. }
             | Expr::MapNew { .. }
             | Expr::SetNew { .. }
             | Expr::MapNewFromArray { .. }
             | Expr::SetNewFromArray { .. }
-            | Expr::MapSet { .. }
-            | Expr::SetAdd { .. }
-            | Expr::MapGet { .. }
             | Expr::MapEntryKeyAt { .. }
             | Expr::MapEntryValueAt { .. }
             | Expr::SetValueAt { .. }
@@ -944,6 +1278,10 @@ impl<'a> Gen<'a> {
             | Expr::GetAsyncIterator { .. }
             | Expr::ObjectCoerce { .. } => self.expr_rest_collections(fx, e),
             Expr::ProxyNew { .. }
+            | Expr::ProxyGet { .. }
+            | Expr::ProxySet { .. }
+            | Expr::ProxyHas { .. }
+            | Expr::ProxyDelete { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

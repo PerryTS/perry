@@ -192,7 +192,7 @@ pub(crate) fn infer_decl_type(
                         ty = Type::Named("TextDecoder".to_string());
                     } else if matches!(
                         class_name,
-                        "EventTarget" | "Event" | "CustomEvent" | "DOMException"
+                        "EventTarget" | "Event" | "CustomEvent" | "MessageEvent" | "DOMException"
                     ) {
                         ty = Type::Named(class_name.to_string());
                     } else if matches!(

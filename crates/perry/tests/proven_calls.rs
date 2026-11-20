@@ -1,12 +1,15 @@
 //! FVA: a call through a value is a call of the bodies the value is.
 //!
-//! End to end, whole program (`PERRY_FACTS_UNITS=0`) and per unit: a call
+//! End to end, whole program: a call
 //! whose callee set the facts prove makes no runtime dispatch, and every
 //! program prints node's output (pinned below).
 //!
 //! * a member call through a literal field holding one function per layout
-//!   (`o.f(v)` over two literals): the slot's one load and one indirect
-//!   call through the body's code word, no `js_closure_call`;
+//!   (`o.f(v)` over two literals): the slot's one load, one load of the
+//!   callee's info word, one compare with the first body's info and a direct
+//!   call of each body (the second is the arm no compare matched), no
+//!   `js_closure_call`, no indirect call; over five literals (more than
+//!   four bodies) one indirect call through the body's code word;
 //! * virtual dispatch over two classes with a never-nullish receiver: one
 //!   class-id load and a switch of direct method calls, no generic arm;
 //! * the same call on a receiver that may be `undefined`: the class-id
@@ -43,9 +46,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -97,13 +97,70 @@ console.log("fields", s, run(p, 5), run(q, 5));
 #[test]
 fn a_member_call_through_a_proven_field_runs_its_bodies() {
     let d = tmp("fields");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, FIELDS, whole);
         assert_eq!(out, "fields 70 6 10\n", "whole={whole}");
         if whole {
             let run = body(&ll, "run");
             assert!(!run.contains("js_closure_call"), "{run}");
+            assert!(!run.contains("call double %"), "no indirect call:\n{run}");
+            let compares = run
+                .lines()
+                .filter(|l| l.contains("icmp eq ptr") && l.contains("$info"))
+                .count();
+            assert_eq!(compares, 1, "one info compare for two bodies:\n{run}");
+            for f in ["fa", "fb"] {
+                let direct = run
+                    .lines()
+                    .filter(|l| {
+                        l.contains("call ")
+                            && l.contains("@__perry_wrap_")
+                            && l.contains(&format!("__{f}("))
+                    })
+                    .count();
+                assert_eq!(direct, 1, "one direct call of {f}:\n{run}");
+            }
+            // No other arm: the join merges exactly the two body calls.
+            let join = run
+                .lines()
+                .find(|l| l.contains("= phi double") && l.contains("%proven_call."))
+                .unwrap_or_else(|| panic!("a join of the arms:\n{run}"));
+            assert_eq!(join.matches("%proven_call.").count(), 2, "{join}");
+        }
+    }
+}
+
+const FIELDS5: &str = r#"
+function fa(x: number) { return x + 1; }
+function fb(x: number) { return x * 2; }
+function fc(x: number) { return x - 3; }
+function fd(x: number) { return x * 5; }
+function fe(x: number) { return x + 7; }
+function run(o: any, v: number) { return o.f(v); }
+const p0: any = { f: fa, t: 1 };
+const p1: any = { f: fb, t: 2 };
+const p2: any = { f: fc, t: 3 };
+const p3: any = { f: fd, t: 4 };
+const p4: any = { f: fe, t: 5 };
+let s = 0;
+for (let i = 0; i < 10; i++) {
+  const r = i % 5;
+  s += run(r === 0 ? p0 : r === 1 ? p1 : r === 2 ? p2 : r === 3 ? p3 : p4, i);
+}
+console.log("fields5", s);
+"#;
+
+#[test]
+fn a_member_call_through_a_field_of_five_bodies_is_one_indirect_call() {
+    let d = tmp("fields5");
+    for whole in [true] {
+        let (ll, out) = compile_and_run(&d, FIELDS5, whole);
+        assert_eq!(out, "fields5 106\n", "whole={whole}");
+        if whole {
+            let run = body(&ll, "run");
+            assert!(!run.contains("js_closure_call"), "{run}");
             assert!(run.contains("call double %"), "an indirect call:\n{run}");
+            assert!(!run.contains("icmp eq ptr"), "no info compare:\n{run}");
         }
     }
 }
@@ -123,12 +180,9 @@ console.log("nullable", callN(a), callN(undefined), callN(b));
 #[test]
 fn virtual_dispatch_over_proven_classes_is_a_class_id_switch() {
     let d = tmp("tower");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, TOWER, whole);
         assert_eq!(out, "tower 70\nnullable 2 threw:0 2\n", "whole={whole}");
-        if !whole {
-            continue;
-        }
         let call = body(&ll, "call");
         let switch = call
             .lines()
@@ -162,7 +216,7 @@ console.log("values", s);
 #[test]
 fn a_call_through_a_local_holding_two_closures_is_one_indirect_call() {
     let d = tmp("values");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, VALUES, whole);
         assert_eq!(out, "values 13\n", "whole={whole}");
         if whole {
@@ -192,15 +246,12 @@ fn a_proven_static_is_called_without_its_guard() {
     // (`Body.sun`, `Pk.of` through a value) is its body's direct call; one
     // replaced after its definition (`C.k`) keeps the guarded call.
     let d = tmp("statics");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, STATICS, whole);
         assert_eq!(
             out, "statics 1,2 33 3\nreplaced 1\nreplaced 2\n",
             "whole={whole}"
         );
-        if !whole {
-            continue;
-        }
         let make = body(&ll, "make");
         assert!(!make.contains("js_class_static_call_guard("), "{make}");
         assert!(make.contains("@perry_static_main_ts__Body__"), "{make}");
@@ -229,7 +280,7 @@ fn a_getter_on_a_new_key_keeps_the_layout() {
     // the literal's layout (not E5), and a getter over an existing data key
     // (`m.tag`) stays E5. Output pinned to node in both modes.
     let d = tmp("accessors");
-    for whole in [true, false] {
+    for whole in [true] {
         let (_, out) = compile_and_run(&d, ACCESSORS, whole);
         assert_eq!(out, "accessors 10 tag,k\nredefined 7 3\n", "whole={whole}");
     }

@@ -50,14 +50,17 @@ fn imported_function_method_spreads_use_receiver_dispatch() {
             .iter()
             .position(|line| line.trim_start().starts_with(&format!("{receiver} =")))
             .unwrap();
-        let last_concat = lines
+        // The argument vector is built by the one spread drain
+        // (js_array_spread_append), which allocates and runs the iterator.
+        let last_drain = lines
             .iter()
             .rposition(|line| {
-                line.contains("@js_array_concat(") && !line.trim_start().starts_with("declare")
+                line.contains("@js_array_spread_append(")
+                    && !line.trim_start().starts_with("declare")
             })
-            .unwrap();
+            .unwrap_or_else(|| panic!("{method}: no spread drain in:\n{ir}"));
         assert!(
-            receiver_load > last_concat,
+            receiver_load > last_drain,
             "{method} must reload the receiver after argument allocation:\n{ir}"
         );
         assert!(

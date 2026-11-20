@@ -288,6 +288,7 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });

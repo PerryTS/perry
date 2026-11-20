@@ -6,16 +6,24 @@ use super::{ClosureHeader, FN_REST_SYNTHETIC_ARGUMENTS, FN_REST_USER_AND_ARGUMEN
 unsafe fn array_from_cells(values: &[std::cell::UnsafeCell<f64>], arguments: bool) -> f64 {
     let array = crate::array::js_array_alloc_literal(values.len() as u32);
     let elements = crate::array::array_elements_ptr(array).cast::<f64>();
+    // The birth row of EK §3.1 (as `js_array_from_values`): P = the leading
+    // run of non-hole values, so the bundle is admitted wherever an ordinary
+    // dense Array is (the spread stack form reads a forwarded `arguments`
+    // bundle in place, G8).
+    let mut run = values.len() as u32;
     for (i, value) in values.iter().enumerate() {
         let value = *value.get();
+        if run == values.len() as u32 && value.to_bits() == crate::value::TAG_HOLE {
+            run = i as u32;
+        }
         crate::string::js_string_addref_if_heap_string(value);
         let slot = elements.add(i);
-        // GC_STORE_AUDIT(BARRIERED): final array storage, with the same layout
-        // note and barrier as js_array_from_values; no per-element push.
+        // GC_STORE_AUDIT(BARRIERED): final array storage, published below as
+        // js_array_from_values publishes its newborn; no per-element push.
         slot.write(value);
-        crate::gc::js_gc_note_slot_layout(array as u64, i as u32, value.to_bits());
-        crate::gc::js_write_barrier_slot(array as u64, slot as u64, value.to_bits());
     }
+    crate::array::publish_newborn_elements(array, values.len());
+    crate::array::ek_birth_prefix(array, run);
     if arguments {
         crate::array::mark_array_as_arguments_object(array);
     }

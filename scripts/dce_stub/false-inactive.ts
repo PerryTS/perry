@@ -1,0 +1,13 @@
+// Once a known false inactive claim (CXCHK0 findings, accepted witness
+// language/array/test_gap_10086): the facts called the iterator's `return`
+// inactive, yet destructuring runs it. The activation reach now reaches it, so
+// dead-body removal (`PERRY_FACTS_DCE=1`) keeps it and the output is Node's.
+let closed = 0;
+const closing: any = {};
+closing[Symbol.iterator] = function () {
+let i = 0;
+return { next: function () { i++; return { done: false, value: i }; },
+return: function () { closed++; return { done: true }; } };
+};
+const [z1] = closing;
+console.log(z1, closed);

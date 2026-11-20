@@ -1,0 +1,49 @@
+display (?<word>a+)(?=b) dg (?<word>a+)(?=b) dg
+identity false true false
+test true 3 0
+exec ["aa","aa"] 3 3
+reset false 0 3
+flags  true 1 true 1
+flags i true 1 true 1
+flags g true 3 false 0
+flags y false 0 true 1
+flags gy false 0 true 1
+flags u true 1 true 1
+flags s true 1 true 1
+flags m true 1 true 1
+churn hot g 3
+compile true after gi 0
+twin before g 0 true
+invalid true
+unchanged after gi
+copy before g 0
+readonly true
+published published y 0
+coerce lastIndex
+coercion true 2
+get exec
+override false
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+patched true x
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+replace plain 0
+replace-match red 0
+sticky baaa xxxb
+empty -🚀-a-
+captures ba ba
+remove-empty 🚀a
+remove-sticky ba 2
+DEC 250: Cannot redefine built-in member RegExp.prototype.flags: built-in objects are read-only in a compiled program (adding a new member is allowed)
+flags-hook 
+DEC 250: Cannot redefine built-in member RegExp.prototype.flags: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member RegExp.prototype[Symbol(Symbol.replace)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+replace-hook 
+DEC 250: Cannot redefine built-in member RegExp.prototype[Symbol(Symbol.replace)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+own-replace own replacement
+custom proto
+custom-proto false
+source "(?:)"  true true
+source "a\\/b"  true true
+source "\\n"  true true
+source "\ud800"  true true
+source "🚀"  true true

@@ -1,0 +1,1 @@
+Fix Reflect.construct receiver facts when target and newTarget differ. The solver runs the target constructor on the allocation selected by newTarget, including constructor-body reads, and retains object-return alternatives. Unknown allocation receivers no longer acquire the target's slot layout.

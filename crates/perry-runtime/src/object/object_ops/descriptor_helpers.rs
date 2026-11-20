@@ -6,8 +6,7 @@ use super::*;
 /// paths (#2817 / #2843 / #2816).
 pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 /// Throw `TypeError: <prefix><suffix>` where `suffix` is a runtime-built
 /// string (e.g. the offending descriptor value rendered with the same
@@ -15,8 +14,7 @@ pub(crate) fn throw_object_type_error(message: &[u8]) -> ! {
 pub(crate) fn throw_object_type_error_with_suffix(prefix: &str, suffix: &str) -> ! {
     let full = format!("{prefix}{suffix}");
     let msg = crate::string::js_string_from_bytes(full.as_ptr(), full.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Render a value the way Node does inside its `Object.defineProperty`
@@ -56,16 +54,8 @@ pub(crate) unsafe fn value_is_object_like(value: f64) -> bool {
         return true;
     }
     if !jv.is_pointer() {
-        // Module-level raw-I64 object pointers (top16 == 0) — accept if it
-        // resolves to a real heap object.
-        let bits = value.to_bits();
-        if bits != 0 && bits <= 0x0000_FFFF_FFFF_FFFF && bits > 0x10000 {
-            if is_primitive_cell(bits as usize) {
-                return false;
-            }
-            return is_valid_obj_ptr(bits as *const u8)
-                || crate::closure::is_closure_ptr(bits as usize);
-        }
+        // A primitive. A word whose top 16 bits are clear is a Number (a
+        // denormal, or +0), not a raw object pointer.
         return false;
     }
     let ptr = jv.as_pointer::<u8>() as usize;
@@ -413,8 +403,7 @@ unsafe fn throw_descriptor_value_error(prefix: &str, value: f64) -> ! {
     let string = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     drop(message);
     drop(rendered);
-    let error = crate::error::js_typeerror_new(string);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(string));
 }
 
 /// [[GetOwnProperty]] dispatch returns a completed, fresh reflection record.
@@ -534,7 +523,7 @@ pub(super) unsafe fn object_prototype_has_desc_field() -> bool {
     let keys_view = crate::object::object_keys(ptr as *const ObjectHeader);
     let keys = keys_view.arr();
     match crate::value::addr_class::try_read_gc_header(keys as usize) {
-        Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+        Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
         Some(_) => return true, // unexpected shape — be conservative
         None => return false,   // no keys array — nothing own
     }
@@ -575,7 +564,7 @@ pub(crate) unsafe fn try_decode_descriptor<'scope>(
     let keys = keys_view.arr();
     if !keys.is_null() {
         match crate::value::addr_class::try_read_gc_header(keys as usize) {
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {}
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {}
             _ => return None, // corrupted keys slot — let the guarded path cope
         }
         let key_count = keys_view.count() as usize;
@@ -983,7 +972,18 @@ pub(crate) unsafe fn define_property_force_store_value(
             {
                 let i = crate::object::key_attrs::key_storage_slot(keys, i as u32) as usize;
                 let inline_limit = crate::object::object_inline_capacity(obj) as usize;
-                if i < inline_limit {
+                let current = if i < inline_limit {
+                    crate::object::js_object_get_field(obj, i as u32).bits()
+                } else {
+                    crate::object::overflow_get(obj as usize, i).unwrap_or(0)
+                };
+                if crate::object::arguments_store_through_cell(
+                    obj,
+                    current,
+                    value_handle.get_nanbox_f64(),
+                ) {
+                    // A mapped arguments key keeps its cell.
+                } else if i < inline_limit {
                     js_object_set_field(
                         obj,
                         i as u32,

@@ -5,8 +5,11 @@
 //! body, a function declaration called exactly once — `lower::run_once`) its
 //! members read and write those captures in the class ENVIRONMENT
 //! (`Expr::ClassEnvGet`/`ClassEnvSet`), the way V8 keeps them in the closure
-//! context. Every other capturing class keeps the per-instance `__perry_cap_*`
-//! snapshot, because each of its evaluations has its own environment.
+//! context. A class expression in a function body, and a declaration that may
+//! be evaluated more than once (owner decision 64 (c'): its later evaluations
+//! are fresh class objects), read a GUARDED environment: directly while the
+//! class has had one evaluation, per receiver evaluation after that. Every
+//! other capturing class keeps the per-instance `__perry_cap_*` snapshot.
 //!
 //! Each test is differential: Node runs the same source, and both outputs must
 //! equal the expected text. Each also asserts WHICH storage the compiler chose
@@ -247,7 +250,7 @@ fn a_class_declaration_captures_per_call_of_its_function() {
          m1.set(5);
          console.log(m1.get(), m2.get());",
         "5 2\n",
-        &[("C", "instance")],
+        &[("C", "env-guarded")],
     );
 }
 
@@ -280,7 +283,7 @@ fn a_class_in_a_loop_body_is_not_a_single_evaluation() {
            console.log(made.map((o) => o.get()).join(','));
          })();",
         "p,q\n",
-        &[("L", "instance")],
+        &[("L", "env-guarded")],
     );
 }
 

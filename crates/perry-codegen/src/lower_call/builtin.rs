@@ -16,7 +16,10 @@
 use anyhow::Result;
 use perry_hir::Expr;
 
-use crate::expr::{lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_to_i64, FnCtx};
+use crate::expr::{
+    lower_array_literal, lower_expr, nanbox_pointer_inline, unbox_pointer_or_null, unbox_to_i64,
+    FnCtx,
+};
 use crate::nanbox::double_literal;
 use crate::rooting::{self, RootedGroup};
 use crate::types::{DOUBLE, I32, I64};
@@ -328,7 +331,7 @@ pub(super) fn lower_builtin_new<'a>(
         // `maxByteLength` AFTER `ToIndex(length)`, per spec, so both operands
         // go over raw. `length` can be an object (its `valueOf` runs in the
         // runtime), and lowering the options literal allocates: root it.
-        "ArrayBuffer" if args.len() >= 2 => {
+        "ArrayBuffer" | "SharedArrayBuffer" if args.len() >= 2 => {
             let size_collects = rooting::any_operand_may_collect(ctx, args[1..].iter());
             let size_idx = group.lower(ctx, &args[0], size_collects)?;
             let options_idx = adopt_optional_arg(ctx, args, 1, group)?;
@@ -340,11 +343,14 @@ pub(super) fn lower_builtin_new<'a>(
                 Some(i) => group.reread(ctx, i)?,
                 None => double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)),
             };
-            let handle = ctx.block().call(
-                I64,
-                "js_array_buffer_new_with_options",
-                &[(DOUBLE, &size_box), (DOUBLE, &options_box)],
-            );
+            let runtime = if class_name == "SharedArrayBuffer" {
+                "js_shared_array_buffer_new_with_options"
+            } else {
+                "js_array_buffer_new_with_options"
+            };
+            let handle =
+                ctx.block()
+                    .call(I64, runtime, &[(DOUBLE, &size_box), (DOUBLE, &options_box)]);
             Ok(Some(nanbox_pointer_inline(ctx.block(), &handle)))
         }
         "ArrayBuffer" | "SharedArrayBuffer" => {
@@ -566,13 +572,13 @@ pub(super) fn lower_builtin_new<'a>(
             )))
         }
         "BroadcastChannel" => {
-            // #6986: `name` was held across the discard loop's lowering.
             let name = adopt_leading_arg_discard_rest(ctx, args, group)?;
             let blk = ctx.block();
+            let argc = args.len().to_string();
             Ok(Some(blk.call(
                 DOUBLE,
-                "js_broadcast_channel_new",
-                &[(DOUBLE, &name)],
+                "js_broadcast_channel_new_counted",
+                &[(DOUBLE, &name), (I32, &argc)],
             )))
         }
         "Event" => {
@@ -1399,7 +1405,9 @@ pub(super) fn lower_builtin_new<'a>(
             }
             let exec_box = lower_expr(ctx, &args[0])?;
             let blk = ctx.block();
-            let exec_handle = unbox_to_i64(blk, &exec_box);
+            // By the tag alone: a Number executor (also an address-shaped
+            // one) reaches the runtime as null and throws its TypeError.
+            let exec_handle = unbox_pointer_or_null(blk, &exec_box);
             let p = blk.call(I64, "js_promise_new_with_executor", &[(I64, &exec_handle)]);
             Ok(Some(nanbox_pointer_inline(blk, &p)))
         }
@@ -1471,25 +1479,11 @@ pub(super) fn lower_builtin_new<'a>(
             Ok(Some(boxed))
         }
 
-        // new WebSocketServer({ port: N }) → js_ws_server_new(opts_f64)
-        "WebSocketServer" => {
-            // Lower the options object (first arg) as a NaN-boxed f64.
-            let opts = if !args.is_empty() {
-                lower_expr(ctx, &args[0])?
-            } else {
-                double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
-            };
-            ctx.pending_declares
-                .push(("js_ws_server_new".to_string(), I64, vec![DOUBLE]));
-            let blk = ctx.block();
-            let handle = blk.call(I64, "js_ws_server_new", &[(DOUBLE, &opts)]);
-            Ok(Some(crate::expr::nanbox_inline::nanbox_handle_inline(
-                blk, &handle,
-            )))
-        }
-        // Issue #606 — `new WebSocket(url)` from `import { WebSocket } from
-        // "ws"`. npm ws's API is sync-ctor: returns the client handle
-        // immediately and connects in the background; the user's
+        // Issue #606 — `new WebSocket(url)` on the GLOBAL `WebSocket` (npm
+        // `ws` compiles from source, so an import binding of that name is
+        // the package's class and skips this arm). The API is sync-ctor:
+        // returns the client handle immediately and connects in the
+        // background; the user's
         // `client.on("open", cb)` then registers a listener that fires
         // once the connect completes. The previous lower path treated
         // `new WebSocket(...)` as a no-op `Expr::New` and let the
@@ -1499,7 +1493,7 @@ pub(super) fn lower_builtin_new<'a>(
         // through `js_ws_connect_start` returns the handle synchronously
         // and the connect runs as a sibling tokio task that pushes an
         // Open / Error event when complete.
-        "WebSocket" => {
+        "WebSocket" if import_src.is_none() => {
             let url_box = if !args.is_empty() {
                 lower_expr(ctx, &args[0])?
             } else {

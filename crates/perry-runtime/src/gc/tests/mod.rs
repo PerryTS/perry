@@ -8,6 +8,7 @@ mod array_pointer_slot_enumeration;
 mod barrier;
 mod barrier_arming;
 mod barrier_decoded_parent;
+mod block_persist_precise_point;
 mod block_persist_scan_window;
 mod block_pool_pressure;
 mod block_skip;
@@ -70,7 +71,6 @@ mod json_stringify_output;
 mod keys_attrs;
 mod layout_inline_mask;
 mod layout_pointer_free_hazard;
-mod layout_table_absence;
 mod layout_trace;
 mod lazy_intrinsic_towers;
 mod lazy_tape_side_alloc;
@@ -104,8 +104,10 @@ mod promise_owner_overflow;
 mod promote_in_place;
 mod promoted_cohort;
 mod proxy_registry;
+mod record_array;
 mod residual_prototype_relocation;
 mod restore_coverage;
+mod restore_walk;
 mod retention_9628_9629;
 mod retired_handle_carrier;
 mod root_words;
@@ -212,3 +214,7 @@ mod young_dynamic_growth;
 mod object_descriptor_walk;
 
 mod inline_birth_bound;
+
+mod leaf_census_coalescing;
+
+mod stamp_guard_tests;

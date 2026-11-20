@@ -8,11 +8,26 @@ pub(crate) fn function_would_have_own_prototype(func_value: f64) -> bool {
         || is_arrow_function_value(func_value)
         || is_plain_async_function_value(func_value)
         || is_bound_function_value(func_value)
-        || super::super::native_module::builtin_closure_is_non_constructable_value(func_value)
     {
         return false;
     }
     let jv = crate::value::JSValue::from_bits(func_value.to_bits());
+    // A generator or async generator function is not a constructor, yet it
+    // owns `prototype` (ECMA-262 15.5.4 / 15.6.4, also as a method): its
+    // info carries FN_NON_CONSTRUCTOR, so it answers before that test.
+    if jv.is_pointer()
+        && crate::closure::is_closure_ptr(jv.as_pointer::<u8>() as usize)
+        && unsafe {
+            crate::closure::props::closure_has_generator_body(
+                jv.as_pointer::<crate::closure::ClosureHeader>(),
+            )
+        }
+    {
+        return true;
+    }
+    if super::super::native_module::builtin_closure_is_non_constructable_value(func_value) {
+        return false;
+    }
     if jv.is_pointer() {
         let ptr = jv.as_pointer::<crate::closure::ClosureHeader>();
         if crate::closure::closure_is_bound_method(ptr)
@@ -100,6 +115,9 @@ pub extern "C" fn js_function_prototype_value_for_read(func_value: f64) -> f64 {
         }
     }
     let closure_addr = ptr as usize;
+    if let Some(proto) = unsafe { crate::closure::props::prototype_slot_value(closure_addr) } {
+        return proto;
+    }
     if crate::closure::closure_is_key_deleted(closure_addr, "prototype") {
         return undef;
     }

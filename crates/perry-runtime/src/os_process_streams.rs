@@ -545,12 +545,13 @@ fn stdin_deliver_data(bytes: &[u8]) {
     crate::event_pump::js_notify_main_thread();
 }
 
-/// `wasm32-wasip1` has no helper threads, so there is no reader thread: the
-/// slot only records that the program reads stdin, and the event loop (the
-/// ordinary pump with a zero-timeout poll, the park with its wait) watches fd 0
-/// and calls `p1_stdin_ready` when it is readable.
-#[cfg(all(target_os = "wasi", target_env = "p1"))]
-pub(crate) fn p1_stdin_wanted() -> bool {
+/// WASI (preview 1 and 0.2) has no helper threads, so there is no reader
+/// thread: the slot only records that the program reads stdin, and the event
+/// loop (the ordinary pump with a zero-timeout poll, the park with its wait)
+/// watches fd 0 and calls `wasi_stdin_ready` when it is readable. #13953: the
+/// WASIp2 build used to spawn the reader thread and panicked in the spawn.
+#[cfg(target_os = "wasi")]
+pub(crate) fn wasi_stdin_wanted() -> bool {
     use std::sync::atomic::Ordering;
     STDIN_READER_STARTED.load(Ordering::Acquire)
         && !STDIN_EOF_SEEN.load(Ordering::Acquire)
@@ -559,8 +560,8 @@ pub(crate) fn p1_stdin_wanted() -> bool {
 
 /// fd 0 is readable (or at EOF): one read cannot block, so deliver what it
 /// returns exactly as the reader thread does elsewhere.
-#[cfg(all(target_os = "wasi", target_env = "p1"))]
-pub(crate) fn p1_stdin_ready() {
+#[cfg(target_os = "wasi")]
+pub(crate) fn wasi_stdin_ready() {
     use std::io::Read;
     let mut buf = [0u8; 65536];
     match std::io::stdin().lock().read(&mut buf) {
@@ -577,8 +578,8 @@ pub(crate) fn p1_stdin_ready() {
 }
 
 fn ensure_stdin_reader() {
-    if cfg!(all(target_os = "wasi", target_env = "p1")) {
-        #[cfg(all(target_os = "wasi", target_env = "p1"))]
+    if cfg!(target_os = "wasi") {
+        #[cfg(target_os = "wasi")]
         crate::turnloop_net::register_pump();
         stdin_reader_claim_start();
         return;

@@ -11,9 +11,6 @@
 //! Protocol output is copied out of a server codec before any transport call
 //! or JS callback. Decoded requests and session events use the existing pumps.
 
-use std::collections::{HashMap, VecDeque};
-use std::sync::{Mutex, OnceLock};
-
 use perry_ffi::turnloop_net as tl;
 
 pub(crate) mod conn;
@@ -71,46 +68,22 @@ pub(crate) fn next_id() -> i64 {
 
 // ── The request queue ───────────────────────────────────────────────────────
 
-/// Requests decoded and waiting for the main-thread pump, per JS server handle.
-///
-/// The same `HttpPendingRequest` P5 queues, and drained by the same pump: the
-/// struct already carries `h2_stream_handle` / `h2_stream_headers`, because the
-/// hyper HTTP/2 path used them for the `'stream'` event.
-fn pending() -> &'static Mutex<HashMap<i64, VecDeque<crate::server::server::HttpPendingRequest>>> {
-    static PENDING: OnceLock<
-        Mutex<HashMap<i64, VecDeque<crate::server::server::HttpPendingRequest>>>,
-    > = OnceLock::new();
-    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
+/// Requests decoded and waiting for the main-thread pump wait on their server
+/// (`HttpServer::pending`), the same queue P5 fills and the same pump drains:
+/// the struct already carries `h2_stream_handle` / `h2_stream_headers`,
+/// because the hyper HTTP/2 path used them for the `'stream'` event.
 pub(crate) fn take_pending(
     server_handle: i64,
 ) -> Option<crate::server::server::HttpPendingRequest> {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get_mut(&server_handle)
-        .and_then(|q| q.pop_front())
+    crate::server::server::take_server_pending(server_handle)
 }
 
-pub(crate) fn queue_pending(
-    server_handle: i64,
-    request: crate::server::server::HttpPendingRequest,
-) {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .entry(server_handle)
-        .or_default()
-        .push_back(request);
+pub(crate) fn queue_pending(request: crate::server::server::HttpPendingRequest) {
+    crate::server::server::queue_server_pending(request);
 }
 
 /// Whether any turnloop HTTP/2 work is outstanding, so the pump keeps the
 /// process alive while a session is live or a request is queued.
 pub(crate) fn has_pending() -> bool {
-    pending()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .values()
-        .any(|q| !q.is_empty())
+    crate::server::server::any_owned_server(|s| !s.pending.is_empty())
 }

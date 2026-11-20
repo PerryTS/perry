@@ -63,15 +63,10 @@ unsafe fn site_prototype_object(
     {
         return None;
     }
-    let proof = (*site.add(2)).load(Ordering::Relaxed);
-    let bag = (*(closure as *const ClosureHeader)).props;
-    if bag.is_null() || crate::object::shapes::object_shape_stamp(bag) != LayoutWord(proof as u32) {
-        return None;
-    }
-    let slot = (proof >> 32) as u32;
+    // The function's own `prototype` slot (the family word above proves the
+    // slot exists); a hole means `prototype` left the slot: general path.
+    let value = JSValue::from_bits(crate::closure::props::prototype_slot_value(closure)?.to_bits());
     let prototype_proof = (*site.add(3)).load(Ordering::Relaxed);
-    let live = (prototype_proof >> 32) as u32;
-    let value = crate::object::object_field_at_with_live(bag, slot, live);
     if !value.is_pointer() {
         return None;
     }
@@ -89,22 +84,12 @@ unsafe fn prime_function_site(closure: usize, proto: *const ObjectHeader, site: 
         return;
     }
     let closure = closure as *const ClosureHeader;
-    let bag = (*closure).props;
-    if bag.is_null() {
+    if crate::closure::props::prototype_slot_value(closure as usize).is_none() {
         return;
     }
-    let shape = crate::object::shapes::object_shape_stamp(bag);
-    let Some(record) = crate::object::shapes::shape_record_for_word(shape) else {
-        return;
-    };
-    let Some(Some(slot)) = record.own_data_position_of_value(0, b"prototype") else {
-        return;
-    };
     (*site.add(1)).store((*closure).info as u64, Ordering::Relaxed);
-    (*site.add(2)).store(shape.0 as u64 | (slot as u64) << 32, Ordering::Relaxed);
     (*site.add(3)).store(
-        crate::object::shapes::object_shape_stamp(proto).0 as u64
-            | (record.live_inline_slot_count() as u64) << 32,
+        crate::object::shapes::object_shape_stamp(proto).0 as u64,
         Ordering::Relaxed,
     );
     (*site).store(

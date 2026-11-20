@@ -59,6 +59,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 fn get(arr: u32, idx: u32) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
@@ -71,6 +72,7 @@ fn set(arr: u32, idx: u32, value: Expr) -> Stmt {
         object: Box::new(Expr::LocalGet(arr)),
         index: Box::new(Expr::LocalGet(idx)),
         value: Box::new(value),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

@@ -10,6 +10,7 @@ pub mod capability;
 mod class_accessors;
 pub mod crypto_chain;
 pub mod deferral;
+pub mod descriptor;
 pub(crate) mod destructuring;
 pub mod dynamic_import;
 pub mod egress;
@@ -18,6 +19,8 @@ pub use emitted_closures::emitted_closures;
 pub(crate) mod enums;
 pub mod error;
 pub mod eval_classifier;
+pub mod fn_proto;
+pub mod folded_call;
 pub mod fx;
 pub mod ir;
 pub mod js_transform;
@@ -32,6 +35,16 @@ pub mod monomorph;
 pub mod native_profile;
 mod number;
 pub use number::js_number_to_string;
+
+/// Whether `path` is TypeScript source, whose import specifiers that name only
+/// a type are elided (bind nothing). A JavaScript module binds every specifier.
+pub fn is_typescript_source(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension().and_then(|ext| ext.to_str()),
+        Some("ts" | "tsx" | "mts" | "cts")
+    )
+}
+pub mod namespace_pairs;
 pub mod patched_builtins;
 pub mod private_names;
 pub mod solid_jsx;
@@ -82,7 +95,10 @@ pub use lower::{
 };
 pub use monomorph::{monomorphize_module, monomorphize_modules};
 pub use native_profile::exported_native_pod_abi;
-pub use patched_builtins::proto_census::{scan_module as scan_proto_census, ProtoCensus};
+pub use patched_builtins::proto_census::{
+    install_lowering_census as install_lowering_proto_census, scan_module as scan_proto_census,
+    ProtoCensus,
+};
 pub use patched_builtins::{
     clear_patched_builtins, patched_prototype_methods, scan_module as scan_patched_builtins,
     set_patched_builtins, PatchedBuiltins,
@@ -92,6 +108,7 @@ pub use type_alias_resolve::{resolve_type_aliases_in_module, AliasDef, AliasTabl
 mod iterator_record;
 
 pub mod dynamic_code;
+pub mod method_call;
 pub mod realm_reach;
 pub mod static_dynamic_code;
 

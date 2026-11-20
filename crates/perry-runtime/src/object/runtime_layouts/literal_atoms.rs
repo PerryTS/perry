@@ -929,3 +929,93 @@ pub(super) static ATOM_30: StaticAtom = StaticAtom {
 };
 
 wasm_atom!(ATOM_30);
+
+#[used(linker)]
+#[export_name = "perry_image_literal_0_666173744368756e6b"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_strings"
+)]
+pub(super) static IMAGE_31: ImageString<10> = image(*b"fastChunk\0");
+
+wasm_string_image!(IMAGE_31);
+
+#[used(linker)]
+#[export_name = "perry_atom_666173744368756e6b"]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_atoms"
+)]
+pub(super) static ATOM_31: StaticAtom = StaticAtom {
+    hash: atom_hash(b"fastChunk"),
+    string: std::ptr::addr_of!(IMAGE_31.string),
+    kind: crate::codegen_abi::ATOM_KIND_STRING,
+    _pad: [0; 3],
+    index: 0,
+};
+
+wasm_atom!(ATOM_31);
+
+#[used(linker)]
+#[export_name = "perry_image_literal_0_706970654f6e44617461"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_strings"
+)]
+pub(super) static IMAGE_32: ImageString<11> = image(*b"pipeOnData\0");
+
+wasm_string_image!(IMAGE_32);
+
+#[used(linker)]
+#[export_name = "perry_atom_706970654f6e44617461"]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_atoms"
+)]
+pub(super) static ATOM_32: StaticAtom = StaticAtom {
+    hash: atom_hash(b"pipeOnData"),
+    string: std::ptr::addr_of!(IMAGE_32.string),
+    kind: crate::codegen_abi::ATOM_KIND_STRING,
+    _pad: [0; 3],
+    index: 0,
+};
+
+wasm_atom!(ATOM_32);
+
+#[used(linker)]
+#[export_name = "perry_image_literal_0_706970655061757365"]
+#[cfg_attr(target_vendor = "apple", link_section = "__TEXT,__perry_strings")]
+#[cfg_attr(target_os = "windows", link_section = ".perrystr$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_strings"
+)]
+pub(super) static IMAGE_33: ImageString<10> = image(*b"pipePause\0");
+
+wasm_string_image!(IMAGE_33);
+
+#[used(linker)]
+#[export_name = "perry_atom_706970655061757365"]
+#[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_atoms")]
+#[cfg_attr(target_os = "windows", link_section = ".perryatm$m")]
+#[cfg_attr(
+    not(any(target_vendor = "apple", target_os = "windows", target_family = "wasm")),
+    link_section = "perry_atoms"
+)]
+pub(super) static ATOM_33: StaticAtom = StaticAtom {
+    hash: atom_hash(b"pipePause"),
+    string: std::ptr::addr_of!(IMAGE_33.string),
+    kind: crate::codegen_abi::ATOM_KIND_STRING,
+    _pad: [0; 3],
+    index: 0,
+};
+
+wasm_atom!(ATOM_33);

@@ -335,7 +335,7 @@ pub(super) fn read_birth_data(obj: *const ObjectHeader, data: StateData) -> Opti
         StateData::ReadableHwm => 0,
         StateData::ReadableChunks => 1,
         StateData::ReadableBuffered => 3,
-        StateData::Pipes => 4,
+        StateData::Pipes => 7,
         StateData::WritableHwm => 0,
         StateData::WritableLength => 1,
         StateData::WritableCorked => 2,
@@ -411,6 +411,13 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
             buffer.get_nanbox_f64(),
             0.0,
             0.0,
+            // node 26.12: `fastChunk`, `pipeOnData`, `pipePause` are born null.
+            // node fills them from pipe()'s 'data' listener and pause closure and a
+            // prefetched chunk; perry's pipe has no data-listener closure and keeps
+            // no prefetched chunk, so they stay null.
+            f64::from_bits(TAG_NULL),
+            f64::from_bits(TAG_NULL),
+            f64::from_bits(TAG_NULL),
             super::state_record::constructor_data(stream.get_nanbox_f64(), StateData::Pipes)
                 .unwrap_or(f64::from_bits(TAG_UNDEFINED)),
             f64::from_bits(TAG_NULL),

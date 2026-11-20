@@ -59,9 +59,9 @@ mod tests;
 use perry_ffi::agent_post::{self, AgentJob};
 
 pub(crate) use conn::{
-    adopt_alpn_http1, begin_stream, destroy_connection, finish_body_notified, is_busy,
-    note_aborted_handle, send_body, send_interim, send_response_notified, take_aborted,
-    take_pending, with_connections,
+    adopt_alpn_http1, begin_stream, body_is_chunked, destroy_connection, finish_body_notified,
+    is_busy, note_aborted_handle, send_body, send_interim, send_response_notified, take_aborted,
+    take_pending, unsent_head_len, with_connections,
 };
 
 /// This crate's slot in the runtime's completion-sink registry.

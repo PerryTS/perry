@@ -1,8 +1,9 @@
 //! Method calls on builtin receivers (object model step 5, phase 2,
 //! OBJECT_MODEL_2026-10-13.md §3.6 "Builtins", §3.7).
 //!
-//! An array, a string, a Map, a Set, a WeakMap, a WeakSet or a function
-//! resolves a method through its family's intrinsic prototype
+//! An array, a string, a Map, a Set, a WeakMap, a WeakSet, a function or a
+//! Buffer/`Uint8Array` byte cell (`byte_view`) resolves a method through its
+//! family's intrinsic prototype
 //! (`Array.prototype`, `String.prototype`, …), a sealed intrinsic layout
 //! whose shadow bit says whether the program has written it
 //! (`builtin_proto`, step 3). While neither that prototype nor
@@ -74,7 +75,7 @@ unsafe fn heap_cell_any(v: f64) -> Option<*const crate::gc::GcHeader> {
 unsafe fn array_recv(v: f64) -> Option<f64> {
     let bits = v.to_bits();
     let mut header = crate::value::addr_class::pointer_value_header(bits)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let mut live = (bits & POINTER_MASK) as usize;
@@ -82,7 +83,7 @@ unsafe fn array_recv(v: f64) -> Option<f64> {
         live = forwarded_head(live)?;
         // `clean_arr_ptr` resolved `live` to the array the alias forwards to.
         header = crate::value::addr_class::honest_header(live);
-        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(header.obj_type)
             || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -114,7 +115,7 @@ unsafe fn forwarded_head(addr: usize) -> Option<usize> {
 unsafe fn map_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_MAP
-            && super::cell_meta::map_cell_meta(raw(v) as *const crate::map::MapHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Map)
 }
 
@@ -123,7 +124,7 @@ unsafe fn map_ok(v: f64) -> bool {
 unsafe fn set_ok(v: f64) -> bool {
     heap_cell(v).is_some_and(|h| {
         (*h).obj_type == crate::gc::GC_TYPE_SET
-            && super::cell_meta::set_cell_meta(raw(v) as *const crate::set::SetHeader).is_null()
+            && !super::cell_meta::builtin_cell_has_meta(raw(v) as usize, (*h).obj_type)
     }) && pristine(BuiltinProto::Set)
 }
 
@@ -148,8 +149,11 @@ unsafe fn weak_ok(v: f64, brand: u32) -> bool {
 const WEAKMAP: u32 = crate::weakref::CLASS_ID_WEAKMAP;
 const WEAKSET: u32 = crate::weakref::CLASS_ID_WEAKSET;
 
+mod byte_view;
+use byte_view::{byte_view_ok, is_byte_view_receiver_type};
 mod function_receiver;
-use function_receiver::{function_call, function_ok};
+use function_receiver::function_call;
+pub(super) use function_receiver::function_ok;
 
 /// `Array.prototype.push` on a plain array (the dispatcher's dense arm).
 /// `recv.apply(args…)` on a function `function_ok` admitted: `Get(recv,
@@ -178,13 +182,30 @@ pub(crate) unsafe fn by_name_function_apply(target: f64, args: &[f64]) -> Option
     None
 }
 
+/// `f.apply(this, list)` whose lookup read the realm's own
+/// `Function.prototype.apply` (codegen `emit_apply_lane`, on the value's code
+/// identity): that body's semantics with `f` as its receiver. The value was
+/// read before the arguments, so nothing the arguments did to `f` is asked.
+///
+/// # Safety
+/// `recv`, `this` and `list` are live values.
+#[no_mangle]
+pub unsafe extern "C-unwind" fn js_function_apply_read(recv: f64, this: f64, list: f64) -> f64 {
+    if let Some(value) = crate::closure::try_native_apply(recv, this, list) {
+        return value;
+    }
+    super::global_this::function_prototype_apply_thunk(
+        std::ptr::null(),
+        crate::closure::JsThis::from_f64(recv),
+        this,
+        list,
+    )
+}
+
 #[inline(never)]
 unsafe fn array_push(recv: f64, values: &[f64]) -> f64 {
     let arr = raw(recv) as *mut crate::array::ArrayHeader;
-    if crate::array::array_is_frozen(arr) {
-        crate::collection_iter::throw_type_error("Cannot mutate a frozen array");
-    }
-    crate::array::guard_writable_length(arr);
+    crate::array::push_guard(arr, values.len() as u32);
     let mut a = arr;
     for v in values {
         a = crate::array::js_array_push_f64_spec(a, *v);
@@ -767,11 +788,8 @@ pub unsafe extern "C-unwind" fn js_bm_get1(
         return crate::map::js_map_get(raw(recv).cast(), a0);
     }
     if weak_ok(recv, WEAKMAP) {
-        return crate::weakref::operations::get(
-            recv,
-            a0,
-            crate::weakref::operations::Receiver::Folded(WEAKMAP),
-        );
+        // `weak_ok` read the receiver's birth-layout word: its brand.
+        return crate::weakref::operations::get_birth_layout(recv, a0);
     }
     let args: [f64; 1] = [a0];
     super::method_call::js_method_call_slow(site, recv, key, method_id, args.as_ptr(), args.len())
@@ -1907,6 +1925,7 @@ const FAMILY_ARRAY: u64 = 2;
 const FAMILY_MAP: u64 = 4;
 const FAMILY_SET: u64 = 8;
 const FAMILY_FUNCTION: u64 = 16;
+const FAMILY_BYTES: u64 = 32;
 
 /// The lookup half of a split method call (#11910) whose key names a builtin
 /// method of the families in `families`: a receiver of one of them that the
@@ -1935,7 +1954,9 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
         // One header read picks the family; an ordinary object takes the
         // probe's lookup at once.
         let admitted = match (*h).obj_type {
-            crate::gc::GC_TYPE_ARRAY => families & FAMILY_ARRAY != 0 && array_recv(recv).is_some(),
+            crate::gc_array_type_pat!() => {
+                families & FAMILY_ARRAY != 0 && array_recv(recv).is_some()
+            }
             crate::gc::GC_TYPE_MAP => families & FAMILY_MAP != 0 && map_ok(recv),
             crate::gc::GC_TYPE_SET => families & FAMILY_SET != 0 && set_ok(recv),
             // The Map and Set families' entries name only methods a WeakMap
@@ -1944,6 +1965,9 @@ pub unsafe extern "C-unwind" fn js_bm_lookup(
             crate::gc_object_type_pat!() => {
                 (families & FAMILY_MAP != 0 && weak_ok(recv, WEAKMAP))
                     || (families & FAMILY_SET != 0 && weak_ok(recv, WEAKSET))
+            }
+            t if is_byte_view_receiver_type(t) => {
+                families & FAMILY_BYTES != 0 && byte_view_ok(recv)
             }
             crate::gc::GC_TYPE_CLOSURE => {
                 families & FAMILY_FUNCTION != 0

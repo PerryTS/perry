@@ -1,6 +1,0 @@
-▶ suite
-    test at <location>
-  ✔ case one (<test-duration>)
-  ✖ case two (<test-duration>)
-ℹ duration_ms <test-duration>
-plain output

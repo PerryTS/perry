@@ -32,6 +32,7 @@ pub(super) fn for_each_child_list<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a [Stmt])
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -253,6 +254,7 @@ pub(super) fn declarations_to_assignments(stmts: &mut Vec<Stmt>, ids: &HashMap<u
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         declarations_to_assignments(body, ids);
                         if let Some(c) = catch {
@@ -449,13 +451,13 @@ pub(super) fn module_facts(hir: &HirModule, limits: Limits) -> ModuleFacts {
         let cap_params = c.constructor.as_ref().is_some_and(|ctor| {
             ctor.params
                 .iter()
-                .any(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .any(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
         });
         let cap_fields = c
             .fields
             .iter()
             .chain(c.static_fields.iter())
-            .any(|f| f.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX));
+            .any(|f| f.origin.is_capture());
         if cap_params || cap_fields {
             capturing_classes.insert(c.name.clone());
         }

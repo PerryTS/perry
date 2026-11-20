@@ -1,0 +1,6 @@
+proven holes 1,undefined,3,
+grown 4950
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member %ArrayIteratorPrototype%.next: built-in objects are read-only in a compiled program
+captured 1,2,3,
+typed arbitrary output 0ab

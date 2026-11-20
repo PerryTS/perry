@@ -14,11 +14,12 @@ fn array(result: Result<f64, EngineError>) -> *mut ArrayHeader {
             && !crate::value::addr_class::is_handle_band(ptr as usize)
             && !ptr.is_null()
             && unsafe {
-                (*ptr
-                    .sub(crate::gc::GC_HEADER_SIZE)
-                    .cast::<crate::gc::GcHeader>())
-                .obj_type
-                    == crate::gc::GC_TYPE_ARRAY
+                crate::gc_type_is_array!(
+                    (*ptr
+                        .sub(crate::gc::GC_HEADER_SIZE)
+                        .cast::<crate::gc::GcHeader>())
+                    .obj_type
+                )
             }
         {
             Ok(value)

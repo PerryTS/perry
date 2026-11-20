@@ -1,8 +1,8 @@
 from pathlib import Path
 import json,os,subprocess,shutil
 L=Path('/root/lanes/perry-unpackcpu');R=L/'perry';V=L/'validation'
-n=(R/'test-parity/output/node/test_gap_native_payload_zlib_one_shots.txt').read_text().splitlines()
-p=(R/'test-parity/output/perry/test_gap_native_payload_zlib_one_shots.txt').read_text().splitlines()
+n=(R/'tests/parity/output/node/test_gap_native_payload_zlib_one_shots.txt').read_text().splitlines()
+p=(R/'tests/parity/output/perry/test_gap_native_payload_zlib_one_shots.txt').read_text().splitlines()
 base=dict(line.split() for line in (L/'evidence/one-shot-control.out').read_text().splitlines())
 assert len(n)==len(p)==9 and n[3:]==p[3:]
 for nl,pl in zip(n[:3],p[:3]):

@@ -1,0 +1,15 @@
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Map.prototype.get: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member Set.prototype.add: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member Set.prototype.add: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+DEC 250: Cannot replace built-in member Array.prototype.map: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.map: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.push: built-in objects are read-only in a compiled program (adding a new member is allowed)
+["own:1","Stack:2"]
+1,2,3,4,5,11 9,8,7 6 1 2
+2,4,6 2,3

@@ -957,6 +957,10 @@ mod tests {
                 descriptor_name: "test_guard".to_string(),
                 descriptor: vec![1],
             })],
+            signature: None,
+            sig_defaults: Vec::new(),
+            sig_public: Default::default(),
+            record: None,
         }
     }
 

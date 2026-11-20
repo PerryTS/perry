@@ -613,10 +613,7 @@ mod tests {
             proto.get_nanbox_f64()
         ));
 
-        let function_ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-            b"Function".as_ptr(),
-            8,
-        ));
+        let function_ctor = scope.root_nanbox_f64(crate::object::builtin_value_core("Function"));
         assert!(!super::is_function_prototype_object_value(
             function_ctor.get_nanbox_f64()
         ));
@@ -635,10 +632,7 @@ mod tests {
     fn function_prototype_memo_is_the_by_name_intrinsic() {
         let _lock = crate::gc::global_side_table_test_lock();
         let scope = crate::gc::RuntimeHandleScope::new();
-        let ctor = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-            b"Function".as_ptr(),
-            8,
-        ));
+        let ctor = scope.root_nanbox_f64(crate::object::builtin_value_core("Function"));
         let walked = scope.root_nanbox_f64(crate::closure::closure_get_dynamic_prop(
             closure_addr(ctor.get_nanbox_f64()),
             "prototype",

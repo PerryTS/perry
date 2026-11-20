@@ -1,0 +1,1 @@
+Whole-program facts: a call copied into a function instance keeps its template's protocol status, so the for-of step of an iterated array inside a summarized function or method is still never a call of `next` on the array.

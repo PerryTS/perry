@@ -64,7 +64,7 @@ fn ancestor_fields_in_scope(ctx: &FnCtx<'_>, class: &Class) -> bool {
     let mut refs = Vec::new();
     let mut visited = std::collections::HashSet::new();
     for field in &class.fields {
-        if field.origin.is_reservation() || field.name.starts_with("__perry_cap_") {
+        if field.origin.is_reservation() || field.origin.is_capture() {
             continue;
         }
         for expr in field.init.iter().chain(field.key_expr.iter()) {
@@ -224,7 +224,7 @@ pub(crate) fn default_call(ctx: &mut FnCtx<'_>, class: &Class, args: &[Expr]) ->
             || ctor
                 .params
                 .iter()
-                .any(|p| p.name.starts_with("__perry_cap_"))
+                .any(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
         {
             return None;
         }
@@ -432,7 +432,7 @@ mod tests {
 
     #[test]
     fn capture_slots_keep_the_existing_snapshot_binding() {
-        let ir = ir("value: any, __perry_cap_77: any", 16);
+        let ir = ir("value: any, __perry_cap_77m000000000001: any", 16);
         for class in ["First", "Second"] {
             let child = body(&ir, class);
             assert!(child.contains("super.checked.direct"), "{child}");

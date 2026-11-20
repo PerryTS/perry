@@ -15,13 +15,6 @@
   "lockfile": {},
   "not_tokio": [
     {
-      "name": "lettre",
-      "versions": [
-        "0.11.23"
-      ],
-      "why": "perry-ext-nodemailer uses lettre's `message` builder only; the `tokio1` / `tokio1-rustls-tls` / `pool` transport features are off and the SMTP transport is turnloop-smtp. Its Cargo.lock entry has no tokio dependency."
-    },
-    {
       "name": "tungstenite",
       "versions": [
         "0.30.0"

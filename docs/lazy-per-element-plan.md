@@ -254,7 +254,7 @@ code paths are cold).
 
 Below, ✅ = must pass byte-for-byte vs Node under pragma-on,
 pragma-off, and `PERRY_JSON_TAPE=1` env. New test files under
-`test-files/test_json_lazy_*.ts`.
+`tests/fixtures/programs/test_json_lazy_*.ts`.
 
 ### Access patterns (test_json_lazy_access.ts)
 

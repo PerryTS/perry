@@ -88,7 +88,7 @@ MIRRORS: tuple[tuple[str, str, str], ...] = (
         "matrix",
     ),
     (
-        "test-parity/node-compat-matrix.baseline.json",
+        "tests/parity/node-compat-matrix.baseline.json",
         r'"nodeVersion":\s*"(\d+\.\d+\.\d+)"',
         "matrix",
     ),
@@ -139,14 +139,14 @@ EXEMPTIONS: tuple[Exemption, ...] = (
         major_tracks_oracle=False,
         reason=(
             "Runs Node's OWN test corpus, which must be executed by the Node line "
-            "it was taken from. Derived from test-compat/node-core/pinned-version.txt "
+            "it was taken from. Derived from tests/compat/node-core/pinned-version.txt "
             "so the coupling is explicit instead of looking like drift (#6367). "
             "The Node core suite is inlined into the Extended Tests parent."
         ),
         locator=_workflow_pins,
     ),
     Exemption(
-        path="test-compat/node-core/pinned-version.txt",
+        path="tests/compat/node-core/pinned-version.txt",
         value="v22.x",
         major_tracks_oracle=False,
         reason=(
@@ -397,7 +397,7 @@ def self_test() -> int:
 
     # Rule 3a: a stale exemption (tree moved on) is caught.
     stale = Exemption(
-        path="test-compat/node-core/pinned-version.txt",
+        path="tests/compat/node-core/pinned-version.txt",
         value="v20.x",
         major_tracks_oracle=False,
         reason="self-test",

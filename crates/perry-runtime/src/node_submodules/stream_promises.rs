@@ -12,8 +12,7 @@
 
 use super::fs_promises::{promise_rejected, promise_undefined};
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_f64, js_closure_get_capture_ptr,
-    js_closure_set_capture_f64, js_closure_set_capture_ptr, ClosureHeader,
+    js_closure_alloc, js_closure_get_capture_f64, js_closure_set_capture_f64, ClosureHeader,
 };
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_set_field_by_name, ObjectHeader,
@@ -41,9 +40,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     let jsval = JSValue::from_bits(bits);
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & crate::value::POINTER_MASK) as usize;
-    }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
     }
     0
 }
@@ -81,7 +77,7 @@ fn array_ptr_from_value(value: f64) -> Option<*const crate::array::ArrayHeader> 
         return None;
     }
     unsafe {
-        if gc_type_for_ptr(raw) != Some(crate::gc::GC_TYPE_ARRAY) {
+        if gc_type_for_ptr(raw) != Some(crate::gc_array_type_pat!()) {
             return None;
         }
     }
@@ -222,7 +218,7 @@ extern "C" fn stream_promises_finished_error_listener(
     _this: crate::closure::JsThis,
     err: f64,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     finished_state_reject(state, err);
     undefined_value()
 }
@@ -231,7 +227,7 @@ extern "C" fn stream_promises_finished_side_listener(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     let readable_side = js_closure_get_capture_f64(closure, 1).to_bits() == crate::value::TAG_TRUE;
     if readable_side {
         finished_state_set_bool(state, b"readableDone", true);
@@ -246,7 +242,7 @@ extern "C" fn stream_promises_finished_close_listener(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let state = js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
+    let state = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
     if finished_state_bool(state, b"settled") {
         return undefined_value();
     }
@@ -410,7 +406,7 @@ fn pending_finished_promise(
         crate::fn_info!(stream_promises_finished_error_listener, 1; with_declared(1)),
         1,
     );
-    js_closure_set_capture_ptr(error_listener, 0, state as i64);
+    crate::closure::closure_set_capture_ref(error_listener, 0, state as i64);
     add_once_listener(handle, b"error", listener_value(error_listener));
 
     if need_readable {
@@ -418,7 +414,7 @@ fn pending_finished_promise(
             crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
             2,
         );
-        js_closure_set_capture_ptr(end_listener, 0, state as i64);
+        crate::closure::closure_set_capture_ref(end_listener, 0, state as i64);
         js_closure_set_capture_f64(end_listener, 1, f64::from_bits(crate::value::TAG_TRUE));
         add_once_listener(handle, b"end", listener_value(end_listener));
     }
@@ -427,7 +423,7 @@ fn pending_finished_promise(
             crate::fn_info!(stream_promises_finished_side_listener, 0; with_declared(0)),
             2,
         );
-        js_closure_set_capture_ptr(finish_listener, 0, state as i64);
+        crate::closure::closure_set_capture_ref(finish_listener, 0, state as i64);
         js_closure_set_capture_f64(finish_listener, 1, f64::from_bits(crate::value::TAG_FALSE));
         add_once_listener(handle, b"finish", listener_value(finish_listener));
     }
@@ -436,7 +432,7 @@ fn pending_finished_promise(
         crate::fn_info!(stream_promises_finished_close_listener, 0; with_declared(0)),
         1,
     );
-    js_closure_set_capture_ptr(close_listener, 0, state as i64);
+    crate::closure::closure_set_capture_ref(close_listener, 0, state as i64);
     add_once_listener(handle, b"close", listener_value(close_listener));
 
     if let Some(signal) = signal {
@@ -500,7 +496,6 @@ fn is_invalid_pipeline_body(value: f64) -> bool {
         || jsval.is_null()
         || jsval.is_bool()
         || jsval.is_number()
-        || jsval.is_int32()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(value) != 0 }
 }
@@ -617,7 +612,73 @@ pub(crate) extern "C" fn thunk_streamP_pipeline(
     let Some(rest) = array_ptr_from_value(options_or_rest) else {
         return direct_stream_promises_pipeline(source, destination, options_or_rest);
     };
+    // Node's `pipeline(...streams, options)`: a trailing plain object that is
+    // no stream, iterable or function is the options bag (`{ signal, end }`),
+    // not a third stream.
+    let len = crate::array::js_array_length(rest);
+    if len >= 1 {
+        let last = crate::array::js_array_get_f64(rest, len - 1);
+        if is_pipeline_options(last) {
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let source = scope.root_nanbox_f64(source);
+            let destination = scope.root_nanbox_f64(destination);
+            let rest_value = scope.root_nanbox_f64(options_or_rest);
+            let signal = options_signal(last).map(|v| scope.root_nanbox_f64(v));
+            if let Some(signal) = &signal {
+                if signal_aborted(signal.get_nanbox_f64()) {
+                    return promise_rejected(signal_reason(signal.get_nanbox_f64()));
+                }
+            }
+            let streams = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - 1));
+            for i in 0..len - 1 {
+                let array = crate::value::js_nanbox_get_pointer(rest_value.get_nanbox_f64())
+                    as *const crate::array::ArrayHeader;
+                let stage = crate::array::js_array_get_f64(array, i);
+                streams.set_raw_mut_ptr(
+                    streams.with_mut_ptr(|list| crate::array::js_array_push_f64(list, stage)),
+                );
+            }
+            let promise = stream_list_pipeline(
+                source.get_nanbox_f64(),
+                destination.get_nanbox_f64(),
+                streams.with_mut_ptr(|list| list as *const crate::array::ArrayHeader),
+            );
+            // The signal aborts the pipeline's promise, as in Node.
+            if let Some(signal) = &signal {
+                let promise_ptr =
+                    crate::value::js_nanbox_get_pointer(promise) as *mut crate::promise::Promise;
+                register_abort_listener(signal.get_nanbox_f64(), promise_ptr);
+            }
+            return promise;
+        }
+    }
     stream_list_pipeline(source, destination, rest)
+}
+
+/// A plain options object (`{ signal, end }`) rather than a pipeline stage: an
+/// object without the stream / web-stream / iterator surface and not callable.
+fn is_pipeline_options(value: f64) -> bool {
+    let jsval = JSValue::from_bits(value.to_bits());
+    if object_ptr_from_value(value).is_none() || array_ptr_from_value(value).is_some() {
+        return false;
+    }
+    if crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(value) as usize) {
+        return false;
+    }
+    let _ = jsval;
+    let callable = |name: &[u8]| {
+        get_object_property(value, name).is_some_and(|v| {
+            JSValue::from_bits(v.to_bits()).is_pointer()
+                && crate::closure::is_closure_ptr(crate::value::js_nanbox_get_pointer(v) as usize)
+        })
+    };
+    !(callable(b"pipe")
+        || callable(b"on")
+        || callable(b"write")
+        || callable(b"next")
+        || callable(b"getReader")
+        || callable(b"getWriter")
+        || callable(b"then"))
 }
 
 /// `pipeline(source, destination, [...more])`: hand every stream and a

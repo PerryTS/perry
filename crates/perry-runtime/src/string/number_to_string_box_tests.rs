@@ -183,8 +183,8 @@ fn coercion_box_twins_match_their_pointer_originals_on_other_primitives() {
         f64::from_bits(crate::value::TAG_NULL),
         f64::from_bits(crate::value::TAG_TRUE),
         f64::from_bits(crate::value::TAG_FALSE),
-        f64::from_bits(JSValue::int32(-42).bits()),
-        f64::from_bits(JSValue::int32(123_456).bits()),
+        f64::from(-42),
+        f64::from(123_456),
     ];
     for value in values {
         assert_eq!(

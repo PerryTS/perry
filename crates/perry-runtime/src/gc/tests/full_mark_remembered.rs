@@ -144,7 +144,8 @@ fn dropping_one_folded_entry_fails_young_edge_coverage() {
         }
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
-        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
             red.is_err(),
             "dropping one folded entry must turn coverage red"
@@ -194,7 +195,8 @@ fn dropping_one_folded_entry_fails_malloc_edge_coverage() {
         }
         let verify = verify_live_parent(parent);
         assert!(verify.checked_old_to_young_edges > 0, "premise: {verify:?}");
-        let red = std::panic::catch_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
+        let red =
+            crate::test_support::child_unwind(|| assert_eq!(verify.missing_edges, 0, "{verify:?}"));
         assert!(
             red.is_err(),
             "dropping one folded entry must turn coverage red"

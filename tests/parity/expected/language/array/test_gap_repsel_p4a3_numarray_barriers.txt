@@ -1,0 +1,6 @@
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+undefined undefined -1
+89 2
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+undefined -1 1 undefined
+120,105,125,124,142,125,133,128,115,135,126,109,121,117,134,141

@@ -215,6 +215,7 @@ pub(crate) fn register_turnloop_stream_handle(
         response_headers: Vec::new(),
         turnloop_conn: conn_id,
         turnloop_responded: false,
+        request_started: false,
     })
 }
 

@@ -1,0 +1,1 @@
+Whole-program facts prove array methods (slice, includes, join) on arrays returned by functions: a summarized literal's elements no longer stand for every named key of the array (chess 613 to 617 of 647 sites, chess tests 784 to 791 of 806).

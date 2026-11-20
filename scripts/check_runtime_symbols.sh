@@ -79,6 +79,9 @@ SENTINELS=(
   js_typed_feedback_plain_array_index_get_guard
   js_typed_feedback_numeric_array_index_get_guard
   js_typed_feedback_packed_f64_array_loop_guard
+  js_typed_feedback_packed_f64_range_loop_guard
+  js_string_array_range_loop_guard
+  js_closure_exact_func_guard
   js_typed_feedback_packed_i32_array_loop_guard
   js_typed_feedback_packed_u32_array_loop_guard
   js_typed_feedback_array_index_get_fallback_boxed
@@ -205,4 +208,7 @@ for lib in "$@"; do
     echo "ok: $lib defines all ${#SENTINELS[@]} sentinel symbols"
   fi
 done
+# A shipped runtime archive also carries no std symbolizer: std is built from
+# rust-src without its `backtrace` feature (.cargo/config.toml [unstable]).
+"$(dirname "$0")/check_std_symbolizer.sh" "$@" || status=1
 exit "$status"

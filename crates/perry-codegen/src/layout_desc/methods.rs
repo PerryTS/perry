@@ -154,7 +154,7 @@ mod tests {
                 .enumerate()
                 .filter(|(_, (_, method))| *method)
                 .map(|(i, _)| ConstFnBirth {
-                    slot: i as u8,
+                    slot: i as u32,
                     symbol: format!("body_{cid}_{i}$info"),
                 })
                 .collect(),
@@ -231,6 +231,7 @@ mod tests {
             init_count: own.len() as u32,
             discriminant: 0,
             variants: vec![],
+            born_with_keys: false,
         };
         let mut layouts = ProgramLayouts::default();
         let mut eligible = family.clone();

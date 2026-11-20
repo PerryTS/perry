@@ -45,8 +45,66 @@
 use crate::expr::FnCtx;
 use crate::types::{DOUBLE, I1, I32, I64, PTR};
 
-/// The runtime entry every ArrayPush slow arm calls.
+/// The runtime entry every ArrayPush slow arm calls with
+/// `PERRY_PUSH_METHOD_TIERS=0`: an own `push` of an ARRAY receiver exits, any
+/// other receiver takes the builtin append.
 pub(super) const PUSH_SPEC_OR_OWN: &str = "js_array_push_f64_spec_or_own";
+
+/// The same entry, which also performs the real `Get(recv, "push")` for a
+/// receiver that is no Array at all (an object behind a `number[]`
+/// annotation): its own or inherited user `push` exits like an Array's own.
+pub(super) const PUSH_SPEC_OR_METHOD: &str = "js_array_push_f64_spec_or_method";
+
+/// `PERRY_PUSH_METHOD_TIERS=0` (`off`, `false`) keeps the push tiers that call
+/// the builtin without resolving `push` on the receiver:
+///
+/// * the guarded numeric tier trusts `js_typed_feedback_numeric_array_push_guard`,
+///   which admits an Array with a named layout (an own `push`, an own accessor)
+///   or an own `[[Prototype]]`;
+/// * the native `array.push_single` / `array.push` arm (a field receiver in
+///   value position, in a constructor, or with several arguments) appends with
+///   no test of the receiver;
+/// * a slow arm's receiver that is no Array takes the builtin's array-like
+///   append.
+pub(crate) fn method_tiers_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_PUSH_METHOD_TIERS").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The slow arms' runtime entry under the switch.
+pub(super) fn push_entry() -> &'static str {
+    if method_tiers_enabled() {
+        PUSH_SPEC_OR_METHOD
+    } else {
+        PUSH_SPEC_OR_OWN
+    }
+}
+
+/// Branch to `heap_label` when the NaN-boxed `recv_box` is a heap pointer
+/// above the runtime-id band (one subtract, one unsigned compare: the
+/// precondition of reading a header behind it), else to `other_label`.
+pub(super) fn emit_heap_pointer_branch(
+    ctx: &mut FnCtx<'_>,
+    recv_box: &str,
+    heap_label: &str,
+    other_label: &str,
+) {
+    let blk = ctx.block();
+    let bits = blk.bitcast_double_to_i64(recv_box);
+    let biased = blk.sub(
+        I64,
+        &bits,
+        crate::expr::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+    );
+    let heap = blk.icmp_ult(
+        I64,
+        &biased,
+        crate::expr::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+    );
+    blk.cond_br(&heap, heap_label, other_label);
+}
 
 /// The join where an ArrayPush tier's own-method exits meet its ordinary
 /// result. Created before the tier's first slow arm, closed by
@@ -56,6 +114,10 @@ pub(super) struct OwnPushJoin {
     label: String,
     /// `(value, predecessor label)` for each own exit.
     incoming: Vec<(String, String)>,
+    /// The boxed receiver, when the tier must test that it is a heap pointer
+    /// before a runtime entry is handed its unboxed address
+    /// (`method_site::inline_tier_needs_pointer_test`).
+    receiver_test: Option<String>,
 }
 
 impl OwnPushJoin {
@@ -66,7 +128,51 @@ impl OwnPushJoin {
             idx,
             label,
             incoming: Vec::new(),
+            receiver_test: None,
         }
+    }
+
+    /// [`OwnPushJoin::new`] whose slow arms first test that the boxed
+    /// receiver `recv_box` is a heap pointer (when `test`): the runtime entry
+    /// takes the unboxed ADDRESS, and the low bits of `null`, a Number, a
+    /// String or a boolean are no address (a `null` receiver used to come back
+    /// as the "head" address 2, written into the local). A miss is the
+    /// ordinary `Get(recv, "push")` + `Call`: a primitive's `push` is missing,
+    /// so it throws the call's TypeError as node does.
+    pub(super) fn with_receiver_test(ctx: &mut FnCtx<'_>, recv_box: &str, test: bool) -> Self {
+        let mut join = Self::new(ctx);
+        if test {
+            join.receiver_test = Some(recv_box.to_string());
+        }
+        join
+    }
+
+    /// The later slow arms are reached only through a header admission that
+    /// already proved the receiver a heap pointer: they need no test.
+    pub(super) fn receiver_is_heap_pointer(&mut self) {
+        self.receiver_test = None;
+    }
+
+    /// The ordinary method call on a receiver that is no heap pointer, as an
+    /// exit of the join; `ctx` continues in `heap_label`'s block.
+    fn emit_non_pointer_exit(&mut self, ctx: &mut FnCtx<'_>, recv_box: &str, v: &str) {
+        let heap_idx = ctx.new_block("apush.recv.heap");
+        let other_idx = ctx.new_block("apush.recv.other");
+        let heap_label = ctx.block_label(heap_idx);
+        let other_label = ctx.block_label(other_idx);
+        emit_heap_pointer_branch(ctx, recv_box, &heap_label, &other_label);
+        ctx.current_block = other_idx;
+        let value = crate::builtin_proto::emit_generic_call(
+            ctx,
+            crate::builtin_proto::GenericRead::Receiver,
+            recv_box,
+            "push",
+            &[v.to_string()],
+        );
+        let end = ctx.block().label.clone();
+        ctx.block().br(&self.label);
+        self.incoming.push((value, end));
+        ctx.current_block = heap_idx;
     }
 
     /// Emit a slow arm's push of `v` onto `arr_handle`.
@@ -76,6 +182,9 @@ impl OwnPushJoin {
     /// `js_array_push_f64_spec`. The own exit is recorded here and branches to
     /// the join.
     pub(super) fn emit_push(&mut self, ctx: &mut FnCtx<'_>, arr_handle: &str, v: &str) -> String {
+        if let Some(recv_box) = self.receiver_test.clone() {
+            self.emit_non_pointer_exit(ctx, &recv_box, v);
+        }
         // An entry-block alloca, never an in-block one: a slow arm inside a
         // loop would otherwise grow the stack every iteration (#10463).
         let own_slot = ctx.func.alloca_entry(I32);
@@ -87,7 +196,7 @@ impl OwnPushJoin {
             let blk = ctx.block();
             let bits = blk.call(
                 I64,
-                PUSH_SPEC_OR_OWN,
+                push_entry(),
                 &[(I64, arr_handle), (DOUBLE, v), (PTR, &own_slot)],
             );
             let own = blk.load(I32, &own_slot);

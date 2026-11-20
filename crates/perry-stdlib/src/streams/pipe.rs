@@ -901,8 +901,7 @@ mod tests {
         _this: perry_runtime::closure::JsThis,
         _reason: f64,
     ) -> f64 {
-        let promise =
-            perry_runtime::closure::js_closure_get_capture_ptr(closure, 0) as *mut Promise;
+        let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
         box_promise(promise)
     }
 
@@ -988,7 +987,7 @@ mod tests {
             perry_runtime::fn_info!(pending_abort_action, 1; with_declared(1)),
             1,
         );
-        perry_runtime::closure::js_closure_set_capture_ptr(callback, 0, action as i64);
+        perry_runtime::closure::closure_set_capture_ref(callback, 0, action as i64);
         let readable = alloc_readable(0, 0, 0, 1.0);
         let writable = alloc_writable(0, 0, callback as i64, 1.0);
         let locks = acquire_pipe_locks(readable, writable).unwrap();

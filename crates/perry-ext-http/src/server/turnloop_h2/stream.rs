@@ -352,6 +352,7 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
         peer_port,
     );
     im.http_version = "2.0".to_string();
+    im.http2_compat = true;
     im.socket_value = crate::server::http2_server::socket_of_session(session_handle);
     let request_handle = crate::server::request::alloc_incoming_message(im);
     let response_handle = crate::server::response::alloc_server_response_for_turnloop(
@@ -381,21 +382,18 @@ fn dispatch_request(conn: &mut H2Conn, i: usize) {
     stream.request_handle = request_handle;
     stream.response_handle = response_handle;
 
-    super::queue_pending(
+    super::queue_pending(crate::server::server::HttpPendingRequest {
         server_handle,
-        crate::server::server::HttpPendingRequest {
-            server_handle,
-            request_handle,
-            response_handle,
-            // A `'stream'` listener answers the request itself, exactly as it
-            // does on the hyper path; synthesizing a default response here as
-            // well would put two responses on one stream.
-            skip_default_response: has_stream_listener,
-            h2_stream_handle: stream_handle,
-            h2_stream_headers: headers_vec,
-            is_check_continue: false,
-        },
-    );
+        request_handle,
+        response: crate::server::request::handle_to_pointer_f64(response_handle),
+        // A `'stream'` listener answers the request itself, exactly as it
+        // does on the hyper path; synthesizing a default response here as
+        // well would put two responses on one stream.
+        skip_default_response: has_stream_listener,
+        h2_stream_handle: stream_handle,
+        h2_stream_headers: headers_vec,
+        is_check_continue: false,
+    });
 }
 
 // ── Client inbound ──────────────────────────────────────────────────────────

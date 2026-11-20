@@ -75,9 +75,6 @@ fn build(dir: &Path, files: &[(&str, &str)], whole: bool) -> Built {
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll)
         .env("PERRY_FACTS_DUMP", &dump);
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
     let out = cmd
         .arg("compile")
         .arg(dir.join(files[0].0))
@@ -125,14 +122,12 @@ fn body<'a>(ir: &'a str, symbol: &str) -> &'a str {
     &ir[at..end]
 }
 
-/// Both modes: the program prints `expected`; return (per unit, whole).
-fn both(files: &[(&str, &str)], expected: &str) -> (Built, Built, tempfile::TempDir) {
+/// The program prints `expected`; return the whole-program build.
+fn both(files: &[(&str, &str)], expected: &str) -> (Built, tempfile::TempDir) {
     let dir = tempfile::tempdir().unwrap();
-    let u = build(dir.path(), files, false);
     let w = build(dir.path(), files, true);
-    assert_eq!(u.stdout.trim(), expected, "per unit output");
     assert_eq!(w.stdout.trim(), expected, "whole output");
-    (u, w, dir)
+    (w, dir)
 }
 
 const PROBES: [&str; 3] = [
@@ -357,8 +352,8 @@ console.log(acc);
 
 #[test]
 fn a_field_of_one_class_is_a_proven_receiver() {
-    let (u, w, _d) = both(&[("main.ts", SINGLE)], "508500");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", SINGLE)], "508500");
+    for b in [&w] {
         assert!(b.field_receiver_elisions("step") > 0, "{}", b.elisions);
         let ir = b.ir("main");
         assert_no_probe(&ir, "perry_method_main_ts__Sched__step");
@@ -369,8 +364,8 @@ fn a_field_of_one_class_is_a_proven_receiver() {
 
 #[test]
 fn a_field_of_a_union_of_classes_switches_over_them() {
-    let (u, w, _d) = both(&[("main.ts", UNION)], "1005997");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", UNION)], "1005997");
+    for b in [&w] {
         assert!(b.field_receiver_elisions("step") > 0, "{}", b.elisions);
         let ir = b.ir("main");
         let step = body(&ir, "perry_method_main_ts__Sched__step");
@@ -388,8 +383,8 @@ fn a_field_of_a_union_of_classes_switches_over_them() {
 
 #[test]
 fn a_nullable_field_keeps_the_receiver_test() {
-    let (u, w, _d) = both(&[("main.ts", NULLABLE)], "true\n1498500");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", NULLABLE)], "true\n1498500");
+    for b in [&w] {
         assert!(
             b.elisions.lines().any(|l| l.contains("__Sched__step")
                 && l.contains("recv=field current ")
@@ -409,8 +404,8 @@ fn a_nullable_field_keeps_the_receiver_test() {
 
 #[test]
 fn a_field_written_top_has_no_fact() {
-    let (u, w, _d) = both(&[("main.ts", TOP)], "81\n1005000");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", TOP)], "81\n1005000");
+    for b in [&w] {
         // The guard's input held: the field is ⊤ in the facts.
         assert!(
             b.facts
@@ -428,8 +423,8 @@ fn a_field_written_top_has_no_fact() {
 
 #[test]
 fn a_function_in_the_field_has_no_fact() {
-    let (u, w, _d) = both(&[("main.ts", FUNC)], "1005015");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", FUNC)], "1005015");
+    for b in [&w] {
         assert!(b.field_elisions("stepOk", "ok") > 0, "{}", b.elisions);
         assert_eq!(b.field_receiver_elisions("step"), 0, "{}", b.elisions);
         assert_probe(&b.ir("main"), "perry_method_main_ts__Sched__step");
@@ -440,8 +435,8 @@ fn a_function_in_the_field_has_no_fact() {
 /// all, so there is no control to prove (the interp sabotage makes it fail).
 #[test]
 fn interpreted_code_leaves_no_fact() {
-    let (u, w, _d) = both(&[("main.ts", INTERP)], "505502");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", INTERP)], "505502");
+    for b in [&w] {
         assert_eq!(b.field_receiver_elisions("step"), 0, "{}", b.elisions);
     }
 }
@@ -450,8 +445,8 @@ fn interpreted_code_leaves_no_fact() {
 fn a_declared_field_observed_before_the_constructor_assigns_it_is_nullable() {
     // `current: Task;` is declared: the key exists (undefined) from the
     // start, so a read before the assignment sees undefined: nullable.
-    let (u, w, _d) = both(&[("main.ts", EARLY)], "505500\ntrue");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.ts", EARLY)], "505500\ntrue");
+    for b in [&w] {
         assert!(
             b.elisions.lines().any(|l| l.contains("__Sched__step")
                 && l.contains("recv=field current ")
@@ -474,8 +469,8 @@ fn a_reserved_key_gives_no_field_class_fact() {
     // No declaration: `current` is stored after `this.peek()` ran, so it can
     // be read unset (reserved: known slot, presence unknown, the read goes on
     // to the prototype chain). No read of it is a proven receiver.
-    let (u, w, _d) = both(&[("main.js", RESERVED)], "505500\ntrue");
-    for b in [&u, &w] {
+    let (w, _d) = both(&[("main.js", RESERVED)], "505500\ntrue");
+    for b in [&w] {
         assert!(
             !b.elisions
                 .lines()
@@ -493,17 +488,11 @@ fn another_modules_writer_is_in_the_field_classes() {
         ("holder.ts", XMOD_HOLDER),
         ("other.ts", XMOD_OTHER),
     ];
-    let (u, w, _d) = both(&files, "4424156");
-    for b in [&u, &w] {
+    let (w, _d) = both(&files, "4424156");
+    for b in [&w] {
         assert!(b.field_elisions("stepOk", "ok") > 0, "{}", b.elisions);
     }
-    assert!(
-        u.field_receiver_elisions("step") <= w.field_receiver_elisions("step"),
-        "per unit proves more than whole:\n{}\n--\n{}",
-        u.elisions,
-        w.elisions
-    );
-    for b in [&u, &w] {
+    for b in [&w] {
         assert!(
             !b.elisions
                 .lines()

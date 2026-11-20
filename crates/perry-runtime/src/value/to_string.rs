@@ -107,25 +107,6 @@ pub(crate) fn js_jsvalue_to_string_impl(
         } else {
             crate::string::js_string_from_bytes(b"false".as_ptr(), 5)
         }
-    } else if jsval.is_int32() {
-        // A registered class id shares the INT32 encoding (`Expr::ClassRef`)
-        // — `String(C)` / `"" + C` must produce the class's source text, not
-        // the numeric id. #9413 gave codegen a class-source side table
-        // (`js_register_class_source`), so this is the real source when the
-        // class came from user code and the NativeFunction placeholder only
-        // for classes perry synthesized.
-        let n = jsval.as_int32();
-        let cid = (value.to_bits() & 0xFFFF_FFFF) as u32;
-        if crate::object::is_class_id_registered(cid) {
-            if !skip_to_primitive {
-                let primitive = unsafe { class_ref_to_primitive(value, 2) };
-                return js_jsvalue_to_string_impl(primitive, reject_symbol);
-            }
-            let s = crate::object::class_ref_to_string(cid);
-            return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        }
-        let s = n.to_string();
-        crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32)
     } else if jsval.is_bigint() {
         // BigInt - convert to decimal string
         let ptr = jsval.as_bigint_ptr();
@@ -136,6 +117,12 @@ pub(crate) fn js_jsvalue_to_string_impl(
         // Proxy ids can be SMALLER than the 0x10000 heap floor — check the
         // registry (a by-value lookup, no deref) before the gate.
         if crate::proxy_hooks::proxy_is_proxy(value) != 0 {
+            // ToString(p) is ToString(ToPrimitive(p, string)) (7.1.17, 7.1.1):
+            // the lookups run the Proxy's get trap, the call has this = p.
+            if !skip_to_primitive {
+                let primitive = crate::proxy_hooks::proxy_to_primitive(value, 2);
+                return js_jsvalue_to_string_impl(primitive, reject_symbol);
+            }
             if crate::proxy_hooks::proxy_wraps_callable(value) {
                 let s = "function () { [native code] }";
                 return crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
@@ -294,7 +281,7 @@ pub(crate) fn js_jsvalue_to_string_impl(
 
             unsafe {
                 let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-                if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_array!((*gc_header).obj_type) {
                     // A reassigned `Array.prototype.toString` must run instead
                     // of the hardcoded join (test262 S15.5.1.1_A1_T8).
                     match array_prototype_to_string_override(value) {

@@ -636,10 +636,10 @@ pub fn app_run(_app_handle: i64) {
 /// (when `PERRY_UI_SCREENSHOT_PATH` is set) and exits the process cleanly.
 /// This lets doc-example programs be verified in CI without a human.
 fn install_test_mode_exit_timer() {
-    if !perry_ui_testkit::is_test_mode() {
+    if !perry_ui::test_mode::is_test_mode() {
         return;
     }
-    let delay_secs = perry_ui_testkit::exit_delay_ms() as f64 / 1000.0;
+    let delay_secs = perry_ui::test_mode::exit_delay_ms() as f64 / 1000.0;
     unsafe {
         let target = PerryTestExitTarget::new();
         let sel = Sel::register(c"testExit:");
@@ -666,11 +666,11 @@ define_class!(
     impl PerryTestExitTarget {
         #[unsafe(method(testExit:))]
         fn test_exit(&self, _sender: &AnyObject) {
-            if let Some(path) = perry_ui_testkit::screenshot_path() {
+            if let Some(path) = perry_ui::test_mode::screenshot_path() {
                 let mut len: usize = 0;
                 let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                 if !ptr.is_null() && len > 0 {
-                    perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                    perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                     unsafe { libc::free(ptr as *mut libc::c_void); }
                 }
             }
@@ -1349,6 +1349,16 @@ define_class!(
                     // CADisplayLink-quality vsync alignment is a follow-up.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // Turn this agent's turnloop once (non-blocking). Since the
+                    // tokio removal, fetch / node:net / node:http complete on
+                    // NET_* completions that only a loop turn collects. A CLI
+                    // program turns it in `js_wait_for_event`; a UI app never
+                    // calls that, so without this no network I/O ever finishes
+                    // and `await fetch(...)` hangs forever.
+                    {
+                        extern "C" { fn js_loop_settle_once(); }
+                        js_loop_settle_once();
+                    }
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).
                     js_run_stdlib_pump();

@@ -14,6 +14,29 @@ fn check(value: f64, expected: &str) {
     assert_eq!(read_js_string_pub(result), expected);
 }
 
+// Both the Rust and the ABI render must print `expected` and run the counted
+// `constructor` accessor exactly `reads` times each (node 26.12 reads
+// `value.constructor` once; only a Buffer's inspect fallback reads it again).
+fn check_reads(value: f64, expected: &str, reads: usize) {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(describe_received(value.get_nanbox_f64()), expected);
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        reads,
+        "Rust render constructor reads for {expected}"
+    );
+    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+    let result = crate::validators::js_runtime_describe_received(value.get_nanbox_f64());
+    assert_eq!(read_js_string_pub(result), expected);
+    assert_eq!(
+        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
+        reads,
+        "ABI render constructor reads for {expected}"
+    );
+}
+
 #[test]
 fn received_primitives_and_numbers() {
     for (bits, expected) in [
@@ -36,10 +59,7 @@ fn received_primitives_and_numbers() {
     ] {
         check(value, &format!("type number ({expected})"));
     }
-    check(
-        f64::from_bits(JSValue::int32(-42).bits()),
-        "type number (-42)",
-    );
+    check(f64::from(-42), "type number (-42)");
 }
 
 #[test]
@@ -193,14 +213,17 @@ fn received_function_and_constructor_names() {
     let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::object::js_object_alloc(0, 0) as i64,
     ));
+    // node 26.12.1: only a non-empty string name names the instance; an empty
+    // or undefined name falls through to `inspect(value, { depth: -1 })`,
+    // which prints `[Object]` for the object's enumerable `constructor` key.
     for (value, expected) in [
-        (text("Custom"), "Custom"),
-        (text(""), ""),
-        (f64::from_bits(crate::value::TAG_UNDEFINED), "undefined"),
+        (text("Custom"), "an instance of Custom"),
+        (text(""), "[Object]"),
+        (f64::from_bits(crate::value::TAG_UNDEFINED), "[Object]"),
     ] {
         set(ctor.get_nanbox_f64(), "name", value);
         set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
-        check(obj.get_nanbox_f64(), &format!("an instance of {expected}"));
+        check(obj.get_nanbox_f64(), expected);
     }
     let null_proto = crate::object::js_object_alloc_null_proto(0, 0);
     check(
@@ -281,7 +304,12 @@ fn received_symbol_names_reject_implicit_coercion() {
     ));
     set(ctor.get_nanbox_f64(), "name", symbol.get_nanbox_f64());
     set(obj.get_nanbox_f64(), "constructor", ctor.get_nanbox_f64());
-    for value in [function, obj] {
+    // A function's Symbol name is coerced (node 26.12.1: TypeError "Cannot
+    // convert a Symbol value to a string"); a Symbol `constructor.name` is not
+    // a non-empty string, so it falls through to inspect: `[Object]`.
+    check(obj.get_nanbox_f64(), "[Object]");
+    {
+        let value = &function;
         for abi in [false, true] {
             let error = crate::exception::catch_js_throw(|| {
                 if abi {
@@ -344,10 +372,13 @@ fn received_abi_preserves_surrogate_names() {
                 unit as f64
             );
             assert_eq!(unsafe { (*ptr).utf16_len } as usize, prefix.len() + 1);
-            let error = scope.root_nanbox_f64(build_received_type_error(
-                "Received ",
-                value.get_nanbox_f64(),
-            ));
+            let error = scope.root_nanbox_f64(
+                crate::validators::received::received_type_error(
+                    "Received ",
+                    value.get_nanbox_f64(),
+                )
+                .value(),
+            );
             let message = scope.root_nanbox_f64(property(error.get_nanbox_f64(), "message"));
             let ptr = crate::value::js_get_string_pointer_unified(message.get_nanbox_f64())
                 as *const StringHeader;
@@ -422,14 +453,20 @@ fn with_received_intrinsic_constructor(name: &str, test: impl FnOnce(f64, f64)) 
         prototype.get_nanbox_f64(),
         key.get_nanbox_f64(),
     ));
+    // The fixture patches and restores the intrinsic itself, as the runtime
+    // does when it defines one; a program may not (DEC 250).
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+        crate::object::own_override::as_builtin_definition(|| {
+            test(value.get_nanbox_f64(), prototype.get_nanbox_f64());
+        });
     }));
-    crate::object::js_object_define_property(
-        prototype.get_nanbox_f64(),
-        key.get_nanbox_f64(),
-        original.get_nanbox_f64(),
-    );
+    crate::object::own_override::as_builtin_definition(|| {
+        crate::object::js_object_define_property(
+            prototype.get_nanbox_f64(),
+            key.get_nanbox_f64(),
+            original.get_nanbox_f64(),
+        );
+    });
     if let Err(panic) = result {
         std::panic::resume_unwind(panic);
     }
@@ -459,7 +496,7 @@ extern "C" fn received_throwing_constructor(
     _this: crate::closure::JsThis,
 ) -> f64 {
     RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    crate::exception::js_throw(text("constructor sentinel"));
+    crate::exception::test_throw(text("constructor sentinel"));
 }
 
 extern "C" fn received_collecting_constructor(
@@ -516,13 +553,8 @@ fn received_typed_array_inherited_constructor_getter() {
             prototype,
             crate::fn_info!(received_patched_constructor, 0),
         );
-        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
-        let result = crate::validators::js_runtime_describe_received(value);
-        assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
-        assert_eq!(
-            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            3
-        );
+        // node 26.12.1: one `constructor` Get (inherited getter, reads=1).
+        check_reads(value, "an instance of PatchedView", 1);
     });
 }
 
@@ -560,13 +592,10 @@ fn received_typed_array_inherited_constructor_collect() {
         assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
         let mut after = 0;
         crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
-        assert!(
-            after >= before + 3,
-            "all three constructor reads must collect"
-        );
+        assert!(after > before, "the constructor read must collect");
         assert_eq!(
             RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            3
+            1
         );
     });
 }
@@ -618,17 +647,15 @@ fn inherited_view_getter(name: &str, collecting: bool) {
         crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
         let result = crate::validators::js_runtime_describe_received(value);
         assert_eq!(read_js_string_pub(result), "an instance of PatchedView");
+        // node 26.12.1: one `constructor` Get (inherited getter, reads=1).
         assert_eq!(
             RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            3
+            1
         );
         if collecting {
             let mut after = 0;
             crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
-            assert!(
-                after >= before + 3,
-                "all three constructor reads must collect"
-            );
+            assert!(after > before, "the constructor read must collect");
         }
     });
 }
@@ -712,32 +739,28 @@ fn received_uint8_array_inherited_constructor_collect() {
     inherited_view_getter("Uint8Array", true);
 }
 
-fn assert_received_in_error(value: f64, rhs: &str) {
+// The public `validate_function` error carries the same description.
+fn assert_cb_received(value: f64, received: &str) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
-    for abi in [false, true] {
-        let error = crate::exception::catch_js_throw(|| {
-            if abi {
-                crate::validators::js_runtime_describe_received(value.get_nanbox_f64());
-            } else {
-                validate_function("cb", value.get_nanbox_f64());
-            }
-        })
-        .expect_err("primitive constructor RHS must throw");
-        let error = scope.root_nanbox_f64(error);
-        assert_eq!(
-            read_js_string_pub(property(error.get_nanbox_f64(), "name")),
-            "TypeError"
-        );
-        assert_eq!(
-            property(error.get_nanbox_f64(), "code").to_bits(),
-            crate::value::TAG_UNDEFINED
-        );
-        assert_eq!(
-            read_js_string_pub(property(error.get_nanbox_f64(), "message")),
-            format!("Cannot use 'in' operator to search for 'name' in {rhs}")
-        );
-    }
+    check(value.get_nanbox_f64(), received);
+    let error = crate::exception::catch_js_throw(|| {
+        validate_function("cb", value.get_nanbox_f64());
+    })
+    .expect_err("a non-function cb must throw");
+    let error = scope.root_nanbox_f64(error);
+    assert_eq!(
+        read_js_string_pub(property(error.get_nanbox_f64(), "name")),
+        "TypeError"
+    );
+    assert_eq!(
+        read_js_string_pub(property(error.get_nanbox_f64(), "code")),
+        "ERR_INVALID_ARG_TYPE"
+    );
+    assert_eq!(
+        read_js_string_pub(property(error.get_nanbox_f64(), "message")),
+        format!("The \"cb\" argument must be of type function. Received {received}")
+    );
 }
 
 #[test]
@@ -749,22 +772,20 @@ fn received_primitive_constructor_data() {
     ));
     let symbol = scope.root_nanbox_f64(unsafe { crate::symbol::js_symbol_new(text("n")) });
     let string = scope.root_nanbox_f64(text("ctor"));
-    for (constructor, rhs) in [
-        (1.0, "1"),
-        (string.get_nanbox_f64(), "ctor"),
-        (f64::from_bits(crate::value::TAG_TRUE), "true"),
-        (symbol.get_nanbox_f64(), "Symbol(n)"),
+    // node 26.12.1 (`{ constructor: c }`): a primitive constructor has no
+    // non-empty string `name`, so every one falls through to inspect, which
+    // prints `[Object]` for the enumerable `constructor` key; nothing throws.
+    for constructor in [
+        1.0,
+        string.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_TRUE),
+        symbol.get_nanbox_f64(),
+        f64::from_bits(crate::value::TAG_NULL),
+        f64::from_bits(crate::value::TAG_UNDEFINED),
+        f64::from_bits(crate::value::TAG_FALSE),
     ] {
         set(value.get_nanbox_f64(), "constructor", constructor);
-        assert_received_in_error(value.get_nanbox_f64(), rhs);
-    }
-    for bits in [
-        crate::value::TAG_NULL,
-        crate::value::TAG_UNDEFINED,
-        crate::value::TAG_FALSE,
-    ] {
-        set(value.get_nanbox_f64(), "constructor", f64::from_bits(bits));
-        check(value.get_nanbox_f64(), "[Object]");
+        assert_cb_received(value.get_nanbox_f64(), "[Object]");
     }
 }
 
@@ -777,7 +798,11 @@ extern "C" fn received_collecting_primitive_constructor(
     1.0
 }
 
-fn primitive_view_getter(name: &str) {
+// node 26.12.1, a `constructor` getter returning 1, own then inherited: an
+// empty Buffer prints `<Buffer >` (reads=2: Buffer's inspect reads it again),
+// a DataView `[DataView]`, an Int16Array(1) `[Int16Array]` own and
+// `[TypedArray [Int16Array]]` inherited (reads=1).
+fn primitive_view_getter(name: &str, own_expected: &str, proto_expected: &str, reads: usize) {
     with_received_intrinsic_constructor(name, |value, prototype| {
         let scope = crate::gc::RuntimeHandleScope::new();
         let value = scope.root_nanbox_f64(value);
@@ -788,18 +813,16 @@ fn primitive_view_getter(name: &str) {
                 target.get_nanbox_f64(),
                 crate::fn_info!(received_collecting_primitive_constructor, 0),
             );
-            // Each public/ABI invocation reads twice, including across collecting getters.
-            RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
             let mut before = 0;
             crate::gc::js_gc_stats(&mut before, std::ptr::null_mut(), std::ptr::null_mut());
-            assert_received_in_error(value.get_nanbox_f64(), "1");
-            assert_eq!(
-                RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-                4
-            );
+            let expected = if own { own_expected } else { proto_expected };
+            check_reads(value.get_nanbox_f64(), expected, reads);
             let mut after = 0;
             crate::gc::js_gc_stats(&mut after, std::ptr::null_mut(), std::ptr::null_mut());
-            assert!(after >= before + 4, "all constructor reads must collect");
+            assert!(
+                after >= before + 2 * reads as u64,
+                "all constructor reads must collect"
+            );
             if own {
                 let key = scope.root_nanbox_f64(text("constructor"));
                 crate::object::js_object_delete_dynamic_value(
@@ -813,18 +836,18 @@ fn primitive_view_getter(name: &str) {
 
 #[test]
 fn received_primitive_buffer_constructor_getter() {
-    primitive_view_getter("Buffer");
+    primitive_view_getter("Buffer", "<Buffer >", "<Buffer >", 2);
 }
 #[test]
 fn received_primitive_data_view_constructor_getter() {
-    primitive_view_getter("DataView");
+    primitive_view_getter("DataView", "[DataView]", "[DataView]", 1);
 }
 #[test]
 fn received_primitive_typed_array_constructor_getter() {
-    primitive_view_getter("Int16Array");
+    primitive_view_getter("Int16Array", "[Int16Array]", "[TypedArray [Int16Array]]", 1);
 }
 
-extern "C" fn received_second_null_constructor(
+extern "C" fn received_alternating_null_constructor(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
@@ -836,7 +859,7 @@ extern "C" fn received_second_null_constructor(
     }
 }
 
-extern "C" fn received_second_undefined_constructor(
+extern "C" fn received_alternating_undefined_constructor(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
@@ -848,92 +871,61 @@ extern "C" fn received_second_undefined_constructor(
     }
 }
 
+// node 26.12.1: a getter answering 1 then null (or undefined) is read once;
+// `(1).name` is undefined, so inspect prints `{}` (the accessor is not
+// enumerable) and the later nullish answer is never seen.
 #[test]
-fn received_primitive_constructor_second_nullish_read() {
+fn received_primitive_constructor_read_once() {
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::object::js_object_alloc(0, 0) as i64,
     ));
-    for (info, rhs) in [
-        (crate::fn_info!(received_second_null_constructor, 0), "null"),
-        (
-            crate::fn_info!(received_second_undefined_constructor, 0),
-            "undefined",
-        ),
+    for info in [
+        crate::fn_info!(received_alternating_null_constructor, 0),
+        crate::fn_info!(received_alternating_undefined_constructor, 0),
     ] {
         install_received_constructor_getter(value.get_nanbox_f64(), info);
-        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
-        assert_received_in_error(value.get_nanbox_f64(), rhs);
-        assert_eq!(
-            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            4
-        );
+        check_reads(value.get_nanbox_f64(), "{}", 1);
     }
 }
 
-static RECEIVED_TRANSITION_COLLECT: std::sync::atomic::AtomicBool =
+static RECEIVED_CONSTRUCTOR_COLLECT: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
-static RECEIVED_THIRD_KIND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-extern "C" fn received_transition_constructor(
+static RECEIVED_CONSTRUCTOR_KIND: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+// The one `constructor` Get answers by kind: 0 null, 1 undefined, 3 `0`,
+// 4 `false`, 5 `""`, otherwise an object named PatchedObject.
+extern "C" fn received_kind_constructor(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 3;
-    let kind = RECEIVED_THIRD_KIND.load(std::sync::atomic::Ordering::Relaxed);
-    if RECEIVED_TRANSITION_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
+    RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let kind = RECEIVED_CONSTRUCTOR_KIND.load(std::sync::atomic::Ordering::Relaxed);
+    if RECEIVED_CONSTRUCTOR_COLLECT.load(std::sync::atomic::Ordering::Relaxed) {
         crate::gc::js_gc_collect();
     }
-    if call == 0 && kind == 10 {
-        return f64::from_bits(crate::value::TAG_FALSE);
-    }
-    if call == 2 {
-        match kind {
-            0 => return f64::from_bits(crate::value::TAG_NULL),
-            1 => return f64::from_bits(crate::value::TAG_UNDEFINED),
-            3 => return 0.0,
-            4 => return f64::from_bits(crate::value::TAG_FALSE),
-            5 => return text(""),
-            _ => {}
-        }
+    match kind {
+        0 => return f64::from_bits(crate::value::TAG_NULL),
+        1 => return f64::from_bits(crate::value::TAG_UNDEFINED),
+        3 => return 0.0,
+        4 => return f64::from_bits(crate::value::TAG_FALSE),
+        5 => return text(""),
+        _ => {}
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let ctor = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::object::js_object_alloc(0, 0) as i64,
     ));
-    set(
-        ctor.get_nanbox_f64(),
-        "name",
-        text(if call == 2 { "ThirdObject" } else { "Second" }),
-    );
+    set(ctor.get_nanbox_f64(), "name", text("PatchedObject"));
     ctor.get_nanbox_f64()
 }
 
-fn assert_received_bare_error(value: f64, message: &str) {
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let value = scope.root_nanbox_f64(value);
-    let error = crate::exception::catch_js_throw(|| {
-        validate_function("cb", value.get_nanbox_f64());
-    })
-    .expect_err("metadata evaluation must throw");
-    let error = scope.root_nanbox_f64(error);
-    assert_eq!(
-        read_js_string_pub(property(error.get_nanbox_f64(), "name")),
-        "TypeError"
-    );
-    assert_eq!(
-        read_js_string_pub(property(error.get_nanbox_f64(), "message")),
-        message
-    );
-    assert_eq!(
-        property(error.get_nanbox_f64(), "code").to_bits(),
-        crate::value::TAG_UNDEFINED
-    );
-}
-
+// node 26.12.1, an own `constructor` getter: null, undefined and false print
+// `{}`; an object named PatchedObject names the instance; reads=1 each.
 #[test]
-fn received_third_constructor_nullish_getv() {
-    RECEIVED_TRANSITION_COLLECT.store(false, std::sync::atomic::Ordering::Relaxed);
+fn received_constructor_nullish_getv() {
+    RECEIVED_CONSTRUCTOR_COLLECT.store(false, std::sync::atomic::Ordering::Relaxed);
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -941,37 +933,17 @@ fn received_third_constructor_nullish_getv() {
     ));
     install_received_constructor_getter(
         value.get_nanbox_f64(),
-        crate::fn_info!(received_transition_constructor, 0),
+        crate::fn_info!(received_kind_constructor, 0),
     );
-    for (kind, label) in [(0, "null"), (1, "undefined")] {
-        RECEIVED_THIRD_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
-        RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
-        assert_received_bare_error(
-            value.get_nanbox_f64(),
-            &format!("Cannot read properties of {label} (reading 'name')"),
-        );
-        assert_eq!(
-            RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            3
-        );
+    for (kind, expected) in [
+        (0, "{}"),
+        (1, "{}"),
+        (4, "{}"),
+        (2, "an instance of PatchedObject"),
+    ] {
+        RECEIVED_CONSTRUCTOR_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
+        check_reads(value.get_nanbox_f64(), expected, 1);
     }
-    RECEIVED_THIRD_KIND.store(2, std::sync::atomic::Ordering::Relaxed);
-    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(
-        describe_received(value.get_nanbox_f64()),
-        "an instance of ThirdObject"
-    );
-    assert_eq!(
-        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-        3
-    );
-    RECEIVED_THIRD_KIND.store(10, std::sync::atomic::Ordering::Relaxed);
-    RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
-    assert_eq!(describe_received(value.get_nanbox_f64()), "[Object]");
-    assert_eq!(
-        RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-        1
-    );
 }
 
 per_test_global! {
@@ -983,7 +955,7 @@ extern "C" fn received_primitive_name(
     this: crate::closure::JsThis,
 ) -> f64 {
     let receiver = JSValue::from_bits(this.as_f64().to_bits());
-    let matches = match RECEIVED_THIRD_KIND.load(std::sync::atomic::Ordering::Relaxed) {
+    let matches = match RECEIVED_CONSTRUCTOR_KIND.load(std::sync::atomic::Ordering::Relaxed) {
         3 => receiver.is_number() && this.as_f64() == 0.0,
         4 => receiver.is_bool() && !receiver.as_bool(),
         5 => receiver.is_any_string() && read_js_string_pub(this.as_f64()).is_empty(),
@@ -995,8 +967,8 @@ extern "C" fn received_primitive_name(
 }
 
 #[test]
-fn received_third_constructor_primitive_getv() {
-    RECEIVED_TRANSITION_COLLECT.store(true, std::sync::atomic::Ordering::Relaxed);
+fn received_constructor_primitive_getv() {
+    RECEIVED_CONSTRUCTOR_COLLECT.store(true, std::sync::atomic::Ordering::Relaxed);
     let _lock = crate::gc::global_side_table_test_lock();
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -1004,7 +976,7 @@ fn received_third_constructor_primitive_getv() {
     ));
     install_received_constructor_getter(
         value.get_nanbox_f64(),
-        crate::fn_info!(received_transition_constructor, 0),
+        crate::fn_info!(received_kind_constructor, 0),
     );
     for (kind, brand) in [(3, "Number"), (4, "Boolean"), (5, "String")] {
         let proto = scope.root_nanbox_f64(crate::object::builtin_prototype_value(brand));
@@ -1030,7 +1002,7 @@ fn received_third_constructor_primitive_getv() {
             key.get_nanbox_f64(),
             descriptor.get_nanbox_f64(),
         );
-        RECEIVED_THIRD_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
+        RECEIVED_CONSTRUCTOR_KIND.store(kind, std::sync::atomic::Ordering::Relaxed);
         RECEIVED_CONSTRUCTOR_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
         let result = describe_received(value.get_nanbox_f64());
         if original.get_nanbox_u64() == crate::value::TAG_UNDEFINED {
@@ -1045,10 +1017,12 @@ fn received_third_constructor_primitive_getv() {
                 original.get_nanbox_f64(),
             );
         }
+        // node 26.12.1: `(0).name` etc. run the patched getter with the
+        // primitive receiver and name the instance; one `constructor` Get.
         assert_eq!(result, "an instance of PrimitiveName", "{brand}");
         assert_eq!(
             RECEIVED_CONSTRUCTOR_CALLS.load(std::sync::atomic::Ordering::Relaxed),
-            3
+            1
         );
         assert!(
             RECEIVED_PRIMITIVE_THIS.load(std::sync::atomic::Ordering::Relaxed),
@@ -1226,7 +1200,7 @@ extern "C" fn received_chain_throwing_value_getter(
 ) -> f64 {
     let call = RECEIVED_CONSTRUCTOR_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     if call % 2 == 1 {
-        crate::exception::js_throw(text("constructor sentinel"));
+        crate::exception::test_throw(text("constructor sentinel"));
     }
     f64::from_bits(crate::value::TAG_UNDEFINED)
 }

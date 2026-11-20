@@ -2,7 +2,7 @@
 //! #1098). Pure move — no logic changes.
 
 use crate::block::LlBlock;
-use crate::nanbox::{BIGINT_TAG_I64, INT32_TAG_I64, POINTER_TAG_I64, STRING_TAG_I64};
+use crate::nanbox::{BIGINT_TAG_I64, POINTER_TAG_I64, STRING_TAG_I64};
 use crate::types::{DOUBLE, F32, I1, I32, I64};
 
 /// The one NaN a Perry value is allowed to be: `0x7FF8_0000_0000_0000`.
@@ -101,12 +101,10 @@ pub(crate) fn i32_bool_to_nanbox(blk: &mut LlBlock, i32_val: &str) -> String {
     blk.bitcast_i64_to_double(&tagged)
 }
 
-/// Inline NaN-box of a raw signed i32. The low 32 payload bits are interpreted
-/// as `u32`, matching `JSValue::int32` in the runtime.
+/// Box a raw signed i32 as a JS Number: the raw double (exact for every i32).
+/// A Number has one encoding in every JS-visible value; no INT32 word.
 pub(crate) fn i32_to_nanbox(blk: &mut LlBlock, i32_val: &str) -> String {
-    let payload = blk.zext(I32, i32_val, I64);
-    let tagged = blk.or(I64, &payload, INT32_TAG_I64);
-    blk.bitcast_i64_to_double(&tagged)
+    blk.sitofp(I32, i32_val, DOUBLE)
 }
 
 #[cfg(test)]

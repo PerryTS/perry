@@ -500,6 +500,7 @@ pub struct LoweringContext {
     /// #4101: original source text keyed by FuncId, captured by slicing the
     /// module source against each function's AST span at lowering time.
     /// Flushed into `Module.closure_source_text` alongside `pending_functions`.
+    pub(crate) non_constructor_funcs: std::collections::HashSet<FuncId>,
     pub(crate) closure_source_text: HashMap<FuncId, crate::ir::FunctionSourceMetadata>,
     /// #9413: original source text keyed by ClassId, captured by slicing the
     /// module source against each class's AST span at lowering time. Flushed
@@ -907,17 +908,6 @@ pub struct LoweringContext {
     /// was silent — a plain `const a = { v: 42 }; a.v` read `undefined` merely
     /// because some never-called function elsewhere also named a proxy `a`.
     pub(crate) proxy_local_ids: HashSet<LocalId>,
-    /// #3144: local binding -> builtin prototype method name, for bindings like
-    /// `const m = [].map` / `const s = "".slice`. Lets the `.call`/`.apply`
-    /// rewrite recognize `m.call(arr, ...)` (the receiver of `.call` is a plain
-    /// identifier, not a member/literal) and synthesize `arr.map(...)`.
-    ///
-    /// Keyed by the resolved `LocalId` (registered by the declarator lowering
-    /// in `track_decl_aliases`, and for module-level bindings at
-    /// pre-registration so earlier-lowered function bodies resolve it too).
-    /// The former name-keyed map was scope-blind and folded unrelated
-    /// same-named parameters' `.call(...)` into a builtin method call.
-    pub(crate) builtin_proto_method_local_ids: HashMap<LocalId, String>,
     /// #809: locals whose initializer is an object literal or
     /// `Object.create(...)` — i.e. provably a plain object, never a Date.
     /// Consulted by `static_receiver_class` so `obj.toJSON()` /
@@ -986,12 +976,6 @@ pub struct LoweringContext {
     /// `Any`, but an *annotated* structural object type can still be backed by
     /// an accessor.
     pub(crate) closed_shape_literal_locals: HashMap<LocalId, String>,
-    /// Runtime locals initialised straight from `require("undici")`, the
-    /// shape esbuild's CommonJS output uses (`var import_undici =
-    /// require("undici")`). A `var`/`let` cannot be registered as a namespace
-    /// alias (it may be reassigned and keeps a runtime slot), but `new
-    /// <local>.Agent(...)` still has to reach the native constructor row.
-    pub(crate) undici_namespace_locals: HashSet<LocalId>,
     /// Set while lowering a directly exported binding/default expression.
     /// Eligible method literals consume this flag and retain the seeded IIFE
     /// representation needed to publish an exact cross-module own-method
@@ -1222,9 +1206,7 @@ pub struct LoweringContext {
     /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
     /// expression statement — see
     /// `collect_direct_top_level_reassigned_identifiers`, which deliberately
-    /// does NOT reuse the deeper, name-only (no scope tracking)
-    /// `collect_assigned_function_binding_candidates` scan: that would
-    /// false-positive on a same-named binding shadowed in a nested block.
+    /// does NOT use the function-binding scan (`module_assigned_bindings`).
     /// Consulted when lowering a top-level `class` declaration: a class name
     /// is normally
     /// resolved purely through the class registry (`ctx.lookup_class` /

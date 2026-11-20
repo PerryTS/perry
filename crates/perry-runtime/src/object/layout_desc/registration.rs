@@ -90,7 +90,10 @@ unsafe fn register_static_row(index: usize, desc: *mut PerryLayoutDesc) -> bool 
 #[inline]
 pub(super) fn is_runtime_layout_word(word: u32) -> bool {
     word & crate::codegen_abi::LAYOUT_TAG != 0
-        && LayoutWord(word).row().0 < super::super::runtime_layouts::RUNTIME_LAYOUT_ROWS
+        // Row bits = physical row - LAYOUT_ROW_BIAS; the family words (top row
+        // bits, physical rows 0..9) are no runtime layouts.
+        && LayoutWord(word).row_bits()
+            < super::super::runtime_layouts::RUNTIME_LAYOUT_ROWS - crate::codegen_abi::LAYOUT_ROW_BIAS
 }
 
 /// The registered word of `desc` for a birth in this agent. A runtime
@@ -100,7 +103,7 @@ pub(super) fn is_runtime_layout_word(word: u32) -> bool {
 pub(crate) unsafe fn layout_word_for_birth(desc: *const PerryLayoutDesc) -> Option<u32> {
     let id = registered_layout_id(load_layout_id(desc))?;
     if is_runtime_layout_word(id)
-        && super::super::shapes::shape_record_for_word(LayoutWord(id)).is_none()
+        && !super::super::shapes::shape_record_for_runtime_layout_word(LayoutWord(id))
     {
         install_runtime_layout(desc)?;
     }
@@ -138,10 +141,20 @@ pub(crate) unsafe fn register_namespace_layout(desc: *const PerryLayoutDesc) -> 
 /// whose stores must reach their funnel, `OrdinaryUnmarked` or
 /// `CallableOrdinary`.
 pub(super) fn declared_kind(code: u8) -> Option<super::super::shapes::ShapeObjectKind> {
-    use super::super::shapes::ShapeObjectKind::{CallableOrdinary, Ordinary, OrdinaryUnmarked};
-    [Ordinary, OrdinaryUnmarked, CallableOrdinary]
-        .into_iter()
-        .find(|k| k.code() == code as u64)
+    use super::super::shapes::ShapeObjectKind::{
+        Arguments, ArgumentsStrict, CallableOrdinary, Ordinary, OrdinaryUnmarked,
+    };
+    // An arguments layout (kinds 13/14) is a runtime layout born by its own
+    // funnel (`alloc_arguments_layout`); its record carries the kind.
+    [
+        Ordinary,
+        OrdinaryUnmarked,
+        CallableOrdinary,
+        Arguments,
+        ArgumentsStrict,
+    ]
+    .into_iter()
+    .find(|k| k.code() == code as u64)
 }
 
 /// Register one descriptor under `requested`; the id it resolved to, or 0

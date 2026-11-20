@@ -17,8 +17,6 @@ extern crate perry_ext_http;
 #[cfg(target_os = "wasi")]
 extern crate perry_ext_net;
 #[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
-extern crate perry_ext_undici;
-#[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
 extern crate perry_ext_ws;
 #[cfg(all(target_os = "wasi", feature = "wasi-node-modules"))]
 extern crate perry_ext_zlib;

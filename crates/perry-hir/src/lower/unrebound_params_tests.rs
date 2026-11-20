@@ -4,7 +4,7 @@
 //! VERDICT tests: both desugars print the same numbers when the parameter is
 //! never rebound, so only the presence of the temp tells them apart. The
 //! behaviour where the snapshot matters is covered against node by
-//! `test-files/test_gap_compound_param_base*.{ts,cts}`.
+//! `tests/fixtures/programs/test_gap_compound_param_base*.{ts,cts}`.
 
 #![cfg(test)]
 

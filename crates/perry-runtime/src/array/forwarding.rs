@@ -24,7 +24,7 @@ pub(super) unsafe fn follow_array_forwarding(
         let mut first_forwarded_header: *mut crate::gc::GcHeader = std::ptr::null_mut();
         while let Some(gc_header) = tracked_header {
             let gc_header = gc_header.as_ptr();
-            if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_not_array!((*gc_header).obj_type)
                 || (*gc_header).gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 break;
@@ -38,7 +38,7 @@ pub(super) unsafe fn follow_array_forwarding(
             else {
                 return None;
             };
-            if (*target_header.as_ptr()).obj_type != crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_not_array!((*target_header.as_ptr()).obj_type) {
                 return None;
             }
             cleaned = new_user as *const ArrayHeader;
@@ -92,9 +92,7 @@ pub(crate) fn clean_owned_arr_ptr(arr: *const ArrayHeader) -> *const ArrayHeader
     unsafe {
         let tracked = crate::value::addr_class::try_read_tracked_gc_header(cleaned as usize);
         match follow_array_forwarding(cleaned, tracked) {
-            Some((live, Some(header)))
-                if (*header.as_ptr()).obj_type == crate::gc::GC_TYPE_ARRAY =>
-            {
+            Some((live, Some(header))) if crate::gc_type_is_array!((*header.as_ptr()).obj_type) => {
                 live
             }
             _ => std::ptr::null(),
@@ -146,7 +144,7 @@ pub(crate) fn arrays_share_identity(a_bits: u64, b_bits: u64) -> bool {
         ) else {
             return false;
         };
-        if ha.obj_type != crate::gc::GC_TYPE_ARRAY || hb.obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(ha.obj_type) || crate::gc_type_is_not_array!(hb.obj_type) {
             return false;
         }
         if a == b {
@@ -175,7 +173,7 @@ pub(crate) fn is_array_value_bits(bits: u64) -> bool {
                 (bits & crate::value::POINTER_MASK) as usize,
             )
         }
-        .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+        .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 /// The relocation-stable identity token of an array value (#13792): the one

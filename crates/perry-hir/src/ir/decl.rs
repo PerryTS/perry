@@ -112,6 +112,8 @@ pub struct Import {
     /// but do NOT pin the target as eager — if no static edge reaches it
     /// the target is `Deferred`. `specifiers` is empty for these.
     pub is_dynamic: bool,
+    /// Static `import defer` binds a namespace without evaluating its module.
+    pub is_deferred: bool,
     /// Issue #1672: this source is the target of at least one dynamic
     /// `import()` site in the module, but the edge could NOT be a
     /// dedicated `is_dynamic` synthetic edge because a *static* import of
@@ -281,6 +283,13 @@ pub struct Class {
     /// inside a turbopack factory threw at module init). Codegen
     /// (`init_static_fields_*`) skips module-init static init for these.
     pub is_nested: bool,
+    /// R9BIRTH6: the `module.init` index the declaration evaluates at
+    /// (ECMA-262 15.7.14 ClassDefinitionEvaluation runs at the statement's
+    /// position; before it the binding is in its TDZ, 14.3.1), for a
+    /// top-level class declaration: the statements its evaluation emits
+    /// (parent registration, computed names, static elements) start there.
+    /// `None` for nested classes, class expressions and synthetic classes.
+    pub decl_stmt: Option<u32>,
     /// #6812 (w16): minimum inline slot count to allocate for instances,
     /// beyond `fields.len()`. Set only on per-site empty-literal anon-shape
     /// classes when the lowering can prove the builder's final width (e.g. a
@@ -323,6 +332,45 @@ pub fn is_cjs_record_export(name: &str) -> bool {
 }
 
 impl Class {
+    /// The class has heritage and no constructor of its own: it runs the
+    /// default derived constructor `constructor(...a) { super(...a) }`, and
+    /// its field initializers are the registered `<class>_default_fields`
+    /// body. A `new` of such a class may be constructed through the class
+    /// value as written (`new` of a specialization constructs the class it
+    /// was specialized from; codegen `super_constructor::new`).
+    pub fn is_default_derived(&self) -> bool {
+        self.constructor.is_none()
+            && (self.extends_name.is_some()
+                || self.extends_expr.is_some()
+                || self.extends.is_some()
+                || self.native_extends.is_some())
+    }
+
+    /// Accessor `f` of `getters` / `setters` is `static`: an own property of
+    /// the class constructor, not of its prototype (`static_accessor_fn_ids`).
+    pub fn is_static_accessor(&self, f: &Function) -> bool {
+        self.static_accessor_fn_ids.contains(&f.id)
+    }
+
+    /// Some member's key is evaluated by ClassDefinitionEvaluation: the one
+    /// question "does this class have keys the compiler cannot name". A member
+    /// keyed by a known symbol is an ordinary member and does not count.
+    pub fn has_evaluated_members(&self) -> bool {
+        self.computed_members
+            .iter()
+            .any(ClassComputedMember::is_evaluated)
+    }
+
+    /// Some instance getter or setter has an evaluated key: the only member
+    /// that can intercept a `this.x` read or store by a name the compiler
+    /// does not see (an evaluated-key method is a writable data property, so
+    /// an own field shadows it and an add over it defines an own property).
+    pub fn has_evaluated_accessor(&self) -> bool {
+        self.computed_members.iter().any(|m| {
+            m.is_evaluated() && !m.is_static && !matches!(m.kind, ClassComputedMemberKind::Method)
+        })
+    }
+
     /// The class `__perry_declared_keys(k1, k2, ...)` births: an object with
     /// a null prototype whose keys are exactly the declared ones, each absent
     /// until stored (`ClassFieldOrigin::Declared`). It has no constructor and
@@ -483,6 +531,28 @@ pub struct ClassComputedMember {
     pub source_order: usize,
 }
 
+impl ClassComputedMember {
+    /// The member's key when it is known at compile time: a well-known symbol
+    /// (`SymbolFor("@@__perry_wk_<name>")`) or a registered `Symbol.for("lit")`.
+    /// The key expression IS the key's identity, so a known member is named
+    /// by it exactly as a string member is named by its text. String and
+    /// number literal keys never reach here: the lowering names those members.
+    pub fn known_symbol(&self) -> Option<&str> {
+        match &self.key_expr {
+            Expr::SymbolFor(inner) => match inner.as_ref() {
+                Expr::String(s) => Some(s.as_str()),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// The key is evaluated by ClassDefinitionEvaluation (not known here).
+    pub fn is_evaluated(&self) -> bool {
+        self.known_symbol().is_none()
+    }
+}
+
 /// A class field
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ClassFieldOrigin {
@@ -494,9 +564,28 @@ pub enum ClassFieldOrigin {
     /// limited by the late-key budget. Only [`Class::is_declared_keys_record`]
     /// classes carry it.
     Declared,
+    /// A compiler capture field, synthesized by `synthesize_class_captures`.
+    /// It is defined at birth like [`ClassFieldOrigin::Definition`] (see
+    /// [`ClassFieldOrigin::is_definition`]); this origin is the one place that
+    /// says "compiler capture field": no reader looks at the name.
+    Capture,
 }
 
 impl ClassFieldOrigin {
+    /// The field defines its property at birth (a source definition or a
+    /// compiler capture field).
+    pub fn is_definition(self) -> bool {
+        matches!(
+            self,
+            ClassFieldOrigin::Definition | ClassFieldOrigin::Capture
+        )
+    }
+
+    /// The field is a compiler capture field.
+    pub fn is_capture(self) -> bool {
+        matches!(self, ClassFieldOrigin::Capture)
+    }
+
     /// The field defines no property at birth (a reservation the
     /// constructor or a later store fills).
     pub fn is_reservation(self) -> bool {

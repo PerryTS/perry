@@ -16,7 +16,12 @@ references in `realm-dumps/`, byte for byte:
   built without it fails by construction. It walks only the roots in R (the
   names are handed to it as `realm-dump.names`), and its dump, restricted to
   the names, must equal `<p>.jsonl`, which is main's full walk restricted to
-  the same names.
+  the same names. Both dumpers are built from one source, the restricted one
+  (`dumper_source(names)`): only R differs between the reference and the
+  check. The plain source's namespace imports run every module's init, and
+  those inits rewrite cells in R (console, process: own `prototype` keys and
+  lengths; Math, SyntaxError.prototype), so a reference built from it
+  recorded the dumper's own imports, not the realm.
 * Full: the dumper compiled with no input (R is top); its dump must equal
   `full.jsonl`.
 
@@ -37,6 +42,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import realm_dump  # noqa: E402
@@ -44,10 +50,41 @@ import realm_dump  # noqa: E402
 ROOT = Path(__file__).resolve().parent.parent
 REFS = ROOT / "realm-dumps"
 DUMPER = ROOT / "scripts" / "realm_dump.ts"
-PROGRAMS = ["hello", "lad-04-classes", "lad-07-json"]
+PROGRAMS = ["hello", "lad-04-classes", "lad-07-json", "node-imports"]
 # The dump binary runs in one fixed environment on every arm and host.
 RUN_ENV = {"PATH": "/usr/bin:/bin", "HOME": "/root", "LANG": "C"}
-RUN_DIR = Path("/tmp/perry-realm-diff")
+# The executable's path and the dumper's source path are realm values too
+# (process.execPath, process.argv, module paths). Each gate run works in its
+# own temporary directory, so concurrent runs never touch each other's files,
+# and the dump spells that directory as a fixed token (paths derived from it,
+# such as node:module's globalPaths entry <run>/../lib/node, follow).
+WORK_TOKEN = "$REALM_DIFF_WORK"
+_WORK = []
+
+
+def work_dir():
+    """This process's private directory: src/ holds the dumper source, run/
+    the dump binary's working directory."""
+    if not _WORK:
+        work = Path(tempfile.mkdtemp(prefix="perry-realm-diff-"))
+        import atexit
+        atexit.register(shutil.rmtree, work, True)
+        _WORK.append(work)
+    return _WORK[0]
+
+
+def import_name(specifier):
+    """The name R records for `import * as ns from "<specifier>"`: the
+    compiler's realm-reach scan (perry-hir realm_reach.rs native_module) adds
+    the module's `node:<module>` namespace entry and its members. A native
+    receiver cell (%NativeNamespace:...%) is a different root: the runtime
+    spells it (path/posix's is %NativeNamespace:path.posix%) and some modules
+    (node:fs) have none. The dumper keys its native roots by this name
+    (`nativeRoots` in realm_dump.ts; the gate tests hold the two together)."""
+    return "node:" + specifier.removeprefix("node:")
+
+
+NATIVE_IMPORT = re.compile(r'^import \* as (realm_native_\d+) from "([^"]+)";$', re.M)
 
 
 class GateError(Exception):
@@ -67,6 +104,26 @@ def compile_ts(perry, source, binary, extra_env):
     if run.returncode != 0:
         raise GateError(f"{source.name} failed to compile (see {binary}.compile.log)")
     return log
+
+
+def dumper_source(names=None):
+    """The dumper, written to this run's src directory. Restricted to `names`, every
+    namespace import of a module outside R is bound to undefined: a static
+    import runs its module's init, which births all of the module's exports,
+    and a restricted dumper must not touch a root outside R."""
+    text = DUMPER.read_text()
+    imports = NATIVE_IMPORT.findall(text)
+    if not imports:
+        raise GateError(f"{DUMPER} has no native namespace imports (format changed?)")
+    if names is not None:
+        text = NATIVE_IMPORT.sub(
+            lambda m: m.group(0) if import_name(m.group(2)) in names
+            else f"const {m.group(1)}: any = undefined; // {m.group(2)} is outside R", text)
+    source = work_dir() / "src" / "realm_dump.ts"
+    shutil.rmtree(source.parent, ignore_errors=True)
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    return source
 
 
 def reach_of(log):
@@ -95,18 +152,20 @@ def dump(binary, names=None, walk=False):
     restricted dumper walks only roots in R. Its output is restricted to
     `names` either way."""
     # The executable's path and argv[0] are realm values (process.execPath,
-    # process.argv, module paths): every dump runs as the same file from the
-    # same directory, on every arm and host.
-    shutil.rmtree(RUN_DIR, ignore_errors=True)
-    RUN_DIR.mkdir(parents=True)
-    shutil.copy2(binary, RUN_DIR / "realm-dump")
+    # process.argv, module paths): every dump runs as the same file name from
+    # this run's directory, and that directory is spelled as a token.
+    run_dir = work_dir() / "run"
+    shutil.rmtree(run_dir, ignore_errors=True)
+    run_dir.mkdir(parents=True)
+    shutil.copy2(binary, run_dir / "realm-dump")
     if walk:
-        (RUN_DIR / "realm-dump.names").write_text("\n".join(sorted(names)))
-    run = subprocess.run(["./realm-dump"], cwd=RUN_DIR, env=RUN_ENV,
+        (run_dir / "realm-dump.names").write_text("\n".join(sorted(names)))
+    run = subprocess.run(["./realm-dump"], cwd=run_dir, env=RUN_ENV,
                          capture_output=True, text=True)
     if run.returncode != 0:
         raise GateError(f"{binary} exited {run.returncode}: {run.stderr[-500:]}")
-    return realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    text = realm_dump.canonical(realm_dump.graph_from_text(run.stdout), names)
+    return text.replace(str(work_dir()), WORK_TOKEN)
 
 
 def witness_names(perry, program, out):
@@ -148,11 +207,12 @@ def main():
             names_file = REFS / f"{program}.names.json"
             reference = REFS / f"{program}.jsonl"
             if args.regenerate:
-                # Main populates every cell: its plain dump restricted to the
-                # names is the reference.
+                # Main populates every cell: its full realm (R top), dumped by
+                # the restricted dumper's source and restricted to the names,
+                # is the reference.
                 names_file.write_text(json.dumps({"names": names}, indent=0) + "\n")
                 binary = out / f"dump-{program}" / "realm-dump"
-                compile_ts(args.perry, DUMPER, binary, {})
+                compile_ts(args.perry, dumper_source(set(names)), binary, {})
                 reference.write_text(dump(binary, set(names)))
                 print(f"realm_diff_gate: regenerated {program} ({len(names)} names)")
                 continue
@@ -164,12 +224,13 @@ def main():
                 ok = False
                 continue
             binary = out / f"dump-{program}" / "realm-dump"
-            log = compile_ts(args.perry, DUMPER, binary, {"PERRY_REALM_REACH_NAMES": str(names_file)})
+            log = compile_ts(args.perry, dumper_source(set(names)), binary,
+                             {"PERRY_REALM_REACH_NAMES": str(names_file)})
             check_restricted(log, names_file, names)
             ok &= compare(program, reference, dump(binary, set(names), walk=True), out)
         if "full" in wanted or args.self_test:
             binary = out / "dump-full" / "realm-dump"
-            log = compile_ts(args.perry, DUMPER, binary, {})
+            log = compile_ts(args.perry, dumper_source(), binary, {})
             if not reach_of(log)["top"]:
                 raise GateError("the plainly built dumper's R is not top")
             if args.regenerate:
@@ -185,7 +246,7 @@ def main():
                     print("FAIL self-test: a dumper built without the input passed the restricted check")
                     ok = False
                 except GateError as e:
-                    print(f"realm_diff_gate: self-test refused the plain dumper ({e})")
+                    print(f"realm_diff_gate: self-test ok: the restricted check refused the plain dumper ({e})")
     except GateError as e:
         print(f"FAIL {e}")
         ok = False

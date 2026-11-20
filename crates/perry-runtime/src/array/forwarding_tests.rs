@@ -99,6 +99,7 @@ fn growth_preserves_the_owned_array_accessor_pair_and_attributes() {
 }
 
 #[test]
+#[cfg(target_pointer_width = "64")]
 fn install_array_growth_forwarding_with_installs_stub_for_injected_header() {
     // Actual low-address classification is covered by
     // value::addr_class::tests::tracked_gc_classifier_accepts_injected_low_arena_membership.

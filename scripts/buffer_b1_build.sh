@@ -16,7 +16,7 @@ until [[ $(df --output=avail -BG / | tail -1 | tr -dc 0-9) -ge 25 ]]; do sleep 3
 df -h /
 taskset -c 0-55 cargo build --release -j 8 \
     -p perry -p perry-runtime -p perry-runtime-static -p perry-stdlib-static \
-    -p perry-ext-zlib -p perry-ext-http -p perry-ext-net -p perry-ext-ethers \
+    -p perry-ext-zlib -p perry-ext-http -p perry-ext-net \
     -p perry-ext-sharp -p perry-ext-ws \
     --features perry-stdlib/external-zlib-pump,perry-stdlib/external-http-server-pump,perry-stdlib/external-http-client-pump \
     > "$hostdir/logs/$arm-coherent-build.log" 2>&1

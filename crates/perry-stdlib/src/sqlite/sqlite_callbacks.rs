@@ -101,11 +101,11 @@ unsafe fn result_error_pending(ctx: *mut ffi::sqlite3_context) {
     ffi::sqlite3_result_error(ctx, c"JavaScript callback threw".as_ptr(), -1);
 }
 
-fn range_error_value(message: &str) -> f64 {
+fn range_error_value(message: &str) -> perry_runtime::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     perry_runtime::node_submodules::register_error_code_pub(msg, "ERR_OUT_OF_RANGE");
-    let err = perry_runtime::error::js_rangeerror_new(msg);
-    perry_runtime::js_nanbox_pointer(err as i64)
+    let err = perry_runtime::error::CoreError::range_error(msg);
+    err
 }
 
 fn plain_type_error_value(message: &str) -> f64 {
@@ -121,7 +121,10 @@ fn plain_range_error_value(message: &str) -> f64 {
 }
 
 /// A SQLite integer as a JS value, or node's range error (not thrown).
-pub(crate) unsafe fn integer_value_checked(value: i64, read_bigints: bool) -> Result<JSValue, f64> {
+pub(crate) unsafe fn integer_value_checked(
+    value: i64,
+    read_bigints: bool,
+) -> Result<JSValue, perry_runtime::error::CoreError> {
     if read_bigints {
         return Ok(JSValue::bigint_ptr(
             perry_runtime::bigint::js_bigint_from_i64(value),
@@ -174,7 +177,8 @@ unsafe fn value_arg_checked(
         return Ok(JSValue::null());
     }
     match ffi::sqlite3_value_type(value) {
-        ffi::SQLITE_INTEGER => integer_value_checked(ffi::sqlite3_value_int64(value), use_bigints),
+        ffi::SQLITE_INTEGER => integer_value_checked(ffi::sqlite3_value_int64(value), use_bigints)
+            .map_err(|error| error.value()),
         ffi::SQLITE_FLOAT => Ok(JSValue::number(ffi::sqlite3_value_double(value))),
         ffi::SQLITE_TEXT => {
             let ptr = ffi::sqlite3_value_text(value);
@@ -339,9 +343,7 @@ pub(crate) unsafe extern "C" fn node_sqlite_authorizer_trampoline(
         return ffi::SQLITE_DENY;
     };
     let result = value_from_f64(result);
-    let code = if result.is_int32() {
-        Some(result.as_int32())
-    } else if result.is_number() {
+    let code = if result.is_number() {
         let number = result.as_number();
         (number.is_finite()
             && number.fract() == 0.0
@@ -610,9 +612,6 @@ pub(crate) unsafe extern "C" fn node_sqlite_changeset_conflict(
         return ffi::SQLITE_CHANGESET_ABORT;
     };
     let result = value_from_f64(result);
-    if result.is_int32() {
-        return result.as_int32() as c_int;
-    }
     if result.is_number() {
         let number = result.as_number();
         if number.is_finite()

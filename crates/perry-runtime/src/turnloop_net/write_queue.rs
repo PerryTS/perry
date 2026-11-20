@@ -46,6 +46,72 @@ pub(super) fn submit_bytes(
     Ok(())
 }
 
+/// How [`submit_bytes_eager`] placed a buffer.
+pub(super) enum Eager {
+    /// The kernel took it whole; no driver write was submitted (libuv's
+    /// `uv_try_write` with no write request). The caller posts the completion.
+    Whole,
+    /// The kernel took this prefix; the rest is one driver write.
+    Part(usize),
+}
+
+/// [`submit_bytes`] after libuv's `uv_try_write`: when no driver write is
+/// ahead of `bytes`, the kernel takes what it can right now and only the
+/// remainder goes to the driver. This is what makes a Node write synchronous:
+/// `writableLength` drops at once, and a completion that flushes the backlog
+/// decides `'drain'` on what is left (perry#9493).
+pub(super) fn submit_bytes_eager(
+    driver: &mut turnloop::Loop,
+    name: Name,
+    entry: &mut Entry,
+    mut bytes: Vec<u8>,
+) -> Result<Eager, Error> {
+    if entry.inflight != 0 {
+        submit_bytes(driver, name, entry, bytes)?;
+        return Ok(Eager::Part(0));
+    }
+    let sent = try_send(driver, entry.handle, &bytes);
+    if sent == bytes.len() {
+        return Ok(Eager::Whole);
+    }
+    bytes.drain(..sent);
+    submit_bytes(driver, name, entry, bytes)?;
+    Ok(Eager::Part(sent))
+}
+
+/// Non-blocking `send` until the socket would block. Any error stops it: the
+/// driver write of the remainder meets the same error and reports it. A
+/// descriptor that is not a socket (an adopted tty or FIFO) takes nothing here.
+#[cfg(unix)]
+fn try_send(driver: &turnloop::Loop, handle: Handle, bytes: &[u8]) -> usize {
+    let Ok(turnloop::RawTransport::Fd(fd)) = driver.raw_transport(handle) else {
+        return 0;
+    };
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    let flags = libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL;
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    let flags = libc::MSG_DONTWAIT;
+    let mut sent = 0;
+    while sent < bytes.len() {
+        // SAFETY: `fd` is the loop's live socket and the range is initialized.
+        let n = unsafe { libc::send(fd, bytes[sent..].as_ptr().cast(), bytes.len() - sent, flags) };
+        if n > 0 {
+            sent += n as usize;
+        } else if n < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted
+        {
+            continue;
+        } else {
+            break;
+        }
+    }
+    sent
+}
+
+#[cfg(not(unix))]
+fn try_send(_driver: &turnloop::Loop, _handle: Handle, _bytes: &[u8]) -> usize {
+    0
+}
+
 /// Submit the write-side shutdown. Returns whether it went to a Windows pipe
 /// drain job instead (a job, not a handle operation: a link route must hold a
 /// ref for it until its terminal completion).
@@ -75,6 +141,9 @@ pub(super) fn submit_shutdown(
     entry.writes.push_back(PendingWrite {
         user,
         len: 0,
+        sent: 0,
+        sync: false,
+        posted: false,
         last: true,
     });
     Ok(drain)
@@ -114,6 +183,9 @@ pub(super) fn accept_write(
                 entry.writes.push_back(PendingWrite {
                     user,
                     len,
+                    sent: 0,
+                    sync: false,
+                    posted: false,
                     last: true,
                 });
             } else {
@@ -263,7 +335,7 @@ pub(super) fn retire(net: &mut NetState, id: i64, op_class: u64) -> Vec<(u64, us
     }
     let mut retired = Vec::new();
     while let Some(w) = entry.writes.pop_front() {
-        entry.queued = entry.queued.saturating_sub(w.len);
+        entry.queued = entry.queued.saturating_sub(w.len - w.sent);
         retired.push((w.user, w.len, entry.queued + waiting));
         if w.last {
             break;

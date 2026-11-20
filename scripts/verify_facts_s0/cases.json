@@ -1,0 +1,6 @@
+{
+  "activation-call": "activation:call",
+  "activation-accessor": "activation:accessor",
+  "activation-this": "activation:this",
+  "activation-escape": "activation:escape"
+}

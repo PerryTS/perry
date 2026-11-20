@@ -287,7 +287,7 @@ fn import_rejection_and_duplicate_completion_preserve_the_first_promise_outcome(
             -1
         );
         crate::gc::gc_collect_minor();
-        assert!(frame(pointer).failed);
+        assert!(frame(pointer).is_failed());
         assert_eq!(
             (*promise(frame(pointer).get(slot))).reason.to_bits(),
             frame(pointer).get(error).to_bits()

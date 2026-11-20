@@ -244,6 +244,61 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     all_numeric_elements: bool,
     reread: impl FnOnce(&mut FnCtx<'f>) -> Result<Vec<String>>,
 ) -> Result<String> {
+    emit_array_birth(
+        ctx,
+        n,
+        None,
+        canonical_raw_f64,
+        layout_notes_needed,
+        all_numeric_elements,
+        reread,
+    )
+}
+
+/// What an inline fill birth `new Array(n).fill(v)` (`expr::fill_birth`)
+/// changes of a literal's inline birth: the slots it reserves (`capacity >=
+/// n`, the slack born as holes) and the word its elements are (`rest`: I32
+/// words, `i64` operands; else plain doubles). Its layout bits are
+/// `perry_abi::fill_birth_layout`, what the runtime's `js_array_fill_birth`
+/// installs.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct FillShape {
+    pub capacity: usize,
+    pub rest: bool,
+}
+
+/// A birth of `n` elements in `capacity` slots is emitted inline (the bump
+/// allocation and the stores) by [`emit_array_birth`], not by a runtime call.
+pub(crate) fn inline_birth_admitted(ctx: &FnCtx<'_>, n: usize, capacity: usize) -> bool {
+    n != 0
+        && n <= capacity
+        && capacity <= INLINE_ARRAY_MAX_ELEMENTS
+        && !crate::codegen::full_outline_ic_enabled()
+        && crate::target_layout::inline_births_admitted(ctx.target_triple)
+}
+
+/// [`emit_array_from_lowered_values`], or with `fill` the inline fill birth:
+/// the same bump allocation and header words, `fill`'s capacity and layout
+/// bits, and every element stored once as the word `reread` gives (plain
+/// doubles, or `i64` I32 words when `fill.rest`). The caller has checked
+/// [`inline_birth_admitted`]; its values are no pointers, so the collecting
+/// slow arm of the allocation needs no root for them.
+pub(crate) fn emit_array_birth<'f>(
+    ctx: &mut FnCtx<'f>,
+    n: usize,
+    fill: Option<FillShape>,
+    canonical_raw_f64: &[bool],
+    layout_notes_needed: &[bool],
+    all_numeric_elements: bool,
+    reread: impl FnOnce(&mut FnCtx<'f>) -> Result<Vec<String>>,
+) -> Result<String> {
+    if let Some(shape) = fill {
+        anyhow::ensure!(
+            inline_birth_admitted(ctx, n, shape.capacity),
+            "perry-codegen: a fill birth of {n} elements in {} slots is not inline",
+            shape.capacity
+        );
+    }
     // #5391: oversized modules outline array-literal construction. The inline
     // bump-alloc + N×(store + layout-note + barrier) sequence makes minified
     // data-table builders huge (single 18MB functions are impractical to
@@ -251,7 +306,7 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     // a per-literal stack buffer and build the array in ONE runtime call. The
     // buffer is hoisted to the entry block (fixed size per site; bounded total
     // stack) and consumed immediately by the call, so no GC-visible window.
-    if crate::codegen::full_outline_ic_enabled() {
+    if fill.is_none() && crate::codegen::full_outline_ic_enabled() {
         let vals = reread(ctx)?;
         let buf = ctx.func.alloca_entry_array(DOUBLE, n);
         for (i, v) in vals.iter().enumerate() {
@@ -268,9 +323,12 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
     // Inline bump-allocator path for small literals. Size threshold matches
     // `MAX_SCALAR_ARRAY_LEN` in collectors.rs so every candidate the escape
     // pass rejects can still benefit from the inline alloc.
-    // ILP32 (wasm32 WASI, #11378): the inline bump reads `InlineArenaState`
-    // at LP64 offsets; take the runtime call below instead.
-    if n <= INLINE_ARRAY_MAX_ELEMENTS && !crate::codegen::helpers::ilp32_target() {
+    // The bump reads `InlineArenaState` at the target's offsets
+    // (`target_layout::inline_arena_layout`); other ILP32 targets take the
+    // runtime call below.
+    if n <= INLINE_ARRAY_MAX_ELEMENTS
+        && crate::target_layout::inline_births_admitted(ctx.target_triple)
+    {
         if n == 0 {
             return Ok(super::inline_birth::empty_array(ctx));
         }
@@ -288,22 +346,23 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         const GC_LAYOUT_POINTER_FREE: u64 = 0x4000;
 
         // Empty arrays use the same birth protocol, retaining the runtime's
-        // four-slot append reserve. Nonempty literals keep their exact size.
-        let capacity = n;
+        // four-slot append reserve. Nonempty literals keep their exact size;
+        // a fill birth has the slots the runtime gives it.
+        let capacity = fill.map_or(n, |shape| shape.capacity);
         let total_size = GC_HEADER_SIZE + ARRAY_HEADER_SIZE + (capacity as u64) * ELEMENT_SIZE;
         let total_size_str = total_size.to_string();
 
         // Load state + compute bump check. `total_size` is always a
         // multiple of 8, every prior alloc rounds offset to 8, and blocks
         // start 8-aligned, so no align-up step is needed.
+        let arena = crate::target_layout::inline_arena_layout(ctx.target_triple);
         let state_ptr = load_inline_arena_state(ctx);
         let blk = ctx.block();
-        let offset_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "8")]);
-        let offset_val = blk.load(I64, &offset_field_ptr);
+        let (offset_field_ptr, offset_val) =
+            super::inline_birth::arena_load(blk, &arena, &state_ptr, arena.offset);
         let aligned_off = offset_val.clone();
         let new_offset = blk.add(I64, &aligned_off, &total_size_str);
-        let size_field_ptr = blk.gep(I8, &state_ptr, &[(I64, "16")]);
-        let size_val = blk.load(I64, &size_field_ptr);
+        let (_, size_val) = super::inline_birth::arena_load(blk, &arena, &state_ptr, arena.limit);
         let fits = blk.icmp_ule(I64, &new_offset, &size_val);
 
         let fast_idx = ctx.new_block("arrlit.fast");
@@ -318,8 +377,8 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // Fast path: commit the bump, compute `data + offset`.
         ctx.current_block = fast_idx;
         let blk = ctx.block();
-        // GC_STORE_AUDIT(INIT): arena bump offset is allocator metadata, not a JS heap edge.
-        blk.store(I64, &new_offset, &offset_field_ptr);
+        // The arena bump offset is allocator metadata, not a JS heap edge.
+        super::inline_birth::arena_store(blk, &arena, &new_offset, &offset_field_ptr);
         let data_ptr = blk.load(PTR, &state_ptr);
         let raw_fast = blk.gep(I8, &data_ptr, &[(I64, &aligned_off)]);
         let fast_pred_label = blk.label.clone();
@@ -385,6 +444,15 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
             None
         };
         let header_word = match &all_plain_numbers {
+            // The fill birth's layout bits replace the pointer-free hint.
+            _ if fill.is_some() => {
+                let layout = perry_abi::fill_birth_layout(fill.is_some_and(|shape| shape.rest));
+                (GC_TYPE_ARRAY
+                    | (GC_FLAG_ARENA << 8)
+                    | (u64::from(layout) << 16)
+                    | (total_size << 32))
+                    .to_string()
+            }
             Some(all_plain) => {
                 // GC_ARRAY_RAW_F64_LAYOUT (0x80) in `_reserved`.
                 let flagged = gc_packed | (0x80u64 << 16);
@@ -405,7 +473,9 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
 
         // Packed ArrayHeader at raw+8 (length low 32 / capacity high 32).
         let arr_header_addr = blk.gep(I8, &raw, &[(I64, "8")]);
-        let arr_header_packed = (n as u64) | ((capacity as u64) << 32);
+        // `capacity >= n` (asserted): wpfacts' length floor for a literal
+        // is its `n` slots (`solve::arr_len`).
+        let arr_header_packed = perry_abi::array_birth_header(n as u32, capacity as u32);
         // GC_STORE_AUDIT(INIT): freshly allocated ArrayHeader length/capacity, no child pointer.
         blk.store(I64, &arr_header_packed.to_string(), &arr_header_addr);
         let named = blk.gep(I8, &raw, &[(I64, "16")]);
@@ -428,6 +498,20 @@ pub(crate) fn emit_array_from_lowered_values<'f>(
         // user-visible address.
         let user_ptr = blk.gep(I8, &raw, &[(I64, "8")]);
         let user_ptr_as_i64 = blk.ptrtoint(&user_ptr, I64);
+
+        if let Some(shape) = fill {
+            let word = if shape.rest { I64 } else { DOUBLE };
+            let blk = ctx.block();
+            for (i, v) in vals.iter().enumerate() {
+                let offset = (32 + i * 8).to_string();
+                let elem_ptr = blk.gep_inbounds(I8, &raw, &[(I64, &offset)]);
+                // GC_STORE_AUDIT(POINTER_FREE): a plain double or an I32
+                // word (the 0x7FFE band); the header already says so.
+                blk.store(word, v, &elem_ptr);
+            }
+            super::inline_birth::finish(ctx, &raw, &birth_flags, &state_ptr);
+            return Ok(user_ptr_as_i64);
+        }
 
         if let Some(all_plain) = all_plain_numbers {
             let plain_idx = ctx.new_block("arrlit.plain_numbers");

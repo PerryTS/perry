@@ -21,24 +21,18 @@ impl KeyRef<'_> {
             return crate::object::keys_find_property_slot_by_bytes_resolved_hashed(
                 crate::object::ObjectKeys::new(keys as *mut _, count),
                 count,
+                0,
                 bytes,
                 hash,
             );
         }
-        let slots = crate::array::array_elements_ptr(keys);
-        if word != 0 {
-            if let Some(i) = (0..count).rev().find(|&i| {
-                *slots.add(i as usize) == word
-                    && !crate::object::key_attrs::entry_is_private(
-                        crate::object::key_attrs::keys_entry(keys, i),
-                    )
-            }) {
-                return Some(i);
-            }
-        }
+        // The word is tried inside the one back-to-front scan, never in a pass
+        // ahead of it: a later noncanonical spelling of the same text is the
+        // most-derived declaration and wins (#10595).
         crate::object::keys_find_property_slot_by_bytes_resolved_hashed(
             crate::object::ObjectKeys::new(keys as *mut _, count),
             count,
+            word,
             bytes,
             hash,
         )

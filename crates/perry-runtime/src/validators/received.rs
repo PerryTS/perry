@@ -12,7 +12,7 @@ enum ReceivedNativePrototype {
 /// small integer). `JSValue::is_number` deliberately excludes the INT32 tag,
 /// so both must be checked.
 pub fn is_numeric(jv: JSValue) -> bool {
-    jv.is_number() || jv.is_int32()
+    jv.is_number()
 }
 
 pub(crate) fn is_nullish(jv: JSValue) -> bool {
@@ -43,11 +43,7 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
     }
     // Denormal bits can resemble legacy addresses; never probe them as pointers.
     if is_numeric(jv) {
-        let n = if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            value
-        };
+        let n = value;
         let number = if n == 0.0 && n.is_sign_negative() {
             "-0".to_string()
         } else {
@@ -84,22 +80,17 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
         return received_name("function ", name.get_nanbox_f64());
     }
     if jv.is_reference() {
+        // Node 26.12 (`errors: validate constructor name`): the name is
+        // `value.constructor?.name`, each property read once (either may be an
+        // accessor, and `constructor` may be a primitive). Only a non-empty
+        // string names the instance; anything else falls through to
+        // `inspect(value, { depth: -1 })`.
         let constructor =
             scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-        if crate::value::js_is_truthy(constructor.get_nanbox_f64()) != 0 {
-            let constructor =
-                scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-            let key = scope.root_nanbox_f64(received_key("name"));
-            // Node uses `"name" in value.constructor`: the second read may
-            // be primitive, which must throw an uncoded language TypeError.
-            if crate::object::js_in_operator(constructor.get_nanbox_f64(), key.get_nanbox_f64())
-                .to_bits()
-                == crate::value::TAG_TRUE
-            {
-                let constructor =
-                    scope.root_nanbox_f64(received_property(value.get_nanbox_f64(), "constructor"));
-                let name =
-                    scope.root_nanbox_f64(received_property(constructor.get_nanbox_f64(), "name"));
+        if !is_nullish(JSValue::from_bits(constructor.get_nanbox_f64().to_bits())) {
+            let name =
+                scope.root_nanbox_f64(received_property(constructor.get_nanbox_f64(), "name"));
+            if received_nonempty_string(name.get_nanbox_f64()) {
                 return received_name("an instance of ", name.get_nanbox_f64());
             }
         }
@@ -112,17 +103,22 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
             || crate::object::prototype_chain::object_static_prototype(addr)
                 == Some(crate::value::TAG_NULL)
         {
-            let empty = header.is_some_and(|h| unsafe {
-                crate::gc_type_is_object!((*h.as_ptr()).obj_type)
-                    && crate::object::object_keys(addr as *const crate::object::ObjectHeader)
-                        .count()
-                        == 0
-            });
+            let empty = header
+                .is_some_and(|h| unsafe { crate::gc_type_is_object!((*h.as_ptr()).obj_type) })
+                && !received_has_enumerable_own_keys(value.get_nanbox_f64());
             return received_text(if empty {
                 "[Object: null prototype] {}"
             } else {
                 "[Object: null prototype]"
             });
+        }
+        // `inspect(value, { depth: -1 })` of an object with no enumerable own
+        // keys (string or symbol) prints its braces, `{}`; any key makes the
+        // depth cut-off print `[Object]`.
+        let ordinary =
+            header.is_some_and(|h| unsafe { crate::gc_type_is_object!((*h.as_ptr()).obj_type) });
+        if ordinary && !received_has_enumerable_own_keys(value.get_nanbox_f64()) {
+            return received_text("{}");
         }
         return received_text("[Object]");
     }
@@ -130,7 +126,8 @@ pub(crate) fn describe_received_js(value: f64) -> *mut StringHeader {
 }
 
 /// Build a received-value error without round-tripping through UTF-8 Rust text.
-pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
+
+pub(crate) fn received_type_error(prefix: &str, value: f64) -> crate::error::CoreError {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
     let received = scope.root_string_ptr(describe_received_js(value.get_nanbox_f64()));
@@ -142,12 +139,11 @@ pub(crate) fn build_received_type_error(prefix: &str, value: f64) -> f64 {
     message.with_mut_ptr(|s| {
         crate::node_submodules::register_error_code_pub(s, "ERR_INVALID_ARG_TYPE")
     });
-    let error = message.with_mut_ptr(|s| crate::error::js_typeerror_new(s));
-    crate::value::js_nanbox_pointer(error as i64)
+    message.with_mut_ptr(|s| crate::error::CoreError::type_error(s))
 }
 
 pub(crate) fn throw_received_type_error(prefix: &str, value: f64) -> ! {
-    crate::exception::js_throw(build_received_type_error(prefix, value))
+    crate::exception::throw_core(received_type_error(prefix, value))
 }
 
 pub(crate) fn received_key(name: &str) -> f64 {
@@ -235,7 +231,7 @@ pub(crate) fn received_inherited_property(receiver: f64, prototype: u64, key: f6
     let previous = crate::object::accessor_receiver_override_begin(receiver.get_nanbox_f64());
     let previous = previous.map(|value| scope.root_nanbox_f64(value));
     // Restore the displaced override on both success and user exceptions.
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let key_ptr = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64());
         crate::object::prototype_chain::resolve_inherited_field_from_prototype(
             crate::value::addr_class::object_ref_addr(receiver.get_nanbox_f64()),
@@ -248,7 +244,7 @@ pub(crate) fn received_inherited_property(receiver: f64, prototype: u64, key: f6
     crate::object::accessor_receiver_override_end(previous.map(|value| value.get_nanbox_f64()));
     match result {
         Ok(bits) => f64::from_bits(bits),
-        Err(error) => crate::exception::js_throw(error),
+        Err(error) => crate::exception::rethrow_caught(error),
     }
 }
 
@@ -446,6 +442,40 @@ pub(crate) fn received_native_fallback(value: f64) -> Option<*mut StringHeader> 
     Some(received_text(&format!("[{label}{suffix}]")))
 }
 
+/// node's `getKeys(value, showHidden = false)` is non-empty: an own
+/// enumerable string key (`Object.keys`) or an own enumerable symbol key.
+fn received_has_enumerable_own_keys(value: f64) -> bool {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let value = scope.root_nanbox_f64(value);
+    let addr = crate::value::addr_class::object_ref_addr(value.get_nanbox_f64());
+    let keys = crate::object::js_object_keys(addr as *const crate::object::ObjectHeader);
+    if !keys.is_null() && crate::array::js_array_length(keys) != 0 {
+        return true;
+    }
+    let symbols = scope.root_raw_const_ptr(unsafe {
+        crate::symbol::js_object_get_own_property_symbols(value.get_nanbox_f64())
+    } as *const crate::array::ArrayHeader);
+    let count = crate::array::js_array_length(symbols.get_raw_const_ptr());
+    (0..count).any(|i| {
+        let key = crate::array::js_array_get_f64(symbols.get_raw_const_ptr(), i);
+        crate::object::js_object_property_is_enumerable(value.get_nanbox_f64(), key).to_bits()
+            == crate::value::TAG_TRUE
+    })
+}
+
+/// `typeof value === 'string' && value !== ''`.
+fn received_nonempty_string(value: f64) -> bool {
+    let jv = JSValue::from_bits(value.to_bits());
+    if !jv.is_any_string() {
+        return false;
+    }
+    if jv.is_short_string() {
+        return jv.short_string_len() != 0;
+    }
+    let ptr = crate::value::js_get_string_pointer_unified(value) as *const StringHeader;
+    !ptr.is_null() && unsafe { (*ptr).byte_len } != 0
+}
+
 pub(crate) fn received_name(prefix: &str, value: f64) -> *mut StringHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let value = scope.root_nanbox_f64(value);
@@ -529,14 +559,20 @@ pub(crate) fn bigint_decimal(value: f64) -> String {
 }
 
 pub(crate) fn build_type_error_with_code_value(message: &str, code: &'static str) -> f64 {
+    type_error_with_registered_code(message, code).value()
+}
+
+pub(crate) fn type_error_with_registered_code(
+    message: &str,
+    code: &'static str,
+) -> crate::error::CoreError {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::value::js_nanbox_pointer(err as i64)
+    crate::error::CoreError::type_error(msg)
 }
 
 pub fn throw_type_error_with_code(message: &str, code: &'static str) -> ! {
-    crate::exception::js_throw(build_type_error_with_code_value(message, code))
+    crate::exception::throw_core(type_error_with_registered_code(message, code))
 }
 
 /// Validate a `node:events` listener argument (#3072).
@@ -620,8 +656,7 @@ pub fn throw_range_error_with_code(message: &str) -> ! {
 pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 /// Throw a plain `Error` (name `"Error"`) carrying an explicit Node error
@@ -631,8 +666,7 @@ pub fn throw_range_error_named(message: &str, code: &'static str) -> ! {
 pub fn throw_error_with_code(message: &str, code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 /// Read a JS string value (heap `StringHeader` or inline SSO) into a Rust
@@ -663,11 +697,7 @@ pub(crate) fn validate_int32(value: f64, arg_name: &str, min: i64, max: i64) {
             value,
         );
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !n.is_finite() || n.fract() != 0.0 {
         let received = if n.is_nan() {
             "NaN".to_string()

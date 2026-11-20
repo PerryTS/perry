@@ -1,0 +1,1 @@
+Test only: the class-capture environment test now expects a class declaration that can run more than once to read a guarded environment, which is what the compiler has emitted since decision 64 c′. No compiler change.

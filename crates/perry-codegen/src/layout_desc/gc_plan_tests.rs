@@ -39,3 +39,58 @@ fn a_class_family_descriptor_emits_its_static_gc_plan() {
         "the descriptor's plan word must be the two-slot plan: {descriptor}"
     );
 }
+
+/// An array creation family's named layout lists the keys its store sites
+/// declare ahead of their first store: each carries `LAYOUT_KEY_OPTIONAL`
+/// (absent while its slot holds the hole), as a class family's late key does.
+/// The leading iterator key keeps attribute 0, and so does every key of a
+/// layout that is not an array's.
+#[test]
+fn an_array_family_descriptor_marks_its_declared_keys_optional() {
+    crate::layout_ordinals::begin_module("arrlate", Default::default(), true);
+    let mut m = LlModule::new("x86_64-unknown-linux-gnu");
+    let mut strings = StringPool::with_prefix("arrlate".into());
+    let mut emitted = BTreeMap::new();
+    let range = atom(&mut m, &mut strings, &mut emitted, "rangeEnd").unwrap();
+    let keys = vec![String::new(), "rangeEnd".to_string()];
+    let atoms = vec!["perry_atom_well_known_iterator".to_string(), range.clone()];
+    for (suffix, array_named) in [("arrlate_fam", true), ("litlate_fam", false)] {
+        emit_descriptor(
+            &mut m,
+            "perry_layouts",
+            &format!("{suffix}_desc"),
+            suffix,
+            &keys,
+            &atoms,
+            0x55,
+            2,
+            0,
+            LAYOUT_ID_CARRIED,
+            Some(1),
+            "0",
+            array_named,
+        );
+    }
+    let ir = m.to_ir();
+    let list = |suffix: &str| {
+        ir.lines()
+            .find(|line| line.starts_with(&format!("@perry_layout_keys_{suffix} = ")))
+            .unwrap_or_else(|| panic!("key list {suffix} must be defined"))
+            .to_string()
+    };
+    let optional = crate::runtime_abi::LAYOUT_KEY_OPTIONAL as i8;
+    let array = list("arrlate_fam");
+    assert!(
+        array.contains("ptr @perry_atom_well_known_iterator, i32 0, i8 0,"),
+        "the iterator key keeps attribute 0: {array}"
+    );
+    assert!(
+        array.contains(&format!("ptr @{range}, i32 1, i8 {optional},")),
+        "a declared late key is optional: {array}"
+    );
+    let literal = list("litlate_fam");
+    assert!(
+        literal.contains(&format!("ptr @{range}, i32 1, i8 0,")),
+        "a key of a layout that is not an array's carries no attribute: {literal}"
+    );
+}

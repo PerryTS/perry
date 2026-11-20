@@ -140,12 +140,7 @@ unsafe fn construct_function_impl(
     // primitive callees, silently fell through to the empty-object fallback.
     {
         let jv = crate::value::JSValue::from_bits(func_value.to_bits());
-        if jv.is_undefined()
-            || jv.is_null()
-            || jv.is_bool()
-            || (jv.is_int32() && constructor_class_ref_id(func_value).is_none())
-            || jv.is_any_string()
-            || jv.is_bigint()
+        if jv.is_undefined() || jv.is_null() || jv.is_bool() || jv.is_any_string() || jv.is_bigint()
         {
             let desc =
                 unsafe { super::super::object_ops::describe_value_for_type_error(func_value) };
@@ -718,6 +713,16 @@ unsafe fn construct_registered_class_ref_entry(
     } else {
         std::slice::from_raw_parts(args_ptr, args_len)
     };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    // GetPrototypeFromConstructor(newTarget) (ECMA-262 10.1.13) for a
+    // newTarget that is no class (`Reflect.construct(C, [], function F() {})`):
+    // the instance's [[Prototype]] is `F.prototype`, read before the birth
+    // (the read may allocate) and installed before the constructor body runs.
+    let custom_proto = new_target_class_id(new_target)
+        .is_none()
+        .then(|| constructor_prototype_bits(new_target))
+        .flatten()
+        .map(|bits| scope.root_nanbox_u64(bits));
     let inst = allocate_class_instance(instance_cid, birth_args).0;
     // #2768: a registered-class constructor reached through this path — static
     // `new ClassName()`, a first-class ClassRef `new`, or `Reflect.construct`
@@ -757,8 +762,16 @@ unsafe fn construct_registered_class_ref_entry(
     // doc-comment at the top of this file called for. Reading back through the
     // handles is not bookkeeping: an evacuating cycle rewrites the slot in
     // place, so the pre-call value is stale by construction.
-    let scope = crate::gc::RuntimeHandleScope::new();
     let inst_handle = scope.root_raw_mut_ptr(inst);
+    if let Some(proto) = custom_proto {
+        inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst| {
+            super::super::prototype_chain::object_set_static_prototype(
+                inst as usize,
+                proto.get_nanbox_u64(),
+            )
+        });
+    }
+    let inst: *mut ObjectHeader = inst_handle.get_raw_mut_ptr();
     let prev_new_target = crate::object::js_new_target_get();
     let prev_new_target_handle = scope.root_new_target_save(prev_new_target);
     crate::object::js_new_target_set(new_target);
@@ -790,13 +803,20 @@ unsafe fn construct_registered_class_ref_entry(
 /// it is an object" rule: returns `newTarget.prototype`'s bits when that value
 /// is an object (so a typed-array view should adopt it as its `[[Prototype]]`),
 /// or `None` when it is a primitive (so the default per-kind prototype applies).
+// One out-of-line copy for its three construct paths: P3 B2 made the body
+// small enough for LLVM to inline it into each, which grew `.text` by
+// ~1.2 KB (CWN: binaries must not grow).
+#[inline(never)]
 fn new_target_custom_object_prototype(new_target: f64) -> Option<u64> {
     if let Some(class_id) = constructor_class_ref_id(new_target) {
         let declared = super::class_decl_prototype_value(class_id);
         if unsafe { super::super::value_is_object_like(declared) } {
             return Some(declared.to_bits());
         }
-        return Some(super::super::class_prototype_ref_value(class_id).to_bits());
+        // P3 B2 (REVIEW-p3 D3): `newTarget.prototype` is not an object (an id
+        // with no declaration reads `undefined`, the same answer as the
+        // `prototype` read), so the default per-kind prototype applies.
+        return None;
     }
     let proto = new_target_prototype_get(new_target)?;
     if unsafe { super::super::value_is_object_like(proto) }
@@ -926,6 +946,11 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                 | BuiltinConstructorIdentity::CryptoKey
                 | BuiltinConstructorIdentity::SubtleCrypto
                 | BuiltinConstructorIdentity::Navigator
+                | BuiltinConstructorIdentity::ReadableStreamDefaultController
+                | BuiltinConstructorIdentity::ReadableStreamDefaultReader
+                | BuiltinConstructorIdentity::ReadableByteStreamController
+                | BuiltinConstructorIdentity::ReadableStreamBYOBReader
+                | BuiltinConstructorIdentity::ReadableStreamBYOBRequest
                 | BuiltinConstructorIdentity::MessagePort
                 | BuiltinConstructorIdentity::Storage
         ) {
@@ -954,7 +979,8 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                     | BuiltinConstructorIdentity::BigInt64Array
                     | BuiltinConstructorIdentity::BigUint64Array
             );
-            let proto = if typed {
+            let deferred = typed || identity == BuiltinConstructorIdentity::MessageEvent;
+            let proto = if deferred {
                 None
             } else {
                 new_target_custom_object_prototype(nt.get_nanbox_f64())
@@ -963,7 +989,7 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
             let values: Vec<_> = args.iter().map(|h| h.get_nanbox_f64()).collect();
             if let Some(result) = builtin::construct(identity, func.get_nanbox_f64(), &values) {
                 let result = scope.root_nanbox_f64(result);
-                let proto = if typed {
+                let proto = if deferred {
                     new_target_custom_object_prototype(nt.get_nanbox_f64())
                         .map(|bits| scope.root_nanbox_u64(bits))
                 } else {
@@ -976,6 +1002,14 @@ pub unsafe extern "C" fn js_new_function_construct_with_new_target(
                         &nt,
                         proto,
                     );
+                }
+                if let Some(object) = native_receiver::fetch_backed_object(
+                    &scope,
+                    result.get_nanbox_f64(),
+                    &nt,
+                    proto,
+                ) {
+                    return object;
                 }
                 native_receiver::apply_prototype(result.get_nanbox_f64(), proto);
                 return result.get_nanbox_f64();
@@ -1104,6 +1138,47 @@ mod callable_probe_tests {
     static ARROW_INFO: JsFunctionInfo =
         JsFunctionInfo::of(test_body as crate::codegen_abi::JsBody0<ClosureHeader>)
             .with_flags(crate::closure::FN_ARROW);
+
+    static METHOD_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+    extern "C" fn method_body(
+        _closure: *const ClosureHeader,
+        _this: crate::closure::JsThis,
+    ) -> f64 {
+        METHOD_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        0.0
+    }
+
+    static METHOD_INFO: JsFunctionInfo =
+        JsFunctionInfo::of(method_body as crate::codegen_abi::JsBody0<ClosureHeader>)
+            .with_flags(crate::closure::FN_NON_CONSTRUCTOR);
+
+    #[test]
+    fn distinct_new_target_rejects_method_before_invoking_body() {
+        let _global = crate::gc::global_side_table_test_lock();
+        let _threshold = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+        crate::object::js_get_global_this();
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let method = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&METHOD_INFO, 0) as usize,
+            ));
+        let new_target = scope
+            .root_nanbox_f64(pointer_value(
+                crate::closure::js_closure_alloc(&ORDINARY_INFO, 0) as usize,
+            ));
+        METHOD_CALLS.store(0, std::sync::atomic::Ordering::Relaxed);
+        let result = crate::exception::catch_js_throw(|| unsafe {
+            js_new_function_construct_with_new_target(
+                method.get_nanbox_f64(),
+                std::ptr::null(),
+                0,
+                new_target.get_nanbox_f64(),
+            )
+        });
+        assert!(result.is_err(), "a method has no [[Construct]] slot");
+        assert_eq!(METHOD_CALLS.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
 
     fn pointer_value(ptr: usize) -> f64 {
         f64::from_bits(crate::value::POINTER_TAG | ptr as u64)

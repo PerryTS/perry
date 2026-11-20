@@ -4,7 +4,7 @@
 Every shard of the nightly `test262` job writes a `scripts/test262_subset.py`
 report (`--full-corpus`). This merges them into one pass rate over every case,
 comparable to other engines' published Test262 figures, and compares it with
-`test-compat/test262/baseline.json`:
+`tests/compat/test262/baseline.json`:
 
 - a test that is not in the baseline's `known_failures` and now fails is a
   regression;
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-BASELINE = REPO_ROOT / "test-compat" / "test262" / "baseline.json"
+BASELINE = REPO_ROOT / "tests/compat" / "test262" / "baseline.json"
 BUCKETS = ("pass", "diff", "runtime-fail", "compile-fail", "skip")
 
 

@@ -95,11 +95,6 @@ fn integer_key_probe(raw: u64, idx: f64) -> Result<f64, u64> {
 }
 
 fn numeric_key_u32_index(value: f64) -> Option<u32> {
-    let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index as u32);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value < u32::MAX as f64 {
         Some(value as u32)
     } else {
@@ -108,11 +103,6 @@ fn numeric_key_u32_index(value: f64) -> Option<u32> {
 }
 
 fn numeric_key_i32_index(value: f64) -> Option<i32> {
-    let bits = value.to_bits();
-    if (bits & crate::value::TAG_MASK) == crate::value::INT32_TAG {
-        let index = crate::value::JSValue::from_bits(bits).as_int32();
-        return (index >= 0).then_some(index);
-    }
     if value.is_finite() && value >= 0.0 && value.fract() == 0.0 && value <= i32::MAX as f64 {
         Some(value as i32)
     } else {
@@ -137,6 +127,26 @@ fn numeric_key_i32_index(value: f64) -> Option<i32> {
 /// garbage f64 values.
 #[no_mangle]
 pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> f64 {
+    // A plain object's index key is an element of its store: answered here,
+    // ahead of the receiver ladder's frame.
+    let bits = obj_handle as u64;
+    let tag = bits >> 48;
+    if tag == 0x7FFD || tag == 0 {
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+            crate::value::POINTER_TAG | (bits & crate::value::POINTER_MASK),
+        )) {
+            if let Some(value) = unsafe { crate::array::plain_elements::get_number_key(obj, idx) } {
+                return value;
+            }
+        }
+    }
+    get_index_polymorphic_rest(obj_handle, idx)
+}
+
+/// [`js_object_get_index_polymorphic`] for every receiver its store arm does
+/// not answer.
+#[inline(never)]
+fn get_index_polymorphic_rest(obj_handle: i64, idx: f64) -> f64 {
     let raw = if (obj_handle as u64) >> 48 >= 0x7FF8 {
         // NaN-boxed: only POINTER_TAG (0x7FFD) and STRING_TAG (0x7FFF) carry a
         // heap pointer in the low 48 bits. INT32 (0x7FFE) is usually a primitive
@@ -175,19 +185,27 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
                     idx,
                 );
             }
-            0x7FFE => {
-                let class_id = (obj_handle as u64 & 0xFFFF_FFFF) as u32;
-                if class_id != 0 && crate::object::class_registry::is_class_id_registered(class_id)
-                {
-                    return crate::value::js_dyn_index_get(f64::from_bits(obj_handle as u64), idx);
-                }
-                return f64::from_bits(crate::value::TAG_UNDEFINED);
-            }
             _ => return f64::from_bits(crate::value::TAG_UNDEFINED),
         }
     } else {
         obj_handle as u64
     };
+    // An ordinary object (no arguments object, whose mapped indices are its
+    // own): an integral key its layouts hold answers before the exotic
+    // receiver ladder below, none of whose kinds is a `GC_TYPE_OBJECT` cell.
+    // The probe itself declines Array-subclass instances and objects with an
+    // elements store.
+    if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(f64::from_bits(
+        crate::value::POINTER_TAG | raw,
+    )) {
+        let flags =
+            unsafe { (*crate::gc::header_from_trusted_user_ptr(obj as *const u8))._reserved };
+        if flags & crate::gc::OBJ_FLAG_ARGUMENTS == 0 {
+            if let Ok(value) = integer_key_probe(obj as u64, idx) {
+                return value;
+            }
+        }
+    }
     // Array.from's array-like fallback can receive a Proxy record. Its id is
     // not a heap header; route it inside the existing low-address guard so
     // ordinary heap receivers do not perform a proxy registry lookup.
@@ -226,10 +244,14 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             return value;
         }
     }
-    if let Some(value) =
-        unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
-    {
-        return value;
+    // A Node `Buffer` takes its own arm below, which also answers method and
+    // expando names.
+    if !crate::buffer::is_node_buffer(raw as usize) {
+        if let Some(value) =
+            unsafe { crate::typedarray_props::typed_array_get_numeric_index(raw as usize, idx) }
+        {
+            return value;
+        }
     }
     // #8149: `ArrayBuffer` / `SharedArrayBuffer` / `DataView` share the buffer
     // registry with `Buffer`/`Uint8Array` but have NO integer-indexed own
@@ -241,7 +263,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     {
         if let Some(key) = crate::buffer::canonical_index_key(idx) {
             return crate::buffer::buffer_read_own_prop(raw as usize, &key)
-                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED));
+                .unwrap_or_else(|| crate::buffer::buffer_inherited_get(raw as usize, &key));
         }
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
@@ -254,6 +276,15 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             // so the MockBuffer no-op swap never happened and the packet-sizing
             // pass wrote into a zero-length Buffer (RangeError
             // [ERR_OUT_OF_RANGE] at the MySQL handshake).
+            // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView reads
+            // own, then its [[Prototype]] chain, never the Buffer table.
+            if crate::buffer::is_non_indexed_buffer_view(raw as usize) {
+                if let Some(name) = buffer_key_name(idx) {
+                    let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+                    let v = crate::object::view_get(raw as *const crate::object::ObjectHeader, key);
+                    return f64::from_bits(v.bits());
+                }
+            }
             if let Some(name) = buffer_key_name(idx) {
                 if let Some(v) = crate::buffer::buffer_read_own_prop(raw as usize, &name) {
                     return v;
@@ -273,9 +304,10 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
             }
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         };
-        let byte_val =
-            crate::buffer::js_buffer_get(raw as *const crate::buffer::BufferHeader, index);
-        return byte_val as f64;
+        return crate::buffer::js_buffer_index_get_value(
+            raw as *const crate::buffer::BufferHeader,
+            index,
+        );
     }
     if crate::typedarray_hook_slots::lookup_typed_array_kind(raw as usize).is_some() {
         return crate::typedarray_hook_slots::js_typed_array_index_get_dynamic(
@@ -296,12 +328,13 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let gc_type = unsafe {
+    let (gc_type, header_flags) = unsafe {
         let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
         if gc_header_addr < 0x1000 {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         }
-        *(gc_header_addr as *const u8)
+        let header = &*(gc_header_addr as *const crate::gc::GcHeader);
+        (header.obj_type, header._reserved)
     };
 
     if gc_type == crate::gc::GC_TYPE_STRING {
@@ -311,7 +344,12 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         );
     }
 
-    if let Some(index) = numeric_key_u32_index(idx) {
+    // OBJ_FLAG_ARGUMENTS is set at an arguments object's birth: a header
+    // without it is no arguments object, so the full admission is skipped.
+    if let Some(index) = (header_flags & crate::gc::OBJ_FLAG_ARGUMENTS != 0)
+        .then(|| numeric_key_u32_index(idx))
+        .flatten()
+    {
         if let Some(value) =
             unsafe { arguments_object_get_index(raw as *const ObjectHeader, index) }
         {
@@ -319,7 +357,7 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
         }
     }
 
-    if gc_type == crate::gc::GC_TYPE_ARRAY || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+    if crate::gc_type_is_array!(gc_type) || gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
         if let Some(index) = numeric_key_u32_index(idx) {
             return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
         }
@@ -347,18 +385,28 @@ pub extern "C" fn js_object_get_index_polymorphic(obj_handle: i64, idx: f64) -> 
     if gc_type == crate::gc::GC_TYPE_CLOSURE {
         return unsafe { rooted_property_key_get(raw, idx) };
     }
+    // A Map/Set has no indexed own properties and its storage is no element
+    // vector: `s[7]` is the ordinary [[Get]] of "7" (own expandos, then the
+    // receiver's chain), the one keyed read `js_dyn_index_get` owns.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
+        return crate::value::js_dyn_index_get(
+            f64::from_bits(crate::value::POINTER_TAG | raw),
+            idx,
+        );
+    }
+    // An object's overflow table read as its key list (a runtime caller):
+    // the array getter owns that layout.
+    if gc_type == crate::gc::GC_TYPE_OVERFLOW {
         let Some(index) = numeric_key_u32_index(idx) else {
             return f64::from_bits(crate::value::TAG_UNDEFINED);
         };
         return crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index);
     }
-    // Buffer / Map / Set / typed-array / unknown — try the array getter
-    // (which handles registered buffers + typed arrays via per-kind reads).
-    let Some(index) = numeric_key_u32_index(idx) else {
-        return f64::from_bits(crate::value::TAG_UNDEFINED);
-    };
-    crate::array::js_array_get_f64(raw as *mut crate::array::ArrayHeader, index)
+    // Every other GC-headed receiver (a Date, a Promise, an Error, a RegExp,
+    // a weak collection, ...) is an object with no element vector: `o[i]` is
+    // the ordinary [[Get]] of ToPropertyKey(i). The array getter refused such
+    // a receiver and answered NaN.
+    unsafe { rooted_property_key_get(raw, idx) }
 }
 
 /// Polymorphic numeric-key set: `obj[idx] = value` where `idx` is a number
@@ -470,10 +518,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
     }
     if crate::buffer::is_registered_buffer(raw as usize) {
         if let Some(index) = numeric_key_i32_index(idx) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 raw as *mut crate::buffer::BufferHeader,
                 index,
-                value as i32,
+                value,
             );
             return;
         }
@@ -495,7 +543,10 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         );
         return;
     }
+    // A Map/Set: the ordinary [[Set]] of the property key (the store twin of
+    // the read above), never a storage write and never dropped.
     if crate::set::is_registered_set(raw as usize) || crate::map::is_registered_map(raw as usize) {
+        crate::value::js_dyn_index_set(f64::from_bits(crate::value::POINTER_TAG | raw), idx, value);
         return;
     }
 
@@ -508,7 +559,7 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         *(gc_header_addr as *const u8)
     };
 
-    if gc_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(gc_type) {
         if let Some(index) = numeric_key_u32_index(idx) {
             // Includes lazy/forwarded — js_array_set_f64_extend_strict's clean_arr_ptr_mut
             // walks the forwarding chain and routes buffers/typed-arrays through
@@ -538,6 +589,12 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
                 return;
             }
         }
+        // An element of a plain object's index store: its own data property.
+        if let Some(obj) = super::field_get_set::runtime_read_site::object_receiver(boxed) {
+            if unsafe { crate::array::plain_elements::set_existing_number_key(obj, idx, value) } {
+                return;
+            }
+        }
         // Array-subclass post-step below must observe their evacuated values.
         let scope = crate::gc::RuntimeHandleScope::new();
         let recv_h = scope.root_nanbox_f64(boxed);
@@ -557,17 +614,23 @@ pub extern "C" fn js_object_set_index_polymorphic(obj_handle: i64, idx: f64, val
         );
         return;
     }
-    // Buffer / typed-array were handled above. Map / Set are collection
-    // objects with external storage, not dense ArrayHeader payloads, so numeric
-    // writes are no-ops instead of truncating fractional keys into element
-    // offsets.
-    if let Some(index) = numeric_key_u32_index(idx) {
-        crate::array::js_array_set_f64_extend_strict(
-            raw as *mut crate::array::ArrayHeader,
-            index,
-            value,
-        );
+    // A lazy JSON array becomes its ordinary Array inside the array setter.
+    if gc_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if let Some(index) = numeric_key_u32_index(idx) {
+            crate::array::js_array_set_f64_extend_strict(
+                raw as *mut crate::array::ArrayHeader,
+                index,
+                value,
+            );
+        }
+        return;
     }
+    // Buffer / typed-array / Map / Set were handled above. Every other
+    // GC-headed receiver (a Date, a Promise, an Error, a RegExp, a weak
+    // collection, ...) is an object with no element vector: `o[i] = v` is the
+    // ordinary [[Set]] of ToPropertyKey(i). The array setter refused such a
+    // receiver and dropped the store.
+    crate::proxy::js_put_value_set(boxed, idx, value, boxed, 0);
 }
 
 /// A NON-numeric computed key as a Rust string (`buf["writeInt8"]`), or `None`
@@ -589,3 +652,7 @@ fn buffer_key_name(idx: f64) -> Option<String> {
         Some(String::from_utf8_lossy(bytes).into_owned())
     }
 }
+
+#[cfg(test)]
+#[path = "polymorphic_index_int32_exact_tests.rs"]
+mod int32_exact_tests;

@@ -51,11 +51,22 @@ pub fn message_port_id(receiver: f64) -> Option<u64> {
     PORT_ID.read(receiver).map(f64::to_bits)
 }
 
+fn receiver_id(this: JsThis) -> u64 {
+    message_port_id(this.as_f64()).unwrap_or_else(|| invalid_receiver())
+}
+
 fn dispatch(operation: MessagePortOperation, this: JsThis, data: f64, transfer: f64) -> f64 {
+    dispatch_validated(operation, this, receiver_id(this), data, transfer)
+}
+
+fn dispatch_validated(
+    operation: MessagePortOperation,
+    this: JsThis,
+    id: u64,
+    data: f64,
+    transfer: f64,
+) -> f64 {
     let receiver = this.as_f64();
-    let Some(id) = message_port_id(receiver) else {
-        invalid_receiver();
-    };
     if id != 0 {
         if let Some(provider) = DISPATCH.peek() {
             let mut result = js_undefined();
@@ -75,31 +86,54 @@ fn dispatch(operation: MessagePortOperation, this: JsThis, data: f64, transfer: 
         MessagePortOperation::Ref | MessagePortOperation::Unref => {
             with_port_states(|map| {
                 if let Some(state) = map.get_mut(&ptr) {
-                    state.refed = !state.closed && matches!(operation, MessagePortOperation::Ref);
+                    state.refed = port_transport::alive(state.lease)
+                        && matches!(operation, MessagePortOperation::Ref);
                 }
             });
             js_undefined()
         }
         MessagePortOperation::HasRef => js_bool(with_port_states(|map| {
             map.get(&ptr)
-                .is_some_and(|state| !state.closed && state.refed)
+                .is_some_and(|state| port_transport::alive(state.lease) && state.refed)
         })),
     }
 }
 
 fn invalid_receiver() -> ! {
     let message = key("Illegal invocation");
-    let error = crate::error::js_typeerror_new(message);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(message))
 }
 
-extern "C" fn post_message(
+/// Read the message and optional transfer list without padding away absence.
+///
+/// # Safety
+/// `args` must point to `len` current native-call arguments. Copy the returned
+/// values into rooted storage before any operation that can collect.
+pub unsafe fn post_message_arguments(args: *const f64, len: usize) -> (f64, f64) {
+    if len == 0 {
+        crate::fs::validate::throw_type_error_with_code(
+            "Not enough arguments to MessagePort.postMessage",
+            "ERR_MISSING_ARGS",
+        );
+    }
+    let data = unsafe { *args };
+    let transfer = if len > 1 {
+        unsafe { *args.add(1) }
+    } else {
+        js_undefined()
+    };
+    (data, transfer)
+}
+
+unsafe extern "C" fn post_message(
     _closure: *const ClosureHeader,
     this: JsThis,
-    data: f64,
-    transfer: f64,
+    args: *const f64,
+    len: usize,
 ) -> f64 {
-    dispatch(MessagePortOperation::PostMessage, this, data, transfer)
+    let id = receiver_id(this);
+    let (data, transfer) = unsafe { post_message_arguments(args, len) };
+    dispatch_validated(MessagePortOperation::PostMessage, this, id, data, transfer)
 }
 
 extern "C" fn start(_closure: *const ClosureHeader, this: JsThis) -> f64 {
@@ -140,7 +174,7 @@ extern "C" fn has_ref_port(_closure: *const ClosureHeader, this: JsThis) -> f64 
 
 pub fn install_core_methods(object: *mut ObjectHeader) {
     let _no_move = crate::gc::GcSuppressScope::new();
-    install_method(object, "postMessage", crate::fn_info!(#[realm(MessagePort.prototype.postMessage, constructible = true)] export crate::messaging::port_operations::post_message, 2; with_declared(2)), 2);
+    install_method(object, "postMessage", crate::fn_info!(#[realm(MessagePort.prototype.postMessage, constructible = true)] export native_args crate::messaging::port_operations::post_message, 2; with_declared(2)), 2);
     install_method(object, "start", crate::fn_info!(#[realm(MessagePort.prototype.start, constructible = true)] export crate::messaging::port_operations::start, 0; with_declared(0)), 0);
     install_method(object, "close", crate::fn_info!(#[realm(MessagePort.prototype.close, constructible = true)] export crate::messaging::port_operations::close, 1; with_declared(1)), 1);
     install_method(object, "ref", crate::fn_info!(#[realm(MessagePort.prototype.ref, constructible = true)] export crate::messaging::port_operations::ref_port, 0; with_declared(0)), 0);

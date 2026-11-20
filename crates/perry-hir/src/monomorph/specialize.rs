@@ -275,6 +275,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
         is_exported: class.is_exported,
         aliases: class.aliases.clone(),
         is_nested: class.is_nested,
+        decl_stmt: None,
         alloc_width_hint: class.alloc_width_hint,
         // #7575: `new Gen<number>()` constructs `Gen$num`, whose class id is
         // what the instance carries — while `x instanceof Gen` resolves the RHS

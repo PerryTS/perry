@@ -205,6 +205,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
                         body: vec![],
                     }),
                     finally: None,
+                    forof_completion: None,
                 },
             )?;
             Ok(Some(group.reread(ctx, incoming)?))
@@ -238,14 +239,29 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
 pub(crate) fn symbol(prefix: &str, fid: u32) -> String {
     format!("perry_resume_frame__{prefix}__{fid}")
 }
-/// Record the private body ABI before closure compilation (module init is
-/// emitted later). Birth and body consume the same compiler-owned descriptor.
+/// Record continuation facts before callable workers snapshot the module.
+/// A birth can lower on a different worker from its resume body, so recording
+/// these facts only at the birth makes scalar control lowering depend on the
+/// worker partition. Birth and body consume the same descriptor.
 pub(crate) fn record_entries(
     llmod: &crate::module::LlModule,
     hir: &perry_hir::Module,
     prefix: &str,
 ) {
     fn visit(llmod: &crate::module::LlModule, e: &Expr, prefix: &str) {
+        if let Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            ..
+        } = e
+        {
+            if let Expr::Closure { func_id, .. } = obj.as_ref() {
+                let name = crate::fn_info::closure_body_symbol(prefix, *func_id);
+                llmod.note_fn_info(&name, |facts| {
+                    facts.fixed_generator_state = true;
+                });
+            }
+        }
         if let Expr::NativeMethodCall {
             module,
             method,
@@ -306,6 +322,29 @@ pub(crate) fn record_entries(
                 visit(llmod, e, prefix);
                 false
             });
+        }
+    }
+    for class in &hir.classes {
+        for f in class
+            .methods
+            .iter()
+            .chain(&class.static_methods)
+            .chain(class.getters.iter().map(|(_, f)| f))
+            .chain(class.setters.iter().map(|(_, f)| f))
+            .chain(class.computed_members.iter().map(|m| &m.function))
+            .chain(&class.constructor)
+        {
+            for s in &f.body {
+                perry_hir::walker::stmt_any_expr(s, &mut |e| {
+                    visit(llmod, e, prefix);
+                    false
+                });
+            }
+        }
+        for field in class.fields.iter().chain(&class.static_fields) {
+            for e in field.key_expr.iter().chain(&field.init) {
+                visit(llmod, e, prefix);
+            }
         }
     }
 }

@@ -147,7 +147,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
     if needs_arguments_synth {
         let mapped = !strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(&params, fn_decl.function.body.as_ref())
         } else {
             Vec::new()
         };
@@ -176,7 +176,6 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
             }
             let native_info = match type_name.as_str() {
                 "PluginApi" => Some(("perry/plugin", "PluginApi")),
-                "WebSocket" | "WebSocketServer" => Some(("ws", type_name.as_str())),
                 // Web Fetch API: Request / Response / Headers as function
                 // params — same registration the local-init paths get
                 // (destructuring.rs:1457+ for `const r = new Request(…)`).

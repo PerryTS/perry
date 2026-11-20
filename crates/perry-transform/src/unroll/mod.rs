@@ -727,6 +727,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 substitute_localget_with_int_in_stmt(s, iv_id, value);
@@ -891,6 +892,7 @@ fn refresh_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 refresh_in_stmt(s, remap, next_id, next_func_id);
@@ -1260,6 +1262,7 @@ mod tests {
             body: vec![],
             catch: None,
             finally: None,
+            forof_completion: None,
         }];
         let f = make_for(i, 0, 3, body, CompareOp::Lt);
         assert!(try_unroll(&f).is_none());

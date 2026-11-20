@@ -75,9 +75,7 @@ pub extern "C" fn js_url_coerce_string(value: f64) -> *mut StringHeader {
     if unsafe { crate::symbol::js_is_symbol(value) != 0 } {
         let msg = b"Cannot convert a Symbol value to a string";
         let m = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_typeerror_new(m);
-        let bits = crate::value::JSValue::pointer(err as *const u8).bits();
-        crate::exception::js_throw(f64::from_bits(bits));
+        crate::exception::throw_core(crate::error::CoreError::type_error(m));
     }
     crate::value::js_jsvalue_to_string(value)
 }
@@ -131,6 +129,19 @@ mod tests {
         assert_eq!(hostname, "localhost");
         assert_eq!(port, "3000");
         assert_eq!(pathname, "/api");
+    }
+
+    #[test]
+    fn a_final_dot_segment_names_a_directory() {
+        use super::parse::resolve_url;
+        let file = "file:///app/src/main.js";
+        assert_eq!(resolve_url(".", file), "file:/app/src/");
+        assert_eq!(resolve_url("./", file), "file:/app/src/");
+        assert_eq!(resolve_url("..", file), "file:/app/");
+        assert_eq!(resolve_url("../.", file), "file:/app/");
+        assert_eq!(resolve_url("./sub/..", file), "file:/app/src/");
+        assert_eq!(resolve_url("x", file), "file:/app/src/x");
+        assert_eq!(resolve_url("..", "http://h/a/b/c"), "http://h/a/");
     }
 
     #[test]
@@ -230,10 +241,10 @@ mod tests {
     #[test]
     fn test_resolve_relative_url() {
         let resolved = resolve_url(".", "file:///Users/test/lib/file.ts");
-        assert_eq!(resolved, "file:/Users/test/lib");
+        assert_eq!(resolved, "file:/Users/test/lib/");
 
         let resolved = resolve_url("..", "file:///Users/test/lib/file.ts");
-        assert_eq!(resolved, "file:/Users/test");
+        assert_eq!(resolved, "file:/Users/test/");
 
         let fixture = resolve_url("../fixtures/", "file:///Users/test/tls/handshake/test.ts");
         assert_eq!(fixture, "file:/Users/test/tls/fixtures/");

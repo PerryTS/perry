@@ -93,22 +93,11 @@ fn handle_string_value(handle: &RuntimeHandle<'_>) -> f64 {
     })
 }
 
+/// `f` must panic with a message containing `expected` (observed from a
+/// child process: every test build is `panic = "abort"`).
+#[track_caller]
 fn assert_panics_with(expected: &str, f: impl FnOnce()) {
-    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));
-    let Err(payload) = result else {
-        panic!("expected panic containing {expected:?}");
-    };
-    let message = if let Some(s) = payload.downcast_ref::<&str>() {
-        *s
-    } else if let Some(s) = payload.downcast_ref::<String>() {
-        s.as_str()
-    } else {
-        "<non-string panic>"
-    };
-    assert!(
-        message.contains(expected),
-        "panic message {message:?} did not contain {expected:?}"
-    );
+    crate::test_support::expect_child_panic(expected, f);
 }
 
 pub(super) fn force_next_general_arena_alloc_slow() {

@@ -415,9 +415,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
         .classes
         .iter()
         .filter(|class| {
-            class.getters.is_empty()
-                && class.setters.is_empty()
-                && class.computed_members.is_empty()
+            class.getters.is_empty() && class.setters.is_empty() && !class.has_evaluated_members()
         })
         .map(|class| class.name.as_str())
         .collect();
@@ -527,6 +525,16 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
 /// (constructor, field initializers, methods, accessors, computed members) —
 /// for expressions that can rewrite a class's prototype.
 pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
+    collect_module_dispatch_facts_with(hir, &Default::default())
+}
+
+/// [`collect_module_dispatch_facts`] with the module's proven method sites
+/// (`ElisionFacts::native_member_calls`): a proven Buffer read keeps its
+/// buffer sealed (`sealed_buffers::buffer_exposure`).
+pub fn collect_module_dispatch_facts_with(
+    hir: &Module,
+    native_member_calls: &std::collections::BTreeSet<u32>,
+) -> ModuleDispatchFacts {
     let mut facts = ModuleDispatchFacts {
         prototype_touched_classes: HashSet::new(),
         opaque_prototype_mutation: false,
@@ -544,7 +552,10 @@ pub fn collect_module_dispatch_facts(hir: &Module) -> ModuleDispatchFacts {
         closure_bindings: super::spec_abi_sites::single_binding_closure_locals(hir),
         new_bindings: HashMap::new(),
         ocreate_bindings: HashMap::new(),
-        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(hir)),
+        buffer_exposure: Some(super::sealed_buffers::buffer_exposure(
+            hir,
+            native_member_calls,
+        )),
         array_record_protocol_dead: false,
     };
 
@@ -968,6 +979,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for_each_expr_in_stmts(body, f);
             if let Some(catch) = catch {
@@ -1065,6 +1077,7 @@ mod tests {
             decorators: Vec::new(),
             is_exported: false,
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             aliases: Vec::new(),
@@ -1111,6 +1124,7 @@ mod tests {
             value: Box::new(Expr::Number(99.0)),
             receiver: Box::new(Expr::LocalGet(RECEIVER)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -1275,6 +1289,7 @@ mod tests {
                 PROTO,
             )))),
             Stmt::Expr(Expr::TypeOf(Box::new(Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(PROTO)),
@@ -1286,6 +1301,7 @@ mod tests {
                     byte_end: 0,
                     byte_offset: 78,
                     object: Box::new(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(PROTO)),

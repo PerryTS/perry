@@ -1,0 +1,8 @@
+sort 0 1 154 306 300
+desc 306 0
+words w0 w45 w99
+["at:1","fill:2","indexOf:3","subarray:4","set:5","join:-"]
+TypeError 20 2,2,2
+4 2 true 5+1+4 2
+1,2,3 2,1,3 1,9,3
+97,98,99

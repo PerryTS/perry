@@ -52,7 +52,26 @@ impl OptimizedLibs {
     }
 }
 
-pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
+/// Whether the program reaches TLS: it imports `tls`, `https`, `http2` or
+/// `http` (whose wrapper carries `https`), names perry's `upgradeToTLS`, or
+/// may name any of them at run time (`getBuiltinModule`, dynamic code). Only
+/// such a program links the TLS transport features and runs
+/// `js_ext_net_tls_install`; a `net` or `child_process` program links no TLS.
+pub(crate) fn reaches_tls(ctx: &CompilationContext) -> bool {
+    ctx.uses_upgrade_to_tls
+        || ctx.uses_get_builtin_module
+        || perry_hir::has_deferred_dynamic_code_sites()
+        || ctx.native_module_imports.iter().any(|module| {
+            matches!(
+                module.strip_prefix("node:").unwrap_or(module),
+                "tls" | "http" | "https" | "http2"
+            )
+        })
+}
+
+/// The modules whose wrapper install hooks the entry prologue calls: the
+/// program's own imports, plus `net` for a `tls` import.
+pub(crate) fn program_module_set(ctx: &CompilationContext) -> BTreeSet<String> {
     let mut iteration_set: BTreeSet<String> = ctx.native_module_imports.iter().cloned().collect();
     if let Ok(forced) = std::env::var("PERRY_FORCE_WELL_KNOWN") {
         for module in forced.split(|ch: char| ch == ',' || ch == ';' || ch.is_whitespace()) {
@@ -78,6 +97,25 @@ pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<Str
     iteration_set
 }
 
+/// The modules whose wrapper archives the program links: [`program_module_set`]
+/// plus `net` when the program reaches `child_process`
+/// (`CompilationContext::uses_child_process`; child_process is runtime-only,
+/// so `native_module_imports` never lists it). A child process's stdio pipes are
+/// `net.Socket`s, as in Node, so perry-ext-net is linked; its install hook is
+/// not in the entry prologue (startup stays flat) but runs at the first spawn
+/// that builds a pipe socket (perry-runtime `cp_pipe_socket`).
+pub(crate) fn well_known_iteration_set(ctx: &CompilationContext) -> BTreeSet<String> {
+    let mut iteration_set = program_module_set(ctx);
+    if ctx.uses_child_process
+        || iteration_set
+            .iter()
+            .any(|m| m.strip_prefix("node:").unwrap_or(m) == "child_process")
+    {
+        iteration_set.insert("net".to_string());
+    }
+    iteration_set
+}
+
 /// Whether the well-known flip is on — i.e. `PERRY_DISABLE_WELL_KNOWN` unset.
 pub(crate) fn well_known_flip_enabled() -> bool {
     std::env::var_os("PERRY_DISABLE_WELL_KNOWN").is_none()
@@ -95,7 +133,7 @@ pub(crate) fn well_known_flip_enabled() -> bool {
 pub(crate) fn wrapper_is_sole_provider(module: &str) -> bool {
     matches!(
         module.strip_prefix("node:").unwrap_or(module),
-        "net" | "ws" | "zlib"
+        "net" | "perry/websocket" | "zlib"
     )
 }
 

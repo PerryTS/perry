@@ -92,6 +92,8 @@ FROM ${GLIBC_IMAGE}
 # checked while bootstrapping ca-certificates; only TLS peer validation is
 # disabled for this first signed archive fetch. This matches the existing
 # glibc-2.31 release image.
+COPY .github/actions/setup-llvm22/apt.llvm.org.gpg.key /tmp/apt.llvm.org.gpg.key
+COPY scripts/install-llvm22-bullseye.sh /tmp/install-llvm22-bullseye.sh
 RUN printf '%s\n' \
       'deb [check-valid-until=no] https://archive.debian.org/debian bullseye main' \
       'deb https://archive.debian.org/debian-security bullseye-security main' \
@@ -109,13 +111,7 @@ RUN printf '%s\n' \
     # (CMAKE_AR-NOTFOUND: libz-ng-sys's static archive step); 3.25 does.
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       -t bullseye-backports cmake \
-    && curl -fsSL https://apt.llvm.org/llvm-snapshot.gpg.key \
-      -o /etc/apt/trusted.gpg.d/apt.llvm.org.asc \
-    && printf '%s\n' \
-      'deb https://apt.llvm.org/bullseye/ llvm-toolchain-bullseye-22 main' \
-      > /etc/apt/sources.list.d/llvm22.list \
-    && apt-get update \
-    && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    && /tmp/install-llvm22-bullseye.sh /tmp/apt.llvm.org.gpg.key \
       clang-22 libpolly-22-dev llvm-22-dev libxml2-dev libzstd-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 

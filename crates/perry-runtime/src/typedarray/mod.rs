@@ -26,6 +26,8 @@ mod iterate;
 #[cfg(test)]
 mod resolved_read_tests;
 pub(crate) use crate::byte_cell_support::shared_access;
+#[cfg(test)]
+mod fill_tests;
 mod slice_ops;
 #[cfg(test)]
 mod this_arg_tests;
@@ -228,6 +230,55 @@ unsafe fn native_memory_copy_accepts_buffer(addr: usize) -> bool {
 
 pub use crate::byte_cell_support::typed_array_alloc;
 
+/// The per-kind cast of one number into the element at `dst`. The single
+/// conversion every store (`store_at`, `fill`) uses.
+#[inline(always)]
+unsafe fn store_raw(dst: *mut u8, kind: u8, value: f64) {
+    match kind {
+        KIND_INT8 => {
+            let v = to_uint32_bits(value) as u8 as i8;
+            *(dst as *mut i8) = v;
+        }
+        KIND_UINT8 => {
+            *dst = to_uint32_bits(value) as u8;
+        }
+        KIND_UINT8_CLAMPED => {
+            let byte = to_uint8_clamp(value);
+            *dst = byte;
+        }
+        KIND_INT16 => {
+            let v = to_uint32_bits(value) as u16 as i16;
+            *(dst as *mut i16) = v;
+        }
+        KIND_UINT16 => {
+            *(dst as *mut u16) = to_uint32_bits(value) as u16;
+        }
+        KIND_INT32 => {
+            let v = to_uint32_bits(value) as i32;
+            *(dst as *mut i32) = v;
+        }
+        KIND_UINT32 => {
+            *(dst as *mut u32) = to_uint32_bits(value);
+        }
+        KIND_FLOAT16 => {
+            *(dst as *mut u16) = f64_to_f16_bits(value);
+        }
+        KIND_FLOAT32 => {
+            *(dst as *mut f32) = value as f32;
+        }
+        KIND_FLOAT64 => {
+            *(dst as *mut f64) = value;
+        }
+        KIND_BIGINT64 => {
+            *(dst as *mut i64) = bigint::bigint_slot_bits(value) as i64;
+        }
+        KIND_BIGUINT64 => {
+            *(dst as *mut u64) = bigint::bigint_slot_bits(value);
+        }
+        _ => {}
+    }
+}
+
 /// Store a number into the typed array slot, performing the per-kind cast.
 pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64) {
     let kind = crate::typedarray::element_kind(ta);
@@ -238,79 +289,34 @@ pub(crate) unsafe fn store_at(ta: *mut TypedArrayHeader, idx: usize, value: f64)
     if typed_array_has_shared_backing(ta) {
         return shared_access::store(base.add(off), kind, value);
     }
-    match kind {
-        KIND_INT8 => {
-            let v = to_uint32_bits(value) as u8 as i8;
-            *(base.add(off) as *mut i8) = v;
-        }
-        KIND_UINT8 => {
-            *base.add(off) = to_uint32_bits(value) as u8;
-        }
-        KIND_UINT8_CLAMPED => {
-            let byte = to_uint8_clamp(value);
-            *base.add(off) = byte;
-        }
-        KIND_INT16 => {
-            let v = to_uint32_bits(value) as u16 as i16;
-            *(base.add(off) as *mut i16) = v;
-        }
-        KIND_UINT16 => {
-            *(base.add(off) as *mut u16) = to_uint32_bits(value) as u16;
-        }
-        KIND_INT32 => {
-            let v = to_uint32_bits(value) as i32;
-            *(base.add(off) as *mut i32) = v;
-        }
-        KIND_UINT32 => {
-            *(base.add(off) as *mut u32) = to_uint32_bits(value);
-        }
-        KIND_FLOAT16 => {
-            *(base.add(off) as *mut u16) = f64_to_f16_bits(value);
-        }
-        KIND_FLOAT32 => {
-            *(base.add(off) as *mut f32) = value as f32;
-        }
-        KIND_FLOAT64 => {
-            *(base.add(off) as *mut f64) = value;
-        }
-        KIND_BIGINT64 => {
-            *(base.add(off) as *mut i64) = bigint::bigint_slot_bits(value) as i64;
-        }
-        KIND_BIGUINT64 => {
-            *(base.add(off) as *mut u64) = bigint::bigint_slot_bits(value);
-        }
-        _ => {}
-    }
+    store_raw(base.add(off), kind, value)
+}
+
+/// The element encoding of an already-converted `value` in `kind`, as the
+/// little-endian bytes of one element in the low bytes of the word.
+pub(crate) fn element_bits(kind: u8, value: f64) -> u64 {
+    let mut bits = 0u64;
+    unsafe { store_raw(&mut bits as *mut u64 as *mut u8, kind, value) };
+    bits
 }
 
 /// Load a slot, returning a plain f64 (numeric, not NaN-boxed).
 pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
+    load_at_shared(ta, idx, typed_array_has_shared_backing(ta))
+}
+
+/// [`load_at`] for the typed-array cell `ta`, admitted by its caller, whose
+/// owner is (`shared`) or is not a SharedArrayBuffer.
+pub(crate) unsafe fn load_at_shared(ta: *const TypedArrayHeader, idx: usize, shared: bool) -> f64 {
     let kind = crate::typedarray::element_kind(ta);
     let elem_size =
         crate::typedarray::elem_size_for_kind(crate::typedarray::element_kind(ta)) as usize;
     let base = data_ptr(ta);
     let off = idx * elem_size;
-    if typed_array_has_shared_backing(ta) {
+    if shared {
         return shared_access::load(base.add(off), kind);
     }
     match kind {
-        KIND_INT8 => *(base.add(off) as *const i8) as f64,
-        KIND_UINT8 | KIND_UINT8_CLAMPED => *base.add(off) as f64,
-        KIND_INT16 => *(base.add(off) as *const i16) as f64,
-        KIND_UINT16 => *(base.add(off) as *const u16) as f64,
-        KIND_INT32 => *(base.add(off) as *const i32) as f64,
-        KIND_UINT32 => *(base.add(off) as *const u32) as f64,
-        // #10779: an ArrayBuffer lane is arbitrary user bytes, so a float
-        // kind is the one element kind whose value can land inside Perry's
-        // NaN-box tag band. Canonicalise here — this is the single runtime
-        // choke point every `ta[i]` read funnels through — so the value that
-        // leaves is a number for every consumer that tag-dispatches it.
-        // Integer kinds cannot produce a NaN and are left untouched.
-        KIND_FLOAT16 => {
-            crate::array::canonical_raw_f64(f16_bits_to_f64(*(base.add(off) as *const u16)))
-        }
-        KIND_FLOAT32 => crate::array::canonical_raw_f64(*(base.add(off) as *const f32) as f64),
-        KIND_FLOAT64 => crate::array::canonical_raw_f64(*(base.add(off) as *const f64)),
         // BigInt kinds return a NaN-boxed BigInt (not a plain Number), so
         // `ta[i]` round-trips as a `bigint`. The raw slot bits are the BigInt's
         // low limb; widen via the signed/unsigned constructor for `> i64::MAX`.
@@ -322,6 +328,29 @@ pub(crate) unsafe fn load_at(ta: *const TypedArrayHeader, idx: usize) -> f64 {
             let v = *(base.add(off) as *const u64);
             crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_u64(v) as i64)
         }
+        _ => load_number_raw(base.add(off), kind),
+    }
+}
+
+/// The Number at `src`, an element of the numeric (non-BigInt) `kind`.
+#[inline(always)]
+unsafe fn load_number_raw(src: *const u8, kind: u8) -> f64 {
+    match kind {
+        KIND_INT8 => *(src as *const i8) as f64,
+        KIND_UINT8 | KIND_UINT8_CLAMPED => *src as f64,
+        KIND_INT16 => *(src as *const i16) as f64,
+        KIND_UINT16 => *(src as *const u16) as f64,
+        KIND_INT32 => *(src as *const i32) as f64,
+        KIND_UINT32 => *(src as *const u32) as f64,
+        // #10779: an ArrayBuffer lane is arbitrary user bytes, so a float
+        // kind is the one element kind whose value can land inside Perry's
+        // NaN-box tag band. Canonicalise here — this is the single runtime
+        // choke point every `ta[i]` read funnels through — so the value that
+        // leaves is a number for every consumer that tag-dispatches it.
+        // Integer kinds cannot produce a NaN and are left untouched.
+        KIND_FLOAT16 => crate::array::canonical_raw_f64(f16_bits_to_f64(*(src as *const u16))),
+        KIND_FLOAT32 => crate::array::canonical_raw_f64(*(src as *const f32) as f64),
+        KIND_FLOAT64 => crate::array::canonical_raw_f64(*(src as *const f64)),
         _ => 0.0,
     }
 }
@@ -520,8 +549,8 @@ mod tests {
                 crate::value::TAG_FALSE,
                 crate::value::TAG_NULL,
                 crate::value::TAG_UNDEFINED,
-                crate::value::JSValue::int32(5).bits(),
-                0x7FF9_0100_0000_0035, // short string "5"
+                crate::value::INTERNAL_WORD_TAG | 5, // a raw 0x7FFE word
+                0x7FF9_0100_0000_0035,               // short string "5"
             ] {
                 assert!(
                     !typed_array_fast_index_set(ptr, KIND_FLOAT64, 0.0, f64::from_bits(boxed)),

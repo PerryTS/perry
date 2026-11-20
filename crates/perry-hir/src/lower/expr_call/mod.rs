@@ -23,6 +23,18 @@ use crate::types::Type;
 
 use super::{lower_expr, LoweringContext};
 
+/// A remaining qualified name does not establish an Array receiver.
+fn is_qualified_type_name(name: &str) -> bool {
+    name.contains('.')
+}
+
+/// A generic base that names an array type. Any other generic base (`Pick`,
+/// `Omit`, `Readonly`, a user generic) describes some other value whose own
+/// methods may share names with `Array.prototype`.
+fn is_array_generic_base(base: &str) -> bool {
+    matches!(base, "Array" | "ReadonlyArray")
+}
+
 fn is_typed_array_type(ty: &Type) -> bool {
     matches!(
         ty,
@@ -66,7 +78,10 @@ mod local_array_methods;
 mod module_class_static;
 #[cfg(test)]
 mod module_class_static_tests;
+#[cfg(test)]
+mod module_object_prototype_tests;
 mod module_static;
+pub(crate) use module_static::math_intrinsic;
 mod name_fold;
 mod native_module;
 mod native_module_spread_tests;
@@ -166,10 +181,9 @@ use globals::try_global_builtins;
 use imported_array_methods::try_imported_array_methods;
 use inline_array_methods::try_inline_array_methods;
 use intrinsics::{
-    check_eval_function_call, try_bare_regexp_call, try_builtin_prototype_method_apply_call,
-    try_dynamic_require, try_embed_wasm, try_function_return_this, try_import_meta_require,
-    try_iterator_from, try_namespace_static_method_apply_call_bind, try_native_arena_intrinsics,
-    try_native_arena_public_api, try_native_memory_public_api, try_native_module_method_apply_call,
+    check_eval_function_call, try_bare_regexp_call, try_dynamic_require, try_embed_wasm,
+    try_function_return_this, try_import_meta_require, try_iterator_from,
+    try_native_arena_intrinsics, try_native_arena_public_api, try_native_memory_public_api,
     try_pod_layout_constants, try_precompile, try_require_literal,
     try_strict_eval_arguments_assignment, validate_native_scalar_conversion_call,
 };
@@ -183,8 +197,7 @@ use nested_namespace::{
     try_web_crypto_subtle,
 };
 use post_args_dispatch::{
-    try_array_static_alias_call, try_object_has_own_call, try_object_prototype_call,
-    try_object_static_alias_call, try_proxy_call,
+    try_array_static_alias_call, try_object_static_alias_call, try_proxy_call,
 };
 use prescans::run_call_prescans;
 use regex_string::try_regex_string_methods;
@@ -346,13 +359,8 @@ fn lower_call_inner(
         return Ok(expr);
     }
     validate_native_scalar_conversion_call(ctx, call, has_spread)?;
-    // The rewrites of `f.call(…)` / `f.apply(…)` / `f.bind(…)(…)` below run
-    // the intrinsic's semantics; a program that writes that method onto a
-    // builtin prototype calls whatever the property holds.
-    if !function_proto_method_written(call) {
-        if let Some(expr) = borrowed_call_folds(ctx, call, has_spread)? {
-            return Ok(expr);
-        }
+    if let Some(expr) = borrowed_call_folds(ctx, call, has_spread)? {
+        return Ok(expr);
     }
     if let Some(expr) = try_function_return_this(ctx, call, has_spread) {
         return Ok(expr);
@@ -468,14 +476,6 @@ fn lower_call_inner(
         Err(args) => args,
     };
     args = match try_array_static_alias_call(ctx, call, args, has_spread) {
-        Ok(expr) => return Ok(expr),
-        Err(args) => args,
-    };
-    args = match try_object_has_own_call(call, args, has_spread) {
-        Ok(expr) => return Ok(expr),
-        Err(args) => args,
-    };
-    let mut args = match try_object_prototype_call(call, args, has_spread) {
         Ok(expr) => return Ok(expr),
         Err(args) => args,
     };
@@ -782,8 +782,24 @@ fn lower_call_inner(
             // #3896: mark the callee position so the expr_member read-gate
             // keeps rejecting `ns.foo()` (absent member call) while relaxing a
             // bare value read `ns.foo` to undefined for Node-core namespaces.
+            //
+            // The flag names the IMMEDIATE callee member, so it is set only when
+            // the callee is a member expression (through parens and TS-only
+            // wrappers, which lower straight to their operand). Any other callee
+            // is a value expression whose sub-expressions are values, never this
+            // call's callee member (ECMA-262 13.3.6.1: the callee is evaluated as
+            // an ordinary expression; only a property reference supplies a
+            // `this`): `pick(Number.isInteger)(x)`, `new F(a)(x)`, `tag`..`(x)`,
+            // `(await p)(x)`, `f?.(a)(x)`, `(c ? a : b)(x)`, `(a, b)(x)`. Left set
+            // there, the first member lowered inside — e.g. the argument
+            // `Number.isInteger` — took it for the direct callee, and the
+            // member-tail reroute-undo (#4596/#4627) collapsed it to the
+            // value-less `PropertyGet { GlobalGet(0), "isInteger" }`, i.e. the
+            // program read `globalThis.isInteger` instead of the function.
+            // `lower_member_inner` clears the flag on entry, so it never reaches
+            // the member's object or a computed key.
             let prev_callee = ctx.lowering_call_callee;
-            ctx.lowering_call_callee = true;
+            ctx.lowering_call_callee = callee_is_member_position(expr);
             let callee_expr = lower_expr(ctx, expr);
             ctx.lowering_call_callee = prev_callee;
             let callee_expr = callee_expr?;
@@ -890,7 +906,7 @@ fn lower_call_inner(
                 })
             }
         }
-        ast::Callee::Import(_) => {
+        ast::Callee::Import(import) => {
             // Issue #100: dynamic import() — lower to Expr::DynamicImport with
             // an empty `paths` list. `collect_modules` runs the path-const
             // folder and populates `paths`. If the argument can't be folded
@@ -907,62 +923,34 @@ fn lower_call_inner(
                 byte_offset: call.span.lo.0,
                 deferred_error: None,
                 synchronous: false,
+                deferred: import.phase == ast::ImportPhase::Defer,
             })
         }
     }
 }
 
-/// The borrowed-method rewrites: `f.call(…)`, `f.apply(…)` and
-/// `f.bind(…)(…)` on a function the lowering knows, turned into the direct
-/// call.
-fn borrowed_call_folds(
-    ctx: &mut LoweringContext,
-    call: &ast::CallExpr,
-    has_spread: bool,
-) -> Result<Option<Expr>> {
-    // Literal IIFEs keep the ordinary guarded `.call` lookup and thisArg.
-    // #1722: `path.join.apply(null, [a, b])` / `.call(null, a, b)` and the
-    // same shape on any stdlib namespace — rewrite to the direct call so
-    // the dedicated per-method lowering runs (indirect invocation
-    // otherwise reads the method value as `undefined`).
-    if let Some(expr) = try_native_module_method_apply_call(ctx, call, has_spread)? {
-        return Ok(Some(expr));
-    }
-    // #1777: `Array.prototype.slice.call(arguments, 1)` / `[].slice.call(…)` and
-    // the same on any builtin prototype — rewrite `Proto.method.{call,apply}(
-    // thisArg, …)` to `thisArg.method(…)` so the indirect prototype-borrow
-    // dispatches (the bare method value otherwise reads `undefined`).
-    if let Some(expr) = try_builtin_prototype_method_apply_call(ctx, call, has_spread)? {
-        return Ok(Some(expr));
-    }
-    // #2143: `Promise.resolve.call(t, x)` / `Math.min.apply(t, [a,b])` /
-    // `(JSON.parse.bind(t, x))(y)` — drop the (unused) `thisArg` and call the
-    // namespace static directly. Built-in function values otherwise lower to a
-    // numeric fallback (no reified `Function.prototype`).
-    try_namespace_static_method_apply_call_bind(ctx, call, has_spread)
-}
+// Guarded borrowing retains the actual source function and the complete call.
+#[path = "borrowed_call.rs"]
+mod borrowed_call;
+use borrowed_call::borrowed_call_folds;
 
-/// Does the program write the `Function.prototype` method this call borrows
-/// through (`f.call(…)`, `f.apply(…)`, `f.bind(…)(…)`; #11394's record)?
-fn function_proto_method_written(call: &ast::CallExpr) -> bool {
-    let ast::Callee::Expr(callee) = &call.callee else {
-        return false;
-    };
-    let member = match callee.as_ref() {
-        ast::Expr::Member(m) => m,
-        ast::Expr::Call(inner) => match &inner.callee {
-            ast::Callee::Expr(e) => match e.as_ref() {
-                ast::Expr::Member(m) => m,
-                _ => return false,
-            },
+/// The callee is a member expression, possibly under parens and TS-only
+/// wrappers (`(o.f)(x)`, `(o.f as any)(x)`, `o.f!(x)`, `o.f<T>(x)`), which
+/// lower straight to their operand: the only callee shape whose immediate
+/// sub-lowering is the callee member `lowering_call_callee` names.
+fn callee_is_member_position(e: &ast::Expr) -> bool {
+    let mut cur = e;
+    loop {
+        match cur {
+            ast::Expr::Member(_) => return true,
+            ast::Expr::Paren(x) => cur = &x.expr,
+            ast::Expr::TsAs(x) => cur = &x.expr,
+            ast::Expr::TsNonNull(x) => cur = &x.expr,
+            ast::Expr::TsSatisfies(x) => cur = &x.expr,
+            ast::Expr::TsTypeAssertion(x) => cur = &x.expr,
+            ast::Expr::TsConstAssertion(x) => cur = &x.expr,
+            ast::Expr::TsInstantiation(x) => cur = &x.expr,
             _ => return false,
-        },
-        _ => return false,
-    };
-    match &member.prop {
-        ast::MemberProp::Ident(p) if matches!(p.sym.as_ref(), "call" | "apply" | "bind") => {
-            crate::patched_builtins::prototype_method_patched(p.sym.as_ref())
         }
-        _ => false,
     }
 }

@@ -1,14 +1,14 @@
 # Polyglot Benchmark Methodology
 
 Last updated: 2026-05-06 — Perry v0.5.585 (fast-math opt-in flip);
-Perry data in [`RESULTS.md`](./RESULTS.md) refreshed for both modes;
-[`RESULTS_AUTO.md`](./RESULTS_AUTO.md) is the pre-flip auto-generated
+Perry data in [`RESULTS.md`](RESULTS.md) refreshed for both modes;
+[`RESULTS_AUTO.md`](RESULTS_AUTO.md) is the pre-flip auto-generated
 snapshot at v0.5.249 — see its header note
 under RUNS=11.
 
 This document describes how the polyglot benchmark suite is constructed and
 run, what each benchmark measures, and why Perry's numbers differ from the
-other languages. It is the companion to [`RESULTS.md`](./RESULTS.md).
+other languages. It is the companion to [`RESULTS.md`](RESULTS.md).
 
 ## What this suite is (and isn't)
 
@@ -446,7 +446,7 @@ LLVM's autovectorizer generates parallel-accumulator reductions for the
 floating-point probes only when `reassoc` is on. **C++ closes these gaps with
 `clang++ -O3
 -ffast-math`** — same LLVM pipeline, one flag — see
-[`RESULTS_OPT.md`](./RESULTS_OPT.md). They are reported here for
+[`RESULTS_OPT.md`](RESULTS_OPT.md). They are reported here for
 diagnostic completeness; treating Perry's `--fast-math` numbers as
 runtime-perf wins on real code (vs C++ `-O3` rather than vs C++
 `-O3 -ffast-math`) is a misuse of the data, which is why we put both
@@ -463,7 +463,7 @@ This methodology will drift as the Perry codegen changes. Key moments:
   to actually-installed versions (rustc 1.94.1, Apple clang 21.0.0,
   swift 6.3.1, Bun 1.3.12, Node 25.8.0, Python 3.14.3); added
   the `loop_data_dependent` documentation section + Optimization
-  probes section. Data in [`RESULTS_AUTO.md`](./RESULTS_AUTO.md)
+  probes section. Data in [`RESULTS_AUTO.md`](RESULTS_AUTO.md)
   comes from a fresh RUNS=11 polyglot run at v0.5.249 on 2026-04-25.
 - **2026-04-22 (v0.5.243 era):** RUNS=11 methodology rolled out.
   `compute_stats` awk routine emits median + p95 + σ + min + max

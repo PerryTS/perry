@@ -7,7 +7,7 @@ fn run(source: &str, units: bool) -> ProgramFacts {
     let hir = perry_hir::lower_module(&parsed, "t", "t.ts").unwrap();
     let modules = [("t.ts".to_string(), &hir)];
     if units {
-        crate::compute_units(&modules, &FactsConfig::default())
+        crate::compute(&modules, &FactsConfig::default())
     } else {
         crate::compute(&modules, &FactsConfig::default())
     }

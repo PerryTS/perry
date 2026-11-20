@@ -30,7 +30,7 @@
 #          requirement was met on this test
 #   UNVER  output byte-exact but the arm was INERT here (no collection, or
 #          nothing moved for an evacuating arm) -- NOT green, by design
-#   XFAIL  a triaged, justified expected-red (test-parity/gc_repsel_triage.txt)
+#   XFAIL  a triaged, justified expected-red (tests/parity/gc_repsel_triage.txt)
 #   FAIL   output mismatch, crash, non-zero exit, or compile failure
 #
 # A cell that matched the oracle under an inert arm is UNVER, never PASS. A
@@ -45,7 +45,7 @@
 # per-run cycle counts belong in the run's own output, not here.)
 #
 # ADDING A REPRESENTATION: register its gap file in
-# test-parity/gc_repsel_corpus.txt. This script FAILS if a `test_gap_repsel_*`
+# tests/parity/gc_repsel_corpus.txt. This script FAILS if a `test_gap_repsel_*`
 # or `test_gap_specabi_*` file exists that is not registered (see
 # docs/representation-selection-rfc.md 5.6).
 #
@@ -55,7 +55,7 @@
 # and exit 0. Every run therefore ends in
 # `scripts/gc_matrix_liveness_check.py`, which fails when an arm satisfied its
 # own `requires=` on zero cells — and equally when an arm listed in
-# `test-parity/gc_matrix_inert_arms.txt` starts biting again, so the registry
+# `tests/parity/gc_matrix_inert_arms.txt` starts biting again, so the registry
 # cannot rot in the other direction either.
 #
 # ***DO NOT PUT LIVENESS NUMBERS IN THIS HEADER.*** The last hand-maintained
@@ -105,8 +105,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$ROOT"
 
-MANIFEST="test-parity/gc_repsel_corpus.txt"
-TRIAGE="test-parity/gc_repsel_triage.txt"
+MANIFEST="tests/parity/gc_repsel_corpus.txt"
+TRIAGE="tests/parity/gc_repsel_triage.txt"
 ARMS_SEL="pr"
 FILTER=""
 PRESSURE_MB="8"
@@ -321,7 +321,7 @@ RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[0;33m'; NC=$'\033[0m'
 # inert. The liveness gate exists because that one is invisible on screen.
 # ---------------------------------------------------------------------------
 ARMS=(
-"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***LIVE AGAIN AS OF 2026-08-09*** -- its known-inert entry was deleted in test-parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
+"default||%P%|scavenge|as-shipped GC configuration under allocation pressure. ***LIVE AGAIN AS OF 2026-08-09*** -- its known-inert entry was deleted in tests/parity/gc_matrix_inert_arms.txt. #7024 made this a relocating arm (the alloc-point trigger defers to js_gc_loop_safepoint -> gc_safepoint_moving_minor, which runs the copying minor on precise rewritable roots); #7161 then flipped PERRY_GC_MOVING_LOOP_POLLS default-OFF pending #7154, and that one env gates BOTH halves of the route -- perry-codegen's moving_safepoint_polls_enabled decides whether the back-edge polls are emitted at all, and perry-runtime's gc_moving_loop_polls_enabled decides whether the trigger defers to them. A default binary has neither, so the minor runs behind ManualGcScanGuard::force_full_scan and the copying minor is ineligible by construction. requires=scavenge STAYS: it is what the shipped default is FOR, the registry entry names what blocks it, and the liveness gate fails the day it scavenges again so the entry cannot outlive its cause. safepoint_minor carries the relocating claim meanwhile."
 "safepoint_minor|PERRY_GC_MOVING_LOOP_POLLS=1|%P% PERRY_GC_MOVING_LOOP_POLLS=1|scavenge|THE SOUND RELOCATING ARM, and what keeps the #6993 defect class reachable per-PR while #7161's stopgap holds. Sets the poll flag at BOTH compile and run time (same env on both sides -- keyed into the object cache as env_gc_moving_loop_polls, so a warm cache cannot serve poll-free objects). The copying minor then runs at js_gc_loop_safepoint -> gc_safepoint_moving_minor, where the loop body has completed and every live heap value is a named local on the shadow stack: precise, rewritable roots. No %E%, no force -- this is exactly what default was between #7024 and #7161, and what default becomes again when the stopgap lifts. NOT a replacement for the %E% arms: a back-edge poll only fires while user JS runs, so it cannot expose an unrooted local inside runtime code that never re-enters user JS (#7249). evac_minor and force_verify remain in the PR subset for that."
 "evac_minor||%P% %E%|move|THE evacuating arm, and the STRONGER acceptance route (#7249): the automatic alloc-point collection as a COPYING minor that relocates survivors at a register-imprecise point, which is where an unrooted runtime-side local is exposed. No stress knob -- this is the collector's own moving path."
 "force_evac||%P% %E% PERRY_GC_FORCE_EVACUATE=1|move|stress-copy every marked non-pinned nursery object"
@@ -422,46 +422,65 @@ while IFS= read -r line; do
 done < "$MANIFEST"
 
 missing_reg=0
-for f in test-files/test_gap_repsel_*.ts test-files/test_gap_specabi_*.ts; do
-    [ -f "$f" ] || continue
-    b="$(basename "$f" .ts)"
+REGISTRATION_MAP="$(python3 "$SCRIPT_DIR/gc_corpus_sources.py" --root "$ROOT" \
+    --pattern 'test_gap_repsel_*.ts' --pattern 'test_gap_specabi_*.ts' --allow-empty-patterns)" || exit 3
+while IFS="$(printf '\t')" read -r b f; do
+    [ -n "$f" ] || continue
     found=0
     for c in "${CORPUS[@]}"; do [ "$c" = "$b" ] && found=1 && break; done
     if [ "$found" = 0 ]; then
         echo "${RED}UNREGISTERED${NC} $f is a representation-selection gap file but is not in $MANIFEST" >&2
         missing_reg=1
     fi
-done
+done <<< "$REGISTRATION_MAP"
 if [ "$missing_reg" = 1 ]; then
     echo "A NEW REPRESENTATION MUST REGISTER ITS GAP FILE in $MANIFEST." >&2
     echo "See docs/representation-selection-rfc.md 5.6 (GC under unboxed representations)." >&2
     exit 3
 fi
 
-for b in "${CORPUS[@]}"; do
-    [ -f "test-files/$b.ts" ] || { echo "manifest lists $b but test-files/$b.ts does not exist" >&2; exit 3; }
-done
+# GC ids remain bare manifest names. Resolve them to one runnable source before
+# any oracle/compiler receipt can be produced; keep the id/path pairs aligned
+# while filtering and sharding so report names and flat artifacts stay stable.
+SOURCE_MAP="$(python3 "$SCRIPT_DIR/gc_corpus_sources.py" --root "$ROOT" "${CORPUS[@]}")" || exit 3
+CORPUS_SOURCE_PATHS=()
+source_index=0
+while IFS="$(printf '\t')" read -r source_id source_path; do
+    [ "$source_id" = "${CORPUS[$source_index]}" ] || {
+        echo "GC source resolver returned an out-of-order id: $source_id" >&2; exit 3;
+    }
+    CORPUS_SOURCE_PATHS+=("$source_path")
+    source_index=$((source_index+1))
+done <<< "$SOURCE_MAP"
+[ "$source_index" -eq "${#CORPUS[@]}" ] || { echo "GC source resolver returned an incomplete mapping" >&2; exit 3; }
 
 if [ -n "$FILTER" ]; then
-    FILTERED=()
+    FILTERED=(); FILTERED_SOURCES=()
+    corpus_i=0
     for b in "${CORPUS[@]}"; do
-        case "$b" in *"$FILTER"*) FILTERED+=("$b") ;; esac
+        case "$b" in
+            *"$FILTER"*) FILTERED+=("$b"); FILTERED_SOURCES+=("${CORPUS_SOURCE_PATHS[$corpus_i]}") ;;
+        esac
+        corpus_i=$((corpus_i+1))
     done
     CORPUS=(${FILTERED[@]+"${FILTERED[@]}"})
+    CORPUS_SOURCE_PATHS=(${FILTERED_SOURCES[@]+"${FILTERED_SOURCES[@]}"})
 fi
 [ "${#CORPUS[@]}" -gt 0 ] || { echo "empty corpus after filter" >&2; exit 2; }
 
 CORPUS_TOTAL="${#CORPUS[@]}"
 if [ "$SHARD_COUNT" -gt 1 ]; then
-    SHARDED=()
+    SHARDED=(); SHARDED_SOURCES=()
     corpus_i=0
     for b in "${CORPUS[@]}"; do
         if [ $((corpus_i % SHARD_COUNT + 1)) -eq "$SHARD_INDEX" ]; then
             SHARDED+=("$b")
+            SHARDED_SOURCES+=("${CORPUS_SOURCE_PATHS[$corpus_i]}")
         fi
         corpus_i=$((corpus_i+1))
     done
     CORPUS=(${SHARDED[@]+"${SHARDED[@]}"})
+    CORPUS_SOURCE_PATHS=(${SHARDED_SOURCES[@]+"${SHARDED_SOURCES[@]}"})
 fi
 [ "${#CORPUS[@]}" -gt 0 ] || { echo "empty corpus in shard $SHARD_INDEX/$SHARD_COUNT" >&2; exit 2; }
 echo "==> shard $SHARD_INDEX/$SHARD_COUNT: ${#CORPUS[@]}/$CORPUS_TOTAL corpus files (stable manifest round-robin)"
@@ -472,17 +491,20 @@ progress "selected files=${#CORPUS[@]} corpus_total=$CORPUS_TOTAL"
 # keys are accepted. Apply the same settings at compile time so auto-optimize
 # selects gc-instruments for seeded/protected witnesses (freshness.rs).
 FIXTURE_ENVS=(); FIXTURE_LIMITS=()
+fixture_i=0
 for b in "${CORPUS[@]}"; do
     fixture_env=""
     fixture_limit=""
     case ",$SELECTED," in
         *,loop_polls,*)
-            fixture_env="$(python3 "$SCRIPT_DIR/gc_matrix_fixture_env.py" "test-files/$b.ts")" || exit 2
-            fixture_limit="$(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" --print-limit "test-files/$b.ts")" || exit 2
+            source_path="${CORPUS_SOURCE_PATHS[$fixture_i]}"
+            fixture_env="$(python3 "$SCRIPT_DIR/gc_matrix_fixture_env.py" "$source_path")" || exit 2
+            fixture_limit="$(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" --print-limit "$source_path")" || exit 2
             ;;
     esac
     FIXTURE_ENVS+=("$fixture_env")
     FIXTURE_LIMITS+=("$fixture_limit")
+    fixture_i=$((fixture_i+1))
 done
 
 # ---------------------------------------------------------------------------
@@ -521,10 +543,11 @@ for b in "${CORPUS[@]}"; do
     echo "  oracle [$oracle_i/${#CORPUS[@]}] $b"
     progress "oracle-start test=$b"
     node_argv=()
-    node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "test-files/$b.ts" | head -1)
+    source_path="${CORPUS_SOURCE_PATHS[$((oracle_i-1))]}"
+    node_argv_line=$(sed -n -E 's|^[[:space:]]*//[[:space:]]*parity-node-argv:[[:space:]]*(.*)$|\1|p' "$source_path" | head -1)
     if [ -n "$node_argv_line" ]; then read -r -a node_argv <<< "$node_argv_line"; fi
-    if ! node --experimental-strip-types ${node_argv[@]+"${node_argv[@]}"} "test-files/$b.ts" > "$WORK/oracle/$b.out" 2>/dev/null; then
-        echo "${RED}ORACLE FAIL${NC} node cannot run test-files/$b.ts -- it would drop out of the gate" >&2
+    if ! node --experimental-strip-types ${node_argv[@]+"${node_argv[@]}"} "$source_path" > "$WORK/oracle/$b.out" 2>/dev/null; then
+        echo "${RED}ORACLE FAIL${NC} node cannot run $source_path -- it would drop out of the gate" >&2
         oracle_fail=1
         progress "oracle-result test=$b result=FAIL"
     else
@@ -543,6 +566,16 @@ for rec in "${ARMS[@]}"; do
     id="$(arm_field "$rec" 1)"
     case ",$SELECTED," in *",$id,"*) ;; *) continue ;; esac
     cenv="$(arm_field "$rec" 2)"
+    # Auto-optimized links install the GC diagnostics (the trace hook and the
+    # diagnostic minor collection that runs the evacuation verifier) only when
+    # the COMPILE asks for them (gc_diagnostics_requested). Every arm is
+    # measured through PERRY_GC_TRACE/PERRY_GC_DIAG at run time, so every arm
+    # must be compiled with PERRY_GC_DIAG=1 too, or the liveness gate measures
+    # a binary that cannot report and most cells are inert. PERRY_GC_TRACE is
+    # NOT set at compile time: it would switch the link to the _instr archives.
+    # shipped_default is the control: compiled with the old env (no GC env at
+    # all) so the shipped collector stays exercised; it is not liveness-gated.
+    if [ "$id" != shipped_default ]; then cenv="${cenv:+$cenv }PERRY_GC_DIAG=1"; fi
     slug="$(printf '%s' "${cenv:-_base}" | tr -c 'A-Za-z0-9' '_')"
     fixture_group=0
     # safepoint_minor has the same base compile env; never share its binaries
@@ -570,7 +603,7 @@ NARMS="${#ARM_IDS[@]}"
 echo "==> warming the auto-optimize archive"
 mkdir -p "$WORK/bin/_warm"
 progress "compile-start env=_warm test=${CORPUS[0]}"
-"$PERRY_BIN" "test-files/${CORPUS[0]}.ts" -o "$WORK/bin/_warm/warm" > "$WORK/bin/_warm/warm.log" 2>&1 \
+"$PERRY_BIN" "${CORPUS_SOURCE_PATHS[0]}" -o "$WORK/bin/_warm/warm" > "$WORK/bin/_warm/warm.log" 2>&1 \
     || { echo "${RED}warm-up compile failed${NC} (see $WORK/bin/_warm/warm.log)" >&2; }
 progress "compile-result env=_warm test=${CORPUS[0]} result=$([ -x "$WORK/bin/_warm/warm" ] && echo PASS || echo FAIL)"
 
@@ -585,7 +618,7 @@ while [ "$ti" -lt "${#CORPUS[@]}" ]; do
             progress "compile-start env=_warm_fixture test=${CORPUS[$ti]} compile_env=$fixture_env"
             # All words have been validated as literal GC KEY=VALUE tokens.
             # shellcheck disable=SC2086
-            env $fixture_env "$PERRY_BIN" "test-files/${CORPUS[$ti]}.ts" -o "$WORK/bin/_warm/fixture" \
+            env $fixture_env "$PERRY_BIN" "${CORPUS_SOURCE_PATHS[$ti]}" -o "$WORK/bin/_warm/fixture" \
                 > "$WORK/bin/_warm/fixture.log" 2>&1 \
                 || { echo "${RED}fixture warm-up compile failed${NC}" >&2; }
             progress "compile-result env=_warm_fixture test=${CORPUS[$ti]} result=$([ -x "$WORK/bin/_warm/fixture" ] && echo PASS || echo FAIL)"
@@ -600,6 +633,7 @@ gi=0
 while [ "$gi" -lt "${#GROUP_SLUGS[@]}" ]; do
     slug="${GROUP_SLUGS[$gi]}"; cenv="${GROUP_ENVS[$gi]}"
     mkdir -p "$WORK/bin/$slug" "$WORK/env/$slug"
+    mkdir -p "$WORK/source"
     ti=0
     for b in "${CORPUS[@]}"; do
         effective_cenv="$cenv"
@@ -607,12 +641,13 @@ while [ "$gi" -lt "${#GROUP_SLUGS[@]}" ]; do
             effective_cenv="$effective_cenv ${FIXTURE_ENVS[$ti]}"
         fi
         printf '%s\n' "$effective_cenv" > "$WORK/env/$slug/$b"
+        printf '%s\n' "${CORPUS_SOURCE_PATHS[$ti]}" > "$WORK/source/$b"
         ti=$((ti+1))
     done
     printf '%s\n' "${CORPUS[@]}" | WORK="$WORK" PERRY_BIN="$PERRY_BIN" CENV="$cenv" SLUG="$slug" \
         PROGRESS_OUT="$PROGRESS_OUT" SHARD_INDEX="$SHARD_INDEX" SHARD_COUNT="$SHARD_COUNT" \
         xargs -P "$JOBS" -I{} sh -c \
-        'CENV=$(cat "$WORK/env/$SLUG/$1"); echo "  compile env=$SLUG test=$1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-start env=%s test=%s compile_env=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" "$CENV" >> "$PROGRESS_OUT"; if env $CENV "$PERRY_BIN" "test-files/$1.ts" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1; then [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=PASS\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; else echo "COMPILEFAIL $SLUG $1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=FAIL\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; fi' _ {}
+        'CENV=$(cat "$WORK/env/$SLUG/$1"); SOURCE=$(cat "$WORK/source/$1"); echo "  compile env=$SLUG test=$1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-start env=%s test=%s compile_env=%s\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" "$CENV" >> "$PROGRESS_OUT"; if env $CENV "$PERRY_BIN" "$SOURCE" -o "$WORK/bin/$SLUG/$1" > "$WORK/bin/$SLUG/$1.log" 2>&1; then [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=PASS\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; else echo "COMPILEFAIL $SLUG $1"; [ -z "$PROGRESS_OUT" ] || printf "%s shard=%s/%s compile-result env=%s test=%s result=FAIL\n" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$SHARD_INDEX" "$SHARD_COUNT" "$SLUG" "$1" >> "$PROGRESS_OUT"; fi' _ {}
     gi=$((gi+1))
 done
 
@@ -665,7 +700,7 @@ while [ "$ai" -lt "$NARMS" ]; do
             # A witness ceiling is execution-only and must never alter the
             # oracle, compiler, shipped controls, or OFF arms.
             if [ "$id" = loop_polls ] && [ -n "${FIXTURE_LIMITS[$ti]}" ]; then
-                runtime_command=(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" "test-files/$b.ts" "$bin")
+                runtime_command=(python3 -B "$SCRIPT_DIR/parity_fixture_limits.py" "${CORPUS_SOURCE_PATHS[$ti]}" "$bin")
             fi
             env $renv PERRY_GC_TRACE=1 PERRY_GC_DIAG=1 "${runtime_command[@]}" \
                 > "$WORK/out/$b.$id.out" 2> "$WORK/out/$b.$id.err"

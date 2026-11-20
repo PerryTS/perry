@@ -13,31 +13,6 @@ fn whole(src: &str) -> ProgramFacts {
     facts_with(src, diag())
 }
 
-fn units(mods: &[(&str, &str)]) -> ProgramFacts {
-    let parsed: Vec<_> = mods
-        .iter()
-        .map(|(p, s)| {
-            let m = perry_parser::parse_typescript(s, p).expect("parses");
-            let name = p.trim_end_matches(".ts");
-            let mut hir = perry_hir::lower_module(&m, name, p).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            hir
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> = mods
-        .iter()
-        .zip(&parsed)
-        .map(|((p, _), h)| (p.to_string(), h))
-        .collect();
-    let mut cfg = diag();
-    cfg.max_work = Some(50_000_000);
-    crate::compute_units(&list, &cfg)
-}
-
 /// The cause names of every site record of `kind` with `key`, in every
 /// analysis unit.
 fn causes(pf: &ProgramFacts, kind: &str, key: &str) -> Vec<String> {
@@ -235,6 +210,10 @@ fn every_verdict_reason_has_a_cause() {
 }
 
 macro_rules! cause_test {
+    (unseen $name:ident, $cause:literal, $kind:literal, $key:literal, $src:expr) => {
+        // The program loads an unseen module: `hostFn` is its function.
+        cause_test!($name, $cause, $kind, $key, &unseen($src));
+    };
     ($name:ident, $cause:literal, $kind:literal, $key:literal, $src:expr) => {
         #[test]
         fn $name() {
@@ -274,26 +253,48 @@ macro_rules! verdict_test {
 }
 
 cause_test!(
-    escaped_parameter,
+    unseen escaped_parameter,
     "escaped-parameter",
     "property",
     "x",
     r#"const g: any = (globalThis as any).hostFn; g(function (o: any) { return o.x; });"#
 );
 cause_test!(
-    escaped_this,
+    unseen escaped_this,
     "escaped-this",
     "property",
     "y",
     r#"const g: any = (globalThis as any).hostFn; g({ m() { return (this as any).y; } });"#
 );
 cause_test!(
-    intrinsic_prototype_top_store,
+    unseen intrinsic_prototype_top_store,
     "intrinsic-prototype-top-store",
     "property",
     "q",
-    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = [1].map; console.log(m.q);"#
+    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
 );
+/// A read on a ⊤ receiver names the receiver's own root, even when a key
+/// written onto a builtin prototype through ⊤ is also a member the primitive
+/// chain would answer: the token loop (⊤ first) runs before the primitive load.
+#[test]
+fn top_receiver_read_keeps_the_receivers_root() {
+    // r is top (an unknown call) or a string; r.q is read after a key was
+    // written onto String.prototype through top, and its result is the
+    // receiver of .z.
+    let pf = whole(&unseen(
+        r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
+    ));
+    let got = causes(&pf, "property", "z");
+    assert!(
+        got.iter().any(|c| c == "external-input"),
+        "external-input not in {got:?}"
+    );
+    assert!(
+        !got.iter().any(|c| c == "intrinsic-prototype-top-store"),
+        "receiver root booked to the prototype store: {got:?}"
+    );
+}
+
 cause_test!(
     opaque_builtin,
     "opaque-builtin",
@@ -306,10 +307,10 @@ cause_test!(
     "computed-key",
     "property",
     "w",
-    r#"const g: any = (globalThis as any).hostFn; console.log((globalThis as any)[g()].w);"#
+    r#"const g: any = (globalThis as any)[process.argv[2]]; console.log((globalThis as any)[g()].w);"#
 );
 cause_test!(
-    escaped_object_field,
+    unseen escaped_object_field,
     "escaped-object-field",
     "property",
     "b",
@@ -318,9 +319,9 @@ cause_test!(
 cause_test!(
     external_input,
     "external-input",
-    "value-call",
-    "write",
-    r#"process.stdout.write("x");"#
+    "property",
+    "x",
+    r#"new FinalizationRegistry(function (h: any) { return h.x; });"#
 );
 cause_test!(
     unmodeled_construct,
@@ -337,8 +338,8 @@ cause_test!(
     r#"const g: any = JSON.parse("0"); const r = g(); console.log(r.z);"#
 );
 cause_test!(
-    function_without_identity,
-    "function-without-identity",
+    unseen unknown_accessor_function,
+    "unknown-accessor-function",
     "property",
     "x",
     r#"const g: any = (globalThis as any).hostFn; const o: any = {}; Object.defineProperty(o, "p", { get: g }); console.log(o.p.x);"#
@@ -395,12 +396,14 @@ verdict_test!(
 );
 
 // Interpreted code: `Function.call` runs the Function constructor (E14).
+// A spread may be the runtime's depd shape, which makes a function also
+// without an interpreter (`builtins::function_ctor_runs_code`).
 cause_test!(
     dynamic_code,
     "dynamic-code",
     "property",
     "x",
-    r#"const r: any = (Function as any).call(null, "return 1"); console.log(r.x);"#
+    r#"const p = ["return 1"]; const r: any = (Function as any).call(null, ...p); console.log(r.x);"#
 );
 
 /// B-codes mark a typed array hard, and a typed array is no fact unit, so
@@ -417,31 +420,6 @@ fn buffer_aliasing() {
         classify("B2 buffer transfer/resize"),
         Some(Unknown::BufferAliasing)
     );
-}
-
-/// The unit edge: another unit's parameter, receiver and value, and a
-/// namespace re-export the program does not resolve.
-#[test]
-fn unit_edge_causes() {
-    let pf = units(&[
-        ("u.ts", "export function f(o: any) { return o.x; } export class C { m() { return this.y; } } export function mk(): any { return (globalThis as any).q; }"),
-        ("a.ts", "export const v = { w: 1 };"),
-        ("b.ts", "export const v = { w: 2 };"),
-        ("c.ts", "export * from \"./a\"; export * from \"./b\";"),
-        ("t.ts", "import { f, C, mk } from \"./u\"; import * as c from \"./c\"; const h: any = (globalThis as any).hostFn; h(f); h(C); console.log(mk().z, (c as any).v.w);"),
-    ]);
-    for (key, cause) in [
-        ("x", "unit-edge-parameter"),
-        ("y", "unit-edge-this"),
-        ("z", "unit-edge-value"),
-        ("w", "module-namespace"),
-    ] {
-        let got = causes(&pf, "property", key);
-        assert!(
-            got.iter().any(|c| c == cause),
-            "{key}: {cause} not in {got:?}"
-        );
-    }
 }
 
 /// One record per HIR site: the census of a program with every site kind
@@ -492,92 +470,6 @@ fn every_hir_site_has_one_record() {
             "no {kind} sites: {lines:?}"
         );
     }
-}
-
-/// Print the causes of each probe program (run with `--ignored
-/// --nocapture`): the probes the per-cause tests below pin.
-#[test]
-#[ignore]
-fn ledger_probe() {
-    let probes: &[(&str, &str, &str, &str)] = &[
-        (
-            "dynamic",
-            "property",
-            "x",
-            r#"const r: any = (Function("return { x: 1 }") as any)(); console.log(r.x);"#,
-        ),
-        (
-            "dynamic2",
-            "property",
-            "x",
-            r#"const f: any = new Function("return { x: 1 }"); const r: any = f(); console.log(r.x);"#,
-        ),
-        (
-            "buffer",
-            "property",
-            "q",
-            r#"const u = new Uint8Array(new ArrayBuffer(8)); const b: any = u.buffer; console.log(b.q);"#,
-        ),
-        (
-            "buffer2",
-            "property",
-            "q",
-            r#"const b = new ArrayBuffer(8); const u = new Uint8Array(b); const v: any = new DataView(u.buffer); console.log(v.q);"#,
-        ),
-    ];
-    for (name, kind, key, src) in probes {
-        let pf = if *name == "dynamic" {
-            facts_with(
-                src,
-                FactsConfig {
-                    diagnostics: true,
-                    ..interp_cfg()
-                },
-            )
-        } else {
-            whole(src)
-        };
-        println!("PROBE whole {name}: {:?}", causes(&pf, kind, key));
-        for (_, lines) in &pf.diagnostics {
-            for l in lines.iter().filter(|l| {
-                l.contains("\"record\":\"site\"") && l.contains(&format!("\"key\":\"{key}\""))
-            }) {
-                if let Some(at) = l.find("\"causes\":[") {
-                    println!("PROBE line {name}: {}", &l[at..l.len().min(at + 300)]);
-                }
-            }
-        }
-        let v: Vec<_> = pf
-            .sites
-            .iter()
-            .filter(|s| s.key == *key)
-            .map(|s| &s.verdict)
-            .collect();
-        println!("PROBE verdict {name}: {v:?}");
-    }
-    let pf = units(&[
-        ("u.ts", "export function f(o: any) { return o.x; } export class C { m() { return this.y; } } export function mk(): any { return (globalThis as any).q; }"),
-        ("a.ts", "export const v = { w: 1 };"),
-        ("b.ts", "export const v = { w: 2 };"),
-        ("c.ts", "export * from \"./a\"; export * from \"./b\";"),
-        ("t.ts", "import { f, C, mk } from \"./u\"; import * as c from \"./c\"; const h: any = (globalThis as any).hostFn; h(f); h(C); console.log(mk().z, (c as any).v.w);"),
-    ]);
-    for (kind, key) in [
-        ("property", "x"),
-        ("property", "y"),
-        ("property", "z"),
-        ("property", "w"),
-    ] {
-        println!("PROBE units {key}: {:?}", causes(&pf, kind, key));
-        let v: Vec<_> = pf
-            .sites
-            .iter()
-            .filter(|s| s.key == key)
-            .map(|s| &s.verdict)
-            .collect();
-        println!("PROBE units verdict {key}: {v:?}");
-    }
-    println!("PROBE completeness {:?}", completeness(&pf));
 }
 
 /// The closed list of reasons a published value contract is unknown
@@ -658,33 +550,4 @@ fn every_unknown_reason_is_named() {
     for w in UNKNOWN_WHY {
         assert!(given.contains(*w), "reason {w} is given nowhere");
     }
-}
-
-/// An unknown published value names why, in the value-output,
-/// argument-output and contract-input records; a known one says null.
-#[test]
-fn unknown_values_carry_a_reason() {
-    let pf = units(&[
-        ("u.ts", "export function f(o: any) { return o.x; } export function mk(): any { return (globalThis as any).q; } export const g: any = (globalThis as any).hostValue;"),
-        ("t.ts", "import { f, mk, g } from \"./u\"; const h: any = (globalThis as any).hostFn; h(f); console.log(mk().z, g.k); f({ a: 1 });"),
-    ]);
-    let (mut unknown, mut with_why, mut known_with_why) = (0, 0, 0);
-    for (_, lines) in &pf.diagnostics {
-        for l in lines.iter().filter(|l| {
-            l.contains("\"record\":\"contract-input\"")
-                || l.contains("\"record\":\"value-output\"")
-                || l.contains("\"record\":\"argument-output\"")
-        }) {
-            let why = l.contains("\"why\":{\"reason\":\"");
-            if l.contains("\"unknown\":true") || l.contains(";unknown=true;") {
-                unknown += 1;
-                with_why += why as usize;
-            } else if why {
-                known_with_why += 1;
-            }
-        }
-    }
-    assert!(unknown > 0, "the program publishes no unknown value");
-    assert_eq!(unknown, with_why, "an unknown value without a reason");
-    assert_eq!(known_with_why, 0, "a reason on a known value");
 }

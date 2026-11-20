@@ -58,6 +58,9 @@ import * as realm_native_56 from "node:trace_events";
 // Reflection oracle for the compiled realm. The descriptor walk never invokes
 // accessors; the explicit pristine intrinsic seeds below use known builtins.
 // An ES module keeps the dumper's own declarations off the global object.
+// The names file is read through named imports: they call into fs without
+// running the namespace's init, which births every export of node:fs.
+import { existsSync, readFileSync } from "node:fs";
 export {};
 
 const symbolValues: any[] = [];
@@ -123,9 +126,11 @@ function descriptor(d: any, path: string): any {
 // file (one name per line) in the working directory limits the global keys,
 // intrinsics and native modules it walks from to those names; everything else
 // is reached only through their descriptors and prototypes. Without the file
-// every root is walked.
-const restrictedNames: string[] | null = realm_native_14.existsSync("realm-dump.names")
-    ? realm_native_14.readFileSync("realm-dump.names", "utf8").split("\n")
+// every root is walked. A namespace import is a root too: its module's init
+// runs at startup and births every export, so the gate compiles the restricted
+// dumper with the imports of modules outside R bound to undefined instead.
+const restrictedNames: string[] | null = existsSync("realm-dump.names")
+    ? readFileSync("realm-dump.names", "utf8").split("\n")
     : null;
 function inR(name: string): boolean {
     return restrictedNames === null || restrictedNames.indexOf(name) >= 0;
@@ -165,7 +170,8 @@ if (inR("%BufferSpeciesConstructor%")) {
     const bufferSpecies = Object.getOwnPropertyDescriptor(Buffer, Symbol.species);
     if (bufferSpecies && bufferSpecies.get) intrinsic("%BufferSpeciesConstructor%", () => bufferSpecies.get.call(Buffer));
 }
-// Static native imports are realm roots too. Keep literal specifiers so each
+// Static native imports are realm roots too, keyed by the name R records for
+// the import (import_name in realm_diff_gate.py). Keep literal specifiers so each
 // module's existing installer is linked by the qualified reference compiler.
 const nativeRoots: any[] = [
     ["node:assert", realm_native_0],

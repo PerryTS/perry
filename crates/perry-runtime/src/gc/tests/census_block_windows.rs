@@ -97,6 +97,7 @@ fn the_block_window_index_answers_exactly_like_the_fence_search() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn sabotaged_block_window_lookup_is_caught_by_the_comparison() {
     run_isolated(|| {
@@ -121,6 +122,7 @@ fn sabotaged_block_window_lookup_is_caught_by_the_comparison() {
     });
 }
 
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn bases_sharing_a_window_keep_the_fence_search() {
     let mut valid = ValidPointerSet::new();

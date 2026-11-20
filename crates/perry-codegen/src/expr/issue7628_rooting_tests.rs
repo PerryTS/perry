@@ -194,6 +194,7 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })),
@@ -203,14 +204,14 @@ fn the_emitted_ir_rereads_both_operands_below_the_read() {
     assert_operand_reread_below(
         &ir,
         "js_put_value_set_dynamic",
-        0,
+        1,
         "js_to_numeric",
         "the IndexUpdate receiver",
     );
     assert_operand_reread_below(
         &ir,
         "js_put_value_set_dynamic",
-        1,
+        2,
         "js_to_numeric",
         "the IndexUpdate index",
     );
@@ -264,6 +265,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             op: BinaryOp::Add,
             prefix: false,
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }))),
@@ -293,6 +295,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
                 op: BinaryOp::Add,
                 prefix: false,
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             })),

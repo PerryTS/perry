@@ -394,6 +394,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             value,
             receiver,
             strict,
+            element_offset,
             byte_offset,
             byte_end,
         } => Expr::PutValueSet {
@@ -402,6 +403,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             value: Shallow::shallow(value, n),
             receiver: Shallow::shallow(receiver, n),
             strict: strict.clone(),
+            element_offset: element_offset.clone(),
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
@@ -533,6 +535,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset,
             deferred_error,
             synchronous,
+            deferred,
         } => Expr::DynamicImport {
             paths: paths.clone(),
             arg: Shallow::shallow(arg, n),
@@ -540,6 +543,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset: byte_offset.clone(),
             deferred_error: deferred_error.clone(),
             synchronous: synchronous.clone(),
+            deferred: *deferred,
         },
         Expr::WorkerNew {
             paths,

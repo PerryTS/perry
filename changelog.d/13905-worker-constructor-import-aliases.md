@@ -1,0 +1,1 @@
+Fix renamed worker-thread constructor imports: dispatch MessageChannel, BroadcastChannel and Worker by their original export name rather than the local alias. Preserve constructor-name collisions, Worker child-entry discovery and eval metadata, while retaining existing lexical/global/namespace resolution.

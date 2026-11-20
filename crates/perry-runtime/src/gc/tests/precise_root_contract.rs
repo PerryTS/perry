@@ -88,7 +88,7 @@ fn mistyped_nonpointer_sabotage_fails_the_liveness_witness() {
     global_liveness_witness(false);
     // Verification rejects the bare address at registration; the release
     // path (verification off) still loses the object, caught by survival.
-    let failure = std::panic::catch_unwind(|| {
+    let failure = crate::test_support::child_unwind(|| {
         let _release = PreciseRootVerificationOff::new();
         global_liveness_witness(true)
     });
@@ -118,7 +118,7 @@ fn stale_typed_root_sabotage_fails_evacuation_verification() {
     let mut root = ptr_bits(old);
     js_gc_register_global_root(&mut root as *mut u64 as i64);
     let verifier = EvacuationVerifier::all_forwarded(&valid);
-    let stale = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+    let stale = crate::test_support::child_unwind(std::panic::AssertUnwindSafe(|| {
         verify_mutable_root_slots(verifier);
     }));
     assert!(

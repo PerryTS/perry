@@ -1,8 +1,8 @@
 # WASI Preview 1 output (`--target wasip1`)
 
-**Status: in progress, tracked in [#13259](https://github.com/PerryTS/perry/issues/13259).**
-`--target wasip1` does not exist yet; this page is the contract the series
-implements, so each step can be reviewed against it. Nothing here changes
+**Status: implemented ([#13259](https://github.com/PerryTS/perry/issues/13259)).**
+This page is the contract `--target wasip1` implements and the
+`wasi-execution` CI job qualifies. Nothing here changes
 `--target wasi` (WASI 0.2 components), the browser `wasm`/`web` targets or the
 native targets. [WASI_P1_HOSTING.md](WASI_P1_HOSTING.md) is the unrelated
 `node:wasi` input support.
@@ -13,28 +13,34 @@ a **core module** (not a component) for hosts that provide
 `wasi_snapshot_preview1`. Reusable component authoring stays on the Component
 Model; see [the roadmap decision](WASI_ROADMAP.md#decision-support-p1-inputs-and-a-qualified-p1-output).
 
-What lands in which step, in order:
+How it landed:
 
-1. This documentation.
+1. This documentation (#13280).
 2. The runtime builds for `wasm32-wasip1`; networking operations return "not
-   supported".
+   supported" (#13298).
 3. The `--target wasip1` compiler target, with hello, filesystem, exception
    and forced-GC acceptance and a check that the module imports only
-   `wasi_snapshot_preview1`.
-4. A runtime bundle with the Node-module crates (http, zlib, ws and others).
+   `wasi_snapshot_preview1` (#13343).
+4. A runtime bundle with the Node-module crates (http, zlib, ws and others)
+   (#13356).
 5. Inbound TCP and signals on standard imports, qualified with a reference
-   host, then the opt-in `perry_net` outbound and DNS imports.
+   host (#13376), then the opt-in `perry_net` outbound and DNS imports
+   (#13386).
 6. The opt-in `perry_host.discard_pages` import: with `PERRY_WASM_DISCARD=1`
-   the runtime offers freed memory back to the host.
-7. Further wasm32 code-size and relocation options, then release packaging of
-   the P1 runtime archive beside the P2 one.
+   the runtime offers freed memory back to the host (#13417).
+7. The opt-in static relocation model for wasm32 objects,
+   `PERRY_WASM_STATIC_RELOC=1` (#13388), and release packaging of the P1
+   runtime archive beside the P2 one (#13394). The proposed pass that kept
+   SjLj block-crossing values in stack slots was not needed: WASI `try`
+   lowers to native wasm exception handling with no `setjmp` (#13337).
 
 ## Host requirements
 
 - A core-module host with `wasi_snapshot_preview1`.
-- WebAssembly exception handling. Generated try blocks and the C runtime use
-  LLVM's SjLj lowering on wasm EH, as on P2, so the host needs
-  `-W exceptions=y` (Wasmtime) or the equivalent.
+- WebAssembly exception handling (the standard proposal, `try_table` and
+  `throw_ref`). Generated try blocks and the runtime catch with native wasm
+  EH, as on P2, so older hosts need `-W exceptions=y` (Wasmtime) or the
+  equivalent.
 - No other imports unless the program was compiled with one of the opt-in
   extensions below.
 
@@ -56,7 +62,7 @@ that do not use sockets run on plain Wasmtime.
 
 While the module is idle it waits in a single `poll_oneoff` over every open
 socket, the signal stream, fd 0 once the program reads standard input, and the
-next timer deadline. The reference host in `test-wasi/p1-host` (Unix only;
+next timer deadline. The reference host in `tests/integration/wasi/p1-host` (Unix only;
 built and exercised by the `wasi-execution` job) implements these calls over a
 single descriptor table and is what the inbound-TCP, signal and stdin cases
 run under.

@@ -1,0 +1,1 @@
+Add `textfieldSetInputType(field, type)` to `perry/ui`. On the web target it sets the `<input>` type to `text`, `tel`, `email`, `number`, `url` or `search`, so phones show the matching keyboard; any other value leaves the field a plain `text` input, as HTML does for a type it does not know. Native backends accept the call and leave the field unchanged.

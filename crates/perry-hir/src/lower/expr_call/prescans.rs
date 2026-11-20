@@ -15,7 +15,6 @@ use crate::lower_patterns::{
 };
 
 use super::super::{try_desugar_reactive_animate, try_desugar_reactive_text, LoweringContext};
-use super::stream::register_super_stream_controller_params;
 
 /// Run all pre-scan registrations and reactive desugars that must
 /// happen BEFORE this call's args are lowered. Returns `Some(expr)`
@@ -141,20 +140,6 @@ pub(super) fn run_call_prescans(
     // any read state changes. Closes the follow-up to #109.
     if let Some(desugared) = try_desugar_reactive_animate(ctx, call)? {
         return Ok(Some(desugared));
-    }
-
-    // Issue #562: `super({ start, pull, transform, flush, ... })` inside
-    // a class extending `ReadableStream` / `TransformStream` —
-    // pre-register the controller param of each callback as a
-    // `readable_stream` native instance BEFORE the args are lowered, so
-    // `controller.enqueue(...)` inside those callback bodies dispatches
-    // through the streams arms in `lower_call.rs`. Mirrors the existing
-    // pre-scan in `expr_new.rs::lower_new` for `new ReadableStream({...})`
-    // / `new TransformStream({...})`. Idempotent for non-matching shapes.
-    if matches!(&call.callee, ast::Callee::Super(_)) {
-        if let Some(parent_ident) = ctx.current_class_super_ident.clone() {
-            register_super_stream_controller_params(ctx, &parent_ident, call);
-        }
     }
 
     Ok(None)

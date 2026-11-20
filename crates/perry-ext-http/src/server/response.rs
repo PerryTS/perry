@@ -13,6 +13,9 @@ use perry_ffi::{
 };
 
 use crate::server::request::handle_to_pointer_f64;
+use crate::server::response_cork::{
+    queue_connection_cork_tick, throw_unknown_chunked_encoding, writable_length,
+};
 use crate::server::response_end::call_closure0;
 use crate::server::types::{
     js_json_stringify, js_node_setheaders_entries, js_value_is_closure, jsvalue_to_body_bytes,
@@ -24,6 +27,8 @@ use crate::server::types::{
 /// signalling backpressure so producer loops (`while (res.write(buf))`)
 /// terminate instead of spinning forever (#4909).
 const DEFAULT_HIGH_WATER_MARK: usize = 16 * 1024;
+/// node's `OutgoingMessage` `writableHighWaterMark` (`getDefaultHighWaterMark()`).
+pub(crate) const WRITABLE_HIGH_WATER_MARK: usize = 65_536;
 
 // ------------------------------------------------------------------
 // #4907 — Node-compatible header / argument validation.
@@ -177,9 +182,20 @@ pub struct ResponseState {
     /// request after the first one was destroyed. `None` for a standalone
     /// `new http.ServerResponse(req)` and a bare `OutgoingMessage`.
     pub(crate) turnloop: Option<(crate::server::turnloop_route::ResponseConnection, u64)>,
+    /// The `http2` compat API's response: its prototype is
+    /// `Http2ServerResponse.prototype`, not `ServerResponse.prototype`
+    /// (#13802).
+    pub(crate) http2_compat: bool,
     /// P5: the head has gone out and further writes stream straight to the
     /// socket.
     pub turnloop_streaming: bool,
+    /// node's `OutgoingMessage[kCorked]`: `cork()` adds one, `uncork()`
+    /// subtracts one, and a streaming HTTP/1 `write()` on an uncorked message
+    /// corks it until the next tick (node f9175a212c).
+    pub corked: i32,
+    /// node's `kChunkedBuffer`: the body bytes of chunked writes made while the
+    /// message is corked. `uncork()` sends them as ONE chunk (node f9175a212c).
+    pub chunked_buffer: Vec<u8>,
 }
 
 /// Owned shape produced by `.end()` (or by `begin_streaming` for the head
@@ -270,7 +286,10 @@ impl ResponseState {
             standalone_req_method: None,
             destroyed: false,
             turnloop: None,
+            http2_compat: false,
             turnloop_streaming: false,
+            corked: 0,
+            chunked_buffer: Vec::new(),
         }
     }
 
@@ -841,7 +860,10 @@ pub unsafe extern "C" fn js_node_http_res_write_head(
 }
 
 /// node's `_implicitHeader` on a heap response's first write:
-/// `writeHead(this.statusCode)`.
+/// `writeHead(this.statusCode)`. Only the status fields are written here;
+/// the head itself (`_header`) is stored where its bytes are encoded
+/// ([`store_encoded_head`]), once the body framing is known: `end()` without
+/// a head still picks `Content-Length` (node sets `_contentLength` first).
 fn heap_implicit_head(handle: i64) {
     let scope = perry_ffi::TransientRootScope::enter();
     let owner = scope.root_addr(handle);
@@ -851,9 +873,22 @@ fn heap_implicit_head(handle: i64) {
     {
         return;
     }
-    commit_heap_head(owner.get(), f64::NAN, None);
-    if let Some(sr) = response_state_mut(owner.get()) {
-        sr.header_committed = true;
+    heap::sync_head_fields(owner.get());
+    let code = response_state(owner.get()).map_or(200, |sr| sr.status_code);
+    heap::write_head_fields(owner.get(), code, None);
+    heap::restate(owner.get());
+}
+
+/// `this._header = head` for a heap response whose implicit head is encoded
+/// now: the one place an implicit head becomes the object's `_header`.
+fn store_encoded_head(handle: i64) {
+    if !heap::is_response(handle) {
+        return;
+    }
+    let scope = perry_ffi::TransientRootScope::enter();
+    let owner = scope.root_addr(handle);
+    if let Some(head) = super::response_end::render_head(owner.get()) {
+        heap::set_header_text(owner.get(), &head);
     }
 }
 
@@ -872,6 +907,12 @@ extern "C" {
 pub(crate) fn implicit_header(handle: i64) {
     let scope = perry_ffi::TransientRootScope::enter();
     let owner = scope.root_addr(handle);
+    // The status of record is the response's own `statusCode` field.
+    if response_state(owner.get())
+        .is_some_and(|sr| !(sr.headers_sent || sr.header_committed || sr.writable_ended))
+    {
+        heap::sync_head_fields(owner.get());
+    }
     let status = match response_state(owner.get()) {
         Some(sr) if !(sr.headers_sent || sr.header_committed || sr.writable_ended) => {
             f64::from(sr.status_code)
@@ -906,12 +947,6 @@ pub(crate) fn implicit_header(handle: i64) {
 
 /// node's `writeHead` on a heap response: `statusMessage`, `statusCode`, then
 /// `_header` (`_storeHeader`).
-fn commit_heap_head(handle: i64, status: f64, reason: Option<String>) {
-    let scope = perry_ffi::TransientRootScope::enter();
-    let owner = scope.root_addr(handle);
-    heap::sync_head_fields(owner.get());
-    finish_heap_head(owner.get(), status, reason);
-}
 fn finish_heap_head(handle: i64, status: f64, reason: Option<String>) {
     let scope = perry_ffi::TransientRootScope::enter();
     let owner = scope.root_addr(handle);
@@ -949,11 +984,37 @@ fn stream_write_with_cb(handle: i64, bytes: &[u8], callback: i64) -> Option<bool
     let callback_root = callback_scope.root_addr(callback);
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    if !begin_streaming(response_root.get()) {
+    if !begin_streaming_head(response_root.get(), true) {
         return None;
     }
     let (conn, seq) = response_state(response_root.get()).and_then(|sr| sr.turnloop)?;
-    let conn = conn.root();
+    let conn = conn.root(response_socket(response_root.get()));
+    // node f9175a212c (`write_`): a write on an uncorked HTTP/1 message corks
+    // it and uncorks on the next tick; while it is corked, chunked writes
+    // collect in `chunked_buffer` and go out as one chunk.
+    if let Some(chunked) = crate::server::turnloop_route::http1_chunked(&conn, seq) {
+        let sr = response_state_mut(response_root.get())?;
+        if sr.corked <= 0 {
+            sr.corked += 1;
+            queue_connection_cork_tick(response_root.get());
+        }
+        let sr = response_state_mut(response_root.get())?;
+        // node: a non-empty chunk joins the buffer; an empty one joins it only
+        // behind buffered chunks, else it is sent (and carries the head).
+        if chunked && sr.corked != 0 && !(bytes.is_empty() && sr.chunked_buffer.is_empty()) {
+            sr.chunked_buffer.extend_from_slice(bytes);
+            // node: `msg.writableLength < msg.writableHighWaterMark`.
+            let below_hwm = writable_length(response_root.get()) < WRITABLE_HIGH_WATER_MARK
+                && crate::server::turnloop_route::writable_below_watermark(&conn, seq);
+            if !below_hwm {
+                response_state_mut(response_root.get())?.needs_drain = true;
+            }
+            if callback != 0 {
+                push_write_callback(response_root.get(), callback_root.get());
+            }
+            return Some(below_hwm);
+        }
+    }
     // A backpressured HTTP/2 write has already accepted these bytes. Preserve
     // its answer instead of falling back to buffering a duplicate chunk.
     let below_hwm = crate::server::turnloop_route::send_body(&conn, seq, bytes)?;
@@ -1055,6 +1116,7 @@ pub extern "C" fn js_node_http_res_write_full(
     if ended {
         return f64::from_bits(TAG_TRUE);
     }
+    throw_unknown_chunked_encoding(response_root.get(), chunk, arg2);
     if let Some(b) = &bytes {
         if let Some(below_hwm) = stream_write(response_root.get(), b) {
             // Streaming: the chunk is on its way to the wire, so the write
@@ -1162,7 +1224,9 @@ pub(crate) fn finalize_buffered_end(
     // That same `implicit_header` call can trigger a moving collection, which
     // relocates a young chunk; re-read it from the root afterwards.
     let chunk_root = response_scope.root_nanbox(chunk);
-    implicit_header(response_root.get());
+    // A heap response commits its head on the object (node's `_implicitHeader`
+    // writes `statusCode`, `statusMessage`, `_header`) before the wire reads it.
+    heap_implicit_head(response_root.get());
     let chunk = chunk_root.get();
     let v = JsValue::from_bits(chunk.to_bits());
     let final_chunk = if v.is_undefined() || v.is_null() {
@@ -1184,12 +1248,26 @@ pub(crate) fn finalize_buffered_end(
     // final chunk and the trailer block are encoded and submitted directly.
     if sr.turnloop_streaming {
         let (conn, seq) = sr.turnloop.expect("streaming implies a turnloop target");
-        let conn = conn.root();
+        let conn = conn.root(response_socket(response_root.get()));
         let chunk = final_chunk.clone();
         let trailers = sr.snapshot_trailers();
         sr.writable_ended = true;
         sr.writable_finished = true;
         sr.needs_drain = false;
+        // node f9175a212c (`end`): a final chunk written while the message is
+        // corked joins the buffered chunked writes, and the buffer goes out as
+        // one chunk before the terminator. `end()` leaves the message uncorked.
+        let mut chunk = chunk;
+        if sr.corked != 0 && !sr.chunked_buffer.is_empty() {
+            if let Some(c) = chunk.take() {
+                sr.chunked_buffer.extend_from_slice(&c);
+            }
+        }
+        let buffered = std::mem::take(&mut sr.chunked_buffer);
+        sr.corked = 0;
+        if !buffered.is_empty() {
+            let _ = crate::server::turnloop_route::send_body(&conn, seq, &buffered);
+        }
         if let Some(c) = chunk {
             let _ = crate::server::turnloop_route::send_body(&conn, seq, &c);
         }
@@ -1201,6 +1279,7 @@ pub(crate) fn finalize_buffered_end(
                 crate::server::response_end::flush_callback(response_root.get(), end_callback.get())
             }),
         );
+        heap::mark_ended(response_root.get());
         crate::server::request::mark_connection_written(req_handle_of(response_root.get()));
         return Some(end_outcome(response_root.get(), deferred));
     }
@@ -1227,13 +1306,14 @@ pub(crate) fn finalize_buffered_end(
     };
     let turnloop = sr.turnloop;
     let req_handle = sr.req_handle;
+    store_encoded_head(response_root.get());
     // P5: the handler, the codec and the socket are on the same thread, so
     // the response is encoded and submitted here. A response with no
     // connection (the connection's request was never delivered) has nowhere
     // to go, and is simply finished.
     let mut deferred = false;
     if let Some((conn, seq)) = turnloop {
-        let conn = conn.root();
+        let conn = conn.root(response_socket(response_root.get()));
         deferred = crate::server::turnloop_route::send_response_notified(
             &conn,
             seq,
@@ -1246,6 +1326,7 @@ pub(crate) fn finalize_buffered_end(
     if let Some(sr) = response_state_mut(response_root.get()) {
         sr.writable_finished = true;
     }
+    heap::mark_ended(response_root.get());
     crate::server::request::mark_connection_written(req_handle);
     Some(end_outcome(response_root.get(), deferred))
 }
@@ -1273,8 +1354,22 @@ fn end_outcome(handle: i64, deferred: bool) -> EndOutcome {
 /// Standalone (`assignSocket`) and bare `OutgoingMessage` handles keep the
 /// buffered path, as does a response whose connection already died.
 pub(crate) fn begin_streaming(handle: i64) -> bool {
+    begin_streaming_head(handle, false)
+}
+
+/// [`begin_streaming`]; `defer_head` holds an HTTP/1 head back until the first
+/// body bytes or the terminator, as node's corked first `write()` does.
+pub(crate) fn begin_streaming_head(handle: i64, defer_head: bool) -> bool {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
+    let heap_head = heap::is_response(response_root.get())
+        && response_state(response_root.get()).is_some_and(|sr| {
+            sr.turnloop.is_some() && !(sr.turnloop_streaming || sr.standalone || sr.writable_ended)
+        });
+    if heap_head {
+        // The streamed head is the object's committed head, as in `end`.
+        heap_implicit_head(response_root.get());
+    }
     let headers = header_values::snapshot(response_root.get());
     let Some(sr) = response_state_mut(response_root.get()) else {
         return false;
@@ -1299,11 +1394,11 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
         body: Vec::new(),
         auto_content_length: false,
     };
-    let conn = conn.root();
+    let conn = conn.root(response_socket(response_root.get()));
     let first = std::mem::take(&mut sr.buffered_body);
     sr.headers_sent = true;
     sr.turnloop_streaming = true;
-    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape) {
+    if !crate::server::turnloop_route::begin_stream(&conn, seq, shape, defer_head) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.turnloop_streaming = false;
         }
@@ -1312,6 +1407,14 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
     if !first.is_empty() {
         let _ = crate::server::turnloop_route::send_body(&conn, seq, &first);
     }
+    if heap_head {
+        store_encoded_head(response_root.get());
+        heap::set_field(
+            response_root.get(),
+            b"_headerSent",
+            f64::from_bits(TAG_TRUE),
+        );
+    }
     true
 }
 
@@ -1319,26 +1422,39 @@ pub(crate) fn begin_streaming(handle: i64) -> bool {
 /// returned `false`) and its queued bytes have since drained below the
 /// HWM, clear the flag and return its `'drain'` listeners for the caller
 /// (the pump) to fire. Empty otherwise.
+#[cfg(test)]
 pub(crate) fn take_drain_listeners_if_ready(handle: i64) -> Vec<i64> {
     let response_scope = perry_ffi::TransientRootScope::enter();
     let response_root = response_scope.root_addr(handle);
-    let Some(sr) = response_state_mut(response_root.get()) else {
+    if !drain_ready(response_root.get()) {
         return Vec::new();
+    }
+    response_event_listeners(response_root.get(), "drain")
+}
+
+/// Streaming backpressure has cleared: consume the pending `'drain'`. A heap
+/// response then emits it through its own `emit`; a legacy one fires its
+/// listener table.
+pub(crate) fn drain_ready(handle: i64) -> bool {
+    let response_scope = perry_ffi::TransientRootScope::enter();
+    let response_root = response_scope.root_addr(handle);
+    let socket = response_socket(response_root.get());
+    let Some(sr) = response_state_mut(response_root.get()) else {
+        return false;
     };
     if !sr.needs_drain || sr.writable_ended {
-        return Vec::new();
+        return false;
     }
     let below = match sr.turnloop {
         Some((conn, seq)) if sr.turnloop_streaming => {
-            crate::server::turnloop_route::writable_below_watermark(&conn.root(), seq)
+            crate::server::turnloop_route::writable_below_watermark(&conn.root(socket), seq)
         }
         _ => false,
     };
-    if !below {
-        return Vec::new();
+    if below {
+        sr.needs_drain = false;
     }
-    sr.needs_drain = false;
-    response_event_listeners(response_root.get(), "drain")
+    below
 }
 
 /// `res.flushHeaders()` — Node sends headers immediately even before
@@ -1354,16 +1470,10 @@ pub extern "C" fn js_node_http_res_flush_headers(handle: i64) {
         if let Some(sr) = response_state_mut(response_root.get()) {
             sr.headers_sent = true;
         }
+        // node's flushHeaders stores the head (`_header`) even with no socket.
+        store_encoded_head(response_root.get());
     }
 }
-
-/// `res.cork()` — buffered responses are already corked until `.end()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_cork(_handle: i64) {}
-
-/// `res.uncork()` — no-op counterpart to `cork()`.
-#[no_mangle]
-pub extern "C" fn js_node_http_res_uncork(_handle: i64) {}
 
 /// `res.setTimeout(msecs[, callback])` — expose Node's chainable control
 /// surface; actual transport timeout scheduling is handled at the server.

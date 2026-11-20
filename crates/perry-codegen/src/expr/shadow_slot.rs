@@ -81,6 +81,9 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
                     .is_some_and(|ty| !crate::typed_shape::type_is_pointer_bearing(ty))
         }
         Expr::Compare { .. } | Expr::Void(_) => true,
+        // c1: every Math function returns a Number; the intrinsic forms
+        // return the raw double.
+        e if crate::expr::math_intrinsic_operands(e).is_some() => true,
         Expr::Unary { op, operand } => match op {
             UnaryOp::Not | UnaryOp::Pos => true,
             UnaryOp::Neg | UnaryOp::BitNot => {

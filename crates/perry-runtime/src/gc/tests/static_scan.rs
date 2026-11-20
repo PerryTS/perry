@@ -34,7 +34,7 @@ static mut STATIC_SCAN_LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: FIELDS as u32,
-    layout_id: 0x8000008d,
+    layout_id: 0x8000008e,
     rep: 0,
     proto: std::ptr::null(),
     keys: EMPTY_KEYS.as_ptr(),
@@ -70,7 +70,7 @@ enum Cycle {
 /// collection. `Ok((objects scanned through a plan, every child intact))`; `Err`
 /// is the collection thread's panic message.
 fn collect_over_a_family_object(cycle: Cycle, sabotaged: bool) -> Result<(u32, bool), String> {
-    std::thread::spawn(move || {
+    crate::test_support::thread_outcome(sabotaged, move || {
         let _guard = CopyingNurseryTestGuard::new(1);
         let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
         let _scan = ConservativeScanDisabledGuard::new();
@@ -124,7 +124,6 @@ fn collect_over_a_family_object(cycle: Cycle, sabotaged: bool) -> Result<(u32, b
         });
         (hits, intact)
     })
-    .join()
     .map_err(|payload| {
         payload
             .downcast_ref::<String>()

@@ -1,0 +1,1 @@
+- wpfacts: `Object.defineProperty(o, "k", { get, set })` with a constant key installs the descriptor literal's own get/set, as the computed-key form already did. Before, every same-shape descriptor literal shared one constructor whose `get` field joined every define site's getter, so a call through one CommonJS export key activated every export.

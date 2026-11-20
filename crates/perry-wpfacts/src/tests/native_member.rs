@@ -11,29 +11,6 @@
 //! same function without the write is a NativeMember.
 use super::*;
 
-fn modules(mods: &[(&str, &str)], per_unit: bool, cfg: &FactsConfig) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    match per_unit {
-        true => crate::compute_units(&list, cfg),
-        false => crate::compute(&list, cfg),
-    }
-}
-
 fn one(src: &str, units: bool) -> ProgramFacts {
     modules(&[("t", src)], units, &FactsConfig::default())
 }
@@ -145,12 +122,8 @@ fn a_receiver_of_two_families_is_no_native_member() {
             "v.slice(1)",
             "slice",
         ),
-        // A string or undefined.
-        (
-            "const v: any = process.argv.length > 2 ? \"abc\" : undefined;",
-            "v.charAt(0)",
-            "charAt",
-        ),
+        // A string or undefined is a two-kind receiver the claim covers
+        // (the String member or the TypeError): tests/prim_recv.rs.
         // A Map or a Set (both define `has`).
         (
             "const v: any = process.argv.length > 2 ? new Map() : new Set();",
@@ -288,7 +261,10 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             // The same module.
             let pf = one(&format!("{write}\n{user}\nconsole.log(run());"), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(none_native(&v), "units={units} {write}: {v:?}");
+            // DEC 250: the lock refuses each write (a member replace, an
+            // `Object.prototype` add): the read stays the builtin.
+            // The same locked native member is final in both modes.
+            assert!(native(&v), "units={units} {write}: {v:?}");
             // Another module.
             let pf = modules(
                 &[
@@ -303,7 +279,7 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
             );
             let v = verdicts_in(&pf, 1, "indexOf", true);
             assert!(
-                none_native(&v),
+                native(&v),
                 "units={units} other module {write}: {v:?}\n{}",
                 pf.dump_text()
             );
@@ -318,11 +294,13 @@ fn a_program_write_onto_a_builtin_prototype_is_no_native_member() {
     }
 }
 
-/// Obligation 4 (d): a store into ⊤ may write a builtin prototype. On a
-/// String the site's reason names it (the sites only it keeps); an array's
-/// call of the now unknown member hands the array to unknown code as well.
+/// Obligation 4 (d) under DEC 250: a store into ⊤ may write a builtin
+/// prototype, but never a member the image gives a locked one (`indexOf`
+/// of String.prototype and Array.prototype): both sites stay NativeMember,
+/// and the array is handed to no unknown code. (Before the solver read the
+/// lock, both lost the proof.)
 #[test]
-fn a_store_into_top_is_no_native_member_while_it_holds() {
+fn a_store_into_top_writes_no_locked_native_member() {
     for units in [false, true] {
         for store in ["ext.indexOf = 1;", "ext[process.argv[3]] = 1;"] {
             let src = |s: &str| {
@@ -344,28 +322,51 @@ fn a_store_into_top_is_no_native_member_while_it_holds() {
             assert!(native(&v), "control units={units}: {v:?}");
             let pf = one(&src(store), units);
             let v = verdicts_in(&pf, 0, "indexOf", true);
-            assert!(
-                matches!(v.as_slice(), [Verdict::No(w), Verdict::No(_)] if w.starts_with("native member: a store into ⊤")),
-                "units={units} {store}: {v:?}"
-            );
+            assert!(native(&v), "units={units} {store}: {v:?}");
         }
     }
 }
 
-/// E23: an accessor on `Object.prototype` is a program-wide kill.
+/// E23: an accessor on `Object.prototype` is a program-wide kill, but not
+/// of a final read (DEC 250): `Array.prototype.indexOf` is an image member
+/// the runtime lock never lets be replaced, and the lookup finds it before
+/// `Object.prototype`, so the accessor changes no `a.indexOf`. An add on
+/// `Object.prototype` (`zz`) is refused (the define throws a TypeError);
+/// `constructor` is exempt from the lock and the accessor is installed.
 #[test]
 fn an_object_prototype_accessor_is_no_native_member() {
     for units in [false, true] {
-        let pf = one(
-            r#"
-            Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });
-            function main() { const a: any = [1, 2]; return a.indexOf(0); }
-            console.log(main());
-        "#,
-            units,
-        );
-        let v = verdicts_in(&pf, 0, "indexOf", true);
-        assert!(none_native(&v), "units={units}: {v:?}");
+        for (define, kill) in [
+            ("", false),
+            (
+                r#"Object.defineProperty(Object.prototype, "zz", { get() { return 1; } });"#,
+                true,
+            ),
+            (
+                r#"Object.defineProperty(Object.prototype, "constructor", { get() { return 1; } });"#,
+                true,
+            ),
+        ] {
+            let pf = one(
+                &format!(
+                    r#"
+                {define}
+                class P {{ x = 1; }}
+                const p = new P();
+                function main() {{ const a: any = [1, 2]; return a.indexOf(0); }}
+                console.log(main(), p.x);
+            "#
+                ),
+                units,
+            );
+            let v = verdicts_in(&pf, 0, "indexOf", true);
+            assert!(native(&v), "units={units} {define}: {v:?}");
+            let e = tmpl(&pf, "P").escape.clone();
+            assert_eq!(e.is_some(), kill, "units={units} {define}: {e:?}");
+            if kill && !units {
+                assert!(e.unwrap().contains("E23"), "units={units} {define}");
+            }
+        }
     }
 }
 
@@ -437,4 +438,166 @@ fn per_unit_is_never_stronger_than_whole() {
         "{}",
         w.dump_text()
     );
+}
+
+/// A RegExp object's `test` and `exec` (chess app.ts:151
+/// `/^[a-h][1-8]$/.test(verb)`): the methods the solve's RegExp call model
+/// describes (`regexp_described`) are its intrinsic members. A literal and
+/// a constructed RegExp alike.
+#[test]
+fn a_regexp_method_call_is_a_native_member() {
+    let src = r#"
+        function main(v: string) {
+            const r: any = /^[a-h][1-8]$/;
+            const q: any = new RegExp(v);
+            return r.test(v) && /^a+$/.test(v) && q.exec(v) !== null;
+        }
+        console.log(main("e2"));
+    "#;
+    for units in [false, true] {
+        let pf = one(src, units);
+        for key in ["test", "exec"] {
+            let v = verdicts_in(&pf, 0, key, true);
+            assert!(native(&v), "units={units} {key}: {v:?}\n{}", pf.dump_text());
+        }
+    }
+}
+
+/// A RegExp's key the solve does not describe, and a receiver that may be
+/// a RegExp or another family.
+#[test]
+fn a_regexp_key_not_described_or_a_mixed_receiver_is_no_native_member() {
+    for units in [false, true] {
+        for (make, use_, key) in [
+            ("const r: any = /a/;", "r.toString()", "toString"),
+            ("const r: any = /a/;", "r.foo()", "foo"),
+            (
+                "const r: any = process.argv.length > 2 ? /a/ : \"a\";",
+                "r.test(\"a\")",
+                "test",
+            ),
+            (
+                "const r: any = process.argv.length > 2 ? /a/ : new Set();",
+                "r.test(\"a\")",
+                "test",
+            ),
+        ] {
+            let pf = one(
+                &format!("function main() {{ {make} return {use_}; }}\nconsole.log(main());"),
+                units,
+            );
+            let v = verdicts_in(&pf, 0, key, true);
+            assert!(none_native(&v), "units={units} {make} {use_}: {v:?}");
+        }
+    }
+}
+
+/// A RegExp's own `test`, its prototype replaced,
+/// or the RegExp handed to unknown code: its `.test` is no
+/// NativeMember; the same function without the write is one. (A write to
+/// `RegExp.prototype` is not here: it is sealed, see the next test.)
+#[test]
+fn an_own_key_or_escape_write_on_a_regexp_is_no_native_member() {
+    let make = "const r: any = /a/;";
+    for write in [
+        "r.test = (s: string) => true;",
+        "r[process.argv[2]] = 1;",
+        "r.__proto__ = { test() { return false; } };",
+        "Object.setPrototypeOf(r, { test() { return false; } });",
+        "Object.defineProperty(r, \"test\", { get() { return () => false; } });",
+        "(globalThis as any)[process.argv[2]](r);",
+    ] {
+        control_and_negative(make, write, "r.test(\"a\")", "test", true);
+    }
+}
+
+/// `RegExp.prototype` is sealed (DEC 250, rt/lock.ts): `RegExp.prototype.test = f`
+/// throws, so `.test` of a regexp stays an image member.
+#[test]
+fn a_sealed_regexp_prototype_write_keeps_the_native_member() {
+    // `Object.prototype.test = f` is shadowed by the own `RegExp.prototype.test`.
+    for w in ["RegExp", "Object"] {
+        for units in [false, true] {
+            let src = &format!("function main() {{ const r: any = /a/; ({w}.prototype as any).test = function () {{ return false; }}; return r.test(\"a\"); }}\nconsole.log(main());");
+            let pf = one(src, units);
+            let v = verdicts_in(&pf, 0, "test", true);
+            assert!(native(&v), "units={units}: {v:?}\n{}", pf.dump_text());
+        }
+    }
+}
+
+/// A Buffer method `Buffer.prototype` owns (`readInt32BE`, `readUInt8`) is
+/// a NativeMember until a write may reach it: onto `Buffer.prototype` by
+/// name, under any key, through the prototype read off a buffer, an own
+/// property of the receiver, or unknown code. Whole-program solve only.
+#[test]
+fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
+    for key in ["readInt32BE", "readUInt8"] {
+        for write in [
+            format!("(Buffer.prototype as any).{key} = function () {{ return 7; }};"),
+            format!("Object.assign(Buffer.prototype, {{ {key}() {{ return 7; }} }});"),
+            "(Buffer.prototype as any)[process.argv[2]] = () => 7;".to_string(),
+            "(Object.getPrototypeOf(Buffer.alloc(1)) as any)[process.argv[2]] = () => 7;"
+                .to_string(),
+            format!("(b as any).{key} = () => 7;"),
+            "(b as any)[process.argv[2]] = () => 7;".to_string(),
+            "eval(process.argv[2]);".to_string(),
+            "(0, eval)(process.argv[2]);".to_string(),
+            "new Function(process.argv[2])();".to_string(),
+        ] {
+            // The driver links the interpreter for a program with dynamic
+            // code (`dynamic_reach.rs`: a deferred eval/Function site);
+            // without it the Function constructor throws.
+            let dynamic = write.contains("eval") || write.contains("Function(");
+            let cfg = if dynamic {
+                FactsConfig {
+                    dynamic_code: Some("E14 test: dynamic code".into()),
+                    interpreted_sources: true,
+                    ..FactsConfig::default()
+                }
+            } else {
+                FactsConfig::default()
+            };
+            for units in [false, true] {
+                let src = |w: &str| {
+                    format!(
+                        "function main() {{ const b = Buffer.alloc(8); {w} return b.{key}(0); }}\nconsole.log(main());"
+                    )
+                };
+                // The per-unit solve proves no Buffer member (it misses a
+                // write through `Object.assign`): the control is a
+                // NativeMember in the whole-program solve only.
+                let pf = one(&src(""), units);
+                let v = verdicts_in(&pf, 0, key, true);
+                let ok = if units { none_native(&v) } else { native(&v) };
+                assert!(ok, "control units={units} {}: {v:?}", src(""));
+                let pf = modules(&[("t", &src(&write))], units, &cfg);
+                let v = verdicts_in(&pf, 0, key, true);
+                assert!(none_native(&v), "units={units} {}: {v:?}", src(&write));
+            }
+        }
+    }
+}
+
+fn modules(mods: &[(&str, &str)], per_unit: bool, cfg: &FactsConfig) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    match per_unit {
+        true => crate::compute(&list, cfg),
+        false => crate::compute(&list, cfg),
+    }
 }

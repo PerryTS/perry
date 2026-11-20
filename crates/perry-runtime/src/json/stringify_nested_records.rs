@@ -68,7 +68,7 @@ unsafe fn key_count(view: crate::object::ObjectKeys) -> Option<usize> {
         0
     } else {
         let kh = crate::value::addr_class::try_read_tracked_gc_header(keys as usize)?.as_ref();
-        if kh.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(kh.obj_type)
             || kh.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
             || (kh.size as usize)
                 < crate::gc::GC_HEADER_SIZE + std::mem::size_of::<crate::ArrayHeader>()
@@ -366,7 +366,7 @@ pub(super) unsafe fn try_emit(
         return false;
     };
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || (*arr).length < 2
         || (*arr).length > (*arr).capacity

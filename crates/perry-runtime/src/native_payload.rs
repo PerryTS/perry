@@ -9,11 +9,12 @@
 //! * its **per-realm prototype** carries the methods, so `typeof`, method
 //!   reads, `Object.keys`, `JSON.stringify`, `Map`/`WeakMap` keys and identity
 //!   (`a !== b`) are those of any object;
-//! * its **`ObjectMeta.native_state` word** holds the payload: a
-//!   POINTER_TAG-boxed `GC_TYPE_NATIVE_HANDLE` cell (`native_handle.rs`) that
-//!   owns a `Box<T>` of the family's Rust state. The meta record's GC arm
-//!   traces that word (`gc/layout_slot_visit.rs`), so the cell lives exactly
-//!   as long as the object and is finalized by the sweep that finds both dead.
+//! * its **payload slot**, the own slot of the process-lifetime private key
+//!   `[[NativePayload]]` ([`payload_key`]; the first key of a born instance),
+//!   holds the payload: a POINTER_TAG-boxed `GC_TYPE_NATIVE_HANDLE` cell
+//!   (`native_handle.rs`) that owns a `Box<T>` of the family's Rust state.
+//!   The slot is an ordinary traced field, so the cell lives exactly as long
+//!   as the object and is finalized by the sweep that finds both dead.
 //!
 //! Lifetime. The cell's finalizer is the monomorphized drop of `Box<T>`; it
 //! runs once per installed payload, at release ([`close`]), sweep or thread
@@ -214,6 +215,16 @@ pub fn adopt_prototype(
     })
 }
 
+/// The prototype the family `class_id` adopted in this realm, or null before
+/// its first adoption.
+#[inline]
+pub(crate) fn adopted_prototype(class_id: u32) -> *mut ObjectHeader {
+    let Some(index) = slot_index_if_payload(class_id) else {
+        return std::ptr::null_mut();
+    };
+    PAYLOAD_PROTOTYPES.with(|slots| slots[index].load(Ordering::Acquire)) as *mut ObjectHeader
+}
+
 pub(crate) fn adopt_prototype_with(
     class_id: u32,
     proto: *mut ObjectHeader,
@@ -404,8 +415,7 @@ extern "C" fn payload_ctor_thunk(
 ) -> f64 {
     let message = b"Illegal constructor";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// The cell's type tag: the family id plus the payload's layout. One family
@@ -426,7 +436,7 @@ unsafe extern "C" fn drop_payload<T>(resource: *mut c_void, _hint: *mut c_void) 
 /// type's drop, and (for a stream family) the [`StreamHooks`] through which
 /// the runtime's one stream state machine reaches the codec. One static per
 /// payload type, so the word costs no cell growth and the runtime finds the
-/// hooks from the object it already holds (`meta.native_state` -> cell ->
+/// hooks from the object it already holds (payload slot -> cell ->
 /// vtable), with no name, table or class switch.
 ///
 /// `#[repr(C)]`: a binding crate's family names a vtable of the same layout
@@ -478,37 +488,74 @@ fn hooked_vtable<T: StreamPayload>() -> &'static PayloadVTable {
     &VTableOf::<T>::HOOKED
 }
 
-/// Is `word` (an `ObjectMeta.native_state`) a payload cell reference? The
-/// one predicate the meta record's GC arm uses to decide whether the word is
-/// an edge. Native payloads and weak collections use this same GC-edge encoding.
+/// Is `word` (an `ObjectMeta.native_state`, or a payload slot) a traced
+/// pointer edge? The one predicate the meta record's GC arm uses to decide
+/// whether its word is an edge (weak collections, stream and alias records).
 #[inline(always)]
 pub(crate) fn is_payload_state_word(word: u64) -> bool {
     word & crate::value::TAG_MASK == crate::value::POINTER_TAG
         && word & crate::value::POINTER_MASK != 0
 }
 
-/// The payload cell a `native_state` word leads to: the cell itself, or,
-/// for a runtime stream, the cell its state record holds
-/// (`node_stream::state_record`: `native_state` -> record -> cell). A weak
-/// collection's storage uses the same edge encoding and names no cell.
-/// Public for binding crates' tests that inspect a cell.
+/// The process-lifetime private key of an object's payload slot,
+/// `[[NativePayload]]`: one symbol for every agent, the runtime symbol atom
+/// `NP_SYMBOL_NATIVE_PAYLOAD`, so a layout can list the key (a layout born
+/// with it takes the payload in its slot). Created on first use, so no object
+/// can list the key before then.
+#[inline]
+pub(crate) fn payload_key() -> usize {
+    // SAFETY: a static atom.
+    unsafe { crate::object::runtime_layouts::runtime_symbol_of_atom(&PAYLOAD_ATOM) }
+        .expect("the payload key is a runtime symbol atom") as usize
+}
+
+use crate::object::runtime_layouts::NP_SYMBOL_NATIVE_PAYLOAD as PAYLOAD_ATOM;
+
+/// The entry attributes of the payload slot: runtime-only (no reflection,
+/// copy or clone reaches it) and non-enumerable.
+pub(crate) const PAYLOAD_ENTRY: u8 =
+    crate::object::shaped_symbols::PRIVATE_ENTRY | crate::object::key_attrs::ENTRY_NON_ENUMERABLE;
+
+/// The payload cell a payload slot word names (the slot holds the cell's
+/// POINTER_TAG word; any other word names no cell).
 #[inline(always)]
 pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
     if !is_payload_state_word(word) {
         return None;
     }
     let target = word & crate::value::POINTER_MASK;
-    // SAFETY: a pointer-tagged `native_state` word is a traced edge to a live
-    // GC cell.
+    // SAFETY: a pointer-tagged slot word is a traced edge to a live GC cell.
     let header = unsafe { crate::value::addr_class::try_read_gc_header(target as usize) }?;
-    match header.obj_type {
-        crate::gc::GC_TYPE_NATIVE_HANDLE => Some(target as *mut NativeHandleHeader),
-        crate::gc::GC_TYPE_ARRAY => {
-            let cell = crate::stream_hooks::record_payload_cell(word);
-            (cell != 0).then(|| (cell & crate::value::POINTER_MASK) as *mut NativeHandleHeader)
-        }
-        _ => None,
-    }
+    (header.obj_type == crate::gc::GC_TYPE_NATIVE_HANDLE)
+        .then_some(target as *mut NativeHandleHeader)
+}
+
+/// The payload cell `obj` owns: the value of its `[[NativePayload]]` own
+/// slot. The shape is the authority: a born instance lists the key first
+/// (slot 0, one compare); an object that attached later (a subclass's
+/// `super()`) finds it by key in its key list. Public for binding crates'
+/// tests that inspect a cell.
+///
+/// # Safety
+/// `obj` is a live ordinary object.
+///
+/// Out of line on purpose: the generic payload readers (`payload_mut::<T>`
+/// and friends) are instantiated in the native-module crates, and an inlined
+/// key-list read there names the shape directory thread-local from outside
+/// this crate. That exports it, and every runtime access to it (the startup
+/// shape-directory publish among them) then takes the general-dynamic TLS
+/// sequence instead of the local-dynamic one.
+#[inline(never)]
+pub unsafe fn payload_cell_of_object(obj: *const ObjectHeader) -> Option<*mut NativeHandleHeader> {
+    let key = crate::object::runtime_layouts::bound_runtime_symbol(&PAYLOAD_ATOM)?;
+    payload_cell_of_word(crate::object::shaped_symbols::own_private(obj, key)?)
+}
+
+/// [`payload_cell_of_object`] for a value (`None` for a non-object).
+pub fn payload_cell_of_value(value: f64) -> Option<*mut NativeHandleHeader> {
+    let obj = any_object(value)?;
+    // SAFETY: a live ordinary object (checked by `any_object`).
+    unsafe { payload_cell_of_object(obj) }
 }
 
 /// Allocate an instance of `family` owning `payload`.
@@ -614,12 +661,28 @@ pub fn alloc_with_prototype<T: 'static>(
     )
 }
 
-/// `slots`: the instance's live inline slots, at least `own.len()` (a birth
-/// that adds keys after `own` sizes for them, so none spills).
+/// `slots`: the instance's live inline slots after the payload slot, at
+/// least `own.len()` (a birth that adds keys after `own` sizes for them, so
+/// none spills).
 fn alloc_cell<T: 'static>(
     family: &'static NativePayloadFamily,
     payload: Option<T>,
     vtable: &'static PayloadVTable,
+    external_bytes: usize,
+    own: &[(&[u8], f64)],
+    slots: usize,
+    proto: *mut ObjectHeader,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let cell = scope.root_nanbox_u64(new_cell(family, payload, vtable).word);
+    alloc_with_cell(family, &cell, external_bytes, own, slots, proto)
+}
+
+/// [`alloc_cell`] for a cell the caller made and roots (`cell`): an
+/// unreachable cell is ordinary garbage, so a failed birth only drops it.
+fn alloc_with_cell(
+    family: &'static NativePayloadFamily,
+    cell: &crate::gc::RuntimeHandle<'_>,
     external_bytes: usize,
     own: &[(&[u8], f64)],
     slots: usize,
@@ -633,26 +696,28 @@ fn alloc_cell<T: 'static>(
     if proto.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let obj = unsafe { born_instance(family.class_id, proto, slots as u32) };
+    // The payload slot is the instance's first key: slot 0.
+    let obj = unsafe { born_instance(family.class_id, proto, slots as u32 + 1) };
     if obj.is_null() {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let obj = scope.root_raw_mut_ptr(obj);
+    store_payload_word(&obj, cell.get_nanbox_u64());
     for (key, value) in &own_roots {
         set_own(&scope, &obj, key, value.get_nanbox_f64());
     }
-    attach_rooted(&obj, family, payload, vtable, external_bytes);
+    link_cell(&obj, cell.get_nanbox_u64(), external_bytes);
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 #[path = "native_payload_attach.rs"]
 mod attach;
-use attach::attach_rooted;
 pub(crate) use attach::{any_object, attach_external_rooted, set_own};
 pub use attach::{
     attach_stream_to_object, attach_to_object, define_own_accessor, iter_result_done_value,
     iterator_prototype, prototype, state_get, state_set,
 };
+use attach::{link_cell, new_cell, store_payload_word};
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
 /// with `slots` live inline slots.
@@ -740,32 +805,20 @@ fn instance_of(value: f64, class_id: u32) -> Option<*mut ObjectHeader> {
 #[inline]
 fn payload_cell(value: f64, class_id: u32) -> Result<*mut NativeHandleHeader, PayloadMiss> {
     let obj = instance_of(value, class_id).ok_or(PayloadMiss::Foreign)?;
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return Err(PayloadMiss::Foreign);
-    }
-    payload_cell_of_word(unsafe { (*meta).native_state }).ok_or(PayloadMiss::Foreign)
+    // SAFETY: a live ordinary object (checked by `instance_of`).
+    unsafe { payload_cell_of_object(obj) }.ok_or(PayloadMiss::Foreign)
 }
 
 /// The stream hooks of `value`'s attached payload, and its cell, when its
-/// family is a stream family: `meta.native_state` -> cell -> the vtable the
-/// cell's `finalizer` word names. Three loads from the object the caller
+/// family is a stream family: the payload slot -> cell -> the vtable the
+/// cell's `finalizer` word names. A few loads from the object the caller
 /// already holds; no name, table or class switch, and a subclass instance
 /// that attached the payload in `super()` answers the same way.
 #[inline]
 pub(crate) fn stream_hooks_of(
     value: f64,
 ) -> Option<(&'static StreamHooks, *mut NativeHandleHeader)> {
-    let obj = any_object(value)?;
-    // SAFETY: a live ordinary object (checked by `any_object`).
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return None;
-    }
-    // SAFETY: the meta record of a live object.
-    let cell = payload_cell_of_word(unsafe { (*meta).native_state })?;
+    let cell = payload_cell_of_value(value)?;
     // SAFETY: a payload state word names the object's live payload cell.
     let vtable = unsafe { crate::native_handle::cell_vtable(cell)? };
     Some((vtable.stream?, cell))
@@ -808,13 +861,7 @@ pub unsafe fn payload_mut_attached<'a, T: 'static>(
     value: f64,
     family: &NativePayloadFamily,
 ) -> Result<&'a mut T, PayloadMiss> {
-    let obj = any_object(value).ok_or(PayloadMiss::Foreign)?;
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
-    if meta.is_null() {
-        return Err(PayloadMiss::Foreign);
-    }
-    let cell = payload_cell_of_word((*meta).native_state).ok_or(PayloadMiss::Foreign)?;
+    let cell = payload_cell_of_value(value).ok_or(PayloadMiss::Foreign)?;
     if (*cell).type_id != type_tag::<T>(family.class_id) {
         return Err(PayloadMiss::Foreign);
     }
@@ -1289,7 +1336,7 @@ unsafe fn state_slot_set(obj: *mut ObjectHeader, i: usize, value: f64) {
 }
 
 unsafe fn state_inline_limit(obj: *mut ObjectHeader) -> usize {
-    (crate::object::object_live_slot_count(obj) as usize).max(crate::object::INLINE_SLOT_FLOOR)
+    crate::object::object_inline_capacity(obj) as usize
 }
 
 unsafe fn state_key_index(obj: *const ObjectHeader, name: &[u8]) -> Option<usize> {
@@ -1629,15 +1676,7 @@ pub fn close_attached<T: 'static>(value: f64, family: &NativePayloadFamily) -> b
     if unsafe { payload_mut_attached::<T>(value, family) }.is_err() {
         return false;
     }
-    let Some(obj) = any_object(value) else {
-        return false;
-    };
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return false;
-    }
-    let Some(cell) = payload_cell_of_word(unsafe { (*meta).native_state }) else {
+    let Some(cell) = payload_cell_of_value(value) else {
         return false;
     };
     unsafe { crate::native_handle::native_handle_release_rust_payload(cell) }
@@ -1758,13 +1797,7 @@ pub fn js_state(value: f64, family: &NativePayloadFamily, create: bool) -> f64 {
 /// The class id carried by `value`'s attached payload cell (the family's,
 /// also for a source subclass instance), on the cell's creator thread.
 pub(crate) fn attached_family_class_id(value: f64) -> Option<u32> {
-    let obj = any_object(value)?;
-    // A1_UNPROVEN: record-first: payload family class layout word (kind-A/B question for S0f).
-    let meta = unsafe { crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)) };
-    if meta.is_null() {
-        return None;
-    }
-    let cell = payload_cell_of_word(unsafe { (*meta).native_state })?;
+    let cell = payload_cell_of_value(value)?;
     unsafe {
         if (*cell).finalized != 0
             || (*cell).creator_thread_id != crate::native_handle::current_thread_id()

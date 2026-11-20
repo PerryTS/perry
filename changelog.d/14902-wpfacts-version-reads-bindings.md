@@ -1,0 +1,1 @@
+An Array that a callee grows keeps the length the callee gives it: whole-program facts no longer claim a constant length for a local whose reads after its assignment all go through a narrowed version (a `const a = [..]` passed to a function that pushes onto it compiled to a wrong sum).

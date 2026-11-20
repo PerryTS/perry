@@ -92,9 +92,7 @@ impl ResponseShape {
 /// The `IncomingMessage` handle a response answers, read back after the
 /// response's own borrow has ended.
 pub(crate) fn req_handle_of(handle: i64) -> i64 {
-    get_handle::<ServerResponse>(handle)
-        .map(|sr| sr.req_handle)
-        .unwrap_or(0)
+    response_state(handle).map(|sr| sr.req_handle).unwrap_or(0)
 }
 
 /// Allocate the `ServerResponse` for a request the turnloop HTTP server
@@ -102,49 +100,67 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 ///
 /// The handler runs on the thread that owns the connection, so `res.end()`
 /// encodes and submits the write itself.
+///
+/// HTTP/2 stays a registry response in this step: its birth runs inside the
+/// session table's lock (`turnloop_h2::stream::dispatch_request`), where a
+/// heap birth may not allocate.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
-    alloc_response_for_connection(
-        crate::server::http2_server::socket_of_session(conn_id),
-        Some(crate::server::turnloop_route::ResponseConnection::H2Session(conn_id)),
+    let mut response = ServerResponse::new().with_request_handle(req_handle);
+    response.http2_compat = true;
+    response.socket_value = crate::server::http2_server::socket_of_session(conn_id);
+    response.turnloop = Some((
+        crate::server::turnloop_route::ResponseConnection::H2Session(conn_id),
         seq,
-        req_handle,
-    )
+    ));
+    register_handle(response)
 }
 
+/// An HTTP/1 exchange's `ServerResponse`, born on node's ServerResponse
+/// layout like `new ServerResponse(req)`, with its socket in the object's own
+/// `socket` slot. Returns the object word. The birth allocates, so it runs
+/// outside the connection borrow. node's `parserOnIncoming` then gives the
+/// fresh response the server's `_maxRequestsPerSocket`.
 pub(crate) fn alloc_http1_server_response_for_turnloop(
     socket: f64,
     seq: u64,
     req_handle: i64,
-) -> i64 {
-    let connection = perry_ext_net::native_transport::snapshot(socket).map(|incarnation| {
-        crate::server::turnloop_route::ResponseConnection::Socket {
-            owner: socket,
-            incarnation,
-        }
+    max_requests_per_socket: f64,
+) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let socket = scope.root_nanbox(socket);
+    let mut state = ResponseState::new();
+    state.req_handle = req_handle;
+    state.turnloop = perry_ext_net::native_transport::snapshot(socket.get()).map(|incarnation| {
+        (
+            crate::server::turnloop_route::ResponseConnection::Socket { incarnation },
+            seq,
+        )
     });
-    alloc_response_for_connection(socket, connection, seq, req_handle)
-}
-
-fn alloc_response_for_connection(
-    socket: f64,
-    connection: Option<crate::server::turnloop_route::ResponseConnection>,
-    seq: u64,
-    req_handle: i64,
-) -> i64 {
-    let mut response = ServerResponse::new().with_request_handle(req_handle);
-    response.socket_value = socket;
-    response.turnloop = connection.map(|connection| (connection, seq));
-    register_handle(response)
+    let req = crate::server::request::handle_to_pointer_f64(req_handle);
+    let handle = unsafe { crate::server::response_payload::alloc(state, req) };
+    if handle == 0 {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let owner = scope.root_addr(handle);
+    crate::server::response_payload::set(owner.get(), ResponseKey::Socket, socket.get());
+    crate::server::response_payload::set_field(
+        owner.get(),
+        b"_maxRequestsPerSocket",
+        max_requests_per_socket,
+    );
+    crate::server::request::handle_to_pointer_f64(owner.get())
 }
 
 /// True when a response's connection died under it (client disconnect /
 /// server close): the connection handle is gone.
 pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
-    let Some(sr) = get_handle::<ServerResponse>(handle) else {
+    let Some(sr) = response_state(handle) else {
         return false;
     };
     match sr.turnloop {
-        Some((conn, _)) => !crate::server::turnloop_route::is_live(&conn.root()),
+        Some((conn, _)) => {
+            !crate::server::turnloop_route::is_live(&conn.root(response_socket(handle)))
+        }
         None => false,
     }
 }
@@ -156,9 +172,9 @@ pub(crate) fn stream_receiver_gone(handle: i64) -> bool {
 /// wire here.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_continue(handle: i64) {
-    if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
+    if let Some((conn, seq)) = response_state(handle).and_then(|sr| sr.turnloop) {
         crate::server::turnloop_route::send_interim(
-            &conn.root(),
+            &conn.root(response_socket(handle)),
             seq,
             b"HTTP/1.1 100 Continue\r\n\r\n",
         );
@@ -168,9 +184,9 @@ pub extern "C" fn js_node_http_res_write_continue(handle: i64) {
 /// `res.writeProcessing()` — emits an HTTP/1.1 102-Processing. Stub.
 #[no_mangle]
 pub extern "C" fn js_node_http_res_write_processing(handle: i64) {
-    if let Some((conn, seq)) = get_handle::<ServerResponse>(handle).and_then(|sr| sr.turnloop) {
+    if let Some((conn, seq)) = response_state(handle).and_then(|sr| sr.turnloop) {
         crate::server::turnloop_route::send_interim(
-            &conn.root(),
+            &conn.root(response_socket(handle)),
             seq,
             b"HTTP/1.1 102 Processing\r\n\r\n",
         );

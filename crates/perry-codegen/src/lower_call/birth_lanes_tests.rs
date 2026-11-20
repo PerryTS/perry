@@ -82,6 +82,7 @@ fn class(
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -95,6 +96,7 @@ fn store(f: &str, value: Expr) -> Stmt {
         value: Box::new(value),
         receiver: Box::new(Expr::This),
         strict: true,
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })

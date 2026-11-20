@@ -217,6 +217,7 @@ fn collect_live_writes<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_live_writes(body, proofs, writes, let_bound);
                 if let Some(c) = catch {
@@ -289,7 +290,7 @@ fn collect_other_writes(
 }
 
 struct Env<'a> {
-    iife: &'a std::cell::RefCell<HashMap<u32, Option<Kind>>>,
+    iife: &'a std::cell::RefCell<HashMap<(u32, usize), Option<Kind>>>,
     boxed_vars: &'a HashSet<u32>,
     module_globals: &'a HashMap<u32, String>,
     proofs: &'a HashMap<u32, HirType>,
@@ -438,11 +439,14 @@ impl Env<'_> {
                     is_generator: false,
                     ..
                 } if args.is_empty() && params.is_empty() => {
-                    if let Some(k) = self.iife.borrow().get(func_id) {
+                    // Cloned closure bodies share an ID, but the bounded
+                    // return analysis also depends on the caller's depth.
+                    let key = (*func_id, depth);
+                    if let Some(k) = self.iife.borrow().get(&key) {
                         return *k;
                     }
                     let k = iife_return_kind(body, self.boxed_vars, self.module_globals, depth);
-                    self.iife.borrow_mut().insert(*func_id, k);
+                    self.iife.borrow_mut().insert(key, k);
                     k
                 }
                 Expr::PropertyGet {
@@ -507,6 +511,7 @@ fn iife_return_kind(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     returns(body, f);
                     if let Some(c) = catch {
@@ -668,6 +673,7 @@ fn lets_in_loops(stmts: &[Stmt]) -> HashSet<u32> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, in_loop, out);
                     if let Some(c) = catch {

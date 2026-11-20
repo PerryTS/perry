@@ -1,0 +1,1 @@
+`res.write()` on a chunked HTTP/1 response now follows node 26.12: writes made in the same tick, or between `cork()` and `uncork()`, go out as one chunk, `writableCorked` and `writableLength` report the corked state, and a string chunk with an unknown encoding throws `ERR_UNKNOWN_ENCODING`.

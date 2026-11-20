@@ -44,6 +44,85 @@ pub(crate) struct NmNamespaceOps {
     /// namespace object (`const fn = fs.lstatSync`): NaN-boxed namespace
     /// value + property-name bytes → bound callable (or undefined).
     pub bind_method: unsafe fn(f64, *const u8, usize) -> f64,
+    /// What the module's tables say about an own member (`None`: no such
+    /// member, or deleted, or hidden): see [`NmMember`].
+    pub member: fn(&str, &str) -> Option<NmMember>,
+}
+
+/// An own member of a namespace as its module's tables describe it: the one
+/// classification its descriptor (`nm_get_own_descriptor`) and `delete`
+/// ([`nm_delete_member`]) read.
+#[derive(Clone, Copy)]
+pub(crate) enum NmMember {
+    /// A zlib read-only constant: non-writable, non-configurable data.
+    ZlibReadonly { enumerable: bool },
+    /// An fs stream class or `fs.promises`: a configurable accessor.
+    FsAccessor,
+    /// `fs.constants`, `process.permission`: non-writable, non-configurable data.
+    ReadonlyData,
+    /// Writable data (`module`, `async_hooks` and `vm` members are not
+    /// configurable).
+    Data { configurable: bool },
+}
+
+impl NmMember {
+    pub(crate) fn configurable(self) -> bool {
+        matches!(
+            self,
+            NmMember::FsAccessor | NmMember::Data { configurable: true }
+        )
+    }
+}
+
+/// `[[Delete]]` of an own member of a native namespace (`delete console.log`,
+/// `delete require("path").join`). Called only by the program-level deletes
+/// (`delete o.k`, `delete o[k]`, `Reflect.deleteProperty` and a trap-less
+/// proxy), so a binary without one links none of it; the module tables are
+/// reached through the armed ops (a namespace exists only once they are). A
+/// member the tables describe as non-configurable is kept: `Some(0)`. A
+/// described or stored member is marked deleted in the override table, then
+/// `None`: the caller's ordinary delete drops any own field, accessor or
+/// attributes of the key and answers `true`.
+#[inline(never)]
+pub(crate) unsafe fn nm_delete_member(obj: f64, key: f64) -> Option<i32> {
+    let ops = nm_namespace_ops()?;
+    let ptr = crate::value::js_nanbox_get_pointer(obj) as *const ObjectHeader;
+    if !(crate::value::JSValue::from_bits(obj.to_bits()).is_pointer()
+        && crate::value::addr_class::is_above_handle_band(ptr as usize)
+        && super::is_valid_obj_ptr(ptr as *const u8)
+        && (*ptr).class_id == super::native_module::NATIVE_MODULE_CLASS_ID)
+    {
+        return None;
+    }
+    // Both names borrow heap strings: nothing below allocates before the
+    // override store has copied them.
+    let (mut module_buf, mut key_buf) = (
+        [0u8; crate::value::SHORT_STRING_MAX_LEN],
+        [0u8; crate::value::SHORT_STRING_MAX_LEN],
+    );
+    let module = crate::string::js_string_key_bytes(
+        super::js_object_get_field(ptr as *mut _, 0),
+        &mut module_buf,
+    )?;
+    let name = crate::string::js_string_key_bytes(
+        crate::value::JSValue::from_bits(key.to_bits()),
+        &mut key_buf,
+    )?;
+    let (module, name) = (
+        std::str::from_utf8(module).ok()?,
+        std::str::from_utf8(name).ok()?,
+    );
+    match (ops.member)(module, name) {
+        Some(member) if !member.configurable() => return Some(0),
+        None if name == "__module__"
+            || super::native_module::native_namespace_prop_override_get(module, name).is_none() =>
+        {
+            return None
+        }
+        _ => {}
+    }
+    super::native_module::native_namespace_prop_override_delete(module, name);
+    None
 }
 
 static NM_NAMESPACE_OPS: AtomicPtr<NmNamespaceOps> = AtomicPtr::new(std::ptr::null_mut());

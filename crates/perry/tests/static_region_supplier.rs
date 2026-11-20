@@ -21,8 +21,11 @@ fn perry_bin() -> PathBuf {
 
 /// Three region loops over named receivers (a class parameter read, a class
 /// parameter store, a closed object type), 50 entries each, then one class
-/// instance that gained a key (its shape is not the birth shape): a static
-/// miss, served by the plain loop.
+/// instance that gained a key. The closed object type takes the static
+/// supplier. The class `P` is born on its class family
+/// (`class_instances_born_on_family`), so its loops never take the static
+/// supplier: each loop primes the family's learned word once, and that word
+/// serves every instance, the one that gained a key included.
 const MAIN: &str = r#"
 class P {
   a: number; b: number; c: number;
@@ -79,12 +82,13 @@ fn named_receivers_run_their_loop_regions_from_the_static_id() {
     let stdout = String::from_utf8_lossy(&run.stdout);
     let census = String::from_utf8_lossy(&run.stderr);
     assert_eq!(stdout.trim(), EXPECTED, "census:\n{census}");
-    // Every entry of the three named loops is a static hit (150); `q`, whose
-    // shape gained a key, misses into the plain loop (two entries). No region
-    // loads or primes a word.
+    // The closed object type's 50 entries are static hits; the class loops'
+    // 102 entries run the family's learned word, primed once per loop. Every
+    // entry runs the split loop, and every iteration its fast copy.
     assert_eq!(route(&census, "rloop_guard"), 152, "{census}");
-    assert_eq!(route(&census, "rloop_static"), 150, "{census}");
-    assert_eq!(route(&census, "rloop_split"), 150, "{census}");
-    assert_eq!(route(&census, "rloop_plain"), 2, "{census}");
-    assert_eq!(route(&census, "rt_rloop_prime_ok"), 0, "{census}");
+    assert_eq!(route(&census, "rloop_static"), 50, "{census}");
+    assert_eq!(route(&census, "rloop_split"), 152, "{census}");
+    assert_eq!(route(&census, "rloop_plain"), 0, "{census}");
+    assert_eq!(route(&census, "rt_rloop_prime_ok"), 2, "{census}");
+    assert_eq!(route(&census, "rloop_g"), 0, "{census}");
 }

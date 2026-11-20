@@ -42,7 +42,7 @@ pub(crate) use context::perry_ui_factory_returns_handle;
 pub(crate) mod class_capture_scope;
 pub(crate) mod expr_assign;
 mod expr_call;
-pub(crate) use expr_call::intrinsics::as_builtin_proto_method_ref;
+pub(crate) use expr_call::math_intrinsic;
 pub(crate) mod expr_function;
 pub(crate) mod native_factory;
 pub(crate) use expr_function::capture_function_source;
@@ -63,8 +63,8 @@ pub(crate) use for_head::{
     map_set_delete_safe_for_of, predefine_for_head, resolve_for_of_iterable_type,
     rewrite_collection_view_for_of,
 };
-mod for_of_guard;
-pub(crate) use for_of_guard::lower_stmt_for_of;
+pub(crate) mod for_of_guard;
+pub(crate) use for_of_guard::{lower_body_literal_for_of, lower_stmt_for_of};
 mod stmt_loops;
 pub(crate) use stmt_loops::{
     async_iterator_close_driver, iterator_next_method_call, iterator_step_call,
@@ -85,7 +85,7 @@ pub(crate) mod fn_ctor_env;
 mod global_eval_hoist;
 mod run_once;
 pub use run_once::class_names as run_once_class_names;
-mod shared_mutable_capture;
+pub(crate) mod shared_mutable_capture;
 pub(crate) mod type_widening;
 pub(crate) mod unrebound_params;
 pub(crate) use closure_analysis::*;
@@ -122,6 +122,7 @@ pub(crate) use array_fold::{
 };
 
 mod lower_module_fn;
+mod module_assigned_bindings;
 mod module_strict;
 mod module_tdz;
 pub use lower_module_fn::{
@@ -162,9 +163,13 @@ mod for_of_counter_tests;
 mod proxy_binding_tests;
 #[cfg(test)]
 mod tests;
+mod this_field_loop_tests;
 
 #[cfg(test)]
 mod iterator_step_tests;
+
+#[cfg(test)]
+mod typed_for_of_admission_tests;
 
 #[cfg(test)]
 mod wtf8_key_tests;

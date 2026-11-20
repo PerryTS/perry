@@ -23,10 +23,7 @@ use crate::disposable::{
 fn throw_incompatible(proto: &str, method: &str) -> ! {
     let msg = format!("Method {proto}.{method} called on incompatible receiver");
     let s = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_typeerror_new(s);
-    crate::exception::js_throw(f64::from_bits(
-        crate::value::JSValue::pointer(err as *const u8).bits(),
-    ))
+    crate::exception::throw_core(crate::error::CoreError::type_error(s))
 }
 
 /// Resolve the `this` receiver to a stack `ObjectHeader` of the expected class id,
@@ -226,7 +223,7 @@ pub(super) fn install_disposable_proto_methods(
             // corrupts a data slot (see the Map arm in `collection_proto_thunks`).
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ds_proto_disposed_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("DisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ds_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
             );
             ipm(
                 proto_obj,
@@ -264,7 +261,7 @@ pub(super) fn install_disposable_proto_methods(
         "AsyncDisposableStack" => {
             install_disposed_getter(
                 proto_obj,
-                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ads_proto_disposed_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("AsyncDisposableStack.prototype.disposed.<get>", constructible = true)] export crate::object::disposable_proto_thunks::ads_proto_disposed_getter_thunk, 0; with_name("get disposed"), with_declared(0)),
             );
             ipm(
                 proto_obj,

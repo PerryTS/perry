@@ -1,0 +1,32 @@
+pristine [abc] ["abc",0,"abc",0,[]]
+pristine [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+pristine [] ["",0,"",0,[]]
+DEC 250: Cannot add member Object.prototype.exec: built-in objects are read-only in a compiled program
+DEC 250: Cannot add member Object.prototype[Symbol(Symbol.replace)]: built-in objects are read-only in a compiled program
+object proto [abc] ["abc",0,"abc",0,[]]
+object proto [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+object proto [] ["",0,"",0,[]]
+object proto removed [abc] ["abc",0,"abc",0,[]]
+object proto removed [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+object proto removed [] ["",0,"",0,[]]
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto exec [abc] ["abc",0,"abc",0,[]]
+proto exec [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+proto exec [] ["",0,"",0,[]]
+DEC 250: Cannot redefine built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto exec restored [abc] ["abc",0,"abc",0,[]]
+proto exec restored [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+proto exec restored [] ["",0,"",0,[]]
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto exec null [abc] ["abc",0,"abc",0,[]]
+proto exec null [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+proto exec null [] ["",0,"",0,[]]
+DEC 250: Cannot redefine built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member RegExp.prototype[Symbol(Symbol.replace)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto symbol replace [abc] ["abc",0,"abc",0,[]]
+proto symbol replace [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+proto symbol replace [] ["",0,"",0,[]]
+DEC 250: Cannot redefine built-in member RegExp.prototype[Symbol(Symbol.replace)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+restored [abc] ["abc",0,"abc",0,[]]
+restored [a+b+c] ["a_b_c",0,"a_b+c",0,[]]
+restored [] ["",0,"",0,[]]

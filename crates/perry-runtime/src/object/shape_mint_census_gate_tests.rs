@@ -170,7 +170,7 @@ fn census_rejects_a_producer_bypassing_the_funnel() {
         1,
         "retirement must not erase an overlap"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]
@@ -187,7 +187,7 @@ fn census_rejects_a_missing_facts_memo_entry() {
         1,
         "the negative control must be detected"
     );
-    assert!(std::panic::catch_unwind(|| capture.check()).is_err());
+    assert!(crate::test_support::child_unwind(|| capture.check()).is_err());
 }
 
 #[test]
@@ -271,6 +271,7 @@ fn census_gates_real_add_definition_and_spread_producers() {
             crate::object::spread::js_object_spread_fresh_leading(
                 f64::from_bits(crate::value::TAG_UNDEFINED),
                 object_value,
+                0,
             );
             let readonly = crate::object::js_object_alloc(0, 0);
             crate::object::js_object_set_field_by_name(

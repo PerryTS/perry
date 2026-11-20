@@ -91,6 +91,15 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
     step_from_result(result, out)
 }
 
+/// A for-of step the compiler emits over a proven sync generator whose body
+/// re-yielded a `yield*` inner result object: the step is that object's
+/// IteratorComplete and IteratorValue, as [`js_iterator_step`] reads it.
+#[no_mangle]
+#[cold]
+pub unsafe extern "C-unwind" fn js_iterator_step_inner_result(result: f64, out: *mut f64) -> i32 {
+    step_from_result(result, out)
+}
+
 /// IteratorComplete then (when not done) IteratorValue of a returned result:
 /// validated as an Object, members read by ordinary [[Get]].
 unsafe fn step_from_result(result: f64, out: *mut f64) -> i32 {
@@ -141,9 +150,14 @@ pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle
         let obj = raw as *const ObjectHeader;
         // An actual own next slot needs only its descriptor. In particular,
         // ordinary custom iterators must not bind a method during [[Get]];
-        // the following Call supplies the iterator as its receiver.
-        if crate::object::shapes::object_shape_record(obj).is_some() {
-            let keys = crate::object::object_keys(obj);
+        // the following Call supplies the iterator as its receiver. The
+        // receiver is scanned first, then (with no own keys) its family.
+        let mut holder = crate::object::shapes::object_shape_record(obj).map(|_| obj);
+        if holder.is_none() {
+            holder = crate::object::iterator_next_property_owner(obj);
+        }
+        while let Some(h) = holder {
+            let keys = crate::object::object_keys(h);
             let (slots, count) = keys.dense_slots();
             if let Some(slot) = (0..count).find(|&i| {
                 crate::string::js_string_key_matches_bytes(
@@ -153,22 +167,14 @@ pub(super) unsafe fn iterator_next_method_rooted(iter: &crate::gc::RuntimeHandle
             }) {
                 return super::iterator_method::read_method(
                     iter,
-                    super::iterator_method::property_at(obj, slot as u32),
+                    super::iterator_method::property_at(h, slot as u32),
                 );
             }
-        }
-        if let Some(owner) = crate::object::iterator_next_property_owner(obj) {
-            let keys = crate::object::object_keys(owner);
-            let (slots, count) = keys.dense_slots();
-            if let Some(slot) = (0..count).find(|&i| {
-                crate::string::js_string_key_matches_bytes(
-                    JSValue::from_bits((*slots.add(i)).to_bits()),
-                    b"next",
-                )
-            }) {
-                let method = super::iterator_method::property_at(owner, slot as u32);
-                return super::iterator_method::read_method(iter, method);
-            }
+            holder = if h == obj {
+                crate::object::iterator_next_property_owner(obj)
+            } else {
+                None
+            };
         }
     }
     let key = crate::string::intern_ascii_literal(b"next");
@@ -335,7 +341,7 @@ unsafe fn array_record_enter(
         return array_record_refused(value, record, None);
     };
     let array = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let raw = raw as *const crate::array::ArrayHeader;
             // Admission above already proved this header belongs to the receiver.
             // Reuse it for arena arrays without repeating the raw-pointer ownership

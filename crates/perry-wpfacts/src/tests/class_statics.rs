@@ -15,12 +15,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
 }
 
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
-
 /// The class `Pk` is reached through a value (`k`), so its member reads and
 /// calls are sites on the class object.
 const PK: &str = r#"
@@ -28,33 +22,6 @@ const PK: &str = r#"
     function useIt(k: any) { return k.of(2) + k.x; }
     console.log(useIt(Pk));
 "#;
-
-#[test]
-fn a_constant_static_called_through_a_value_is_proven() {
-    let pf = facts(PK);
-    // `prototype` is one too: a class's is neither writable nor configurable.
-    assert_eq!(
-        tmpl(&pf, "Pk").statics,
-        ["of", "prototype", "x"],
-        "{}",
-        pf.dump_text()
-    );
-    assert!(proven(&pf, "of"), "{}", pf.dump_text());
-    assert!(proven(&pf, "x"), "{}", pf.dump_text());
-    let of = sites(&pf, "of");
-    assert!(
-        of[0].targets.iter().any(|t| t.contains("::static of#")),
-        "{:?}",
-        of[0]
-    );
-    // Per unit claims no more than whole program.
-    let u = units(PK);
-    for k in ["of", "x"] {
-        if proven(&u, k) {
-            assert!(proven(&pf, k));
-        }
-    }
-}
 
 #[test]
 fn a_nested_class_static_is_defined_where_the_class_is_evaluated() {
@@ -175,4 +142,47 @@ fn a_static_method_named_like_a_written_instance_field_is_constant() {
         .find(|f| f.key == "value")
         .expect("the field");
     assert!(!f.readonly && f.writers_post > 0, "{f:?}");
+}
+
+/// EUC S: a class object holds its static methods as own data properties from
+/// class evaluation, so the lookup stops at the class object even when a
+/// computed store through an unknown object could have redefined a builtin
+/// prototype member of that name (`Function.prototype.with`).
+fn tracker(extra: &str) -> String {
+    format!(
+        r#"
+    class Tracker {{
+      items: number[] = [];
+      static with(cb: (t: Tracker) => void): number {{ const t = new Tracker(); cb(t); return t.items.length; }}
+      add(n: number): void {{ this.items.push(n); }}
+    }}
+    const g: any = (globalThis as any)["some" + String(Date.now() % 2)];
+    const k = String(Date.now());
+    {extra}
+    function use(c: any) {{ return c.with((t: Tracker) => {{ t.add(1); }}); }}
+    const r = use(Tracker);
+    console.log(r);
+"#
+    )
+}
+
+#[test]
+fn a_static_method_shadows_the_builtin_chain_past_a_top_store() {
+    // Control: no store through an unknown object.
+    let pf = facts(&tracker(""));
+    assert!(proven(&pf, "with"), "{}", pf.dump_text());
+    // The store through an unknown object reshapes builtin prototypes in the
+    // model; the own static method still answers the call.
+    let pf = facts(&tracker("if (g) g[k] = 1;"));
+    assert!(proven(&pf, "with"), "{}", pf.dump_text());
+}
+
+#[test]
+fn a_static_method_stays_unproven_when_it_can_be_deleted_or_the_class_escapes() {
+    let pf = facts(&tracker(
+        "if (g) g[k] = 1; if (Date.now() < 0) delete (Tracker as any).with;",
+    ));
+    assert!(!proven(&pf, "with"), "{}", pf.dump_text());
+    let pf = facts(&tracker("if (g) { g[k] = 1; g.cb = Tracker; }"));
+    assert!(!proven(&pf, "with"), "{}", pf.dump_text());
 }

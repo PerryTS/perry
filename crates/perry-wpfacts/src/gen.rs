@@ -7,17 +7,30 @@ use crate::model::*;
 use crate::pts::FxHashMap;
 use perry_hir::{Class, Export, Function, Global, Import, ImportSpecifier, Module, Stmt};
 
+mod compare;
 mod define_keys;
 mod export;
 pub(crate) use export::UNDESCRIBED;
 mod for_in;
 mod glue;
+pub(crate) mod in_bounds;
+pub(crate) mod narrow;
 mod native_result;
 mod once;
+mod own_guard;
+mod own_store;
+mod param_key;
+pub(crate) mod ret_param;
+pub(crate) mod settled;
+pub(crate) use own_guard::Region;
 mod primitives;
+mod private_methods;
+mod proto_first;
+mod record_steps;
 mod shared_closures;
 mod view;
 mod walk;
+pub(crate) mod zero_sign;
 pub(crate) use walk::variant_name;
 
 /// A read site the precision report can match against the dynamic census:
@@ -32,7 +45,37 @@ pub struct ReadSite {
     /// A call through a value (`f(x)`): `recv` is the callee node, `key`
     /// the atom `()`.
     pub value_call: bool,
+    /// S8: a bare call of a name the main realm declares neither on the
+    /// global object nor on its chain (`Gen::bare_user_global`), outside a
+    /// module a Worker may run: `recv` is [[Get]](globalThis, name), the
+    /// callee (`value_call`). An `undefined` / `null` there is the absent
+    /// name's ReferenceError (9.1.1.4.6, 9.1.1.2.6) or Call's TypeError
+    /// (7.3.14): nothing is called, the site's throw arm.
+    pub global_get: bool,
     pub func: FnIdx,
+    /// ACCSITE1 D2: the access the record names (a read or call, a store,
+    /// a compound's GetValue).
+    pub access: crate::derive::Access,
+}
+
+/// A folded builtin-method node (`perry_hir::folded_call`): the call
+/// `recv.key(..)` at the site its receiver names (`method_sites`).
+pub(crate) struct FoldedSite {
+    pub module: u32,
+    pub site: perry_hir::folded_call::Site,
+    pub key: Atom,
+    pub recv: NodeId,
+}
+
+/// A computed member operation over nodes already generated for the solve.
+#[derive(Clone, Debug)]
+pub(crate) struct ElementSite {
+    pub module: u32,
+    pub byte_offset: u32,
+    pub op: crate::derive::ElementOp,
+    pub recv: NodeId,
+    pub idx: NodeId,
+    pub key: Key,
 }
 
 /// Another unit's module namespace object as this unit holds it (§18.2,
@@ -78,6 +121,8 @@ pub(crate) enum ParamGuard {
 pub(crate) struct ModInfo {
     pub path: String,
     pub locals: FxHashMap<u32, NodeId>,
+    /// The dead-zone value of a local's cell (`Gen::dead_zone`).
+    pub dead_zones: FxHashMap<u32, NodeId>,
     pub globals: FxHashMap<u32, NodeId>,
     pub funcs: FxHashMap<u32, FnIdx>,
     pub classes: FxHashMap<String, TmplId>,
@@ -87,8 +132,13 @@ pub(crate) struct ModInfo {
     pub scope: FxHashMap<String, NodeId>,
     pub ns_tok: Tok,
     pub site_counter: u32,
-    pub iterres: FxHashMap<FnIdx, NodeId>,
+    /// A plain-async step's iter-result slot, per function and `done` flag
+    /// of its writes (`Gen::iter_res_node`).
+    pub iterres: FxHashMap<(FnIdx, bool), NodeId>,
     pub iterout: FxHashMap<FnIdx, NodeId>,
+    /// Per for-of loop (its value local): what its step yields
+    /// (`Gen::step_yield_node`).
+    pub stepyield: FxHashMap<(FnIdx, u32), NodeId>,
 }
 
 /// A body generation walks once its function is active (DECISIONS 225).
@@ -103,6 +153,8 @@ pub(crate) enum PendingWalk<'a> {
     Fields(u32, &'a perry_hir::Class),
     /// A closure's body (its emitted definition) in its creation context.
     Closure(crate::gen::Fx, &'a perry_hir::Expr),
+    #[cfg(test)]
+    OwnedClosure(crate::gen::Fx, Box<perry_hir::Expr>),
     /// A module only `import()` loads: its body runs once an `import()`
     /// site a body that can run holds names it (or a module it loads
     /// imports it).
@@ -112,12 +164,27 @@ pub(crate) enum PendingWalk<'a> {
 pub struct Gen<'a> {
     pub m: Model,
     pub(crate) diagnostic: Option<crate::diagnostics::Capture>,
+    /// The output node of the `iteratorStep` whose arguments are being
+    /// generated: what the `iteratorStepOutput` among them reads.
+    pub(crate) step_out: Option<NodeId>,
+    /// The function whose `if (IterResultGetDone)` arm is being walked:
+    /// the `IterResultGetValue` there reads the slot a `return` wrote.
+    pub(crate) iter_done_arm: Option<FnIdx>,
     pub modules: Vec<(&'a str, &'a Module)>,
     pub(crate) mods: Vec<ModInfo>,
     pub path_index: FxHashMap<String, u32>,
     pub exports: FxHashMap<(u32, Atom), NodeId>,
     pub export_resolving: crate::pts::FxHashSet<(u32, Atom)>,
+    /// U8: the key value each `js_object_literal_to_property_key` result
+    /// converts (7.1.19 ToPropertyKey: a String key is itself), for the
+    /// literal's computed own key (`Cons::OwnComputedKey`).
+    pub(crate) prop_key_of: FxHashMap<NodeId, NodeId>,
     pub thrown: NodeId,
+    /// The plain-async step closures and their error carriers (`StepSplits`).
+    pub(crate) step: StepSplits,
+    /// The realm error a failed runtime operation throws (`Model::runtime_error`,
+    /// held by `thrown`), for a site that throws it into its own region.
+    pub runtime_error: Tok,
     /// Registry summary: only dynamic lookups read every publication.
     pub cjs_registry: NodeId,
     /// Canonical module path -> the publications for that path.
@@ -125,6 +192,29 @@ pub struct Gen<'a> {
     /// Nonliteral publications may replace any named path.
     pub cjs_unknown_path: NodeId,
     pub read_sites: Vec<ReadSite>,
+    /// ACCSITE1: the named store sites (`o.k = v`, a compound's PutValue and
+    /// GetValue). Kept apart from `read_sites`, which the read-side passes
+    /// walk; `derive::site_facts` judges both.
+    pub store_sites: Vec<ReadSite>,
+    /// The folded method nodes that have a site (`method_sites`).
+    pub(crate) folded_sites: Vec<FoldedSite>,
+    /// NDISP2: every HIR-specialized member op (`member_ops`).
+    pub(crate) member_ops: Vec<crate::member_ops::MemberOp>,
+    pub(crate) element_sites: Vec<ElementSite>,
+    /// `(module, element_offset, value node)` of every `IndexGet` copy
+    /// (`canonical_numbers`, P3 B1).
+    pub(crate) element_values: Vec<(u32, u32, NodeId)>,
+    /// The result node of every named property read codegen lowers as a
+    /// property read (a `PropertyGet`, a `PropertyUpdate`'s read): the reads
+    /// `rest_fields`' use record admits (I32 at rest, PR C).
+    pub(crate) field_reads: Vec<NodeId>,
+    /// VR-4b: each named read with a source offset, `(module, offset, key,
+    /// result node)`. A member chain's reads share their offset, so the key
+    /// tells them apart.
+    pub(crate) load_sites: Vec<(u32, u32, Atom, NodeId)>,
+    /// VR-4b: the holder of the array literal about to be walked
+    /// (`Model::arr_birth_holder`); the literal's arm takes it.
+    pub(crate) direct_arr: Option<crate::records::ArrBirth>,
     /// Exports whose value is a class declaration (design §11.2).
     pub export_class: FxHashMap<(u32, Atom), TmplId>,
     /// Exports whose value is a function declaration, and the published
@@ -157,11 +247,6 @@ pub struct Gen<'a> {
     /// element kind, the primitives beside them). `ta_reported`: the fields
     /// a reader's census reported (`ta <key> of <display>`): sunk.
     pub field_tas: FxHashMap<(TmplId, Atom), (Option<u8>, u16)>,
-    /// DECISIONS 208: while a value contract is built
-    /// (`lib::value_contract_of_toks`), the layouts of this unit it
-    /// describes: each stands in `layouts_out` until the outermost one is
-    /// built.
-    pub(crate) describing: std::cell::RefCell<Option<Vec<String>>>,
     pub ta_reported: crate::pts::FxHashSet<(String, String)>,
     /// DECISIONS 126: the stand-ins of other units' typed-array fields
     /// (report, token), one per class and key.
@@ -237,6 +322,68 @@ pub struct Gen<'a> {
     /// and the bindings whose stored values no contract describes
     /// (`Gen::contract_check`: they escaped).
     pub(crate) binding_writes: FxHashMap<u32, NodeId>,
+    /// While a for-of binding is walked (`Gen::stmts`): its value local
+    /// reads the value the loop's `arrayRecordForValue` just wrote.
+    pub(crate) for_binding: Option<(u32, u32, NodeId)>,
+    /// Rule RP1 (`gen/record_steps.rs`): the address of the arguments of
+    /// each positional `arrayRecordIndex(c)` step read, with its index.
+    pub(crate) record_steps: FxHashMap<usize, u32>,
+    /// Rule RP2: the (module, local) of each guarded iterator record
+    /// source (`arrayRecordNeedsIterator(s = s)`) and payload
+    /// (`arrayRecordPayload(.., p = ..)`), whose protocol arm never sees a
+    /// held Array (`Cons::RecordEntry`).
+    pub(crate) record_locals: crate::pts::FxHashSet<(u32, u32)>,
+    /// The (module, local, value node, `Fx::guard`) of the last local
+    /// write walked (`narrow::Gen::narrow_assigned`).
+    pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
+    /// Loop-test narrowings being walked (`gen/narrow.rs`).
+    pub(crate) narrow: Vec<narrow::Narrow>,
+    /// Rule DA collectors of the `if`/`switch` statements being walked
+    /// (module, local, function body, node): `narrow::Gen::def_assign_begin`.
+    pub(crate) def_collect: Vec<(u32, u32, FnIdx, NodeId)>,
+    /// In-bounds index stores (`gen/in_bounds.rs`).
+    pub(crate) in_bounds: in_bounds::InBounds,
+    /// The function body being walked and its locals a guard may narrow
+    /// (`narrow::scope_locals`).
+    pub(crate) narrow_scope: Option<(FnIdx, crate::pts::FxHashSet<u32>)>,
+    /// The `const` bindings the bodies being walked declare
+    /// (`narrow::Consts`): a body a closure creates may narrow the ones it
+    /// captures.
+    pub(crate) narrow_consts: crate::pts::FxHashSet<(u32, u32)>,
+    /// `(module, byte offset, argument nodes)` of each method call site
+    /// (`bindings::ModuleBindings::call_arg_ranges`).
+    pub(crate) call_args_at: Vec<(u32, u32, Vec<NodeId>)>,
+    /// `(module, byte offset, result node)` of each call site with a source
+    /// offset (`bindings::ModuleBindings::number_calls`).
+    pub(crate) call_results_at: Vec<(u32, u32, NodeId)>,
+    /// `(module, byte offset, byte end, result node)` of every call with a
+    /// source offset, whatever its callee (`call_kinds`).
+    pub(crate) call_kinds_at: Vec<(u32, u32, u32, NodeId)>,
+    /// The spread nodes of the `CallSpread` being lowered whose first
+    /// argument no spread precedes (`CallSite::first_arg_fixed`): a call
+    /// made with exactly these is fixed when it is made, before a builtin
+    /// model (the console formatter, `builtin_args_view`) reads it.
+    pub(crate) fixed_spreads: Option<Vec<NodeId>>,
+    /// The list births and the push sites of the bodies walked, the body
+    /// the walk is in (a serial; its loop depth is `loop_depth`) and the
+    /// number of bodies entered so far (`list_caps`).
+    pub(crate) list_births: Vec<crate::list_caps::Birth>,
+    pub(crate) list_pushes: Vec<crate::list_caps::Push>,
+    pub(crate) list_body: u32,
+    pub(crate) list_bodies: u32,
+    /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
+    /// identity (the callee expression's address), whether it spreads, and
+    /// for a direct call its callee node (`signatures::typed_calls`).
+    pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,
+    /// One-unit String literal nodes by code (`Gen::str_literal`).
+    pub(crate) str_lits: FxHashMap<i64, NodeId>,
+    /// The counted walks HIR lowers a for-of over an ordinary array to
+    /// (`perry_hir::lower::for_of_guard`, `Gen::stmt`): (module, array
+    /// local, counter local). Their `array[k]` binding is what the
+    /// iteration yields, as the IteratorRecord loop's element is.
+    pub(crate) for_of_walks: crate::pts::FxHashSet<(u32, u32, u32)>,
+    /// The `const` bindings walked with an initializer (module, HIR id).
+    pub(crate) initialized_consts: crate::pts::FxHashSet<(u32, u32)>,
     pub(crate) write_top: crate::pts::FxHashSet<u32>,
     pub(crate) stand_in_fc: FxHashMap<Tok, &'a crate::units::FnContract>,
     /// DECISIONS 241: stores on a published function no contract describes
@@ -272,15 +419,26 @@ pub struct Gen<'a> {
     /// tokens whose use beyond the contract is a census report.
     pub stand_ins: FxHashMap<String, (NodeId, TmplId, Vec<Tok>)>,
     pub ctor_phase: FxHashMap<TmplId, CtorPhase>,
+    /// R9BIRTH3 rule M: classes whose instances run another method at an
+    /// ancestor constructor's followed `this.m()` call (a class from them up
+    /// to that ancestor defines `m`): that ancestor's constructor leaks
+    /// `this` for them (`Gen::settle_rule_m`).
+    pub m_override_leaks: crate::pts::FxHashSet<TmplId>,
     pub fn_inst_of: FxHashMap<FnIdx, TmplId>,
     pub field_init_fn: FxHashMap<TmplId, FnIdx>,
     pub static_init_fn: FxHashMap<TmplId, FnIdx>,
-    pub prim_const: [NodeId; 7],
+    pub prim_const: [NodeId; 9],
+    /// One node per integer literal value, holding that Number with its
+    /// point interval (`Gen::num_literal`); shared like `prim_const`.
+    pub num_lits: FxHashMap<i64, NodeId>,
     pub(crate) shared_closures: shared_closures::SharedClosures<'a>,
     pub walked: crate::pts::FxHashSet<FnIdx>,
     /// DECISIONS 225: the bodies not walked yet because they are not
     /// active (`Gen::walk_activated` walks each once it is).
     pub(crate) pending_walk: FxHashMap<FnIdx, Vec<PendingWalk<'a>>>,
+    /// DECISIONS 225: the bodies never walked (the activation set is final
+    /// and does not hold them): `family_reach` reads their text.
+    pub(crate) unwalked: Vec<PendingWalk<'a>>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
     /// sources (module path → source → module path). A re-export declares
@@ -289,6 +447,48 @@ pub struct Gen<'a> {
     /// The negative control (`PERRY_FACTS_SABOTAGE=dynimport`): `import()`
     /// sites skip their module mapping (DECISIONS 226).
     pub dynimport_sabotage: bool,
+    /// Integer intervals are generated (`FactsConfig::no_int_ranges`).
+    pub int_ranges: bool,
+    /// Array literals record their birth length (`solve::arr_len`;
+    /// `FactsConfig::no_array_lengths`).
+    pub arr_lengths: bool,
+    /// The source site of the last `new Array(...)` of the builtin
+    /// (`new_builtin`), which the fused fill (`call_with`) marks hole-free.
+    pub new_array_site: Option<SiteId>,
+    /// The push-filled births and their fill pushes (`push_fills`), by
+    /// expression identity.
+    pub(crate) push_fill: crate::push_fills::Fills,
+    /// The fill whose birth is the `new Array()` being generated.
+    pub(crate) push_fill_new: Option<u32>,
+    /// Guards narrow locals and one-unit Strings carry codes
+    /// (`FactsConfig::no_guard_ranges`).
+    pub guard_ranges: bool,
+    /// Guards narrow locals by presence: a truthy or non-nullish test
+    /// filters out `null`/`undefined` (`FactsConfig::no_guard_presence`).
+    pub guard_presence: bool,
+    /// A name-keyed fold (`Expr::WeakRefDeref`, the FinalizationRegistry
+    /// pair) is also the ordinary method call its helper makes on a
+    /// receiver of another kind (`reach::name_folds`).
+    pub name_folds: bool,
+    /// R1: a write of a narrowed local in a branch that always leaves past
+    /// the narrowing's code does not end its narrowed reads after the branch
+    /// (`gen::narrow`, "Writes on a leaving path";
+    /// `FactsConfig::no_leaving_writes`).
+    pub leaving_writes: bool,
+    /// −0 tolerance (`zero_sign`): the expression `expr` evaluates next is
+    /// an operand whose parent classifies its use (a compare, an integer
+    /// rule, a copy, a store, a call argument); any other is a
+    /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
+    pub zs_ok: bool,
+    /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
+    /// branch's writes are dropped from the reads after it, also a branch
+    /// that falls through to them.
+    pub leaving_write_sabotage: bool,
+    /// The loops and `switch`es (`jumps`) and `try` statements (`tries`)
+    /// the walk is inside: where an unlabeled `break`/`continue` lands, and
+    /// whether a `throw` or a `finally` stays inside a narrowing's code.
+    pub jumps: u32,
+    pub tries: u32,
     /// The `import()` / `require(expr)` specifiers of the bodies walked, by
     /// module (`live_dynamic_imports`): in the activation pass, the sites a
     /// body that can run holds.
@@ -314,7 +514,7 @@ pub struct Gen<'a> {
     pub rooted_stores: std::collections::BTreeMap<usize, bool>,
     /// Locals holding a class method's lexical home (`ClassMethodHome`):
     /// (module, local) → the class. `super` through such a home starts at
-    /// that class's parent, exactly like `SuperPropertyGet`.
+    /// the home's prototypes, exactly like `SuperPropertyGet`.
     pub class_homes: FxHashMap<(u32, u32), TmplId>,
     /// The unpublished object of each enclosing chunked literal birth
     /// (`Expr::LiteralChunks`), innermost last: what its chunk calls'
@@ -326,19 +526,78 @@ pub struct Gen<'a> {
     pub cell_locals: crate::pts::FxHashSet<(u32, u32)>,
     /// Literal birth templates by expression (compiler data, `new_lit`).
     pub(crate) lit_births: FxHashMap<usize, (TmplId, Tok)>,
+    /// A defaulted parameter's argument node by (module, local): what the
+    /// calls pass, before the default replaces `undefined` (compiler data,
+    /// `params_inner`).
+    pub(crate) default_args: FxHashMap<(u32, u32), NodeId>,
     /// The constant first argument of the call `call_expr` is lowering,
     /// taken by `call_with` (`Model::call_lit`).
     pub(crate) call_lit_arg: Option<Atom>,
+    /// MATHB1B: while a namespace pair's intrinsic arm is walked, the
+    /// generic arm's arguments and the node each one evaluated to there
+    /// (`Gen::namespace_pair`).
+    /// Each slot holds the node and the walk position (`expr_seq`) of the
+    /// match.
+    pub(crate) pair_args: Option<Vec<(perry_hir::Expr, Option<(NodeId, usize)>)>>,
+    /// The number of expressions `Gen::expr` has entered: orders a namespace
+    /// pair's argument matches (`Gen::expr`).
+    pub(crate) expr_seq: usize,
+    /// Reads guarded by an own-property test (the `IndexGet`'s address)
+    /// and the invalidation node watched by `Cons::OwnGate`.
+    pub(crate) own_reads: FxHashMap<usize, NodeId>,
+    /// Reads after a store of the same object and key (`gen/own_store.rs`,
+    /// the `IndexGet`'s address).
+    pub(crate) own_store_reads: crate::pts::FxHashSet<usize>,
+    /// The last call's callee (`f(o,k)`), or method receiver (`H` of
+    /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
+    pub(crate) own_test_recv: Option<NodeId>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
     /// `ForInKeys` it holds.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
+    /// ENUM1: the for-in loops being walked, outlined or not, whose key and
+    /// iterated binding are never written: (module, loop variable, the
+    /// local `__forin_obj` copies) (`Gen::enum_read`).
+    pub(crate) for_in_reads: Vec<(u32, u32, for_in::EnumSubject)>,
+    /// F-A: (module, `__forin_obj` local) -> the side-effect-free path
+    /// it is initialized from (`for (k in a.b.c)`).
+    pub(crate) for_in_paths: FxHashMap<(u32, u32), for_in::SubjPath>,
+    /// `let a = b` of locals: (module, a) -> b (the `__forin_obj` copy).
+    pub(crate) local_copies: FxHashMap<(u32, u32), u32>,
+    /// Per module: locals written anywhere (`=`, `++`).
+    pub(crate) written: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// SKINROOT11: `const v = S[k]` lowered so far: (module, v) -> (k, S,
+    /// the function that holds the binding).
+    pub(crate) same_key_reads: FxHashMap<(u32, u32), (u32, perry_hir::Expr, FnIdx)>,
     /// Constant bindings' initializers: (module, global, id) -> init
     /// (`Gen::note_define_keys`, `Gen::const_key`).
     pub(crate) const_inits: FxHashMap<(u32, bool, u32), define_keys::ConstInit>,
     /// Per module: locals written or captured anywhere (`Gen::for_in_of`).
     pub(crate) unstable: FxHashMap<u32, crate::pts::FxHashSet<u32>>,
+    /// Per module: its call-only functions' parameters and calls
+    /// (`Gen::key_shape_of`).
+    pub(crate) param_calls: FxHashMap<u32, param_key::ParamCalls<'a>>,
+}
+
+/// A plain-async step closure `(__step_value, __step_is_error)` resumes its
+/// body with a normal completion (`__step_is_error` false: the awaited value,
+/// 27.7.5.3 Await step 3, `gen.next(v)`) or with a throw completion (true: the
+/// awaited promise's reason, step 5, `gen.throw(e)`). One parameter carries
+/// both at run time; the solve keeps them apart: the value carrier is the
+/// parameter, the error carrier is one node per step, read wherever
+/// `__step_value` is read under `if (__step_is_error)` and written by every
+/// resume with `true` (`AsyncStepChain`'s reason, `__step_self(e, true)`).
+#[derive(Default)]
+pub(crate) struct StepSplits {
+    /// (module, `__step_value`) -> the step's error carrier.
+    pub(crate) by_value: FxHashMap<(u32, u32), NodeId>,
+    /// (module, `__step_is_error`) -> its `__step_value`.
+    pub(crate) by_flag: FxHashMap<(u32, u32), u32>,
+    /// (module, `__step_self`) -> the step's error carrier.
+    pub(crate) by_self: FxHashMap<(u32, u32), NodeId>,
+    /// The error arms being walked, innermost last: (module, `__step_value`).
+    pub(crate) arms: Vec<(u32, u32)>,
 }
 
 /// Per-function walking context.
@@ -370,16 +629,80 @@ mod class_values;
 mod indexed_owner;
 
 impl<'a> Gen<'a> {
+    #[cfg(test)]
+    pub(crate) fn packet_generator_effect(
+        &mut self,
+        f: FnIdx,
+        object: NodeId,
+        is_async: bool,
+        publish: impl FnOnce(&mut Self),
+    ) {
+        let mode = self.m.packet_generator_action(f, object, is_async);
+        if mode.unwrap_or(true) {
+            publish(self);
+        }
+        if mode.is_some() {
+            self.m.packet_protocol_depth -= 1;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn packet_class_effect(
+        &mut self,
+        mi: u32,
+        name: &str,
+        action: crate::summary::packet::ClassAction<NodeId>,
+        publish: impl FnOnce(&mut Self),
+    ) {
+        let mode = self
+            .m
+            .packet_class_action(self.modules[mi as usize].0, name, action);
+        if mode.unwrap_or(true) {
+            publish(self);
+        }
+        if mode.is_some() {
+            self.m.packet_protocol_depth -= 1;
+        }
+    }
+
     pub fn new(modules: Vec<(&'a str, &'a Module)>, relations: bool, explain: bool) -> Self {
+        Self::new_observed(modules, relations, explain, false)
+    }
+
+    pub(crate) fn new_observed(
+        modules: Vec<(&'a str, &'a Module)>,
+        relations: bool,
+        explain: bool,
+        birth_census: bool,
+    ) -> Self {
         let mut m = Model::default();
         m.cur_fn = NO_FN;
         m.explain = explain;
+        if crate::hold_ledger::on() {
+            m.explain = true;
+            m.ledger = Some(crate::hold_ledger::HoldLedger::new());
+        }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
         m.rel_phase = b'G';
+        // Capture initialization origins too, before any solver propagation.
+        // This state exists only for an explicitly requested diagnostic dump.
+        if birth_census {
+            let mut d = crate::diagnostics::Trace::default();
+            d.census = Some(crate::diagnostics::BirthCensus {
+                suppress: (std::env::var("PERRY_FACTS_ONLY").ok().as_deref() == Some("1"))
+                    .then(|| std::env::var("PERRY_FACTS_SUPPRESS_BIRTH").ok())
+                    .flatten(),
+                ..Default::default()
+            });
+            m.diagnostic = Some(d);
+        }
         if relations {
             m.relations = Some(Vec::new());
         }
+        m.prov = crate::provenance::Prov::from_env(relations, || {
+            modules.iter().map(|(p, _)| p.to_string()).collect()
+        });
         let top = m.tok(TokKind::Top);
         debug_assert_eq!(top, TOP);
         m.top_node = m.node_l("TOPNODE");
@@ -387,7 +710,7 @@ impl<'a> Gen<'a> {
         m.add_tok(top_tok_node, TOP);
         m.add_prim(top_tok_node, prim::ALL);
         m.top_tok_node = top_tok_node;
-        let mut prim_const = [0; 7];
+        let mut prim_const = [0; 9];
         for (i, p) in [
             prim::NUM,
             prim::STR,
@@ -396,6 +719,8 @@ impl<'a> Gen<'a> {
             prim::UNDEF,
             prim::BIGINT,
             prim::SYMBOL,
+            prim::TRUE,
+            prim::FALSE,
         ]
         .into_iter()
         .enumerate()
@@ -408,10 +733,29 @@ impl<'a> Gen<'a> {
         m.add_prim(all, prim::ALL);
         m.all_prim_node = all;
         let thrown = m.node_l("THROWN");
-        // Runtime-thrown errors are runtime objects: ⊤-origin.
-        m.add_top(thrown, |_| "thrown value (runtime errors)".into());
-        m.add_prim(thrown, prim::ALL);
+        // What a `catch` (or a rejection handler) receives beside the values
+        // the program throws (edges): the error object a failed runtime
+        // operation makes (`exception::throw_core`; codegen inserts such
+        // throws the model never sees, so every program can catch one). It is
+        // also the region of every call made outside generation (DESIGN SEEDE
+        // section 8); ⊤ reaches it only through such a region.
+        let rterr = m.runtime_error();
+        m.add_tok(thrown, rterr);
         m.thrown = thrown;
+        let esc = m.node_l("ESCRAISE");
+        let r = m.reason("thrown into unknown code");
+        m.sink_node(esc, r);
+        m.esc_raise = esc;
+        let host = m.node_l("HOSTREPORT");
+        crate::builtins::host_report_readers(&mut m, host);
+        m.host_report = host;
+        m.process_event = m.node_l("PROCEVENT");
+        let acc = m.node_l("ESCACCESSORS");
+        let r = m.reason("accessor function of a value unknown code holds");
+        m.sink_node(acc, r);
+        m.esc_accessors = acc;
+        m.lazy_raise = m.node_l("LAZYRAISE");
+        m.escaped_classes = m.node_l("ESCCLASSES");
         let cjs_registry = m.node_l("CJSREG");
         let cjs_unknown_path = m.node_l("CJSUNKNOWNPATH");
         m.cjs_union = cjs_registry;
@@ -421,6 +765,7 @@ impl<'a> Gen<'a> {
         // An ESM entry installs no main record: `require.main` is undefined.
         m.cjs_main = m.node_l("CJSMAIN");
         m.add_prim(m.cjs_main, prim::UNDEF);
+        m.process_arrays = m.process_string_arrays();
         let _ = m.tok(TokKind::ObjectProto);
         let mut path_index = FxHashMap::default();
         for (i, (p, _)) in modules.iter().enumerate() {
@@ -429,16 +774,29 @@ impl<'a> Gen<'a> {
         Gen {
             m,
             diagnostic: None,
+            step_out: None,
+            iter_done_arm: None,
             modules,
             mods: Vec::new(),
             path_index,
             exports: FxHashMap::default(),
             export_resolving: Default::default(),
+            prop_key_of: FxHashMap::default(),
             thrown,
+            step: StepSplits::default(),
+            runtime_error: rterr,
             cjs_registry,
             cjs_paths: Default::default(),
             cjs_unknown_path,
             read_sites: Vec::new(),
+            store_sites: Vec::new(),
+            folded_sites: Vec::new(),
+            member_ops: Vec::new(),
+            element_sites: Vec::new(),
+            element_values: Vec::new(),
+            field_reads: Vec::new(),
+            load_sites: Vec::new(),
+            direct_arr: None,
             export_class: FxHashMap::default(),
             export_fn: FxHashMap::default(),
             fn_contracts: Vec::new(),
@@ -449,7 +807,6 @@ impl<'a> Gen<'a> {
             field_prims: Default::default(),
             field_values: FxHashMap::default(),
             field_tas: FxHashMap::default(),
-            describing: Default::default(),
             ta_reported: Default::default(),
             stand_in_tas: Vec::new(),
             indexed_allocation_sites: FxHashMap::default(),
@@ -482,6 +839,27 @@ impl<'a> Gen<'a> {
             effect_srcs: Default::default(),
             effect_bad: Default::default(),
             binding_writes: FxHashMap::default(),
+            for_binding: None,
+            record_steps: Default::default(),
+            record_locals: Default::default(),
+            last_local_set: None,
+            narrow: Vec::new(),
+            def_collect: Vec::new(),
+            in_bounds: Default::default(),
+            narrow_scope: None,
+            narrow_consts: Default::default(),
+            call_args_at: Vec::new(),
+            call_results_at: Vec::new(),
+            call_kinds_at: Vec::new(),
+            fixed_spreads: None,
+            list_births: Vec::new(),
+            list_pushes: Vec::new(),
+            list_body: 0,
+            list_bodies: 0,
+            call_sites_at: Vec::new(),
+            str_lits: Default::default(),
+            for_of_walks: Default::default(),
+            initialized_consts: Default::default(),
             write_top: Default::default(),
             stand_in_fc: FxHashMap::default(),
             parent_values: Vec::new(),
@@ -497,16 +875,32 @@ impl<'a> Gen<'a> {
             view: None,
             stand_ins: FxHashMap::default(),
             ctor_phase: FxHashMap::default(),
+            m_override_leaks: crate::pts::FxHashSet::default(),
             fn_inst_of: FxHashMap::default(),
             field_init_fn: FxHashMap::default(),
             static_init_fn: FxHashMap::default(),
             prim_const,
+            num_lits: FxHashMap::default(),
             walked: Default::default(),
             pending_walk: Default::default(),
+            unwalked: Vec::new(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),
             dynimport_sabotage: false,
+            int_ranges: true,
+            arr_lengths: true,
+            new_array_site: None,
+            push_fill: Default::default(),
+            push_fill_new: None,
+            guard_ranges: true,
+            guard_presence: true,
+            name_folds: true,
+            leaving_writes: true,
+            zs_ok: false,
+            leaving_write_sabotage: false,
+            jumps: 0,
+            tries: 0,
             dynimport_seen: Default::default(),
             dynamic_only: Default::default(),
             roots: Vec::new(),
@@ -521,11 +915,23 @@ impl<'a> Gen<'a> {
             chunk_objects: Vec::new(),
             cell_locals: Default::default(),
             lit_births: FxHashMap::default(),
+            default_args: FxHashMap::default(),
             call_lit_arg: None,
+            pair_args: None,
+            expr_seq: 0,
+            own_reads: FxHashMap::default(),
+            own_store_reads: Default::default(),
+            own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
             for_in_key: Vec::new(),
+            for_in_reads: Vec::new(),
+            local_copies: FxHashMap::default(),
+            for_in_paths: FxHashMap::default(),
+            written: FxHashMap::default(),
+            same_key_reads: FxHashMap::default(),
             const_inits: FxHashMap::default(),
             unstable: FxHashMap::default(),
+            param_calls: FxHashMap::default(),
         }
     }
 
@@ -544,6 +950,7 @@ impl<'a> Gen<'a> {
             self.mods.push(ModInfo {
                 path: path.to_string(),
                 locals: FxHashMap::default(),
+                dead_zones: FxHashMap::default(),
                 globals: FxHashMap::default(),
                 funcs: FxHashMap::default(),
                 classes: FxHashMap::default(),
@@ -553,9 +960,17 @@ impl<'a> Gen<'a> {
                 site_counter: 0,
                 iterres: FxHashMap::default(),
                 iterout: FxHashMap::default(),
+                stepyield: FxHashMap::default(),
             });
             for f in self.functions_of(mi as usize) {
-                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false);
+                let kind = Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    self.modules[mi as usize].1,
+                    f,
+                ));
+                let fx = self.register_fn(mi, f.id, &f.name, &f.params, false, false, kind);
+                let suspends = f.is_async || f.is_generator || f.was_plain_async;
+                self.m.funcs[fx as usize].ret_param =
+                    ret_param::ret_param(&f.params, &f.body, suspends);
                 self.m.decls.insert(fx);
             }
             for c in self.classes_of(mi as usize) {
@@ -627,6 +1042,24 @@ impl<'a> Gen<'a> {
                     .resolved_path
                     .as_ref()
                     .and_then(|p| self.path_index.get(p).copied());
+                // A module outside the program that is no builtin is unseen
+                // code run at load: it may write any key of the global
+                // object (rule G reads an unresolved global as `native_written`
+                // then). It holds the global object as unknown code does, so
+                // every built-in is in its reach by name and a store into ⊤
+                // may write one (`global_in_top`, as for the global object
+                // given to unknown code). In per-unit mode a missing target
+                // is another unit.
+                if target.is_none()
+                    && !self.m.unit_mode
+                    && !crate::builtins::is_builtin_module(&imp.source)
+                {
+                    let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                    let what = format!("module {} runs unseen", imp.source);
+                    crate::builtins::note_native_write(&mut self.m, t, None, &what);
+                    self.m.unseen_module_runs = true;
+                    crate::builtins::note_global_in_top(&mut self.m);
+                }
                 for spec in &imp.specifiers {
                     let (local, node) = match (spec, target) {
                         (ImportSpecifier::Named { imported, local }, Some(t)) => {
@@ -684,245 +1117,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// After the solve: the other units' classes this unit used beyond their
-    /// contract (census reports, design §11.3), by template display. An
-    /// aborted unit reports every contract it consumed, but an open contract
-    /// function: an aborted unit is unknown code holding it, as for one that
-    /// escapes (`open_fn`).
-    ///
-    /// An aborted unit is unknown code holding everything its code names,
-    /// not only what its walk reached before the node bound stopped it: the
-    /// imports it names (its unit imports, the module imports among its
-    /// names) still unnamed are made first (their stand-ins, the layouts
-    /// their contracts reach, every key of a namespace), so each is
-    /// reported. A module import the unit never names is not its to hold.
-    pub(crate) fn reports(&mut self) -> Vec<String> {
-        if self.m.aborted {
-            let view = self.view;
-            let mut rest: Vec<(u32, String)> = self
-                .unnamed_imports
-                .iter()
-                .filter(|((_, local), (imp, _))| {
-                    view.is_none_or(|v| {
-                        v.ext_names.contains(local)
-                            || crate::decl_units::module_of(&imp.source) != imp.source
-                    })
-                })
-                .map(|(k, _)| k.clone())
-                .collect();
-            rest.sort_unstable();
-            for (mi, name) in rest {
-                self.import_value(mi, &name);
-            }
-        }
-        let mut out: Vec<String> = self
-            .stand_ins
-            .iter()
-            .filter(|(_, (_, tm, toks))| {
-                self.m.aborted
-                    || self.m.foreign_written.contains(tm)
-                    || self.m.adds_keys.get(tm).is_some_and(|&k| k > 0)
-                    || toks
-                        .iter()
-                        .any(|&t| self.m.is_escaped(t) || self.m.hard.contains_key(&t))
-            })
-            .map(|(d, _)| d.clone())
-            .collect();
-        // Explain: why this unit reports each contract it consumed.
-        if self.m.explain && !self.m.aborted {
-            let mut why: Vec<String> = Vec::new();
-            for (d, (_, tm, toks)) in &self.stand_ins {
-                if !out.contains(d) {
-                    continue;
-                }
-                let mut rs: Vec<String> = Vec::new();
-                if self.m.foreign_written.contains(tm) {
-                    rs.push("written".into());
-                }
-                if self.m.adds_keys.get(tm).is_some_and(|&k| k > 0) {
-                    rs.push("adds keys".into());
-                }
-                for &t in toks {
-                    if let Some(&r) = self.m.escaped.get(&t) {
-                        rs.push(format!("escaped: {}", self.m.reasons[r as usize]));
-                    }
-                    if let Some(&(_, r)) = self.m.hard.get(&t) {
-                        rs.push(format!("hard: {}", self.m.reasons[r as usize]));
-                    }
-                }
-                why.push(format!("{d}: {}", rs.join("; ")));
-            }
-            why.sort();
-            let unit = self.view.map_or("", |v| v.key.as_str());
-            for w in why {
-                eprintln!("perry: wpfacts explain: unit {unit} reports {w}");
-            }
-        }
-        for ((name, _), &(_, t)) in &self.stand_in_fns {
-            // An aborted unit is unknown code holding everything it names
-            // (ALI cause 4). It reports what no contract grants unknown code:
-            // the layouts and classes it holds (it may store into them,
-            // above) and a function it may call on a receiver of its own.
-            // A call with ⊤ arguments of a function whose receiver is
-            // unused is granted: an open function runs for any caller
-            // (`open_fn`), a closed one's argument contract is ⊤ for an
-            // aborted caller (the driver's `closed_refs`).
-            let escaped = match self.m.aborted {
-                true => !self.receiver_unused(t),
-                false => self.m.is_escaped(t) && !self.open_fn(t),
-            };
-            // DECISIONS 210: used as an object beyond the contract.
-            if escaped || self.m.hard.contains_key(&t) || self.m.fn_touched.contains(&t) {
-                out.push(format!("fn:{name}"));
-            }
-        }
-        // A value stored under a named key of it is one the owner does not
-        // see (an element store is the typed array's own data).
-        for (rep, t) in &self.stand_in_tas {
-            let written = self
-                .m
-                .tmpl_of(*t)
-                .is_none_or(|tm| crate::bindings::owner_metadata_written(&self.m, tm));
-            if self.m.aborted || written || self.m.is_escaped(*t) || self.m.hard.contains_key(t) {
-                if self.m.explain {
-                    let esc = self
-                        .m
-                        .escaped
-                        .get(t)
-                        .map(|&r| self.m.reasons[r as usize].clone());
-                    let hard = self
-                        .m
-                        .hard
-                        .get(t)
-                        .map(|&(_, r)| self.m.reasons[r as usize].clone());
-                    eprintln!(
-                        "perry: wpfacts explain: unit {} reports {rep}: written {written} escaped {esc:?} hard {hard:?}",
-                        self.view.map_or("", |v| v.key.as_str())
-                    );
-                }
-                out.push(rep.clone());
-            }
-        }
-        out.extend(self.override_reports());
-        // A class of another unit this unit gave as a class object's parent
-        // (`Object.setPrototypeOf(B, A)`, `B.__proto__ = A`): a `super()`
-        // runs its constructor on a receiver its unit does not see, as for
-        // a class whose `extends` names it (DECISIONS 57). Not a break: its
-        // unit publishes the constructor contract.
-        for (d, (_, tm, _)) in &self.stand_ins {
-            if self.m.relinked_parents.contains(tm) {
-                out.push(format!("extends {d}"));
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
-    }
-
-    /// A class of this unit with another unit's class `A` as an ancestor
-    /// and the keys it defines (on its prototype, as a birth key or a key
-    /// its instances hold; `*` with computed members or stores): `A`'s unit
-    /// reads `this.k` on its receivers through `A`'s chain only while no
-    /// unit reports `override k of <A>` (DECISIONS 59).
-    fn override_reports(&self) -> Vec<String> {
-        let m = &self.m;
-        let disp: FxHashMap<TmplId, &str> = self
-            .stand_ins
-            .iter()
-            .map(|(d, (_, tm, _))| (*tm, d.as_str()))
-            .collect();
-        if disp.is_empty() {
-            return Vec::new();
-        }
-        let open_node = |n: Option<&NodeId>| {
-            n.is_some_and(|&n| !m.nodes[n as usize].pts.is_empty() || m.nodes[n as usize].prim != 0)
-        };
-        // The keys `t` holds a value under (a load makes an empty field).
-        let held = |t: Tok| -> Vec<Atom> {
-            m.field_keys
-                .get(&t)
-                .into_iter()
-                .flatten()
-                .copied()
-                .filter(|&a| open_node(m.fields.get(&(t, a))))
-                .collect()
-        };
-        // Own keys of each class's instances.
-        let mut inst: FxHashMap<TmplId, (Vec<Atom>, bool)> = FxHashMap::default();
-        for (t, k) in m.toks.iter().enumerate() {
-            let TokKind::Obj(tm, _) = *k else { continue };
-            if !matches!(m.tmpls[tm as usize].kind, TmplKind::Class { .. }) {
-                continue;
-            }
-            let t = t as Tok;
-            let e = inst.entry(tm).or_default();
-            e.0.extend(held(t));
-            e.1 |= open_node(m.field_any.get(&t));
-        }
-        let mut out = Vec::new();
-        for (c, tp) in m.tmpls.iter().enumerate() {
-            let c = c as TmplId;
-            if !matches!(tp.kind, TmplKind::Class { .. })
-                || disp.contains_key(&c)
-                || m.foreign.contains_key(&c)
-            {
-                continue;
-            }
-            // Its other-unit ancestors, through this unit's parents.
-            let mut anc: Vec<TmplId> = Vec::new();
-            let mut work: Vec<TmplId> = tp
-                .parent
-                .into_iter()
-                .chain(tp.parent_links.iter().copied())
-                .collect();
-            let mut seen: Vec<TmplId> = Vec::new();
-            while let Some(p) = work.pop() {
-                if seen.contains(&p) {
-                    continue;
-                }
-                seen.push(p);
-                if disp.contains_key(&p) {
-                    anc.push(p);
-                    continue;
-                }
-                let pp = &m.tmpls[p as usize];
-                work.extend(pp.parent);
-                work.extend(pp.parent_links.iter().copied());
-            }
-            if anc.is_empty() {
-                continue;
-            }
-            let proto = m.tok_index.get(&TokKind::Proto(c)).copied();
-            let mut keys: Vec<Atom> = tp.proto_members.clone();
-            keys.extend(tp.birth_keys.iter().copied());
-            // DECISIONS 234: a key of its instances may disappear or be
-            // redefined (delete, defineProperty): no key of theirs is sure.
-            let mut open = tp.has_computed_members || m.keys_unsure.contains(&c);
-            if let Some(pt) = proto {
-                keys.extend(held(pt));
-                open |= open_node(m.field_any.get(&pt));
-            }
-            if let Some((ks, o)) = inst.get(&c) {
-                keys.extend(ks.iter().copied());
-                open |= *o;
-            }
-            keys.sort_unstable();
-            keys.dedup();
-            for a in anc {
-                if open {
-                    out.push(format!("override * of {}", disp[&a]));
-                }
-                for &k in &keys {
-                    let name = &m.atoms[k as usize];
-                    if name != "constructor" {
-                        out.push(format!("override {name} of {}", disp[&a]));
-                    }
-                }
-            }
-        }
-        out
-    }
-
     /// A stand-in of another unit's function that unknown code may hold
     /// (design §18.9, DECISIONS 67): an open contract function (no
     /// argument contract, decision 19) whose receiver is unused. Its
@@ -937,12 +1131,6 @@ impl<'a> Gen<'a> {
         self.stand_in_fc
             .get(&t)
             .is_some_and(|c| c.closed.is_none() && !c.callable && c.lexical_this)
-    }
-
-    /// A stand-in of another unit's function whose contract uses no
-    /// receiver.
-    fn receiver_unused(&self, t: Tok) -> bool {
-        self.stand_in_fc.get(&t).is_some_and(|c| c.lexical_this)
     }
 
     /// Resolve the typed parameters' entry-guard candidates (every class and
@@ -1032,6 +1220,7 @@ impl<'a> Gen<'a> {
         params: &[perry_hir::Param],
         lexical_this: bool,
         is_closure: bool,
+        proto: Option<perry_hir::fn_proto::FnProtoKind>,
     ) -> FnIdx {
         if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
             return f;
@@ -1043,6 +1232,12 @@ impl<'a> Gen<'a> {
             }
         }
         let fx = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            fx,
+            crate::summary::packet::Identity(self.modules[mi as usize].0.into(), id, String::new()),
+            params,
+        );
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         if is_closure {
             self.m.closures.insert(fx);
@@ -1050,6 +1245,9 @@ impl<'a> Gen<'a> {
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
+        // Predicate evidence is global: a bad closure context invalidates
+        // all callers, even when its body is summarized.
+        let own_test = self.m.node_l("own-test");
         // Parameters and the result belong to the new function's body.
         let outer_fn = std::mem::replace(&mut self.m.cur_fn, fx);
         self.m.own(ret);
@@ -1058,19 +1256,37 @@ impl<'a> Gen<'a> {
         let mut ps = Vec::new();
         let mut rest = None;
         let mut mapped = None;
-        for p in params {
+        let mut arguments = None;
+        // DEADFN15 C3 (c): `this` and the parameters but the rest one.
+        self.m.rest_front_watch(this, fx);
+        for (pi, p) in params.iter().enumerate() {
             let n = self.local(mi, p.id);
-            if p.is_rest {
+            if self.m.prov.is_some() {
+                self.m.why_param(n, name, &p.name, pi);
+            }
+            if !p.is_rest {
+                self.m.rest_front_watch(n, fx);
+            }
+            // `arguments` beside a user rest parameter is no rest itself
+            // (the HIR appends it after `...r`), but the same object: every
+            // argument, never a positional one.
+            if p.is_rest || p.arguments_object.is_some() {
                 // The rest local holds a fresh array whose elements are the
                 // extra arguments (and, for `arguments`, every argument).
                 let arr = match &p.arguments_object {
                     Some(_) => self.new_args_template(mi),
-                    None => self.new_arr_template(mi, "rest"),
+                    None => {
+                        let t = self.new_arr_template(mi, "rest");
+                        self.m.rest_param_tmpls.insert(t);
+                        self.m.rest_owner.insert(t, self.m.cur_fn);
+                        t
+                    }
                 };
                 let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
                 self.m.add_tok(n, at);
                 let fa = self.m.field_any(at);
                 if let Some(ao) = &p.arguments_object {
+                    arguments = Some((n, ao.strict));
                     self.m.edge(args_all, fa);
                     // Its own `length` is the argument count until code
                     // stores another value; sloppy `callee` is the function
@@ -1091,7 +1307,9 @@ impl<'a> Gen<'a> {
                         mapped = Some((fa, self.m.all_fields(at)));
                     }
                 }
-                rest = Some(n);
+                if p.is_rest {
+                    rest = Some(n);
+                }
             } else if rest.is_some() && params.iter().all(|q| q.arguments_object.is_none()) {
                 // A parameter after a rest parameter is a capture slot the
                 // HIR appends to a class constructor (`...a, cap`): the rest
@@ -1105,7 +1323,17 @@ impl<'a> Gen<'a> {
                 ) {
                     self.param_ty.push((n, mi, p.ty.clone()));
                 }
-                ps.push(n);
+                if p.default.is_some() {
+                    // A defaulted parameter: the calls pass to its own
+                    // argument node; the local is that value without
+                    // `undefined`, plus the default (`params_inner`).
+                    let a = self.m.node_named("arg", || format!("arg({name})"));
+                    self.m.own(a);
+                    self.default_args.insert((mi, p.id), a);
+                    ps.push(a);
+                } else {
+                    ps.push(n);
+                }
             }
         }
         self.m.cur_fn = outer_fn;
@@ -1122,8 +1350,11 @@ impl<'a> Gen<'a> {
             }
         }
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: id,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: ps,
             rest,
@@ -1131,28 +1362,37 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: params.iter().any(|p| p.arguments_object.is_some()),
+            arguments,
+            own_test: OwnTestBody::Pending(own_test),
             token: tok,
             ctor_of: None,
             lexical_this,
             no_summary: false,
-            gen_step: false,
+            foreign_params: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
+            proto,
             captures: Vec::new(),
             forwards_super: false,
             parent: if is_closure { outer_fn } else { NO_FN },
             forwarded: false,
+            ret_param: None,
         });
+        #[cfg(test)]
+        self.m.packet_end(packet_prior, false);
         self.mods[mi as usize].funcs.insert(id, fx);
         fx
     }
 
     fn register_class(&mut self, mi: u32, c: &Class) {
+        let module = self.modules[mi as usize].1;
         let tm = self.m.tmpls.len() as TmplId;
         let display = format!("{}:{}", self.mods[mi as usize].path_short(), c.name);
         let mut accessor_keys = Vec::new();
         for (n, _) in c.getters.iter().chain(c.setters.iter()) {
-            let a = self.m.atom(n);
+            let a = self.accessor_atom(mi, c, n);
             if !accessor_keys.contains(&a) {
                 accessor_keys.push(a);
             }
@@ -1165,11 +1405,33 @@ impl<'a> Gen<'a> {
         for &(a, _) in named.iter().flatten() {
             push_unique(&mut accessor_keys, a);
         }
+        // A method under a computed key that names one property key
+        // (`*[Symbol.iterator]()`, `["k"]()`) is defined under exactly that
+        // key (ECMA-262 15.4.4 MethodDefinitionEvaluation, 10.2.8
+        // DefineMethodProperty): it is a named method, as `k()` is.
+        let method_named: Vec<Option<Atom>> = c
+            .computed_members
+            .iter()
+            .map(|cm| {
+                if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
+                    return None;
+                }
+                match self.read_key(mi, &cm.key_expr) {
+                    Key::Named(a) => Some(a),
+                    Key::Any(_) => None,
+                }
+            })
+            .collect();
         let proto_members = {
             let mut v = accessor_keys.clone();
             for meth in &c.methods {
                 let a = self.m.atom(&meth.name);
                 push_unique(&mut v, a);
+            }
+            for (cm, a) in c.computed_members.iter().zip(&method_named) {
+                if let (false, Some(a)) = (cm.is_static, a) {
+                    push_unique(&mut v, *a);
+                }
             }
             // A literal has no own `constructor`: it reads
             // `Object.prototype`'s, which a store into ⊤ may replace.
@@ -1207,18 +1469,26 @@ impl<'a> Gen<'a> {
             definite: literal_keys,
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: c.native_extends.clone(),
             accessor_keys: accessor_keys.clone(),
-            has_computed_members: named.iter().any(|n| n.is_none()),
+            has_computed_members: named
+                .iter()
+                .zip(&method_named)
+                .any(|(n, m)| n.is_none() && m.is_none()),
             field_init: None,
             proto_members,
             parent_value: None,
             parent_links: Vec::new(),
             null_proto: c.declared_keys_null_proto(),
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         self.mods[mi as usize].classes.insert(c.name.clone(), tm);
         for a in &c.aliases {
@@ -1229,20 +1499,29 @@ impl<'a> Gen<'a> {
         }
         // Functions of the class.
         if let Some(ctor) = &c.constructor {
-            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false);
+            let f = self.register_fn(mi, ctor.id, &ctor.name, &ctor.params, false, false, None);
             self.m.funcs[f as usize].ctor_of = Some(tm);
             self.m.funcs[f as usize].forwards_super = forwards_super(ctor);
             self.m.tmpls[tm as usize].ctor = Some(f);
-            // Its hidden capture parameters (DECISIONS 117): slot `i` of the
-            // class environment, in the order the HIR appends them.
+            // Only an environment-publishing constructor takes its hidden
+            // arguments from that environment. Instance captures forward the
+            // actual argument, which their ClassCaptureValue rebind prefers
+            // over the declaration snapshot (including an unseeded snapshot).
+            let publishes_environment = ctor.body.iter().any(|s| {
+                matches!(s, perry_hir::Stmt::Expr(perry_hir::Expr::ClassEnvSet {
+                    class_name, publish: true, ..
+                }) if class_name == &c.name)
+            });
             let caps = ctor
                 .params
                 .iter()
                 .rev()
-                .take_while(|p| p.name.starts_with(perry_hir::cap_fields::CAP_FIELD_PREFIX))
+                .take_while(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
                 .count();
-            self.m.funcs[f as usize].captures =
-                (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            if publishes_environment {
+                self.m.funcs[f as usize].captures =
+                    (0..caps).map(|i| self.class_env(mi, &c.name, i)).collect();
+            }
         }
         let proto = self.m.tok(TokKind::Proto(tm));
         let cobj = self.m.tok(TokKind::ClassObj(tm));
@@ -1251,10 +1530,10 @@ impl<'a> Gen<'a> {
         // (decision 17).
         if !c.is_literal_shape() {
             let pa = self.m.atom("prototype");
-            let pf = self.m.field(cobj, pa);
+            let pf = self.m.field_r(cobj, pa);
             self.m.add_tok(pf, proto);
             let ca = self.m.atom("constructor");
-            let cf = self.m.field(proto, ca);
+            let cf = self.m.field_r(proto, ca);
             self.m.add_tok(cf, cobj);
         }
         // DECISIONS 108: a function's name is its identity: contracts are
@@ -1263,10 +1542,18 @@ impl<'a> Gen<'a> {
         // `Set::contains` and `IdentitySet::contains` are two functions.
         for meth in &c.methods {
             let name = format!("{}::{}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(proto, a);
+                let n = self.m.field_r(proto, a);
                 self.m.add_tok(n, t);
             }
             let this = self.m.funcs[f as usize].this;
@@ -1274,36 +1561,75 @@ impl<'a> Gen<'a> {
         }
         for meth in &c.static_methods {
             let name = format!("{}::static {}", c.name, meth.name);
-            let f = self.register_fn(mi, meth.id, &name, &meth.params, false, false);
+            let f = self.register_fn(
+                mi,
+                meth.id,
+                &name,
+                &meth.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
+            );
             let t = self.m.funcs[f as usize].token;
             for a in self.method_keys(&meth.name) {
-                let n = self.m.field(cobj, a);
+                let n = self.m.field_r(cobj, a);
                 self.m.add_tok(n, t);
+                self.m.tmpls[tm as usize].static_methods.push(a);
             }
         }
         for (name, g) in &c.getters {
             let fname = format!("{}::get {name}", c.name);
-            let f = self.register_fn(mi, g.id, &fname, &g.params, false, false);
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
-            let a = self.m.atom(name);
+            let f = self.register_fn(
+                mi,
+                g.id,
+                &fname,
+                &g.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, g)),
+            );
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(g) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
+            let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().0.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().0.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
         for (name, s) in &c.setters {
             let fname = format!("{}::set {name}", c.name);
-            let f = self.register_fn(mi, s.id, &fname, &s.params, false, false);
-            let this = self.m.funcs[f as usize].this;
-            self.m.this_class.insert(this, tm);
-            let a = self.m.atom(name);
+            let f = self.register_fn(
+                mi,
+                s.id,
+                &fname,
+                &s.params,
+                false,
+                false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(module, s)),
+            );
+            // A static accessor is an own property of the class object;
+            // its `this` is whatever reads it (a subclass, `Object.create`).
+            let holder = if c.is_static_accessor(s) {
+                cobj
+            } else {
+                let this = self.m.funcs[f as usize].this;
+                self.m.this_class.insert(this, tm);
+                proto
+            };
+            let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.accessors.entry((proto, a)).or_default().1.push(ft);
-            push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+            self.m.accessors.entry((holder, a)).or_default().1.push(ft);
+            push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
-        for (cm, named) in c.computed_members.iter().zip(named) {
+        for ((cm, named), method_key) in c.computed_members.iter().zip(named).zip(method_named) {
             let f = self.register_fn(
                 mi,
                 cm.function.id,
@@ -1311,21 +1637,42 @@ impl<'a> Gen<'a> {
                 &cm.function.params,
                 false,
                 false,
+                Some(perry_hir::fn_proto::FnProtoKind::of_function(
+                    module,
+                    &cm.function,
+                )),
             );
             if let Some((a, setter)) = named {
-                // Under a constant key: that key's accessor.
-                let this = self.m.funcs[f as usize].this;
-                self.m.this_class.insert(this, tm);
+                // Under a constant key: that key's accessor, on the class
+                // object when it is static.
+                let holder = if cm.is_static {
+                    cobj
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                    proto
+                };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
-                let e = self.m.accessors.entry((proto, a)).or_default();
+                let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
-                push_unique(self.m.accessor_keys.entry(proto).or_default(), a);
+                push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
                 continue;
             }
             let holder = if cm.is_static { cobj } else { proto };
-            let any = self.m.field_any(holder);
             let t = self.m.funcs[f as usize].token;
+            if let Some(a) = method_key {
+                let n = self.m.field_r(holder, a);
+                self.m.add_tok(n, t);
+                if cm.is_static {
+                    self.m.tmpls[tm as usize].static_methods.push(a);
+                } else {
+                    let this = self.m.funcs[f as usize].this;
+                    self.m.this_class.insert(this, tm);
+                }
+                continue;
+            }
+            let any = self.m.field_any(holder);
             self.m.add_tok(any, t);
             // A computed accessor may be named after any key.
             if !matches!(cm.kind, perry_hir::ClassComputedMemberKind::Method) {
@@ -1339,6 +1686,16 @@ impl<'a> Gen<'a> {
                 let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
                 self.m.add_tok(this, inst);
                 self.m.funcs[f as usize].no_summary = true;
+                self.m.funcs[f as usize].foreign_params = true;
+                #[cfg(test)]
+                if self.m.packets_enabled {
+                    std::rc::Rc::make_mut(&mut self.m.funcs[f as usize].body_packet)
+                        .header
+                        .shared
+                        .push(crate::summary::packet::SharedEntry::ComputedAccessor {
+                            class: self.m.tmpls[tm as usize].display.clone(),
+                        });
+                }
                 let fa = self.m.field_any(proto);
                 let ret = self.m.funcs[f as usize].ret;
                 self.m.edge(ret, fa);
@@ -1356,13 +1713,26 @@ impl<'a> Gen<'a> {
 
     pub(crate) fn synthetic_fn(&mut self, mi: u32, name: &str) -> FnIdx {
         let fx = self.m.funcs.len() as FnIdx;
+        #[cfg(test)]
+        let packet_prior = self.m.packet_header(
+            fx,
+            crate::summary::packet::Identity(
+                self.modules[mi as usize].0.into(),
+                u32::MAX,
+                name.into(),
+            ),
+            &[],
+        );
         let tok = self.m.tok(TokKind::Func(fx, NO_CTX));
         let this = self.m.node_named("this", || format!("this({name})"));
         let ret = self.m.node_named("ret", || format!("ret({name})"));
         let args_all = self.m.node_named("args", || format!("args({name})"));
         self.m.funcs.push(FuncInfo {
+            #[cfg(test)]
+            body_packet: Default::default(),
             module: mi,
             func_id: u32::MAX,
+            raise: u32::MAX,
             name: format!("{}:{}", self.mods[mi as usize].path_short(), name),
             params: vec![],
             rest: None,
@@ -1370,18 +1740,26 @@ impl<'a> Gen<'a> {
             ret,
             args_all,
             has_arguments: false,
+            arguments: None,
+            own_test: OwnTestBody::Unknown,
             token: tok,
             ctor_of: None,
             lexical_this: false,
             no_summary: false,
-            gen_step: false,
+            foreign_params: false,
+            gen_proto: None,
+            gen_fn_protos: None,
             gen_async: false,
             gen_reyields: false,
+            proto: None,
             captures: Vec::new(),
             forwards_super: false,
             parent: NO_FN,
             forwarded: false,
+            ret_param: None,
         });
+        #[cfg(test)]
+        self.m.packet_end(packet_prior, false);
         fx
     }
 
@@ -1395,18 +1773,34 @@ impl<'a> Gen<'a> {
             self.m.constructor_origins.insert(tm, origin);
             self.m.rel(|| format!("ctororigin {tm} {origin}"));
         }
-        let parent = c
-            .extends_name
-            .as_ref()
-            .and_then(|n| self.resolve_class_name(mi, n));
-        let builtin_parent = c
-            .extends_name
-            .as_deref()
-            .filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
+        // The name a member heritage carries (`extends O.Base`, `O["Base"]`)
+        // is its property key, which names no binding: the parent is the
+        // value the heritage evaluated to, whatever class elsewhere carries
+        // that name (§17.2). A global name (`extends Error`) is a read of
+        // the global object (`GlobalGet(0)`), a binding.
+        let member = match c.extends_expr.as_deref() {
+            Some(perry_hir::Expr::PropertyGet { object, .. }) => {
+                !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(0))
+            }
+            Some(perry_hir::Expr::IndexGet { .. } | perry_hir::Expr::StaticFieldGet { .. }) => true,
+            _ => false,
+        };
+        let binding = c.extends_name.as_deref().filter(|_| !member);
+        let parent = binding.and_then(|n| self.resolve_class_name(mi, n));
+        let builtin_parent =
+            binding.filter(|n| parent.is_none() && crate::builtins::native_parent_summarized(n));
         if let Some(p) = parent {
             self.m.tmpls[tm as usize].parent = Some(p);
         } else if let Some(n) = builtin_parent {
-            self.m.tmpls[tm as usize].native_parent = Some(("builtin".into(), n.to_string()));
+            // The binding's module when HIR resolved it to an import of a
+            // node module (`import { EventEmitter } from "events"`), else
+            // the global object's built-in.
+            let module = c
+                .native_extends
+                .as_ref()
+                .filter(|(_, name)| name == n)
+                .map_or("builtin", |(m, _)| m.as_str());
+            self.m.tmpls[tm as usize].native_parent = Some((module.into(), n.to_string()));
         } else if c.extends_name.as_deref() == Some("Object") && c.extends_expr.is_none() {
             // `extends Object`: the ordinary chain.
         } else if c.extends_expr.is_some()
@@ -1422,7 +1816,8 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            self.parent_values.push((mi, tm, c.extends_name.clone()));
+            self.parent_values
+                .push((mi, tm, binding.map(str::to_string)));
         }
     }
 
@@ -1456,6 +1851,7 @@ impl<'a> Gen<'a> {
     /// no parent value (its `extends` resolved statically, or none) cannot
     /// take one: its instances escape and `v` is sunk, as before.
     pub(crate) fn feed_parent(&mut self, v: NodeId, tm: Option<TmplId>, why: &str) {
+        let native = tm.and_then(|tm| crate::builtins::native_parent_value(&mut self.m, tm));
         match tm.and_then(|tm| Some((tm, self.m.tmpls[tm as usize].parent_value?))) {
             Some((tm, (pv, _))) => {
                 self.m.edge(v, pv);
@@ -1470,6 +1866,40 @@ impl<'a> Gen<'a> {
                 let chk = self.m.node_l("parent-check");
                 self.m.edge(v, chk);
                 self.m.parent_checks.push((tm, chk));
+            }
+            // A class linked by name to a built-in parent (`extends Error`):
+            // `super()` runs the evaluated `extends` value with `this` = the
+            // instance. The native summary (`native_parent_ctor`) is that run
+            // only when the value is the constructor the global object
+            // declares under the name; whether it is depends on what the
+            // solve finds (a program or an unseen module may write the
+            // global, rule G), and anything else runs before the solve ends,
+            // so the value is checked during the solve (`Cons::NativeParent`).
+            None if native.is_some() => {
+                let tm = tm.unwrap();
+                // The evaluated value is a built-in constructor, no class:
+                // no static construction through a parent is published
+                // (`super_unrelinked`); `super()` follows the live edge,
+                // which is where the native run happens.
+                self.m.parent_unsettled.insert(tm);
+                let chk = self.m.node_l("native-parent-check");
+                self.m.edge(v, chk);
+                // The class object's [[Prototype]] is the evaluated `extends`
+                // value (ClassDefinitionEvaluation), as for any parent value:
+                // a static read or call on the class (`X.g()`) reaches what
+                // the program stored on that constructor.
+                let c = self.m.tok(TokKind::ClassObj(tm));
+                let cp = self.m.proto_node(c);
+                self.m.edge(v, cp);
+                let reason = self.m.reason(why);
+                self.m.cons(
+                    chk,
+                    Cons::NativeParent {
+                        tm,
+                        expected: native.unwrap(),
+                        reason,
+                    },
+                );
             }
             None => {
                 self.to_sink(v, why);
@@ -1526,10 +1956,21 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// The storage key of private field `name` (`#x`) declared by class `c`
-    /// of module `mi`: the class its private elements belong to, the one it
-    /// was specialized from (codegen `element_class_id_in`), names it.
-    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+    /// The key accessor `name` of class `c` is held under: a private one
+    /// (`get #x()`) under the dispatch key its guarded access reads
+    /// (`Expr::PrivateGuard` keeps the `perry_hir::private_names` key), named
+    /// by the class it was specialized from, as its fields are.
+    fn accessor_atom(&mut self, mi: u32, c: &Class, name: &str) -> Atom {
+        if !name.starts_with('#') {
+            return self.m.atom(name);
+        }
+        let k = perry_hir::private_names::private_member_key(self.private_class_id(mi, c), name);
+        self.m.atom(&k)
+    }
+
+    /// The class whose private elements class `c` of module `mi` carries:
+    /// the one it was specialized from (codegen `element_class_id_in`).
+    fn private_class_id(&self, mi: u32, c: &Class) -> u32 {
         let module = self.modules[mi as usize].1;
         let mut cur = c;
         for _ in 0..module.classes.len() {
@@ -1542,7 +1983,14 @@ impl<'a> Gen<'a> {
                 None => break,
             }
         }
-        perry_hir::private_names::private_value_key(cur.id, name)
+        cur.id
+    }
+
+    /// The storage key of private field `name` (`#x`) declared by class `c`
+    /// of module `mi`: the class its private elements belong to, the one it
+    /// was specialized from (codegen `element_class_id_in`), names it.
+    pub(crate) fn private_field_key(&self, mi: u32, c: &Class, name: &str) -> String {
+        perry_hir::private_names::private_value_key(self.private_class_id(mi, c), name)
     }
 
     /// The key of static field `field_name` of class `class_name`: a `#x`
@@ -1589,6 +2037,39 @@ impl<'a> Gen<'a> {
         found
     }
 
+    /// What a local's cell holds before its declaration runs: the TDZ seed
+    /// (`Stmt::PreallocateTdzBoxes`) writes `undefined` here, not into the
+    /// local. The seed is not a value of the binding: a program read that
+    /// finds it throws a ReferenceError (`js_box_get_bits`), so only
+    /// initialized values flow out of a read. Only the compiler's own
+    /// capture snapshots read a cell in its dead zone without throwing
+    /// (`js_tdz_suppress_begin`): they take `undefined` (`snapshot_read`).
+    pub(crate) fn dead_zone(&mut self, mi: u32, id: u32) -> NodeId {
+        if let Some(&n) = self.mods[mi as usize].dead_zones.get(&id) {
+            return n;
+        }
+        let n = self
+            .m
+            .node_named("dead zone", || format!("dead_zone({mi},{id})"));
+        self.mods[mi as usize].dead_zones.insert(id, n);
+        n
+    }
+
+    /// A class capture snapshot's read of `e` (codegen brackets it in a
+    /// TDZ-suppression window): what the read sees, and when `e` reads a
+    /// local, the `undefined` its cell holds in the dead zone.
+    pub(crate) fn snapshot_read(&mut self, fx: &Fx, e: &perry_hir::Expr) -> NodeId {
+        let v = self.expr(fx, e);
+        let perry_hir::Expr::LocalGet(id) = e else {
+            return v;
+        };
+        let z = self.dead_zone(fx.module, *id);
+        let out = self.tmp("capture snapshot");
+        self.m.edge(v, out);
+        self.m.edge(z, out);
+        out
+    }
+
     pub(crate) fn local(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(n) = self.for_in_key_param(mi, id) {
             return n;
@@ -1597,10 +2078,14 @@ impl<'a> Gen<'a> {
             return self.extern_value(mi, name);
         }
         if let Some(&n) = self.mods[mi as usize].locals.get(&id) {
+            #[cfg(test)]
+            self.m.packet_cell(n, id);
             if self.m.node_fn[n as usize] != self.m.cur_fn {
                 if self.m.cur_fn != NO_FN {
                     let f = self.m.cur_fn;
                     self.m.captures.insert((n, f));
+                    // DEADFN15 C3 (a): a captured variable is shared.
+                    self.m.rest_front_watch(n, NO_FN);
                 }
             }
             return n;
@@ -1608,6 +2093,8 @@ impl<'a> Gen<'a> {
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
         self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
+        #[cfg(test)]
+        self.m.packet_cell(n, id);
         n
     }
 
@@ -1670,27 +2157,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// The other units' bindings this unit writes (`local_write`), each by
-    /// its HIR id with its key: its unit's path and its name there.
-    pub(crate) fn written_keys(&self) -> Vec<(u32, (String, String))> {
-        let Some(v) = self.view else {
-            return Vec::new();
-        };
-        v.written
-            .iter()
-            .filter_map(|(id, local)| {
-                v.imports.iter().find_map(|imp| {
-                    imp.specifiers.iter().find_map(|s| match s {
-                        ImportSpecifier::Named { imported, local: l } if l == local => {
-                            Some((*id, (imp.source.clone(), imported.clone())))
-                        }
-                        _ => None,
-                    })
-                })
-            })
-            .collect()
-    }
-
     pub(crate) fn global(&mut self, mi: u32, id: u32) -> NodeId {
         if let Some(name) = self.view.and_then(|v| v.foreign_globals.get(&id)) {
             return self.extern_value(mi, name);
@@ -1704,8 +2170,27 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn new_arr_template(&mut self, mi: u32, what: &str) -> TmplId {
+        self.new_arr_birth(mi, what, false, false)
+    }
+
+    /// An array born with every index below its length (`TmplKind::Arr`
+    /// `hole_free`) or not. `plain`: a program literal or spread literal
+    /// (`TmplKind::Arr::plain`), set only with `Model::array_reps` on.
+    pub(crate) fn new_arr_birth(
+        &mut self,
+        mi: u32,
+        what: &str,
+        hole_free: bool,
+        plain: bool,
+    ) -> TmplId {
         let site = self.next_site(mi);
-        self.new_indexed_template(mi, TmplKind::Arr { module: mi, site }, what, site)
+        let kind = TmplKind::Arr {
+            module: mi,
+            site,
+            hole_free,
+            plain: plain && self.m.array_reps,
+        };
+        self.new_indexed_template(mi, kind, what, site)
     }
 
     /// A function's `arguments` object: not an Array (`TmplKind::Args`).
@@ -1730,6 +2215,8 @@ impl<'a> Gen<'a> {
             definite: vec![],
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1741,13 +2228,25 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }
 
     /// A generation-time birth template belongs to the body making it.
     pub(crate) fn note_birth_fn(&mut self, tm: TmplId) {
+        #[cfg(test)]
+        if let Some(b) = &mut self.m.packet_scope {
+            b.packet.births.push(crate::summary::packet::Birth {
+                template: tm,
+                module: String::new(),
+                kind: None,
+                keys: Vec::new(),
+            });
+        }
         if self.m.cur_fn != NO_FN {
             let f = self.m.cur_fn;
             self.m.tmpl_fn.insert(tm, f);
@@ -1769,6 +2268,8 @@ impl<'a> Gen<'a> {
             definite: vec![],
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1780,7 +2281,10 @@ impl<'a> Gen<'a> {
             parent_links: Vec::new(),
             null_proto: false,
             chain_miss: false,
+            chain_miss_open: false,
             species: None,
+            per_evaluation: false,
+            static_methods: Vec::new(),
         });
         tm
     }

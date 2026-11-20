@@ -61,6 +61,7 @@ fn class(id: u32, name: &str, extends: Option<u32>, extends_name: Option<&str>) 
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -341,6 +342,7 @@ fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
         .expect("public closure entry");
     let entry = public.split("typed_closure_public.fast").next().unwrap();
     assert_eq!(entry.matches("fcmp ord double").count(), 2, "{public}");
-    assert!(public.contains("typed_closure_public.int32"), "{public}");
+    assert!(public.contains("typed_closure_public.nan"), "{public}");
+    assert!(!public.contains("int32_convert"), "{public}");
     assert!(public.contains("$generic"), "{public}");
 }

@@ -115,7 +115,8 @@ unsafe extern "C" fn dispose(handle: *mut std::ffi::c_void, cleanup: u64, out: *
     engine.disposed += 1;
     *out = Buffer::default();
     if engine.cleanup_error {
-        (*(cleanup as usize as *const callback::Frame<'_>)).capture(99.0);
+        (*(cleanup as usize as *const callback::Frame<'_>))
+            .capture(crate::exception::test_caught(99.0));
         RELEASED_ERROR
     } else {
         OK
@@ -363,7 +364,7 @@ extern "C-unwind" fn throwing_hook(
     _: f64,
 ) -> f64 {
     crate::gc::gc_collect_minor();
-    crate::exception::js_throw(77.0)
+    crate::exception::test_throw(77.0)
 }
 
 #[test]

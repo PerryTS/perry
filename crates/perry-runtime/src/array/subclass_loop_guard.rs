@@ -41,7 +41,7 @@ fn elements_loop_source(
     }
     let elements_header =
         unsafe { crate::value::addr_class::try_read_gc_header(elements as usize) }?;
-    (elements_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    (crate::gc_type_is_array!(elements_header.obj_type)
         && elements_header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0)
         .then_some((elements, elements_header))
 }
@@ -130,13 +130,13 @@ fn packed_arraylike_loop_guard(
     // side exit. Moving GC normally rewrites closure slots, but accepting the
     // same representation here also makes forced-evacuation entry fail-safe.
     let raw = if source_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        if source_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(source_header.obj_type) {
             return None;
         }
         let target = unsafe { crate::gc::forwarding_address(source_header) };
         let target_header =
             unsafe { crate::value::addr_class::try_read_gc_header(target as usize) }?;
-        if target_header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(target_header.obj_type)
             || target_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -165,7 +165,7 @@ fn packed_arraylike_loop_guard(
         );
     }
 
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(header.obj_type) {
         if unsafe {
             super::super::array_has_element_descriptors_resolved(raw as *const ArrayHeader)
         } || super::super::array_index_fast_path_invalid_for(header._reserved)
@@ -406,7 +406,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     let (source, source_header) =
         elements_loop_source(source, source_header).unwrap_or((source, source_header));
     let raw = if source_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
-        if source_header.obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!(source_header.obj_type) {
             return 0;
         }
         let target = unsafe { crate::gc::forwarding_address(source_header) };
@@ -415,7 +415,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
         else {
             return 0;
         };
-        if target_header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(target_header.obj_type)
             || target_header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return 0;
@@ -451,7 +451,7 @@ pub extern "C" fn js_packed_arraylike_loop_revalidate_live(
     }
 
     if kind == 1 {
-        if header.obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!(header.obj_type)
             || super::super::array_has_element_descriptors(raw as *const crate::array::ArrayHeader)
             || super::super::array_index_fast_path_invalid_for(header._reserved)
         {

@@ -1,0 +1,1 @@
+- Implement canonical Event-derived `MessageEvent` construction and worker/channel delivery, including port validation, iterable conversion, legacy initialization, and throw-safe dispatch state cleanup.

@@ -8,33 +8,14 @@ enum LocalWrite {
     NonPointer,
 }
 
-thread_local! {
-    /// #6219 perf: cache each closure body's collected local-writes, keyed by
-    /// the body slice's identity `(ptr, len)`, so a closure subtree is walked
-    /// ONCE total instead of once per enclosing frame. Writes are keyed by
-    /// GLOBAL local id, so the same cached set is correct for every ancestor
-    /// frame AND the closure's own frame — the collection is compositional.
-    ///
-    /// Without this, emitting a shadow frame per closure/method (#6219) made
-    /// each frame's `collect_pointer_typed_locals` re-descend the full nested
-    /// closure subtree, so a body nested `D` deep was walked `O(D)` times —
-    /// `O(nesting²)` overall, which never finished on deeply-nested bundles
-    /// (the Next.js standalone server, thousands of closures 5–10 deep).
-    ///
-    /// Safe because within a single `perry compile` the HIR is alive for the
-    /// whole (parallel) codegen — no body is freed, so no `(ptr, len)` is ever
-    /// reused for a different body; and each closure body is reachable from
-    /// exactly one enclosing tree, so its writes don't depend on the caller.
-    static CLOSURE_WRITES_MEMO: std::cell::RefCell<
-        HashMap<(usize, usize), std::rc::Rc<HashMap<u32, Vec<LocalWrite>>>>,
-    > = std::cell::RefCell::new(HashMap::new());
-}
+mod closure_writes;
+pub(crate) use closure_writes::ClosureWrites;
 
 const MAX_POINTER_ANALYSIS_TYPE_DEPTH: usize = 4;
 
 /// Class name for a `TYPED_ARRAY_KIND_*` tag (reverse of
 /// `perry_hir::typed_array_kind_for_name`).
-fn typed_array_class_name_for_kind(kind: u8) -> Option<&'static str> {
+pub(crate) fn typed_array_class_name_for_kind(kind: u8) -> Option<&'static str> {
     const NAMES: &[&str] = &[
         "Int8Array",
         "Uint8Array",
@@ -199,6 +180,15 @@ pub fn collect_pointer_typed_locals(
     stmts: &[perry_hir::Stmt],
     flat_const_ids: &HashSet<u32>,
 ) -> std::collections::HashMap<u32, u32> {
+    ClosureWrites::default().pointer_locals(params, stmts, flat_const_ids)
+}
+
+fn pointer_locals(
+    memo: &ClosureWrites,
+    params: &[perry_hir::Param],
+    stmts: &[perry_hir::Stmt],
+    flat_const_ids: &HashSet<u32>,
+) -> HashMap<u32, u32> {
     use perry_hir::Stmt;
     fn expr_value_type(
         expr: &Expr,
@@ -493,226 +483,8 @@ pub fn collect_pointer_typed_locals(
         }
     }
 
-    fn collect_expr_writes_in_closure_stmts(
-        stmts: &[Stmt],
-        writes: &mut HashMap<u32, Vec<LocalWrite>>,
-    ) {
-        for stmt in stmts {
-            match stmt {
-                Stmt::Let { init, .. } => {
-                    if let Some(init) = init {
-                        collect_expr_writes(init, writes);
-                    }
-                }
-                Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-                    collect_expr_writes(expr, writes);
-                }
-                Stmt::Return(None)
-                | Stmt::Break
-                | Stmt::Continue
-                | Stmt::LabeledBreak(_)
-                | Stmt::LabeledContinue(_)
-                | Stmt::PreallocateBoxes(_)
-                | Stmt::PreallocateTdzBoxes(_)
-                | Stmt::ReleaseBoxes(_) => {}
-                Stmt::If {
-                    condition,
-                    then_branch,
-                    else_branch,
-                } => {
-                    collect_expr_writes(condition, writes);
-                    collect_expr_writes_in_closure_stmts(then_branch, writes);
-                    if let Some(else_branch) = else_branch {
-                        collect_expr_writes_in_closure_stmts(else_branch, writes);
-                    }
-                }
-                Stmt::While { condition, body } => {
-                    collect_expr_writes(condition, writes);
-                    collect_expr_writes_in_closure_stmts(body, writes);
-                }
-                Stmt::DoWhile { body, condition } => {
-                    collect_expr_writes_in_closure_stmts(body, writes);
-                    collect_expr_writes(condition, writes);
-                }
-                Stmt::For {
-                    init,
-                    condition,
-                    update,
-                    body,
-                } => {
-                    if let Some(init) = init {
-                        collect_expr_writes_in_closure_stmts(
-                            std::slice::from_ref(init.as_ref()),
-                            writes,
-                        );
-                    }
-                    if let Some(condition) = condition {
-                        collect_expr_writes(condition, writes);
-                    }
-                    if let Some(update) = update {
-                        collect_expr_writes(update, writes);
-                    }
-                    collect_expr_writes_in_closure_stmts(body, writes);
-                }
-                Stmt::Labeled { body, .. } => {
-                    collect_expr_writes_in_closure_stmts(
-                        std::slice::from_ref(body.as_ref()),
-                        writes,
-                    );
-                }
-                Stmt::Try {
-                    body,
-                    catch,
-                    finally,
-                } => {
-                    collect_expr_writes_in_closure_stmts(body, writes);
-                    if let Some(catch) = catch {
-                        collect_expr_writes_in_closure_stmts(&catch.body, writes);
-                    }
-                    if let Some(finally) = finally {
-                        collect_expr_writes_in_closure_stmts(finally, writes);
-                    }
-                }
-                Stmt::Switch {
-                    discriminant,
-                    cases,
-                } => {
-                    collect_expr_writes(discriminant, writes);
-                    for case in cases {
-                        if let Some(test) = &case.test {
-                            collect_expr_writes(test, writes);
-                        }
-                        collect_expr_writes_in_closure_stmts(&case.body, writes);
-                    }
-                }
-            }
-        }
-    }
-
-    /// Shallow: ids DECLARED directly in `stmts` (`let` bindings), recursing
-    /// through control-flow blocks but NOT into nested closures. A nested
-    /// closure's locals belong to its own scope, and its own memo entry already
-    /// excludes them, so we stop at the closure boundary.
-    ///
-    /// Used only to decide which of a closure's collected writes are "free"
-    /// (i.e. target a captured outer local) and therefore worth propagating to
-    /// ancestor frames. Approximation is safe in BOTH directions: HIR local ids
-    /// are globally unique, so under-counting here at worst propagates a write
-    /// to an id no ancestor declares (pruned harmlessly), and over-counting at
-    /// worst makes an ancestor slightly more conservative (an extra safe root).
-    fn collect_direct_let_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
-        for stmt in stmts {
-            match stmt {
-                Stmt::Let { id, .. } => {
-                    out.insert(*id);
-                }
-                Stmt::If {
-                    then_branch,
-                    else_branch,
-                    ..
-                } => {
-                    collect_direct_let_ids(then_branch, out);
-                    if let Some(else_branch) = else_branch {
-                        collect_direct_let_ids(else_branch, out);
-                    }
-                }
-                Stmt::While { body, .. } | Stmt::DoWhile { body, .. } => {
-                    collect_direct_let_ids(body, out);
-                }
-                Stmt::For { init, body, .. } => {
-                    if let Some(init) = init {
-                        collect_direct_let_ids(std::slice::from_ref(init.as_ref()), out);
-                    }
-                    collect_direct_let_ids(body, out);
-                }
-                Stmt::Labeled { body, .. } => {
-                    collect_direct_let_ids(std::slice::from_ref(body.as_ref()), out);
-                }
-                Stmt::Try {
-                    body,
-                    catch,
-                    finally,
-                } => {
-                    collect_direct_let_ids(body, out);
-                    if let Some(catch) = catch {
-                        collect_direct_let_ids(&catch.body, out);
-                    }
-                    if let Some(finally) = finally {
-                        collect_direct_let_ids(finally, out);
-                    }
-                }
-                Stmt::Switch { cases, .. } => {
-                    for case in cases {
-                        collect_direct_let_ids(&case.body, out);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn collect_expr_writes(expr: &Expr, writes: &mut HashMap<u32, Vec<LocalWrite>>) {
-        match expr {
-            Expr::LocalSet(id, rhs) => {
-                writes
-                    .entry(*id)
-                    .or_default()
-                    .push(LocalWrite::Expr((**rhs).clone()));
-                collect_expr_writes(rhs, writes);
-            }
-            Expr::Update { id, .. } => {
-                writes.entry(*id).or_default().push(LocalWrite::NonPointer);
-            }
-            Expr::Closure { params, body, .. } => {
-                for param in params {
-                    if let Some(default) = &param.default {
-                        collect_expr_writes(default, writes);
-                    }
-                }
-                // #6219 perf: collect this closure body's writes at most once
-                // (memoized by body identity) and merge them in, rather than
-                // re-descending the subtree for every enclosing frame. The
-                // recursive `collect_expr_writes_in_closure_stmts` below itself
-                // routes deeper closures through this same arm, so the whole
-                // subtree is computed once and every ancestor reuses the cache.
-                //
-                // The cached set holds only the closure's FREE writes — targets
-                // NOT declared anywhere in this subtree (its params + direct
-                // `let`s; deeper closures' locals are already excluded by their
-                // own cached entries). Those are precisely the writes an ancestor
-                // frame can care about (a captured outer local written from
-                // inside the closure). A write to one of the closure's OWN locals
-                // is resolved by that closure's own analysis, so propagating it up
-                // was pure O(nesting²)-clone waste — the second half of the #6219
-                // codegen blowup, after the redundant re-walk fixed by the memo.
-                let key = (body.as_ptr() as usize, body.len());
-                let cached = CLOSURE_WRITES_MEMO.with(|m| m.borrow().get(&key).cloned());
-                let sub = match cached {
-                    Some(rc) => rc,
-                    None => {
-                        let mut sub_writes: HashMap<u32, Vec<LocalWrite>> = HashMap::new();
-                        collect_expr_writes_in_closure_stmts(body, &mut sub_writes);
-                        let mut own_ids: HashSet<u32> = params.iter().map(|p| p.id).collect();
-                        collect_direct_let_ids(body, &mut own_ids);
-                        sub_writes.retain(|id, _| !own_ids.contains(id));
-                        let rc = std::rc::Rc::new(sub_writes);
-                        CLOSURE_WRITES_MEMO.with(|m| m.borrow_mut().insert(key, rc.clone()));
-                        rc
-                    }
-                };
-                for (id, ws) in sub.iter() {
-                    writes.entry(*id).or_default().extend(ws.iter().cloned());
-                }
-            }
-            _ => {
-                perry_hir::walker::walk_expr_children(expr, &mut |child| {
-                    collect_expr_writes(child, writes)
-                });
-            }
-        }
-    }
-
     fn collect_facts(
+        memo: &ClosureWrites,
         stmts: &[Stmt],
         local_types: &mut HashMap<u32, Type>,
         writes: &mut HashMap<u32, Vec<LocalWrite>>,
@@ -726,13 +498,13 @@ pub fn collect_pointer_typed_locals(
                             .entry(*id)
                             .or_default()
                             .push(LocalWrite::Expr(init.clone()));
-                        collect_expr_writes(init, writes);
+                        memo.collect_expr_writes(init, writes);
                     } else {
                         writes.entry(*id).or_default().push(LocalWrite::NonPointer);
                     }
                 }
                 Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
-                    collect_expr_writes(expr, writes);
+                    memo.collect_expr_writes(expr, writes);
                 }
                 Stmt::Return(None)
                 | Stmt::Break
@@ -747,19 +519,19 @@ pub fn collect_pointer_typed_locals(
                     then_branch,
                     else_branch,
                 } => {
-                    collect_expr_writes(condition, writes);
-                    collect_facts(then_branch, local_types, writes);
+                    memo.collect_expr_writes(condition, writes);
+                    collect_facts(memo, then_branch, local_types, writes);
                     if let Some(else_branch) = else_branch {
-                        collect_facts(else_branch, local_types, writes);
+                        collect_facts(memo, else_branch, local_types, writes);
                     }
                 }
                 Stmt::While { condition, body } => {
-                    collect_expr_writes(condition, writes);
-                    collect_facts(body, local_types, writes);
+                    memo.collect_expr_writes(condition, writes);
+                    collect_facts(memo, body, local_types, writes);
                 }
                 Stmt::DoWhile { body, condition } => {
-                    collect_facts(body, local_types, writes);
-                    collect_expr_writes(condition, writes);
+                    collect_facts(memo, body, local_types, writes);
+                    memo.collect_expr_writes(condition, writes);
                 }
                 Stmt::For {
                     init,
@@ -768,45 +540,56 @@ pub fn collect_pointer_typed_locals(
                     body,
                 } => {
                     if let Some(init) = init {
-                        collect_facts(std::slice::from_ref(init.as_ref()), local_types, writes);
+                        collect_facts(
+                            memo,
+                            std::slice::from_ref(init.as_ref()),
+                            local_types,
+                            writes,
+                        );
                     }
                     if let Some(condition) = condition {
-                        collect_expr_writes(condition, writes);
+                        memo.collect_expr_writes(condition, writes);
                     }
                     if let Some(update) = update {
-                        collect_expr_writes(update, writes);
+                        memo.collect_expr_writes(update, writes);
                     }
-                    collect_facts(body, local_types, writes);
+                    collect_facts(memo, body, local_types, writes);
                 }
                 Stmt::Labeled { body, .. } => {
-                    collect_facts(std::slice::from_ref(body.as_ref()), local_types, writes);
+                    collect_facts(
+                        memo,
+                        std::slice::from_ref(body.as_ref()),
+                        local_types,
+                        writes,
+                    );
                 }
                 Stmt::Try {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
-                    collect_facts(body, local_types, writes);
+                    collect_facts(memo, body, local_types, writes);
                     if let Some(catch) = catch {
                         if let Some((id, _)) = &catch.param {
                             local_types.insert(*id, Type::Any);
                         }
-                        collect_facts(&catch.body, local_types, writes);
+                        collect_facts(memo, &catch.body, local_types, writes);
                     }
                     if let Some(finally) = finally {
-                        collect_facts(finally, local_types, writes);
+                        collect_facts(memo, finally, local_types, writes);
                     }
                 }
                 Stmt::Switch {
                     discriminant,
                     cases,
                 } => {
-                    collect_expr_writes(discriminant, writes);
+                    memo.collect_expr_writes(discriminant, writes);
                     for case in cases {
                         if let Some(test) = &case.test {
-                            collect_expr_writes(test, writes);
+                            memo.collect_expr_writes(test, writes);
                         }
-                        collect_facts(&case.body, local_types, writes);
+                        collect_facts(memo, &case.body, local_types, writes);
                     }
                 }
             }
@@ -825,7 +608,7 @@ pub fn collect_pointer_typed_locals(
         local_types.insert(p.id, pointer_analysis_type(&p.ty));
         param_ids.insert(p.id);
     }
-    collect_facts(stmts, &mut local_types, &mut writes);
+    collect_facts(memo, stmts, &mut local_types, &mut writes);
     super::integer_locals::collect_flat_row_aliases(stmts, flat_const_ids, &mut flat_row_alias_ids);
     // #6219 perf: the type-inference fixpoint below infers each frame local's
     // type from its writes. Writes to ids NOT declared in THIS frame (a nested
@@ -833,7 +616,7 @@ pub fn collect_pointer_typed_locals(
     // local writes) are resolved by that closure's OWN analysis, so processing
     // them here is pure redundant work — O(nesting) per closure frame, the
     // second half of the #6219 codegen blowup (the first being the walk itself,
-    // fixed by CLOSURE_WRITES_MEMO). Prune to this frame's locals (params +
+    // shared through the module closure-write summaries). Prune to this frame's locals (params +
     // `let`s, all present in `local_types`). This is at worst OVER-inclusive —
     // a frame local whose write references a pruned id sees that id as unknown
     // and conservatively keeps its slot — so it never DROPS a shadow slot: no
@@ -868,12 +651,21 @@ pub fn collect_pointer_typed_locals(
     // that case every unproven binding keeps a conservative shadow slot.
     const MAX_FIXPOINT_ITERS: usize = 16;
     const MAX_FIXPOINT_LOCALS: usize = 8192;
+    // Refinements feed later bindings in the same pass. With a pass cap,
+    // hash order changes which bindings are proven before the cutoff and
+    // therefore changes the emitted GC roots.
+    let mut ordered_writes: Vec<_> = if writes.len() <= MAX_FIXPOINT_LOCALS {
+        writes.iter().collect()
+    } else {
+        Vec::new()
+    };
+    ordered_writes.sort_unstable_by_key(|(id, _)| **id);
     let mut iters = 0usize;
     let mut changed = writes.len() <= MAX_FIXPOINT_LOCALS;
     while changed && iters < MAX_FIXPOINT_ITERS {
         iters += 1;
         changed = false;
-        for (id, local_writes) in &writes {
+        for &(id, local_writes) in &ordered_writes {
             let mut inferred_ty: Option<Type> = None;
             // #7280: a PARAMETER has one definition this loop cannot see — the
             // INCOMING ARGUMENT. `writes` is collected by walking the body, so
@@ -1058,6 +850,7 @@ pub fn collect_pointer_typed_locals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     walk(body, out, next_slot, non_pointer_locals, flat_row_alias_ids);
                     if let Some(c) = catch {
@@ -1149,6 +942,90 @@ mod tests {
     use perry_hir::{Function, Param, Stmt};
 
     #[test]
+    fn reused_closure_body_storage_does_not_carry_root_proofs() {
+        let binding = |id, init| Stmt::Let {
+            id,
+            name: format!("v{id}"),
+            ty: Type::Any,
+            mutable: true,
+            init: Some(init),
+        };
+        let write = |rhs| Stmt::Expr(Expr::LocalSet(1, Box::new(rhs)));
+        let mut frame = vec![
+            binding(1, Expr::Integer(0)),
+            Stmt::Expr(Expr::Closure {
+                func_id: 7,
+                params: vec![],
+                return_type: Type::Void,
+                body: vec![write(Expr::String("heap".into()))],
+                captures: vec![1],
+                mutable_captures: vec![1],
+                captures_this: false,
+                captures_new_target: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: false,
+                construct_only: false,
+            }),
+            binding(2, Expr::LocalGet(1)),
+        ];
+        let source = frame.clone();
+        let Stmt::Expr(source_closure) = &source[1] else {
+            unreachable!()
+        };
+        let memo = ClosureWrites::new(&[(7, source_closure)]);
+        let roots = |frame: &[Stmt]| memo.pointer_locals(&[], frame, &HashSet::new());
+        assert!(roots(&source).contains_key(&2));
+        assert!(roots(&frame).contains_key(&2));
+        // Reuse the exact allocation, as an allocator may for successive
+        // temporary HIR copies. The captured cell stays rooted in both frames.
+        let Stmt::Expr(Expr::Closure { body, .. }) = &mut frame[1] else {
+            unreachable!()
+        };
+        body[0] = write(Expr::Integer(1));
+        let slots = roots(&frame);
+        assert!(slots.contains_key(&1));
+        assert!(
+            !slots.contains_key(&2),
+            "scalar copy kept a stale root: {slots:?}"
+        );
+    }
+
+    #[test]
+    fn bounded_pointer_refinement_has_stable_root_slots() {
+        // Definitions precede their uses, but their IDs run backwards. A
+        // stable ascending sweep proves one more link per round, so this
+        // chain reaches the refinement cap with both rooted and scalar locals.
+        let body: Vec<Stmt> = (1..=65)
+            .rev()
+            .map(|id| Stmt::Let {
+                id,
+                name: format!("v{id}"),
+                ty: Type::Any,
+                mutable: false,
+                init: Some(if id == 65 {
+                    Expr::Number(1.0)
+                } else {
+                    Expr::LocalGet(id + 1)
+                }),
+            })
+            .collect();
+        let expected: HashMap<u32, u32> = (1..=49)
+            .rev()
+            .enumerate()
+            .map(|(slot, id)| (id, slot as u32))
+            .collect();
+        for _ in 0..32 {
+            assert_eq!(
+                collect_pointer_typed_locals(&[], &body, &HashSet::new()),
+                expected,
+                "fresh hash seeds must not change the roots at the pass cap"
+            );
+        }
+    }
+    #[test]
     fn declared_scalar_holding_pointer_keeps_shadow_slot() {
         let stmts = vec![Stmt::Let {
             id: 1,
@@ -1186,6 +1063,7 @@ mod tests {
                 op: BinaryOp::Add,
                 prefix: true,
                 strict: true,
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
             },
@@ -1792,24 +1670,20 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
-            Stmt::Expr(Expr::IndexSet {
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-                value: Box::new(Expr::Object(Vec::new())),
-                byte_offset: 0,
-                byte_end: 0,
-            }),
+            Stmt::Expr(Expr::synthetic_index_set(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(0)),
+                Box::new(Expr::Object(Vec::new())),
+            )),
             Stmt::Let {
                 id: 2,
                 name: "x".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::IndexGet {
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::Integer(0)),
-                }),
+                init: Some(Expr::synthetic_index_get(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::Integer(0)),
+                )),
             },
         ];
         let slots = collect_pointer_typed_locals(&[], &stmts, &HashSet::new());
@@ -1825,12 +1699,8 @@ mod tests {
     /// bindings hold the heap class object and must be rooted (#11862).
     #[test]
     fn a_boxed_class_evaluation_owner_binding_keeps_its_shadow_slot() {
-        let owner_read = || Expr::IndexGet {
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Integer(0)),
-        };
+        let owner_read =
+            || Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)));
         let stmts = vec![
             Stmt::Let {
                 id: 1,
@@ -1845,13 +1715,11 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Sequence(vec![
-                    Expr::IndexSet {
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::Integer(0)),
-                        value: Box::new(Expr::Object(Vec::new())),
-                        byte_offset: 0,
-                        byte_end: 0,
-                    },
+                    Expr::synthetic_index_set(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::Integer(0)),
+                        Box::new(Expr::Object(Vec::new())),
+                    ),
                     owner_read(),
                 ])),
             },

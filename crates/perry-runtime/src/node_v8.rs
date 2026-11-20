@@ -382,7 +382,7 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
     match std::fs::write(&path, json.as_bytes()) {
         Ok(()) => string_value(&path),
         Err(err) => unsafe {
-            crate::exception::js_throw(crate::fs::build_fs_error_value(&err, "open", &path))
+            crate::exception::throw_core(crate::io_error::fs_error(&err, "open", &path))
         },
     }
 }
@@ -589,9 +589,6 @@ pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
 /// Coerce a NaN-boxed JS value to a u32 (int32-tagged fast path + double).
 fn as_u32(value: f64) -> u32 {
     let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        return (bits & 0xFFFF_FFFF) as u32;
-    }
     let jsv = JSValue::from_bits(bits);
     if jsv.is_number() {
         let n = jsv.as_number();

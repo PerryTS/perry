@@ -17,3 +17,6 @@ Nothing outside this directory links to these files except `scripts/check_gc_env
 | `actions-consolidation-plan.md`, `actions-consolidation-inventory.json` | 2026-10-08 | GitHub Actions consolidation plan |
 | `2026-10-11-stdelete.md` | 2026-10-11 | Class D side-table deletion |
 | `wasi-component-validation-2026-10-21/` | 2026-10-21 | WASI and component-model validation runs |
+| `2026-11-02-test-structure-census.md` | 2026-11-02 | Program-test lanes, judges, subjects and source ownership behind the test-structure proposal |
+| `iife-return-depth-determinism-2026-11-18.md` | 2026-11-18 | Depth-sensitive IIFE memoization, negative controls, and determinism validation |
+| `2026-11-17-typed-array-kind-miss-audit.md` | 2026-11-17 | `lookup_typed_array_kind` call sites vs Node `Buffer` receivers (#9347) |

@@ -29,12 +29,16 @@ fail proves nothing).
 import argparse
 import json
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
 import tempfile
 
-HELLO = 'console.log("Hello, world!");\n'
+# The realm-diff gate's hello witness. A program of constant prints only is
+# compiled by the tiny-program specialization, which links no runtime and has
+# no realm reach; this one reads process.argv, so it takes the normal pipeline.
+HELLO = (Path(__file__).resolve().parent.parent / "realm-dumps" / "programs" / "hello.ts").read_text()
 PREFIX = "perry_runtime_layout_"
 MARKER = "perry_test_layout_descriptors"
 # PerryLayoutDesc on 64-bit ELF (codegen layout_desc::DESC_TY):
@@ -63,6 +67,9 @@ def compile_hello(perry, out, extra_link=""):
     env = dict(os.environ)
     env["PERRY_REALM_REACH"] = "1"
     env["PERRY_NO_CACHE"] = "1"
+    # nm and the retained relocations need the symbol table: skip only the
+    # post-link strip (codegen and link are those of the shipped program).
+    env["PERRY_KEEP_SYMBOLS"] = "1"
     env["PERRY_EXTRA_LINK_ARGS"] = ("-Wl,--emit-relocs " + extra_link).strip()
     run = subprocess.run([perry, "compile", src, "-o", binary], env=env,
                          capture_output=True, text=True, cwd=out)

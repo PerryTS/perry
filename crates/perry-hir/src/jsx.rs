@@ -64,7 +64,15 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     let props_expr = if props_parts.is_empty() {
         Expr::Null
     } else if has_spread_attr {
-        Expr::ObjectSpread { parts: props_parts }
+        Expr::ObjectSpread {
+            parts: props_parts
+                .into_iter()
+                .map(|(key, value)| match key {
+                    Some(key) => crate::ir::ObjectPart::Define(key, value),
+                    None => crate::ir::ObjectPart::Spread(value),
+                })
+                .collect(),
+        }
     } else {
         Expr::object_literal(
             props_parts

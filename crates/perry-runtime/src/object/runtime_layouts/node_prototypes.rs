@@ -473,10 +473,14 @@ runtime_symbol_atom!(
     "kAbortSignalDetached",
     12
 );
+// The private key of an object's native payload slot (`native_payload`):
+// a layout that lists it is born with the payload slot in place, so the
+// attach fills that slot and the object stays on its layout.
+runtime_symbol_atom!(NP_SYMBOL_NATIVE_PAYLOAD, "[[NativePayload]]", 13);
 
 /// The runtime symbol atoms by number, and whether each is a registry symbol
 /// (`Symbol.for(description)`) rather than a symbol of its own.
-static RUNTIME_SYMBOL_ATOMS: [(&StaticAtom, bool); 13] = [
+static RUNTIME_SYMBOL_ATOMS: [(&StaticAtom, bool); 14] = [
     (&NP_SYMBOL_K_CAPTURE, false),
     (&NP_SYMBOL_NODEJS_REJECTION, true),
     (&NP_SYMBOL_TO_ASYNC_STREAMABLE, true),
@@ -490,9 +494,10 @@ static RUNTIME_SYMBOL_ATOMS: [(&StaticAtom, bool); 13] = [
     (&NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, false),
     (&NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, false),
     (&NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, false),
+    (&NP_SYMBOL_NATIVE_PAYLOAD, false),
 ];
-static RUNTIME_SYMBOLS: [std::sync::atomic::AtomicUsize; 13] =
-    [const { std::sync::atomic::AtomicUsize::new(0) }; 13];
+static RUNTIME_SYMBOLS: [std::sync::atomic::AtomicUsize; 14] =
+    [const { std::sync::atomic::AtomicUsize::new(0) }; 14];
 
 /// The symbol runtime symbol atom `atom` names: created once per process, the
 /// same symbol in every agent (registration binds every layout key to it),
@@ -538,6 +543,14 @@ pub(crate) unsafe fn runtime_symbol_of_atom(
         Ok(_) => Some(symbol),
         Err(other) => Some(other as *mut crate::symbol::SymbolHeader),
     }
+}
+
+/// The symbol runtime symbol atom `atom` names if it is already created
+/// (`None` before its first use: no object can list it yet).
+pub(crate) fn bound_runtime_symbol(atom: &'static StaticAtom) -> Option<usize> {
+    let n = atom.index as usize;
+    let bound = RUNTIME_SYMBOLS.get(n)?.load(std::sync::atomic::Ordering::Acquire);
+    (bound != 0).then_some(bound)
 }
 
 /// The NaN-boxed symbol runtime symbol atom `atom` names.

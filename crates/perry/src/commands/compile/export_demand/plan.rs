@@ -91,6 +91,8 @@ pub(crate) fn plan(
                 if item.kind == Kind::Erased {
                     continue;
                 }
+                let aliased = ctx.package_aliases.get(source).cloned();
+                let source = aliased.as_ref().unwrap_or(source);
                 let rp = resolved(source);
                 match super::super::reachability::resolve_edge(
                     ctx,
@@ -394,7 +396,11 @@ pub(crate) fn plan(
                 }
                 Kind::Import => {
                     for (local, _) in &item.imports {
-                        if !names.contains(local) {
+                        // A deferred require's binding is never read; it keeps
+                        // the target's init on demand (`collect_modules`).
+                        if !names.contains(local)
+                            && !super::super::collect_modules::is_deferred_require_binding(local)
+                        {
                             prune.imports.insert(local.clone());
                         }
                     }

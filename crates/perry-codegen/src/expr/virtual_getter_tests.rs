@@ -57,6 +57,7 @@ fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };

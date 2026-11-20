@@ -96,8 +96,6 @@ pub extern "C" fn js_stdlib_install_compiled() {
     js_stdlib_install_bundled_streams();
     #[cfg(feature = "bundled-events")]
     js_stdlib_install_events();
-    #[cfg(feature = "bundled-nodemailer")]
-    js_stdlib_install_bundled_nodemailer();
     #[cfg(feature = "database-sqlite")]
     js_stdlib_install_database_sqlite();
     #[cfg(feature = "crypto")]
@@ -110,8 +108,6 @@ pub extern "C" fn js_stdlib_install_compiled() {
     js_stdlib_install_web_fetch();
     #[cfg(feature = "turnloop-http-client")]
     js_stdlib_install_turnloop_http_client();
-    #[cfg(feature = "turnloop-smtp-client")]
-    js_stdlib_install_turnloop_smtp_client();
 }
 
 #[cfg(feature = "bundled-streams")]
@@ -127,14 +123,6 @@ pub extern "C" fn js_stdlib_install_bundled_streams() {
 pub extern "C" fn js_stdlib_install_events() {
     install_once!({
         super::dispatch::install_events();
-    });
-}
-
-#[cfg(feature = "bundled-nodemailer")]
-#[no_mangle]
-pub extern "C" fn js_stdlib_install_bundled_nodemailer() {
-    install_once!({
-        super::dispatch::install_nodemailer();
     });
 }
 
@@ -256,13 +244,5 @@ pub extern "C" fn js_stdlib_install_web_fetch() {
 pub extern "C" fn js_stdlib_install_turnloop_http_client() {
     install_once!({
         super::async_bridge::install_turnloop_http_client_active();
-    });
-}
-
-#[cfg(feature = "turnloop-smtp-client")]
-#[no_mangle]
-pub extern "C" fn js_stdlib_install_turnloop_smtp_client() {
-    install_once!({
-        super::async_bridge::install_turnloop_smtp_active();
     });
 }

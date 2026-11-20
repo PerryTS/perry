@@ -314,7 +314,7 @@ ahash = "0.8.12"
 perex = { workspace = true, optional = true }
 # Taffy — flexbox / grid layout engine for the perry/tui module
 # (#358 Phase 3). Same crate Bevy and Dioxus use; pure Rust, no FFI.
-taffy = { version = "0.13", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
+taffy = { version = "0.15", default-features = false, features = ["std", "flexbox", "taffy_tree"] }
 miniz_oxide = "=0.9.1"
 itoa.workspace = true
 ryu.workspace = true
@@ -366,6 +366,8 @@ unicode-normalization = { version = "0.1" }
 # Intl.Segmenter (the grapheme path is what string-width@7+/wrap-ansi@9+ use,
 # so it gates ink). Pure-Rust UAX #29 implementation, already in our lock graph.
 unicode-segmentation = { version = "1" }
+# perry/tui measures text in terminal columns (UAX #11); already in our lock graph.
+unicode-width = { version = "0.2.2" }
 # #5298/#5896: BCP-47 (UTS #35) structural locale-tag canonicalization, CLDR
 # aliases, and likely-subtag expansion for the Intl locale APIs. Both crates and
 # their compiled data are already in the default lock graph via icu_datetime.
@@ -421,6 +423,13 @@ mimalloc = { version = "0.1", default-features = false, optional = true }
 # here, so those primitives cannot reach the pages a collection just freed.
 # `mi_collect` can. The Apple-only VM-tag retag (#6882) uses the same crate.
 libmimalloc-sys = { version = "0.1", features = ["extended"], optional = true }
+
+# Android (API 29, native ELF thread-locals): the program is a shared library the app
+# process dlopens, and bionic refuses initial-exec TLS there ("TLS symbol ... in dlopened
+# ... using IE access model"). mimalloc's C thread-locals default to initial-exec
+# (`-ftls-model=initial-exec`); `local_dynamic_tls` builds them local-dynamic.
+[target.'cfg(target_os = "android")'.dependencies]
+libmimalloc-sys = { version = "0.1", features = ["extended", "local_dynamic_tls"], optional = true }
 
 # #6882: mimalloc tags its OS mappings with VM tag 100, which macOS tooling
 # (vmmap, Instruments' VM Tracker, `footprint`) decodes as `IOAccelerator` —
@@ -518,3 +527,11 @@ hostname = { version = "0.4", optional = true }
 [target.'cfg(target_family = "wasm")'.dependencies]
 # Constructor-based enumeration of relocated image records in linear memory.
 inventory = "=0.3.21"
+
+[target.'cfg(not(target_family = "wasm"))'.dev-dependencies]
+# Test-only runtime layout definitions (DESIGN 3.2 item 10) for this crate's
+# integration tests (tests/*.rs). They link the runtime library without a
+# compiled program, so nothing defines the layout descriptors, and
+# `cfg(test)` covers only the library's own unit tests. The same mechanism
+# as every other crate whose tests link the runtime.
+perry-runtime = { path = ".", features = ["test-layout-descriptors"] }

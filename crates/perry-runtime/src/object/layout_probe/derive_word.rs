@@ -77,18 +77,34 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
         i as u32 >= rec.position_bound_raw()
             && (direct_position(rec, keys, i as u32) || slotted(i).is_some())
     };
-    if count <= SCAN_KEYS && !aliased && checked == 0 && !(0..count as usize).any(unbounded) {
+    // A function family record is always indexed: its entries are [`INFO_ENTRY`].
+    // POSBOUND's raw loads cannot serve an encoded slot. The index already
+    // expresses which other slots can be loaded or written directly.
+    let info = rec.object_kind().is_function_layout();
+    if count <= SCAN_KEYS
+        && !aliased
+        && checked == 0
+        && !info
+        && rec.i32_lanes() == 0
+        && !(0..count as usize).any(unbounded)
+    {
         return flags;
     }
-    let buckets = (count as usize * 2).next_power_of_two();
+    // At most a quarter of the buckets hold a key: a lookup's first bucket
+    // decides it (a hit, or an empty bucket proving the key absent) for all
+    // but a few keys, and only those continue to the collision loop
+    // (`indexed::continued`, out of line). A list's index is derived once and
+    // shared by every receiver of the record.
+    let buckets = (count as usize * 4).next_power_of_two();
     // The blocking entries' hashes (`KeyIndex::blocks`), every one of them.
     let mut blocking: Vec<u64> = Vec::new();
     let mut unknown = false;
-    // `(position, inline slot)` of each public accessor whose pair is an
-    // inline slot of every receiver ([`ACCESSOR_ENTRY`]), by position. An
+    // `(position, index word)` of each public accessor, by position: its
+    // pair's storage slot, the same for every receiver, with
+    // [`PAIR_SPILLED`] past the inline slots ([`ACCESSOR_ENTRY`]). An
     // accessor blocks a store, so the blocking pass below reads every
     // accessor's attributes once.
-    let mut accessor_slots: Vec<(u32, u32)> = Vec::new();
+    let mut accessor_slots: Vec<(u32, u64)> = Vec::new();
     if rec.summary()
         & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
             | crate::object::key_attrs::SUMMARY_PRIVATE)
@@ -110,8 +126,13 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
                 && *w == *words.add(i)
             {
                 let slot = crate::object::key_attrs::key_storage_slot(keys, i as u32);
-                if slot < rec.live_inline_slot_count && slot != NO_LOAD {
-                    accessor_slots.push((i as u32, slot));
+                if slot != NO_LOAD {
+                    let spilled = if slot < rec.live_inline_slot_count {
+                        0
+                    } else {
+                        PAIR_SPILLED
+                    };
+                    accessor_slots.push((i as u32, u64::from(slot) | spilled));
                 }
             }
             match h {
@@ -157,11 +178,22 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             (w, _, _) if w != *words.add(i) => w,
             _ => match slotted(i) {
                 Some(slot) => u64::from(slot),
-                None if !accessor_slots.is_empty() => accessor_slotted(i).map_or(0, u64::from),
+                None if !accessor_slots.is_empty() => accessor_slotted(i).unwrap_or(0),
                 None => 0,
             },
         };
     }
+    // A store may write a key's slot when no entry of the list blocks one,
+    // else when the key's own entry is plain writable data.
+    let store_plain = |i: usize| {
+        rec.summary()
+            & (crate::object::key_attrs::SUMMARY_BLOCKS_STORE
+                | crate::object::key_attrs::SUMMARY_PRIVATE)
+            == 0
+            || crate::object::key_attrs::entry_is_plain_writable_data(
+                crate::object::key_attrs::keys_entry(keys, i as u32),
+            )
+    };
     let slots = KeyIndex::buckets(table) as *mut u32;
     for b in 0..buckets {
         *slots.add(b) = u32::MAX;
@@ -175,12 +207,21 @@ pub(super) unsafe fn derive_word(rec: &ShapeRecord) -> u64 {
             b = (b + 1) & (buckets - 1);
         }
         let alias = canon[i].0 != *words.add(i);
+        let direct = direct_position(rec, keys, i as u32);
+        let slot_entry = !direct && slotted(i).is_some();
+        let write = (direct || slot_entry) && store_plain(i);
         *slots.add(b) = i as u32
             | if *text { TEXT_ENTRY } else { 0 }
             | if alias { ALIAS_ENTRY } else { 0 }
-            | if direct_position(rec, keys, i as u32) {
+            | if write { WRITE_ENTRY } else { 0 }
+            | if info && !direct && !slot_entry {
+                INFO_ENTRY
+            } else {
+                0
+            }
+            | if direct {
                 DIRECT_ENTRY
-            } else if slotted(i).is_some() {
+            } else if slot_entry {
                 SLOT_ENTRY
             } else if !accessor_slots.is_empty() && accessor_slotted(i).is_some() {
                 ACCESSOR_ENTRY

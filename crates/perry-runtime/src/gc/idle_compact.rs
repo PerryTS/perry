@@ -404,7 +404,7 @@ pub(super) fn maybe_compact(now: u64) -> bool {
     // The collector scratch has been dropped and the process is idle.
     // Return its native pages through the same purge as a full reclaim.
     let _ = super::cycle_malloc_trim::run_malloc_trim(GcProgressKind::NormalIncremental);
-    let _ = super::cycle_malloc_trim::run_allocator_purge(true);
+    let _ = super::cycle_malloc_trim::run_allocator_purge(true, true);
     true
 }
 

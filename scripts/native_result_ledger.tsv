@@ -6,7 +6,7 @@ js_bcrypt_hash	NR_GCPTR	crates/perry-ext-bcrypt/src/lib.rs	*mut Promise
 js_buffer_alloc_unsafe_slow	NR_GCPTR	crates/perry-runtime/src/buffer/from.rs	*mut BufferHeader
 js_buffer_copy_bytes_from	NR_GCPTR	crates/perry-runtime/src/buffer/copy_bytes.rs	*mut BufferHeader
 js_buffer_transcode	NR_GCPTR	crates/perry-runtime/src/buffer/transcode.rs	*mut BufferHeader
-js_bun_build	NR_GCPTR	crates/perry-ext-typescript/src/bun.rs	*mut Promise
+js_bun_build	NR_GCPTR	crates/perry-ext-bun/src/bun.rs	*mut Promise
 js_bun_serve	NR_HANDLE_ID	crates/perry-ext-http/src/server/bun_server.rs	i64
 js_bun_sqlite_database_call	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
 js_bun_sqlite_database_query	NR_HANDLE_ID	crates/perry-stdlib/src/sqlite/bun.rs	Handle
@@ -17,16 +17,7 @@ js_bun_sqlite_statement_all	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*
 js_bun_sqlite_statement_run	NR_GCPTR	crates/perry-stdlib/src/sqlite/node_db.rs	*mut ObjectHeader
 js_bun_sqlite_statement_values	NR_GCPTR	crates/perry-stdlib/src/sqlite/bun.rs	*mut ArrayHeader
 js_bun_tcp_listen	NR_GCPTR	crates/perry-ext-net/src/bun_tcp.rs	i64
-js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-typescript/src/bun.rs	Handle
-js_cheerio_load	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_select	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_children	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_eq	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_find	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_first	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_last	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_cheerio_selection_parent	NR_HANDLE_ID	crates/perry-ext-cheerio/src/lib.rs	Handle
-js_ethers_wallet_create_random	NR_JS_VALUE	crates/perry-ext-ethers/src/lib.rs	JsValue
+js_bun_transpiler_new	NR_HANDLE_ID	crates/perry-ext-bun/src/bun.rs	Handle
 js_events_add_abort_listener	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	i64
 js_events_get_event_listeners	NR_GCPTR	crates/perry-stdlib/src/events/module_helpers.rs	*mut ArrayHeader
 js_events_on	NR_GCPTR	crates/perry-stdlib/src/events/events_on.rs	*mut ArrayHeader
@@ -52,16 +43,6 @@ js_http_set_timeout_full	NR_HANDLE_ID	crates/perry-ext-http/src/client_outgoing.
 js_https_agent_new	NR_HANDLE_ID	crates/perry-ext-http/src/agent.rs	Handle
 js_https_get_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
 js_https_request_overload	NR_HANDLE_ID	crates/perry-ext-http/src/lib.rs	Handle
-js_lodash_chunk	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_compact	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_drop	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_flatten	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_range	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_reverse	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_tail	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_take	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_times	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
-js_lodash_uniq	NR_GCPTR	crates/perry-stdlib/src/lodash.rs	*mut ArrayHeader
 js_net_block_list_new	NR_GCPTR	crates/perry-ext-net/src/classes.rs	i64
 js_net_socket_address_new	NR_GCPTR	crates/perry-ext-net/src/classes.rs	i64
 js_node_http2_connect	NR_HANDLE_ID	crates/perry-ext-http/src/server/http2_server/session.rs	i64
@@ -90,8 +71,6 @@ js_node_https_server_unref	NR_HANDLE_ID	crates/perry-ext-http/src/server/https_s
 js_node_stream_method_event_names	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
 js_node_stream_method_raw_listeners	NR_GCPTR	crates/perry-runtime/src/node_stream_event_emitter.rs	i64
-js_nodemailer_send_mail	NR_GCPTR	crates/perry-ext-nodemailer/src/lib.rs	*mut Promise
-js_nodemailer_verify	NR_GCPTR	crates/perry-ext-nodemailer/src/lib.rs	*mut Promise
 js_os_user_info_options	NR_GCPTR	crates/perry-runtime/src/os.rs	*mut ObjectHeader
 js_perry_embedded_files	NR_GCPTR	crates/perry-runtime/src/embedded.rs	*mut crate::array::ArrayHeader
 js_perry_read_embedded	NR_NULLABLE_GCPTR	crates/perry-runtime/src/embedded.rs	*mut crate::buffer::BufferHeader
@@ -162,10 +141,6 @@ js_tls_server_remove_listener	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_tls_tlssocket_constructor	NR_HANDLE_ID	crates/perry-stdlib/src/tls.rs	i64
 js_u8_from_base64	NR_GCPTR	crates/perry-runtime/src/buffer/u8_codec.rs	*mut BufferHeader
 js_u8_from_hex	NR_GCPTR	crates/perry-runtime/src/buffer/u8_codec.rs	*mut BufferHeader
-js_undici_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
-js_undici_get_global_dispatcher	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
-js_undici_proxy_agent_new	NR_HANDLE_ID	crates/perry-ext-undici/src/lib.rs	Handle
 js_ws_connect	NR_GCPTR	crates/perry-ext-ws/src/lib.rs	*mut perry_ffi::Promise
 js_ws_on	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
 js_ws_on_client_i64	NR_HANDLE_ID	crates/perry-ext-ws/src/lib.rs	i64
-js_ws_server_new	NR_HANDLE_ID	crates/perry-ext-ws/src/server.rs	Handle

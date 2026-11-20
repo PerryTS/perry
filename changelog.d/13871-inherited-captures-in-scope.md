@@ -1,0 +1,1 @@
+A class declared at module scope that extends a class value returned by a factory (`const C = make(1); class Child extends C {}`) is constructed again instead of throwing `ReferenceError: Child is not defined`.

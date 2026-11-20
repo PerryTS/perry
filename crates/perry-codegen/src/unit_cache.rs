@@ -166,12 +166,8 @@ mod tests {
     }
 
     #[test]
-    fn unwinding_restores_scope_and_unwritable_cache_is_nonfatal() {
+    fn an_unwritable_cache_is_nonfatal() {
         let cache = fixture();
-        let _ = std::panic::catch_unwind(|| {
-            with_module_cache(Some(cache.0.clone()), || panic!("fixture"));
-        });
-        assert!(UnitCache::current().is_none());
         let path = cache.0.join("not-a-directory");
         std::fs::write(&path, b"file").unwrap();
         let unusable = UnitCache(path);

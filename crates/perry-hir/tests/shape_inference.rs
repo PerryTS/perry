@@ -769,11 +769,6 @@ fn literal_matching_interface_shape_infers_same_field_set() {
 fn factory_returning_nested_literal_survives_roundtrip() {
     // Phase 4 infers makeCfg's return type from its body; Phase 1's inference
     // of the nested literal survives the round-trip to the call site.
-    //
-    // The combination of `class X extends Y` with a top-level factory-call
-    // binding currently hits a pre-existing compiler overflow in this tree
-    // (see tests/repro_test.rs), unrelated to this work. This test exercises
-    // the factory + nested-literal round-trip without the extends-chain trigger.
     let module = lower_src(
         r#"
         function makeCfg() { return { scale: 1, origin: { x: 0, y: 0 } }; }
@@ -794,7 +789,6 @@ fn factory_returning_nested_literal_survives_roundtrip() {
 
 #[test]
 fn standalone_inheritance_preserves_chain() {
-    // Separate test covers the inheritance chain without the overflow trigger.
     let module = lower_src(
         r#"
         class Base { b: number; constructor(b: number) { this.b = b; } }

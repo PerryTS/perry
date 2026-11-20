@@ -237,7 +237,7 @@ unsafe fn dense_array(bits: u64) -> Option<(*const crate::ArrayHeader, usize)> {
     }
     let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
     let header = crate::value::addr_class::try_read_tracked_gc_header(arr as usize)?.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!(header.obj_type)
         || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         || !(*arr).named.is_null()
         || (header.size as usize) < crate::gc::GC_HEADER_SIZE + ARRAY_BYTES
@@ -381,7 +381,7 @@ unsafe fn emit_repeated_output(
             let arr = (bits & POINTER_MASK) as *const crate::ArrayHeader;
             let header =
                 &*((arr as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader);
-            if header.obj_type != crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_not_array!(header.obj_type)
                 || header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
                 || !(*arr).named.is_null()
                 || (*arr).length != len as u32

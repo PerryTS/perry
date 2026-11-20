@@ -48,7 +48,9 @@ fn scans_member_writes_on_namespaces() {
     assert!(s.contains(&pair("Number", "isNaN")));
     assert_array_iteration_facts(&s, &["elements", "write"]);
     assert_eq!(
-        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        s.iter()
+            .filter(|(ns, _)| ns != ARRAY_ITERATION && ns != NS_ESCAPED)
+            .count(),
         5,
         "{s:?}"
     );
@@ -161,16 +163,113 @@ fn reads_and_ordinary_objects_are_not_patches() {
         o.log = () => {};
         Math.max(1, 2);
         process.stdout.write = (() => true) as any;
-        const k = "x";
-        (globalThis as any)[k] = 1;
+        (globalThis as any)["x"] = 1;
         Object.assign(globalThis, { foo: 1 });
         "#,
     );
-    assert_array_iteration_facts(&s, &["elements", "proto", "write"]);
+    assert_array_iteration_facts(&s, &["write"]);
     assert_eq!(
         s.len(),
-        3,
+        1,
         "ordinary writes add no namespace/prototype patch: {s:?}"
+    );
+}
+
+/// DEC 255: a store into the global object under a key the scan cannot read
+/// may rebind any namespace. It records the global pseudo-namespace (not
+/// "every namespace replaced"), and every direct namespace call is GUARDED on
+/// `Pristine(ns)`: the intrinsic stays behind the runtime's bit.
+#[test]
+fn non_static_global_store_guards_namespace_calls() {
+    for src in [
+        "const k: any = process.argv[2]; (globalThis as any)[k] = {};",
+        "Object.assign(globalThis, (process as any).shims);",
+        "const k: any = process.argv[2]; Object.defineProperty(globalThis, k, { value: 1 });",
+        "const k: any = process.argv[2]; Reflect.set(globalThis, k, 1);",
+        "const k: any = process.argv[2]; [(globalThis as any)[k]] = [1];",
+    ] {
+        let s = scan(src);
+        assert!(
+            s.contains(&pair(GLOBAL_ANY_KEY, ANY_MEMBER)),
+            "{src}: {s:?}"
+        );
+        let m = lower_with_patches(&format!(
+            "{src}\nconst r = Object.keys({{ a: 1 }});\nconst t = Math.max(1, 2);"
+        ));
+        // `r` and `t` are the program's last two declarations.
+        let lets = m
+            .init
+            .iter()
+            .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+            .count();
+        let r = init_of(&m, lets - 2);
+        assert!(
+            r.starts_with("Conditional { condition: NamespacePatched(\"Object\")"),
+            "{src}: {r}"
+        );
+        assert!(r.contains("property: \"keys\""), "generic arm: {r}");
+        let t = init_of(&m, lets - 1);
+        assert!(
+            t.contains("NamespacePatched(\"Math\")") && t.contains("MathMax"),
+            "{src}: {t}"
+        );
+    }
+    // A static non-namespace key names no namespace: no guard.
+    let m = lower_with_patches(
+        "(globalThis as any).foo = 1; Object.assign(globalThis, { bar: 2 });\nconst r = Object.keys({ a: 1 });",
+    );
+    assert!(
+        !init_of(&m, 0).contains("NamespacePatched"),
+        "{}",
+        init_of(&m, 0)
+    );
+}
+
+/// DEC 255 hunk 3: a parenthesized or TS-typed target that names a namespace
+/// (`(Object as any) = w`) is the store `Object = w` is. The lowering peels
+/// the target to the ident, so the scan does too, and the namespace call
+/// reads the binding.
+#[test]
+fn parenthesized_and_ts_as_global_targets_rebind_the_namespace() {
+    for src in [
+        "(Object as any) = w;",
+        "(Object) = w;",
+        "Object! = w;",
+        "(<any>Object) = w;",
+        "(Object satisfies any) = w;",
+    ] {
+        let s = scan(&format!("const w: any = {{}};\n{src}"));
+        assert!(s.contains(&pair("Object", ANY_MEMBER)), "{src}: {s:?}");
+        let m = lower_with_patches(&format!(
+            "const w: any = {{}};\n{src}\nconst r = Object.keys({{ a: 1 }});"
+        ));
+        // `r` is the program's last declaration.
+        let lets = m
+            .init
+            .iter()
+            .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+            .count();
+        let r = init_of(&m, lets - 1);
+        assert!(is_dynamic_member_call(&r, "keys"), "{src}: {r}");
+    }
+    // The same wrapped target inside a destructuring assignment is the same
+    // store. (The lowering rejects this form today, so only the scan is read.)
+    let s = scan("const w: any = {};\n[(Object as any)] = [w];");
+    assert!(s.contains(&pair("Object", ANY_MEMBER)), "{s:?}");
+    // A wrapped target that names a local is no store into the global object:
+    // the call keeps its intrinsic.
+    let m = lower_with_patches(
+        "let x: any = 1;\nconst w: any = {};\n(x as any) = w;\n(x) = w;\nconst r = Object.keys({ a: 1 });",
+    );
+    let lets = m
+        .init
+        .iter()
+        .filter(|s| matches!(s, Stmt::Let { init: Some(_), .. }))
+        .count();
+    let r = init_of(&m, lets - 1);
+    assert!(
+        !is_dynamic_member_call(&r, "keys") && !r.contains("NamespacePatched"),
+        "{r}"
     );
 }
 
@@ -305,7 +404,9 @@ fn scans_member_writes_through_a_namespace_alias() {
     assert!(s.contains(&pair("console", "info")), "{s:?}");
     assert_array_iteration_facts(&s, &["write"]);
     assert_eq!(
-        s.iter().filter(|(ns, _)| ns != ARRAY_ITERATION).count(),
+        s.iter()
+            .filter(|(ns, _)| ns != ARRAY_ITERATION && ns != NS_ESCAPED)
+            .count(),
         2,
         "{s:?}"
     );
@@ -403,4 +504,160 @@ fn unreachable_namespace_call_has_no_guard() {
     let m = lower_with_patches("const r = Math.max(1, 2); const t = typeof JSON.parse;");
     assert!(!init_of(&m, 0).contains("NamespacePatched"));
     assert_eq!(init_of(&m, 1), "String(\"function\")");
+}
+
+/// The `Expr` statement at `idx` of the module init.
+fn expr_stmt_of(module: &crate::Module, idx: usize) -> String {
+    let exprs: Vec<_> = module
+        .init
+        .iter()
+        .filter_map(|s| match s {
+            Stmt::Expr(e) => Some(e),
+            _ => None,
+        })
+        .collect();
+    format!("{:?}", exprs[idx])
+}
+
+#[test]
+fn scans_global_function_rebinds() {
+    let s = scan(
+        r#"
+        (globalThis as any).setTimeout = (f: any) => 0;
+        global.setInterval = (f: any) => 0;
+        Object.defineProperty(globalThis, "clearTimeout", { value: () => {} });
+        Object.assign(globalThis, { queueMicrotask() {} });
+        setImmediate = (f: any) => 0;
+        const g = globalThis as any;
+        g.clearImmediate = () => {};
+        "#,
+    );
+    for name in [
+        "setTimeout",
+        "setInterval",
+        "clearTimeout",
+        "queueMicrotask",
+        "setImmediate",
+        "clearImmediate",
+    ] {
+        assert!(s.contains(&pair(GLOBAL_FUNCTION, name)), "{name}: {s:?}");
+    }
+    assert!(
+        !s.contains(&pair(GLOBAL_FUNCTION, "clearInterval")),
+        "{s:?}"
+    );
+    // A read, or a store onto an ordinary object, rebinds nothing.
+    let s = scan("const t = globalThis.setTimeout; const o: any = {}; o.setTimeout = t;");
+    assert!(!s.iter().any(|(ns, _)| ns == GLOBAL_FUNCTION), "{s:?}");
+}
+
+#[test]
+fn rebound_timer_call_reads_the_global_binding() {
+    let m = lower_with_patches(
+        r#"
+        const orig = globalThis.setTimeout;
+        (globalThis as any).setTimeout = (f: any, ms: any) => orig(f, ms);
+        setTimeout(() => {}, 1);
+        setInterval(() => {}, 1);
+        queueMicrotask(() => {});
+        "#,
+    );
+    // Statement 0 is the store itself.
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        call.starts_with("Call { callee: PropertyGet {")
+            && call.contains("object: GlobalGet(0), property: \"setTimeout\""),
+        "rebound setTimeout reads the binding: {call}"
+    );
+    let untouched = expr_stmt_of(&m, 2);
+    assert!(
+        untouched.contains("ExternFuncRef { name: \"setInterval\""),
+        "unwritten sibling keeps the direct call: {untouched}"
+    );
+    let micro = expr_stmt_of(&m, 3);
+    assert!(micro.starts_with("QueueMicrotask("), "{micro}");
+}
+
+#[test]
+fn rebound_queue_microtask_call_reads_the_global_binding() {
+    let m = lower_with_patches(
+        r#"
+        globalThis.queueMicrotask = (f: any) => {};
+        queueMicrotask(() => {});
+        "#,
+    );
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        !call.starts_with("QueueMicrotask(") && call.contains("property: \"queueMicrotask\""),
+        "{call}"
+    );
+}
+
+#[test]
+fn unwritten_program_keeps_direct_timer_calls() {
+    let m = lower_with_patches(
+        r#"
+        setTimeout(() => {}, 1);
+        clearTimeout(0 as any);
+        queueMicrotask(() => {});
+        const k = typeof setTimeout;
+        "#,
+    );
+    let call = expr_stmt_of(&m, 0);
+    assert!(
+        call.contains("ExternFuncRef { name: \"setTimeout\""),
+        "{call}"
+    );
+    let clear = expr_stmt_of(&m, 1);
+    assert!(
+        clear.contains("ExternFuncRef { name: \"clearTimeout\""),
+        "{clear}"
+    );
+    assert!(expr_stmt_of(&m, 2).starts_with("QueueMicrotask("));
+    assert_eq!(init_of(&m, 0), "String(\"function\")");
+}
+
+#[test]
+fn non_static_global_store_rebinds_timers() {
+    let m = lower_with_patches(
+        r#"
+        const k: any = process.argv[2];
+        (globalThis as any)[k] = () => 0;
+        setTimeout(() => {}, 1);
+        "#,
+    );
+    let call = expr_stmt_of(&m, 1);
+    assert!(
+        call.contains("property: \"setTimeout\"")
+            && !call.contains("ExternFuncRef { name: \"setTimeout\""),
+        "{call}"
+    );
+}
+
+/// A computed store into the global object may rebind a global FUNCTION, but
+/// never turns a program class or other non-global-function name into a
+/// global read.
+#[test]
+fn any_key_global_store_rebinds_only_global_functions() {
+    let s = scan("const k: any = process.argv[2]; (globalThis as any)[k] = 0;");
+    assert!(s.contains(&pair(GLOBAL_ANY_KEY, ANY_MEMBER)), "{s:?}");
+    set_patched_builtins(Arc::new(s));
+    let foo = global_function_patched("Foo");
+    let st = global_function_patched("setTimeout");
+    clear_patched_builtins();
+    assert!(!foo);
+    assert!(st);
+}
+
+#[test]
+fn dynamic_code_reach_rebinds_only_global_functions() {
+    let mut s = PatchedBuiltins::new();
+    s.dynamic_code_reach
+        .record_global("new Function(...) @ test".to_string());
+    set_patched_builtins(Arc::new(s));
+    let foo = global_function_patched("Foo");
+    let st = global_function_patched("setTimeout");
+    clear_patched_builtins();
+    assert!(!foo);
+    assert!(st);
 }

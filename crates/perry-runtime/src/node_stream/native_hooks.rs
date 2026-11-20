@@ -4,7 +4,7 @@
 //! A codec family's object (a zlib `Gzip`, a crypto `Hash`, the test-only
 //! rot13 family) is an ordinary runtime Transform/Writable. Its payload holds
 //! only the codec, and the runtime reaches the codec through the
-//! [`StreamHooks`] its payload cell's vtable names (`meta.native_state` ->
+//! [`StreamHooks`] its payload cell's vtable names (the payload slot ->
 //! cell -> `PayloadVTable::stream`): no method looked up by name, no table, no
 //! class switch. Output re-enters through the runtime's own `push_chunk`, so
 //! there is one readable queue, one writable buffer and one listener list,
@@ -298,7 +298,7 @@ fn set_flag(stream: f64, key: Slot, on: bool) {
 // ─── resolution ────────────────────────────────────────────────────────────
 
 /// The hooks of `stream`'s attached payload, when its family is a stream
-/// family: `meta.native_state` -> cell -> `PayloadVTable::stream`.
+/// family: the payload slot -> cell -> `PayloadVTable::stream`.
 #[inline]
 pub(crate) fn hooks_of(stream: f64) -> Option<&'static StreamHooks> {
     crate::native_payload::stream_hooks_of(stream).map(|(hooks, _)| hooks)

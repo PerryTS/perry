@@ -1,0 +1,1 @@
+- Fix a top-level await that waits on a callback-style native completion (`fs.readdir(path, cb)`, Effect's FileSystem) exiting with "Detected unsettled top-level await" (exit 13): the entry's async module loop now runs the timers, poll and check phases each turn, as the synchronous `await` loop does. This unblocks build-time macros such as Supabase's compute-stacks macro.

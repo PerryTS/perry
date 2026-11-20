@@ -99,17 +99,6 @@ async function main(): Promise<void> {
 main();
 "#;
 
-fn stat(stderr: &str, name: &str) -> u64 {
-    let line = stderr
-        .lines()
-        .find(|l| l.starts_with("[method-site]"))
-        .unwrap_or_else(|| panic!("missing method-site stats: {stderr}"));
-    line.split_whitespace()
-        .find_map(|w| w.strip_prefix(name).and_then(|v| v.strip_prefix('=')))
-        .and_then(|v| v.parse().ok())
-        .unwrap_or_else(|| panic!("missing {name}: {line}"))
-}
-
 #[test]
 fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -132,7 +121,6 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
     );
     let run = Command::new(&output)
         .current_dir(dir.path())
-        .env("PERRY_METHOD_SITE_STATS", "1")
         .env("PERRY_GC_FORCE_EVACUATE", "1")
         .env("PERRY_GC_VERIFY_EVACUATION", "1")
         .env("PERRY_GC_POISON_FROMSPACE", "1")
@@ -144,18 +132,6 @@ fn class_accessor_entry_collects_with_original_receiver_and_stops_for_workers() 
         String::from_utf8_lossy(&run.stdout).trim(),
         "2000 2000 8000 31000 42000 31000 103000 31",
         "{stderr}"
-    );
-    assert!(
-        stat(&stderr, "read_accessor_primes") > 0,
-        "accessor entry never primed: {stderr}"
-    );
-    assert!(
-        stat(&stderr, "read_accessor_hits") > 0,
-        "accessor entry never hit: {stderr}"
-    );
-    assert!(
-        stat(&stderr, "read_accessor_class_primes") > 0,
-        "bare CLASS path never primed: {stderr}"
     );
     // No holder moves: entries name only stable holders (gc::never_move).
 }

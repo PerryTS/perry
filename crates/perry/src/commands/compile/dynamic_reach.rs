@@ -20,12 +20,17 @@ use anyhow::Result;
 
 use super::CompilationContext;
 
-pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<()> {
+/// Returns the activation pass it ran, for the facts to take over (`None`:
+/// it ran none; the facts run their own).
+pub(super) fn prune(
+    ctx: &mut CompilationContext,
+    roots: &[PathBuf],
+) -> Result<Option<perry_wpfacts::Activation>> {
     if matches!(
         std::env::var("PERRY_DYNAMIC_REACH").as_deref(),
         Ok("off" | "0" | "false" | "no")
     ) {
-        return Ok(());
+        return Ok(None);
     }
     let any_dynamic = ctx.native_modules.values().any(|m| {
         m.imports
@@ -33,7 +38,7 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
             .any(|i| i.is_dynamic || i.is_dynamic_target)
     });
     if !any_dynamic {
-        return Ok(());
+        return Ok(None);
     }
     let started = std::time::Instant::now();
     let dynamic_code = perry_hir::has_deferred_dynamic_code_sites()
@@ -43,7 +48,7 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
     let interpreted_sources = !perry_hir::interpreted_source_sites().is_empty()
         || ctx.native_module_imports.contains("vm")
         || ctx.uses_data_url_dynamic_import;
-    let Some(live) = super::program_facts::live_dynamic_imports(
+    let Some(activation) = super::program_facts::activation(
         &ctx.native_modules,
         super::program_facts::export_sources(ctx),
         dynamic_code,
@@ -51,11 +56,14 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
         &ctx.patched_builtins.dynamic_code_reach,
         roots.iter().map(|p| p.display().to_string()).collect(),
     ) else {
+        return Ok(None);
+    };
+    let Some(live) = activation.live_dynamic_imports() else {
         eprintln!(
             "perry: dynamic reach: the activation pass ran past its bounds, nothing dropped ({:.1}s)",
             started.elapsed().as_secs_f64()
         );
-        return Ok(());
+        return Ok(Some(activation));
     };
     let report = std::env::var_os("PERRY_DYNAMIC_REACH_REPORT");
     let mut lines: Vec<String> = Vec::new();
@@ -64,6 +72,7 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
     // Edges: (target, live).
     let mut edges: HashMap<PathBuf, Vec<(PathBuf, bool)>> = HashMap::new();
     let mut entered: HashSet<PathBuf> = HashSet::new();
+    let (mut dynamic_edges, mut dead_edges) = (0usize, 0usize);
     for p in &paths {
         let (imports, exports) = {
             let m = &ctx.native_modules[p];
@@ -87,12 +96,16 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
             // A synthesized `import()` edge lives when a site a body that
             // can run holds names its specifier.
             let alive = !i.is_dynamic || live.contains(&(name.clone(), i.source.clone()));
-            if i.is_dynamic && report.is_some() {
-                lines.push(format!(
-                    "edge {} {name} -> {}",
-                    if alive { "live" } else { "dead" },
-                    i.source
-                ));
+            if i.is_dynamic {
+                dynamic_edges += 1;
+                dead_edges += !alive as usize;
+                if report.is_some() {
+                    lines.push(format!(
+                        "edge {} {name} -> {}",
+                        if alive { "live" } else { "dead" },
+                        i.source
+                    ));
+                }
             }
             entered.insert(t.clone());
             out.push((t, alive));
@@ -131,10 +144,8 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
         .filter(|p| !reached.contains(*p))
         .cloned()
         .collect();
-    let dead_edges = lines.iter().filter(|l| l.starts_with("edge dead")).count();
     eprintln!(
-        "perry: dynamic reach: {} dynamic edges, {dead_edges} held only by bodies that cannot run; {} modules dropped ({:.1}s)",
-        lines.len(),
+        "perry: dynamic reach: {dynamic_edges} dynamic edges, {dead_edges} held only by bodies that cannot run; {} modules dropped ({:.1}s)",
         pruned.len(),
         started.elapsed().as_secs_f64()
     );
@@ -143,7 +154,7 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
             lines.sort();
             std::fs::write(path, lines.join("\n") + "\n")?;
         }
-        return Ok(());
+        return Ok(Some(activation));
     }
     // Sites (in bodies that cannot run) keep only specifiers of modules that
     // stay.
@@ -192,5 +203,5 @@ pub(super) fn prune(ctx: &mut CompilationContext, roots: &[PathBuf]) -> Result<(
         std::fs::write(path, lines.join("\n") + "\n")?;
     }
     ctx.native_modules.retain(|p, _| !pruned.contains(p));
-    Ok(())
+    Ok(Some(activation))
 }

@@ -1,0 +1,2 @@
+Instrumented builds: the startup-snapshot census no longer reports an object whose memory was later reused as the holder or the target of a held pointer, and its TLS image scan is no longer counted as the cost of a module init. Production builds are unchanged.
+Instrumented builds: the census also follows a builtin prototype cut in place and clears the object starts of a freshly mapped arena region, so memory reuse is tracked without retiring a live object.

@@ -30,6 +30,10 @@ pub(crate) enum Unknown {
     /// A key the program itself writes (or may write) onto a builtin
     /// prototype: the builtin member it names may be replaced.
     IntrinsicPrototypeWrite,
+    /// A member of a runtime-born host object (console, process.stdout/stderr/
+    /// stdin) the compiler-internal description does not list, or a key the
+    /// program writes onto that object.
+    HostMemberOpen,
     /// A result of, or callback argument from, an opaque or unmodeled
     /// builtin.
     OpaqueBuiltin,
@@ -42,6 +46,8 @@ pub(crate) enum Unknown {
     ModuleNamespace,
     /// A function value without a known body.
     FunctionWithoutIdentity,
+    /// An installed accessor whose callable body is unknown.
+    UnknownAccessorFunction,
     /// Host input: native modules, process, host globals.
     ExternalInput,
     /// A reflective operation took the object (defineProperty, delete,
@@ -82,6 +88,10 @@ pub(crate) enum Unknown {
     HardLayout,
     /// The static is not a constant of its class.
     NotAConstantStatic,
+    /// The receiver is a class object, or the key a private brand, of a
+    /// class expression evaluated more than once (DECISIONS 251 rule C):
+    /// each evaluation is its own class object and private brand.
+    PerClassEvaluation,
 }
 
 impl Unknown {
@@ -96,11 +106,13 @@ impl Unknown {
             UnknownCalleeEscape => "unknown-callee-escape",
             IntrinsicPrototypeTopStore => "intrinsic-prototype-top-store",
             IntrinsicPrototypeWrite => "intrinsic-prototype-write",
+            HostMemberOpen => "host-member-open",
             OpaqueBuiltin => "opaque-builtin",
             ComputedKey => "computed-key",
             EscapedObjectField => "escaped-object-field",
             ModuleNamespace => "module-namespace",
             FunctionWithoutIdentity => "function-without-identity",
+            UnknownAccessorFunction => "unknown-accessor-function",
             ExternalInput => "external-input",
             ReflectiveOperation => "reflective-operation",
             DynamicCode => "dynamic-code",
@@ -120,6 +132,7 @@ impl Unknown {
             NonFunctionCallee => "non-function-callee",
             HardLayout => "hard-layout",
             NotAConstantStatic => "not-a-constant-static",
+            PerClassEvaluation => "per-class-evaluation",
         }
     }
 }
@@ -196,6 +209,7 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || w.contains("from unmodeled code")
             || w.contains("unknown code")
             || starts("unknown holder of the box")
+            || w.contains("hands its resource to async_hooks init")
             || starts("unregistered function id")
             || starts("bind with spread arguments")
             || w.contains("decorator")
@@ -204,8 +218,11 @@ pub(crate) fn route(why: &str) -> Option<Route> {
         } else if starts("argument of native ")
             || starts("argument of builtin ")
             || starts("argument of a primitive method")
+            // Class.prototype.method: the argument of a native method the realm declares.
+            || w.strip_prefix("argument of ").is_some_and(|r| r.contains('.') && !r.contains(' '))
             || starts("argument of unmodeled runtime entry")
             || starts("argument of runtime glue")
+            || (starts("argument of host ") && w.ends_with(" (kept by the stream)"))
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("Array.prototype method on an array-like")
@@ -214,12 +231,17 @@ pub(crate) fn route(why: &str) -> Option<Route> {
             || starts("RegExp operand")
             || starts("getOwnPropertyDescriptor")
             || starts("__lookupGetter__ result")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("To")
             || starts("replace")
             || starts("array join")
+            || w.contains(" coerces its ")
             || starts("sort comparator")
             || starts("spread argument iteration")
             || starts("JSON.stringify")
+            || starts("console argument")
             || starts("groupBy key")
             || starts("structuredClone source")
             || starts("typed-array source")
@@ -331,10 +353,9 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("re-exported by ")
         {
             ModuleNamespace
-        } else if starts("unregistered function id")
-            || starts("accessor of unknown function value")
-            || starts("unresolved class value")
-        {
+        } else if starts("accessor of unknown function value") {
+            UnknownAccessorFunction
+        } else if starts("unregistered function id") || starts("unresolved class value") {
             FunctionWithoutIdentity
         } else if starts("result of an unknown function") {
             UnknownCalleeEscape
@@ -344,9 +365,15 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("result of unmodeled runtime entry")
             || starts("result of runtime glue")
             || starts("__lookupGetter__ result")
+            || starts("result of a getter the realm does not declare")
+            || starts("accessor descriptor")
+            || starts("unrepresented native accessor descriptor")
+            || starts("accessor lookup without a receiver")
             || starts("structuredClone/transfer result")
             || starts("spread of an unmodeled object")
             || starts("own values of an unmodeled object")
+            || starts("result of an unmodeled native accessor lookup")
+            || starts("a closure native's captures")
         {
             OpaqueBuiltin
         } else if starts("global ")
@@ -377,6 +404,7 @@ pub(crate) fn classify(origin: &str) -> Option<Unknown> {
             || starts("iteratorRestAppend")
             || starts("cjsRequireEdge")
             || starts("unknown result alternative")
+            || starts("value a finally capability is resolved with")
         {
             UnmodeledConstruct
         } else {
@@ -442,6 +470,8 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         AccessorKey
     } else if starts("native member: the program writes") {
         IntrinsicPrototypeWrite
+    } else if starts("host member undescribed or written") {
+        HostMemberOpen
     } else if starts("native member: a store into ⊤") {
         IntrinsicPrototypeTopStore
     } else if starts("native member: a builtin prototype may be redefined") {
@@ -460,6 +490,8 @@ pub(crate) fn verdict_cause(v: &crate::Verdict) -> Option<Result<Unknown, String
         NonFunctionCallee
     } else if starts("not a constant static") {
         NotAConstantStatic
+    } else if starts("per class evaluation") {
+        PerClassEvaluation
     } else {
         return Some(Err(why.clone()));
     }))

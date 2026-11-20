@@ -145,6 +145,7 @@ fn apply_stmts(body: &mut [Stmt], fix: &mut dyn FnMut(FuncId, &mut [Param])) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 apply_stmts(body, fix);
                 if let Some(c) = catch {

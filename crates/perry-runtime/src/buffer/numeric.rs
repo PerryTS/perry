@@ -75,23 +75,9 @@ fn buffer_write_at(
 }
 
 fn throw_range_error_code(code: &[u8], message: &[u8]) -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-    });
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    let set = |key: &[u8], value: f64| {
-        let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-    };
-    let str_val = |s: &[u8]| -> f64 {
-        let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-        f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-    };
-    set(b"name", str_val(b"RangeError"));
-    set(b"code", str_val(code));
-    set(b"message", str_val(message));
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        message, code,
+    ))
 }
 
 pub(super) fn throw_out_of_range() -> ! {
@@ -110,8 +96,7 @@ pub(super) fn throw_dataview_offset_out_of_bounds() -> ! {
     // Node throws a plain `RangeError` here with no `code` property (#2878).
     const MSG: &[u8] = b"Offset is outside the bounds of the DataView";
     let msg = crate::string::js_string_from_bytes(MSG.as_ptr(), MSG.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 fn throw_buffer_out_of_bounds() -> ! {

@@ -67,17 +67,20 @@ unsafe fn format_error_array(arr_ptr: *const crate::array::ArrayHeader, depth: u
     if arr_ptr.is_null() {
         return "[]".to_string();
     }
-    let length = (*arr_ptr).length as usize;
-    if length == 0 {
+    let arr_ptr = crate::array::clean_arr_ptr(arr_ptr);
+    if arr_ptr.is_null() || (*arr_ptr).length == 0 {
         return "[]".to_string();
     }
-    let data_ptr =
-        crate::array::array_elements_ptr(arr_ptr as *const crate::array::ArrayHeader) as *const f64;
+    // The same entries (hole runs included) as any inspected Array, one per
+    // line; a sparse Array's far elements come from its named layout.
+    let parts = super::value_repr::array_entries(arr_ptr, |elem| {
+        super::value_repr::ArrayEntry::new(format_jsvalue_for_json(elem, depth + 1), false)
+    });
     let mut out = String::from("[");
-    for i in 0..length {
+    for part in parts {
         out.push('\n');
         out.push_str("    ");
-        out.push_str(&format_jsvalue_for_json(*data_ptr.add(i), depth + 1));
+        out.push_str(&part.text);
     }
     out.push('\n');
     out.push_str("  ]");

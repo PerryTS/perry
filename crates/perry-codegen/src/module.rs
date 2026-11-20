@@ -20,7 +20,12 @@ use crate::function::LlFunction;
 use crate::native_value::NativeRepRecord;
 use crate::types::LlvmType;
 
+mod inline_copies;
 mod linkage;
+mod unit_graph;
+mod unit_locality;
+#[cfg(test)]
+mod unit_locality_inline_copy_tests;
 pub(crate) use linkage::*;
 mod metadata;
 pub use metadata::BufferAliasScopes;
@@ -53,6 +58,7 @@ fn push_statepoint_declarations(ir: &mut String) {
 }
 
 pub struct LlModule {
+    pub(crate) callable_worker: bool,
     /// Per-compile module-state ownership, copied from CompileOptions.
     pub(crate) program_has_worker: bool,
     pub target_triple: String,
@@ -177,6 +183,7 @@ impl LlModule {
 
     pub fn new_with_fp_flags(target_triple: impl Into<String>, fp_flags: FpFlags) -> Self {
         Self {
+            callable_worker: false,
             target_triple: target_triple.into(),
             program_has_worker: false,
             declarations: Vec::new(),
@@ -336,12 +343,6 @@ impl LlModule {
         return_type: LlvmType,
         param_types: &[LlvmType],
     ) {
-        // The straight-line read-region lowering was removed in object-model
-        // step 5. Its retired runtime API has no supplier, including for TOP.
-        debug_assert!(
-            !matches!(name, "js_region_guard_pack" | "js_region_guard_prime"),
-            "retired straight-line read-region helper: {name}"
-        );
         if self.declared_names.contains(name) {
             return;
         }
@@ -393,12 +394,6 @@ impl LlModule {
         param_types: &[LlvmType],
         ret_attrs: &str,
     ) {
-        // The straight-line read-region lowering was removed in object-model
-        // step 5. Its retired runtime API has no supplier, including for TOP.
-        debug_assert!(
-            !matches!(name, "js_region_guard_pack" | "js_region_guard_prime"),
-            "retired straight-line read-region helper: {name}"
-        );
         if self.declared_names.contains(name) {
             return;
         }
@@ -596,13 +591,19 @@ impl LlModule {
             })
             .map(|f| f.name.clone())
             .collect();
-        let bodies: Vec<_> = self
+        let mut bodies: Vec<_> = self
             .fn_infos
             .borrow()
             .entry_bodies(&exported)
             .into_iter()
             .filter(|body| self.has_function(body))
             .collect();
+        // Module frames append to the existing callable inventory so their
+        // publication cannot change a callable's owner ordinal.
+        bodies.sort_by_key(|body| self.fn_infos.borrow().facts(body).module_frame);
+        let publishes_callables = bodies
+            .iter()
+            .any(|body| !self.fn_infos.borrow().facts(body).module_frame);
         // The bodies the runtime names in a stack trace (a published info
         // with a non-empty name) are the JS text section's functions.
         let named: std::collections::HashSet<&str> = bodies
@@ -620,9 +621,9 @@ impl LlModule {
         for function in &mut self.functions {
             function.js_text = named.contains(function.name.as_str());
         }
-        if bodies.is_empty() {
-            // Publishing an empty descriptor cannot make any metadata visible.
-            // Omit the dead registration at the same final inventory boundary.
+        if !publishes_callables {
+            // Stack-only records are read through static image bounds on demand;
+            // they do not create a startup registration for an empty owner.
             for function in &mut self.functions {
                 for block in function.blocks_mut() {
                     block.insts_mut().retain(|inst| !matches!(inst, crate::inst::LlInst::Call { callee, .. } if callee == "js_register_function_metadata"));
@@ -679,6 +680,12 @@ impl LlModule {
     /// bodies.  They use this lookup to decide whether flattening that body
     /// before statepoint rewriting stays inside the explicit native-roots
     /// code-size budget.
+    pub(crate) fn function_named_mut(&mut self, name: &str) -> Option<&mut LlFunction> {
+        self.functions
+            .iter_mut()
+            .find(|function| function.name == name)
+    }
+
     pub(crate) fn function_estimated_ir_bytes(&self, name: &str) -> Option<usize> {
         self.functions
             .iter()
@@ -807,11 +814,16 @@ impl LlModule {
     }
 
     /// An external thread-local global with an explicit TLS model
-    /// (`initialexec`, ...): a runtime `#[thread_local]` generated code names.
+    /// (`initialexec`, ...; empty: the default, general-dynamic): a runtime
+    /// `#[thread_local]` generated code names.
     pub fn add_external_tls_global(&mut self, name: &str, ty: &str, model: &str) {
-        self.globals.push(format!(
-            "@{name} = external thread_local({model}) global {ty}"
-        ));
+        let tls = if model.is_empty() {
+            "thread_local".to_string()
+        } else {
+            format!("thread_local({model})")
+        };
+        self.globals
+            .push(format!("@{name} = external {tls} global {ty}"));
     }
 
     pub fn add_external_global(&mut self, name: &str, ty: LlvmType) {
@@ -1306,18 +1318,7 @@ impl LlModule {
             crate::workers::unit_workers(),
             |function, _, _| function,
         );
-        Box::new(parts.into_iter().map(|part| {
-            let mut ir = part.pre;
-            for function in part.funcs {
-                ir.push_str(&render_fn_external_with_gc_leaf_callees(
-                    &function,
-                    &part.gc_leaf_callees,
-                ));
-                ir.push('\n');
-            }
-            ir.push_str(&part.post);
-            ir
-        }))
+        Box::new(parts.into_iter().map(OwnedCodegenUnitPart::into_text))
     }
 
     /// Render this module as `n` independent codegen-unit `.ll` texts (#5391).
@@ -1358,6 +1359,7 @@ impl LlModule {
                 pre: String::new(),
                 post: String::new(),
                 funcs,
+                copies: Vec::new(),
                 gc_leaf_callees,
             }];
         }
@@ -1423,32 +1425,15 @@ impl LlModule {
             })
         };
         let n = n.min(funcs.len());
-        // Balance units by estimated byte size, not function count: minified
-        // bundles have a few enormous functions (a 68MB IIFE in the cli.js
-        // case), so contiguous count-chunking can clump them into one outsized
-        // unit whose LLVM optimization time dominates. Greedy largest-first bin-packing
-        // assigns each function to the currently-smallest unit, isolating big
-        // functions and keeping the rest even. (A single function larger than
-        // total/n is irreducible here; that requires structured outlining inside
-        // codegen, not something inter-function partitioning can divide.)
+        // Which unit each function compiles in: `module/unit_locality.rs`.
         let sizes: Vec<usize> = funcs
             .iter()
             .map(|f| f.borrow().estimated_ir_bytes())
             .collect();
-        let mut order: Vec<usize> = (0..funcs.len()).collect();
-        order.sort_by_key(|&i| std::cmp::Reverse(sizes[i]));
-        let mut buckets: Vec<Vec<usize>> = vec![Vec::new(); n];
-        let mut bucket_bytes = vec![0usize; n];
-        for &i in &order {
-            let target = bucket_bytes
-                .iter()
-                .enumerate()
-                .min_by_key(|&(_, &b)| b)
-                .map(|(idx, _)| idx)
-                .unwrap_or(0);
-            buckets[target].push(i);
-            bucket_bytes[target] += sizes[i];
-        }
+        let buckets = {
+            let refs: Vec<&LlFunction> = funcs.iter().map(|f| f.borrow()).collect();
+            unit_graph::assign_units(&self.symbol_prefix, &refs, &sizes, n)
+        };
         let bucket_names: Vec<Vec<String>> = buckets
             .iter()
             .map(|bucket| {
@@ -1532,6 +1517,18 @@ impl LlModule {
         // the unit workers (`TextFinish` is a function of the text alone),
         // and the finished texts are scanned and handed to `visit` in unit
         // order — so the result does not depend on the worker count.
+        // Direct calls into another unit: the callee's text also goes to the
+        // caller's unit as an `available_externally` body (`inline_copies.rs`).
+        let copy_units = {
+            let refs: Vec<&LlFunction> = funcs.iter().map(|f| f.borrow()).collect();
+            inline_copies::inline_copy_units(
+                &refs,
+                &buckets,
+                &gc_leaf_callees,
+                crate::codegen::helpers::native_stack_roots_enabled(),
+            )
+        };
+        let mut unit_copies: Vec<Vec<UnitCopy>> = (0..buckets.len()).map(|_| Vec::new()).collect();
         let mut slots: Vec<Option<F>> = funcs.into_iter().map(Some).collect();
         let mut bucket_items: Vec<Vec<T>> = Vec::with_capacity(buckets.len());
         for (bi, bucket) in buckets.iter().enumerate() {
@@ -1552,6 +1549,20 @@ impl LlModule {
             for ((func, text), &i) in owned.into_iter().zip(texts).zip(bucket) {
                 collect_symbol_refs(&text, &mut bucket_refs[bi]);
                 collect_metadata_refs(&text, &mut bucket_metadata_refs[bi]);
+                if !copy_units[i].is_empty() {
+                    let function = func.borrow();
+                    if let Some(copy) = inline_copies::available_externally_text(function, &text) {
+                        for &u in &copy_units[i] {
+                            collect_symbol_refs(&copy, &mut bucket_refs[u]);
+                            collect_metadata_refs(&copy, &mut bucket_metadata_refs[u]);
+                            unit_copies[u].push(UnitCopy {
+                                name: function.name.clone(),
+                                declaration: declare_line_for(function),
+                                text: copy.clone(),
+                            });
+                        }
+                    }
+                }
                 items.push(visit(func, &text, sizes[i]));
             }
             bucket_items.push(items);
@@ -1721,9 +1732,10 @@ impl LlModule {
             })
             .collect();
 
-        let mut parts = Vec::with_capacity(n);
-        for (bi, items) in bucket_items.into_iter().enumerate() {
-            let defined: HashSet<&str> = bucket_names[bi].iter().map(String::as_str).collect();
+        let mut parts = Vec::with_capacity(buckets.len());
+        for ((bi, items), copies) in bucket_items.into_iter().enumerate().zip(unit_copies) {
+            let mut defined: HashSet<&str> = bucket_names[bi].iter().map(String::as_str).collect();
+            defined.extend(copies.iter().map(|c| c.name.as_str()));
             let mut pre = String::new();
             pre.push_str("; Generated by perry-codegen (codegen unit)\n");
             pre.push_str(&format!("source_filename = \"{MODULE_SOURCE_NAME}\"\n"));
@@ -1836,6 +1848,7 @@ impl LlModule {
                 pre,
                 post: unit_posts[bi].clone(),
                 funcs: items,
+                copies,
                 gc_leaf_callees: Arc::clone(&gc_leaf_callees),
             });
         }
@@ -1852,18 +1865,7 @@ impl LlModule {
         }
         parts
             .into_iter()
-            .map(|part| {
-                let mut ir = part.pre;
-                for func in &part.funcs {
-                    ir.push_str(&render_fn_external_with_gc_leaf_callees(
-                        func,
-                        &part.gc_leaf_callees,
-                    ));
-                    ir.push('\n');
-                }
-                ir.push_str(&part.post);
-                ir
-            })
+            .map(OwnedCodegenUnitPart::into_text)
             .collect()
     }
 }
@@ -1937,7 +1939,42 @@ pub(crate) struct OwnedCodegenUnitPart<T> {
     pub pre: String,
     pub post: String,
     pub funcs: Vec<T>,
+    /// Bodies of other units' functions this unit calls directly, as
+    /// `available_externally` definitions (`module/inline_copies.rs`). Their
+    /// names are not declared in `pre`; `declaration` stands in for that.
+    pub copies: Vec<UnitCopy>,
     pub gc_leaf_callees: Arc<HashSet<String>>,
+}
+
+impl<F: std::borrow::Borrow<LlFunction>> OwnedCodegenUnitPart<F> {
+    /// The unit's complete `.ll` text: skeleton, its own functions, the
+    /// `available_externally` copies, metadata. Every text transport renders a
+    /// unit through this one function. The layout leaves a copied callee out
+    /// of `pre`'s declarations, so a unit rendered without its copies names
+    /// a symbol it neither defines nor declares.
+    fn into_text(self) -> String {
+        let mut ir = self.pre;
+        for function in &self.funcs {
+            ir.push_str(&render_fn_external_with_gc_leaf_callees(
+                function.borrow(),
+                &self.gc_leaf_callees,
+            ));
+            ir.push('\n');
+        }
+        for copy in &self.copies {
+            ir.push_str(&copy.text);
+            ir.push('\n');
+        }
+        ir.push_str(&self.post);
+        ir
+    }
+}
+
+/// One `available_externally` body in a caller's unit.
+pub(crate) struct UnitCopy {
+    pub name: String,
+    pub declaration: String,
+    pub text: String,
 }
 
 #[cfg(test)]
@@ -1981,3 +2018,5 @@ fn llvm_metadata_string(text: &str) -> String {
     }
     out
 }
+
+mod callable;

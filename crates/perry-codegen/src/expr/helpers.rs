@@ -70,14 +70,22 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             UnaryOp::Not => false,
         },
-        // Non-add arithmetic has already applied its Number/BigInt/coercion
-        // rules. Consume its canonical-result proof, including closed raw
-        // field contracts, rather than requiring both syntax leaves to be
-        // literals or counters. Keep add's existing live-bits bookkeeping;
-        // concatenation can publish a pointer and is not this result contract.
-        Expr::Binary { op, .. } => {
-            !matches!(op, BinaryOp::Add)
-                && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+        // Arithmetic has already applied its Number/BigInt/coercion rules.
+        // Consume its canonical-result proof, including closed raw field
+        // contracts, rather than requiring both syntax leaves to be literals
+        // or counters. An add is admitted only when both operands are
+        // themselves numeric by construction: then it is an `fadd` of two
+        // canonical numbers, never a concatenation, and its NaN is canonical.
+        // `PERRY_NUMERIC_ADD_BITS=0` keeps every add on the live-bits test.
+        Expr::Binary { op, left, right } => {
+            if matches!(op, BinaryOp::Add) {
+                std::env::var("PERRY_NUMERIC_ADD_BITS").as_deref() != Ok("0")
+                    && expr_produces_numeric_bits_by_construction(ctx, left)
+                    && expr_produces_numeric_bits_by_construction(ctx, right)
+                    && crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            } else {
+                crate::type_analysis::expr_produces_canonical_raw_f64(ctx, expr)
+            }
         }
         Expr::Conditional {
             then_expr,
@@ -240,6 +248,28 @@ pub(crate) fn emit_string_addref_if_heap_string(ctx: &mut FnCtx<'_>, value: &str
         .call_void("js_string_addref_if_heap_string", &[(DOUBLE, value)]);
     ctx.block().br(&done_label);
     ctx.current_block = done_idx;
+}
+
+/// `"lit"` the string pool atomises (non-empty UTF-8 of at most
+/// `INTERN_MAX_BYTE_LEN` = 64 bytes, perry-runtime `string/intern.rs`), or a
+/// conditional choosing between such. `PERRY_UNBOXED_CLASS_FIELDS=0` answers
+/// false.
+pub(crate) fn expr_is_pool_atom_literal(value: &Expr) -> bool {
+    if crate::stmt::this_field_fast_off() {
+        return false;
+    }
+    fn walk(value: &Expr) -> bool {
+        match value {
+            Expr::String(s) => !s.is_empty() && s.len() <= 64,
+            Expr::Conditional {
+                then_expr,
+                else_expr,
+                ..
+            } => walk(then_expr) && walk(else_expr),
+            _ => false,
+        }
+    }
+    walk(value)
 }
 
 pub(crate) fn class_field_store_needs_string_addref(ctx: &FnCtx<'_>, value: &Expr) -> bool {
@@ -414,6 +444,24 @@ pub(crate) fn lower_js_args_array(
 pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     let bits = blk.bitcast_double_to_i64(boxed);
     blk.and(I64, &bits, POINTER_MASK_I64)
+}
+
+/// The object address a value names, decoded by its tag alone: the payload of
+/// a `POINTER_TAG` value, `0` for every other word. For an argument the runtime
+/// reads as an object pointer that may be any value (a callable argument:
+/// `new Promise(executor)`, `JSON.parse(text, reviver)`), where
+/// [`unbox_to_i64`]'s mask would turn a Number into an address (a denormal
+/// keeps its bits, a negative Number or `1.1` keeps its low 48 bits).
+pub(crate) fn unbox_pointer_or_null(blk: &mut LlBlock, boxed: &str) -> String {
+    let bits = blk.bitcast_double_to_i64(boxed);
+    let tag = blk.and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+    let payload = blk.and(I64, &bits, POINTER_MASK_I64);
+    blk.select(crate::types::I1, &is_pointer, I64, &payload, "0")
 }
 
 /// `unbox_to_i64` for an argument a native entry reads as a
@@ -618,3 +666,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
 pub(crate) fn unbox_str_handle(blk: &mut LlBlock, boxed: &str) -> String {
     blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, boxed)])
 }
+
+#[cfg(test)]
+#[path = "callable_by_tag_tests.rs"]
+mod callable_by_tag_tests;

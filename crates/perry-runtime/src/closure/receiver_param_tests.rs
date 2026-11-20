@@ -68,7 +68,7 @@ static PROBE_WIDE: JsFunctionInfo =
 const UNDEF: u64 = crate::value::TAG_UNDEFINED;
 
 fn receiver() -> f64 {
-    f64::from_bits(crate::value::JSValue::int32(4242).bits())
+    f64::from(4242)
 }
 
 fn this() -> JsThis {

@@ -168,7 +168,7 @@ fn closure_outliving_its_call_sees_every_context() {
 #[test]
 fn sabotage_escaped_closure_writes_its_capture() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function f(o: any) {{ let v: any = o; ext((n: any) => {{ v = n; }}); return v; }}
         const r = f(new A());
@@ -183,7 +183,7 @@ fn sabotage_escaped_closure_writes_its_capture() {
 #[test]
 fn sabotage_closure_through_an_escaped_field() {
     let pf = facts(&format!(
-        "{CLASSES}
+        "import \"unseen-host\"; {CLASSES}
         declare const ext: any;
         function f(o: any) {{ const h: any = {{}}; h.g = (n: any) => {{ o.v = n; }}; ext(h); return o; }}
         const r = f(new A());

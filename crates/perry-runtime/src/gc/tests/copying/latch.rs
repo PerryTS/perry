@@ -225,18 +225,11 @@ fn raw_young_pin_that_bypasses_pin_object_aborts_the_copier() {
         // We are the child; the #[ignore]d body below does the work.
         return;
     }
-    let exe = std::env::current_exe().expect("test binary path");
-    let output = std::process::Command::new(exe)
-        .args([
-            "--exact",
-            "gc::tests::copying::latch::pin_latch_sabotage_child",
-            "--ignored",
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(SABOTAGE_ENV, "1")
-        .output()
-        .expect("spawn sabotage child");
+    let output =
+        crate::test_support::test_process("gc::tests::copying::latch::pin_latch_sabotage_child")
+            .env(SABOTAGE_ENV, "1")
+            .output()
+            .expect("spawn sabotage child");
 
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert_eq!(

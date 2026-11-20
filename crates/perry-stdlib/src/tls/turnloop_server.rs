@@ -53,8 +53,8 @@ use super::{
 
 /// This module's completion-sink slot. perry-ext-net owns 0, perry-ext-http
 /// 1 and 6, this crate's HTTP client 2, SMTP client 3 and framework server 5,
-/// perry-ext-ws 7 and 8, the database bindings 9..=12
-/// (`perry-db-turnloop::subsystem`), and perry-runtime's own tests use 13.
+/// perry-ext-ws 7 and 8, the reserved database band 9..=12 (its bindings no
+/// longer exist in this workspace), and perry-runtime's own tests use 13.
 pub(super) const SUBSYSTEM: u8 = 14;
 
 /// Base of the turnloop id band for listeners and connections: `ID_BAND +

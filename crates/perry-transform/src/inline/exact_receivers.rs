@@ -181,6 +181,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 visit_stmts(body, facts);
                 if let Some(catch) = catch {
@@ -362,6 +363,15 @@ pub fn clear_exact_receivers_after_global_effect(expr: &Expr, facts: &mut ExactR
 
 pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceiverFacts) {
     match expr {
+        // A closed construction runs no code outside its own class and writes
+        // only the fields of the object it builds (`crate::effects`): what is
+        // known about every other object still holds after it. Its arguments
+        // are judged on their own.
+        Expr::New { class_name, .. } if crate::effects::construction_is_closed(class_name) => {
+            walk_expr_children(expr, &mut |child| {
+                invalidate_exact_receivers_for_expr(child, facts)
+            });
+        }
         Expr::Call { .. }
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
@@ -503,6 +513,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             for stmt in body {
                 collect_exact_receiver_refs_in_stmt(stmt, facts, out);

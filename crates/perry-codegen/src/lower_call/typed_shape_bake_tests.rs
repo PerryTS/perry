@@ -57,11 +57,11 @@ fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -93,6 +93,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -199,6 +203,7 @@ fn two_field_class(name: &str, f1_ty: Type) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -211,6 +216,24 @@ fn two_field_class(name: &str, f1_ty: Type) -> Class {
 /// fold the layout into. An outlined `js_object_alloc_class_inline_keys` site
 /// keeps the runtime declare, by design.
 pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
+    let first = Expr::Binary {
+        op: BinaryOp::Add,
+        left: Box::new(Expr::LocalGet(I_ID)),
+        right: Box::new(Expr::Integer(1)),
+    };
+    loop_new_module_with(name, f1_ty, first, second)
+}
+
+/// [`loop_new_module`] whose first argument is `JSON.parse("1")`: a value no
+/// fact proves a Number. `i + 1` is a proven Number, so its birth stores the
+/// raw lane with no number test and never reaches the constructor (P3 B4b);
+/// this fixture keeps the tested birth, whose fallback runs the constructor.
+pub(super) fn loop_new_module_unproven(name: &str, f1_ty: Type, second: Expr) -> Module {
+    let first = Expr::JsonParse(Box::new(Expr::String("1".into())));
+    loop_new_module_with(name, f1_ty, first, second)
+}
+
+fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> Module {
     let mut m = Module::new("typed_shape_bake.ts");
     m.classes = vec![two_field_class(name, f1_ty)];
     m.init = vec![Stmt::For {
@@ -240,14 +263,7 @@ pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
                 init: Some(Expr::New {
                     byte_end: 0,
                     class_name: name.to_string(),
-                    args: vec![
-                        Expr::Binary {
-                            op: BinaryOp::Add,
-                            left: Box::new(Expr::LocalGet(I_ID)),
-                            right: Box::new(Expr::Integer(1)),
-                        },
-                        second,
-                    ],
+                    args: vec![first, second],
                     type_args: Vec::new(),
                     byte_offset: 0,
                     cap_args_appended: 0,
@@ -398,7 +414,13 @@ fn a_pointer_bearing_birth_uses_the_same_header_image_and_its_own_shape() {
 /// the runtime.
 #[test]
 fn an_undefined_constructor_completion_takes_the_inline_arm() {
-    let ir = emit(&loop_new_module("Pair", Type::Number, Expr::Integer(2)));
+    // An unproven argument: a proven-Number birth never calls the constructor,
+    // so it has no completion to decide.
+    let ir = emit(&loop_new_module_unproven(
+        "Pair",
+        Type::Number,
+        Expr::Integer(2),
+    ));
     assert!(
         ir.contains("ctor_ret.merge"),
         "the inline `undefined` arm was not emitted, so every construction \

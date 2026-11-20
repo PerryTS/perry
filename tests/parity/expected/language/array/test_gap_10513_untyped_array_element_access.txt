@@ -1,0 +1,37 @@
+dense [10,"s",null,{"x":1}]
+dense2 2.5 true
+hole-read undefined false
+hole-store 7 true 3
+presized-holes [null,null,null,"x",null] false true
+grown 40 1560 1560
+sparse 46 undefined false 1
+grown-field 100 4950 99
+pushed 2048 2048
+refill 6048 189
+oob-read undefined undefined undefined undefined undefined
+keys 3 ["0","1","2","-1","1.5","k"] neg frac str2 named
+symbol symval 3
+maxidx 4294967295
+  throw 0 TypeError
+  throw 3 TypeError
+frozen [1,2,3]
+  throw 3 TypeError
+sealed [99,2,3]
+  throw 5 TypeError
+noext [1,42,3] 3
+named [1,20,3] t
+accessor 7 set0=11,get0
+  throw 2 TypeError
+readonly 3
+setproto 9 p1 true false protoset=5
+nullproto np np5 6
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+ap-pollute 4 x y 
+ap-clean z
+typed 4464,65535,3,0 1.25,2.5,1 255,2
+shared 124 124
+views 0,0,255,7,0,0,0,0 7
+buffer 01410000 65 undefined
+string b undefined undefined
+arguments 1|2|A
+rmw 20500 20500 true

@@ -259,6 +259,7 @@ fn emit_get(
     let storage = ctx.new_block("ta.read.storage");
     let load = ctx.new_block("ta.read.load");
     let oob = ctx.new_block("ta.read.oob");
+    let other_kind = ctx.new_block("ta.read.other_kind");
     let slow = ctx.new_block("ta.read.slow");
     let done = ctx.new_block("ta.read.done");
     let guard_l = ctx.block_label(guard);
@@ -267,6 +268,7 @@ fn emit_get(
     let storage_l = ctx.block_label(storage);
     let load_l = ctx.block_label(load);
     let oob_l = ctx.block_label(oob);
+    let other_kind_l = ctx.block_label(other_kind);
     let slow_l = ctx.block_label(slow);
     let done_l = ctx.block_label(done);
     let brand = [super::byte_cell::brand_for_kind(kind)];
@@ -278,7 +280,8 @@ fn emit_get(
     let access = if let Some(param) = proof {
         let admitted = ctx.new_block("ta.read.hoisted");
         let admitted_l = ctx.block_label(admitted);
-        ctx.block().cond_br(&param.valid_i1, &admitted_l, &slow_l);
+        ctx.block()
+            .cond_br(&param.valid_i1, &admitted_l, &other_kind_l);
         ctx.current_block = admitted;
         let len = ctx.block().load(I32, &param.length_slot);
         super::byte_cell::Access {
@@ -289,7 +292,7 @@ fn emit_get(
             len,
         }
     } else {
-        super::byte_cell::resolve(ctx, object, brands, &slow_l)
+        super::byte_cell::resolve(ctx, object, brands, &other_kind_l)
     };
     let admitted_storage = "true".to_owned();
     ctx.block().br(&guard_l);
@@ -342,6 +345,48 @@ fn emit_get(
     });
     let oob_end = ctx.block().label.clone();
     ctx.block().br(&done_l);
+    // The receiver is no cell of the expected kind: a typed array of another
+    // kind still reads its element directly (a Number key; the runtime
+    // entry dispatches on the cell's own kind), anything else is the
+    // complete indexed read.
+    ctx.current_block = other_kind;
+    let (raw, any_typed) = super::byte_cell::any_typed_array_guard(ctx, object);
+    let any_idx = ctx.new_block("ta.read.any_kind");
+    let any_l = ctx.block_label(any_idx);
+    ctx.block().cond_br(&any_typed, &any_l, &slow_l);
+    ctx.current_block = any_idx;
+    let any_value = ctx.block().call(
+        DOUBLE,
+        "js_typed_array_get_number_key",
+        &[(I64, &raw), (DOUBLE, key)],
+    );
+    let (any_value, any_end) = if number_context {
+        // A Number element is its own ToNumber; only `undefined` (no such
+        // element) and a BigInt element take the coercion.
+        let coerce_idx = ctx.new_block("ta.read.any_coerce");
+        let coerce_l = ctx.block_label(coerce_idx);
+        let number_idx = ctx.new_block("ta.read.any_number");
+        let number_l = ctx.block_label(number_idx);
+        let bits = ctx.block().bitcast_double_to_i64(&any_value);
+        let abs = ctx.block().and(I64, &bits, "9223372036854775807");
+        let boxed = ctx.block().icmp_ugt(I64, &abs, "9221120237041090560"); // > 0x7FF8_0000_0000_0000
+        let call_end = ctx.block().label.clone();
+        ctx.block().cond_br(&boxed, &coerce_l, &number_l);
+        ctx.current_block = coerce_idx;
+        let coerced = ctx
+            .block()
+            .call(DOUBLE, "js_number_coerce", &[(DOUBLE, &any_value)]);
+        let coerce_end = ctx.block().label.clone();
+        ctx.block().br(&number_l);
+        ctx.current_block = number_idx;
+        let v = ctx
+            .block()
+            .phi(DOUBLE, &[(&any_value, &call_end), (&coerced, &coerce_end)]);
+        (v, ctx.block().label.clone())
+    } else {
+        (any_value, ctx.block().label.clone())
+    };
+    ctx.block().br(&done_l);
     ctx.current_block = slow;
     // Preserve the boxed receiver on every miss. A lying annotation may
     // supply an SSO string or a primitive whose masked bits are no address.
@@ -368,6 +413,7 @@ fn emit_get(
         &[
             (&value, &load_end),
             (&undefined, &oob_end),
+            (&any_value, &any_end),
             (&fallback, &slow_end),
         ],
     )
@@ -471,6 +517,7 @@ mod tests {
                 body: vec![Stmt::While {
                     condition: Expr::LocalGet(2),
                     body: vec![Stmt::Return(Some(Expr::IndexGet {
+                        element_offset: 0,
                         byte_offset: 0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),

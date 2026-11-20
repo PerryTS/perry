@@ -1,0 +1,1 @@
+Make bounded GC-root inference deterministic by visiting local writes in local-ID order. Hash iteration could change which scalar locals were proven before the pass limit, changing the emitted roots and native code between identical compilations.

@@ -387,7 +387,8 @@ impl Brotli {
             input,
             state: Placed::try_new(
                 buffers,
-                BrotliState::new(alloc.clone(), alloc.clone(), alloc),
+                // RFC 7932 only; `Payload::allow_brotli_large_window` opts in.
+                BrotliState::new_strict(alloc.clone(), alloc.clone(), alloc),
             )
             .ok_or_else(allocation::out_of_memory)?,
             total_out: 0,
@@ -848,6 +849,7 @@ pub(super) struct Payload {
     zstd_error: Option<(String, i32)>,
     buffers: BufferOwner,
     dictionary: Option<Vec<u8>>,
+    brotli_large_window: bool,
 }
 impl Payload {
     pub(super) fn new(codec: Codec, level: Compression, chunk_size: usize) -> io::Result<Self> {
@@ -909,6 +911,7 @@ impl Payload {
             zstd_error: None,
             buffers,
             dictionary,
+            brotli_large_window: false,
         })
     }
     /// Size scratch after Gzip's base option validation without replacing its
@@ -1051,13 +1054,25 @@ impl Payload {
             _ => {}
         }
     }
+    /// Accepts large-window Brotli streams (window up to 1 GiB), as Node does
+    /// under `params[BROTLI_DECODER_PARAM_LARGE_WINDOW]`. Survives `reset`.
+    pub(super) fn allow_brotli_large_window(&mut self) {
+        self.brotli_large_window = true;
+        if let Some(Decoder::Brotli(brotli)) = &mut self.decoder {
+            brotli.state.large_window = true;
+        }
+    }
     pub(super) fn reset(&mut self) -> io::Result<()> {
+        let large_window = self.brotli_large_window;
         *self = Self::with_dictionary(
             self.codec,
             self.level,
             self.scratch.len(),
             self.dictionary.clone(),
         )?;
+        if large_window {
+            self.allow_brotli_large_window();
+        }
         Ok(())
     }
 }

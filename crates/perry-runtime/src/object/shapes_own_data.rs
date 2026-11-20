@@ -133,7 +133,7 @@ pub(crate) unsafe fn plain_receiver_miss_is_final(object: *const ObjectHeader, k
     {
         return false;
     }
-    if record.object_kind() != ShapeObjectKind::Ordinary
+    if !record.kind_is(ShapeObjectKind::Ordinary)
         || record.weak_collection_brand().is_some()
         || !record.brands().is_empty()
     {

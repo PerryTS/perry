@@ -95,3 +95,31 @@ fn ordinary_builder_sequence_still_folds_without_a_prototype_barrier() {
         "the folded assignment should be absorbed into the allocation"
     );
 }
+
+/// Every form that can put an accessor or a non-writable key on a prototype
+/// keeps the assignment a `[[Set]]`, not only `Object.prototype` spelled out:
+/// an alias, a definition the scan cannot name, dynamic code, a relink.
+#[test]
+fn any_census_interception_keeps_the_assignment() {
+    for (src, why) in [
+        (
+            "const P: any = Object.prototype;\nObject.defineProperty(P, \"hook\", { set(v: any) {}, configurable: true });",
+            "aliased Object.prototype",
+        ),
+        ("declare const k: string;\nObject.defineProperty(Object.prototype, k, { set(v: any) {} });", "unnamed key"),
+        ("new Function(\"o\", \"return o\");", "dynamic code"),
+        ("class C {}\nObject.setPrototypeOf(C.prototype, {});", "relink"),
+    ] {
+        let module = lower_src(&format!("{src}\nconst built: any = {{}};\nbuilt.hook = 42;\n"));
+        assert!(
+            has_runtime_set(&module, "hook"),
+            "{why}: the assignment must survive as runtime [[Set]]: {:?}",
+            module.init
+        );
+    }
+    // A definition of another key leaves `hook` free to fold.
+    let module = lower_src(
+        "Object.defineProperty(Object.prototype, \"other\", { set(v: any) {} });\nconst built: any = {};\nbuilt.hook = 42;\n",
+    );
+    assert!(!has_runtime_set(&module, "hook"), "{:?}", module.init);
+}

@@ -54,6 +54,8 @@ fn gc_init_establishes_inline_state_on_each_live_worker_heap() {
                     length: 0,
                     capacity: 3,
                     named: std::ptr::null_mut(),
+                    #[cfg(target_pointer_width = "32")]
+                    _ek_pad: 0,
                     ek_prefix: 0,
                     ek_kind: 0,
                 });

@@ -238,7 +238,11 @@ fn rule1_clear_object_descriptors_on_a_handle_transitions_its_bag() {
     let handle = native.handle() as usize;
     set_property_attrs(handle, "hid".to_string(), FROZEN_ATTRS);
     unsafe {
-        let bag = super::descriptor_state::descriptor_holder(handle);
+        let super::descriptor_state::KeyTarget::Object(bag) =
+            super::descriptor_state::owner_key_target(handle)
+        else {
+            panic!("an object owner")
+        };
         assert!(!bag.is_null());
         let before = shapes::object_shape_stamp(bag);
         clear_object_descriptors(handle);

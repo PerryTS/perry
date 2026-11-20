@@ -91,16 +91,8 @@ impl RealmPlan {
             symbols: BTreeSet::new(),
         };
         for (name, declaration) in &all {
-            // Every program has the global cell, so the layouts it declares as
-            // its own births (the one it is born on) are always reached.
-            let global_owned = matches!(
-                &declaration.storage,
-                Some(RealmStorageFacts::RuntimeLayout(layout))
-                    if layout.owners.iter().any(|owner| owner == "%Global%")
-            );
-            if name == "%Global%"
-                || (!reach.is_full() && !reach.names.contains(name) && !global_owned)
-            {
+            // The global cell's own layout is in every R (RealmReach::close).
+            if name == "%Global%" || (!reach.is_full() && !reach.names.contains(name)) {
                 continue;
             }
             if let Some(RealmStorageFacts::RuntimeLayout(layout)) = &declaration.storage {
@@ -153,6 +145,7 @@ impl RealmPlan {
                         value: Some(RealmValue::String(module.clone())),
                         get: None,
                         set: None,
+                        value_type: None,
                     },
                 );
             }
@@ -357,6 +350,32 @@ mod tests {
     }
 
     #[test]
+    fn a_birth_site_owns_its_layouts_and_has_no_cell() {
+        const LAYOUTS: [&str; 2] = ["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"];
+        let site = crate::realm_manifest::REALM
+            .iter()
+            .find(|e| e.name == "%ArgumentsBirth%")
+            .unwrap();
+        assert_eq!(site.kind, perry_hir::realm_manifest::RealmKind::BirthSite);
+        for layout in LAYOUTS {
+            assert!(site.births.contains(&layout), "reach edge {layout}");
+        }
+        let hello = RealmPlan::from_reach(&reach("console.log('hi');")).unwrap();
+        for layout in LAYOUTS {
+            assert!(!hello.runtime_layouts.contains_key(layout), "{layout}");
+        }
+        let mut r = reach("console.log('hi');");
+        r.names.insert("%ArgumentsBirth%".into());
+        r.close(crate::realm_manifest::REALM);
+        let plan = RealmPlan::from_reach(&r).unwrap();
+        for layout in LAYOUTS {
+            assert!(plan.runtime_layouts.contains_key(layout), "{layout}");
+        }
+        assert!(!plan.cells.contains_key("%ArgumentsBirth%"));
+        assert!(!plan.providers.contains_key("%ArgumentsBirth%"));
+    }
+
+    #[test]
     fn runtime_layouts_follow_reached_births_without_retaining_unrelated_kinds() {
         let hello = RealmPlan::from_reach(&reach("console.log('hi');")).unwrap();
         for layout in [
@@ -511,6 +530,37 @@ mod tests {
     }
 
     #[test]
+    fn every_global_key_reached_alone_closes_its_plan() {
+        // A global key's value (a reference or an accessor's getter) must be
+        // born by the key's own R node: a program that reads only that key
+        // gets a closed plan. `navigator` became an accessor whose getter no
+        // node birthed.
+        let global: RealmDeclaration = crate::realm_manifest::REALM
+            .iter()
+            .find(|entry| entry.name == "%Global%")
+            .map(|entry| serde_json::from_str(entry.facts).unwrap())
+            .unwrap();
+        let keys: Vec<_> = global
+            .properties
+            .iter()
+            .filter(|property| !property.symbol)
+            .map(|property| property.key.clone())
+            .collect();
+        assert!(keys.iter().any(|key| key == "navigator"));
+        let mut failures = Vec::new();
+        for key in &keys {
+            let reach = reach(&format!("console.log(typeof globalThis.{key});"));
+            if reach.is_full() {
+                continue;
+            }
+            if let Err(error) = RealmPlan::from_reach(&reach) {
+                failures.push(format!("{key}: {error}"));
+            }
+        }
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
     fn an_absent_birth_is_an_error_not_implicit_reachability() {
         let mut reach = reach("console.log('hi');");
         reach.names.remove("Array.prototype");
@@ -527,6 +577,7 @@ mod tests {
             value: Some(RealmValue::Undefined),
             get: None,
             set: None,
+            value_type: None,
         };
         assert_eq!(property_entry(&property), 2); // non-enumerable data
         property.attributes = 4;
@@ -599,6 +650,23 @@ mod tests {
                 .runtime_layouts
                 .contains_key(&format!("%Layout:{name}%")));
         }
+    }
+
+    #[test]
+    fn a_global_worker_construction_reaches_the_worker_threads_worker() {
+        // `new Worker(...)` with no import lowers to node:worker_threads'
+        // WorkerNew; minting that constructor mints its [[Prototype]],
+        // EventEmitter, so R holds both constructor bags.
+        let global = reach("const w = new Worker(new URL('./w.js', import.meta.url)); w.terminate();");
+        assert!(!global.is_full());
+        assert!(global.names.contains("node:worker_threads.Worker"));
+        let plan = RealmPlan::from_reach(&global).unwrap();
+        assert!(plan
+            .runtime_layouts
+            .contains_key("%Layout:NATIVE_CTOR_EVENT_EMITTER%"));
+        // A program class named Worker is not the builtin.
+        let local = reach("class Worker {} new Worker();");
+        assert!(!local.names.contains("node:worker_threads.Worker"));
     }
 
     #[test]

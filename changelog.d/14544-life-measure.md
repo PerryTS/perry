@@ -1,0 +1,7 @@
+### Added
+- Lifetime measurement (`PERRY_LIFE_MEASURE`, compile time): an instrument knob that links the instrumented runtime variant and makes codegen call `perry_life_birth` at every census birth plus activation, loop-iteration and turn hooks. The run (`PERRY_LIFE_MEASURE=<tsv>` at run time; `PERRY_LIFE_MEASURE_RATE=1` samples every birth) counts births and bytes per site exactly and probes sampled births at the end of their iteration, their function's return, the caller's return and the turn, writing per-site survival with the holder that reached each survivor. A compile-time path value receives the `id<TAB>site key` table. Without the knob nothing is emitted; with the default archives a measure build fails to link. Fixtures and controls: `scripts/test-life-measure.py`.
+
+### Fixed
+- Life claims (check mode and lifetime measurement) veto the untraced whole-young in-place promotion: that cycle reaches nothing, so every claimed object read as freed (survivors reported dead; check-mode violations unseen).
+- Lifetime measurement: a throw's skipped activations are decided at the catching handler (`perry_life_depth` at `try` entry, `perry_life_catch` at the handler, counted `late`); activations no longer pop by equal frame pointer, which an inlined body shares with its caller.
+- Lifetime measurement: the birth and body-entry hooks never collect (the birth's value and the body's arguments are not rooted across them; a probe there corrupted semver and postcss runs); activations a throw left are popped by the next hook at a rooted point.

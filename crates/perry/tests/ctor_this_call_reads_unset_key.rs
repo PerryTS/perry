@@ -18,7 +18,7 @@ fn clean(cmd: &mut Command) -> &mut Command {
     cmd
 }
 
-fn run(src_text: &str, whole: bool) -> String {
+fn run(src_text: &str) -> String {
     let dir = tempfile::tempdir().unwrap();
     let src = dir.path().join("main.js");
     std::fs::write(&src, src_text).unwrap();
@@ -27,9 +27,6 @@ fn run(src_text: &str, whole: bool) -> String {
     clean(&mut cmd)
         .current_dir(dir.path())
         .env("PERRY_NO_CACHE", "1");
-    if whole {
-        cmd.env("PERRY_FACTS_UNITS", "0");
-    }
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -55,8 +52,7 @@ fn run(src_text: &str, whole: bool) -> String {
 
 /// `node main.js` prints `expected`.
 fn check(src: &str, expected: &str) {
-    assert_eq!(run(src, false), expected, "per unit");
-    assert_eq!(run(src, true), expected, "whole program");
+    assert_eq!(run(src), expected, "whole program");
 }
 
 #[test]

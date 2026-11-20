@@ -177,7 +177,7 @@ extern "C" fn throwing_settled_one_shot(
     output: f64,
 ) -> f64 {
     settled_one_shot(c, this, err, output);
-    perry_runtime::exception::js_throw(73.0)
+    perry_runtime::exception::throw_program_value(73.0)
 }
 extern "C" fn caught_one_shot(_: *const RawClosureHeader, _: JsThis, err: f64) -> f64 {
     assert_eq!(err, 73.0);
@@ -363,8 +363,8 @@ fn native_bytes(owner: f64) -> usize {
     let ptr =
         JsValue::from_bits(owner.to_bits()).as_pointer::<perry_runtime::object::ObjectHeader>();
     unsafe {
-        // `native_state` -> the stream's state record -> its payload cell.
-        let cell = perry_runtime::native_payload::payload_cell_of_word((*(*ptr).meta).native_state)
+        // The stream's payload slot -> its payload cell.
+        let cell = perry_runtime::native_payload::payload_cell_of_object(ptr)
             .expect("a zlib stream has a payload cell");
         (*cell).external_bytes as usize
     }
@@ -645,7 +645,9 @@ fn eleven_codecs_are_deferred_runtime_transforms_and_release_on_completion() {
 }
 #[test]
 fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
-    let Some(_isolated) = isolated_rss_guard() else {
+    let Some(_isolated) =
+        isolated_rss_guard("real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced")
+    else {
         return;
     };
     let _agent = super::OwnAgent::enter();
@@ -656,7 +658,8 @@ fn real_gunzip_bomb_parks_on_pause_and_keeps_the_input_traced() {
     let opts = roots.root_nanbox(options());
     // Generated in a separate Node process. A 100 MB producer allocation
     // retained by the allocator would mask the decompressor's RSS growth.
-    let compressed = include_bytes!("../../../../test-files/fixtures/zlib-bomb-100mb.gz");
+    let compressed =
+        include_bytes!("../../../../tests/fixtures/programs/fixtures/zlib-bomb-100mb.gz");
     let expected = 2229916188;
     let owner = roots.root_nanbox(factory("Gunzip", opts.get()));
     listen(owner.get(), 3.0);
@@ -924,29 +927,34 @@ impl Drop for IsolatedRssDone {
     }
 }
 
-fn isolated_rss_guard() -> Option<IsolatedRssDone> {
+/// Run the RSS witness `test` (a test fn of this module) in a fresh process of
+/// its own. `None` in the parent, after asserting that the child completed;
+/// `Some` in the child, which runs the witness.
+///
+/// The child is started the way libtest's runner starts a per-test process
+/// under the workspace's `panic-abort-tests`: `__RUST_TEST_INVOKE=<libtest
+/// name>`, no arguments; it runs the test on its main thread (so the test's
+/// thread name is not its test name) and exits 50 (libtest's `TR_OK`) when it
+/// passes.
+fn isolated_rss_guard(test: &str) -> Option<IsolatedRssDone> {
     const CHILD_ENV: &str = "PERRY_ZLIB_RSS_TEST_NAME";
-    let thread = std::thread::current();
-    let name = thread.name().expect("libtest must name its test thread");
-    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name) {
-        return Some(IsolatedRssDone(name.to_string()));
+    let module = module_path!()
+        .split_once("::")
+        .map_or("", |(_crate, module)| module);
+    let name = format!("{module}::{test}");
+    if std::env::var(CHILD_ENV).ok().as_deref() == Some(name.as_str()) {
+        return Some(IsolatedRssDone(name));
     }
     let output = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            name,
-            "--nocapture",
-            "--include-ignored",
-            "--test-threads=1",
-        ])
-        .env(CHILD_ENV, name)
+        .env("__RUST_TEST_INVOKE", &name)
+        .env(CHILD_ENV, &name)
         .output()
         .expect("launch isolated zlib RSS witness");
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
     let completed = format!("zlib RSS witness completed: {name}");
     assert!(
-        output.status.success() && stdout.lines().any(|line| line.ends_with(&completed)),
+        output.status.code() == Some(50) && stdout.lines().any(|line| line.ends_with(&completed)),
         "isolated RSS witness {name} did not complete: {}\nstdout:\n{stdout}\nstderr:\n{stderr}",
         output.status,
     );
@@ -967,7 +975,9 @@ fn rss() -> usize {
 #[test]
 #[ignore = "full Z8: 50,000 completions per codec plus 50,000 immediate destroys"]
 fn fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss() {
-    let Some(_isolated) = isolated_rss_guard() else {
+    let Some(_isolated) =
+        isolated_rss_guard("fifty_thousand_churn_per_codec_releases_native_bytes_and_has_flat_rss")
+    else {
         return;
     };
     let _agent = super::OwnAgent::enter();
@@ -1175,7 +1185,8 @@ fn destroy_mid_stream_returns_payload_buffers_before_any_collection() {
 }
 #[test]
 fn mid_stream_destroy_churn_keeps_buffers_and_rss_flat() {
-    let Some(_isolated) = isolated_rss_guard() else {
+    let Some(_isolated) = isolated_rss_guard("mid_stream_destroy_churn_keeps_buffers_and_rss_flat")
+    else {
         return;
     };
     let _agent = super::OwnAgent::enter();

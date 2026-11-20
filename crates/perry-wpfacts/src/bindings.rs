@@ -7,7 +7,121 @@
 //! offset, so the binding (not the site) is the key.
 
 use crate::gen::Gen;
-use crate::model::{Model, NodeId, TmplKind, TokKind, TOP};
+use crate::model::{Model, NodeId, TmplId, TmplKind, Tok, TokKind, TOP};
+use crate::pts::{FxHashMap, FxHashSet};
+
+/// `PERRY_FACTS_INSTANCE_NODES=0`: a binding's facts are read off its
+/// shared node alone (`BindingNodes`), as before the join.
+pub fn instance_nodes_enabled() -> bool {
+    !matches!(
+        std::env::var("PERRY_FACTS_INSTANCE_NODES").as_deref(),
+        Ok("0") | Ok("off") | Ok("false")
+    )
+}
+
+/// The nodes a binding's values live in. The body of a summarized function
+/// (`summary`) is solved once per instance, each on its own copy of the
+/// body's slot nodes (`Inst::fresh`). The shared node is the observation
+/// layer: it holds every caller's arguments and every call's result, and
+/// runs every read rule, so it alone is the binding, with one exception. A
+/// literal the body bears per instance (`Summary::births`) is one token per
+/// instance, and only the instance's copy holds it; the shared node keeps
+/// the literal's template token, which no effect of a callee ever reaches
+/// (a push through a parameter grows the instance's token). In a body with
+/// such births a fact of a binding (a local, a `this`, a site operand) is
+/// therefore a fact of its shared node AND of every instance copy: every
+/// per-binding fact reads its nodes from `of`, so none can read the shared
+/// node alone. The copies of a body without births add nothing the shared
+/// node lacks, and their intervals are coarser (an instance's loop counter
+/// widens past the bound the shared body's narrowing keeps), so they are
+/// left out. A binding has a copy only if its slot survives
+/// `summary::compress`, which keeps the slot of every node in
+/// `binding_reads` in a body with births; `of` serves no other node.
+pub(crate) struct BindingNodes<'m> {
+    copies: FxHashMap<NodeId, Vec<NodeId>>,
+    live: usize,
+    reads: &'m FxHashSet<NodeId>,
+}
+
+/// Every node a per-binding fact reads through `BindingNodes::of`: each
+/// module's locals, each function's `this`, the arguments of the calls
+/// `collect` gives ranges for, and the receiver and index of each element
+/// site. `Model::binding_reads` holds them while the summaries are built.
+pub(crate) fn binding_reads(g: &Gen) -> FxHashSet<NodeId> {
+    let mut s: FxHashSet<NodeId> = FxHashSet::default();
+    for info in &g.mods {
+        s.extend(info.locals.values().copied());
+    }
+    s.extend(
+        g.m.funcs
+            .iter()
+            .filter(|f| f.func_id != u32::MAX)
+            .map(|f| f.this),
+    );
+    for (_, _, args) in &g.call_args_at {
+        s.extend(args.iter().copied());
+    }
+    for site in &g.element_sites {
+        s.extend([site.recv, site.idx]);
+    }
+    s.remove(&crate::model::NO_NODE);
+    s
+}
+
+impl<'m> BindingNodes<'m> {
+    /// With `Model::instance_nodes` off (the switch, or the negative
+    /// control `instlit`) a binding is its shared node.
+    pub(crate) fn new(m: &'m Model) -> Self {
+        BindingNodes {
+            reads: &m.binding_reads,
+            copies: if m.instance_nodes {
+                let mut copies = instance_born_copies(m);
+                // A read of a local after an assignment sees a version node
+                // fed from the value, not the local's own node, and summary
+                // compression can drop the local's slot; the instance copies
+                // of its versions are what an instance's reads see.
+                for (&r, &l) in &m.name_of {
+                    if let Some(c) = copies.get(&r).cloned() {
+                        let all = copies.entry(l).or_default();
+                        all.push(r);
+                        all.extend(c);
+                    }
+                }
+                copies
+            } else {
+                FxHashMap::default()
+            },
+            live: m.nodes.len(),
+        }
+    }
+
+    /// Node `n` and its instance copies, `n` first.
+    pub(crate) fn of(&self, n: NodeId) -> Vec<NodeId> {
+        debug_assert!(
+            (n as usize) >= self.live || self.reads.contains(&n),
+            "node {n} is read as a binding but is not in `binding_reads`"
+        );
+        std::iter::once(n)
+            .chain(self.copies.get(&n).into_iter().flatten().copied())
+            .filter(|&c| (c as usize) < self.live)
+            .collect()
+    }
+}
+
+/// The copies, by shared node, of every instance whose summary bears
+/// literals per instance (`Summary::births`: its own, and those of the
+/// calls expanded into it).
+fn instance_born_copies(m: &Model) -> FxHashMap<NodeId, Vec<NodeId>> {
+    let mut copies: FxHashMap<NodeId, Vec<NodeId>> = FxHashMap::default();
+    for (inst, it) in m.sum.insts.iter().enumerate() {
+        if m.sum.of.get(&it.f).is_some_and(|s| !s.births.is_empty()) {
+            m.inst_copies(inst as u32, |orig, copy| {
+                copies.entry(orig).or_default().push(copy)
+            });
+        }
+    }
+    copies
+}
 
 /// A compiled body a binding or a field may hold (FVA): what codegen needs
 /// to call it without the runtime's dispatch.
@@ -62,17 +176,43 @@ pub(crate) fn bodies_of(m: &Model, n: NodeId) -> Vec<BodyRef> {
     out
 }
 
+/// ONCHG2: functions `fs` as bodies, when every one is a compiled closure or
+/// function declaration with a HIR id (no method, no function only another
+/// unit or the runtime has). Empty otherwise.
+pub(crate) fn bodies_of_fns(
+    m: &Model,
+    fs: impl Iterator<Item = crate::model::FnIdx>,
+) -> Vec<BodyRef> {
+    let mut out: Vec<BodyRef> = Vec::new();
+    for f in fs {
+        let fi = &m.funcs[f as usize];
+        let closure = m.closures.contains(&f);
+        if fi.func_id == u32::MAX || !(closure || m.decls.contains(&f)) {
+            return Vec::new();
+        }
+        out.push(BodyRef {
+            module: fi.module,
+            func_id: fi.func_id,
+            params: fi.params.len() as u32,
+            plain: fi.rest.is_none() && !fi.has_arguments,
+            closure,
+        });
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
 /// A stand-in describes another declaration unit's code, but still names
 /// the original emitted body. Consume that identity only in the defining
 /// source module: the native consumer cannot call a foreign module's HIR id.
-fn bodies_with_contracts(g: &Gen, n: NodeId) -> Vec<BodyRef> {
+fn bodies_with_contracts(g: &Gen, nodes: &[NodeId]) -> Vec<BodyRef> {
     let m = &g.m;
-    let node = &m.nodes[n as usize];
-    if node.prim != 0 {
+    if nodes.iter().any(|&n| m.nodes[n as usize].prim != 0) {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for t in node.pts.to_sorted() {
+    for t in tokens_of(m, nodes) {
         if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
             continue;
         }
@@ -114,9 +254,189 @@ fn bodies_with_contracts(g: &Gen, n: NodeId) -> Vec<BodyRef> {
     out
 }
 
+/// The one representation of a value (representation RFC §10.3): what the
+/// whole-program facts give the binding, which codegen obeys.
+///
+/// It has no order: the derived one would not be the lattice (REVIEW-p4l1
+/// finding 7). `Rep::join` is the only join, and every encoding decision
+/// goes through `Rep::encoding` (an `Arr` value is the NaN-boxed pointer
+/// word every Boxed value is).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum Rep {
+    /// Any value, NaN-boxed (⊤).
+    #[default]
+    Boxed,
+    /// Only Numbers: a canonical double.
+    F64,
+    /// Only int32 Numbers (never `-0`) with int demand (`demand`).
+    I32,
+    /// Only plain program Arrays (DESIGN-p4l1 §2.1-2.2, `arr_rep`).
+    Arr(ArrRep),
+    /// Only instances of one admitted value-record template, or (`opt`)
+    /// `undefined` (DESIGN-p4l4 §1.1, `rep_of`). Its fields by value; until
+    /// codegen lowers records (VR-3) its slot encoding is the Boxed word.
+    Record(RecRep),
+}
+
+/// A value record's representation: the template, and whether `undefined`
+/// is among the values (`opt`, the "absent" lane).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct RecRep {
+    pub tmpl: crate::model::TmplId,
+    pub opt: bool,
+}
+
+/// The representation of an `Arr` value's elements: `rep_of` of the join
+/// of every token's element node (an `undefined` stored there makes it
+/// Boxed).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ElemRep {
+    #[default]
+    Boxed,
+    F64,
+    I32,
+}
+
+/// What every Array an `Arr` value may hold has, for its whole life
+/// (DESIGN-p4l1 §2.1, Invariants L, C, D and F of `solve::arr_len`). Each
+/// field says less as it moves: `elem` up `I32 ⊑ F64 ⊑ Boxed`, `floor`
+/// down, `dense` and `fixed` from true to false.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ArrRep {
+    pub elem: ElemRep,
+    /// `length >= floor` and `capacity >= floor` (L, C).
+    pub floor: u32,
+    /// No index below `floor` is ever a hole (D); implies `floor > 0`.
+    pub dense: bool,
+    /// Every token's length interval is one value `lo == hi`: its storage
+    /// never grows, so it is never reallocated or forwarded (F;
+    /// REVIEW-p4l1 R3). Carried here so a join (a field over its class set,
+    /// a signature slot over its copies) keeps or drops it with the rest,
+    /// and no consumer asks a second fact (`const_length`) for it.
+    pub fixed: bool,
+    /// Every token is immutable (`const_arrays`): nothing writes it after
+    /// its birth, so each index holds its birth value for the whole
+    /// program. Implies `fixed`. It is about the Arrays, not about a
+    /// binding that may be read before it holds one: consumers ask
+    /// `BindingFacts::immutable_array`.
+    pub im: bool,
+    /// Every token's template is at rest (I32 at rest, PR B;
+    /// `rest_elems`): each element slot holds an I32 word
+    /// `INT32_TAG | (u32)v` for the Array's whole life.
+    pub at_rest: bool,
+}
+
+/// The encoding of a value's slot: how its word is stored and passed.
+/// `Rep::Arr` is knowledge about a Boxed word, never another encoding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Enc {
+    Boxed,
+    F64,
+    I32,
+    /// A value record: its fields by value (DESIGN-p4l4 §1.3), one lane
+    /// per layout word (and a presence lane when it may be `undefined`).
+    Record,
+}
+
+impl ElemRep {
+    fn join(a: ElemRep, b: ElemRep) -> ElemRep {
+        match (a, b) {
+            (ElemRep::Boxed, _) | (_, ElemRep::Boxed) => ElemRep::Boxed,
+            (ElemRep::F64, _) | (_, ElemRep::F64) => ElemRep::F64,
+            (ElemRep::I32, ElemRep::I32) => ElemRep::I32,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            ElemRep::Boxed => "boxed",
+            ElemRep::F64 => "f64",
+            ElemRep::I32 => "i32",
+        }
+    }
+}
+
+impl ArrRep {
+    /// The join (says less) of two array reps.
+    pub fn join(a: ArrRep, b: ArrRep) -> ArrRep {
+        ArrRep {
+            elem: ElemRep::join(a.elem, b.elem),
+            floor: a.floor.min(b.floor),
+            dense: a.dense && b.dense,
+            fixed: a.fixed && b.fixed,
+            im: a.im && b.im,
+            at_rest: a.at_rest && b.at_rest,
+        }
+    }
+}
+
+impl Rep {
+    /// The join of two representations (DESIGN-p4l1 §2.4): a full table,
+    /// with no `_` arm, so a new variant is a compile error here. A Number
+    /// and an Array have no common representation but Boxed.
+    pub fn join(a: Rep, b: Rep) -> Rep {
+        match (a, b) {
+            (Rep::Boxed, Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_)) => Rep::Boxed,
+            (Rep::F64 | Rep::I32 | Rep::Arr(_), Rep::Boxed) => Rep::Boxed,
+            (Rep::F64, Rep::F64 | Rep::I32) | (Rep::I32, Rep::F64) => Rep::F64,
+            (Rep::I32, Rep::I32) => Rep::I32,
+            (Rep::F64 | Rep::I32, Rep::Arr(_)) | (Rep::Arr(_), Rep::F64 | Rep::I32) => Rep::Boxed,
+            (Rep::Arr(x), Rep::Arr(y)) => Rep::Arr(ArrRep::join(x, y)),
+            // DESIGN-p4l4 §1.1: one template joins with itself (`opt` OR'd).
+            (Rep::Record(x), Rep::Record(y)) if x.tmpl == y.tmpl => Rep::Record(RecRep {
+                tmpl: x.tmpl,
+                opt: x.opt || y.opt,
+            }),
+            // Any other join is the record derive's reject (`R5Join`), so
+            // after its fixpoint no node holds a record beside anything
+            // else; over several nodes (a signature slot's copies) the
+            // join is Boxed, a slot the typed signature does not carry.
+            (Rep::Record(_), Rep::Record(_))
+            | (Rep::Record(_), Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_))
+            | (Rep::Boxed | Rep::F64 | Rep::I32 | Rep::Arr(_), Rep::Record(_)) => Rep::Boxed,
+        }
+    }
+
+    /// The slot encoding (`Enc`): an `Arr` slot holds the Boxed word.
+    pub fn encoding(self) -> Enc {
+        match self {
+            Rep::Boxed | Rep::Arr(_) => Enc::Boxed,
+            Rep::Record(_) => Enc::Record,
+            Rep::F64 => Enc::F64,
+            Rep::I32 => Enc::I32,
+        }
+    }
+
+    /// `boxed`, `f64`, `i32`, or `arr<elem,floor[,dense][,fixed]>`.
+    pub fn name(self) -> String {
+        match self {
+            Rep::Boxed => "boxed".into(),
+            Rep::F64 => "f64".into(),
+            Rep::I32 => "i32".into(),
+            Rep::Arr(r) => format!(
+                "arr<{},{}{}{}{}{}>",
+                r.elem.name(),
+                r.floor,
+                if r.dense { ",dense" } else { "" },
+                if r.fixed { ",fixed" } else { "" },
+                if r.im { ",im" } else { "" },
+                if r.at_rest { ",rest" } else { "" }
+            ),
+            Rep::Record(r) => format!("rec<{}{}>", r.tmpl, if r.opt { ",opt" } else { "" }),
+        }
+    }
+}
+
 /// What one binding can hold.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BindingFacts {
+    /// Its representation (`Rep`).
+    pub rep: Rep,
+    /// −0 tolerance (PR D): its interval holds a `-0` no use observes
+    /// (`zero_sign`): an I32 slot may then receive `-0` as `0`.
+    pub zero_tol: bool,
+    /// One of its values can reach an int consumer (`demand`).
+    pub int_demand: bool,
     /// Diagnostic-only TOP provenance; never consumed by emitted-code decisions.
     pub top: bool,
     pub top_cause: Option<String>,
@@ -133,6 +453,51 @@ pub struct BindingFacts {
     pub class_object: Option<u32>,
     /// Allocation-derived owner kind and minimum extent; no escaped/hard token.
     pub indexed_owner: Option<IndexedOwner>,
+    /// The integer interval of the Numbers it holds (`model::range`): every
+    /// Number it holds is an integer, never `-0`, in `[lo, hi]`. `None`: no
+    /// such bound. Read beside `prims` and `other`.
+    pub int_range: Option<(i64, i64)>,
+    /// It holds only strings and ordinary Array births: its `length` is a
+    /// Number (a String's code-unit count, an Array's non-configurable
+    /// `length`), whatever its declared type says.
+    pub length_number: bool,
+    /// It holds one program Array literal's tokens and nothing else, each
+    /// with the same unmoved birth length (`solve::arr_len`): `x.length` is
+    /// that constant.
+    pub const_length: Option<i64>,
+    /// It is a rooted `const` (`const_arrays`) that holds only immutable
+    /// Arrays (`ArrRep::im`): every read of it that yields a value yields
+    /// an Array nothing writes after its birth.
+    pub immutable_array: bool,
+    /// Such a binding whose Arrays are all born from literals of constant
+    /// Numbers with the same elements (`const_arrays::collect`): index `i`
+    /// reads the Number with bits `const_elems[i]`, for the whole program.
+    pub const_elems: Option<Vec<u64>>,
+    /// It may hold a String, and every String it holds is the value of a
+    /// program string literal (`literal_strings`): born shared, never
+    /// appended to in place.
+    pub literal_strings: bool,
+    /// Every value it holds is `true` or `false` (`booleans`): the slot's
+    /// word is `TAG_TRUE` or `TAG_FALSE`.
+    pub booleans: bool,
+    /// Every value it holds is `true`, `false`, `undefined` or `null`
+    /// (`booleans::holds_or_nullish`): its truthiness is `word == TAG_TRUE`.
+    pub nullish_booleans: bool,
+    /// It holds only plain Arrays whose length nothing changes while its
+    /// function runs (`held_lengths`): a loop of that function may hold
+    /// `x.length` across its calls.
+    pub stable_length: bool,
+    /// Such a local whose Arrays all have a defined length
+    /// (`solve::arr_len`): their elements start right behind the header.
+    pub stable_front: bool,
+    /// It holds only plain Arrays, and in every function that can name it
+    /// each event that may change the length of one of them goes through
+    /// this name (`named_lengths`): a loop without calls that walks it
+    /// need not fear a store through another name.
+    pub named_length: bool,
+    /// It holds only sync generator objects whose for-of protocol is the
+    /// intrinsic one (`gen_sources`): for-of over it resumes their bodies.
+    pub generator_source: bool,
 }
 
 /// Storage proof over all values a binding can hold. Allocation identities
@@ -149,19 +514,23 @@ pub struct IndexedOwner {
 /// primitive values on field observation nodes; that is not a program write.
 pub(crate) fn owner_metadata_written(m: &Model, tm: u32) -> bool {
     let numeric_key = |site: &u32| {
-        m.stores[*site as usize].key_value.is_some_and(|n| {
-            let n = &m.nodes[n as usize];
-            n.prim == crate::model::prim::NUM
-                && n.pts
-                    .to_sorted()
-                    .into_iter()
-                    .all(|v| v != TOP && m.beside_values(v))
-        })
+        // A fill push (`push_fills`) stores an element, nothing else.
+        m.push_fill_sites.contains_key(site)
+            || m.stores[*site as usize].key_value.is_some_and(|n| {
+                let n = &m.nodes[n as usize];
+                n.prim == crate::model::prim::NUM
+                    && n.pts
+                        .to_sorted()
+                        .into_iter()
+                        .all(|v| v != TOP && m.beside_values(v))
+            })
     };
-    if m.any_writers
-        .get(&tm)
-        .is_some_and(|w| w.ctor.iter().chain(&w.post).any(|s| !numeric_key(s)))
-    {
+    if m.any_writers.get(&tm).is_some_and(|w| {
+        w.ctor
+            .iter()
+            .chain(w.post.iter().map(|(s, _)| s))
+            .any(|s| !numeric_key(s))
+    }) {
         return true;
     }
     m.writers.keys().any(|(owner, key)| {
@@ -200,14 +569,57 @@ pub(crate) fn sealed_owner(m: &Model, t: u32) -> Option<(u32, u8)> {
     Some((tm, *m.ta_elem.get(&tm)?))
 }
 
-fn indexed_owner(g: &Gen, n: u32) -> Option<IndexedOwner> {
+/// The tokens `nodes` hold together, sorted and distinct.
+fn tokens_of(m: &Model, nodes: &[NodeId]) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    for &n in nodes {
+        m.nodes[n as usize].pts.sorted_into(&mut toks);
+    }
+    toks.sort_unstable();
+    toks.dedup();
+    toks
+}
+
+/// The length every value of `nodes` has: they hold only program Array
+/// tokens whose birth length never moved (`solve::arr_len`), all the same.
+fn const_length(m: &Model, nodes: &[NodeId]) -> Option<i64> {
+    if nodes.iter().any(|&n| {
+        let node = &m.nodes[n as usize];
+        node.prim != 0 || node.pts.contains_tok(TOP)
+    }) {
+        return None;
+    }
+    let mut len = None;
+    for t in tokens_of(m, nodes) {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if !m.is_arr(t) || m.foreign.contains_key(&tm) || m.is_escaped(t) {
+            return None;
+        }
+        let birth = *m.arr_birth_len.get(&tm)?;
+        if let Some(&ln) = m.arr_len.get(&t) {
+            let r = m.nodes[ln as usize].range;
+            if r.is_top() || r.lo != birth || r.hi != birth {
+                return None;
+            }
+        }
+        match len {
+            None => len = Some(birth),
+            Some(l) if l == birth => {}
+            Some(_) => return None,
+        }
+    }
+    len
+}
+
+fn indexed_owner(g: &Gen, nodes: &[NodeId]) -> Option<IndexedOwner> {
     let m = &g.m;
-    let node = &m.nodes[n as usize];
-    if node.prim != 0 {
+    if nodes.iter().any(|&n| m.nodes[n as usize].prim != 0) {
         return None;
     }
     let mut out: Option<IndexedOwner> = None;
-    for t in node.pts.to_sorted() {
+    for t in tokens_of(m, nodes) {
         if t != TOP && m.beside_values(t) {
             continue;
         }
@@ -250,18 +662,282 @@ pub struct ModuleBindings {
     /// Numeric leaf functions: evaluating the expression on numeric arguments
     /// has no calls, allocation, mutation or user coercion.
     pub numeric_functions: Vec<(u32, Vec<u32>, perry_hir::Expr)>,
+    /// Method call sites by byte offset: each argument's integer interval
+    /// at the call (after narrowing: `gen::narrow`), joined over every copy
+    /// of the call the program holds (inlining duplicates a site); `None`
+    /// for an argument that may be anything but such a Number.
+    pub call_arg_ranges: Vec<(u32, Vec<Option<(i64, i64)>>)>,
+    /// Element reads by `IndexGet::element_offset` whose receiver is proven
+    /// (`ElementRead`), joined over every copy of the read the program holds.
+    pub element_reads: Vec<(u32, ElementRead)>,
+    /// Call byte offsets whose result is a Number at every copy of the call
+    /// the program holds, and at every call that starts at that offset
+    /// (`f(a)(b)`, `o.m(a).n(b)`): every callee the site reaches returns
+    /// only Numbers (representation RFC §10.4, the call's return
+    /// representation). Method calls and calls of any other callee. Sorted.
+    pub number_calls: Vec<u32>,
+    /// Call spans (`Expr::Call::byte_offset`, `byte_end`) whose result holds
+    /// only primitives at every copy, with the union of their kinds (a
+    /// `model::prim` mask, never 0); sorted (`call_kinds`).
+    pub call_kinds: Vec<(u32, u32, u16)>,
+    /// Local id of a `let x = []` whose birth reserves a capacity, with its
+    /// slots; sorted (`list_caps`).
+    pub list_capacities: Vec<(u32, u32)>,
+    /// Method call byte offsets proven field element reads
+    /// (`field_read_calls`, b1), sorted.
+    pub field_read_calls: Vec<(u32, crate::field_read_calls::FieldReadCall)>,
+    /// P2: typed signatures by HIR function id, sorted (`signatures`).
+    pub signatures: Vec<(u32, crate::signatures::Signature)>,
+    /// P2: call byte offset -> the one body `(module, func_id)` a typed
+    /// entry serves, sorted (`signatures`, DESIGN-p2 §2).
+    pub typed_calls: Vec<(u32, (u32, u32))>,
+    /// DESIGN-p4l4 VR-3b: the functions whose Record signature slots stay
+    /// Boxed because a source call of the body is not one of its typed
+    /// calls in its module (`signatures`), sorted: their callers pass a
+    /// materialized copy.
+    pub record_demoted: Vec<u32>,
+    /// Element reads whose value is a plain Number at every copy, by
+    /// `element_offset`, sorted; `true` when the value may also be
+    /// `undefined` (`canonical_numbers`, P3 B1).
+    pub number_element_reads: Vec<(u32, bool)>,
+    /// The `number_element_reads` whose Numbers are all int32s (the value
+    /// node's interval lies in the int32 range at every copy), by
+    /// `element_offset`, sorted (`canonical_numbers`). A `-0` the interval
+    /// tolerates is one no use observes.
+    pub int32_element_reads: Vec<u32>,
+    /// Check mode: element reads by `element_offset` whose past-the-end
+    /// `undefined` the solve withheld at every copy (`Cons::ElemUndef`,
+    /// PR-C1), with the least length lower bound of their receivers; sorted
+    /// (`element_floors`).
+    pub element_floors: Vec<(u32, u32)>,
+    /// Module-scope bindings (by local id) whose every value is this one
+    /// integer Number, sorted (`const_numbers`, N6).
+    pub const_numbers: Vec<(u32, i64)>,
+    /// PR-C2: element reads by `element_offset` whose key is an integer
+    /// Number at every copy, with the hull of its interval; sorted
+    /// (`element_keys`).
+    pub element_keys: Vec<(u32, (i64, i64))>,
+    /// Element sites (reads, stores and called elements) by
+    /// `element_offset` whose key is an integer Number inside the int32
+    /// range at every copy, with the hull of its interval; sorted
+    /// (`element_keys::collect_signs`).
+    pub key_signs: Vec<(u32, (i64, i64))>,
+    /// Element sites by `element_offset` whose key is a non-negative
+    /// integer Number at every copy and may lie past the int32 range, with
+    /// the hull of its interval; sorted (`element_keys::collect_wide`).
+    pub wide_keys: Vec<(u32, (i64, i64))>,
+    /// Quiet sites (`quiet_sites`): the named reads (byte offset, key) and
+    /// the element sites (`element_offset`: reads, stores, updates) that run
+    /// no program code at any copy, and the named reads and element reads
+    /// whose value is a primitive at every copy. Sorted.
+    pub quiet_reads: Vec<(u32, String)>,
+    /// Method sites (`method_sites`): by-name method call sites, keyed as
+    /// codegen keys them and by the method name, with what the solve proves
+    /// of the receiver's values at every copy (`method_sites::TYPED_ARRAY`).
+    /// Sorted.
+    pub method_sites: Vec<(perry_hir::folded_call::Site, String, u8)>,
+    pub quiet_elements: Vec<u32>,
+    pub primitive_reads: Vec<(u32, String)>,
+    pub primitive_elements: Vec<u32>,
+    /// Index stores by `element_offset` whose key the facts took to be at
+    /// most the Array's length (`gen/in_bounds.rs`): check mode tests the
+    /// claim at the store. Sorted, unique.
+    pub inbounds_stores: Vec<u32>,
+    /// In-bounds reads by `element_offset` (`gen/in_bounds.rs`,
+    /// `collect_reads`): at every copy the receiver holds only Arrays of
+    /// this unit that never shrink and the key is an index below the
+    /// length the Array has at the read. `true`: none of them may hold a
+    /// hole either, so the slot is a present element. Sorted by offset.
+    pub inbounds_reads: Vec<(u32, bool)>,
+    /// I32 at rest, PR B (`rest_elems`): element reads and element stores
+    /// by `element_offset` whose every receiver holds only Arrays of at-rest
+    /// templates, with the least floor of those Arrays; the `fill` call
+    /// offsets of the at-rest births, and of those that reserve a capacity
+    /// with it (`rest_elems::reserve`). Sorted.
+    pub rest_reads: Vec<(u32, u32)>,
+    pub rest_writes: Vec<(u32, u32)>,
+    pub rest_births: Vec<u32>,
+    pub rest_reserves: Vec<(u32, u32)>,
+    /// The fill pushes of the at-rest push-filled births (`push_fills`): the
+    /// byte offset of a push's receiver `this.k`, with the Array's final
+    /// length. Sorted.
+    pub rest_pushes: Vec<(u32, u32)>,
+    /// Every fill push (`push_fills`), at rest or not: the byte offset of
+    /// its receiver `this.k`, a read of the Array while it is being born.
+    /// Sorted.
+    pub fill_push_recvs: Vec<u32>,
+    /// The fill births (`fill_births`): the `fill` call offset of a fused
+    /// fill `new Array(k).fill(v)` codegen may bear as one birth, with `k`.
+    /// Sorted.
+    pub fill_births: Vec<(u32, u32)>,
+    /// I32 at rest, PR C (`rest_fields::export_reads`): the named reads (by
+    /// byte offset) whose receiver may hold an instance with an I32 lane at
+    /// the read's key, with the lane's slot when every receiver value is such
+    /// an instance at that slot or nullish (`u32::MAX` otherwise). Sorted.
+    pub rest_lane_reads: Vec<(u32, u32)>,
+    /// Value records VR-4b (`records::export`): what codegen types as a
+    /// record array of the named record template. `record_array_locals`: a
+    /// binding (local id); `record_array_reads`: a named read (byte offset
+    /// and key: the reads of a member chain share their offset);
+    /// the births: an array literal that is the whole value of a `let` or a
+    /// local assignment (local id), of a named store (its element offset),
+    /// of a class field initializer (class id, field). Sorted.
+    pub record_array_locals: Vec<(u32, u32)>,
+    pub record_array_reads: Vec<(u32, String, u32)>,
+    pub record_array_birth_locals: Vec<(u32, u32)>,
+    pub record_array_birth_stores: Vec<(u32, u32)>,
+    pub record_array_birth_fields: Vec<(u32, String, u32)>,
 }
 
-fn facts_of(g: &Gen, n: u32) -> BindingFacts {
-    let m = &g.m;
+/// An element read `a[i]` whose every receiver is a program Array that
+/// keeps its birth length for the whole program (`const_length`): no store
+/// moves it, so its storage never grows, is never forwarded and holds `len`
+/// slots (a birth length is recorded only for a densely backed birth:
+/// `solve::arr_len`), and no `defineProperty` ever gave it an element descriptor
+/// (`solve::arr_len`). A slot holds its own data or a hole; a hole reads
+/// through the prototype chain, which the read leaves to the generic path.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ElementRead {
+    /// The length every receiver has, at every copy.
+    pub len: u32,
+    /// The key is an integer Number in `[0, len)` at every copy.
+    pub key_in_bounds: bool,
+}
+
+/// The `ElementRead` of one copy of an element read: its receiver and key
+/// over their nodes (`BindingNodes`).
+fn element_read(
+    m: &Model,
+    nodes: &BindingNodes<'_>,
+    site: &crate::gen::ElementSite,
+) -> Option<ElementRead> {
+    // A computed key, or a literal one that is a canonical array index (a
+    // loop the HIR unrolled reads `a[0]`, `a[1]`, ... at the loop's site).
+    let index_key = match site.key {
+        crate::model::Key::Any(_) => true,
+        crate::model::Key::Named(a) => {
+            let k = &m.atoms[a as usize];
+            k.parse::<u32>()
+                .is_ok_and(|v| v != u32::MAX && v.to_string() == *k)
+        }
+    };
+    if !index_key {
+        return None;
+    }
+    let recv = nodes.of(site.recv);
+    let len = const_length(m, &recv)?;
+    // A named property moves an Array to the named layout.
+    for t in tokens_of(m, &recv) {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if owner_metadata_written(m, tm) {
+            return None;
+        }
+    }
+    // The read addresses slot `i` of the store, which holds `len` slots: a
+    // birth length is recorded only for a birth whose capacity is at least
+    // its length, and capacity never falls below it while the length is
+    // defined (`solve::arr_len`).
+    let len = u32::try_from(len).ok().filter(|&l| l >= 1)?;
+    let key = number_range_of(m, &nodes.of(site.idx));
+    let key_in_bounds = key.is_some_and(|(lo, hi)| lo >= 0 && hi < i64::from(len));
+    Some(ElementRead { len, key_in_bounds })
+}
+
+/// Node `n` holds only Numbers, each an integer in this interval. An empty
+/// node proves nothing (it may be one the solve left unpopulated).
+pub(crate) fn number_range(m: &Model, n: NodeId) -> Option<(i64, i64)> {
     let node = &m.nodes[n as usize];
+    if node.prim != crate::model::prim::NUM || !node.pts.is_empty() {
+        return None;
+    }
+    let r = node.range;
+    (!r.is_top() && !r.is_empty()).then_some((r.lo, r.hi))
+}
+
+/// `number_range` of what `nodes` hold together (a binding's nodes,
+/// `BindingNodes::of`): every node that holds a value holds only Numbers,
+/// each an integer in the hull of their intervals. The shared node (the
+/// first) answers as `number_range` does. A copy adds its interval; a copy
+/// no Number reached adds nothing (no value at all, or the empty interval a
+/// guard leaves in an instance whose values all fail it: `copy_interval`).
+pub(crate) fn number_range_of(m: &Model, nodes: &[NodeId]) -> Option<(i64, i64)> {
+    let (&shared, copies) = nodes.split_first()?;
+    let (lo, hi) = number_range(m, shared)?;
+    let mut range = crate::model::Iv { lo, hi, nz: false };
+    for &n in copies {
+        let node = &m.nodes[n as usize];
+        if !node.pts.is_empty() || node.prim & !crate::model::prim::NUM != 0 {
+            return None;
+        }
+        range = range.join(copy_interval(node)?);
+    }
+    (!range.is_top()).then_some((range.lo, range.hi))
+}
+
+/// The interval an instance copy adds to its binding's: its own, empty when
+/// no Number reached the copy (a guard clips an instance's interval to
+/// nothing where every value of that instance fails it, and the prims stay).
+/// `None`: its Numbers have no bound.
+fn copy_interval(node: &crate::model::Node) -> Option<crate::model::Iv> {
+    (!node.range.is_top()).then_some(node.range)
+}
+
+/// `facts_of` of one node, for a caller that joins over the nodes itself
+/// (`signatures`, a record field's lane).
+pub(crate) fn facts_of_node(g: &Gen, n: u32) -> BindingFacts {
+    facts_of(g, &[n])
+}
+
+/// The one representation of node `n` (`rep_of`), for P2's signatures.
+pub(crate) fn rep_of_node(g: &Gen, n: u32) -> Rep {
+    facts_of(g, &[n]).rep
+}
+
+/// The facts of the binding whose shared node is `n`: `facts_of` over its
+/// nodes (`BindingNodes::of`).
+pub(crate) fn facts_of_binding(g: &Gen, nodes: &BindingNodes<'_>, n: NodeId) -> BindingFacts {
+    facts_of(g, &nodes.of(n))
+}
+
+/// What the values of `nodes` together are (one binding's nodes,
+/// `BindingNodes::of`; one node for a caller that joins itself). Every
+/// field is a statement about all of them: a set is the union, a proof
+/// holds for each node.
+fn facts_of(g: &Gen, nodes: &[NodeId]) -> BindingFacts {
+    let m = &g.m;
+    let mut arrays_only = true;
+    let top_at = nodes
+        .iter()
+        .copied()
+        .find(|&n| m.nodes[n as usize].pts.contains_tok(TOP));
     let mut out = BindingFacts {
-        prims: node.prim,
-        top: m.explain && node.pts.contains_tok(TOP),
-        top_cause: (m.explain && node.pts.contains_tok(TOP)).then(|| m.top_origin(n)),
+        top: m.explain && top_at.is_some(),
+        top_cause: top_at.filter(|_| m.explain).map(|n| m.top_origin(n)),
         ..Default::default()
     };
-    for t in node.pts.to_sorted() {
+    // The interval: the shared node's (the first; none when it is ⊤ or
+    // empty) joined with every copy's (`copy_interval`).
+    let mut range = crate::model::Iv::EMPTY;
+    let mut unbounded = false;
+    for (i, &n) in nodes.iter().enumerate() {
+        let node = &m.nodes[n as usize];
+        out.prims |= node.prim;
+        out.int_demand |= node.int_demand;
+        out.zero_tol |= node.zs_tol;
+        if i == 0 {
+            range = node.range;
+            unbounded = range.is_top() || range.is_empty();
+        } else {
+            match copy_interval(node) {
+                Some(r) => range = range.join(r),
+                None => unbounded = true,
+            }
+        }
+    }
+    let mut values = out.prims != 0;
+    for t in tokens_of(m, nodes) {
         if t == TOP {
             out.other = true;
             continue;
@@ -281,37 +957,454 @@ fn facts_of(g: &Gen, n: u32) -> BindingFacts {
             out.prims |= crate::model::prim::ALL;
             continue;
         }
+        values = true;
         match &m.toks[t as usize] {
             TokKind::Obj(tm, _) => match m.tmpls[*tm as usize].kind {
-                TmplKind::Class { class_id, .. } => out.class_ids.push(class_id),
-                _ => out.other = true,
+                TmplKind::Class { class_id, .. } => {
+                    arrays_only = false;
+                    out.class_ids.push(class_id)
+                }
+                TmplKind::Arr { .. } => out.other = true,
+                _ => {
+                    arrays_only = false;
+                    out.other = true
+                }
             },
-            _ => out.other = true,
+            _ => {
+                arrays_only = false;
+                out.other = true
+            }
         }
     }
+    out.length_number =
+        values && arrays_only && top_at.is_none() && out.prims & !crate::model::prim::STR == 0;
     out.class_ids.sort_unstable();
     out.class_ids.dedup();
-    out.indexed_owner = indexed_owner(g, n);
-    out.bodies = bodies_with_contracts(g, n);
-    out.class_object = class_object_of(m, n);
+    out.indexed_owner = indexed_owner(g, nodes);
+    if !unbounded {
+        out.int_range = Some((range.lo, range.hi));
+    }
+    out.const_length = const_length(m, nodes);
+    out.bodies = bodies_with_contracts(g, nodes);
+    out.class_object = class_object_of(m, nodes);
+    out.literal_strings = crate::literal_strings::holds(m, nodes);
+    out.booleans = crate::booleans::holds(m, nodes);
+    out.nullish_booleans = crate::booleans::holds_or_nullish(m, nodes);
+    out.rep = match arr_rep(m, nodes) {
+        Some(r) => Rep::Arr(r),
+        None => match record_rep(m, nodes) {
+            Some(r) => Rep::Record(r),
+            None => rep_of(&out),
+        },
+    };
     out
 }
 
-/// The class id of the one class object node `n` holds when it holds
+/// DESIGN-p4l4 §1.1: `Record` when every token of the node is an instance
+/// of one admitted value-record template (`Model::records`), its primitives
+/// are within `undefined` (which sets `opt`), and it holds no ⊤ or marker.
+fn record_rep(m: &Model, nodes: &[NodeId]) -> Option<RecRep> {
+    if m.records.is_empty() {
+        return None;
+    }
+    let prim = nodes.iter().fold(0, |p, &n| p | m.nodes[n as usize].prim);
+    if prim & !crate::model::prim::UNDEF != 0 {
+        return None;
+    }
+    let mut one: Option<TmplId> = None;
+    for t in tokens_of(m, nodes) {
+        let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+            return None;
+        };
+        if t == TOP || m.is_marker(t) || !m.records.contains(&tm) || one.is_some_and(|o| o != tm) {
+            return None;
+        }
+        one = Some(tm);
+    }
+    one.map(|tmpl| RecRep {
+        tmpl,
+        opt: prim & crate::model::prim::UNDEF != 0,
+    })
+}
+
+/// `Rep::Arr` of what `nodes` hold together (DESIGN-p4l1 §2.2): every value
+/// is a token of a plain program Array template (`TmplKind::Arr::plain`)
+/// that is not foreign, escaped or hard (each tested here: `const_length`
+/// leans on `mark_hard` making the length ⊤), and whose template no named
+/// or metadata write touched (`owner_metadata_written`, as `ElementRead`
+/// requires), and, for a `slice` birth, whose species constructor is
+/// `%Array%` or none (`derive::exact_array`). No primitive, no ⊤, no marker of any kind; a node with no
+/// value proves nothing. The rep is the join over the tokens of each one's
+/// own (`tok_arr_rep`). `None` with `Model::array_reps` off.
+pub(crate) fn arr_rep(m: &Model, nodes: &[NodeId]) -> Option<ArrRep> {
+    arr_rep_beside(m, nodes, 0)
+}
+
+/// `arr_rep` of `nodes` with the primitives `ignored` left out of account:
+/// 0 everywhere but under the negative control `arrfield`
+/// (`Model::arr_field_sabotage`).
+pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Option<ArrRep> {
+    if !m.array_reps {
+        return None;
+    }
+    let mut out: Option<ArrRep> = None;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if node.prim & !ignored != 0 {
+            return None;
+        }
+        for t in node.pts.to_sorted() {
+            if t == TOP || m.is_marker(t) || m.bare_marker(t) || m.beside_values(t) {
+                return None;
+            }
+            let TokKind::Obj(tm, _) = m.toks[t as usize] else {
+                return None;
+            };
+            // A record array is its own representation (DESIGN-p4l4 B1).
+            if m.record_arrays.contains_key(&tm) {
+                return None;
+            }
+            let TmplKind::Arr {
+                hole_free,
+                plain: true,
+                ..
+            } = m.tmpls[tm as usize].kind
+            else {
+                return None;
+            };
+            if m.foreign.contains_key(&tm)
+                || m.is_escaped(t)
+                || m.hard.contains_key(&t)
+                || owner_metadata_written(m, tm)
+            {
+                return None;
+            }
+            // A plain `slice` birth (`builtins::site_slice_arr`) is an Array
+            // only while the species constructor is `%Array%` or none.
+            if m.tmpls[tm as usize].species.is_some()
+                && !m.slice_birth_sabotage
+                && !crate::derive::exact_array(m, t)
+            {
+                return None;
+            }
+            let r = tok_arr_rep(m, t, tm, hole_free);
+            out = Some(out.map_or(r, |o| ArrRep::join(o, r)));
+        }
+    }
+    out
+}
+
+/// One plain Array token's `ArrRep`:
+/// - `floor`: the low end of its length interval (`solve::arr_len`), 0 when
+///   the length is ⊤. A token no length rule touched has its birth length
+///   (`Model::arr_len` is born from it), or none;
+/// - `fixed`: that interval is one value;
+/// - `dense`: born hole-free with `floor > 0` (Invariant D);
+/// - `elem`: `rep_of` of its element node (`all_fields`), I32 for int32
+///   Numbers with int demand, F64 for Numbers, else Boxed.
+pub(crate) fn tok_arr_rep(m: &Model, t: Tok, tm: u32, hole_free: bool) -> ArrRep {
+    let (lo, fixed) = match m.arr_len.get(&t) {
+        Some(&ln) => {
+            let r = m.nodes[ln as usize].range;
+            if r.is_top() || r.is_empty() {
+                (0, false)
+            } else {
+                (r.lo, r.lo == r.hi)
+            }
+        }
+        None => match m.arr_birth_len.get(&tm) {
+            Some(&k) => (k, true),
+            None => (0, false),
+        },
+    };
+    let floor = u32::try_from(lo.max(0)).unwrap_or(u32::MAX);
+    let elem = match m.all_fields.get(&t) {
+        Some(&e) => {
+            let node = &m.nodes[e as usize];
+            let int32 = !node.range.is_top()
+                && !node.range.is_empty()
+                && node.range.lo >= i64::from(i32::MIN)
+                && node.range.hi <= i64::from(i32::MAX);
+            let numbers = node.prim == crate::model::prim::NUM && node.pts.is_empty();
+            if m.arr_elem_sabotage && node.prim & crate::model::prim::NUM != 0 {
+                ElemRep::F64
+            } else if !numbers {
+                // PERRY_FACTS_ARR_WHY=1: which element node keeps a plain
+                // Array boxed (feed `n<id>` to PERRY_FACTS_WHY_AT).
+                if std::env::var_os("PERRY_FACTS_ARR_WHY").is_some() {
+                    let pts = node.pts.to_sorted();
+                    eprintln!(
+                        "ARRWHY tok={t} {} elem=n{e} prim={:#x} pts={} first={:?}",
+                        m.tok_name(t),
+                        node.prim,
+                        pts.len(),
+                        pts.iter()
+                            .take(4)
+                            .map(|&p| m.tok_name(p))
+                            .collect::<Vec<_>>()
+                    );
+                }
+                ElemRep::Boxed
+            } else if int32 && elem_demand(m, t, node) {
+                ElemRep::I32
+            } else {
+                ElemRep::F64
+            }
+        }
+        None => ElemRep::Boxed,
+    };
+    ArrRep {
+        elem,
+        floor,
+        dense: hole_free && floor > 0,
+        fixed,
+        im: fixed && m.arr_immutable(t),
+        at_rest: m.rest_tmpls.contains(&tm),
+    }
+}
+
+/// Int demand on token `t`'s elements (`node`, its element node). A read
+/// `a[k]` takes its value from the fields a number key names
+/// (`Model::num_fields`), which feed the element node, so its demand lands
+/// there; with I32 at rest on (PR B, `rest_elems`) that demand counts too.
+pub(crate) fn elem_demand(m: &Model, t: Tok, node: &crate::model::Node) -> bool {
+    node.int_demand
+        || m.rest_elems
+            && m.num_fields
+                .get(&t)
+                .is_some_and(|&n| m.nodes[n as usize].int_demand)
+}
+
+/// The Number representation of what `nodes` hold together (a field over
+/// its template's tokens; I32 at rest, RFC §10.7): F64 when every value is
+/// a Number, I32 when also every one is an int32 (the joined interval) and
+/// one reaches an int consumer (demand); Boxed for anything else, and for
+/// no node or no value. The negative control `restfield` claims I32 for
+/// any Number field.
+pub(crate) fn number_rep_of_nodes(m: &Model, nodes: &[NodeId]) -> Rep {
+    let mut range = crate::model::Iv::EMPTY;
+    let mut demand = false;
+    let mut values = false;
+    for &n in nodes {
+        let node = &m.nodes[n as usize];
+        if !node.pts.is_empty() || node.prim & !crate::model::prim::NUM != 0 {
+            return Rep::Boxed;
+        }
+        values |= node.prim != 0;
+        range = range.join(node.range);
+        demand |= node.int_demand;
+    }
+    if !values {
+        return Rep::Boxed;
+    }
+    if m.rest_field_sabotage {
+        return Rep::I32;
+    }
+    let int32 = !range.is_top()
+        && !range.is_empty()
+        && range.lo >= i64::from(i32::MIN)
+        && range.hi <= i64::from(i32::MAX);
+    if int32 && demand {
+        Rep::I32
+    } else {
+        Rep::F64
+    }
+}
+
+/// The representation the facts give: F64 for a binding of only Numbers,
+/// I32 for one of only int32 Numbers that an int consumer reads.
+fn rep_of(b: &BindingFacts) -> Rep {
+    if b.other || !b.class_ids.is_empty() || b.prims != crate::model::prim::NUM {
+        return Rep::Boxed;
+    }
+    let int32 = b
+        .int_range
+        .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX));
+    if int32 && b.int_demand {
+        Rep::I32
+    } else {
+        Rep::F64
+    }
+}
+
+/// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
+/// `# rep` line per Number local (F64, I32, an interval or an int use)
+/// with what decides its representation (RFC §10.3): the prims, the
+/// interval, int demand and whether the binding is itself an int
+/// consumer's operand. A local is named by its node, readable with
+/// `PERRY_FACTS_RELATIONS=1`; otherwise by its id (`local=`), the HIR
+/// local id codegen reports.
+///
+/// One `# inst_nodes` line per local whose instance copies change its
+/// facts (`BindingNodes`): the number of copies, the representation, the
+/// constant length and the interval its shared node alone would give
+/// (`shared=`, `shared_len=`, `shared_range=`), what the binding has
+/// (`rep=`, `len=`, `range=`), and each node's prims, token count and
+/// interval, the shared node first (`nodes=`).
+pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
+    let m = &g.m;
+    let nodes = BindingNodes::new(m);
+    let mut out = Vec::new();
+    let show_range =
+        |r: Option<(i64, i64)>| r.map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+    let show_len = |l: Option<i64>| l.map_or("none".to_string(), |l| l.to_string());
+    for (mi, info) in g.mods.iter().enumerate() {
+        let mut ls: Vec<(u32, NodeId)> = info.locals.iter().map(|(&i, &n)| (i, n)).collect();
+        ls.sort_unstable();
+        for (id, n) in ls {
+            let node = &m.nodes[n as usize];
+            let all = nodes.of(n);
+            let b = facts_of(g, &all);
+            if all.len() > 1 {
+                let shared = facts_of(g, &[n]);
+                if shared != b {
+                    // Each node: its prims, tokens and interval.
+                    let each: Vec<String> = all
+                        .iter()
+                        .map(|&c| {
+                            let nd = &m.nodes[c as usize];
+                            let r = if nd.range.is_top() {
+                                "top".to_string()
+                            } else if nd.range.is_empty() {
+                                "none".to_string()
+                            } else {
+                                format!("[{},{}]", nd.range.lo, nd.range.hi)
+                            };
+                            format!("{:#x}/{}/{r}", nd.prim, nd.pts.to_sorted().len())
+                        })
+                        .collect();
+                    out.push(format!(
+                        "# inst_nodes module={mi} local={id} copies={} shared={} shared_len={} shared_range={} rep={} len={} range={} nodes={}",
+                        all.len() - 1,
+                        shared.rep.name(),
+                        show_len(shared.const_length),
+                        show_range(shared.int_range),
+                        b.rep.name(),
+                        show_len(b.const_length),
+                        show_range(b.int_range),
+                        each.join(","),
+                    ));
+                }
+            }
+            if !(matches!(b.rep, Rep::F64 | Rep::I32) || b.int_range.is_some() || node.int_use) {
+                continue;
+            }
+            let range = b
+                .int_range
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let name = m.node_names.get(n as usize).map_or("?", |s| s.as_str());
+            out.push(format!(
+                "# rep module={mi} local={id} name={} rep={} prims={:#x} other={} range={range} demand={} use={}",
+                name.replace(' ', "_"),
+                b.rep.name(),
+                b.prims,
+                (b.other || !b.class_ids.is_empty()) as u8,
+                b.int_demand as u8,
+                node.int_use as u8,
+            ));
+        }
+    }
+    out.extend(rest_probe(m));
+    out.extend(crate::rest_elems::probe(m));
+    out.extend(crate::fill_births::probe(m));
+    out.extend(g.m.map_values_probe());
+    out.extend(crate::element_keys::probe(g));
+    out.extend(crate::gen::in_bounds::probe(g));
+    out.extend(crate::gen::in_bounds::read_probe(g));
+    out
+}
+
+/// The at-rest probe (I32 at rest, RFC §10.7; `PERRY_FACTS_DUMP` only): one
+/// `# rest field` line per class or literal field whose nodes hold Numbers
+/// and one `# rest elem` line per plain Array template whose element nodes
+/// do, each with the join over the template's tokens of what decides the
+/// slot's representation (RFC §10.3): the prims, the tokens, the interval
+/// and int demand.
+fn rest_probe(m: &Model) -> Vec<String> {
+    let mut out = Vec::new();
+    for (tm, tpl) in m.tmpls.iter().enumerate() {
+        let tm = tm as u32;
+        let toks = m.tmpl_toks(tm);
+        if toks.is_empty() {
+            continue;
+        }
+        let line = |what: &str, nodes: &[NodeId]| -> Option<String> {
+            let mut prims = 0u16;
+            let mut other = false;
+            let mut range = crate::model::Iv::EMPTY;
+            let mut demand = false;
+            let mut zsign = false;
+            for &n in nodes {
+                let node = &m.nodes[n as usize];
+                prims |= node.prim;
+                other |= !node.pts.is_empty();
+                range = range.join(node.range);
+                demand |= node.int_demand;
+                zsign |= node.zsign;
+            }
+            if prims & crate::model::prim::NUM == 0 {
+                return None;
+            }
+            let range = if range.is_top() || range.is_empty() {
+                "top".to_string()
+            } else {
+                format!("[{},{}]", range.lo, range.hi)
+            };
+            Some(format!(
+                "# rest {what} prims={prims:#x} other={} range={range} demand={} zsign={}",
+                other as u8, demand as u8, zsign as u8
+            ))
+        };
+        if let TmplKind::Arr { plain: true, .. } = tpl.kind {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.all_fields.get(t).copied())
+                .collect();
+            if let Some(l) = line(&format!("elem {}", tpl.display.replace(' ', "_")), &nodes) {
+                out.push(l);
+            }
+            continue;
+        }
+        if !matches!(tpl.kind, TmplKind::Class { .. } | TmplKind::Lit { .. }) {
+            continue;
+        }
+        for &a in &tpl.birth_keys {
+            let nodes: Vec<NodeId> = toks
+                .iter()
+                .filter_map(|t| m.fields.get(&(*t, a)).copied())
+                .collect();
+            let what = format!(
+                "field {}.{}",
+                tpl.display.replace(' ', "_"),
+                crate::model::esc_key(&m.atoms[a as usize])
+            );
+            if let Some(l) = line(&what, &nodes) {
+                out.push(l);
+            }
+        }
+    }
+    out
+}
+
+/// The class id of the one class object `nodes` hold when they hold
 /// nothing else (markers beside their values aside).
-fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
-    let node = &m.nodes[n as usize];
-    if node.prim != 0 {
+fn class_object_of(m: &Model, nodes: &[NodeId]) -> Option<u32> {
+    if nodes.iter().any(|&n| m.nodes[n as usize].prim != 0) {
         return None;
     }
     let mut one = None;
-    for t in node.pts.to_sorted() {
+    for t in tokens_of(m, nodes) {
         if t != TOP && (m.beside_values(t) || m.closed_marker(t)) {
             continue;
         }
         let TokKind::ClassObj(tm) = m.toks[t as usize] else {
             return None;
         };
+        // Rule C (DECISIONS 251): a class expression evaluated more than
+        // once is one class object per evaluation, never one class's.
+        if m.tmpls[tm as usize].per_evaluation {
+            return None;
+        }
         let TmplKind::Class { class_id, .. } = m.tmpls[tm as usize].kind else {
             return None;
         };
@@ -324,11 +1417,12 @@ fn class_object_of(m: &Model, n: NodeId) -> Option<u32> {
 
 pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
     let mut out: Vec<ModuleBindings> = (0..g.mods.len()).map(|_| Default::default()).collect();
+    let nodes = BindingNodes::new(&g.m);
     for (mi, info) in g.mods.iter().enumerate() {
         let mut v: Vec<(u32, BindingFacts)> = info
             .locals
             .iter()
-            .map(|(&id, &n)| (id, facts_of(g, n)))
+            .map(|(&id, &n)| (id, facts_of_binding(g, &nodes, n)))
             .collect();
         v.sort_by_key(|(id, _)| *id);
         out[mi].locals = v;
@@ -337,8 +1431,79 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
         if f.func_id == u32::MAX {
             continue;
         }
-        let b = facts_of(g, f.this);
+        let b = facts_of_binding(g, &nodes, f.this);
         out[f.module as usize].this_of.push((f.func_id, b));
+    }
+    for &(mi, offset, ref args) in &g.call_args_at {
+        let iv: Vec<Option<(i64, i64)>> = args
+            .iter()
+            .map(|&n| number_range_of(&g.m, &nodes.of(n)))
+            .collect();
+        out[mi as usize].call_arg_ranges.push((offset, iv));
+    }
+    let mut reads: Vec<Vec<(u32, Option<ElementRead>)>> = vec![Vec::new(); out.len()];
+    for site in &g.element_sites {
+        if site.op == crate::derive::ElementOp::Read && site.byte_offset != 0 {
+            reads[site.module as usize].push((site.byte_offset, element_read(&g.m, &nodes, site)));
+        }
+    }
+    for (mb, mut rs) in out.iter_mut().zip(reads) {
+        rs.sort_by_key(|(o, _)| *o);
+        let mut joined: Vec<(u32, Option<ElementRead>)> = Vec::new();
+        for (o, r) in rs {
+            match joined.last_mut() {
+                Some((lo, prev)) if *lo == o => {
+                    *prev = match (*prev, r) {
+                        (Some(a), Some(b)) if a.len == b.len => Some(ElementRead {
+                            len: a.len,
+                            key_in_bounds: a.key_in_bounds && b.key_in_bounds,
+                        }),
+                        _ => None,
+                    }
+                }
+                _ => joined.push((o, r)),
+            }
+        }
+        mb.element_reads = joined
+            .into_iter()
+            .filter_map(|(o, r)| Some((o, r?)))
+            .collect();
+    }
+    for mb in &mut out {
+        mb.call_arg_ranges.sort_by_key(|(o, _)| *o);
+        let mut joined: Vec<(u32, Vec<Option<(i64, i64)>>)> = Vec::new();
+        for (o, iv) in std::mem::take(&mut mb.call_arg_ranges) {
+            match joined.last_mut() {
+                Some((lo, prev)) if *lo == o => {
+                    if prev.len() != iv.len() {
+                        prev.iter_mut().for_each(|p| *p = None);
+                        continue;
+                    }
+                    for (p, q) in prev.iter_mut().zip(iv) {
+                        *p = match (*p, q) {
+                            (Some((a, b)), Some((c, d))) => Some((a.min(c), b.max(d))),
+                            _ => None,
+                        };
+                    }
+                }
+                _ => joined.push((o, iv)),
+            }
+        }
+        mb.call_arg_ranges = joined;
+    }
+    let mut results: Vec<Vec<(u32, bool)>> = vec![Vec::new(); out.len()];
+    for &(mi, offset, n) in &g.call_results_at {
+        let node = &g.m.nodes[n as usize];
+        let number = g.m.number_call_sabotage
+            || (node.prim == crate::model::prim::NUM && node.pts.is_empty());
+        results[mi as usize].push((offset, number));
+    }
+    for (mb, mut rs) in out.iter_mut().zip(results) {
+        rs.sort_unstable();
+        // A site is a Number call when every copy's result is (`false`
+        // sorts first, so the first entry of an offset decides).
+        rs.dedup_by_key(|(o, _)| *o);
+        mb.number_calls = rs.into_iter().filter(|(_, n)| *n).map(|(o, _)| o).collect();
     }
     for (mi, (_, m)) in g.modules.iter().enumerate() {
         fn pure(e: &perry_hir::Expr, params: &[u32]) -> bool {

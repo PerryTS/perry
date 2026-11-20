@@ -23,14 +23,12 @@ fn object_key(bytes: &[u8]) -> *const crate::StringHeader {
 
 fn throw_type_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_range_error(message: &[u8]) -> ! {
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_rangeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
 }
 
 fn numeric_integer_kind(kind: u8) -> bool {
@@ -216,7 +214,8 @@ fn atomics_view_arg(value: f64) -> AtomicView {
             kind,
         };
     }
-    if crate::buffer::is_registered_buffer(raw) && crate::buffer::is_uint8array_buffer(raw) {
+    // A Node `Buffer` misses the typed-array lookup above but is a `Uint8Array`.
+    if crate::buffer::is_uint8_view_buffer(raw) {
         return AtomicView::Uint8ArrayBuffer(raw as *mut crate::buffer::BufferHeader);
     }
     throw_type_error(b"Atomics operation requires an integer typed array");
@@ -781,11 +780,11 @@ pub extern "C" fn js_atomics_wait_async(
             view.get_numeric(idx) == expected_i32
         }
     };
-    // The waiter below is a background thread, and wasm32-wasip1 cannot spawn
+    // The waiter below is a background thread, and WASI cannot spawn
     // one. Fail loudly before any waiter is enqueued rather than panic in the
     // spawn.
-    if cfg!(all(target_os = "wasi", target_env = "p1")) {
-        throw_type_error(b"Atomics.waitAsync is not supported on wasip1");
+    if cfg!(target_os = "wasi") {
+        throw_type_error(b"Atomics.waitAsync is not supported on WASI");
     }
     let addr = view.slot_addr(idx);
     let handle = if addr == 0 {
@@ -820,4 +819,36 @@ pub extern "C" fn js_atomics_wait_async(
         crate::thread::queue_promise_string_result(owner_agent, promise_usize, result);
     });
     wait_async_result(true, crate::value::js_nanbox_pointer(promise as i64))
+}
+
+#[cfg(test)]
+mod buffer_receiver_tests {
+    use super::*;
+
+    fn closure() -> *const ClosureHeader {
+        std::ptr::null()
+    }
+
+    fn this() -> crate::closure::JsThis {
+        crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED))
+    }
+
+    /// node: `Buffer` is a `Uint8Array`, so every integer Atomics operation
+    /// accepts it (`Atomics.load(Buffer.from([1, 2]), 1) === 2`).
+    #[test]
+    fn integer_atomics_accept_a_node_buffer() {
+        let _lock = crate::gc::global_side_table_test_lock();
+        crate::gc::gc_init();
+        let buf = crate::buffer::js_buffer_alloc(4, 0);
+        assert!(crate::buffer::is_node_buffer(buf as usize));
+        crate::buffer::js_buffer_set(buf, 1, 2);
+        let view = crate::value::js_nanbox_pointer(buf as i64);
+        let load =
+            crate::exception::catch_js_throw(|| js_atomics_load(closure(), this(), view, 1.0));
+        assert_eq!(load.ok(), Some(2.0));
+        assert_eq!(js_atomics_add(closure(), this(), view, 1.0, 5.0), 2.0);
+        assert_eq!(js_atomics_store(closure(), this(), view, 0.0, 7.0), 7.0);
+        assert_eq!(crate::buffer::js_buffer_get(buf, 0), 7);
+        assert_eq!(crate::buffer::js_buffer_get(buf, 1), 7);
+    }
 }

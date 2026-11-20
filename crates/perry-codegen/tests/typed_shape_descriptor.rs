@@ -33,7 +33,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -67,11 +66,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -112,6 +114,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -168,10 +171,12 @@ fn module_with_new(class: Class) -> Module {
         extern_funcs: Vec::new(),
         init_was_unrolled: false,
         has_top_level_await: false,
+        async_init_function: None,
         init_kind: ModuleInitKind::Eager,
         async_step_closures: std::collections::HashSet::new(),
         closure_display_names: std::collections::HashMap::new(),
         class_display_names: std::collections::HashMap::new(),
+        non_constructor_funcs: Default::default(),
         closure_source_text: std::collections::HashMap::new(),
         class_source_text: std::collections::HashMap::new(),
         async_generator_funcs: std::collections::HashSet::new(),
@@ -179,6 +184,7 @@ fn module_with_new(class: Class) -> Module {
         gen_param_prologue_len: std::collections::HashMap::new(),
         class_family_syntax: None,
         requested_modules: Vec::new(),
+        locally_redeclared_imports: Vec::new(),
     }
 }
 

@@ -148,6 +148,7 @@ mod tests {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     let mut v: Vec<&[Stmt]> = vec![body.as_slice()];
                     if let Some(c) = catch {
@@ -387,6 +388,7 @@ mod tests {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_released_ids(body, out);
                     if let Some(c) = catch {

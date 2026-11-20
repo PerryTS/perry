@@ -1,0 +1,10 @@
+import { constants as fs } from 'node:fs';
+import { constants as os } from 'node:os';
+import { constants as crypto } from 'node:crypto';
+import { constants as promises } from 'node:fs/promises';
+console.log(fs.F_OK, fs.R_OK, fs.W_OK, fs.X_OK);
+console.log(os.errno.EACCES > 0, os.signals.SIGTERM > 0);
+console.log(crypto.RSA_PKCS1_PADDING, crypto.RSA_NO_PADDING);
+console.log(promises.O_RDONLY === fs.O_RDONLY);
+import * as legacy from 'node:constants';
+console.log(legacy.R_OK === fs.R_OK, legacy.RSA_PKCS1_PADDING === crypto.RSA_PKCS1_PADDING);

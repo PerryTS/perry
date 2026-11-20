@@ -1,6 +1,11 @@
 
 {
-    if (module == "fs" || module == "node:fs") && object.is_some() {
+    // Only the stream arms below; any other method of a folded fs receiver
+    // runs the runtime dispatch on the receiver (`fs_receiver_dispatch`).
+    if (module == "fs" || module == "node:fs")
+        && object.is_some()
+        && perry_hir::folded_call::FS_STREAM_METHODS.contains(&method)
+    {
         let recv = object.unwrap();
         let undefined = || double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
         match method {
@@ -326,11 +331,11 @@
                 } else {
                     double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
                 };
-                ctx.block().call_void(
+                let result = ctx.block().call(
+                    DOUBLE,
                     "js_fs_mkdir_sync_options",
                     &[(DOUBLE, &p), (DOUBLE, &options)],
                 );
-                let result = double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
                 arg_group.release(ctx);
                 return Ok(result);
             }
@@ -737,11 +742,15 @@
                 arg_group.release(ctx);
                 return Ok(result);
             }
-            "readSync" if args.len() >= 3 => {
+            "readSync" if args.len() >= 2 => {
                 let (arg_values, arg_group) = super::lower_call_args_rooted(ctx, &args[..args.len().min(3)])?;
                 let fd = arg_values[0].clone();
                 let buf = arg_values[1].clone();
-                let options = arg_values[2].clone();
+                let options = if args.len() >= 3 {
+                    arg_values[2].clone()
+                } else {
+                    double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+                };
                 let result = ctx.block().call(
                     DOUBLE,
                     "js_fs_read_sync_options",

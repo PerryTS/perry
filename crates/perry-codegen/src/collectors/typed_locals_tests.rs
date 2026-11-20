@@ -330,6 +330,24 @@ fn arr_any() -> HirType {
 }
 
 #[test]
+fn cloned_iife_proofs_keep_their_own_depth_budget_across_hash_seeds() {
+    let shallow = iife(60, vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))]);
+    let mut deep = shallow.clone();
+    for _ in 0..5 {
+        deep = Expr::Sequence(vec![deep]);
+    }
+    let body = vec![let_(1, Some(shallow)), let_(2, Some(deep))];
+    for _ in 0..64 {
+        let result = run(&body, &[]);
+        assert_eq!(
+            result.arrays,
+            HashSet::from([1]),
+            "a depth-limited clone must neither poison nor borrow the shallow proof"
+        );
+    }
+}
+
+#[test]
 fn outer_proofs_meet_capture_and_definite_facts() {
     let mut definite = crate::collectors::DefiniteInit::default();
     definite.kinds.insert(7, arr_any());

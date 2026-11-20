@@ -8,11 +8,20 @@ fn store_target(line: &str) -> Option<&str> {
         .map(|(_, target)| target.split(',').next().unwrap().trim())
 }
 
-/// Sabotage the actual emitted header's SSA dependency, separately for each
-/// allocator. Keep the packed type/size word and the seed unchanged: only the
-/// live color is dropped. Also move a real seed immediately after its header.
-pub(super) fn sabotage_controls(ir: &str) {
-    for vector in [false, true] {
+/// A negative control for [`check`].
+pub(super) enum Sabotage {
+    /// Drop the live color from the actual emitted header's SSA dependency of
+    /// the scalar (`vector = false`) or the vector allocator. The packed
+    /// type/size word and the seed stay unchanged.
+    HeaderColor { vector: bool },
+    /// Move a real seed immediately after its header.
+    SeedBeforeInitialization,
+}
+
+/// `ir` with `sabotage` applied to one real subject (asserted live). [`check`]
+/// must refuse the result; each control is its own `should_panic` test.
+pub(super) fn sabotaged(ir: &str, sabotage: Sabotage) -> String {
+    if let Sabotage::HeaderColor { vector } = sabotage {
         let mut changed = false;
         let mut pieces = ir
             .split("\ndefine ")
@@ -56,10 +65,7 @@ pub(super) fn sabotage_controls(ir: &str) {
             break;
         }
         assert!(changed, "both allocator sabotage subjects must be live");
-        assert!(
-            std::panic::catch_unwind(|| check(&pieces.join("\ndefine "))).is_err(),
-            "missing header birth flags must fail for vector={vector}"
-        );
+        return pieces.join("\ndefine ");
     }
     let mut pieces = ir
         .split("\ndefine ")
@@ -91,11 +97,8 @@ pub(super) fn sabotage_controls(ir: &str) {
         changed = true;
         break;
     }
-    assert!(changed);
-    assert!(
-        std::panic::catch_unwind(|| check(&pieces.join("\ndefine "))).is_err(),
-        "seed before initialization must fail"
-    );
+    assert!(changed, "the seed sabotage subject must be live");
+    pieces.join("\ndefine ")
 }
 
 fn registers(text: &str) -> Vec<String> {

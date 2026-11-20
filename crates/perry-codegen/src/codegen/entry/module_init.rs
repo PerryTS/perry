@@ -46,117 +46,138 @@ pub(super) fn compile_module_init(
     // re-running the body, leaving the namespace populator's work
     // partially observable. The wrapper sets `done = 1` BEFORE
     // calling the body so the re-entry path returns immediately.
-    let done_global = format!("__perry_init_done_{}", module_prefix);
-    // #10399: with a Worker in the program this guard MUST be per-thread.
-    // A process-wide flag means a worker reaching `<mod>__init` finds the
-    // 1 the main thread stored, skips the body, and then reads module
-    // globals that point into the main thread's arena — where
-    // `classify_heap_generation` is `Unknown`, so the object reads back
-    // with no keys. Node and bun evaluate the module graph once per
-    // worker; a thread-local flag is what makes that happen here.
-    if llmod.program_has_worker {
-        llmod.add_internal_thread_local_global(&done_global, I8, "0");
+    if cross_module.program_has_tla {
+        super::async_module::emit_record(llmod, hir, module_prefix, cross_module);
     } else {
-        llmod.add_internal_global(&done_global, I8, "0");
-    }
-    let init_name = format!("{}__init", module_prefix);
-    let init_body_name = format!("{}__init_body", module_prefix);
-    let evaluate_name = format!("{}__init_evaluate", module_prefix);
-    {
-        let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
-        let _ = wrap_fn.create_block("entry");
-        let _ = wrap_fn.create_block("guard.ret");
-        let _ = wrap_fn.create_block("guard.do");
-        let ret_label = wrap_fn.block_mut(1).unwrap().label.clone();
-        let do_label = wrap_fn.block_mut(2).unwrap().label.clone();
-        {
-            let blk = wrap_fn.block_mut(0).unwrap();
-            let done = blk.load(I8, &format!("@{}", done_global));
-            let already = blk.icmp_ne(I8, &done, "0");
-            blk.cond_br(&already, &ret_label, &do_label);
+        let done_global = format!("__perry_init_done_{}", module_prefix);
+        // #10399: with a Worker in the program this guard MUST be per-thread.
+        // A process-wide flag means a worker reaching `<mod>__init` finds the
+        // 1 the main thread stored, skips the body, and then reads module
+        // globals that point into the main thread's arena — where
+        // `classify_heap_generation` is `Unknown`, so the object reads back
+        // with no keys. Node and bun evaluate the module graph once per
+        // worker; a thread-local flag is what makes that happen here.
+        //
+        // The guard is the low byte of an eight-byte global. The bytes above it
+        // belong to the runtime, which numbers the module record there on first
+        // evaluation (`js_run_module_init_guarded`), so the record is named by its
+        // evaluation order and not by where the linker put the global.
+        if llmod.program_has_worker {
+            llmod.add_internal_thread_local_global(&done_global, I64, "0");
+        } else {
+            llmod.add_internal_global(&done_global, I64, "0");
         }
+        let init_name = format!("{}__init", module_prefix);
+        let init_body_name = format!("{}__init_body", module_prefix);
+        let evaluate_name = format!("{}__init_evaluate", module_prefix);
         {
-            let blk = wrap_fn.block_mut(1).unwrap();
-            blk.ret_void();
-        }
-        {
-            let blk = wrap_fn.block_mut(2).unwrap();
-            blk.store(I8, "1", &format!("@{}", done_global));
-            // The registry owns failed evaluation records. On a throw the
-            // runtime clears this existing reentry guard before propagating it,
-            // so the next call replays the failure instead of returning early.
-            let evaluate_addr = format!("ptrtoint (ptr @{} to i64)", evaluate_name);
-            let guard_addr = format!("ptrtoint (ptr @{} to i64)", done_global);
-            blk.call_void(
-                "js_run_module_init_guarded",
-                &[(I64, &evaluate_addr), (I64, &guard_addr)],
-            );
-            blk.ret_void();
-        }
-    }
-    {
-        // Include dependency evaluation in the same failure boundary: a
-        // dependency can throw before this module reaches its own body.
-        let evaluate_fn = llmod.define_function(&evaluate_name, VOID, vec![]);
-        let _ = evaluate_fn.create_block("entry");
-        {
-            let blk = evaluate_fn.block_mut(0).unwrap();
-            // Cyclic dependencies may call our hoisted functions before
-            // our body. Prepare literal infrastructure without evaluating
-            // declared classes or any user statement ahead of dependencies.
-            let prepare_addr = format!(
-                "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
-                module_prefix
-            );
-            blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
-            // Trigger init of static-dep + re-export source modules
-            // before the body runs. Each `<dep>__init` is itself
-            // wrapped by the same guard pattern, so this short-
-            // circuits when the dep was already initialized
-            // (Eager-via-main path) and fires the body when the
-            // dep is Deferred and this is the first reach. The driver
-            // excludes evaluation back-edges to the program entry.
-            for dep_prefix in &cross_module.module_init_deps {
-                if dep_prefix == module_prefix {
-                    continue;
-                }
-                blk.call_void(&format!("{}__init", dep_prefix), &[]);
+            let wrap_fn = llmod.define_function(&init_name, VOID, vec![]);
+            let _ = wrap_fn.create_block("entry");
+            let _ = wrap_fn.create_block("guard.ret");
+            let _ = wrap_fn.create_block("guard.do");
+            let ret_label = wrap_fn.block_mut(1).unwrap().label.clone();
+            let do_label = wrap_fn.block_mut(2).unwrap().label.clone();
+            {
+                let blk = wrap_fn.block_mut(0).unwrap();
+                let done = blk.load(I8, &format!("@{}", done_global));
+                let already = blk.icmp_ne(I8, &done, "0");
+                blk.cond_br(&already, &ret_label, &do_label);
             }
-            // Run each module body behind a native exception boundary.
-            // A CommonJS wrapper publishes partial exports at the top of
-            // this body; if an exception escapes before final publication,
-            // the runtime caches that exact failure and wakes path-module
-            // waiters before rethrowing. Keeping the boundary here avoids
-            // adding a JavaScript `try` block that would change top-level
-            // `let`/`const`/`class` scope in flat CJS emission.
-            let init_body_addr = format!("ptrtoint (ptr @{} to i64)", init_body_name);
-            blk.call_void(
-                "js_run_module_init_catching",
-                &[(I64, init_body_addr.as_str())],
-            );
-            blk.ret_void();
+            {
+                let blk = wrap_fn.block_mut(1).unwrap();
+                blk.ret_void();
+            }
+            {
+                let blk = wrap_fn.block_mut(2).unwrap();
+                blk.store(I8, "1", &format!("@{}", done_global));
+                // The registry owns failed evaluation records. On a throw the
+                // runtime clears this existing reentry guard before propagating it,
+                // so the next call replays the failure instead of returning early.
+                let evaluate_addr = format!("ptrtoint (ptr @{} to i64)", evaluate_name);
+                let guard_addr = format!("ptrtoint (ptr @{} to i64)", done_global);
+                blk.call_void(
+                    "js_run_module_init_guarded",
+                    &[(I64, &evaluate_addr), (I64, &guard_addr)],
+                );
+                blk.store(I8, "2", &format!("@{}", done_global));
+                blk.ret_void();
+            }
         }
-    }
-    // Declare every dep's `__init` symbol so the wrapper's calls
-    // resolve at link time. Most overlap with `non_entry_module_prefixes`
-    // (whose declarations live in the entry module's compilation),
-    // but a non-entry module compiled standalone has no entry-side
-    // declaration list — emit them here too. `declare_function`
-    // dedupes by name.
-    for dep_prefix in &cross_module.module_init_deps {
-        if dep_prefix == module_prefix {
-            continue;
+        {
+            // Include dependency evaluation in the same failure boundary: a
+            // dependency can throw before this module reaches its own body.
+            let evaluate_fn = llmod.define_function(&evaluate_name, VOID, vec![]);
+            let _ = evaluate_fn.create_block("entry");
+            {
+                let blk = evaluate_fn.block_mut(0).unwrap();
+                // Cyclic dependencies may call our hoisted functions before
+                // our body. Prepare literal infrastructure without evaluating
+                // declared classes or any user statement ahead of dependencies.
+                let prepare_addr = format!(
+                    "ptrtoint (ptr @__perry_prepare_literals_{} to i64)",
+                    module_prefix
+                );
+                blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
+                // Trigger init of static-dep + re-export source modules
+                // before the body runs. Each `<dep>__init` is itself
+                // wrapped by the same guard pattern, so this short-
+                // circuits when the dep was already initialized
+                // (Eager-via-main path) and fires the body when the
+                // dep is Deferred and this is the first reach. The driver
+                // excludes evaluation back-edges to the program entry.
+                for dep_prefix in &cross_module.module_init_deps {
+                    if dep_prefix == module_prefix {
+                        continue;
+                    }
+                    blk.call_void(&format!("{}__init", dep_prefix), &[]);
+                }
+                // Run each module body behind a native exception boundary.
+                // A CommonJS wrapper publishes partial exports at the top of
+                // this body; if an exception escapes before final publication,
+                // the runtime caches that exact failure and wakes path-module
+                // waiters before rethrowing. Keeping the boundary here avoids
+                // adding a JavaScript `try` block that would change top-level
+                // `let`/`const`/`class` scope in flat CJS emission.
+                let init_body_addr = format!("ptrtoint (ptr @{} to i64)", init_body_name);
+                blk.call_void(
+                    "js_run_module_init_catching",
+                    &[(I64, init_body_addr.as_str())],
+                );
+                blk.ret_void();
+            }
         }
-        llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
+        // Declare every dep's `__init` symbol so the wrapper's calls
+        // resolve at link time. Most overlap with `non_entry_module_prefixes`
+        // (whose declarations live in the entry module's compilation),
+        // but a non-entry module compiled standalone has no entry-side
+        // declaration list — emit them here too. `declare_function`
+        // dedupes by name.
+        for dep_prefix in &cross_module.module_init_deps {
+            if dep_prefix == module_prefix {
+                continue;
+            }
+            llmod.declare_function(&format!("{}__init", dep_prefix), VOID, &[]);
+        }
     }
     // The body retains every existing semantic of `<prefix>__init`
     // (strings init, globals/GC registration, top-level statements,
     // namespace populator at the tail). Calls normally go through the
     // wrapper above, both within this module and across modules.
-    let init_name = init_body_name;
+    let init_name = format!("{}__init_body", module_prefix);
+    module_frame::record(
+        llmod,
+        hir,
+        &init_name,
+        cross_module.app_metadata.module_source_path.as_deref(),
+    );
     let ic_base = llmod.ic_counter;
     let buffer_alias_scopes = llmod.buffer_alias_scope_allocator();
-    let init_fn = llmod.define_function(&init_name, VOID, vec![]);
+    let body_return = if cross_module.program_has_tla {
+        DOUBLE
+    } else {
+        VOID
+    };
+    let init_fn = llmod.define_function(&init_name, body_return, vec![]);
     // Keep the body symbol available to the legacy direct-body worker path.
     // Worker programs use the guarded wrapper, whose state is per thread.
     init_fn.linkage = "external".to_string();
@@ -183,6 +204,7 @@ pub(super) fn compile_module_init(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     let (mut init_shadow_slot_map, _) = enable_module_init_shadow_frame(
+        &cross_module.closure_writes,
         init_fn,
         &hir.init,
         &flat_const_ids,
@@ -199,6 +221,7 @@ pub(super) fn compile_module_init(
         .copied()
         .collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(None);
     let _opt_report_scope =
         crate::opt_report::enter_region("module_init", crate::opt_report::RegionKind::ModuleInit);
     let init_native_facts = crate::collectors::collect_native_region_fact_graph(
@@ -218,6 +241,7 @@ pub(super) fn compile_module_init(
         // too — passing an empty map kept top-level accumulator loops on
         // the rooted/guarded path while in-function ones were clean.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
     // does, which module init never got. The shadow map is built above
@@ -271,10 +295,15 @@ pub(super) fn compile_module_init(
         crate::boxed_vars::collect_let_types_in_stmts(&hir.init, &mut init_local_types);
     }
     let mut ctx = FnCtx {
+        for_in_facts: Default::default(),
+        for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: init_fn,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -300,6 +329,7 @@ pub(super) fn compile_module_init(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -317,6 +347,8 @@ pub(super) fn compile_module_init(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -326,9 +358,12 @@ pub(super) fn compile_module_init(
         shared_super_scope_active: false,
         lexical_this_uses_derived_binding: None,
         inline_ctor_return: Vec::new(),
+        recv_run: None,
+        recv_run_store_member: false,
         new_target_stack: Vec::new(),
         class_stack: Vec::new(),
         in_static_member: false,
+        method_home_local: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -369,6 +404,9 @@ pub(super) fn compile_module_init(
             .compiler_private_async_i1_control_locals,
         scope_map: &cross_module.scope_map,
         string_accumulator_locals: &cross_module.string_accumulator_locals,
+        contents_stable_bindings: &cross_module.contents_stable_bindings,
+        loop_pushed_arrays: &cross_module.loop_pushed_arrays,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -390,6 +428,7 @@ pub(super) fn compile_module_init(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -424,6 +463,8 @@ pub(super) fn compile_module_init(
         int_valued_i64_locals: init_native_facts.int_valued_i64_locals(),
         not_bigint_locals: init_native_facts.not_bigint_locals(),
         number_by_construction_locals: init_native_facts.number_by_construction_locals(),
+        facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: init_native_facts.unsigned_i32_locals(),
         shadow_slots_bound: init_shadow_slot_map.values().copied().collect(),
         temp_roots: crate::rooting::TempRootPool::default(),
@@ -434,6 +475,7 @@ pub(super) fn compile_module_init(
         shadow_slot_clears_after_stmt: init_shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -447,6 +489,9 @@ pub(super) fn compile_module_init(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -474,6 +519,9 @@ pub(super) fn compile_module_init(
         spec_ta_ready: std::collections::HashSet::new(),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return: None,
+        sig_record_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -490,7 +538,6 @@ pub(super) fn compile_module_init(
         local_imported_object_aliases: HashMap::new(),
         imported_vars: &cross_module.imported_vars,
         imported_object_literals: &cross_module.imported_object_literals,
-        short_spread_method_candidates: &cross_module.short_spread_method_candidates,
         object_literal_method_candidates: &cross_module.object_literal_method_candidates,
         compile_time_constants: init_native_facts.compile_time_constants(),
         target_triple: &cross_module.target_triple,
@@ -504,6 +551,7 @@ pub(super) fn compile_module_init(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: init_native_facts.non_escaping_news().clone(),
+        life_claims: init_native_facts.life_claims(),
         non_escaping_new_used_fields: init_native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: init_native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: init_native_facts
@@ -561,7 +609,6 @@ pub(super) fn compile_module_init(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -569,6 +616,8 @@ pub(super) fn compile_module_init(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: std::collections::HashSet::new(),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -617,7 +666,7 @@ pub(super) fn compile_module_init(
         // Script" is the right answer there for a wrapped entry too — and
         // that predicate is mirrored in `perry-hir`'s `lower_module_fn`,
         // which runs before the wrap flag is knowable here.
-        if super::entry_evaluates_as_esm(hir, cross_module) {
+        if !cross_module.program_has_tla && super::entry_evaluates_as_esm(hir, cross_module) {
             ctx.block().call_void("js_mark_entry_module_esm", &[]);
         }
         // #5579: GlobalDeclarationInstantiation for a Script. A non-ESM entry
@@ -661,9 +710,13 @@ pub(super) fn compile_module_init(
             cross_module.namespace_adopts_cjs_exports,
         );
     }
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
     stmt::lower_top_level_stmts(&mut ctx, &hir.init)
         .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
-    init_static_fields_late(&mut ctx, hir)?;
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
+    if hir.async_init_function.is_none() {
+        init_static_fields_late(&mut ctx, hir)?;
+    }
 
     // Issue #100: populate `@__perry_ns_<module_prefix>` from the
     // namespace_entries list at the tail of the non-entry __init.
@@ -693,7 +746,17 @@ pub(super) fn compile_module_init(
     }
 
     if !ctx.block().is_terminated() {
-        ctx.block().ret_void();
+        if cross_module.program_has_tla {
+            let value = if let Some(id) = hir.async_init_function {
+                let name = &func_names[&id];
+                ctx.block().call(DOUBLE, name, &[])
+            } else {
+                crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED))
+            };
+            ctx.block().ret(DOUBLE, &value);
+        } else {
+            ctx.block().ret_void();
+        }
     }
     let ic_globals = std::mem::take(&mut ctx.ic_globals);
     let typed_parse_rodata = std::mem::take(&mut ctx.typed_parse_rodata);

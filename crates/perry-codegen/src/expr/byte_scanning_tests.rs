@@ -26,6 +26,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
         }
     } else {
         Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object,

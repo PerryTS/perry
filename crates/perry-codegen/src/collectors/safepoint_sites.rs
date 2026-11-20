@@ -164,6 +164,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n, all);
@@ -335,6 +336,7 @@ mod tests {
             object: Box::new(this()),
             index: Box::new(Expr::Number(0.0)),
             value: Box::new(call(vec![])),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         };

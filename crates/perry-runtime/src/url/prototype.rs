@@ -17,8 +17,7 @@ fn require_url_receiver(name: &str, this: crate::closure::JsThis) -> *mut Object
     }
     let message = format!("Value of URL.prototype.{name} called on an incompatible receiver");
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg));
 }
 
 macro_rules! url_getter {
@@ -75,63 +74,63 @@ pub(crate) fn install_url_prototype_accessors(proto: *mut ObjectHeader) {
     let entries: &[(&str, Info, Option<Info>)] = &[
         (
             "href",
-            crate::fn_info!(#[realm("URL.prototype.href.<get>")] export crate::url::prototype::get_href, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.href.<set>")] export crate::url::prototype::set_href, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.href.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_href, 0; with_name("get href"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.href.<set>")] export crate::url::prototype::set_href, 1; with_name("set href"), with_declared(1))),
         ),
         (
             "origin",
-            crate::fn_info!(#[realm("URL.prototype.origin.<get>")] export crate::url::prototype::get_origin, 0; with_declared(0)),
+            crate::fn_info!(#[realm("URL.prototype.origin.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_origin, 0; with_name("get origin"), with_declared(0)),
             None,
         ),
         (
             "protocol",
-            crate::fn_info!(#[realm("URL.prototype.protocol.<get>")] export crate::url::prototype::get_protocol, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.protocol.<set>")] export crate::url::prototype::set_protocol, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.protocol.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_protocol, 0; with_name("get protocol"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.protocol.<set>")] export crate::url::prototype::set_protocol, 1; with_name("set protocol"), with_declared(1))),
         ),
         (
             "username",
-            crate::fn_info!(#[realm("URL.prototype.username.<get>")] export crate::url::prototype::get_username, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.username.<set>")] export crate::url::prototype::set_username, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.username.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_username, 0; with_name("get username"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.username.<set>")] export crate::url::prototype::set_username, 1; with_name("set username"), with_declared(1))),
         ),
         (
             "password",
-            crate::fn_info!(#[realm("URL.prototype.password.<get>")] export crate::url::prototype::get_password, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.password.<set>")] export crate::url::prototype::set_password, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.password.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_password, 0; with_name("get password"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.password.<set>")] export crate::url::prototype::set_password, 1; with_name("set password"), with_declared(1))),
         ),
         (
             "host",
-            crate::fn_info!(#[realm("URL.prototype.host.<get>")] export crate::url::prototype::get_host, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.host.<set>")] export crate::url::prototype::set_host, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.host.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_host, 0; with_name("get host"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.host.<set>")] export crate::url::prototype::set_host, 1; with_name("set host"), with_declared(1))),
         ),
         (
             "hostname",
-            crate::fn_info!(#[realm("URL.prototype.hostname.<get>")] export crate::url::prototype::get_hostname, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.hostname.<set>")] export crate::url::prototype::set_hostname, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.hostname.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_hostname, 0; with_name("get hostname"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.hostname.<set>")] export crate::url::prototype::set_hostname, 1; with_name("set hostname"), with_declared(1))),
         ),
         (
             "port",
-            crate::fn_info!(#[realm("URL.prototype.port.<get>")] export crate::url::prototype::get_port, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.port.<set>")] export crate::url::prototype::set_port, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.port.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_port, 0; with_name("get port"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.port.<set>")] export crate::url::prototype::set_port, 1; with_name("set port"), with_declared(1))),
         ),
         (
             "pathname",
-            crate::fn_info!(#[realm("URL.prototype.pathname.<get>")] export crate::url::prototype::get_pathname, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.pathname.<set>")] export crate::url::prototype::set_pathname, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.pathname.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_pathname, 0; with_name("get pathname"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.pathname.<set>")] export crate::url::prototype::set_pathname, 1; with_name("set pathname"), with_declared(1))),
         ),
         (
             "search",
-            crate::fn_info!(#[realm("URL.prototype.search.<get>")] export crate::url::prototype::get_search, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.search.<set>")] export crate::url::prototype::set_search, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.search.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_search, 0; with_name("get search"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.search.<set>")] export crate::url::prototype::set_search, 1; with_name("set search"), with_declared(1))),
         ),
         (
             "searchParams",
-            crate::fn_info!(#[realm("URL.prototype.searchParams.<get>")] export crate::url::prototype::get_search_params, 0; with_declared(0)),
+            crate::fn_info!(#[realm("URL.prototype.searchParams.<get>", effects = { returns(fresh(URLSearchParams.prototype)) })] export crate::url::prototype::get_search_params, 0; with_name("get searchParams"), with_declared(0)),
             None,
         ),
         (
             "hash",
-            crate::fn_info!(#[realm("URL.prototype.hash.<get>")] export crate::url::prototype::get_hash, 0; with_declared(0)),
-            Some(crate::fn_info!(#[realm("URL.prototype.hash.<set>")] export crate::url::prototype::set_hash, 1; with_declared(1))),
+            crate::fn_info!(#[realm("URL.prototype.hash.<get>", effects = { returns(prim(str)) })] export crate::url::prototype::get_hash, 0; with_name("get hash"), with_declared(0)),
+            Some(crate::fn_info!(#[realm("URL.prototype.hash.<set>")] export crate::url::prototype::set_hash, 1; with_name("set hash"), with_declared(1))),
         ),
     ];
     let scope = crate::gc::RuntimeHandleScope::new();

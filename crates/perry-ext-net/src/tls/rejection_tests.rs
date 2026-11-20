@@ -8,7 +8,7 @@ const ISSUED_LEAF: &[u8] = include_bytes!("test_data/ca-issued-leaf.der");
 fn self_signed_leaf() -> Vec<u8> {
     let mut pem = std::io::Cursor::new(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-parity/node-suite/tls/fixtures/localhost-cert.pem"
+        "/../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem"
     )));
     let cert = rustls_pemfile::certs(&mut pem).next().unwrap().unwrap();
     cert.as_ref().to_vec()
@@ -111,7 +111,7 @@ fn configured_ca_and_hostname_validation_remain_unchanged() {
 fn handshake(config: Arc<rustls::ClientConfig>, leaf: &[u8], host: &str) -> (bool, Option<String>) {
     let mut key = std::io::Cursor::new(include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
-        "/../../test-parity/node-suite/tls/fixtures/localhost-key.pem"
+        "/../../tests/parity/node-suite/tls/fixtures/localhost-key.pem"
     )));
     let server = rustls::ServerConfig::builder_with_provider(
         rustls::crypto::ring::default_provider().into(),
@@ -179,7 +179,7 @@ fn factory_session_rejection_and_trust_controls() {
     let pem = Vec::from(
         include_bytes!(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../../test-parity/node-suite/tls/fixtures/localhost-cert.pem"
+            "/../../tests/parity/node-suite/tls/fixtures/localhost-cert.pem"
         ))
         .as_slice(),
     );

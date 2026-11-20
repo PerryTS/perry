@@ -18,37 +18,6 @@
 
 use crate::value::JSValue;
 
-/// Node's `util.inspect` label for a CLASS value: `[class Name]`,
-/// `[class Name extends Parent]`, `[class (anonymous)]`. `None` for anything
-/// that is not a registered class reference.
-///
-/// ## The ambiguity this resolves, and the one it cannot
-///
-/// A class value is an INT32-tagged NaN box carrying the class id
-/// (`class_constructor_ref_value`), which is how compiled code names a class
-/// without materializing an object. `INT32_TAG | 2` — the number 2 — and a
-/// ClassRef with `class_id == 2` are **bit-identical**; `class_ref_id`'s
-/// registry probe is the only thing separating them, exactly as
-/// `symbol/iterator.rs` documents for `for…of`. Class ids are small and
-/// sequential (codegen's `next_class_id = max(existing) + 1`), so in a program
-/// with N classes the integers `1..=N` are genuinely undecidable at this
-/// point. Perry answers "class" for those: a class id leaking into output is
-/// never right, while the integer reading is only *sometimes* right. The
-/// registry probe is what keeps every other integer printing as itself.
-///
-/// ## Cost
-///
-/// `class_ref_id` is an RwLock read plus a hash lookup. Following
-/// `symbol/iterator.rs`'s discipline — probe only where the code was already
-/// about to do something unusual — it is paid only inside the `is_int32()` arm
-/// of a display ladder: a value already being turned into a heap `String` for
-/// output, and already in the INT32 representation, which ordinary JS numbers
-/// (plain f64 doubles) never reach. Nothing on a hot path probes the registry.
-pub(crate) fn class_ref_inspect_label(value: f64) -> Option<String> {
-    let class_id = crate::object::class_ref_id(value)?;
-    Some(class_label_for_id(class_id))
-}
-
 /// `[class …]` for a resolved class id.
 pub(crate) fn class_label_for_id(class_id: u32) -> String {
     // The name comes from whatever `class_name_for_id` reports — deliberately
@@ -79,17 +48,6 @@ fn parent_class_name(class_id: u32) -> Option<String> {
         return None;
     }
     crate::object::class_name_for_id(parent).filter(|n| !n.is_empty())
-}
-
-/// Node's rendering of an INT32-tagged NaN box. The tag is shared between small
-/// integers and class references, so this is the ONE place that decides which
-/// one a display ladder is looking at; every `else if v.is_int32()` arm in a
-/// console/inspect ladder calls it.
-pub(crate) fn int32_or_class_repr(value: f64) -> String {
-    match class_ref_inspect_label(value) {
-        Some(label) => label,
-        None => JSValue::from_bits(value.to_bits()).as_int32().to_string(),
-    }
 }
 
 /// True for the sparse-array hole sentinel (`TAG_HOLE`, #323).
@@ -132,50 +90,87 @@ impl ArrayEntry {
     }
 }
 
-/// Split an array's raw element slots into the entries Node prints: each
-/// non-hole slot rendered by `render`, each *run* of holes collapsed to one
-/// `<N empty items>` entry.
+/// Node's entries for an array of `len` slots, fed its present elements in
+/// index order: each element rendered, each *run* of absent indices (a hole,
+/// or an index past a sparse Array's store with no own element) collapsed to
+/// one `<N empty items>` entry.
+struct EntryRuns {
+    parts: Vec<ArrayEntry>,
+    next: usize,
+}
+
+impl EntryRuns {
+    fn new() -> Self {
+        EntryRuns {
+            parts: Vec::new(),
+            next: 0,
+        }
+    }
+
+    fn present(&mut self, index: usize, entry: ArrayEntry) {
+        if index > self.next {
+            self.parts
+                .push(ArrayEntry::new(empty_items_label(index - self.next), false));
+        }
+        self.parts.push(entry);
+        self.next = index + 1;
+    }
+
+    fn finish(mut self, len: usize) -> Vec<ArrayEntry> {
+        if len > self.next {
+            self.parts
+                .push(ArrayEntry::new(empty_items_label(len - self.next), false));
+        }
+        self.parts
+    }
+}
+
+/// The entries Node prints for the plain Array `arr`: its own elements in
+/// index order, rendered by `render`, with runs of absent indices collapsed.
+/// A sparse Array (`length > capacity`) keeps its far elements in its named
+/// layout: they are read from there, never as slots past the store
+/// (`array_for_each_own_element`), so `[]; a[3000000] = 1` is
+/// `[ <3000000 empty items>, 1 ]`.
 ///
 /// # Safety
 ///
-/// `data_ptr` must point at `len` readable f64 element slots.
-pub(crate) unsafe fn array_entries_with_holes<F>(
-    data_ptr: *const f64,
-    len: usize,
+/// `arr` is a live, forwarding-resolved plain Array.
+pub(crate) unsafe fn array_entries<F>(
+    arr: *const crate::array::ArrayHeader,
     mut render: F,
 ) -> Vec<ArrayEntry>
 where
     F: FnMut(f64) -> ArrayEntry,
 {
-    let mut parts: Vec<ArrayEntry> = Vec::with_capacity(len);
-    let mut i = 0usize;
-    while i < len {
-        let elem = *data_ptr.add(i);
-        if is_array_hole(elem) {
-            let start = i;
-            while i < len && is_array_hole(*data_ptr.add(i)) {
-                i += 1;
-            }
-            parts.push(ArrayEntry::new(empty_items_label(i - start), false));
-            continue;
-        }
-        parts.push(render(elem));
-        i += 1;
-    }
-    parts
+    let len = (*arr).length as usize;
+    let mut runs = EntryRuns::new();
+    crate::array::array_for_each_own_element(arr, |index, elem| {
+        runs.present(index as usize, render(elem));
+        true
+    });
+    // A render that ran program code (an inspect hook) may have shortened
+    // the Array: the trailing run ends at its length now, as in node.
+    runs.finish(len.min((*arr).length as usize))
 }
 
-/// Classify a rendered element for the numeric column layout. A number or an
-/// int32 qualifies — unless the int32 was a class reference, whose label is not
-/// a numeral and must not be right-aligned into a column of them.
-pub(crate) fn entry_is_numeric(elem: f64, rendered: &str) -> bool {
-    let jv = JSValue::from_bits(elem.to_bits());
-    if jv.is_int32() {
-        // Both renderings come from `int32_or_class_repr`, so this is a test on
-        // our own output, not a guess about arbitrary text: an integer never
-        // starts with `[`.
-        return !rendered.starts_with('[');
+/// [`array_entries`] over a slice of raw slots (`TAG_HOLE` = absent).
+#[cfg(test)]
+fn array_entries_with_holes<F>(slots: &[f64], mut render: F) -> Vec<ArrayEntry>
+where
+    F: FnMut(f64) -> ArrayEntry,
+{
+    let mut runs = EntryRuns::new();
+    for (index, &elem) in slots.iter().enumerate() {
+        if !is_array_hole(elem) {
+            runs.present(index, render(elem));
+        }
     }
+    runs.finish(slots.len())
+}
+
+/// Classify an element for the numeric column layout.
+pub(crate) fn entry_is_numeric(elem: f64) -> bool {
+    let jv = JSValue::from_bits(elem.to_bits());
     // node right-aligns a column of numbers and bigints alike.
     jv.is_number() || jv.is_bigint()
 }
@@ -261,11 +256,7 @@ mod tests {
     fn hole_runs_collapse_and_non_holes_render() {
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         let slots = [1.0, hole, hole, 2.0, hole];
-        let parts = unsafe {
-            array_entries_with_holes(slots.as_ptr(), slots.len(), |v| {
-                ArrayEntry::new(v.to_string(), true)
-            })
-        };
+        let parts = array_entries_with_holes(&slots, |v| ArrayEntry::new(v.to_string(), true));
         let rendered: Vec<&str> = parts.iter().map(|p| p.text.as_str()).collect();
         assert_eq!(rendered, ["1", "<2 empty items>", "2", "<1 empty item>"]);
         assert_eq!(
@@ -278,11 +269,7 @@ mod tests {
     fn a_whole_array_of_holes_is_one_entry() {
         let hole = f64::from_bits(crate::value::TAG_HOLE);
         let slots = [hole; 7];
-        let parts = unsafe {
-            array_entries_with_holes(slots.as_ptr(), slots.len(), |_| {
-                ArrayEntry::new("?".to_string(), true)
-            })
-        };
+        let parts = array_entries_with_holes(&slots, |_| ArrayEntry::new("?".to_string(), true));
         assert_eq!(parts.len(), 1);
         // Seven SLOTS but one ENTRY, so Node keeps it on one line.
         assert_eq!(array_body(parts, 0, true), "[ <7 empty items> ]");
@@ -336,35 +323,14 @@ mod tests {
     }
 
     #[test]
-    fn an_unregistered_int32_is_not_a_class() {
-        // 0 is never a class id, and the registry probe rejects the rest.
-        let n = f64::from_bits(crate::value::INT32_TAG);
-        assert_eq!(class_ref_inspect_label(n), None);
-        assert_eq!(int32_or_class_repr(n), "0");
-        let big = f64::from_bits(crate::value::INT32_TAG | 0xFFFF_FFF0);
-        assert_eq!(class_ref_inspect_label(big), None);
-    }
-
-    #[test]
-    fn a_plain_double_is_never_a_class() {
-        assert_eq!(class_ref_inspect_label(49.0), None);
-        assert_eq!(class_ref_inspect_label(f64::NAN), None);
-    }
-
-    #[test]
     fn entry_numeric_classification() {
-        assert!(entry_is_numeric(49.0, "49"));
-        assert!(entry_is_numeric(
-            f64::from_bits(crate::value::INT32_TAG | 49),
-            "49"
-        ));
-        assert!(!entry_is_numeric(
-            f64::from_bits(crate::value::INT32_TAG | 49),
-            "[class Klass]"
-        ));
-        assert!(!entry_is_numeric(
-            f64::from_bits(crate::value::TAG_UNDEFINED),
-            "undefined"
-        ));
+        assert!(entry_is_numeric(49.0));
+        // No JS value is in the 0x7FFE band (P3 B4b).
+        assert!(!entry_is_numeric(f64::from_bits(
+            crate::value::INTERNAL_WORD_TAG | 49
+        )));
+        assert!(!entry_is_numeric(f64::from_bits(
+            crate::value::TAG_UNDEFINED
+        )));
     }
 }

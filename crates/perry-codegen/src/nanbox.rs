@@ -28,7 +28,6 @@ pub const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 pub const HANDLE_TAG: u64 = crate::runtime_abi::HANDLE_TAG;
 pub const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 pub const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
-pub const INT32_MASK: u64 = 0x0000_0000_FFFF_FFFF;
 pub const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 pub const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 /// Low end of the Perry-owned qNaN tag band. A NaN-boxed value is a primitive
@@ -68,11 +67,6 @@ pub const SHORT_STRING_TAG_TOP16_I64: &str = "32761";
 /// against the u64 tags in `tag_strings_match_u64_values`.
 pub const POINTER_TAG_TOP16_I64: &str = "32765";
 pub const BIGINT_TAG_TOP16_I64: &str = "32762";
-/// `INT32_TAG >> 48`. Used by the inline `===` prefix, which settles two
-/// INT32-tagged operands by bit inequality — the encoding
-/// `INT32_TAG | (v as u32 as u64)` is canonical, so different bits are
-/// different integers. Asserted in `tag_strings_match_u64_values`.
-pub const INT32_TAG_TOP16_I64: &str = "32766";
 
 /// Format a `u64` as a signed LLVM i64 literal (LLVM IR integer literals are signed).
 pub fn i64_literal(v: u64) -> String {
@@ -136,7 +130,6 @@ mod tests {
         );
         assert_eq!(i64_literal(POINTER_TAG >> 48), POINTER_TAG_TOP16_I64);
         assert_eq!(i64_literal(BIGINT_TAG >> 48), BIGINT_TAG_TOP16_I64);
-        assert_eq!(i64_literal(INT32_TAG >> 48), INT32_TAG_TOP16_I64);
     }
 
     /// #7511 — the inline pointer-bearing test emitted at class-field stores

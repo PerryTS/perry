@@ -181,9 +181,16 @@ impl Walk {
             Expr::Call { callee, args, .. } => {
                 // `require("net")` / `process.getBuiltinModule("net")` by name
                 // (`lower_call/mod.rs`).
-                if matches!(callee.as_ref(), Expr::ExternFuncRef { .. }) {
+                if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     if let Some(Expr::String(module)) = args.first() {
                         self.materialized.insert(module.clone());
+                        // A global read by name (`unresolved_global_get_expr`)
+                        // is the global's value: a constructor reached as a
+                        // value reaches what `new` of it reaches (its statics,
+                        // `new C()` through the value).
+                        if name == "js_global_get_or_throw_unresolved" {
+                            hand_lowered(set, Surface::Global(module));
+                        }
                     }
                 }
                 if let Expr::PropertyGet {
@@ -317,7 +324,7 @@ fn hand_lowered_owner(surface: &Surface<'_>) -> Option<OwnerKind> {
             | "CountQueuingStrategy"
             | "ByteLengthQueuingStrategy" => Some(STREAMS),
             "Blob" | "File" => Some(HTTP_CLIENT),
-            "WebSocket" | "WebSocketServer" => Some(OwnerKind::WellKnown("ws")),
+            "WebSocket" | "WebSocketServer" => Some(OwnerKind::WellKnown("perry/websocket")),
             "BlockList" | "SocketAddress" => Some(OwnerKind::WellKnown("net")),
             "X509Certificate" => Some(CRYPTO),
             _ => None,
@@ -370,14 +377,14 @@ mod tests {
     fn table_row_constructor_and_variant_surfaces_name_their_providers() {
         assert!(providers_of(vec![]).is_empty());
         // The dispatch-table row lowering picks (prefix-net owner).
-        let undici = Expr::NativeMethodCall {
-            module: "undici".into(),
+        let watcher = Expr::NativeMethodCall {
+            module: "@parcel/watcher".into(),
             class_name: None,
             object: None,
-            method: "request".into(),
+            method: "subscribe".into(),
             args: vec![],
         };
-        assert!(providers_of(vec![undici]).contains(&OwnerKind::WellKnown("undici")));
+        assert!(providers_of(vec![watcher]).contains(&OwnerKind::WellKnown("@parcel/watcher")));
         // `new globalThis.File(...)` reaches the builtin constructor arm.
         let file = Expr::NewDynamic {
             byte_end: 0,
@@ -394,7 +401,7 @@ mod tests {
         assert!(providers_of(vec![Expr::CryptoRandomUUID]).contains(&CRYPTO));
         // A method the table does not list for the module adds nothing.
         let unknown = Expr::NativeMethodCall {
-            module: "undici".into(),
+            module: "@parcel/watcher".into(),
             class_name: None,
             object: None,
             method: "notARealMethod".into(),

@@ -1,0 +1,1 @@
+Eight test-read process-global counters in perry-runtime (feature-installer runs, the stack-map rebuild debt, the zlib super-construct recorder, the namespace getter count, the proxy delete-trap flag) are now per-test, so sibling tests no longer move their values; no change to a shipped binary.

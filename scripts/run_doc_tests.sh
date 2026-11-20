@@ -20,13 +20,11 @@ cd "$REPO_ROOT"
 # The runtime + stdlib are built with `--features full` so the prebuilt
 # `target/release/libperry_*.a` covers every doc-test's import surface,
 # letting PERRY_NO_AUTO_OPTIMIZE=1 below short-circuit the per-test
-# specialized rebuild (~30-200s saved per test). The mail wrapper used by the
-# examples is built in THIS invocation too, so it shares the stdlib's feature
-# unification. (It used to be required for tokio coherence — two invocations
-# meant two tokio compilations — but tokio is gone from the workspace.)
+# specialized rebuild (~30-200s saved per test). No wrapper crate is built
+# here any more: the mail wrapper the examples used to link went with the
+# nodemailer binding (npm `nodemailer` compiles from source).
 cargo build --release \
-    -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests \
-    -p perry-ext-nodemailer
+    -p perry -p perry-runtime -p perry-stdlib -p perry-runtime-static -p perry-stdlib-static -p perry-doc-tests
 scripts/gc_call_effects/sidecars.sh target/release
 
 # Disable per-test auto-optimize for HOST runs only. With this set,

@@ -32,10 +32,8 @@ pub const NATIVE_MODULES: &[&str] = &[
     "bcrypt",         // bcrypt password hashing (replaces the N-API addon)
     "argon2",         // Argon2 password hashing (replaces the N-API addon)
     "node-fetch",     // WHATWG fetch client
-    "ws",             // WebSocket client/server
     "zlib",           // (Node builtin) gzip/deflate/brotli/zstd compression
     "crypto",         // (Node builtin) hashing, HMAC, cipher, sign/verify, WebCrypto
-    "ethers",         // Ethereum library (utils/wallet/ABI)
     "better-sqlite3", // synchronous SQLite (replaces the N-API addon)
     "sqlite",         // node:sqlite builtin surface
     // #6562: Bun FFI (C-ABI). The `bun:` prefix is part of the specifier
@@ -44,7 +42,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "bun:jsc",
     "ffi",        // node:ffi (the node: prefix is normalized away)
     "bun:sqlite", // Bun facade over Perry's native SQLite engine
-    "nodemailer", // SMTP email sending
     // ── Node.js builtin modules ──
     "http",               // HTTP client + server
     "https",              // HTTPS client + server
@@ -79,14 +76,16 @@ pub const NATIVE_MODULES: &[&str] = &[
     "dns/promises",       // (duplicate — kept for parity)
     "url",                // URL / URLSearchParams
     // ── More third-party npm packages ──
-    "lodash",  // general utility library
-    "sharp",   // image processing (replaces the N-API addon)
-    "cheerio", // server-side jQuery-style HTML parsing
+    "sharp", // image processing (replaces the N-API addon)
     // ── Node.js builtins (cont.) ──
     "async_hooks", // async context tracking
     // #2875: internal module backing DisposableStack/AsyncDisposableStack
     // instance-method dispatch (no JS import surface).
     "__disposable__",
+    // Internal module backing the global `WebSocket` client's instance-method
+    // dispatch (perry-ext-ws; no JS import surface). npm `ws` compiles from
+    // source.
+    "__websocket__",
     "readline",       // line-by-line stdin reading
     "repl",           // REPL surface
     "sea",            // single-executable-application API
@@ -128,10 +127,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "perry/audio",             // audio surface
     "perry/background",        // background-task surface
     // ── More third-party npm packages ──
-    // `undici` (#466) — served by perry's native fetch stack via the
-    // bundled perry-ext-undici wrapper (ProxyAgent / Agent /
-    // setGlobalDispatcher / getGlobalDispatcher / fetch subset).
-    "undici",
     // `@perryts/pdf` — official PDF creation package (#516).
     // Bundled wrapper lives in `crates/perry-ext-pdf`; the producer
     // side companion to the existing PdfView widget. d.ts at
@@ -167,9 +162,6 @@ pub const NATIVE_MODULES: &[&str] = &[
     "@parcel/watcher-linux-arm64-musl",
     "@parcel/watcher-win32-x64",
     "@parcel/watcher-win32-arm64",
-    // #8511: the runtime `transpileModule` subset used by OpenCode Code Mode.
-    // The upstream compiler is deliberately not compiled into the app.
-    "typescript",
 ];
 
 /// Node built-in submodules that Perry routes through the

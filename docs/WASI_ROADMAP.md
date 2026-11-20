@@ -30,7 +30,7 @@ third-party core modules inside native Perry. P1 output was deferred until an
 actual deployment required it; one now does, in a Rust embedder that runs
 several Preview 1 guests in one process and cannot take a second WASI layer
 for a single guest. For that deployment shape, a P1 core-module output is
-accepted as `--target wasip1`, a sibling of `--target wasi`, in progress in
+accepted as `--target wasip1`, a sibling of `--target wasi`, implemented in
 [#13259](https://github.com/PerryTS/perry/issues/13259). Its contract is in
 [WASI_P1_OUTPUT.md](WASI_P1_OUTPUT.md): a baseline profile on standard
 `wasi_snapshot_preview1` imports, qualified on the pinned Wasmtime, plus
@@ -166,10 +166,9 @@ independent host/guest moving GC. Blocking-I/O cancellation,
 broader platform qualification and engine shipping costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;
 its [earlier receipt](validation/wasi-turnloop-selected-20261023.json) records
-validation-only upstream repairs. The exact qualified sources now live in the
-repository through [pinned Cargo patches](../third_party/turnloop/VENDORED.md),
-so builds no longer need those external overrides. Released dependency adoption
-remains a future replacement for these local source repairs.
+validation-only upstream repairs. Those repairs are released in turnloop
+0.1.0-beta.2, which Perry now takes from crates.io without Cargo patches or a
+repository copy of the sources.
 This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate

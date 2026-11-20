@@ -84,6 +84,7 @@ fn class(id: u32, name: &str, fields: Vec<&str>, methods: Vec<Function>) -> Clas
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),

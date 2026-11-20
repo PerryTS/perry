@@ -1046,9 +1046,7 @@ fn read_js_string(value: f64) -> Option<String> {
 }
 
 fn numeric_value(jv: JSValue) -> Option<f64> {
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() {
+    if jv.is_number() {
         Some(jv.as_number())
     } else {
         None
@@ -1064,7 +1062,7 @@ fn is_array_value(jv: JSValue) -> bool {
         return false;
     }
     let header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(header.obj_type)
 }
 
 fn display_value(value: f64) -> String {
@@ -1170,8 +1168,7 @@ fn throw_kill_error_code(code: &'static str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, code);
     crate::node_submodules::register_error_syscall(msg, "kill");
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 #[cfg(unix)]
@@ -1303,11 +1300,7 @@ pub extern "C" fn js_process_kill(pid: f64, signal: f64) -> f64 {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let pid_i = if pid_jv.is_int32() {
-        pid_jv.as_int32()
-    } else {
-        pid_jv.as_number() as i32
-    };
+    let pid_i = pid_jv.as_number() as i32;
     let sig_i = normalize_process_signal(signal);
     #[cfg(unix)]
     unsafe {
@@ -1486,14 +1479,9 @@ fn release_signal_resources_in_freed_ranges(freed: &crate::arena::thread_exit::F
 mod resource_teardown_tests {
     #[test]
     fn native_signal_tokens_clear_with_their_retiring_allocation_range() {
-        check(false);
+        check();
     }
-    #[test]
-    #[ignore = "negative control: omit the native signal allocation-range invalidation"]
-    fn negative_control_objtables_signal_resource_teardown() {
-        check(true);
-    }
-    fn check(omit: bool) {
+    fn check() {
         let _guard = crate::gc::global_side_table_test_lock();
         let token = unsafe {
             crate::async_hook_slots::js_async_hooks_provider_init(b"SIGNALWRAP".as_ptr(), 10)
@@ -1506,9 +1494,8 @@ mod resource_teardown_tests {
             .insert(NAME.into(), token);
         let ranges =
             crate::arena::thread_exit::FreedRanges::new(&[(token as usize, token as usize + 1)]);
-        if !omit {
-            super::release_signal_resources_in_freed_ranges(&ranges);
-        }
+        super::release_signal_resources_in_freed_ranges(&ranges);
+
         assert!(
             !super::SIGNAL_ASYNC_IDS.lock().unwrap().contains_key(NAME),
             "retired signal state must not remain in native routing"

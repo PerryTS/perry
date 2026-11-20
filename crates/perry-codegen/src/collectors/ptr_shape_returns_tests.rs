@@ -46,6 +46,7 @@ fn class_c() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -1531,6 +1532,7 @@ fn a_catch_bound_callee_id_is_not_resolved() {
                 body: Vec::new(),
             }),
             finally: None,
+            forof_completion: None,
         }],
         "a catch binding on the same id",
     );
@@ -1817,6 +1819,7 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
             key: Box::new(Expr::String("input".into())),
             value: Box::new(Expr::Number(2.0)),
             strict: true,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

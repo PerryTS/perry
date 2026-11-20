@@ -9,6 +9,7 @@ description = "High-level intermediate representation for Perry"
 workspace = true
 
 [dependencies]
+perry-abi.workspace = true
 perry-diagnostics.workspace = true
 perry-api-manifest.workspace = true
 perry-dispatch.workspace = true

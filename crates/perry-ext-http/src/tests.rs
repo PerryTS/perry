@@ -1,4 +1,5 @@
 use super::*;
+use crate::client_surface::js_http_incoming_message_req;
 use perry_ffi::{drop_handle, get_handle, register_handle};
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard};
@@ -44,15 +45,6 @@ fn young_gc_root() -> i64 {
 fn assert_rewritten(before: i64, after: i64) {
     assert_ne!(after, before);
     assert!(perry_runtime::arena::pointer_in_nursery(after as usize));
-}
-
-#[test]
-fn gc_scanner_registers_idempotently() {
-    // Calling ensure_gc_scanner_registered twice must not panic
-    // and must not register the scanner twice (Once guarantees).
-    ensure_gc_scanner_registered();
-    ensure_gc_scanner_registered();
-    ensure_gc_scanner_registered();
 }
 
 #[test]

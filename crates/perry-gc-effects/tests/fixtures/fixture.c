@@ -3,7 +3,7 @@ typedef int (*fp)(int);
 volatile int fixture_sink;
 int js_proxy_get(int x) { fixture_sink = x; return x ^ 0x5a; }
 void fixture_collect(void) { __asm__ volatile("" ::: "memory"); }
-void js_throw(void) { js_proxy_get(1); }
+void fixture_throw(void) { js_proxy_get(1); }
 extern int unknown_external(int);
 extern void _Unwind_RaiseException(void *);
 void fixture_poll(void) { fixture_collect(); }
@@ -13,7 +13,7 @@ extern void *memcpy(void *, const void *, unsigned long);
 int leaf_helper(int x) { PLANT return x * 3 + 1; }
 int js_back_hot_text(int x) { PLANT return x; }
 int alloc_helper(int x) { fixture_collect(); return x + 2; }
-int throw_helper(int x) { if (x > 100) js_throw(); return x; }
+int throw_helper(int x) { if (x > 100) fixture_throw(); return x; }
 int reenter_helper(int x) { return js_proxy_get(x) + 3; }
 int poll_helper(int x) { fixture_poll(); return x + 4; }
 int gc_reaches_js_helper(int x) { fixture_collect_js(); return x + 6; }

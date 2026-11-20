@@ -61,7 +61,10 @@ pub(crate) unsafe fn try_function_shape_method_call(
     if word == crate::closure::shape::function_dictionary_shape() {
         return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
     }
-    if !crate::closure::shape::function_shape_inherits_from_function_prototype(word, name) {
+    if !crate::closure::shape::function_shape_inherits_from_function_prototype(
+        addr as *const ClosureHeader,
+        name,
+    ) {
         // A class constructor (`C.m()` on a class value): the class arm —
         // statics, callable static data, Function.prototype methods. Reached
         // only once the ordinary function test failed, so no other receiver
@@ -167,8 +170,9 @@ pub(crate) unsafe fn run_function_intrinsic(
 /// reads `getPrototypeOf(fn)`). The intrinsic runs the tower's semantics; any
 /// other callable (`p.call`) is invoked with the function as `this`.
 /// The shape arm declined an inherited Function.prototype method: a class
-/// constructor goes to the class arm; anything else back to the tower. Out of
-/// line so the inlined arm stays small.
+/// constructor goes to the class arm; an async, generator or async-generator
+/// function whose kind prototype was written reads the method off its chain;
+/// anything else back to the tower. Out of line so the inlined arm stays small.
 #[cold]
 #[inline(never)]
 unsafe fn function_shape_decline(
@@ -180,6 +184,18 @@ unsafe fn function_shape_decline(
 ) -> Option<f64> {
     if crate::closure::shape::is_class_info((*(addr as *const ClosureHeader)).info) {
         return super::primitive_methods::class_value_method_call(object, name, args_ptr, args_len);
+    }
+    // The shape names the kind prototype and lacks `name` as an own key. While
+    // that prototype is unwritten it defines none of `bind`/`call`/`apply`, so
+    // the tower's builtin answer is the inherited one. Once written (`gp.apply
+    // = f`, an accessor, a relink), the chain decides, as for a dictionary
+    // function.
+    if let Some(kind) =
+        crate::closure::shape::function_shape_kind_lacking(addr as *const ClosureHeader, name)
+    {
+        if !crate::object::global_this::function_kind_prototype_unwritten(kind) {
+            return dictionary_function_proto_method_call(object, addr, name, args_ptr, args_len);
+        }
     }
     None
 }

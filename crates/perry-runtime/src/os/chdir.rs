@@ -80,8 +80,8 @@ unsafe fn throw_chdir_error(err: &std::io::Error, target: &str) -> ! {
     // code. Previously `path` was set to the target and `dest`/`errno` were
     // absent.
     crate::node_submodules::register_error_path(msg_ptr, cwd);
-    let err_ptr = crate::error::js_error_new_with_message(msg_ptr);
-    let err_addr = err_ptr as usize;
+    let err = crate::error::CoreError::error(msg_ptr);
+    let err_addr = err.header_addr();
     let dest_ptr = js_string_from_bytes(target.as_ptr(), target.len() as u32);
     crate::node_submodules::set_error_user_prop(
         err_addr,
@@ -89,7 +89,7 @@ unsafe fn throw_chdir_error(err: &std::io::Error, target: &str) -> ! {
         crate::value::js_nanbox_string(dest_ptr as i64),
     );
     crate::node_submodules::set_error_user_prop(err_addr, "errno", chdir_error_errno(code) as f64);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err_ptr as i64));
+    crate::exception::throw_core(err);
 }
 
 #[cfg(test)]
