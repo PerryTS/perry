@@ -587,13 +587,23 @@ impl<'a> FuncEmitCtx<'a> {
                     &[&Expr::Bool(*is_static)],
                 );
             }
-            // Only a literal `extends null` is recorded; other dynamic heritage keeps
-            // the class table's static parent.
+            // A literal `extends null` is recorded; any other dynamic heritage keeps the
+            // class table's static parent, and a function parent also lends its
+            // `prototype` to the class's (`class_extends_value`).
             Expr::RegisterClassParentDynamic {
                 class_name,
                 parent_expr,
-            } if matches!(parent_expr.as_ref(), Expr::Null) => {
-                self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+            } => {
+                if matches!(parent_expr.as_ref(), Expr::Null) {
+                    self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+                } else {
+                    self.emit_class_bridge(
+                        func,
+                        "class_extends_value",
+                        class_name,
+                        &[parent_expr.as_ref()],
+                    );
+                }
             }
             Expr::ClassRef(class_name) => {
                 let ctor_slot = self.class_ctor_slot(class_name);
