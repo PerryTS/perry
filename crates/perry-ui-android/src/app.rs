@@ -220,7 +220,9 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         js_stdlib_process_pending();
         // Turn this thread's turnloop: fetch / node:http progress only on a turn.
         {
-            extern "C" { fn js_loop_turn_nonblocking(); }
+            extern "C" {
+                fn js_loop_turn_nonblocking();
+            }
             js_loop_turn_nonblocking();
         }
         js_callback_timer_tick();

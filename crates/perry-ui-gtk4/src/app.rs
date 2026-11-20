@@ -337,7 +337,9 @@ pub fn app_run(_app_handle: i64) {
                 js_run_stdlib_pump();
                 // Turn this thread's turnloop: fetch / node:http progress only on a turn.
                 {
-                    extern "C" { fn js_loop_turn_nonblocking(); }
+                    extern "C" {
+                        fn js_loop_turn_nonblocking();
+                    }
                     js_loop_turn_nonblocking();
                 }
                 js_promise_run_microtasks();
