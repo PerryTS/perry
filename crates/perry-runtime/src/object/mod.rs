@@ -251,9 +251,9 @@ pub(crate) use native_module_registry::install_readline_constructor_metadata;
 pub(crate) use native_module_registry::js_nm_enable_install_all;
 #[cfg(test)]
 pub(crate) use native_module_registry::js_nm_install_v8;
-pub(crate) use native_module_registry::nm_register_v8_constructor_hooks;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
+pub(crate) use native_module_registry::nm_register_v8_constructor_hooks;
 // Re-exported for submodule installers that delegate to a native module.
 #[cfg(test)]
 pub(crate) use native_module_registry::js_nm_install_events;
