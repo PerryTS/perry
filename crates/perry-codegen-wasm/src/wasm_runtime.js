@@ -1225,7 +1225,7 @@ function buildImports() {
         if (!cb || !wasmInstance) return 0;
         const id = setTimeout(() => {
           const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-          if (fn) fn(...cb.captures); // captures are already BigInt
+          if (fn) fn(...__padBigintArgs(fn, 0, [...cb.captures])); // captures are already BigInt
         }, delay);
         return id;
       },
@@ -1234,7 +1234,7 @@ function buildImports() {
         if (!cb || !wasmInstance) return 0;
         const id = setInterval(() => {
           const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-          if (fn) fn(...cb.captures); // captures are already BigInt
+          if (fn) fn(...__padBigintArgs(fn, 0, [...cb.captures])); // captures are already BigInt
         }, delay);
         return id;
       },
@@ -1391,7 +1391,7 @@ function buildImports() {
         const newP = p.then(val => {
           if (cb && wasmInstance) {
             const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
-            if (fn) return u64ToF64(fn(...cb.captures, __jsValueToBits(val)));
+            if (fn) return u64ToF64(fn(...__padBigintArgs(fn, 0, [...cb.captures, __jsValueToBits(val)])));
           }
           return fromJsValue(val);
         });
@@ -3264,11 +3264,11 @@ const __memDispatch = {
   // Captures are already BigInt from closure_set_capture.
   set_timeout: (closure, delay) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
-    return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...closure.captures); }, delay);
+    return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   set_interval: (closure, delay) => {
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
-    return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...closure.captures); }, delay);
+    return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   clear_timeout: (id) => { clearTimeout(id); },
   clear_interval: (id) => { clearInterval(id); },
@@ -3323,7 +3323,7 @@ const __memDispatch = {
     const newP = p.then(val => {
       if (closure && typeof closure.funcIdx !== 'undefined' && wasmInstance) {
         const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0);
-        if (fn) return __bitsToJsValue(fn(...closure.captures, __jsValueToBits(val)));
+        if (fn) return __bitsToJsValue(fn(...__padBigintArgs(fn, 0, [...closure.captures, __jsValueToBits(val)])));
       }
       return val;
     });
