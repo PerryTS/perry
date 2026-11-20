@@ -1,0 +1,1 @@
+`--target web`: a call with spread arguments (`f(...xs)`, `obj.m(...xs)`, `arr.push(...xs)`, `Math.max(...xs)`, `console.log(...xs)`) passes the spread elements instead of evaluating to `undefined`, in sync and async bodies (#15079).
