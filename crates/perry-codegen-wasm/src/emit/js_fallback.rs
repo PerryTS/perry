@@ -327,14 +327,37 @@ impl WasmModuleEmitter {
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                match op {
-                    BinaryOp::Add => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
-                    BinaryOp::Sub => format!("({} - {})", l, r),
-                    BinaryOp::Mul => format!("({} * {})", l, r),
-                    BinaryOp::Div => format!("({} / {})", l, r),
-                    BinaryOp::Mod => format!("({} % {})", l, r),
-                    _ => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
+                // `bridged`: the operator runs on the decoded JS values; the rest run on the
+                // f64 encodings directly.
+                let (js_op, bridged) = match op {
+                    BinaryOp::Add => ("+", true),
+                    BinaryOp::Sub => ("-", false),
+                    BinaryOp::Mul => ("*", false),
+                    BinaryOp::Div => ("/", false),
+                    BinaryOp::Mod => ("%", false),
+                    BinaryOp::Pow => ("**", true),
+                    BinaryOp::BitAnd => ("&", true),
+                    BinaryOp::BitOr => ("|", true),
+                    BinaryOp::BitXor => ("^", true),
+                    BinaryOp::Shl => ("<<", true),
+                    BinaryOp::Shr => (">>", true),
+                    BinaryOp::UShr => (">>>", true),
+                };
+                if bridged {
+                    format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
+                } else {
+                    format!("({l} {js_op} {r})")
                 }
+            }
+            // The same bridge as the WASM arm, so `in` agrees between sync and async bodies.
+            Expr::In { property, object } => {
+                let p = self.emit_js_expr(property, locals);
+                let o = self.emit_js_expr(object, locals);
+                // The property is evaluated before the object; both stay outside the arrow
+                // so an `await` in either remains inside the async body.
+                format!(
+                    "((__p, __o) => __memDispatch.object_has_property(toJsValue(__o), toJsValue(__p)) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))({p}, {o})"
+                )
             }
             Expr::Compare { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
@@ -375,7 +398,8 @@ impl WasmModuleEmitter {
                         "(toJsValue({}) ? u64ToF64(TAG_FALSE) : u64ToF64(TAG_TRUE))",
                         o
                     ),
-                    _ => o,
+                    UnaryOp::BitNot => format!("fromJsValue(~toJsValue({}))", o),
+                    UnaryOp::Pos => format!("fromJsValue(+toJsValue({}))", o),
                 }
             }
             Expr::Await(inner) => {
@@ -814,6 +838,11 @@ impl WasmModuleEmitter {
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
+            }
+            // The same bridge as the WASM arm, so `for...in` agrees between sync and async bodies.
+            Expr::ForInKeys(o) => {
+                let o = self.emit_js_expr(o, locals);
+                format!("fromJsValue(__memDispatch.for_in_keys(toJsValue({o})))")
             }
             Expr::ObjectRest {
                 object,

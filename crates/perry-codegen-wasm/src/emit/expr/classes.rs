@@ -319,7 +319,13 @@ impl<'a> FuncEmitCtx<'a> {
                 let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
                 self.emit_frame_begin(func, 2);
                 self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, args.len() as f64);
+                // The constructor slot, so the prototype's `constructor` is the class value.
+                let ctor_slot = if self.emitter.user_classes.contains(class_name.as_str()) {
+                    self.class_ctor_slot(class_name)
+                } else {
+                    f64::from_bits(TAG_UNDEFINED)
+                };
+                self.emit_store_const(func, 1, ctor_slot);
                 self.emit_memcall(func, "class_new", 2);
                 let ctor = self
                     .emitter
@@ -581,13 +587,23 @@ impl<'a> FuncEmitCtx<'a> {
                     &[&Expr::Bool(*is_static)],
                 );
             }
-            // Only a literal `extends null` is recorded; other dynamic heritage keeps
-            // the class table's static parent.
+            // A literal `extends null` is recorded; any other dynamic heritage keeps the
+            // class table's static parent, and a function parent also lends its
+            // `prototype` to the class's (`class_extends_value`).
             Expr::RegisterClassParentDynamic {
                 class_name,
                 parent_expr,
-            } if matches!(parent_expr.as_ref(), Expr::Null) => {
-                self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+            } => {
+                if matches!(parent_expr.as_ref(), Expr::Null) {
+                    self.emit_class_bridge(func, "class_extends_null", class_name, &[]);
+                } else {
+                    self.emit_class_bridge(
+                        func,
+                        "class_extends_value",
+                        class_name,
+                        &[parent_expr.as_ref()],
+                    );
+                }
             }
             Expr::ClassRef(class_name) => {
                 let ctor_slot = self.class_ctor_slot(class_name);
