@@ -2571,6 +2571,8 @@ const __memDispatch = {
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __callClosureMethod(fn, thisArg, argArr);
   },
+  // Four or more arguments: `closure_call_n(closure, a0, a1, ...)`.
+  closure_call_n: (closure, ...args) => __memDispatch.closure_call_spread(closure, args),
   closure_call_spread: (closure, args) => {
     const argArr = Array.isArray(args) ? args : [];
     if (typeof closure === 'function') return __callHostFunction(closure, argArr);
@@ -6274,8 +6276,9 @@ function __classDispatch(objVal, mname, rawArgs) {
 
 // Convert raw u64 BigInt bits to a JS value, decoding NaN-boxed tags directly.
 // Never reads NaN-boxed values as f64 (Firefox canonicalizes NaN through Float64Array).
+// A void WASM function returns JS `undefined` rather than tagged bits.
 function __bitsToJsValue(bits) {
-  if (bits === TAG_UNDEFINED) return undefined;
+  if (bits === undefined || bits === TAG_UNDEFINED) return undefined;
   if (bits === TAG_NULL) return null;
   if (bits === TAG_TRUE) return true;
   if (bits === TAG_FALSE) return false;

@@ -926,6 +926,41 @@ console.log(bump(5) + " " + total);
     );
 }
 
+// A call through a closure or function value runs the callee with every argument, for any
+// argument count, evaluates each argument once, and a void callee yields `undefined`.
+// Expected output is Node's.
+#[test]
+fn a_dynamic_call_passes_every_argument_once() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f4: any = (a: number, b: number, c: number, d: number) => "" + a + b + c + d;
+const f5: any = (a: number, b: number, c: number, d: number, e: number) => "" + a + b + c + d + e;
+function g4(a: number, b: number, c: number, d: number) { return "" + a + b + c + d; }
+const gv: any = g4;
+function viaParam(fn: (a: number, b: number, c: number, d: number) => number) { return fn(1, 2, 3, 4); }
+console.log("label: " + f4(1, 2, 3, 4) + " " + f5(1, 2, 3, 4, 5) + " " + gv(5, 6, 7, 8) + " " + viaParam((a, b, c, d) => a + b + c + d));
+let n = 0;
+function tick(): number { n++; return n; }
+const a1: any = (x: number) => x;
+const a2: any = (x: number, y: number) => x + y;
+const t1: (x: number) => number = (x) => x;
+const counts: number[] = [];
+n = 0; a1(tick()); counts.push(n);
+n = 0; a2(tick(), tick()); counts.push(n);
+n = 0; f4(tick(), 0, 0, 0); counts.push(n);
+n = 0; t1(tick()); counts.push(n);
+console.log(counts.join(","));
+let sunk = 0;
+function sink(a: number, b?: number, c?: number, d?: number): void { sunk += a; }
+const sv: any = sink;
+console.log(sv(1) + " " + sv(1, 2, 3, 4) + " " + sunk);
+"#
+        ),
+        "label: 1234 12345 5678 10\n1,2,1,1\nundefined undefined 2"
+    );
+}
+
 // `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
 // is a symbol, as `ImageSymbol(name)` is.
 #[test]
