@@ -109,3 +109,31 @@ console.log(b.greet());
         "hi!?"
     );
 }
+
+// `super.m()` from a class one or more levels below a function parent reads that
+// function's captured `prototype` with the instance as `this`; a null one ends the
+// lookup below the class that extends it. Expected output is Node's.
+#[test]
+fn super_below_a_function_parent_keeps_the_receiver() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function F() {}
+(F as any).prototype.hello = function (this: any) { return "hello " + this.name; };
+// @ts-ignore
+class A extends F { name = "a"; direct() { return super.hello(); } }
+// @ts-ignore
+class B extends A { name = "b"; hi() { return super.hello(); } }
+function N() {}
+(N as any).prototype = null;
+// @ts-ignore
+class M extends N {}
+// @ts-ignore
+class K extends M { probe() { return super.x; } }
+const a: any = new A(), b: any = new B(), k: any = new K();
+console.log([a.direct(), b.hi(), k.probe()].join(","));
+"#
+        ),
+        "hello a,hello b,"
+    );
+}

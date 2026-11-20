@@ -2915,9 +2915,7 @@ const __memDispatch = {
   class_super_call: (fn, obj, mname, args) => {
     if (__classMethodFns.has(fn)) return fn.apply(obj, args);
     if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
-    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') {
-      return __memDispatch.closure_call_spread(fn, args);
-    }
+    if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') return __callClosureMethod(fn, obj, args);
     throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
   },
 
@@ -6013,7 +6011,8 @@ function __superGet(home, key, receiver) {
     }
     if (__classFunctionParentProtos.has(below)) {
       const base = __classFunctionParentProtos.get(below);
-      if (base === null) __throwNullReceiver(null, name);
+      // A null one is the home's own prototype only when `cls` itself extends the function.
+      if (base === null) return below === cls ? __throwNullReceiver(null, name) : undefined;
       return Reflect.get(base, name, receiver);
     }
     const host = last && !classMethodTable[last] ? globalThis[last] : undefined;
