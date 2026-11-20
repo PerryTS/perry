@@ -4,7 +4,7 @@ import argparse, os, re, subprocess, tempfile
 from pathlib import Path
 p=argparse.ArgumentParser();p.add_argument('--perry',required=True);args=p.parse_args()
 repo=Path(__file__).resolve().parents[1]
-source=repo/'test-files/test_gap_byte_scanning_bounded_counter.ts'
+source=repo/'tests/parity/language/typed-array/test_gap_byte_scanning_bounded_counter.ts'
 with tempfile.TemporaryDirectory(prefix='perry-bounded-counter-') as td:
  d=Path(td);target=d/source.name;target.write_bytes(source.read_bytes())
  c=subprocess.run([str(Path(args.perry).resolve()),'compile',str(target),'--no-cache','--trace','llvm','-o',str(d/'witness')],cwd=d,capture_output=True,text=True)

@@ -50,6 +50,7 @@ pub(crate) fn validate_gc_type_info(info: &GcTypeInfo) -> Result<(), &'static st
         | GcRewriteDescriptorKind::Buffer
         | GcRewriteDescriptorKind::MetaOnly
         | GcRewriteDescriptorKind::RegexProgram
+        | GcRewriteDescriptorKind::RecordArray
         | GcRewriteDescriptorKind::NativeHandle
         | GcRewriteDescriptorKind::Promise
         | GcRewriteDescriptorKind::AsyncSnapshot

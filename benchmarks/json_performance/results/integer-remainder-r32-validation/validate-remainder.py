@@ -3,7 +3,7 @@ import hashlib,json,os,re,subprocess,sys
 w=Path(__file__).resolve().parent;root=w.parents[3]
 arm='candidate' if '--candidate' in sys.argv else 'main'
 build=w/('frozen-build' if arm=='candidate' else 'frozen-main')
-source=root/'test-files/test_json_index_remainder.ts'
+source=root/'tests/fixtures/programs/test_json_index_remainder.ts'
 clean={k:v for k,v in os.environ.items() if not k.startswith('PERRY_')}
 assert subprocess.check_output(['/opt/homebrew/bin/node','--version'],text=True).strip()=='v26.5.1'
 node=subprocess.run(['/opt/homebrew/bin/node','--experimental-strip-types',str(source)],env=clean,capture_output=True,timeout=180)

@@ -215,7 +215,7 @@ fn moving_closure_box_capture() {
 }
 
 #[test]
-fn moving_native_promise_closure_raw_captures() {
+fn moving_native_promise_closure_captures() {
     let _gc = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let child = text();
@@ -226,9 +226,14 @@ fn moving_native_promise_closure_raw_captures() {
     let wrapper = unsafe { (*promise).on_fulfilled };
     assert!(!wrapper.is_null(), "finally must install a native wrapper");
     let moved = move_root(wrapper as usize, 3) as *mut crate::closure::ClosureHeader;
-    let after =
-        crate::closure::js_closure_get_capture_ptr(moved, 0) as *mut crate::closure::ClosureHeader;
-    assert_ne!(after, callback, "raw callback capture must be rewritten");
+    // The wrapper holds the callback as a tagged pointer value (a heap
+    // reference in a capture slot is never a bare address).
+    assert_eq!(
+        crate::closure::js_closure_get_capture_bits(moved, 0) & TAG_MASK,
+        POINTER_TAG
+    );
+    let after = crate::closure::closure_capture_ref(moved, 0) as *mut crate::closure::ClosureHeader;
+    assert_ne!(after, callback, "the callback capture must be rewritten");
     moved_text(
         crate::closure::js_closure_get_capture_f64(after, 0).to_bits(),
         child,

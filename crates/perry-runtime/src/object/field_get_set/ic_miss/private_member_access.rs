@@ -3,12 +3,14 @@ include!("private_evaluation_storage.rs");
 crate::perry_thread_local! {
     static PRIVATE_METHOD_OWNER_HINT: std::cell::RefCell<Option<(u32, &'static str)>> =
         std::cell::RefCell::new(None);
-    static PRIVATE_MEMBER_ACCESS_HINTS: std::cell::RefCell<crate::exception::CatchStack<PrivateMemberAccessHint>> =
-        std::cell::RefCell::new(crate::exception::CatchStack::new());
 }
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static PRIVATE_MEMBER_ACCESS_HINTS: crate::exception::marks::CatchStackKey<PrivateMemberAccessHint> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.private_member_access_hints);
 
 #[derive(Clone)]
-struct PrivateMemberAccessHint {
+pub(crate) struct PrivateMemberAccessHint {
     class_id: u32,
     /// Interned by `intern_private_name`: recording a hint allocates nothing.
     name: &'static str,
@@ -486,9 +488,9 @@ fn throw_private_type_error(msg: &str) -> ! {
         msg.as_ptr(),
         msg.len() as u32,
     ));
-    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::js_typeerror_new(s));
-    let v = crate::value::JSValue::pointer(err as *const u8).bits();
-    crate::exception::js_throw(f64::from_bits(v))
+    let err = s.with_mut_ptr::<crate::StringHeader, _>(|s| crate::error::CoreError::type_error(s));
+    let v = err;
+    crate::exception::throw_core(v)
 }
 
 #[cfg(test)]

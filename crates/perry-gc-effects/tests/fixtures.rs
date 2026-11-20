@@ -3,6 +3,14 @@
 #![cfg(feature = "analyzer")]
 use perry_gc_effects::*;
 use std::path::{Path, PathBuf};
+fn fixture_entry(class: Class, throws: bool) -> Entry {
+    Entry {
+        class,
+        throws,
+        throw_class: ThrowClass::None,
+        passes: Default::default(),
+    }
+}
 const RULES: &str = include_str!("fixtures/seeds.txt");
 type Fixture = (&'static str, &'static [u8], &'static [u8], &'static [u8]);
 const FORMATS: [Fixture; 3] = [
@@ -57,12 +65,15 @@ fn three_formats_classification_and_planted_violations() {
         ];
         for (name, class, throws) in expected {
             assert_eq!(
-                res.table.get(name),
-                Some(&Entry { class, throws }),
+                res.table.get(name).map(|e| (e.class, e.throws)),
+                Some((class, throws)),
                 "{tag}: {name}"
             );
         }
-        let selected: Vec<_> = expected.iter().map(|(n, _, _)| res.table[*n]).collect();
+        let selected: Vec<_> = expected
+            .iter()
+            .map(|(n, _, _)| res.table[*n].clone())
+            .collect();
         if let Some(base) = &baseline {
             assert_eq!(&selected, base, "{tag} format disagreement");
         } else {
@@ -82,10 +93,7 @@ fn three_formats_classification_and_planted_violations() {
         let cj = classify(&graph, &load_rules(&cj).unwrap(), None).unwrap();
         assert_eq!(
             cj.table["gc_reaches_js_helper"],
-            Entry {
-                class: Class::AllocOnly,
-                throws: false
-            }
+            fixture_entry(Class::AllocOnly, false)
         );
         let hot = archive(tmp.path(), &format!("hot-{tag}.a"), hot);
         let hg = build_graph(&[hot]).unwrap();
@@ -100,10 +108,7 @@ fn three_formats_classification_and_planted_violations() {
         let pr = classify(&pg, &rules, None).unwrap();
         assert_eq!(
             pr.table["leaf_helper"],
-            Entry {
-                class: Class::Reenters,
-                throws: true
-            }
+            fixture_entry(Class::Reenters, true)
         );
         let pn = classify(&pg, &rules, Some(&root)).unwrap();
         for (old, new, name) in [
@@ -111,7 +116,7 @@ fn three_formats_classification_and_planted_violations() {
             (&native.table, &pn.table, "js_back_hot_text"),
         ] {
             // The plant makes the row weaker on both solves.
-            let (old, new) = (old[name], new[name]);
+            let (old, new) = (old[name].clone(), new[name].clone());
             assert!(
                 old.class == Class::Leaf && new.class > old.class,
                 "{tag}: planted class change not detected ({old:?} -> {new:?})"
@@ -150,15 +155,7 @@ fn three_formats_classification_and_planted_violations() {
 fn agreement_gate() {
     fn table(rows: &[(&str, Class, bool)]) -> Table {
         rows.iter()
-            .map(|(n, class, throws)| {
-                (
-                    n.to_string(),
-                    Entry {
-                        class: *class,
-                        throws: *throws,
-                    },
-                )
-            })
+            .map(|(n, class, throws)| (n.to_string(), fixture_entry(*class, *throws)))
             .collect()
     }
     let mut fake = Classification::default();
@@ -257,10 +254,7 @@ fn duplicate_definitions_take_the_weaker_row_in_any_order() {
     for (tag, normal, planted, _) in FORMATS {
         let n = archive(tmp.path(), &format!("n-{tag}.a"), normal);
         let p = archive(tmp.path(), &format!("p-{tag}.a"), planted);
-        let weak = Entry {
-            class: Class::Reenters,
-            throws: true,
-        };
+        let weak = fixture_entry(Class::Reenters, true);
         for order in [[n.clone(), p.clone()], [p.clone(), n.clone()]] {
             let g = build_graph(&order).unwrap();
             let res = classify(&g, &rules, None).unwrap();
@@ -285,34 +279,10 @@ fn installed_callback_delegation_derives_the_actual_callback_effect() {
         let lib = archive(tmp.path(), &format!("callback-{tag}.a"), normal);
         let graph = build_graph(&[lib]).unwrap();
         for (target, expected) in [
-            (
-                "leaf_helper",
-                Entry {
-                    class: Class::Leaf,
-                    throws: false,
-                },
-            ),
-            (
-                "alloc_helper",
-                Entry {
-                    class: Class::AllocOnly,
-                    throws: false,
-                },
-            ),
-            (
-                "throw_helper",
-                Entry {
-                    class: Class::ThrowOnly,
-                    throws: true,
-                },
-            ),
-            (
-                "reenter_helper",
-                Entry {
-                    class: Class::Reenters,
-                    throws: true,
-                },
-            ),
+            ("leaf_helper", fixture_entry(Class::Leaf, false)),
+            ("alloc_helper", fixture_entry(Class::AllocOnly, false)),
+            ("throw_helper", fixture_entry(Class::ThrowOnly, true)),
+            ("reenter_helper", fixture_entry(Class::Reenters, true)),
         ] {
             let text = format!("{RULES}\nindirect exact indirect_helper => exact {target} -- fixture of a closed installer slot with this exact callback\n");
             let result = classify(&graph, &load_rules(&text).unwrap(), None).unwrap();

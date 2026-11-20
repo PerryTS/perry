@@ -1,6 +1,6 @@
 //! Perry's program and subject owners for Perex's scoped-borrow API.
 //!
-//! Programs contain only an inline word count and immutable program words.
+//! Program cells hold immutable words and process-local validation metadata.
 //! The collector can move them; owners retain registered handles, never bases.
 //! Compilation scratch belongs to the caller, and emission writes directly
 //! into the final GC allocation after the pattern borrow has ended.
@@ -40,6 +40,20 @@ struct ProgramCell {
 /// The most cache words a program may be given: a program whose automaton
 /// needs more than this is searched by the evaluator alone.
 const DFA_MAX_WORDS: usize = 64 * 1024;
+
+/// SNAP census (design §2.10.16 R2): the immutable program words of the cell
+/// at `cell`, the content that names it. Instrumented builds only; the only
+/// reader is the linux-x86_64 census runner.
+///
+/// # Safety
+/// `cell` must be the payload address of a live `GC_TYPE_REGEX_PROGRAM`.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) unsafe fn snap_program_words<'a>(cell: usize) -> &'a [u32] {
+    unsafe {
+        let c = cell as *const ProgramCell;
+        std::slice::from_raw_parts(c.add(1).cast(), (*c).word_count)
+    }
+}
 
 /// The address of the program cell's automaton-storage edge, for the
 /// collector's trace and rewrite of the cell at `cell`.
@@ -206,97 +220,44 @@ unsafe impl CellProgram for GcProgram<'_> {}
 unsafe impl CellProgram for CellWords<'_> {}
 
 const WITNESS_BYTES: usize = std::mem::size_of::<perex::binding::ProgramWitness>();
-const WITNESS_WORDS: usize = WITNESS_BYTES / 8;
 const _: () = assert!(
-    WITNESS_BYTES.is_multiple_of(8) && std::mem::align_of::<perex::binding::ProgramWitness>() <= 8,
-    "a witness is stored as whole words"
+    !perex::binding::ProgramWitness::has_padding()
+        && WITNESS_BYTES.is_multiple_of(8)
+        && std::mem::align_of::<perex::binding::ProgramWitness>() <= 8,
+    "scanned witnesses have no implicit padding and occupy whole words"
 );
 
-/// A program cell's witness as plain words: the witness's own field bytes,
-/// and zero in every byte its layout leaves as padding.
-///
-/// A typed store of a `ProgramWitness` (or of an `Option` of one) copies the
-/// padding of wherever the value was held, so the stored bytes would depend
-/// on stale stack or register contents (release builds: half a word of them
-/// per witness), not on the witness. A cell's bytes must be a function of
-/// its value alone: every byte is read by the whole-heap from-space scan.
+/// The presence tag guards a typed witness. An absent witness has initialized
+/// zero bytes inside MaybeUninit; those bytes are never read as a witness.
+/// Perex witnesses contain native provider references, so integer probes or a
+/// zero-initialized ProgramWitness are invalid. Perex explicitly fills its
+/// alignment gap, and the assertions exclude uninitialized padding from the
+/// whole-heap from-space scan without erasing pointer provenance.
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct WitnessWords {
-    /// 1 when `words` holds a witness, 0 when none was recorded.
     present: u64,
-    words: [u64; WITNESS_WORDS],
+    witness: std::mem::MaybeUninit<perex::binding::ProgramWitness>,
 }
+const _: () = assert!(std::mem::size_of::<WitnessWords>() == 8 + WITNESS_BYTES);
 
 impl WitnessWords {
     const NONE: Self = Self {
         present: 0,
-        words: [0; WITNESS_WORDS],
+        witness: std::mem::MaybeUninit::zeroed(),
     };
 
     fn new(witness: perex::binding::ProgramWitness) -> Self {
-        let padding = witness_padding();
-        let mut words = std::mem::MaybeUninit::<[u64; WITNESS_WORDS]>::zeroed();
-        // SAFETY: the buffer is witness-sized and word-aligned (asserted
-        // above). After the typed write every field byte is initialized; the
-        // padding bytes it leaves undefined are each written zero below, so
-        // every byte is initialized when the words are read.
-        unsafe {
-            let at = words.as_mut_ptr().cast::<u8>();
-            // GC_STORE_AUDIT(STACK): Destination is local MaybeUninit<[u64;WITNESS_WORDS]> in WitnessWords::new; typed write never publishes directly into GC memory.
-            at.cast::<perex::binding::ProgramWitness>().write(witness);
-            for (i, &pad) in padding.iter().enumerate() {
-                if pad {
-                    // GC_STORE_AUDIT(STACK): Zeroes padding bytes of same local MaybeUninit word array before assume_init; no heap slot write.
-                    at.add(i).write(0);
-                }
-            }
-            Self {
-                present: 1,
-                words: words.assume_init(),
-            }
+        Self {
+            present: 1,
+            witness: std::mem::MaybeUninit::new(witness),
         }
     }
 
     fn get(&self) -> Option<perex::binding::ProgramWitness> {
-        // SAFETY: `words` was written from a witness by [`Self::new`].
-        (self.present != 0).then(|| unsafe {
-            self.words
-                .as_ptr()
-                .cast::<perex::binding::ProgramWitness>()
-                .read()
-        })
+        // SAFETY: only new sets present; it initializes the complete witness.
+        (self.present != 0).then(|| unsafe { self.witness.assume_init() })
     }
-}
-
-/// Which bytes of a `ProgramWitness` are padding: those whose value never
-/// changes the witness it is read as. A property of the type, found once by
-/// writing 0x00 and 0xFF to each byte of an image and comparing the witness
-/// read back. Sound because a witness is plain data (perex: "its length and
-/// header"), integers that every bit pattern is a valid value of.
-fn witness_padding() -> &'static [bool; WITNESS_BYTES] {
-    static PADDING: std::sync::OnceLock<[bool; WITNESS_BYTES]> = std::sync::OnceLock::new();
-    PADDING.get_or_init(|| {
-        let mut padding = [false; WITNESS_BYTES];
-        let mut image = [0u64; WITNESS_WORDS];
-        let at = image.as_mut_ptr().cast::<u8>();
-        // SAFETY: a zeroed image is a valid witness (above), and every probe
-        // writes a whole byte before the witness is read back.
-        unsafe {
-            let base = at.cast::<perex::binding::ProgramWitness>().read();
-            for (i, pad) in padding.iter_mut().enumerate() {
-                let same = |byte: u8| {
-                    // GC_STORE_AUDIT(STACK): Destination is local image=[0u64;WITNESS_WORDS] used only to inspect witness padding; no GC heap publication.
-                    at.cast::<perex::binding::ProgramWitness>().write(base);
-                    // GC_STORE_AUDIT(STACK): Writes one probe byte into same local image during witness_padding; destination cannot be a GC slot.
-                    at.add(i).write(byte);
-                    at.cast::<perex::binding::ProgramWitness>().read() == base
-                };
-                *pad = same(0x00) && same(0xFF);
-            }
-        }
-        padding
-    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -310,7 +271,7 @@ pub(crate) enum BuildError {
     Compile(CompileError),
     SizeLimit,
     Allocation,
-    Abrupt(u64),
+    Abrupt(crate::exception::Caught),
 }
 
 /// An immutable program held by a real mutable collector root.
@@ -367,15 +328,14 @@ impl<'scope> GcProgram<'scope> {
             // Arena sizes include the GC header and round to eight bytes.
             .filter(|&n| n <= u32::MAX as usize - crate::gc::GC_HEADER_SIZE - 7)
             .ok_or(BuildError::SizeLimit)?;
-        let cell = crate::exception::catch_js_throw(|| {
+        let cell = crate::exception::catch_thrown(|| {
             crate::arena::arena_alloc_gc(
                 size,
                 std::mem::align_of::<ProgramCell>(),
                 crate::gc::GC_TYPE_REGEX_PROGRAM,
             )
         })
-        .map_err(|value| BuildError::Abrupt(value.to_bits()))?
-            as *mut ProgramCell;
+        .map_err(BuildError::Abrupt)? as *mut ProgramCell;
         if cell.is_null() {
             return Err(BuildError::Allocation);
         }
@@ -436,7 +396,7 @@ impl<'scope> GcProgram<'scope> {
             0,
             "a program cell's witness must not be written while a view of its words is live"
         );
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // Validation metadata and native provider references need no GC barrier.
         root.with_const_ptr::<ProgramCell, _>(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness);
         });
@@ -741,7 +701,7 @@ impl InPlace {
     pub(crate) fn record_witness(&self, witness: perex::binding::ProgramWitness) {
         #[cfg(debug_assertions)]
         debug_assert_eq!(PROGRAM_VIEWS.with(std::cell::Cell::get), 0);
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // Validation metadata and native provider references need no GC barrier.
         self.with_cell(|cell| unsafe {
             (*(cell as *mut ProgramCell)).witness = WitnessWords::new(witness)
         });
@@ -757,7 +717,7 @@ impl InPlace {
     /// of a binding of this same cell.
     #[inline]
     pub(crate) fn record_registers(&self, registers: usize) {
-        // A plain-data store into a pointer-free leaf: no allocation, no barrier.
+        // A scalar store needs no GC barrier.
         self.with_cell(|cell| unsafe { (*(cell as *mut ProgramCell)).registers = Some(registers) });
     }
 
@@ -982,44 +942,75 @@ mod program_cell_tests {
         }
     }
 
-    /// A witness whose every byte, padding included, holds `fill`: the
-    /// padding a typed copy of it carries is not the witness's value.
-    fn witness_filled(fill: u8) -> perex::binding::ProgramWitness {
-        let image = [u64::from_ne_bytes([fill; 8]); WITNESS_WORDS];
-        // SAFETY: a witness is plain integers; any image is a valid one.
-        unsafe {
-            image
-                .as_ptr()
-                .cast::<perex::binding::ProgramWitness>()
-                .read()
-        }
-    }
-
-    /// A recorded witness's words are a function of the witness alone: the
-    /// padding of the value it was copied from must not reach the cell, which
-    /// the from-space scan reads word by word.
+    /// Every byte in a typed witness store is initialized, independently of
+    /// the memory's previous occupant, including its native provider reference.
     #[test]
     fn a_recorded_witness_does_not_carry_its_source_padding() {
-        let padding = witness_padding();
-        assert!(
-            padding.iter().any(|&pad| pad),
-            "the witness type has padding: the probe must find it"
-        );
+        use perex::{
+            binding::BoundProgram,
+            compiler::{compile, Node, Range},
+            executor::{find, Frame, Scratch, Undo},
+            input::Input,
+            Budget,
+        };
+        perex::install_unicode_properties();
+        let mut words = [0; 256];
+        let program = compile(
+            Input::utf8(r"\p{L}+"),
+            "u",
+            &mut [Node::default(); 32],
+            &mut [Range::default(); 32],
+            &mut words,
+            &mut Budget::new(100_000),
+        )
+        .unwrap();
+        let bound = BoundProgram::new(program.words(), &mut Budget::new(100_000)).unwrap();
+        let witness = bound.witness();
+        let mut clean = None;
         for fill in [0x00u8, 0xA5, 0xFF] {
-            let witness = witness_filled(fill);
-            let stored = WitnessWords::new(witness);
-            assert_eq!(stored.get(), Some(witness), "the witness reads back");
-            let bytes: Vec<u8> = stored.words.iter().flat_map(|w| w.to_ne_bytes()).collect();
-            for (i, &pad) in padding.iter().enumerate() {
-                if pad {
-                    assert_eq!(
-                        bytes[i], 0,
-                        "padding byte {i} of a {fill:#x} witness reached the cell"
-                    );
-                } else {
-                    assert_eq!(bytes[i], fill, "field byte {i} of a {fill:#x} witness");
-                }
+            let mut slot = std::mem::MaybeUninit::<WitnessWords>::uninit();
+            // SAFETY: the assertions above exclude all padding. new supplies
+            // every field, including a valid typed native provider reference.
+            let (stored, bytes) = unsafe {
+                let at = slot.as_mut_ptr();
+                at.cast::<u8>()
+                    .write_bytes(fill, std::mem::size_of::<WitnessWords>());
+                // GC_STORE_AUDIT(STACK): slot is local test storage, outside the GC heap.
+                at.write(WitnessWords::new(witness));
+                let bytes = std::slice::from_raw_parts(
+                    at.cast::<u8>(),
+                    std::mem::size_of::<WitnessWords>(),
+                )
+                .to_vec();
+                (slot.assume_init(), bytes)
+            };
+            assert_eq!(stored.get(), Some(witness));
+            if let Some(expected) = &clean {
+                assert_eq!(&bytes, expected);
+            } else {
+                clean = Some(bytes);
             }
+            let rebound =
+                BoundProgram::new_witnessed(program.words(), stored.get().unwrap()).unwrap();
+            rebound
+                .with_view(|p| {
+                    let mut captures = [None];
+                    assert!(find(
+                        p,
+                        Input::utf8("αβ"),
+                        0,
+                        Scratch {
+                            registers: &mut [0; 16],
+                            frames: &mut [Frame::default(); 32],
+                            undo: &mut [Undo::default(); 128],
+                        },
+                        &mut captures,
+                        &mut Budget::new(100_000)
+                    )
+                    .unwrap());
+                    assert_eq!(captures[0], perex::span::Span::new(0, 2));
+                })
+                .unwrap();
         }
         assert_eq!(WitnessWords::NONE.get(), None);
     }

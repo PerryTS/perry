@@ -282,15 +282,11 @@ unsafe fn client_ca_material(options: f64) -> Vec<Vec<u8>> {
     if !array.is_null() && is_js_array(value) {
         let len = perry_ffi::js_array_length(array);
         for index in 0..len {
-            if let Some(pem) = pem_bytes(perry_ffi::js_array_get(array, index)) {
-                out.push(pem);
-            }
+            out.push(pem_bytes(perry_ffi::js_array_get(array, index)));
         }
         return out;
     }
-    if let Some(pem) = pem_bytes(value) {
-        out.push(pem);
-    }
+    out.push(pem_bytes(value));
     out
 }
 
@@ -301,20 +297,21 @@ unsafe fn is_js_array(value: JsValue) -> bool {
     JsValue::from_bits(js_array_is_array(f64::from_bits(value.bits())).to_bits()).to_bool()
 }
 
-/// One PEM blob, from a string or a Buffer.
+/// One PEM blob, from a string or a Buffer; any other value is an empty blob, so
+/// a bad `ca` trusts nothing rather than falling back to the platform roots.
 ///
 /// The Buffer read goes through the **canonical runtime registry**: this crate
 /// is a separately linked archive and cannot see a Buffer the program runtime
 /// allocated, which is exactly what `fs.readFileSync` returns.
-unsafe fn pem_bytes(value: JsValue) -> Option<Vec<u8>> {
-    if let Some(text) = jsvalue_to_owned_string(f64::from_bits(value.bits())) {
-        return Some(text.into_bytes());
+unsafe fn pem_bytes(value: JsValue) -> Vec<u8> {
+    // `jsvalue_to_owned_string` answers an object with its JSON, not its bytes.
+    if value.is_any_string() {
+        return jsvalue_to_owned_string(f64::from_bits(value.bits()))
+            .unwrap_or_default()
+            .into_bytes();
     }
-    perry_ffi::bytes::no_gc(|scope| {
-        perry_ffi::bytes::borrow(value, scope)
-            .filter(|bytes| !bytes.is_empty())
-            .map(<[u8]>::to_vec)
-    })
+    perry_ffi::bytes::no_gc(|scope| perry_ffi::bytes::borrow(value, scope).map(<[u8]>::to_vec))
+        .unwrap_or_default()
 }
 
 /// `(host, port, host:port)` for an `http2.connect` authority.
@@ -424,7 +421,38 @@ fn client_request_headers(stream_handle: i64, session_handle: i64) -> Vec<(Strin
     out
 }
 
+/// Node's `options.endStream` for `session.request(headers, options)`: unset,
+/// it is true for the methods without a payload (`isPayloadMeaningless`).
+pub(crate) fn client_request_ends_stream(
+    request_headers: &HashMap<String, String>,
+    options: f64,
+) -> bool {
+    let explicit =
+        perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), "endStream");
+    if explicit.is_bool() {
+        return explicit.to_bool();
+    }
+    let method = request_headers
+        .get(":method")
+        .map(String::as_str)
+        .unwrap_or("GET");
+    matches!(
+        method,
+        "GET" | "HEAD" | "DELETE" | "OPTIONS" | "CONNECT" | "TRACE"
+    )
+}
+
 pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
+    match get_handle_mut::<Http2StreamHandle>(stream_handle) {
+        Some(stream) if stream.request_started => {
+            if !body.is_empty() {
+                super::queue_turnloop_stream_error(stream_handle, "ERR_STREAM_WRITE_AFTER_END");
+            }
+            return;
+        }
+        Some(stream) => stream.request_started = true,
+        None => {}
+    }
     // On turnloop the stream opens on this thread, on the session's existing
     // connection. No runtime, no thread, no `SendRequest` to race for.
     if let Some((session_handle, conn_id)) = get_handle::<Http2StreamHandle>(stream_handle)
@@ -449,6 +477,31 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `http2.connect(url, { ca: fs.readFileSync(path) })` hands over a Buffer,
+    /// and its bytes are the PEM, not the Buffer's JSON.
+    #[test]
+    fn a_buffer_ca_yields_its_bytes() {
+        let pem = b"-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        let value = JsValue::from_object_ptr(perry_ffi::alloc_buffer(pem));
+        assert!(
+            !value.is_any_string(),
+            "fixture must be a Buffer, not a string"
+        );
+        assert_eq!(unsafe { pem_bytes(value) }, pem.to_vec());
+    }
+
+    /// An empty Buffer or a non-PEM value stays an empty blob: an explicit
+    /// `ca` never falls back to the platform roots.
+    #[test]
+    fn an_empty_or_invalid_ca_trusts_nothing() {
+        let empty = JsValue::from_object_ptr(perry_ffi::alloc_buffer(&[]));
+        assert_eq!(unsafe { pem_bytes(empty) }, Vec::<u8>::new());
+        assert_eq!(
+            unsafe { pem_bytes(JsValue::from_bits(1.0f64.to_bits())) },
+            Vec::<u8>::new()
+        );
+    }
 
     /// The events queued for one handle, without draining the global queue —
     /// these tests run in the same process as every other test in this crate
@@ -603,6 +656,7 @@ mod tests {
             response_headers: Vec::new(),
             turnloop_conn: 0,
             turnloop_responded: false,
+            request_started: false,
         });
         assert!(
             super::super::turnloop_conn_of_session(session_handle).is_none(),
@@ -615,5 +669,86 @@ mod tests {
             errors_for(stream_handle),
             vec!["HTTP/2 session is not connected".to_string()]
         );
+    }
+
+    /// `session.request()` for a bodyless method sends its request without an
+    /// `end()` from the caller, as Node's default `endStream` does (#14681),
+    /// and the caller's later `end()` does not open a second stream.
+    ///
+    /// The transportless session makes "the request was started" observable:
+    /// every start errors the stream, so the count of errors is the count of
+    /// starts.
+    #[test]
+    fn a_bodyless_request_starts_without_end_and_only_once() {
+        let session_handle = register_handle(client_session(0));
+        let method = b"request";
+        // No headers object: `:method` defaults to GET.
+        let stream_value = unsafe {
+            super::super::dispatch::js_ext_http2_session_dispatch_method(
+                session_handle,
+                method.as_ptr(),
+                method.len(),
+                std::ptr::null(),
+                0,
+            )
+        };
+        let stream_value = JsValue::from_bits(stream_value.to_bits());
+        assert!(
+            stream_value.is_handle(),
+            "request() must answer a stream handle"
+        );
+        let stream_handle = (stream_value.bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+        assert!(
+            get_handle::<Http2StreamHandle>(stream_handle).is_some(),
+            "fixture must yield a stream handle, or the assertions below are vacuous"
+        );
+        assert_eq!(
+            errors_for(stream_handle),
+            vec!["HTTP/2 session is not connected".to_string()],
+            "a GET must start at request(), before any end()"
+        );
+
+        let end = b"end";
+        unsafe {
+            super::super::dispatch::js_ext_http2_stream_dispatch_method(
+                stream_handle,
+                end.as_ptr(),
+                end.len(),
+                std::ptr::null(),
+                0,
+            );
+        }
+        assert_eq!(
+            errors_for(stream_handle).len(),
+            1,
+            "end() after an endStream request must not start it again"
+        );
+
+        start_client_request(stream_handle, b"payload".to_vec());
+        assert_eq!(
+            errors_for(stream_handle).last().map(String::as_str),
+            Some("ERR_STREAM_WRITE_AFTER_END"),
+            "data after an ended request is reported, not dropped"
+        );
+    }
+
+    #[test]
+    fn only_bodyless_methods_end_the_stream_by_default() {
+        let undefined = f64::from_bits(JsValue::UNDEFINED.bits());
+        let with_method =
+            |method: &str| HashMap::from([(":method".to_string(), method.to_string())]);
+        assert!(client_request_ends_stream(&HashMap::new(), undefined));
+        for method in ["GET", "HEAD", "DELETE", "OPTIONS", "CONNECT", "TRACE"] {
+            assert!(
+                client_request_ends_stream(&with_method(method), undefined),
+                "{method}"
+            );
+        }
+        for method in ["POST", "PUT", "PATCH"] {
+            assert!(
+                !client_request_ends_stream(&with_method(method), undefined),
+                "{method}"
+            );
+        }
     }
 }

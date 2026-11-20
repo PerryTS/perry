@@ -1,0 +1,1 @@
+A sloppy-mode call spread of the function arguments object (f.call(x, ...arguments), f.apply(x, arguments), g(...arguments)) no longer materializes the arguments object: the incoming argument bundle is forwarded straight to the call through the new runtime function js_arguments_bundle_call_spread.

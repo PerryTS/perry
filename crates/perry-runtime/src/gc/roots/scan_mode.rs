@@ -235,6 +235,27 @@ pub(crate) fn conservative_scan_is_effective() -> bool {
     cfg!(any(target_arch = "x86_64", target_arch = "aarch64"))
 }
 
+/// Is a collection starting now at a precise point?
+///
+/// At a precise point every value that can reach a heap object is rooted: a
+/// generated frame through its statepoint map or shadow slot, a runtime helper
+/// through its handle scope. The runtime collects inside an allocation, where a
+/// helper's register or local may hold an unrooted object, only through the
+/// sites that ask for the conservative scan (`ManualGcScanGuard::force_full_scan`,
+/// see `ConservativeScanSite`). So a collection is imprecise exactly when it
+/// asked for that scan and the target cannot run it (wasm32,
+/// [`conservative_scan_is_effective`]). Where the scan runs, it pins what it
+/// finds; where none was asked for, there is nothing to pin.
+///
+/// Two consumers, one predicate: block persistence substitutes for the scan at
+/// an imprecise point, and no collection moves an existing object there.
+pub(crate) fn collection_point_is_precise() -> bool {
+    !(matches!(
+        conservative_stack_scan_decision(),
+        ConservativeStackScanDecision::Scan
+    ) && !conservative_scan_is_effective())
+}
+
 #[cfg(test)]
 thread_local! {
     static CONSERVATIVE_SCAN_EFFECTIVE_TEST: std::cell::Cell<Option<bool>> =

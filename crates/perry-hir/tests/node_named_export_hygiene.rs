@@ -360,8 +360,10 @@ fn global_worker_messaging_constructors_lower_to_builtin_new() {
 
 #[test]
 fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
-    // The genuinely-imported forms keep the stdlib NativeMethodCall routing —
-    // the import anchors `js_worker_threads_*_new` in the link.
+    use perry_hir::{Expr, Stmt};
+
+    // MessageChannel calls its native factory directly. BroadcastChannel uses
+    // constructor dispatch to preserve missing versus supplied arguments.
     let module = lower_result(
         r#"
         import { MessageChannel, BroadcastChannel } from "node:worker_threads";
@@ -372,12 +374,25 @@ fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
     )
     .expect("imported messaging constructors should lower");
 
-    let debug = format!("{module:#?}");
+    let initializer = |binding: &str| {
+        module.init.iter().find_map(|stmt| match stmt {
+            Stmt::Let { name, init, .. } if name == binding => init.as_ref(),
+            _ => None,
+        })
+    };
     assert!(
-        debug.contains("module: \"worker_threads\"")
-            && debug.contains("method: \"MessageChannel\"")
-            && debug.contains("method: \"BroadcastChannel\""),
-        "imported messaging constructors should route through worker_threads native constructors: {debug}"
+        matches!(initializer("a"), Some(Expr::NativeMethodCall {
+            module, class_name: None, object: None, method, args,
+        }) if module == "worker_threads" && method == "MessageChannel" && args.is_empty()),
+        "MessageChannel should call the worker_threads native factory: {module:#?}"
+    );
+    assert!(
+        matches!(initializer("b"), Some(Expr::NewDynamic { callee, args, .. })
+            if matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
+                if matches!(object.as_ref(), Expr::NativeModuleRef(module) if module == "worker_threads")
+                    && property == "BroadcastChannel")
+                && matches!(args.as_slice(), [Expr::String(name)] if name == "b")),
+        "BroadcastChannel should construct the worker_threads export with its name argument: {module:#?}"
     );
 }
 

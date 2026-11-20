@@ -15,6 +15,9 @@ pub(crate) fn lower_proof(
         "invalid IIFE proof"
     );
     let patched = if ctx.wpfacts.fnproto_borrow_unwritten && !ctx.wpfacts.interp_guard {
+        crate::verify_facts::consumed(crate::verify_facts::Fact::FunctionBorrow, || {
+            serde_json::json!({})
+        });
         "false".to_string()
     } else {
         builtin_proto::emit_patched_test(ctx, BuiltinProto::Function)

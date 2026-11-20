@@ -48,6 +48,7 @@ pub(super) fn register_exported_local_variables(ctx: &LoweringContext, module: &
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_bindings(body, bindings);
                     if let Some(catch) = catch {
@@ -90,6 +91,7 @@ pub(crate) fn lower_module_decl(
     ctx: &mut LoweringContext,
     module: &mut Module,
     decl: &ast::ModuleDecl,
+    deferred_namespace_locals: &std::collections::HashSet<String>,
 ) -> Result<()> {
     match decl {
         ast::ModuleDecl::Import(import_decl) => {
@@ -552,6 +554,7 @@ pub(crate) fn lower_module_decl(
                 type_only: whole_decl_type_only,
                 runtime_erased,
                 is_dynamic: false,
+                is_deferred: import_decl.phase == ast::ImportPhase::Defer,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -1346,7 +1349,9 @@ pub(crate) fn lower_module_decl(
                     }
                 }
                 ast::Decl::Class(class_decl) => {
-                    let class = lower_class_decl(ctx, class_decl, true)?;
+                    let mut class = lower_class_decl(ctx, class_decl, true)?;
+                    // R9BIRTH6: the init index its evaluation starts at.
+                    class.decl_stmt = (!class.is_nested).then_some(module.init.len() as u32);
                     let class_name = class.name.clone();
                     // Issue #711: dynamic parent-class registration at the
                     // source position (see non-export class arm below for
@@ -1484,46 +1489,70 @@ pub(crate) fn lower_module_decl(
                             // codegen expected a local function body that was
                             // never emitted, and the link failed on
                             // `__perry_wrap_perry_fn_<mod>__<name>`.
+                            //
+                            // The forwarding import is the one `import { x } from
+                            // "<source>"` would lower to, and whether it stands in
+                            // for the re-export is that import's own predicate,
+                            // `Import::has_native_value_bindings`, the one the
+                            // driver (var-export classification) and codegen (the
+                            // getter in `export_value_wrappers.rs`) read. A Node
+                            // builtin without a native Rust module of its own
+                            // (`node:stream/web`) is such a source too: gating on
+                            // `is_native_module_specifier` alone left `export {
+                            // ReadableStream } from "node:stream/web"` a plain
+                            // ReExport, and importers linked against a
+                            // `__perry_wrap_perry_fn_<mod>__ReadableStream` that no
+                            // module defines.
                             let native_source = canonicalize_native_import_source(&source);
-                            if is_native_module_specifier(&source) {
-                                let is_node_core =
-                                    perry_api_manifest::is_node_core_module(&native_source);
-                                if is_node_core
-                                    && !perry_api_manifest::module_has_public_named_export(
-                                        &native_source,
-                                        &local,
-                                    )
-                                {
-                                    crate::lower_bail!(
-                                        named.span,
-                                        "The requested module '{}' does not provide an export named '{}'",
-                                        source,
-                                        local
-                                    );
+                            let is_native = is_native_module_specifier(&source);
+                            let mut forwarding_import = Import {
+                                source: if is_bare_prefix_only_builtin(&native_source) {
+                                    source.clone()
+                                } else {
+                                    native_source.clone()
+                                },
+                                specifiers: Vec::new(),
+                                is_native,
+                                module_kind: if is_native {
+                                    ModuleKind::NativeRust
+                                } else {
+                                    ModuleKind::NativeCompiled
+                                },
+                                resolved_path: None,
+                                type_only: false,
+                                runtime_erased: false,
+                                is_dynamic: false,
+                                is_deferred: false,
+                                is_dynamic_target: false,
+                                is_deferred_require: false,
+                                is_adopted_require: false,
+                            };
+                            if forwarding_import.has_native_value_bindings() {
+                                if is_native {
+                                    let is_node_core =
+                                        perry_api_manifest::is_node_core_module(&native_source);
+                                    if is_node_core
+                                        && !perry_api_manifest::module_has_public_named_export(
+                                            &native_source,
+                                            &local,
+                                        )
+                                    {
+                                        crate::lower_bail!(
+                                            named.span,
+                                            "The requested module '{}' does not provide an export named '{}'",
+                                            source,
+                                            local
+                                        );
+                                    }
+                                    init_named_cell(module, &native_source, &local, Some(&local));
                                 }
                                 let synthetic_local =
                                     format!("__perry_builtin_reexport_{}", ctx.fresh_local());
-                                init_named_cell(module, &native_source, &local, Some(&local));
-                                module.imports.push(Import {
-                                    source: if is_bare_prefix_only_builtin(&native_source) {
-                                        source.clone()
-                                    } else {
-                                        native_source
-                                    },
-                                    specifiers: vec![ImportSpecifier::Named {
-                                        imported: local,
-                                        local: synthetic_local.clone(),
-                                    }],
-                                    is_native: true,
-                                    module_kind: ModuleKind::NativeRust,
-                                    resolved_path: None,
-                                    type_only: false,
-                                    runtime_erased: false,
-                                    is_dynamic: false,
-                                    is_dynamic_target: false,
-                                    is_deferred_require: false,
-                                    is_adopted_require: false,
+                                forwarding_import.specifiers.push(ImportSpecifier::Named {
+                                    imported: local,
+                                    local: synthetic_local.clone(),
                                 });
+                                module.imports.push(forwarding_import);
                                 module.exports.push(Export::Named {
                                     local: synthetic_local,
                                     exported,
@@ -1593,7 +1622,13 @@ pub(crate) fn lower_module_decl(
                         // not a bare `perry_fn_<mod>__z` function symbol. This is
                         // exactly how zod re-exports `z`, so without this every
                         // `z.object` / `z.coerce` in consumer code is undefined.
-                        if let Some(ns_source) = ctx.namespace_import_sources.get(&local).cloned() {
+                        let deferred_namespace = deferred_namespace_locals.contains(&local);
+                        if let Some(ns_source) = ctx
+                            .namespace_import_sources
+                            .get(&local)
+                            .filter(|_| !deferred_namespace)
+                            .cloned()
+                        {
                             module.exports.push(Export::NamespaceReExport {
                                 source: ns_source,
                                 name: exported.clone(),

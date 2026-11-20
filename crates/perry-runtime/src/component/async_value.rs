@@ -63,7 +63,7 @@ pub(super) fn decode(owner: f64, value: &Value, payload: &Value, stream: bool) -
         .filter(|_| value.as_object().is_some_and(|o| o.len() == 1))
         .unwrap_or_else(|| fail("Invalid owned async value"));
     let schema = serde_json::to_vec(payload).unwrap();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let token = scope.root_nanbox_f64(text(token.as_bytes()));
         let schema = scope.root_nanbox_f64(text(&schema));
         let state = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
@@ -180,7 +180,7 @@ fn begin_read(wrapper: f64, capacity: f64) -> f64 {
     let mut payload = Value::Null;
     let mut value = Value::Null;
     set(state.get_nanbox_f64(), PENDING, 1.0);
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         payload = serde_json::from_str(&string(get(state.get_nanbox_f64(), SCHEMA)))
             .unwrap_or_else(|_| fail("Invalid async payload schema"));
         value = descriptor(state.get_nanbox_f64());
@@ -211,7 +211,7 @@ extern "C" fn dispose(
     }
     let owner = scope.root_nanbox_f64(get(state.get_nanbox_f64(), OWNER));
     let mut request = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         request =
             serde_json::json!({"kind":"async-value","value":descriptor(state.get_nanbox_f64())});
         set(state.get_nanbox_f64(), STATE, CLOSED);
@@ -287,7 +287,7 @@ pub(super) fn chunk(
     } else {
         serde_json::json!({"kind":"tuple","value":vec![payload;input.as_array().unwrap_or_else(||fail("Invalid write remainder")).len()]})
     };
-    let outcome = crate::exception::catch_js_throw(|| value::decode(input, &schema, world, owner));
+    let outcome = crate::exception::catch_thrown(|| value::decode(input, &schema, world, owner));
     drop(schema);
     finish(outcome)
 }

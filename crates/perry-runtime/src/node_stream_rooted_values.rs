@@ -43,6 +43,11 @@ pub(super) fn rooted_array_push(array: &RuntimeHandle<'_>, value: f64) {
 
 /// A new closure for `func` capturing `captures`, rooted in `scope`. Each
 /// capture is read from its handle after the allocation.
+/// Out of line: an allocating helper shared by every stream path. Inlined, its
+/// copies are emitted into each caller (the pipeline entry most of all), and
+/// whether LLVM does that depends on the visiting order inside the
+/// stream/timer call cycle, not on the code.
+#[inline(never)]
 pub(super) fn rooted_closure<'s>(
     scope: &'s RuntimeHandleScope,
     func: *const crate::closure::JsFunctionInfo,
@@ -81,6 +86,8 @@ pub(super) fn rooted_array_copy<'s>(
 
 /// A copy of the native argument array `args` (null is empty), rooted in
 /// `scope`. `args` is rooted before the copy allocates.
+/// Out of line for the same reason as `rooted_closure`.
+#[inline(never)]
 pub(super) fn rooted_args_copy<'s>(
     scope: &'s RuntimeHandleScope,
     args: *const ArrayHeader,

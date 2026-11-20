@@ -1,0 +1,8 @@
+1 next 1 1
+1 return 1 1
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+2 next 1 0
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.next: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)
+2 return 1 0
+DEC 250: Cannot redefine built-in member %GeneratorPrototype%.return: built-in objects are read-only in a compiled program (adding a new member is allowed)

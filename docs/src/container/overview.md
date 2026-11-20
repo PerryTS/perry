@@ -7,8 +7,8 @@ API is split across two TypeScript modules:
 
 | Module | Use case |
 |---|---|
-| [`perry/container`](./containers.md) | Single-container lifecycle: `run`, `create`, `start`, `stop`, `remove`, `inspect`, `logs`, `exec`, plus image management. |
-| [`perry/compose`](./compose.md) | Multi-service orchestration: `up`, `down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, `config` — driven by a TS object literal that mirrors the Compose spec. |
+| [`perry/container`](containers.md) | Single-container lifecycle: `run`, `create`, `start`, `stop`, `remove`, `inspect`, `logs`, `exec`, plus image management. |
+| [`perry/compose`](compose.md) | Multi-service orchestration: `up`, `down`, `ps`, `logs`, `exec`, `start`, `stop`, `restart`, `config` — driven by a TS object literal that mirrors the Compose spec. |
 
 Both modules compile to **direct calls into a Rust backend** that talks to
 whatever OCI-compatible runtime is on the host. There is no JavaScript
@@ -38,7 +38,7 @@ backend in this list — same project-namespaced names, same DNS
 aliases, same `ContainerInfo` shape from `inspect`, with explicit
 warnings (or hard failures, opt-in) when a feature like
 `privileged: true` can't be honored on the chosen runtime. See
-[Cross-Backend Determinism](./determinism.md) for the architecture.
+[Cross-Backend Determinism](determinism.md) for the architecture.
 
 ```typescript
 {{#include ../../examples/stdlib/container/snippets.ts:backend-detect}}
@@ -88,7 +88,7 @@ console.log(JSON.parse(await getAvailableBackends()));              // BackendIn
 `setBackend()` rejects after the first container op fires — the global
 backend `OnceLock` can't be reset. Set it before any other
 `perry/container` or `perry/compose` call. See [Cross-Backend
-Determinism](./determinism.md) for the full architecture and the
+Determinism](determinism.md) for the full architecture and the
 capability-aware `selectBackendFor()` semantics.
 
 ### Environment variables
@@ -97,7 +97,7 @@ capability-aware `selectBackendFor()` semantics.
 |---|---|
 | `PERRY_CONTAINER_BACKEND=<name>` | Process-level backend pin (skips auto-detection). Same effect as calling `setBackend(name)` from TS, but works before the first op fires. Errors with `NoBackendFound` if the named backend isn't probeable. |
 | `PERRY_NO_INSTALL_PROMPT=1` | Disable the interactive installer when no backend is found. Defaults to allowed when `stderr` is a TTY. |
-| `PERRY_CONTAINER_VERIFY_IMAGES=1` | Run `cosign verify` against every pulled image before use. See [Security](./security.md#image-verification). |
+| `PERRY_CONTAINER_VERIFY_IMAGES=1` | Run `cosign verify` against every pulled image before use. See [Security](security.md#image-verification). |
 | `PERRY_ALLOW_UNTRUSTED_SHARED_KERNEL=1` | Opt out of the workload-graph requirement that `policy.tier = "untrusted"` runs in a microVM. **Not recommended for actual untrusted code.** |
 | `PERRY_NO_DEFAULT_SIGINT_CLEANUP=1` | Skip the default SIGINT/SIGTERM handler that drains `COMPOSE_HANDLES`. Tests + tools that own their own teardown set this. |
 
@@ -131,7 +131,7 @@ The pattern most production deployments follow is the same as
 1. **`up()`** — bring the stack up, return an opaque integer handle, and
    exit when every service is started (`up()` does not block on
    healthchecks; for that, see [Healthchecks &
-   readiness](./compose.md#waiting-for-readiness)).
+   readiness](compose.md#waiting-for-readiness)).
 2. **Run a separate readiness probe** (or rely on the in-spec
    `healthcheck` block) to verify the stack is actually serving.
 3. **Exit 0**: the containers keep running thanks to docker's daemon
@@ -172,16 +172,16 @@ container` for one-off tasks against the same containers.
 
 ## Where to read next
 
-- [Single-container lifecycle](./containers.md) — every `perry/container`
+- [Single-container lifecycle](containers.md) — every `perry/container`
   call documented with examples.
-- [Compose orchestration](./compose.md) — `perry/compose` and the
+- [Compose orchestration](compose.md) — `perry/compose` and the
   `ComposeSpec` shape, including the canonical TS-object pattern.
-- [Networking](./networking.md) — networks, the `internal` flag, and
+- [Networking](networking.md) — networks, the `internal` flag, and
   the cross-service-DNS gotcha (and how to work around it today).
-- [Volumes](./volumes.md) — named-vs-bind, preservation across `down()`,
+- [Volumes](volumes.md) — named-vs-bind, preservation across `down()`,
   and the `forgejo-pgdata`-style stable-name pattern.
-- [Security](./security.md) — capabilities, image verification with
+- [Security](security.md) — capabilities, image verification with
   cosign, and the workload-graph policy tiers.
-- [Production patterns](./production-patterns.md) — case study using
+- [Production patterns](production-patterns.md) — case study using
   the [`example-code/forgejo-deployment`](https://github.com/PerryTS/perry/tree/main/example-code/forgejo-deployment)
   example and the gotchas it surfaced.

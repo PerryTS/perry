@@ -197,6 +197,25 @@ fn unproven_bitwise_operands_take_a_guarded_int32_arm() {
                 "{op:?} must mask its shift count to 5 bits:\n{ir}"
             );
         }
+        // N4: the guard says which arm is the likely one (`PERRY_COLD_PATHS`).
+        let guard = ir
+            .lines()
+            .find(|l| l.contains("label %guarded_arith.numeric"))
+            .unwrap_or_else(|| panic!("{op:?} has no guard branch:\n{ir}"));
+        let cond = guard
+            .split_whitespace()
+            .nth(2)
+            .unwrap()
+            .trim_end_matches(',');
+        let expected = ir.lines().any(|l| {
+            l.contains(&format!("{cond} = call i1 @llvm.expect.i1(i1 "))
+                && l.ends_with(", i1 true)")
+        });
+        assert_eq!(
+            expected,
+            crate::module::cold_paths_enabled(),
+            "{op:?} guard `{guard}` expects two Numbers exactly under the switch:\n{ir}"
+        );
     }
 }
 

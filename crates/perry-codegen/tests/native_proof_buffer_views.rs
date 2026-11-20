@@ -32,6 +32,12 @@ mod runtime_fallback;
 #[path = "native_proof_buffer_views/pointer_lifetime.rs"]
 mod pointer_lifetime;
 
+#[path = "native_proof_buffer_views/prototype_guard.rs"]
+mod prototype_guard;
+
+#[path = "native_proof_buffer_views/equals.rs"]
+mod equals;
+
 fn empty_opts() -> CompileOptions {
     CompileOptions {
         namespace_self_import: false,
@@ -63,7 +69,6 @@ fn empty_opts() -> CompileOptions {
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
         imported_classes: Vec::new(),
-        short_spread_method_candidates: std::sync::Arc::default(),
         object_literal_method_candidates: std::sync::Arc::default(),
         imported_enums: Vec::new(),
         imported_async_funcs: std::collections::HashSet::new(),
@@ -97,11 +102,14 @@ fn empty_opts() -> CompileOptions {
         lazy_path_init_modules: Vec::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
         module_source: None,
         debug_source_line_offset: 0,
+        ..Default::default()
     }
 }
 
@@ -251,6 +259,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -457,6 +466,52 @@ fn buffer_set(buffer_id: u32, index: Expr) -> Stmt {
     })
 }
 
+/// The callee-read offset of a Buffer reader site the tests compile as
+/// proven: a whole-program solve gives such a site (a `Buffer.alloc`
+/// receiver, no write onto `Buffer.prototype`) the NativeMember verdict
+/// (perry-wpfacts `native_member` tests), and the driver passes it to the
+/// module as `ElisionFacts::native_member_calls`. perry-codegen runs no
+/// solve, so the tests pass that verdict the way the driver does.
+const PROVEN_SITE: u32 = 41;
+
+fn proven_opts() -> CompileOptions {
+    let elision = perry_codegen::ElisionFacts {
+        native_member_calls: [PROVEN_SITE].into_iter().collect(),
+        ..Default::default()
+    };
+    CompileOptions {
+        program_facts: perry_codegen::ProgramFactsView {
+            elision: std::sync::Arc::new(elision),
+            ..Default::default()
+        },
+        ..empty_opts()
+    }
+}
+
+/// A Buffer reader call at [`PROVEN_SITE`].
+fn proven_buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
+    Expr::Call {
+        byte_end: 0,
+        callee: Box::new(Expr::PropertyGet {
+            byte_end: 0,
+            byte_offset: PROVEN_SITE,
+            object: Box::new(local(buffer_id)),
+            property: method.to_string(),
+        }),
+        args: vec![index],
+        type_args: Vec::new(),
+        byte_offset: PROVEN_SITE,
+    }
+}
+
+fn proven_ir(name: &str, body: Vec<Stmt>) -> String {
+    compile_ir_with_opts(name, body, proven_opts())
+}
+
+fn proven_artifact_json(name: &str, body: Vec<Stmt>) -> serde_json::Value {
+    compile_artifact_json_for_module_with_opts(module(name, body), proven_opts())
+}
+
 fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
     call(
         Expr::PropertyGet {
@@ -471,6 +526,7 @@ fn buffer_read(buffer_id: u32, method: &str, index: Expr) -> Expr {
 
 fn index_get(object_id: u32, index: Expr) -> Expr {
     Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(local(object_id)),
@@ -541,6 +597,7 @@ fn array_set(array_id: u32, index: Expr, value: Expr) -> Stmt {
         object: Box::new(local(array_id)),
         index: Box::new(index),
         value: Box::new(value),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     })
@@ -608,7 +665,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: PROVEN_SITE,
                 object: Box::new(local(1)),
                 property: "readUInt32BE".to_string(),
             }),
@@ -618,7 +675,7 @@ fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
         })),
     ];
 
-    let artifact = compile_artifact_json("artifact_buffer_read_u32.ts", body);
+    let artifact = proven_artifact_json("artifact_buffer_read_u32.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -724,7 +781,7 @@ fn artifact_records_buffer_read_double_as_f64() {
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: PROVEN_SITE,
                 object: Box::new(local(1)),
                 property: "readDoubleLE".to_string(),
             }),
@@ -734,7 +791,7 @@ fn artifact_records_buffer_read_double_as_f64() {
         })),
     ];
 
-    let artifact = compile_artifact_json("artifact_buffer_read_double.ts", body);
+    let artifact = proven_artifact_json("artifact_buffer_read_double.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -764,7 +821,7 @@ fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() 
         Stmt::Return(Some(call(
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: PROVEN_SITE,
                 object: Box::new(local(1)),
                 property: "readFloatLE".to_string(),
             },
@@ -772,7 +829,7 @@ fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() 
         ))),
     ];
 
-    let artifact = compile_artifact_json("artifact_buffer_read_f32.ts", body);
+    let artifact = proven_artifact_json("artifact_buffer_read_f32.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -815,11 +872,11 @@ fn artifact_records_width_aware_buffer_numeric_read_facts() {
     ];
     let mut body = vec![buffer_let(1, "buf", int(16))];
     for (method, ..) in reads {
-        body.push(Stmt::Expr(buffer_read(1, method, int(0))));
+        body.push(Stmt::Expr(proven_buffer_read(1, method, int(0))));
     }
     body.push(Stmt::Return(Some(int(0))));
 
-    let artifact = compile_artifact_json("artifact_width_aware_buffer_reads.ts", body);
+    let artifact = proven_artifact_json("artifact_width_aware_buffer_reads.ts", body);
     let records = artifact["records"].as_array().unwrap();
     for (method, width, endian, signed, floating, native_rep) in reads {
         assert!(
@@ -881,12 +938,12 @@ fn explicit_width_guard_proves_wide_buffer_read() {
                 right: Box::new(length(1)),
             }),
             update: Some(increment(2)),
-            body: vec![Stmt::Expr(buffer_read(1, "readUInt32BE", local(2)))],
+            body: vec![Stmt::Expr(proven_buffer_read(1, "readUInt32BE", local(2)))],
         },
         Stmt::Return(Some(int(0))),
     ];
 
-    let artifact = compile_artifact_json("artifact_width_guard_buffer_read.ts", body);
+    let artifact = proven_artifact_json("artifact_width_guard_buffer_read.ts", body);
     let records = artifact["records"].as_array().unwrap();
     assert!(
         records.iter().any(|record| {
@@ -915,7 +972,10 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
             update: Some(increment(3)),
             body: vec![Stmt::Expr(Expr::LocalSet(
                 2,
-                Box::new(add(local(2), buffer_read(1, "readUInt32BE", local(3)))),
+                Box::new(add(
+                    local(2),
+                    proven_buffer_read(1, "readUInt32BE", local(3)),
+                )),
             ))],
         },
         typed_array_let(
@@ -936,7 +996,7 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
         Stmt::Return(Some(local(2))),
     ];
 
-    let ir = compile_ir("numeric_buffer_typed_array_operands.ts", body);
+    let ir = proven_ir("numeric_buffer_typed_array_operands.ts", body);
     assert!(
         !ir.contains("call double @js_number_coerce"),
         "proven native numeric reads should not force JS number coercion:\n{ir}"

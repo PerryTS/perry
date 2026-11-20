@@ -130,7 +130,7 @@ fn match_candidate(
         || super::loops::stmts_mutate_local(body, counter_id)
         || ctx.reassigned_locals.contains(&bound_id)
         || ctx.boxed_vars.contains(&bound_id)
-        || !ctx.locals.contains_key(&bound_id)
+        || !super::loops::local_has_readable_slot(ctx, bound_id)
     {
         return None;
     }
@@ -281,7 +281,8 @@ fn emit_array_admission(
     let source_gc_type_addr = ctx.block().sub(I64, &array_handle, "8");
     let source_gc_type_ptr = ctx.block().inttoptr(I64, &source_gc_type_addr);
     let source_gc_type = ctx.block().load(I8, &source_gc_type_ptr);
-    let source_is_array = ctx.block().icmp_eq(I8, &source_gc_type, "1");
+    let source_is_array =
+        crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &source_gc_type);
     let source_flags_addr = ctx.block().sub(I64, &array_handle, "7");
     let source_flags_ptr = ctx.block().inttoptr(I64, &source_flags_addr);
     let source_flags = ctx.block().load(I8, &source_flags_ptr);
@@ -310,7 +311,7 @@ fn emit_array_admission(
     let gc_header = ctx.block().trunc(I128, &fingerprint, I64);
     let array_header = ctx.block().lshr(I128, &fingerprint, "64");
     let gc_type = ctx.block().trunc(I64, &gc_header, I8);
-    let is_array = ctx.block().icmp_eq(I8, &gc_type, "1");
+    let is_array = crate::target_layout::emit_gc_type_is_array(ctx.block(), I8, &gc_type);
     let flags_shifted = ctx.block().lshr(I64, &gc_header, "8");
     let flags = ctx.block().trunc(I64, &flags_shifted, I8);
     let forwarded = ctx.block().and(I8, &flags, "128");
@@ -420,7 +421,11 @@ pub(super) fn emit_iteration_guard(ctx: &mut FnCtx<'_>) -> bool {
     let object_ptr = ctx.block().inttoptr(I64, &this_handle);
     let gc_header_ptr = ctx.block().gep(I8, &object_ptr, &[(I64, "-8")]);
     let gc_header = ctx.block().load(I32, &gc_header_ptr);
-    let guarded_gc_bits = ctx.block().and(I32, &gc_header, "134250751");
+    let guarded_gc_bits = ctx.block().and(
+        I32,
+        &gc_header,
+        crate::lower_call::method_override::GC_OBJECT_FIELD_GUARD_MASK_I32,
+    );
     let gc_ok = ctx.block().icmp_eq(I32, &guarded_gc_bits, "2");
     let class_shape = ctx.block().load(I64, &object_ptr);
     let expected_shape_i64 = ctx.block().zext(I32, &fact.method.expected_shape_id, I64);
@@ -490,26 +495,35 @@ pub(super) fn lower(
     let merge_label = ctx.block_label(merge_idx);
     let convert_label = ctx.block_label(convert_idx);
 
-    let bound_slot = ctx
-        .locals
-        .get(&candidate.bound_id)
-        .expect("matched local bound has storage")
-        .clone();
-    let bound_box = ctx.block().load(DOUBLE, &bound_slot);
-    let bound_is_i32 = crate::codegen::emit_typed_arg_guard(
-        ctx.block(),
-        crate::codegen::TypedParamRep::I32,
-        &bound_box,
-    );
-    ctx.block()
-        .cond_br(&bound_is_i32, &convert_label, &slow_pre_label);
-
-    ctx.current_block = convert_idx;
-    let bound_i32 = crate::codegen::emit_typed_arg_to_raw(
-        ctx.block(),
-        crate::codegen::TypedParamRep::I32,
-        &bound_box,
-    );
+    // A canonical int32 bound is its i32 slot; any other bound is a boxed
+    // value that must be proven an int32 first.
+    let bound_i32 = if let Some((bound_i32_slot, crate::expr::SlotRep::I32)) =
+        crate::expr::canonical_local_i32_slot(ctx, candidate.bound_id)
+    {
+        ctx.block().br(&convert_label);
+        ctx.current_block = convert_idx;
+        ctx.block().load(I32, &bound_i32_slot)
+    } else {
+        let bound_slot = ctx
+            .locals
+            .get(&candidate.bound_id)
+            .expect("matched local bound has storage")
+            .clone();
+        let bound_box = ctx.block().load(DOUBLE, &bound_slot);
+        let bound_is_i32 = crate::codegen::emit_typed_arg_guard(
+            ctx.block(),
+            crate::codegen::TypedParamRep::I32,
+            &bound_box,
+        );
+        ctx.block()
+            .cond_br(&bound_is_i32, &convert_label, &slow_pre_label);
+        ctx.current_block = convert_idx;
+        crate::codegen::emit_typed_arg_to_raw(
+            ctx.block(),
+            crate::codegen::TypedParamRep::I32,
+            &bound_box,
+        )
+    };
     let bound_nonnegative = ctx.block().icmp_sge(I32, &bound_i32, "0");
 
     let array_entry_idxs: Vec<usize> = candidate

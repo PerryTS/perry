@@ -269,6 +269,20 @@ fn declared_type_overrides_shape_proof(ctx: &FnCtx<'_>, id: &u32) -> bool {
     }
 }
 
+/// A reassigned local whose declared type is no lifetime proof -- unless
+/// the body's proof map (`FnCtx::typed_locals`, a type at EVERY read)
+/// holds a typed-array class for it: `collectors::definite_init`'s
+/// write-set rule (every write is `new K(..)` of that class, none of the
+/// body's reads can precede the first). Then [`FnCtx::stable_local_type_proof`]
+/// answers from that proof, never from the declaration.
+fn reassigned_without_typed_array_proof(ctx: &FnCtx<'_>, id: u32) -> bool {
+    ctx.reassigned_locals.contains(&id)
+        && !matches!(
+            ctx.typed_locals.get(&id),
+            Some(HirType::Named(n)) if perry_hir::typed_array_kind_for_name(n).is_some()
+        )
+}
+
 /// If the expression is a known instance of a Named class type, return
 /// the class name. Used by the class method dispatch in lower_call to
 /// pick the right `perry_method_<class>_<name>` function.
@@ -278,7 +292,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // `as any` reassignment can replace the binding with a different
         // runtime value, so class-specific field/index/method lowering would
         // be unsound for every use of a reassigned local (#6906).
-        Expr::LocalGet(id) if ctx.reassigned_locals.contains(id) => None,
+        Expr::LocalGet(id) if reassigned_without_typed_array_proof(ctx, *id) => None,
         // Representation-selection Phase 3b: a shape-proven Ptr<Shape> local
         // (or one of its const aliases — the exact-receiver inliner's
         // `__cmpd_base_N` receivers are typed `Any`) has a provenance-exact
@@ -464,12 +478,17 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
 /// actual typed-array-object bytes: a real type-confusion write into the
 /// typed array's header/data region, not a benign missed optimization.
 pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    if let Expr::LocalGet(id) = e {
-        if ctx.reassigned_locals.contains(id) {
-            return false;
+    let ty = match e {
+        Expr::LocalGet(id) if ctx.reassigned_locals.contains(id) => {
+            if reassigned_without_typed_array_proof(ctx, *id) {
+                return false;
+            }
+            // The write-set proof, never the (erasable) declaration.
+            ctx.typed_locals.get(id).cloned()
         }
-    }
-    match static_type_of(ctx, e) {
+        _ => static_type_of(ctx, e),
+    };
+    match ty {
         Some(HirType::Array(_)) | Some(HirType::Tuple(_)) => true,
         Some(HirType::Generic { ref base, .. }) if base == "Array" => true,
         // #3148: %TypedArray% receivers route their not-already-folded methods

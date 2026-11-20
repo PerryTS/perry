@@ -142,7 +142,7 @@ fn switch(ctx: &mut FnCtx<'_>, value: &str, targets: &[String]) {
 }
 
 /// Lower a Boolean decision tree with dynamic stable operands. Classification
-/// and compact-int decoding occur once per local. Numeric execution contains
+/// occurs once per local. Numeric execution contains
 /// only ordered/unordered fcmp and short-circuit branches. All non-numeric
 /// comparisons of the same operator share one call and continuation switch;
 /// ToPrimitive is still called separately for every reached relational node.
@@ -204,8 +204,8 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     }
 
     // Strict equality against a Number never coerces. Leaving non-number
-    // tags as NaNs already gives the exact fcmp verdict, so these graphs need
-    // only compact-int decoding and have no slow arm at all.
+    // tags as NaNs already gives the exact fcmp verdict, so these graphs
+    // classify nothing and have no slow arm at all.
     let strict_numeric_equality = nodes.iter().all(|node| {
         matches!(node.op, CompareOp::Eq | CompareOp::Ne)
             && (matches!(node.left, Operand::Number(_)) || matches!(node.right, Operand::Number(_)))
@@ -215,26 +215,17 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
         let local = Expr::LocalGet(*id);
         let boxed = lower_expr(ctx, &local)?;
         // A mixed graph still has canonical scalar members. Their existing
-        // write proof makes both classification and compact decoding redundant.
-        if crate::type_analysis::expr_produces_canonical_raw_f64(ctx, &local) {
-            *number = boxed;
-            continue;
-        }
-        let bits = ctx.block().bitcast_double_to_i64(&boxed);
-        let top = ctx.block().lshr(I64, &bits, "48");
-        let int = ctx
-            .block()
-            .icmp_eq(I64, &top, crate::nanbox::INT32_TAG_TOP16_I64);
-        if !strict_numeric_equality {
+        // write proof makes classification redundant.
+        if !strict_numeric_equality
+            && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, &local)
+        {
             // The sign-closed plain-number test: negative IEEE values and
             // canonical NaNs pass, every tag (HANDLE_TAG included) fails.
+            let bits = ctx.block().bitcast_double_to_i64(&boxed);
             let plain = crate::codegen::emit_plain_number_bits_test(ctx.block(), &bits);
-            let numeric = ctx.block().or(I1, &plain, &int);
-            all_numbers = ctx.block().and(I1, &all_numbers, &numeric);
+            all_numbers = ctx.block().and(I1, &all_numbers, &plain);
         }
-        let raw = ctx.block().trunc(I64, &bits, I32);
-        let decoded = ctx.block().sitofp(I32, &raw, DOUBLE);
-        *number = ctx.block().select(I1, &int, DOUBLE, &decoded, &boxed);
+        *number = boxed;
     }
 
     let false_idx = ctx.new_block("cmpgraph.false");

@@ -4,7 +4,8 @@ use serde_json::Value;
 use std::path::Path;
 use std::process::{Command, Output};
 
-const SOURCE: &str = include_str!("../../../test-files/test_typed_feedback_profile_replay.ts");
+const SOURCE: &str =
+    include_str!("../../../tests/parity/language/array/test_typed_feedback_profile_replay.ts");
 
 fn success(output: Output) -> Output {
     assert!(

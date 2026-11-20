@@ -22,16 +22,10 @@ fn collecting_holder_publication_blocks_emergency_collection() {
 
 #[test]
 fn collecting_holder_blocks_are_excluded_and_holes_reuse_their_class() {
-    check(false);
+    check();
 }
 
-#[test]
-#[ignore = "negative control: remove the old-block allocation class"]
-fn negative_control_objtables_holder_class() {
-    check(true);
-}
-
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -50,17 +44,6 @@ fn check(erase: bool) {
         .unwrap()
         .1;
     assert_ne!(holder_base, ordinary_base);
-    if erase {
-        crate::arena::OLD_ARENA.with(|arena| unsafe {
-            let arena = &mut *arena.get();
-            let block = arena
-                .blocks
-                .iter_mut()
-                .find(|b| b.data as usize == holder_base)
-                .unwrap();
-            block.extent_kind = crate::arena::ArenaBlockKind::OldBlock;
-        });
-    }
     let movable = crate::arena::old_arena_movable_block_ranges();
     assert!(
         crate::arena::old_arena_block_range_index(&movable, holder).is_none(),

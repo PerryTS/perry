@@ -232,7 +232,7 @@ extern "C" fn dispose(
     let frame = callback::Frame::new(&scope, get(fields, OWNER));
     let mut token = String::new();
     let mut error = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let (fields, record) = live(resource.get_nanbox_f64());
         if get(fields, STATE) != OWNED {
             fail("A borrowed host resource cannot be disposed");
@@ -262,7 +262,7 @@ extern "C" fn dispose(
                 "$hostResource":token,"owned":true,"new":false,
                 "type":string(get(record, payload::TYPE)),"generation":get(record,payload::GENERATION) as u32
             }});
-            let result = crate::exception::catch_js_throw(|| {
+            let result = crate::exception::catch_thrown(|| {
                 persistent::submit::unit(frame.owner.get_nanbox_f64(), &request)
             });
             drop(request);
@@ -308,7 +308,7 @@ pub extern "C" fn js_component_host_resource_value(owner: f64, ty: f64, resource
     let resource = scope.root_nanbox_f64(resource);
     let mut expected = String::new();
     let mut actual = String::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         expected = string(ty.get_nanbox_f64());
         let (fields, record) = live(resource.get_nanbox_f64());
         actual = string(get(record, payload::TYPE));

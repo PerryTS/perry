@@ -112,8 +112,13 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
                     .method_index()
                     .and_then(|index| class_method_entry_at(class_id, index))
                     .is_none())
-    }) || !class_own_symbol_member_keys(class_id, false).is_empty()
-    {
+    }) {
+        return None;
+    }
+    // Known-symbol members follow the string members, each at its first
+    // definition (`static_prototype::collect` names the same slots).
+    let symbols = super::declarations::class_declared_symbol_members(class_id);
+    if symbols.iter().any(|s| s.mixed) {
         return None;
     }
     let scope = crate::gc::RuntimeHandleScope::new();
@@ -149,36 +154,9 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     for member in &members {
         let name = &member.name;
         if member.accessor {
-            use crate::object::accessor_pair::{pair_new, Accessor};
-            use crate::object::key_attrs as ka;
-            let (raw_get, raw_set) = class_own_accessor_ptrs_at(class_id, member.at)?;
-            let get = scope.root_nanbox_f64(class_accessor_function_value_bytes(
-                raw_get, false, false, name, None,
-            ));
-            let set = scope.root_nanbox_f64(class_accessor_function_value_bytes(
-                raw_set,
-                true,
-                false,
-                name,
-                class_own_setter_length_at(class_id, member.at),
-            ));
-            let pair = unsafe {
-                pair_new(Accessor {
-                    get: get.get_nanbox_f64().to_bits(),
-                    set: set.get_nanbox_f64().to_bits(),
-                    raw_get,
-                    raw_set,
-                    static_get: 0,
-                    static_set: 0,
-                })
-            };
-            values.push(scope.root_nanbox_f64(crate::value::js_nanbox_pointer(pair as i64)));
-            entries.push(
-                METHOD_ENTRY
-                    | ka::ENTRY_ACCESSOR
-                    | if raw_get != 0 { ka::ENTRY_HAS_GET } else { 0 }
-                    | if raw_set != 0 { ka::ENTRY_HAS_SET } else { 0 },
-            );
+            let (pair, entry) = decl_accessor_pair_value(class_id, member.at, name)?;
+            values.push(scope.root_nanbox_f64(pair));
+            entries.push(entry);
             continue;
         }
         let f = class_prototype_method_value_at(class_id, name, member.at.method_index());
@@ -187,6 +165,36 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
         }
         values.push(scope.root_nanbox_f64(f));
         entries.push(METHOD_ENTRY);
+    }
+    let mut symbol_entries = Vec::with_capacity(symbols.len());
+    for s in &symbols {
+        // SAFETY: a declared symbol: well-known or registered, never freed.
+        let display = unsafe { crate::symbol::symbol_function_name(s.sym) };
+        if s.accessor {
+            let (pair, entry) = decl_accessor_pair_value(class_id, s.at, display.as_bytes())?;
+            values.push(scope.root_nanbox_f64(pair));
+            symbol_entries.push(entry);
+        } else {
+            let m = super::declarations::class_method_decl_at(class_id, s.at.method_index()?)?;
+            // The entry is this member's own body: it is named `[desc]`.
+            let f = crate::object::native_module::class_method_declaration_value_bytes(
+                class_method_home_word(class_id),
+                display.as_bytes(),
+                m.code as usize,
+                m.param_count,
+                m.has_synthetic_arguments(),
+                m.has_rest(),
+                m.entry as usize,
+                false,
+            );
+            if unsafe { crate::object::field_rep_store::constfn_store_info(f.to_bits()) }.is_none()
+            {
+                return None;
+            }
+            values.push(scope.root_nanbox_f64(f));
+            symbol_entries.push(METHOD_ENTRY);
+        }
+        crate::symbol::note_symbol_key_installed(s.sym);
     }
 
     // The canonical key list with its attribute entries: one edge per key.
@@ -205,6 +213,20 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
                 &proof,
                 cur.rooted_at(arr),
                 key,
+                entry,
+            )
+        });
+        list.set_raw_mut_ptr(next.as_ptr());
+        cur = next;
+    }
+    for (s, entry) in symbols.iter().zip(symbol_entries) {
+        let key = crate::JSValue::pointer(s.sym as *const u8);
+        // SAFETY: as above; a symbol key allocates nothing it does not root.
+        let next = list.with_mut_ptr(|arr: *mut crate::ArrayHeader| unsafe {
+            crate::object::canonical_keys::extend_slot(
+                &proof,
+                cur.rooted_at(arr),
+                crate::object::canonical_keys::Appended::Slot(key),
                 entry,
             )
         });
@@ -261,7 +283,14 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
                 parent_bits,
                 // Slot 0 is `constructor` (a class function object, no lane);
                 // every method slot names its body.
-                |slot| slot != 0 && !members[slot as usize - 1].accessor,
+                |slot| {
+                    let i = slot as usize;
+                    slot != 0
+                        && match members.get(i - 1) {
+                            Some(m) => !m.accessor,
+                            None => !symbols[i - 1 - members.len()].accessor,
+                        }
+                },
                 requested,
             )
         });
@@ -282,6 +311,48 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
     #[cfg(test)]
     BORN_FINAL_BUILDS.with(|n| n.set(n.get() + 1));
     Some(proto.with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)))
+}
+
+/// The accessor pair value of the declared halves at `at`, named `name`,
+/// and its key entry.
+fn decl_accessor_pair_value(
+    class_id: u32,
+    at: super::declarations::DeclAt,
+    name: &[u8],
+) -> Option<(f64, u8)> {
+    use crate::object::accessor_pair::{pair_new, Accessor};
+    use crate::object::key_attrs as ka;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let (raw_get, raw_set) = class_own_accessor_ptrs_at(class_id, at)?;
+    let get = scope.root_nanbox_f64(class_accessor_function_value_bytes(
+        raw_get, false, false, name, None,
+    ));
+    let set = scope.root_nanbox_f64(class_accessor_function_value_bytes(
+        raw_set,
+        true,
+        false,
+        name,
+        class_own_setter_length_at(class_id, at),
+    ));
+    // SAFETY: both halves are rooted across the pair's allocation; the pair
+    // is returned before anything else allocates.
+    let pair = unsafe {
+        pair_new(Accessor {
+            get: get.get_nanbox_f64().to_bits(),
+            set: set.get_nanbox_f64().to_bits(),
+            raw_get,
+            raw_set,
+            static_get: 0,
+            static_set: 0,
+        })
+    };
+    Some((
+        crate::value::js_nanbox_pointer(pair as i64),
+        METHOD_ENTRY
+            | ka::ENTRY_ACCESSOR
+            | if raw_get != 0 { ka::ENTRY_HAS_GET } else { 0 }
+            | if raw_set != 0 { ka::ENTRY_HAS_SET } else { 0 },
+    ))
 }
 
 #[cfg(test)]

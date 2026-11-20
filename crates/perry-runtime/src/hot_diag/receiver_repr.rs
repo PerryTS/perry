@@ -339,7 +339,6 @@ pub(crate) fn receiver_repr_test_snapshot(family: ReceiverReprFamily) -> (u64, u
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     fn assert_fixture(family: ReceiverReprFamily, construct: impl FnOnce() -> (usize, bool)) {
         receiver_repr_test_reset();
@@ -418,8 +417,8 @@ mod tests {
     #[test]
     fn receiver_repr_family_fixtures_move_constructed_and_observed_old() {
         // These two producers live in perry-stdlib, below perry-runtime in
-        // the dependency graph. Their exact producer calls are pinned by the
-        // source-witness test below; the fixtures exercise their audited bands.
+        // the dependency graph, so the fixtures stand in for them with their
+        // audited bands.
         assert_fixture(ReceiverReprFamily::Common, || {
             receiver_repr_note_constructed(ReceiverReprFamily::Common);
             (2, false)
@@ -492,6 +491,33 @@ mod tests {
                 (value.to_bits() & POINTER_MASK) as usize
             });
         }
+        // Every other runtime producer of a family moves the same bucket.
+        assert_fixture_migrated(ReceiverReprFamily::Text, || {
+            let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+            crate::text::js_text_decoder_new(undefined, undefined, undefined) as usize
+        });
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            let content = crate::string::js_string_from_bytes(b"receiver-repr".as_ptr(), 13);
+            crate::tui::ffi::js_perry_tui_text(content) as usize
+        });
+        assert_fixture_migrated(ReceiverReprFamily::Tui, || {
+            // A fresh slot: `useRef` constructs only when its slot owns no handle.
+            crate::tui::hooks::test_seed_hook_slot_roots(crate::value::TAG_UNDEFINED);
+            crate::tui::hooks::js_perry_tui_use_ref(0.0) as usize
+        });
+        for make in [
+            crate::tui::hooks::js_perry_tui_use_app,
+            crate::tui::hooks::js_perry_tui_use_stdout,
+            crate::tui::hooks::js_perry_tui_use_focus_manager,
+        ] {
+            assert_fixture_migrated(ReceiverReprFamily::Tui, || make() as usize);
+        }
+        assert_fixture(ReceiverReprFamily::SymbolGlobal, || {
+            let key = crate::string::js_string_from_bytes(b"receiverReprFixtureFor".as_ptr(), 22);
+            let key = f64::from_bits(crate::value::js_nanbox_string(key as i64).to_bits());
+            let symbol = unsafe { crate::symbol::js_symbol_for(key) };
+            ((symbol.to_bits() & POINTER_MASK) as usize, false)
+        });
         // #340/#341: `null_stub` is migrated — gate A, inverted (see `text`).
         assert_fixture_migrated(ReceiverReprFamily::NullStub, || {
             (crate::object::js_unresolved_namespace_stub().to_bits() & crate::value::POINTER_MASK)
@@ -508,59 +534,6 @@ mod tests {
         assert!(line.contains("null_stub=0; observed_wrapped"));
         assert!(line.ends_with("bare_managed=0; invalid_pointer_zero=0; direct_mismatch=0\n"));
         receiver_repr_test_arm(false);
-    }
-
-    /// Source witnesses bind the fixture above to every audited producer. If a
-    /// producer-side bump is dropped, its exact occurrence floor fails here.
-    #[test]
-    fn receiver_repr_every_family_producer_keeps_its_constructed_bump() {
-        let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-        let workspace = manifest.parent().and_then(Path::parent).unwrap();
-        let witnesses = [
-            ("crates/perry-runtime/src/event_target.rs", "EventTarget", 1),
-            // Both Common registration entrypoints now funnel through one
-            // payload publisher and therefore share one diagnostic bump.
-            ("crates/perry-stdlib/src/common/handle.rs", "Common", 1),
-            ("crates/perry-stdlib/src/fetch/mod.rs", "Fetch", 1),
-            ("crates/perry-runtime/src/proxy.rs", "Proxy", 1),
-            ("crates/perry-runtime/src/timer.rs", "Timer", 1),
-            ("crates/perry-runtime/src/text.rs", "Text", 2),
-            ("crates/perry-runtime/src/tui/tree.rs", "Tui", 1),
-            ("crates/perry-runtime/src/tui/state.rs", "Tui", 1),
-            ("crates/perry-runtime/src/tui/hooks.rs", "Tui", 4),
-            ("crates/perry-runtime/src/async_hooks.rs", "AsyncHook", 1),
-            (
-                "crates/perry-runtime/src/async_hooks.rs",
-                "AsyncResource",
-                1,
-            ),
-            ("crates/perry-runtime/src/symbol.rs", "SymbolGlobal", 2),
-            (
-                "crates/perry-runtime/src/symbol/constructors.rs",
-                "SymbolGlobal",
-                1,
-            ),
-            (
-                "crates/perry-runtime/src/buffer/store/layout.rs",
-                "ExternalBuffer",
-                1,
-            ),
-            ("crates/perry-runtime/src/shared_sab.rs", "Sab", 1),
-            (
-                "crates/perry-runtime/src/object/null_stub.rs",
-                "NullStub",
-                1,
-            ),
-        ];
-        for (relative, family, expected) in witnesses {
-            let text = std::fs::read_to_string(workspace.join(relative)).unwrap();
-            let needle = format!("ReceiverReprFamily::{family}");
-            assert_eq!(
-                text.matches(&needle).count(),
-                expected,
-                "producer-side diagnostic bump changed in {relative}"
-            );
-        }
     }
 }
 

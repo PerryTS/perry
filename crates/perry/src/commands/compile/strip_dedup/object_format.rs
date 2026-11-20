@@ -11,7 +11,7 @@ use std::path::Path;
 /// True if `path` is an ELF object file (first four bytes `0x7F 'E' 'L' 'F'`).
 /// Used to skip panic/unwind-symbol localization on ELF, where localizing
 /// `rust_eh_personality` / `DW.ref.rust_eh_personality` breaks PIE relocations
-/// (see [`RUST_PANIC_UNWIND_SYMBOL_PARTS`]).
+/// (see [`super::rewrite_symbols::is_panic_unwind_symbol`]).
 pub(super) fn object_is_elf(path: &Path) -> bool {
     use std::io::Read;
     let mut magic = [0u8; 4];
@@ -42,14 +42,7 @@ pub(super) fn object_is_coff(path: &Path) -> bool {
     if magic == [0x7f, b'E', b'L', b'F'] {
         return false;
     }
-    // Mach-O: 0xfeedface / 0xfeedfacf in either byte order, plus the
-    // big-endian fat-archive magic 0xcafebabe.
-    if matches!(u32::from_le_bytes(magic), 0xfeed_face | 0xfeed_facf)
-        || matches!(
-            u32::from_be_bytes(magic),
-            0xfeed_face | 0xfeed_facf | 0xcafe_babe
-        )
-    {
+    if magic_is_macho(magic) {
         return false;
     }
     // COFF anonymous/"bigobj" header, emitted by MSVC for large objects.
@@ -61,4 +54,23 @@ pub(super) fn object_is_coff(path: &Path) -> bool {
         u16::from_le_bytes([magic[0], magic[1]]),
         0x014c | 0x8664 | 0xaa64 | 0x01c0 | 0x01c4 | 0x0200 | 0x6264
     )
+}
+
+/// True when `path` is a Mach-O object (thin or fat, either endianness).
+pub(super) fn object_is_macho(path: &Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 4];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok_and(|_| magic_is_macho(magic))
+}
+
+/// 0xfeedface / 0xfeedfacf in either byte order, plus the big-endian
+/// fat-archive magic 0xcafebabe.
+fn magic_is_macho(magic: [u8; 4]) -> bool {
+    matches!(u32::from_le_bytes(magic), 0xfeed_face | 0xfeed_facf)
+        || matches!(
+            u32::from_be_bytes(magic),
+            0xfeed_face | 0xfeed_facf | 0xcafe_babe
+        )
 }

@@ -21,7 +21,7 @@ pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
     let header = crate::value::addr_class::try_read_gc_header(addr)?;
     let _no_move = crate::gc::GcSuppressScope::new();
     let meta = match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY => {
+        crate::gc_array_type_pat!() => {
             let bag = if create {
                 crate::array::array_property_bag_ensure(addr as *mut crate::array::ArrayHeader)
             } else {
@@ -30,32 +30,17 @@ pub(crate) unsafe fn key_identity(addr: usize, create: bool) -> Option<u64> {
             if bag.is_null() {
                 return None;
             }
-            if create {
-                crate::object::object_meta_ensure(
-                    crate::meta_obj_runtime_born!(bag),
-                    crate::object::MetaReason::SetKeyIdentity,
-                )
-            } else {
-                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
-            }
+            crate::object::key_owner::meta_for(
+                bag as usize,
+                crate::object::MetaReason::SetKeyIdentity,
+                create,
+            )
         }
         crate::gc::GC_TYPE_CLOSURE => {
-            let bag = if create {
-                crate::closure::props::bag_ensure(addr)
-            } else {
-                crate::closure::props::bag_of(addr)
-            };
-            if bag.is_null() {
+            if !create && !crate::closure::props::fn_has_key_store(addr) {
                 return None;
             }
-            if create {
-                crate::object::object_meta_ensure(
-                    crate::meta_obj_runtime_born!(bag),
-                    crate::object::MetaReason::SetKeyIdentity,
-                )
-            } else {
-                crate::meta_read!(crate::meta_obj_runtime_born!(bag))
-            }
+            crate::closure::props::meta_for(addr, crate::object::MetaReason::SetKeyIdentity, create)
         }
         _ => {
             let slot = crate::object::cell_meta_slot(addr)?;
@@ -139,7 +124,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
     }
     let tag = bits >> 48;
     let addr = (bits & crate::value::POINTER_MASK) as usize;
-    if matches!(tag, 0 | 0x7FFD | 0x7FFA) {
+    if matches!(tag, 0x7FFD | 0x7FFA) {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) }
             .filter(|h| crate::gc::gc_type_is_movable(h.obj_type))
         {
@@ -154,7 +139,7 @@ fn hash_value(value: f64, insert: bool) -> Option<u32> {
             } else if matches!(
                 kind,
                 crate::gc_object_type_pat!()
-                    | crate::gc::GC_TYPE_ARRAY
+                    | crate::gc_array_type_pat!()
                     | crate::gc::GC_TYPE_CLOSURE
                     | crate::gc::GC_TYPE_PROMISE
                     | crate::gc::GC_TYPE_ERROR
@@ -540,15 +525,18 @@ mod tests {
     }
 
     #[test]
-    fn raw_object_keys_keep_the_relocation_stable_hash() {
+    fn a_number_with_an_objects_address_as_bits_does_not_hash_as_that_object() {
         unsafe {
+            // A word with clear top 16 bits is a Number (a denormal) in value
+            // context: it hashes by its bits, never by the identity of the
+            // object that happens to live at that address.
             let object = crate::object::js_object_alloc(0, 0) as usize;
             let id = key_identity(object, true).unwrap();
-            let mut expected = crate::fast_hash::PtrHasher.build_hasher();
-            (0u64, id).hash(&mut expected);
-            assert_eq!(
+            let mut identity = crate::fast_hash::PtrHasher.build_hasher();
+            (0u64, id).hash(&mut identity);
+            assert_ne!(
                 existing_hash(f64::from_bits(object as u64)),
-                Some(expected.finish() as u32)
+                Some(identity.finish() as u32)
             );
         }
     }
@@ -709,10 +697,4 @@ mod tests {
 #[cfg(test)]
 pub(crate) unsafe fn test_key_identity(addr: usize) -> Option<u64> {
     key_identity(addr, false)
-}
-
-#[cfg(test)]
-pub(crate) unsafe fn test_erase_key_identity(addr: usize) {
-    let meta = *crate::object::cell_meta_slot(addr).unwrap();
-    (*meta).key_identity = 0;
 }

@@ -93,7 +93,7 @@ pub(crate) fn bind_inline_constructor_params(
         crate::expr::emit_shadow_slot_bind_for_local(ctx, param.id);
         ctx.local_types.insert(param.id, param.ty.clone());
         ctx.proven_local_types.remove(&param.id);
-        if let Some(proof) = proof {
+        if let Some(proof) = proof.filter(|proof| ctx.admits_contents_proof(param.id, proof)) {
             ctx.proven_local_types.insert(param.id, proof);
         }
     }

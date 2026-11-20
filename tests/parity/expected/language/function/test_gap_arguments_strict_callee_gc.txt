@@ -1,0 +1,3 @@
+TypeError function true
+TypeError TypeError true true 30
+true

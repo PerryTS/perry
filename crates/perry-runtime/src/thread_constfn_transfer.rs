@@ -24,9 +24,9 @@ pub(super) unsafe fn snapshot(
         || !crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _)).is_null()
         || d.logical_key_count as usize != names?.len()
         || d.live_inline_slot_count as usize != field_count
-        || d.special_constfn_mask == 0
+        || !d.has_constfn_lane()
         || field_rep::has_deprecated(d.rep)
-        || d.deprecation_targets() != (0, 0)
+        || d.deprecation_pending()
     {
         return None;
     }

@@ -317,8 +317,10 @@ int perry_wasi_poll(const int *fds, const unsigned char *kinds, unsigned n,
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -441,14 +443,35 @@ int perry_wasi_socket_address(int fd, int peer, char *text, unsigned cap, unsign
     return inet_ntop(storage.ss_family, ip, text, cap) ? 0 : -errno;
 }
 
-/* Wait at most `timeout_ms` (0: do not wait) for fd 0 to be readable or at
- * EOF. Returns 1 when one read cannot block, 0 on timeout, or a negative
- * errno. WASIp2 has no threads, so the event loop services stdin with this
- * instead of a reader thread (#13953). */
-int perry_wasi_stdin_poll(int timeout_ms) {
-    struct pollfd p = {.fd = 0, .events = POLLIN};
-    int r = poll(&p, 1, timeout_ms);
-    if (r < 0) return -errno;
-    return r > 0 && (p.revents & (POLLIN | POLLHUP | POLLERR)) ? 1 : 0;
+/* Block until one of `fds` is ready (kinds bit 0 read, bit 1 write) or
+ * `timeout_ns` elapses, as the preview 1 body above does. Fills `ready` with the
+ * same bits for each fd and returns how many fds were ready, or a negative
+ * errno. wasi-libc maps poll() over socket and stdio descriptors to one
+ * wasi:io/poll call over their pollables, so the guest sleeps in the host until
+ * a socket or stdin is ready or the timer budget runs out. Hang-up and error
+ * count as ready for the interest asked: the next read or write reports them. */
+int perry_wasi_poll(const int *fds, const unsigned char *kinds, unsigned n,
+                    unsigned long long timeout_ns, unsigned char *ready) {
+    struct pollfd *p = calloc(n ? n : 1, sizeof(*p));
+    if (!p) return -ENOMEM;
+    for (unsigned i = 0; i < n; i++) {
+        ready[i] = 0;
+        p[i].fd = fds[i];
+        p[i].events = (kinds[i] & 1 ? POLLIN : 0) | (kinds[i] & 2 ? POLLOUT : 0);
+    }
+    unsigned long long ms = timeout_ns / 1000000 + (timeout_ns % 1000000 != 0);
+    int r = poll(p, n, ms > INT_MAX ? INT_MAX : (int)ms);
+    if (r < 0) { r = -errno; free(p); return r; }
+    int result = 0;
+    for (unsigned i = 0; i < n; i++) {
+        short ev = p[i].revents;
+        unsigned char bits = 0;
+        if ((kinds[i] & 1) && (ev & (POLLIN | POLLHUP | POLLERR))) bits |= 1;
+        if ((kinds[i] & 2) && (ev & (POLLOUT | POLLHUP | POLLERR))) bits |= 2;
+        ready[i] = bits;
+        if (bits) result++;
+    }
+    free(p);
+    return result;
 }
 #endif

@@ -1,0 +1,1 @@
+A `throw` whose handler is in the throwing function (a `try` around it, the async rejection boundary) branches to that handler instead of searching the stack for it: about 70% fewer instructions per throw-and-catch in one function, also with a `finally` in between.

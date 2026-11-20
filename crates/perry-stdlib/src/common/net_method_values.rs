@@ -115,7 +115,6 @@ fn net_socket_method_name(prop: &str) -> Option<&'static [u8]> {
         "eventNames" => Some(b"eventNames"),
         "listeners" => Some(b"listeners"),
         "rawListeners" => Some(b"rawListeners"),
-        "upgradeToTLS" => Some(b"upgradeToTLS"),
         "setDefaultEncoding" => Some(b"setDefaultEncoding"),
         "cork" => Some(b"cork"),
         "uncork" => Some(b"uncork"),

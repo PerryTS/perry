@@ -166,10 +166,9 @@ independent host/guest moving GC. Blocking-I/O cancellation,
 broader platform qualification and engine shipping costs remain open. The Tokio-free Turnloop provider
 replacement is now selected and qualified on Linux in both component directions;
 its [earlier receipt](validation/wasi-turnloop-selected-20261023.json) records
-validation-only upstream repairs. The exact qualified sources now live in the
-repository through [pinned Cargo patches](../third_party/turnloop/VENDORED.md),
-so builds no longer need those external overrides. Released dependency adoption
-remains a future replacement for these local source repairs.
+validation-only upstream repairs. Those repairs are released in turnloop
+0.1.0-beta.2, which Perry now takes from crates.io without Cargo patches or a
+repository copy of the sources.
 This milestone is not complete.
 
 Introduce an optional component-capable host boundary, for example a separate

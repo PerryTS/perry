@@ -62,7 +62,7 @@ fn canonical_borrow_cleanup_preserves_an_earlier_error_and_drops_each_handle_onc
             let error = scope.root_nanbox_f64(crate::value::js_nanbox_string(
                 crate::string::js_string_from_bytes(b"original".as_ptr(), 8) as i64,
             ));
-            abi::frame(task).guard::<()>(|_| crate::exception::js_throw(error.get_nanbox_f64()));
+            abi::frame(task).guard::<()>(|_| crate::exception::test_throw(error.get_nanbox_f64()));
             assert_eq!(abi::perry_component_frame_resource_scope_end(task), -1);
             assert_eq!(
                 abi::frame(task).error().unwrap().to_bits(),

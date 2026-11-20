@@ -1,5 +1,5 @@
-//! Semantic and observability ratchet for #8694's stable one-key `for...in`
-//! snapshot.  The executable exercises the allocation-free arm first, then
+//! Semantic ratchet for #8694's `for...in` snapshot (the one-key arm and its
+//! diagnostics are gone: DYNP E3 reads the structure).  The executable exercises the allocation-free arm first, then
 //! cases that must remain on the complete generic enumerator.  It is run again
 //! with forced evacuation so the returned shape-owned key array is proven to
 //! stay valid across moving collections.
@@ -13,34 +13,12 @@ fn perry_bin() -> PathBuf {
 
 fn run_fixture(binary: &std::path::Path, force_evacuation: bool) -> Output {
     let mut command = Command::new(binary);
-    command.env("PERRY_FOR_IN_DIAG", "1");
     if force_evacuation {
         command.env("PERRY_GC_FORCE_EVACUATE", "1");
     } else {
         command.env_remove("PERRY_GC_FORCE_EVACUATE");
     }
     command.output().expect("run compiled #8694 fixture")
-}
-
-fn diagnostic_counts(stderr: &str) -> (u64, u64) {
-    let mut stable = 0;
-    let mut fallback = 0;
-    for line in stderr
-        .lines()
-        .filter(|line| line.starts_with("FOR-IN-DIAG "))
-    {
-        for field in line.split_whitespace() {
-            let Some((name, value)) = field.split_once('=') else {
-                continue;
-            };
-            match name {
-                "stable_single" => stable = stable.max(value.parse().unwrap_or(0)),
-                "fallback" => fallback = fallback.max(value.parse().unwrap_or(0)),
-                _ => {}
-            }
-        }
-    }
-    (stable, fallback)
 }
 
 #[test]
@@ -107,13 +85,17 @@ const customOneKeys: string[] = [];
 for (const key in customOne) customOneKeys.push(key);
 console.log("custom-one:", customOneKeys.join(","));
 
-// The cached Object.prototype verdict is shape-generation keyed.  Installing
-// an enumerable property after the hot arm was warmed must invalidate it.
-(Object.prototype as any).lateEnumerable = 3;
+// The cached Object.prototype verdict is shape-generation keyed.  Making an
+// Object.prototype member enumerable after the hot arm was warmed must
+// invalidate it.  DEC 250 (Q2): the program adds no key there; `constructor`
+// is the one image member it may redefine.
+Object.defineProperty(Object.prototype, "constructor", { enumerable: true });
 const latePrototypeKeys: string[] = [];
 for (const key in { own: 1 }) latePrototypeKeys.push(key);
-delete (Object.prototype as any).lateEnumerable;
-console.log("late-prototype:", latePrototypeKeys.join(","));
+Object.defineProperty(Object.prototype, "constructor", { enumerable: false });
+const restoredKeys: string[] = [];
+for (const key in { own: 1 }) restoredKeys.push(key);
+console.log("late-prototype:", latePrototypeKeys.join(","), "restored:", restoredKeys.join(","));
 
 const deleting: any = { a: 1, b: 2 };
 const deletionKeys: string[] = [];
@@ -174,7 +156,7 @@ try {
 snapshot: only next: only,added\n\
 ordered: 2,10,word,inherited\n\
 custom-one: own,base\n\
-late-prototype: own,lateEnumerable\n\
+late-prototype: own,constructor restored: own\n\
 mutation: a\n\
 proxy: target\n\
 exception: x\n";
@@ -189,11 +171,5 @@ exception: x\n";
             stderr
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), EXPECTED);
-        let (stable, fallback) = diagnostic_counts(&stderr);
-        assert!(
-            stable > 0 && fallback > 0,
-            "both the stable arm and generic fallback must be observable; got \
-             stable={stable}, fallback={fallback}\nstderr:\n{stderr}"
-        );
     }
 }

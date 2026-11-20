@@ -33,10 +33,6 @@ pub(crate) fn set_function_source(owner: usize, source: &str) {
     let _no_move = crate::gc::GcSuppressScope::new();
     store(owner, SOURCE, string_value(source));
 }
-#[cfg(test)]
-pub(crate) fn clear_function_source(owner: usize) {
-    store(owner, SOURCE, undefined_value());
-}
 const SCRIPT: u32 = 1;
 unsafe fn record(owner: usize, slot: u32) -> *const ArrayHeader {
     let bits = load(owner, slot).to_bits();
@@ -84,10 +80,6 @@ pub(crate) fn seed_script_for_test(owner: usize) {
             column_offset: 3,
         },
     );
-}
-#[cfg(test)]
-pub(crate) fn clear_script_for_test(owner: usize) {
-    store(owner, SCRIPT, undefined_value());
 }
 const CONTEXT: u32 = 0;
 pub(super) fn context_state(owner: usize) -> Option<ContextState> {
@@ -156,8 +148,4 @@ pub(crate) fn context_fields_for_test(owner: usize) -> Option<(u64, u64, bool, b
             s.microtask_after_evaluate,
         )
     })
-}
-#[cfg(test)]
-pub(crate) fn clear_context_for_test(owner: usize) {
-    store(owner, CONTEXT, undefined_value());
 }

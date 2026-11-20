@@ -56,6 +56,7 @@ fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
         return_type: Type::Any,
         body: vec![Stmt::Return(Some(property(
             Expr::IndexGet {
+                element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),

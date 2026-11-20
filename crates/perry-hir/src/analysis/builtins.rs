@@ -183,6 +183,9 @@ pub(crate) fn is_builtin_global_value_name(name: &str) -> bool {
             | "structuredClone"
             | "atob"
             | "btoa"
+            // `gc` (the `--expose-gc` global): a value read is the
+            // `globalThis.gc` function (`const g = gc; g()`).
+            | "gc"
     )
 }
 

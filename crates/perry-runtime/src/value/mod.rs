@@ -62,7 +62,7 @@ mod tests;
 // named constant for documentation + external tooling but not re-exported
 // since no in-crate consumer references it directly.
 pub(crate) use tags::{
-    BIGINT_TAG, INT32_MASK, INT32_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
+    BIGINT_TAG, INTERNAL_WORD_TAG, JS_HANDLE_TAG, POINTER_MASK, POINTER_TAG,
     SHORT_STRING_DATA_MASK, SHORT_STRING_LEN_MASK, SHORT_STRING_LEN_SHIFT, SHORT_STRING_TAG,
     STRING_TAG, TAG_FALSE, TAG_HOLE, TAG_MARKER, TAG_MASK, TAG_NULL, TAG_TDZ, TAG_TRUE,
     TAG_UNDEFINED,
@@ -119,6 +119,7 @@ pub use nanbox::{
 };
 
 // ----- Dynamic arithmetic dispatch (BigInt vs float) -----
+pub(crate) use dynamic_arith::dyn_to_int32;
 pub use dynamic_arith::{
     js_add_throw_if_symbol, js_dynamic_add, js_dynamic_bitand, js_dynamic_bitor, js_dynamic_bitxor,
     js_dynamic_div, js_dynamic_mod, js_dynamic_mul, js_dynamic_neg, js_dynamic_pos, js_dynamic_pow,

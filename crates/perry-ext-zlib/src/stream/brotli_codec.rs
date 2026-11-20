@@ -38,6 +38,7 @@ pub(super) fn decompress(
     data: &[u8],
     dictionary: Option<Vec<u8>>,
     limit: usize,
+    large_window: bool,
 ) -> Result<Vec<u8>, DecodeError> {
     let dictionary = dictionary.unwrap_or_default();
     let mut alloc = StandardAlloc::default();
@@ -49,6 +50,8 @@ pub(super) fn decompress(
         StandardAlloc::default(),
         custom_dictionary,
     );
+    // The custom-dictionary constructor accepts large windows; RFC 7932 does not.
+    state.large_window = large_window;
     let mut available_in = data.len();
     let mut input_offset = 0;
     let mut total_out = 0;

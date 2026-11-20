@@ -11,16 +11,10 @@ extern "C" fn getter(
 
 #[test]
 fn symbol_accessor_pair_follows_owner_during_copying() {
-    check_owned_accessor(false);
+    check_owned_accessor();
 }
 
-#[test]
-#[ignore = "negative control: erase the moved owner's symbol accessor pair"]
-fn negative_control_objtables_symbol_accessor() {
-    check_owned_accessor(true);
-}
-
-fn check_owned_accessor(erase: bool) {
+fn check_owned_accessor() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = crate::array::js_array_alloc(4) as usize;
@@ -42,11 +36,6 @@ fn check_owned_accessor(erase: bool) {
     let moved = (js_shadow_slot_get(0) & crate::value::POINTER_MASK) as usize;
     let symbol = (js_shadow_slot_get(1) & crate::value::POINTER_MASK) as usize;
     assert_ne!(moved, owner);
-    if erase {
-        unsafe {
-            crate::object::shaped_symbols::delete(moved, symbol);
-        }
-    }
     let (get_after, set_after) =
         unsafe { crate::object::shaped_symbols::accessor(moved, symbol) }.unwrap();
     let lane = unsafe { crate::object::shaped_symbols::get(moved, symbol) }.unwrap();

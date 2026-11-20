@@ -1,0 +1,1 @@
+Whole-program facts: a for-of loop over an array, and an array iterator, keep their values known when a program stores into an unknown value; the solver reads the array iterator chain as the runtime locks it and no longer models the array itself as the iterator that the loop steps or closes.

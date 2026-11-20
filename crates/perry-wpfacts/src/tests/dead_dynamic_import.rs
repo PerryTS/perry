@@ -86,6 +86,7 @@ fn hirs(main: &str) -> Vec<(String, perry_hir::Module)> {
                 type_only: false,
                 runtime_erased: false,
                 is_dynamic: true,
+                is_deferred: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -103,7 +104,11 @@ fn hirs(main: &str) -> Vec<(String, perry_hir::Module)> {
 
 /// Is the formatter's `import()` held by a body that can run?
 fn imports_formatter(host: &str) -> bool {
-    let hirs = hirs(&main_with(host));
+    imports_formatter_of(&main_with(host))
+}
+
+fn imports_formatter_of(main: &str) -> bool {
+    let hirs = hirs(main);
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let activation = crate::activation(&list, &FactsConfig::default());
@@ -123,7 +128,8 @@ fn a_default_every_caller_overrides_never_imports() {
     let list: Vec<(String, &perry_hir::Module)> =
         hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
     let pf = crate::compute(&list, &FactsConfig::default());
-    let on = pf.active_bodies.as_ref().expect("activated");
+    assert!(pf.body_reach.complete, "activated");
+    let on = &pf.body_reach.bodies;
     for (path, id) in [("gen.ts", 0), ("gen.ts", 1), ("fmtlib.ts", 0)] {
         assert!(
             !on.iter().any(|(p, i, _)| p == path && *i == id),
@@ -143,11 +149,12 @@ fn every_way_the_default_can_be_taken_imports() {
         "{ cwd: \"/\", format: process.argv.length > 9 ? (c: string) => Promise.resolve(c) : 0 }",
         // The key is deleted before the call.
         "(() => { const h: any = { cwd: \"/\", format: (c: string) => Promise.resolve(c) }; if (process.argv.length > 9) delete h.format; return h; })()",
-        // The host comes from unknown code.
-        "(globalThis as any)[\"ho\" + \"st\"]",
     ] {
         assert!(imports_formatter(host), "{host}");
     }
+    // The host comes from unknown code: an unseen module may store it.
+    let host = "(globalThis as any)[\"ho\" + \"st\"]";
+    assert!(imports_formatter_of(&unseen(&main_with(host))), "{host}");
 }
 
 /// Is `oxmark` able to run in `src`?
@@ -162,11 +169,8 @@ fn oxmark_runs(src: &str) -> bool {
         .find(|f| f.name == "oxmark")
         .expect("oxmark")
         .id;
-    pf.active_bodies
-        .as_ref()
-        .expect("activated")
-        .iter()
-        .any(|(_, id, _)| *id == ox)
+    assert!(pf.body_reach.complete, "activated");
+    pf.body_reach.bodies.iter().any(|(_, id, _)| *id == ox)
 }
 
 #[test]
@@ -225,6 +229,7 @@ fn program_of(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
                     type_only: false,
                     runtime_erased: false,
                     is_dynamic: true,
+                    is_deferred: false,
                     is_dynamic_target: false,
                     is_deferred_require: false,
                     is_adopted_require: false,
@@ -258,7 +263,8 @@ fn a_module_only_an_uncalled_body_imports_never_runs() {
     let live = activation.live_dynamic_imports().expect("in bound");
         assert_eq!(live.contains(&("main.ts".to_string(), "./lazy.js".to_string())), loads, "{main}");
         let pf = crate::compute(&list, &FactsConfig::default());
-        let on = pf.active_bodies.as_ref().expect("activated");
+        assert!(pf.body_reach.complete, "activated");
+        let on = &pf.body_reach.bodies;
         let init = on.iter().any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));
         assert_eq!(init, loads, "{main}");
     }
@@ -282,6 +288,7 @@ fn a_root_runs_whatever_imports_it() {
         type_only: false,
         runtime_erased: false,
         is_dynamic: true,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -294,7 +301,8 @@ fn a_root_runs_whatever_imports_it() {
             ..FactsConfig::default()
         };
         let pf = crate::compute(&list, &cfg);
-        let on = pf.active_bodies.as_ref().expect("activated");
+        assert!(pf.body_reach.complete, "activated");
+        let on = &pf.body_reach.bodies;
         let init = on
             .iter()
             .any(|(p, id, name)| p == "lazy.ts" && *id == u32::MAX && name.ends_with(":<init>"));
@@ -346,6 +354,7 @@ fn program(mods: &[(&str, &str, &[&str])]) -> Vec<(String, perry_hir::Module)> {
                     type_only: false,
                     runtime_erased: false,
                     is_dynamic: true,
+                    is_deferred: false,
                     is_dynamic_target: false,
                     is_deferred_require: false,
                     is_adopted_require: false,

@@ -77,7 +77,7 @@ pub extern "C" fn js_component_resource_create(ty: f64, payload: f64, destructor
     let record = scope.root_nanbox_f64(undefined());
     let mut rep = 0;
     let mut frame = Frame::allocate_guest_frame();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ty = type_id(ty);
         registry.set_nanbox_f64(super::super::registry());
         if !local_type(registry.get_nanbox_f64(), ty) {
@@ -125,8 +125,8 @@ pub extern "C" fn js_component_resource_create(ty: f64, payload: f64, destructor
         let handle = unsafe {
             (super::super::ops().resource)((&mut frame as *mut Frame).cast(), ty, 0, rep)
         };
-        if let Some(error) = frame.error() {
-            crate::exception::js_throw(error);
+        if let Some(error) = frame.caught_error() {
+            crate::exception::rethrow_caught(error);
         }
         wrap(ty, handle, rep, true, undefined(), undefined())
     });

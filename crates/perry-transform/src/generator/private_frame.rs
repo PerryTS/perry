@@ -547,6 +547,7 @@ fn lower_list(
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         ids(body, out);
                         if let Some(c) = catch {

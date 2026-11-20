@@ -166,6 +166,7 @@ fn collect_var_names_stmt(stmt: &ast::Stmt, out: &mut Vec<String>) {
         }
         While(w) => collect_var_names_stmt(&w.body, out),
         DoWhile(w) => collect_var_names_stmt(&w.body, out),
+        With(w) => collect_var_names_stmt(&w.body, out),
         Labeled(l) => collect_var_names_stmt(&l.body, out),
         Switch(sw) => {
             for case in &sw.cases {
@@ -454,11 +455,10 @@ fn invoke_interp_fn_entered(
         };
         bind_pattern(&ctx, pat, value, env_idx, true);
     }
-    // `var` hoisting (params win over the undefined pre-binding).
+    // `var` hoisting (params win over the undefined pre-binding). Only the
+    // call scope counts: an outer binding of the same name is shadowed.
     for name in &fun.hoisted_vars {
-        if !env::is_bound(root_get(env_idx), name) {
-            env::define(root_get(env_idx), name, bridge::undefined());
-        }
+        env::ensure_var_binding(root_get(env_idx), name);
     }
 
     match &fun.body {
@@ -735,7 +735,8 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         }
         Throw(t) => {
             let value = eval_expr(ctx, &t.arg, env_idx);
-            crate::exception::js_throw(value)
+            // interpreted program throw: counted with dynamic code
+            crate::exception::throw_program_value(value)
         }
         While(w) => exec_while(ctx, w, env_idx, None),
         DoWhile(w) => exec_do_while(ctx, w, env_idx, None),
@@ -747,8 +748,21 @@ pub(crate) fn exec_stmt(ctx: &Ctx, stmt: &ast::Stmt, env_idx: usize) -> Flow {
         Continue(c) => Flow::Continue(c.label.as_ref().map(|l| l.sym.to_string())),
         Labeled(l) => exec_labeled(ctx, l, env_idx),
         Try(t) => exec_try(ctx, t, env_idx),
-        With(_) => throw_unsupported("with statement"),
+        With(w) => exec_with(ctx, w, env_idx),
     }
+}
+
+fn exec_with(ctx: &Ctx, w: &ast::WithStmt, env_idx: usize) -> Flow {
+    let object = eval_expr(ctx, &w.obj, env_idx);
+    if bridge::is_nullish(object) {
+        bridge::throw_type_error("Cannot convert undefined or null to object");
+    }
+    let object_idx = root_push(crate::object::alloc::js_object_coerce(object));
+    let with_env = env::env_new_with(root_get(env_idx), root_get(object_idx));
+    let with_idx = root_push(with_env);
+    let flow = exec_stmt(ctx, &w.body, with_idx);
+    roots_truncate(object_idx);
+    flow
 }
 
 fn exec_decl(ctx: &Ctx, decl: &ast::Decl, env_idx: usize) -> Flow {
@@ -1131,14 +1145,15 @@ fn exec_try(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
             // try (or catch) threw. Run the finalizer, then rethrow — unless the
             // finalizer itself completes abruptly, which swallows the exception
             // (spec Completion-record semantics).
-            let exc = crate::exception::js_get_exception();
+            let exc = crate::exception::pending_exception();
             crate::exception::js_clear_exception();
-            let exc_idx = root_push(exc);
+            let scope = crate::gc::RuntimeHandleScope::new();
+            let caught = exc.root(&scope);
+            let exc_idx = root_push(caught.value());
             match exec_block_scope(ctx, finalizer, env_idx) {
                 Flow::Normal => {
-                    let exc = root_get(exc_idx);
                     roots_truncate(exc_idx);
-                    crate::exception::js_throw(exc)
+                    crate::exception::rethrow_caught(caught.caught())
                 }
                 abrupt => {
                     roots_truncate(exc_idx);
@@ -1163,15 +1178,15 @@ fn exec_try_catch(ctx: &Ctx, t: &ast::TryStmt, env_idx: usize) -> Flow {
     // exception is live (in the rooted TLS slot); put the rooted stack + call
     // depth back to this try's entry state.
     super::interp_restore(saved);
-    let exc = crate::exception::js_get_exception();
+    let exc = crate::exception::pending_exception();
     crate::exception::js_clear_exception();
 
     let Some(handler) = &t.handler else {
         // No catch: let the outer trap (the finalizer wrapper — `try {} finally {}`
         // is the only parse without either) or the caller's trap take it.
-        crate::exception::js_throw(exc)
+        crate::exception::rethrow_caught(exc)
     };
-    let exc_idx = root_push(exc);
+    let exc_idx = root_push(exc.value());
     let catch_env = env::env_new(root_get(env_idx));
     let catch_env_idx = root_push(catch_env);
     if let Some(param) = &handler.param {

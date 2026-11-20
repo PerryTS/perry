@@ -1,0 +1,2 @@
+open-function 42
+open-builtin true

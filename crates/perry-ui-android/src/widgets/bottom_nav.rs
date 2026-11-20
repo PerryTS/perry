@@ -537,6 +537,28 @@ pub fn set_badge(handle: i64, index: i64, badge_ptr: *const u8) {
     })
 }
 
+/// A tab tap reaches JS through `nativeInvokeCallback1(callback_key, index)`.
+/// Mark the tapped tab selected first, the way a native tab bar does on its
+/// own (UITabBar, BottomNavigationView): previously the highlight stayed on
+/// the initial tab unless the program echoed every tap back through
+/// `bottomNavSetSelected`. The JS callback runs afterwards and may still
+/// override the selection. Returns false when `callback_key` is not a nav bar's.
+pub(crate) fn select_from_tap(callback_key: i64, index: f64) -> bool {
+    let handle = STATES.with(|s| {
+        s.borrow()
+            .iter()
+            .find(|(_, st)| st.callback_key == callback_key)
+            .map(|(h, _)| *h)
+    });
+    match handle {
+        Some(h) if index.is_finite() && index >= 0.0 => {
+            set_selected(h, index as i64);
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn set_selected(handle: i64, index: i64) {
     STATES.with(|s| {
         if let Some(state) = s.borrow_mut().get_mut(&handle) {

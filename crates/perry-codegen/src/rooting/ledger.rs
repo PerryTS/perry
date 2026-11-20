@@ -473,6 +473,10 @@ const MIGRATED_MODULES: &[(&str, &str)] = &[
         "crates/perry-codegen/src/lower_call/new_alloc.rs",
         include_str!("../lower_call/new_alloc.rs"),
     ),
+    (
+        "crates/perry-codegen/src/builtin_proto.rs",
+        include_str!("../builtin_proto.rs"),
+    ),
 ];
 
 /// `rooting/temp_root.rs`, inlined at compile time for the terminal-condition

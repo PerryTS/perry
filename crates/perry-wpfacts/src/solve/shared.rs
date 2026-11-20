@@ -13,8 +13,8 @@ impl Model {
         match &self.toks[t as usize] {
             TokKind::ObjectProto => Some(Shared::ObjectProto),
             TokKind::Builtin(ns) => Some(Shared::Builtin(*ns)),
-            TokKind::BuiltinFn => Some(Shared::BuiltinFn),
-            TokKind::NativeProto(n) => Some(Shared::NativeProto(n.clone())),
+            TokKind::BuiltinFn(_) => Some(Shared::BuiltinFn),
+            TokKind::NativeProto(n, ..) => Some(Shared::NativeProto(n.clone())),
             _ => None,
         }
     }
@@ -25,8 +25,8 @@ impl Model {
             Shared::Top => TOP,
             Shared::ObjectProto => self.tok(TokKind::ObjectProto),
             Shared::Builtin(ns) => self.tok(TokKind::Builtin(*ns)),
-            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn),
-            Shared::NativeProto(n) => self.tok(TokKind::NativeProto(n.clone())),
+            Shared::BuiltinFn => self.tok(TokKind::BuiltinFn(crate::model::Native::Any)),
+            Shared::NativeProto(n) => self.tok(TokKind::native_proto(n)),
         }
     }
 
@@ -35,13 +35,16 @@ impl Model {
     /// which escaped puts ⊤ in reach of stores into ⊤ (`global_in_top`).
     pub(crate) fn named_shared(&self, t: Tok) -> Option<Shared> {
         self.shared_of(t)
-            .filter(|s| !matches!(s, Shared::Top | Shared::Builtin(BuiltinNs::GlobalThis)))
+            .filter(|s| !matches!(s, Shared::Top) && !builtins::global_object(self, t))
     }
 
     pub(crate) fn note_shared(&mut self, w: SharedWrite) {
         self.top_write(&w);
         if !self.shared_replay {
-            self.shared_out.insert(w);
+            let handed = matches!(w, SharedWrite::Handed(_));
+            if self.shared_out.insert(w) && handed {
+                builtins::note_handed_to_unknown(self);
+            }
         }
     }
 
@@ -76,7 +79,7 @@ impl Model {
                 let key = match k {
                     Some(k) if k == NUM_KEY => self.elem_key(),
                     Some(k) => Key::Named(self.atom(k)),
-                    None => Key::Any,
+                    None => Key::any(),
                 };
                 let v = self.node_l("shared-store");
                 self.add_top(v, |_| "stored by another unit into a shared object".into());
@@ -118,7 +121,15 @@ impl Model {
                         let holder = self.node_l("shared-accessor-holder");
                         self.add_tok(holder, t);
                         for setter in [false, true] {
-                            self.cons(holder, Cons::AccessorInstall { key, f, setter });
+                            self.cons(
+                                holder,
+                                Cons::AccessorInstall {
+                                    key,
+                                    f,
+                                    setter,
+                                    from: NO_NODE,
+                                },
+                            );
                         }
                     }
                 }
@@ -129,10 +140,10 @@ impl Model {
                 if matches!(s, Shared::ObjectProto) {
                     self.note_fnproto_write(t, None, what);
                 }
-                if matches!(s, Shared::ObjectProto | Shared::NativeProto(_)) {
+                if matches!(s, Shared::ObjectProto | Shared::NativeProto(..)) {
                     builtins::note_native_write(self, t, None, what);
                 }
-                if matches!(s, Shared::Builtin(BuiltinNs::GlobalThis)) {
+                if builtins::global_object(self, t) {
                     builtins::note_global_in_top(self);
                 }
             }

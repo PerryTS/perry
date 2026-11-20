@@ -25,32 +25,41 @@ fn prototype_layout(serial: u64) -> Option<LayoutEntry> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => {
-            (rl::EVENT_EMITTER_PROTOTYPE::WORD, rl::EVENT_EMITTER_PROTOTYPE::desc)
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => (
+            rl::EVENT_EMITTER_PROTOTYPE::WORD,
+            rl::EVENT_EMITTER_PROTOTYPE::desc,
+        ),
+        INTRINSIC_SERIAL_STREAM_PROTOTYPE => {
+            (rl::STREAM_PROTOTYPE::WORD, rl::STREAM_PROTOTYPE::desc)
         }
-        INTRINSIC_SERIAL_STREAM_PROTOTYPE => (rl::STREAM_PROTOTYPE::WORD, rl::STREAM_PROTOTYPE::desc),
         INTRINSIC_SERIAL_READABLE_PROTOTYPE => {
             (rl::READABLE_PROTOTYPE::WORD, rl::READABLE_PROTOTYPE::desc)
         }
         INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => {
             (rl::WRITABLE_PROTOTYPE::WORD, rl::WRITABLE_PROTOTYPE::desc)
         }
-        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => (rl::DUPLEX_PROTOTYPE::WORD, rl::DUPLEX_PROTOTYPE::desc),
+        INTRINSIC_SERIAL_DUPLEX_PROTOTYPE => {
+            (rl::DUPLEX_PROTOTYPE::WORD, rl::DUPLEX_PROTOTYPE::desc)
+        }
         INTRINSIC_SERIAL_TRANSFORM_PROTOTYPE => {
             (rl::TRANSFORM_PROTOTYPE::WORD, rl::TRANSFORM_PROTOTYPE::desc)
         }
-        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => {
-            (rl::PASSTHROUGH_PROTOTYPE::WORD, rl::PASSTHROUGH_PROTOTYPE::desc)
-        }
-        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => {
-            (rl::OUTGOING_MESSAGE_PROTOTYPE::WORD, rl::OUTGOING_MESSAGE_PROTOTYPE::desc)
-        }
-        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => {
-            (rl::SERVER_RESPONSE_PROTOTYPE::WORD, rl::SERVER_RESPONSE_PROTOTYPE::desc)
-        }
-        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => {
-            (rl::INCOMING_MESSAGE_PROTOTYPE::WORD, rl::INCOMING_MESSAGE_PROTOTYPE::desc)
-        }
+        INTRINSIC_SERIAL_PASSTHROUGH_PROTOTYPE => (
+            rl::PASSTHROUGH_PROTOTYPE::WORD,
+            rl::PASSTHROUGH_PROTOTYPE::desc,
+        ),
+        INTRINSIC_SERIAL_OUTGOING_MESSAGE_PROTOTYPE => (
+            rl::OUTGOING_MESSAGE_PROTOTYPE::WORD,
+            rl::OUTGOING_MESSAGE_PROTOTYPE::desc,
+        ),
+        INTRINSIC_SERIAL_SERVER_RESPONSE_PROTOTYPE => (
+            rl::SERVER_RESPONSE_PROTOTYPE::WORD,
+            rl::SERVER_RESPONSE_PROTOTYPE::desc,
+        ),
+        INTRINSIC_SERIAL_INCOMING_MESSAGE_PROTOTYPE => (
+            rl::INCOMING_MESSAGE_PROTOTYPE::WORD,
+            rl::INCOMING_MESSAGE_PROTOTYPE::desc,
+        ),
         _ => return None,
     })
 }
@@ -106,7 +115,8 @@ unsafe fn sealed_prototype_chain(proto: f64, mut serial: u64) -> bool {
         // prototype was born on the layout, so its descriptor is defined.
         let word = (*JSValue::from_bits(bits).as_pointer::<ObjectHeader>()).parent_class_id;
         if word != layout_word
-            || !(crate::object::shapes::SHAPE_ID_BASE..crate::object::layout_desc::UNSHADOWED_WORD_END)
+            || !(crate::object::shapes::SHAPE_ID_BASE
+                ..crate::object::layout_desc::UNSHADOWED_WORD_END)
                 .contains(&word)
         {
             return false;
@@ -128,7 +138,9 @@ fn instance_layout_of_prototype(serial: u64) -> Option<LayoutEntry> {
     use crate::closure::shape::*;
     use crate::object::runtime_layouts as rl;
     Some(match serial {
-        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => (rl::EVENT_EMITTER::WORD, rl::EVENT_EMITTER::desc),
+        INTRINSIC_SERIAL_EVENT_EMITTER_PROTOTYPE => {
+            (rl::EVENT_EMITTER::WORD, rl::EVENT_EMITTER::desc)
+        }
         INTRINSIC_SERIAL_STREAM_PROTOTYPE => (rl::LEGACY_STREAM::WORD, rl::LEGACY_STREAM::desc),
         INTRINSIC_SERIAL_READABLE_PROTOTYPE => (rl::READABLE::WORD, rl::READABLE::desc),
         INTRINSIC_SERIAL_WRITABLE_PROTOTYPE => (rl::WRITABLE::WORD, rl::WRITABLE::desc),

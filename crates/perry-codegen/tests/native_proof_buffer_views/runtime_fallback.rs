@@ -197,6 +197,7 @@ fn uint8_clamped_typed_array_store_records_runtime_fallback() {
             object: Box::new(local(1)),
             index: Box::new(int(0)),
             value: Box::new(number(300.5)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

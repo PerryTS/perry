@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1974 entries across 105 modules
+// Coverage: 1975 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2851,6 +2851,8 @@ declare module "perry/tui" {
   export function useFocusManager(...args: any[]): any;
   /** stdlib */
   export function useInput(p0: any): void;
+  /** stdlib */
+  export function useInputBytes(p0: any): void;
   /** stdlib */
   export function useMemo(p0: any, p1: any): any;
   /** stdlib */

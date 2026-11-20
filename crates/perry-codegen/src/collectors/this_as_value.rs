@@ -287,6 +287,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 stmts_use_this_as_value(body, fields)
                     || catch
@@ -499,7 +500,8 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             .any(|(_, v)| expr_uses_this_as_value(v, fields)),
         Expr::ObjectSpread { parts } => parts
             .iter()
-            .any(|(_, e)| expr_uses_this_as_value(e, fields)),
+            .flatten()
+            .any(|e| expr_uses_this_as_value(e, fields)),
         Expr::New { args, .. } => args.iter().any(|a| expr_uses_this_as_value(a, fields)),
         Expr::NewDynamic { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)
@@ -604,6 +606,7 @@ mod tests {
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
             static_accessor_names: Vec::new(),

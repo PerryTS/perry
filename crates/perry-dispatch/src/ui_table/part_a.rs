@@ -918,6 +918,12 @@ pub(crate) const PERRY_UI_TABLE_PART_A: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "textfieldSetInputType",
+        runtime: "perry_ui_textfield_set_input_type",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "textfieldSetFontSize",
         runtime: "perry_ui_textfield_set_font_size",
         args: &[ArgKind::Widget, ArgKind::F64],

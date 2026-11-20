@@ -238,3 +238,161 @@ fn pipe_response_any_helper_uses_generic_method_dispatch() {
         "an any-typed response.pipe call should retain generic method lookup: {hir}"
     );
 }
+
+fn qualified_type_receiver_lower(src: &str) -> Module {
+    let src = src.to_string();
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(move || {
+            let mut cache = SourceCache::new();
+            let parsed = perry_parser::parse_typescript_with_cache(
+                &src,
+                "qualified_type_receiver.ts",
+                &mut cache,
+            )
+            .expect("qualified receiver syntax should parse");
+            crate::lower_module(&parsed.module, "test", "qualified_type_receiver.ts")
+                .expect("qualified receiver HIR should lower")
+        })
+        .expect("spawn lower thread")
+        .join()
+        .expect("lower thread panicked")
+}
+
+fn qualified_type_receiver_return<'a>(module: &'a Module, name: &str) -> &'a crate::ir::Expr {
+    let function = module
+        .functions
+        .iter()
+        .find(|function| function.name == name)
+        .expect("the source function must be present");
+    function
+        .body
+        .iter()
+        .find_map(|statement| match statement {
+            crate::ir::Stmt::Return(Some(value)) => Some(value),
+            _ => None,
+        })
+        .expect("the source function must return an expression")
+}
+
+fn qualified_type_receiver_assert_generic_join(value: &crate::ir::Expr, expected: &[&str]) {
+    use crate::ir::Expr;
+    let Expr::Call { callee, args, .. } = value else {
+        panic!("an unproven receiver must retain a generic call, not an array fold: {value:?}");
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        panic!("join must retain receiver property lookup: {callee:?}");
+    };
+    assert_eq!(property, "join");
+    assert!(matches!(object.as_ref(), Expr::LocalGet(_)));
+    assert_eq!(
+        args.len(),
+        expected.len(),
+        "all user arguments must survive HIR lowering"
+    );
+    for (argument, expected) in args.iter().zip(expected) {
+        assert!(
+            matches!(argument, Expr::String(actual) if actual.as_str() == *expected),
+            "argument order and values must survive lowering: {argument:?}"
+        );
+    }
+}
+
+#[test]
+fn qualified_type_receiver_named_join_keeps_both_arguments() {
+    let module = qualified_type_receiver_lower(
+        r#"function qualified(svc: Missing.Service) { return svc.join("a", "b"); }"#,
+    );
+    qualified_type_receiver_assert_generic_join(
+        qualified_type_receiver_return(&module, "qualified"),
+        &["a", "b"],
+    );
+}
+
+#[test]
+fn qualified_type_receiver_generic_join_keeps_both_arguments() {
+    let module = qualified_type_receiver_lower(
+        r#"function qualified(svc: Missing.Box<string>) { return svc.join("a", "b"); }"#,
+    );
+    qualified_type_receiver_assert_generic_join(
+        qualified_type_receiver_return(&module, "qualified"),
+        &["a", "b"],
+    );
+}
+
+#[test]
+fn qualified_type_receiver_array_tuple_and_resolved_alias_keep_array_join() {
+    use crate::ir::Expr;
+    let module = qualified_type_receiver_lower(
+        r#"
+        type Strings = string[];
+        function array(svc: string[]) { return svc.join("-"); }
+        function genericArray(svc: Array<string>) { return svc.join("-"); }
+        function tuple(svc: [string, string]) { return svc.join("-"); }
+        function alias(svc: Strings) { return svc.join("-"); }
+    "#,
+    );
+    for name in ["array", "genericArray", "tuple", "alias"] {
+        let value = qualified_type_receiver_return(&module, name);
+        let Expr::ArrayJoin {
+            array,
+            separator: Some(separator),
+        } = value
+        else {
+            panic!("a proven array must retain its existing join fold ({name}): {value:?}");
+        };
+        assert!(matches!(array.as_ref(), Expr::LocalGet(_)));
+        assert!(matches!(separator.as_ref(), Expr::String(value) if value == "-"));
+    }
+}
+
+#[test]
+fn qualified_type_receiver_typed_arrays_keep_existing_join_routes() {
+    use crate::ir::Expr;
+    let module = qualified_type_receiver_lower(
+        r#"
+        function integers(svc: Int32Array) { return svc.join("-"); }
+        function bytes(svc: Uint8Array) { return svc.join("-"); }
+    "#,
+    );
+    let integer_join = qualified_type_receiver_return(&module, "integers");
+    assert!(
+        matches!(integer_join, Expr::ArrayJoin { .. }),
+        "the existing Int32Array HIR route must remain unchanged: {integer_join:?}"
+    );
+    qualified_type_receiver_assert_generic_join(
+        qualified_type_receiver_return(&module, "bytes"),
+        &["-"],
+    );
+}
+
+#[test]
+fn qualified_type_receiver_known_objects_and_unknowns_do_not_fold_join() {
+    use crate::ir::Expr;
+    let module = qualified_type_receiver_lower(
+        r#"
+        class Service { join(a: string, b: string) { return a + b; } }
+        interface Face { join(a: string, b: string): string; }
+        function knownClass(svc: Service) { return svc.join("a", "b"); }
+        function knownInterface(svc: Face) { return svc.join("a", "b"); }
+        function dynamic(svc: any) { return svc.join("a", "b"); }
+        function unknown(svc: unknown) { return svc.join("a", "b"); }
+    "#,
+    );
+    for name in ["knownClass", "knownInterface", "dynamic", "unknown"] {
+        let value = qualified_type_receiver_return(&module, name);
+        assert!(
+            !matches!(value, Expr::ArrayJoin { .. }),
+            "an existing object/dynamic route must not become an array fold ({name}): {value:?}"
+        );
+    }
+    for name in ["dynamic", "unknown"] {
+        qualified_type_receiver_assert_generic_join(
+            qualified_type_receiver_return(&module, name),
+            &["a", "b"],
+        );
+    }
+}

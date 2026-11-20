@@ -728,19 +728,22 @@ pub(crate) fn lower_string_concat(
 ) -> Result<String> {
     // #6951: same hazard as `lower_string_coerce_concat` — the left operand is
     // a heap string in an SSA register across the right operand's evaluation.
-    with_operands_rooted(ctx, &[left, right], |ctx, values| {
-        let blk = ctx.block();
-        // SSO-aware fast path: pass operands as NaN-boxed f64s directly to
-        // `js_string_concat_sso`, which keeps SSO operands inline (no
-        // materialise-to-heap defeat) and returns the result NaN-boxed —
-        // SSO when the total fits 5 bytes, heap-pointer otherwise. Saves up
-        // to 3 heap allocations per concat on hot paths like ABC451D's
-        // recursive `before + after` (1.4M concats with 1-9 byte operands).
-        Ok(blk.call(
-            DOUBLE,
-            "js_string_concat_box",
-            &[(DOUBLE, &values[0]), (DOUBLE, &values[1])],
-        ))
+    // A `charAt` operand answers an inline string here, so the pair below
+    // can be built at the site (`expr/short_string.rs`).
+    crate::expr::short_string::with_char_operands(&[left, right], || {
+        with_operands_rooted(ctx, &[left, right], |ctx, values| {
+            // SSO-aware: the operands go NaN-boxed, so SSO operands stay
+            // inline (no materialise-to-heap defeat) and the result is
+            // NaN-boxed — SSO when the total fits 5 bytes, heap-pointer
+            // otherwise. Saves up to 3 heap allocations per concat on hot
+            // paths like ABC451D's recursive `before + after` (1.4M concats
+            // with 1-9 byte operands). Two inline ASCII operands of at most
+            // five bytes together are joined at the site; every other pair
+            // calls `js_string_concat_box`.
+            Ok(crate::expr::short_string::emit_concat_pair(
+                ctx, &values[0], &values[1],
+            ))
+        })
     })
 }
 

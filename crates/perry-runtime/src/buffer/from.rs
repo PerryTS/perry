@@ -4,8 +4,7 @@ fn throw_invalid_buffer_from_first_arg() -> ! {
     let message = b"The first argument must be of type string or an instance of Buffer, ArrayBuffer, or Array or an Array-like Object.";
     let msg = crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::node_submodules::register_error_code_pub(msg, "ERR_INVALID_ARG_TYPE");
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 /// Create a Buffer from a string
@@ -266,9 +265,7 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
         return None;
     }
 
-    let length = if length_value.is_int32() {
-        length_value.as_int32() as f64
-    } else if length_value.is_number() {
+    let length = if length_value.is_number() {
         length_value.as_number()
     } else {
         return Some(super::pool::copy(0));
@@ -336,7 +333,6 @@ pub extern "C" fn js_buffer_from_value(value: i64, encoding: i32) -> *mut Buffer
     if jsval.is_undefined()
         || jsval.is_null()
         || jsval.is_bool()
-        || jsval.is_int32()
         || jsval.is_number()
         || jsval.is_bigint()
         || unsafe { crate::symbol::js_is_symbol(f64::from_bits(bits)) != 0 }
@@ -537,8 +533,7 @@ fn uint8array_length_or_throw(val: f64) -> u32 {
         };
         let msg = format!("Invalid typed array length: {shown}");
         let m = crate::string::js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-        let err = crate::error::js_rangeerror_new(m);
-        crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64));
+        crate::exception::throw_core(crate::error::CoreError::range_error(m));
     }
     // #5067 — a `Uint8Array` is backed by an `i32`-capacity `BufferHeader`, so
     // a length above `i32::MAX` (~2 GiB) cannot be allocated. Node passes the
@@ -664,7 +659,7 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
         }
         // The raw helper requires an actual ArrayHeader layout.
         if unsafe { crate::value::addr_class::try_read_gc_header(raw) }
-            .is_some_and(|header| header.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|header| crate::gc_type_is_array!(header.obj_type))
         {
             return js_uint8array_from_array(raw as *const ArrayHeader);
         }
@@ -974,29 +969,11 @@ pub extern "C" fn js_data_view_new(value: f64, offset_value: f64, length_value: 
     f64::from_bits(crate::value::JSValue::pointer(view as *mut u8).bits())
 }
 
-fn throw_buffer_alloc_size_out_of_range() -> ! {
-    static REGISTER_RANGE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_RANGE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_RANGE_ERROR);
-    });
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_RANGE_ERROR, 4);
-    {
-        let set = |key: &[u8], value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        let str_val = |s: &[u8]| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-        };
-        set(b"name", str_val(b"RangeError"));
-        set(b"code", str_val(b"ERR_OUT_OF_RANGE"));
-        set(
-            b"message",
-            str_val(b"The value of \"size\" is out of range"),
-        );
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+pub(super) fn throw_buffer_alloc_size_out_of_range() -> ! {
+    crate::exception::throw_core(crate::error::CoreError::range_error_with_own_code(
+        b"The value of \"size\" is out of range",
+        b"ERR_OUT_OF_RANGE",
+    ))
 }
 
 fn validate_buffer_alloc_size(size: i32) -> u32 {
@@ -1120,8 +1097,6 @@ pub extern "C" fn js_buffer_fill_value_range(
     let value = crate::JSValue::from_bits(fill_value.to_bits());
     let byte = if value.is_number() {
         Some(fill_value as i64 as u8)
-    } else if value.is_int32() {
-        Some(value.as_int32() as u8)
     } else if value.is_bool() {
         Some(u8::from(value.as_bool()))
     } else if value.is_undefined() || value.is_null() {
@@ -1197,40 +1172,21 @@ pub extern "C" fn js_buffer_alloc_unsafe_slow(size: f64) -> *mut BufferHeader {
     super::store::store_alloc(crate::gc::GC_TYPE_BUFFER, size, super::store::Init::Uninit)
 }
 
-fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
-    static REGISTER_TYPE_ERROR: std::sync::Once = std::sync::Once::new();
-    REGISTER_TYPE_ERROR.call_once(|| {
-        crate::object::js_register_class_extends_error(crate::error::CLASS_ID_TYPE_ERROR);
-    });
-
-    let obj = crate::object::js_object_alloc(crate::error::CLASS_ID_TYPE_ERROR, 4);
-    {
-        let set = |key: &[u8], value: f64| {
-            let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-            crate::object::js_object_set_field_by_name(obj, key_ptr, value);
-        };
-        let str_val = |s: &[u8]| -> f64 {
-            let ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            f64::from_bits(crate::JSValue::string_ptr(ptr).bits())
-        };
-        let message = format!(
-            "The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array. Received {}",
-            crate::fs::validate::describe_received(element)
-        );
-        set(b"name", str_val(b"TypeError"));
-        set(b"code", str_val(b"ERR_INVALID_ARG_TYPE"));
-        set(b"message", str_val(message.as_bytes()));
-    }
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(obj as i64))
+pub(super) fn throw_buffer_concat_invalid_arg_type(index: usize, element: f64) -> ! {
+    let message = format!(
+        "The \"list[{index}]\" argument must be an instance of Buffer or Uint8Array. Received {}",
+        crate::fs::validate::describe_received(element)
+    );
+    crate::exception::throw_core(crate::error::CoreError::type_error_with_own_code(
+        message.as_bytes(),
+        b"ERR_INVALID_ARG_TYPE",
+    ))
 }
 
 fn normalize_buffer_concat_total_length(total_length: f64) -> Option<usize> {
     let jsval = crate::JSValue::from_bits(total_length.to_bits());
     if jsval.is_undefined() {
         return None;
-    }
-    if jsval.is_int32() {
-        return Some((jsval.as_int32().max(0)) as usize);
     }
     if jsval.is_bool() {
         return Some(if jsval.as_bool() { 1 } else { 0 });
@@ -1277,13 +1233,15 @@ fn js_buffer_concat_impl(
         let arr_data =
             crate::array::array_elements_ptr(arr_ptr as *const ArrayHeader) as *const f64;
 
-        // Helper to strip NaN-boxing tags from buffer element pointers
+        // A list element names a buffer by its tag alone: a POINTER_TAG'd
+        // value gives its payload, every other word (a Number, also one whose
+        // bits look like an address, a string, a handle) gives 0, which the
+        // check below rejects with ERR_INVALID_ARG_TYPE.
         let strip_nanbox = |bits: u64| -> u64 {
-            let top16 = (bits >> 48) as u16;
-            if top16 >= 0x7FF8 {
-                bits & 0x0000_FFFF_FFFF_FFFF
+            if bits & crate::value::TAG_MASK == crate::value::POINTER_TAG {
+                bits & crate::value::POINTER_MASK
             } else {
-                bits
+                0
             }
         };
 

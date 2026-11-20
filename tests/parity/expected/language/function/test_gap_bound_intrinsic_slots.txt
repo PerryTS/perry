@@ -1,0 +1,27 @@
+R:1,2,3 R:1,2,3
+repeat R:7,8,9
+captured R:C:7,8/R:C:7,8
+R:4,5,6
+R:4,5,6
+R:,, R:,, R:1,2,3
+bound call 1 bound apply 2 true
+R:7,8,9 9 bound call
+R:7,8,9 8
+R:10,11,12 42
+R:1,2,3
+R:20,21,22
+R:20,21,22
+R:30,31,32
+R:40,41,42 L012
+R:50,,52 R:60,61,62
+R:70,71,72 R:73,74,75
+R:80,81,82 L012I
+number string object undefined
+object:true object:true
+other:77
+lexical78
+99 undefined
+P:R:1,2,3
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program
+R:1,2,3
+DEC 250: Cannot replace built-in member Function.prototype.call: built-in objects are read-only in a compiled program

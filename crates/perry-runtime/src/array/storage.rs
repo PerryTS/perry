@@ -6,10 +6,11 @@
 //! bounds and sparse-index rules keep their usual meaning. No extra allocation,
 //! metadata slot, header word, side table, or survivor copy is needed.
 //!
-//! The same slack carries an array's named properties (`named_props.rs`): a
-//! `GC_ARRAY_KEY_ATTRS` array permanently reserves its first physical slots
-//! (one, or one per inline key plus a header word), so its front offset is at
-//! least that reserve and an empty-queue reset gives back everything else.
+//! An array's named properties live in a separate bag object
+//! (`named_props.rs`), never in this slack. Only an owned key list
+//! (`GC_ARRAY_KEY_ATTRS`) permanently reserves its first physical slot for
+//! its attribute word, so its front offset is at least that reserve and an
+//! empty-queue reset gives back everything else.
 //!
 //! GC layouts index the logical live range returned by `array_elements_ptr`.
 //! Removing the front invalidates indexed masks, but preserves pointer-free and

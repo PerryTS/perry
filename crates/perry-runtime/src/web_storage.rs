@@ -26,6 +26,54 @@ thread_local! {
     static SESSION_STORE: RefCell<BTreeMap<String, String>> = const { RefCell::new(BTreeMap::new()) };
 }
 
+crate::perry_thread_local! {
+    /// Set while this module writes its own mirror of a stored key onto the
+    /// storage object (`sync_named_property`): that write is the ordinary
+    /// one, not the program's named-property [[Set]].
+    static MIRROR_WRITE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A program [[Set]] of String key `key` on a storage object: WebIDL
+/// 3.9.2 legacy platform object [[Set]]: Storage has a named property
+/// setter, so the write is `setItem(key, value)` (ToString of the value, a
+/// quota error, the stored String mirrored as a named property); the object
+/// itself never holds the program's value. `false`: not a storage object, or
+/// this module's own mirror write.
+pub(crate) fn storage_set_field(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+    value: f64,
+) -> bool {
+    let Some(kind) = storage_kind_from_value(crate::value::js_nanbox_pointer(obj as i64)) else {
+        return false;
+    };
+    if key.is_null() || MIRROR_WRITE.with(|m| m.get()) {
+        return false;
+    }
+    storage_set_item_impl(kind, crate::value::js_nanbox_string(key as i64), value);
+    true
+}
+
+/// A program [[Delete]] of String key `key` on a storage object: WebIDL
+/// 3.9.4 legacy platform object [[Delete]]: a key the area holds (a visible
+/// named property: not one of the prototype's member names) is
+/// `removeItem(key)`; any other key is the ordinary delete.
+pub(crate) fn storage_delete_field(
+    obj: *mut ObjectHeader,
+    key: *const crate::StringHeader,
+) -> Option<i32> {
+    let kind = storage_kind_from_value(crate::value::js_nanbox_pointer(obj as i64))?;
+    if key.is_null() || MIRROR_WRITE.with(|m| m.get()) {
+        return None;
+    }
+    let name = js_string(crate::value::js_nanbox_string(key as i64));
+    if reserved_storage_name(&name) || !with_store(kind, |s| s.contains_key(&name)) {
+        return None;
+    }
+    storage_remove_item_impl(kind, crate::value::js_nanbox_string(key as i64));
+    Some(1)
+}
+
 pub extern "C" fn storage_constructor_illegal(
     _closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
@@ -195,13 +243,37 @@ fn storage_key_impl(kind: StorageKind, index: f64) -> f64 {
     })
 }
 
+/// The `localStorage` / `sessionStorage` getter: Node builds the area on the
+/// first read. The instance is born here (its prototype is the family's, born
+/// by the same ask), not at realm setup, so a program that never reads either
+/// global never births `Storage`.
 fn storage_global_value(kind: StorageKind) -> f64 {
-    let obj = storage_object(kind);
+    let mut obj = storage_object(kind);
     if obj.is_null() {
-        f64::from_bits(TAG_UNDEFINED)
-    } else {
-        crate::value::js_nanbox_pointer(obj as i64)
+        let proto = crate::object::builtin_prototype_value("Storage");
+        let proto = crate::value::js_nanbox_get_pointer(proto) as *mut ObjectHeader;
+        if proto.is_null() {
+            return f64::from_bits(TAG_UNDEFINED);
+        }
+        obj = storage_object(kind);
+        if obj.is_null() {
+            obj = make_storage_object(kind, proto);
+            let slot_ptr = match kind {
+                StorageKind::Local => &crate::object::LOCAL_STORAGE_PTR,
+                StorageKind::Session => &crate::object::SESSION_STORAGE_PTR,
+            };
+            slot_ptr.with_slot(|slot| {
+                crate::gc::runtime_store_root_atomic_raw_i64(slot, obj as i64, Ordering::Release);
+            });
+        }
     }
+    crate::value::js_nanbox_pointer(obj as i64)
+}
+
+#[cfg(test)]
+pub(crate) fn test_read_storage_globals() {
+    storage_global_value(StorageKind::Local);
+    storage_global_value(StorageKind::Session);
 }
 
 fn storage_clear_impl(kind: StorageKind) -> f64 {
@@ -216,44 +288,35 @@ fn storage_clear_impl(kind: StorageKind) -> f64 {
     })
 }
 
-pub(crate) fn install_storage_globals(
-    global: *mut ObjectHeader,
-    storage_ctor: *mut ClosureHeader,
-    storage_proto: *mut ObjectHeader,
-    ctor_value: f64,
-) {
-    if global.is_null() || storage_ctor.is_null() || storage_proto.is_null() {
+/// `Storage.prototype`'s members, part of the family's birth.
+pub(crate) fn install_storage_prototype(storage_proto: *mut ObjectHeader, ctor_value: f64) {
+    if storage_proto.is_null() {
         return;
     }
-    crate::object::set_builtin_property_attrs(
-        global as usize,
-        "Storage".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
     install_method(
         storage_proto,
         "clear",
-        crate::fn_info!(#[realm(Storage.prototype.clear, constructible = true)] export crate::web_storage::storage_clear, 0; with_declared(0)),
+        crate::fn_info!(#[realm(Storage.prototype.clear, constructible = true, effects = { returns(prim(undefined)) })] export crate::web_storage::storage_clear, 0; with_declared(0)),
     );
     install_method(
         storage_proto,
         "getItem",
-        crate::fn_info!(#[realm(Storage.prototype.getItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_get_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.getItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(str | null)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_get_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "key",
-        crate::fn_info!(#[realm(Storage.prototype.key, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_key, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.key, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(str | null)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_key, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "removeItem",
-        crate::fn_info!(#[realm(Storage.prototype.removeItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_remove_item, 1; with_declared(1)),
+        crate::fn_info!(#[realm(Storage.prototype.removeItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); returns(prim(undefined)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_remove_item, 1; with_declared(1)),
     );
     install_method(
         storage_proto,
         "setItem",
-        crate::fn_info!(#[realm(Storage.prototype.setItem, constructible = true, spec = {length = 0}, emit = metadata(realm_storage_method))] export crate::web_storage::storage_set_item, 2; with_declared(2)),
+        crate::fn_info!(#[realm(Storage.prototype.setItem, constructible = true, spec = {length = 0}, effects = { coerce(arg(0), ToPrimitive); coerce(arg(1), ToPrimitive); stores(arg(1) -> strkey(this)); returns(prim(undefined)) }, emit = metadata(realm_storage_method))] export crate::web_storage::storage_set_item, 2; with_declared(2)),
     );
     install_storage_length_accessor(storage_proto);
 
@@ -265,18 +328,14 @@ pub(crate) fn install_storage_globals(
         "constructor".to_string(),
         PropertyAttrs::new(true, false, true),
     );
+}
 
-    let local = make_storage_object(StorageKind::Local, storage_proto);
-    let session = make_storage_object(StorageKind::Session, storage_proto);
-    crate::object::LOCAL_STORAGE_PTR.with_slot(|slot| {
-        crate::gc::runtime_store_root_atomic_raw_i64(slot, local as i64, Ordering::Release);
-    });
-    crate::object::SESSION_STORAGE_PTR.with_slot(|slot| {
-        crate::gc::runtime_store_root_atomic_raw_i64(slot, session as i64, Ordering::Release);
-    });
-
-    set_global_storage_property(global, realm_localStorage!(name), local);
-    set_global_storage_property(global, realm_sessionStorage!(name), session);
+/// `globalThis.localStorage` / `globalThis.sessionStorage` (Node: accessors,
+/// `sessionStorage` enumerable). Bound at realm setup, at the `Storage`
+/// binding's position; the getters make the area on first read.
+pub(crate) fn install_global_accessors(global: *mut ObjectHeader) {
+    set_global_storage_property(global, realm_localStorage!(name), std::ptr::null_mut());
+    set_global_storage_property(global, realm_sessionStorage!(name), std::ptr::null_mut());
 }
 
 /// `info` records the method's declared arity.
@@ -312,7 +371,7 @@ fn install_method(
 
 fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true)] export crate::web_storage::storage_length_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("Storage.prototype.length.<get>", constructible = true, effects = { returns(prim(num)) })] export crate::web_storage::storage_length_getter, 0; with_name("get length"), with_declared(0)),
         0,
     );
     if getter.is_null() {
@@ -344,27 +403,11 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
     let proto_bits = crate::value::js_nanbox_pointer(proto as i64).to_bits();
     crate::object::prototype_chain::object_set_static_prototype(obj as usize, proto_bits);
     update_length_on_obj(obj, 0);
-    for name in ["clear", "getItem", "key", "removeItem", "setItem"] {
-        let func_ptr = match name {
-            "clear" => crate::fn_info!(storage_clear, 0; with_declared(0)),
-            "getItem" => crate::fn_info!(storage_get_item, 1; with_declared(1)),
-            "key" => crate::fn_info!(storage_key, 1; with_declared(1)),
-            "removeItem" => crate::fn_info!(storage_remove_item, 1; with_declared(1)),
-            _ => crate::fn_info!(storage_set_item, 2; with_declared(2)),
-        };
-        let closure = crate::closure::js_closure_alloc(func_ptr, 0);
-        if !closure.is_null() {
-            crate::object::set_bound_native_closure_name(closure, name);
-            crate::object::set_builtin_closure_length(closure as usize, realm_storage_method!(length));
-            crate::object::define_builtin_data_property(
-                obj,
-                string(name),
-                crate::value::js_nanbox_pointer(closure as i64),
-                name.to_string(),
-                PropertyAttrs::new(true, false, true),
-            );
-        }
-    }
+    // Its members live on `Storage.prototype` (node); its own properties are
+    // `length` and the stored keys' mirrors. A program [[Set]] / [[Delete]]
+    // on it is the named setter / deleter (`storage_set_field`), which a
+    // shape-keyed store cache must not answer.
+    unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     match kind {
         StorageKind::Local => LOCAL_STORE.with(|s| s.borrow_mut().clear()),
         StorageKind::Session => SESSION_STORE.with(|s| s.borrow_mut().clear()),
@@ -377,8 +420,8 @@ fn install_storage_length_accessor(proto: *mut ObjectHeader) {
 /// rooted store object, so `_value` is not a property value).
 fn set_global_storage_property(global: *mut ObjectHeader, name: &str, _value: *mut ObjectHeader) {
     let getter_fn = match name {
-        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", constructible = true, spec = {name = property_key}, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0)),
-        _ => crate::fn_info!(#[realm("sessionStorage.<get>", constructible = true, spec = {name = property_key}, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0)),
+        "localStorage" => crate::fn_info!(#[realm("localStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_localStorage))] export crate::web_storage::storage_local_global_getter, 0; with_declared(0)),
+        _ => crate::fn_info!(#[realm("sessionStorage.<get>", constructible = true, spec = {name = property_key}, effects = { returns(fresh(Storage.prototype)) }, emit = metadata(realm_sessionStorage))] export crate::web_storage::storage_session_global_getter, 0; with_declared(0)),
     };
     let getter = crate::closure::js_closure_alloc(getter_fn, 0);
     let setter = crate::closure::js_closure_alloc(
@@ -456,12 +499,14 @@ fn sync_named_property(kind: StorageKind, key: &str, value: Option<&str>) {
         return;
     }
     let key_hdr = string(key);
+    MIRROR_WRITE.with(|m| m.set(true));
     match value {
         Some(value) => crate::object::js_object_set_field_by_name(obj, key_hdr, boxed_str(value)),
         None => {
             crate::object::js_object_delete_field(obj, key_hdr);
         }
     }
+    MIRROR_WRITE.with(|m| m.set(false));
 }
 
 fn update_length(kind: StorageKind, len: usize) {
@@ -511,18 +556,15 @@ fn boxed_str(value: &str) -> f64 {
 
 fn throw_error(message: &str) -> f64 {
     let msg = string(message);
-    let err = crate::error::js_error_new_with_message(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
 }
 
 fn throw_type_error(message: &str) -> f64 {
     let msg = string(message);
-    let err = crate::error::js_typeerror_new(msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::type_error(msg))
 }
 
 fn throw_quota_exceeded() -> f64 {
     let msg = string("The quota has been exceeded.");
-    let err = crate::error::js_error_new_with_name_message(b"QuotaExceededError", msg);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    crate::exception::throw_core(crate::error::CoreError::named(b"QuotaExceededError", msg))
 }

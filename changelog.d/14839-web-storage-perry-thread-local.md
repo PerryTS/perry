@@ -1,0 +1,1 @@
+The Web Storage mirror-write flag is declared with `perry_thread_local!`, so reading it on a Storage object's named-property set or delete takes the fast thread-local path instead of `_tlv_get_addr` on Darwin, and the thread-local policy gate passes again.

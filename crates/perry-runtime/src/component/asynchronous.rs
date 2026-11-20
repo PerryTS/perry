@@ -104,7 +104,7 @@ fn submit_kind(
     let retained = scope.root_nanbox_f64(undefined());
     let saved_context = scope.root_nanbox_f64(undefined());
     let mut encoded = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         retained.set_nanbox_f64(value::retention::new_plan());
         encoded = if http_request.is_null() {
             let world = unsafe { &(*context::get(component.get_nanbox_f64())).world };
@@ -251,7 +251,7 @@ fn step(owner: f64) -> bool {
     let mut parsed = Value::Null;
     let mut status = OK;
     let outcome = primary.run(|| unsafe {
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             let ctx = context::get(component.get_nanbox_f64());
             if (*ctx).host.is_null() || !(*ctx).alive {
                 fail("Component has been disposed");
@@ -311,7 +311,7 @@ fn step(owner: f64) -> bool {
                 )
             };
             output = take(buffer);
-            if primary.threw.get() {
+            if primary.error.is_caught() {
                 remember(owner.get_nanbox_f64(), primary.error.get_nanbox_f64());
             }
             if status == ASYNC_PENDING {
@@ -348,7 +348,7 @@ fn step(owner: f64) -> bool {
         }
     });
     if let Err(error) = outcome {
-        remember(owner.get_nanbox_f64(), error);
+        remember(owner.get_nanbox_f64(), error.value());
     }
     if native(owner.get_nanbox_f64()).failed
         && status != HTTP_FAILURE
@@ -378,7 +378,7 @@ fn step(owner: f64) -> bool {
             undefined()
         });
         if let Err(error) = disposed {
-            remember(owner.get_nanbox_f64(), error);
+            remember(owner.get_nanbox_f64(), error.value());
         }
     }
     drop((output, parsed));
@@ -416,7 +416,7 @@ fn step(owner: f64) -> bool {
     };
     if let Err(error) = settled_result {
         if settled.get() {
-            crate::exception::js_throw(error);
+            crate::exception::rethrow_caught(error);
         }
         crate::promise::js_promise_reject(
             JSValue::from_bits(promise.get_nanbox_f64().to_bits())
@@ -425,7 +425,7 @@ fn step(owner: f64) -> bool {
             if failed {
                 primary_error.get_nanbox_f64()
             } else {
-                error
+                error.value()
             },
         );
     }
@@ -445,12 +445,12 @@ extern "C" fn pump() -> i32 {
         return 0;
     }
     let scope = RuntimeHandleScope::new();
-    let first = scope.root_nanbox_f64(undefined());
+    let mut first = None;
     let mut threw = false;
     let mut completed = 0i32;
     let pending = PENDING.with(|q| std::mem::take(&mut *q.borrow_mut()));
     for link in pending {
-        let result = crate::exception::catch_js_throw(|| {
+        let result = crate::exception::catch_thrown(|| {
             unsafe { payload::link_event_owner(link) }.map_or(true, step)
         });
         match result {
@@ -458,7 +458,7 @@ extern "C" fn pump() -> i32 {
             result => {
                 if let Err(error) = result {
                     if !threw {
-                        first.set_nanbox_f64(error);
+                        first = Some(error.root(&scope));
                         threw = true;
                     }
                     if let Some(owner) = unsafe { payload::link_event_owner(link) } {
@@ -475,7 +475,7 @@ extern "C" fn pump() -> i32 {
     }
     PUMPING.with(|v| v.set(false));
     if threw {
-        crate::exception::js_throw(first.get_nanbox_f64());
+        crate::exception::rethrow_caught(first.as_ref().unwrap().caught());
     }
     completed
 }

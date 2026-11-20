@@ -39,7 +39,7 @@ fn bootstrap_runs_the_initializer_before_allocating_a_managed_frame() {
 
 unsafe extern "C-unwind" fn throw_during_startup(_: *mut c_void) {
     let value = crate::value::js_nanbox_pointer(crate::array::js_array_alloc_with_length(5) as i64);
-    crate::exception::js_throw(value);
+    crate::exception::test_throw(value);
 }
 
 #[test]

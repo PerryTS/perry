@@ -17,6 +17,10 @@ pub use job_domain::JobDomainToken;
 pub struct AsyncContextSnapshot {
     entries: Vec<AsyncContextEntry>,
     job_domain: Option<JobDomainToken>,
+    /// SNAP census: the init that enqueued the job this snapshot belongs to
+    /// (stamped at enqueue; a job runs as that init).
+    #[cfg(perry_gc_instruments)]
+    pub(crate) snap_init: u32,
 }
 
 /// A native context vector in an ordinary young, movable GC holder. The
@@ -135,9 +139,7 @@ impl AsyncLocalStoragePayload {
         Arc::as_ptr(&self.token) as i64
     }
 }
-
 fn install_noop(_proto: &mut crate::native_payload::PayloadPrototype) {}
-
 static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadFamily =
     crate::native_payload::NativePayloadFamily {
         class_id: crate::native_class_ids::ASYNC_LOCAL_STORAGE_LEGACY,
@@ -147,7 +149,6 @@ static ASYNC_LOCAL_STORAGE_PAYLOAD_FAMILY: crate::native_payload::NativePayloadF
         links_owner: false,
         install_prototype: install_noop,
     };
-
 /// Resolve an AsyncLocalStorage ordinary object (including a subclass) to the
 /// native context token used by runtime-owned diagnostics-channel helpers.
 pub fn token_from_storage_value(value: f64) -> Option<i64> {
@@ -160,7 +161,6 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
         .map(|payload| payload.token())
     }
 }
-
 // `perry_thread_local!`, not `thread_local!`: a landing pad reaches this
 // through `unwind_context_guards`, and `js_eh_pad_enter` is a Leaf. std's
 // `LocalKey::with` reads the value through the key's accessor *pointer*;
@@ -169,7 +169,7 @@ pub fn token_from_storage_value(value: f64) -> Option<i64> {
 // as reaching JS. `HotKey::with` is `#[inline(always)]`, and its only indirect
 // call is the audited cold `resolve`.
 crate::perry_thread_local! {
-    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None }) };
+    static ACTIVE_CONTEXT: RefCell<AsyncContextSnapshot> = const { RefCell::new(AsyncContextSnapshot { entries: Vec::new(), job_domain: None, #[cfg(perry_gc_instruments)] snap_init: 0 }) };
 }
 
 unsafe fn token_ref(token: i64) -> &'static AsyncLocalStorageTokenInner {
@@ -411,10 +411,10 @@ pub enum ContextGuardAction {
 }
 
 // `perry_thread_local!` for the reason given at `ACTIVE_CONTEXT`.
-crate::perry_thread_local! {
-    static CONTEXT_GUARDS: RefCell<crate::exception::CatchStack<ContextGuardAction>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static CONTEXT_GUARDS: crate::exception::marks::CatchStackKey<ContextGuardAction> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.context_guards);
 
 /// Register `action` for the scope the calling frame owns (or, called from a
 /// helper the owner calls directly, the owner's: see
@@ -691,6 +691,7 @@ pub(crate) fn test_snapshot_with_store(store: f64) -> AsyncContextSnapshot {
             token: payload.token,
             stores: vec![store],
         }],
+        ..Default::default()
     }
 }
 

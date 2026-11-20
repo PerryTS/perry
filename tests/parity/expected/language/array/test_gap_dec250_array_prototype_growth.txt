@@ -1,0 +1,21 @@
+push -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+push.call -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+unshift.call -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+splice.call insert -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+splice.call nothing -> 0 | length 0 | [0] undefined | 0 in false
+length = 3 -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+fill -> filled | length 0 | [0] undefined | 0 in false
+index store -> threw TypeError: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added) | length 0 | [0] undefined | 0 in false
+length = 0 -> 0 | length 0 | [0] undefined | 0 in false
+Reflect.set index -> false | length 0 | [0] undefined | 0 in false
+Reflect.set number -> false | length 0 | [0] undefined | 0 in false
+Reflect.defineProperty index -> false | length 0 | [0] undefined | 0 in false
+Reflect.set join -> false | length 0 | [0] undefined | 0 in false
+Reflect.defineProperty join -> false | length 0 | [0] undefined | 0 in false
+Reflect.set named add -> 1 | length 0 | [0] undefined | 0 in false
+Reflect.set Object.prototype add -> false | length 0 | [0] undefined | 0 in false
+Reflect.defineProperty Function.prototype add -> false | length 0 | [0] undefined | 0 in false
+Reflect.set Object.prototype index -> false | length 0 | [0] undefined | 0 in false
+Reflect.set plain -> 1 | length 0 | [0] undefined | 0 in false
+Reflect.defineProperty frozen -> false | length 0 | [0] undefined | 0 in false
+ordinary arrays still grow 15 -1,0,99,1 undefined undefined

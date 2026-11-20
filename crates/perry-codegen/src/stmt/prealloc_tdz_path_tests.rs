@@ -69,6 +69,7 @@ fn tdz_finally_allocates_on_normal_and_exception_paths() {
                 init: Some(Expr::Integer(42)),
             },
         ]),
+        forof_completion: None,
     }]);
     let slots = allocated_slots(&ir, crate::nanbox::TAG_TDZ_I64);
     assert_eq!(

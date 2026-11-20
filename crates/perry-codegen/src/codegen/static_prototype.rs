@@ -40,8 +40,14 @@ pub(crate) fn collect(
                     Some("specialized")
                 } else if c.native_extends.is_some() {
                     Some("native-parent")
-                } else if !c.computed_members.is_empty() {
+                } else if c.has_evaluated_members() {
                     Some("computed-members")
+                } else if c.computed_members.iter().any(|m| m.is_static)
+                    || (fresh.contains(&c.name) && !c.computed_members.is_empty())
+                {
+                    // A known symbol key is a birth-shape key of a declared
+                    // instance member only (`declared_symbol_member`).
+                    Some("known-symbol-member")
                 } else if !c.decorators.is_empty() {
                     Some("decorated-class")
                 } else if c
@@ -114,38 +120,102 @@ pub(crate) fn collect(
                 }
                 let mut members: Vec<_> = members.into_iter().collect();
                 members.sort_by_key(|(_, (order, _, _))| *order);
+                // Known-symbol members follow the string members (the
+                // runtime's born-final order: OrdinaryOwnPropertyKeys lists
+                // symbols after strings), each by its first definition.
+                let mut symbols: Vec<(String, (u32, Option<&perry_hir::ClassComputedMember>, u8))> =
+                    Vec::new();
+                for m in &c.computed_members {
+                    let key = m.known_symbol().ok_or("computed-members")?;
+                    let spelling = symbol_key_spelling(key).ok_or("member-content")?;
+                    let (method, half) = match m.kind {
+                        perry_hir::ClassComputedMemberKind::Method => (true, 0),
+                        perry_hir::ClassComputedMemberKind::Getter => (false, 16),
+                        perry_hir::ClassComputedMemberKind::Setter => (false, 32),
+                    };
+                    match symbols.iter_mut().find(|(k, _)| *k == spelling) {
+                        None => symbols.push((
+                            spelling,
+                            (
+                                m.function.id,
+                                method.then_some(m),
+                                if method { 2 } else { 10 | half },
+                            ),
+                        )),
+                        // A redefined symbol member takes the general path.
+                        Some((_, entry)) => {
+                            if method || entry.1.is_some() || entry.2 & half != 0 {
+                                return Err("member-content");
+                            }
+                            entry.0 = entry.0.min(m.function.id);
+                            entry.2 |= half;
+                        }
+                    }
+                }
+                symbols.sort_by_key(|(_, (order, _, _))| *order);
+                let string_count = members.len();
                 let mut keys = b"constructor\0".to_vec();
                 let mut attrs = vec![2];
                 let mut constfn = Vec::new();
                 let mut rep = 0;
                 for (i, (name, (_, method, attr))) in members.iter().enumerate() {
-                    if name.is_empty() || name.contains('\0') || name == "constructor" {
+                    if name.is_empty()
+                        || name.contains('\0')
+                        || name.starts_with('\u{1}')
+                        || name == "constructor"
+                    {
                         return Err("member-content");
                     }
                     keys.extend_from_slice(name.as_bytes());
                     keys.push(0);
                     attrs.push(*attr);
                     let slot = i + 1;
-                    if let Some(m) = method.filter(|_| slot < 32) {
-                        rep |= 3u64 << (2 * slot);
+                    if let Some(m) = method {
+                        // Slots 0..32 are lanes of the shape's `rep` word; a
+                        // method past it has its ConstFn lane in the body list
+                        // alone (the runtime derives the same lane from it).
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
                         let body = format!(
                             "{}__eclo",
                             crate::symbol_names::method(&prefix, &c.name, &m.name)
                         );
                         constfn.push(ConstFnBirth {
-                            slot: slot as u8,
+                            slot: slot as u32,
                             symbol: crate::fn_info::info_symbol(&body),
                         });
                     }
                 }
+                for (i, (spelling, (_, member, attr))) in symbols.iter().enumerate() {
+                    keys.extend_from_slice(spelling.as_bytes());
+                    keys.push(0);
+                    attrs.push(*attr);
+                    let slot = string_count + i + 1;
+                    if let Some(m) = member {
+                        // As for string keys: a lane past word 0 is the body list alone.
+                        if slot < 32 {
+                            rep |= 3u64 << (2 * slot);
+                        }
+                        let body = format!(
+                            "{}__eclo",
+                            crate::symbol_names::method(&prefix, &c.name, &m.function.name)
+                        );
+                        constfn.push(ConstFnBirth {
+                            slot: slot as u32,
+                            symbol: crate::fn_info::info_symbol(&body),
+                        });
+                    }
+                }
+                let members_len = string_count + symbols.len();
                 Ok(ModuleBirth {
                     keys_global: format!("perry_decl_proto_{prefix}__{cid}"),
                     class_id: 0,
                     defined: false,
                     shape: BirthShape {
                         keys,
-                        key_count: members.len() as u32 + 1,
-                        live: members.len() as u32 + 1,
+                        key_count: members_len as u32 + 1,
+                        live: members_len as u32 + 1,
                         proto: BirthProto::Prototype(cid, parent),
                         typed: None,
                         rep,
@@ -179,11 +249,47 @@ pub(crate) fn collect(
     births
 }
 
+/// The birth-shape key spelling of known symbol `key`
+/// (`ClassComputedMember::known_symbol`): `\u{1}@@wk:<number>` for a
+/// well-known symbol, `\u{1}@@for:<registry key>` for a registered one (the
+/// atom spellings of `layout_desc::symbol_atom`). No string member of an
+/// admitted prototype starts with `\u{1}`, so a spelling names one key.
+pub(crate) fn symbol_key_spelling(key: &str) -> Option<String> {
+    if key.contains('\0') {
+        return None;
+    }
+    match key.strip_prefix("@@__perry_wk_") {
+        Some(name) => crate::runtime_abi::WELL_KNOWN_SYMBOLS
+            .iter()
+            .position(|wk| *wk == name)
+            .map(|i| format!("\u{1}@@wk:{i}")),
+        None => Some(format!("\u{1}@@for:{key}")),
+    }
+}
+
 #[cfg(test)]
 #[path = "static_prototype_tests.rs"]
 mod tests;
 
+/// The instance method of `c` keyed by the known symbol spelled `spelling`
+/// ([`symbol_key_spelling`]): the body its static prototype's slot holds.
+pub(crate) fn declared_symbol_method<'c>(
+    c: &'c perry_hir::Class,
+    spelling: &str,
+) -> Option<&'c perry_hir::ClassComputedMember> {
+    if !spelling.starts_with('\u{1}') {
+        return None;
+    }
+    c.computed_members.iter().rev().find(|m| {
+        !m.is_static
+            && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method)
+            && m.known_symbol().and_then(symbol_key_spelling).as_deref() == Some(spelling)
+    })
+}
+
 /// Every intermediate shape proves absence and the next prototype link.
+/// A known-symbol key (`\u{1}` spelling) is proven like a string method: its
+/// holder's ConstFn lane holds the declared member's body.
 /// The final holder shape proves the compiler's body candidate.
 pub(crate) fn chain(
     ctx: &crate::expr::FnCtx<'_>,
@@ -216,9 +322,11 @@ pub(crate) fn chain(
                 .constfn
                 .iter()
                 .any(|entry| entry.slot as usize == slot)
-                && c.methods
+                && (c
+                    .methods
                     .iter()
-                    .any(|m| m.name == method && !m.is_async && !m.is_generator))
+                    .any(|m| m.name == method && !m.is_async && !m.is_generator)
+                    || declared_symbol_method(c, method).is_some()))
             .then_some(result)
             .filter(|_| slot != 0);
         }
@@ -227,6 +335,51 @@ pub(crate) fn chain(
         {
             return None;
         }
+    }
+    None
+}
+
+/// `super.method` in an instance method of `class`: the chain from `class`'s
+/// prototype (the methods' [[HomeObject]], whose static shape names its
+/// parent's prototype as [[Prototype]]) through [`chain`] of the parent to
+/// the ConstFn holder, with the holder's class name. `None` when any class on
+/// it has evaluated heritage (its prototype may be born off the static shape)
+/// or the compiler names no such chain.
+pub(crate) fn super_chain(
+    ctx: &crate::expr::FnCtx<'_>,
+    class: &str,
+    method: &str,
+) -> Option<(Vec<(u32, u32)>, String)> {
+    let c = ctx.classes.get(class)?;
+    if c.specialized_from.is_some() || c.extends_expr.is_some() {
+        return None;
+    }
+    let cid = *ctx.class_ids.get(class)?;
+    let (id, shape) = super::static_shape_ids::static_prototype_layout(cid)?;
+    let parent = c.extends_name.as_ref()?;
+    if !matches!(shape.proto, BirthProto::Prototype(_, p) if ctx.class_ids.get(parent) == Some(&p))
+    {
+        return None;
+    }
+    let tail = chain(ctx, parent, method)?;
+    let &(holder_cid, _) = tail.last()?;
+    // Walk the same links to name the holder; refuse evaluated heritage.
+    let mut name = parent.clone();
+    for _ in 0..64 {
+        let c = ctx.classes.get(&name)?;
+        if c.extends_expr.is_some() {
+            return None;
+        }
+        if let Some(origin) = &c.specialized_from {
+            name = origin.clone();
+            continue;
+        }
+        if ctx.class_ids.get(&name) == Some(&holder_cid) {
+            let mut result = vec![(cid, id)];
+            result.extend(tail);
+            return Some((result, name));
+        }
+        name = c.extends_name.clone()?;
     }
     None
 }

@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
-use perry_hir::{BinaryOp, Expr, Module, Stmt};
+use perry_hir::{BinaryOp, Expr, Module, ObjectPart, Stmt};
 
 use crate::expr::FnCtx;
 use crate::rooting::{self, Repr};
@@ -39,7 +39,7 @@ pub(crate) use site::{add_site, create_site, holder_read, site};
 use models::plain_data;
 pub(crate) use models::{Add, Create, CreateState, HolderRead, Site};
 pub use models::{ExportFact, ImageEntry, ImageKey, ProtoExports};
-use models::{ACCESSOR, HAS_GET, HAS_SET, NON_CONFIGURABLE, NON_ENUMERABLE, NON_WRITABLE};
+use models::{ACCESSOR, HAS_GET, HAS_SET, NON_ENUMERABLE};
 
 mod proto_exports;
 use proto_exports::program_exports;
@@ -115,7 +115,7 @@ const OBJECT_PROTOTYPE_KEYS: &[&str] = &[
 
 /// The module's prototype facts, derived once from its HIR, and the
 /// layouts its lowered code used (the emission's input).
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ModuleCreateFamilies {
     prefix: String,
     /// Prototype bindings the compiler follows.
@@ -785,47 +785,12 @@ fn descriptor_attrs(a: &Analysis<'_>, desc: &Expr) -> Option<u8> {
         Expr::Object(props) => props.iter().map(|(k, v)| (k.as_str(), v)).collect(),
         _ => return None,
     };
-    let function = |v: &Expr| matches!(v, Expr::Closure { .. } | Expr::FuncRef(_));
-    let mut attrs = NON_WRITABLE | NON_ENUMERABLE | NON_CONFIGURABLE;
-    let mut accessor = 0u8;
-    let mut data = false;
-    for (name, value) in fields {
-        let flag = match value {
-            Expr::Bool(b) => Some(*b),
-            _ => None,
-        };
-        match name {
-            "get" if function(value) => accessor |= ACCESSOR | HAS_GET,
-            "set" if function(value) => accessor |= ACCESSOR | HAS_SET,
-            "value" => data = true,
-            "writable" => {
-                data = true;
-                if flag? {
-                    attrs &= !NON_WRITABLE;
-                }
-            }
-            "enumerable" => {
-                if flag? {
-                    attrs &= !NON_ENUMERABLE;
-                }
-            }
-            "configurable" => {
-                if flag? {
-                    attrs &= !NON_CONFIGURABLE;
-                }
-            }
-            _ => return None,
-        }
-    }
-    if accessor != 0 {
-        if data {
-            return None;
-        }
-        // An accessor has no [[Writable]].
-        return Some(accessor | (attrs & !NON_WRITABLE));
-    }
-    Some(attrs)
+    literal_descriptor_attrs(&fields)
 }
+
+/// The attribute entry of a literal property descriptor: one definition,
+/// shared with the whole-program facts (`perry_hir::descriptor`).
+pub(crate) use perry_hir::descriptor::literal_descriptor_attrs;
 
 /// A literal's facts: the keys that are or may be accessors, the string
 /// keys it names, whether it may hold keys it does not name, and its own
@@ -873,12 +838,17 @@ fn literal(a: &Analysis<'_>, e: &Expr) -> Option<Lit> {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (k, v) in parts {
-                match k {
-                    Some(k) => name(&mut lit, k),
-                    None => {
+            for part in parts {
+                match part {
+                    ObjectPart::Define(k, _) => name(&mut lit, k),
+                    ObjectPart::Spread(v) => {
                         lit.open = true;
                         copy_keys(&mut lit.image, a.source_image(v), false);
+                    }
+                    // A key known only at run time: no key image.
+                    ObjectPart::Computed { .. } => {
+                        lit.open = true;
+                        lit.image = None;
                     }
                 }
             }
@@ -1063,4 +1033,23 @@ fn static_store(e: &Expr) -> Option<(u32, &str)> {
         },
         _ => None,
     }
+}
+
+#[derive(Clone)]
+pub(crate) struct CallableState(ModuleCreateFamilies);
+pub(crate) fn callable_state() -> CallableState {
+    let mut state = MODULE_CREATE_FAMILIES.with(|s| s.borrow().clone());
+    state.used.clear();
+    CallableState(state)
+}
+impl CallableState {
+    pub(crate) fn install(&self) {
+        MODULE_CREATE_FAMILIES.with(|s| *s.borrow_mut() = self.0.clone());
+    }
+}
+pub(crate) fn take_callable_effects() -> BTreeMap<String, Site> {
+    MODULE_CREATE_FAMILIES.with(|s| std::mem::take(&mut s.borrow_mut().used))
+}
+pub(crate) fn merge_callable_effects(uses: BTreeMap<String, Site>) {
+    MODULE_CREATE_FAMILIES.with(|s| s.borrow_mut().used.extend(uses));
 }

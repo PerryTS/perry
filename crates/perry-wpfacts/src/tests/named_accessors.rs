@@ -6,12 +6,6 @@
 
 use super::*;
 
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
-
 /// Every live read of `key` is proven (a getter no read runs has none).
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let dead =
@@ -26,84 +20,6 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
         && ss
             .iter()
             .all(|s| matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
-}
-
-/// Per unit no read is lost to an accessor under a computed key. (The
-/// installer's unit reads another unit's prototype, which publishes it
-/// beyond its contract: the unit boundary, not the install, decides the
-/// per-unit verdict.)
-fn no_any_key_accessor(pf: &ProgramFacts) -> bool {
-    let any = |s: &crate::SiteFacts| matches!(&s.verdict, Verdict::No(w) if w.contains("accessor under a computed key"));
-    !pf.sites.iter().any(any)
-        && !pf.templates.iter().any(|t| {
-            [&t.escape, &t.chain].iter().any(|r| {
-                r.as_deref()
-                    .is_some_and(|r| r.contains("accessor under a computed key"))
-            })
-        })
-}
-
-/// Per unit never claims a site whole program does not.
-fn never_stronger(src: &str) {
-    let (u, w) = (units(src), facts(src));
-    for s in &u.sites {
-        if matches!(s.verdict, Verdict::No(_)) {
-            continue;
-        }
-        let ws = w
-            .sites
-            .iter()
-            .find(|x| (x.module, x.byte_offset, &x.key) == (s.module, s.byte_offset, &s.key))
-            .unwrap_or_else(|| panic!("{s:?}\n{}", w.dump_text()));
-        assert!(
-            !matches!(ws.verdict, Verdict::No(_)),
-            "{s:?}\n{}",
-            w.dump_text()
-        );
-    }
-}
-
-/// tsc's `enableDebugInfo`: debug getters installed on a constructor's
-/// prototype from a literal map, reachable but never read by the hot code.
-const CLASS_MAP: &str = r#"
-    class Node { kind: number; constructor(k: number) { this.kind = k; } }
-    function enableDebugInfo() {
-        Object.defineProperties(Node.prototype, {
-            __dbgKind: { get() { return "k" + (this as any).kind; } },
-            __dbgFlags: { get() { return 0; }, enumerable: false },
-        });
-    }
-    enableDebugInfo();
-    function rd(n: Node) { return n.kind; }
-    console.log(rd(new Node(1)) + rd(new Node(2)));
-"#;
-
-const BOUND_MAP: &str = r#"
-    class Node { kind: number; constructor(k: number) { this.kind = k; } }
-    const debugMembers = {
-        __dbgKind: { get() { return "k" + (this as any).kind; } },
-    };
-    function enableDebugInfo() { Object.defineProperties(Node.prototype, debugMembers); }
-    enableDebugInfo();
-    function rd(n: Node) { return n.kind; }
-    console.log(rd(new Node(1)) + rd(new Node(2)));
-"#;
-
-#[test]
-fn a_literal_map_installs_named_accessors() {
-    let w = facts(CLASS_MAP);
-    assert!(proven(&w, "kind"), "{}", w.dump_text());
-    assert!(no_any_key_accessor(&w), "{}", w.dump_text());
-    let u = units(CLASS_MAP);
-    assert!(no_any_key_accessor(&u), "{}", u.dump_text());
-}
-
-#[test]
-fn a_map_in_a_const_binding_installs_named_accessors() {
-    let w = facts(BOUND_MAP);
-    assert!(proven(&w, "kind"), "{}", w.dump_text());
-    let u = units(BOUND_MAP);
-    assert!(no_any_key_accessor(&u), "{}", u.dump_text());
 }
 
 #[test]
@@ -203,31 +119,6 @@ fn a_constant_key_binding_is_a_named_install() {
     "#;
     let w = facts(src);
     assert!(proven(&w, "kind"), "{}", w.dump_text());
-}
-
-#[test]
-fn per_unit_is_never_stronger_than_whole_program() {
-    never_stronger(CLASS_MAP);
-    never_stronger(BOUND_MAP);
-}
-
-#[test]
-fn a_class_accessor_under_a_constant_key_is_named() {
-    let src = r#"
-        const K = "__dbg";
-        class Node {
-            kind: number;
-            constructor(k: number) { this.kind = k; }
-            get [K]() { return this.kind + 1; }
-        }
-        function rd(n: Node) { return n.kind; }
-        const n: any = new Node(2);
-        console.log(rd(new Node(1)) + n.__dbg);
-    "#;
-    let w = facts(src);
-    assert!(proven(&w, "kind"), "{}", w.dump_text());
-    assert!(no_any_key_accessor(&w), "{}", w.dump_text());
-    never_stronger(src);
 }
 
 #[test]

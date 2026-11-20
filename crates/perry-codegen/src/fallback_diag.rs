@@ -571,6 +571,7 @@ fn generic_helper(helper: &str) -> bool {
         || helper == "js_global_get_field_slow"
         || helper.contains("object_set_field_ic")
         || helper.starts_with("perry_probe_")
+        || helper == "perry_store_or_put"
         || helper.starts_with("js_dyn_index_")
         || helper.starts_with("js_object_get_index_")
         || helper.starts_with("js_object_set_index_")
@@ -603,6 +604,7 @@ fn generic_helper(helper: &str) -> bool {
                 | "js_class_static_method_call"
                 | "js_private_method_call"
                 | "js_arguments_call_spread"
+                | "js_arguments_bundle_call_spread"
         )
         || helper.starts_with("js_method_")
         || helper.starts_with("js_object_has")

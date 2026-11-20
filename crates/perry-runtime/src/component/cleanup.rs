@@ -9,7 +9,7 @@ pub(super) fn register(owner: f64, target: f64, request: Value) {
     let target = scope.root_nanbox_f64(target);
     let registry = scope.root_nanbox_f64(undefined());
     let mut encoded = String::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         registry.set_nanbox_f64(unsafe {
             bag::load(
                 object_pointer(owner.get_nanbox_f64()).unwrap() as usize,
@@ -79,7 +79,7 @@ extern "C" fn collected(
     let held = scope.root_nanbox_f64(held);
     let mut encoded = String::new();
     let mut request = Value::Null;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         encoded = string(held.get_nanbox_f64());
         request = serde_json::from_str(&encoded)
             .unwrap_or_else(|_| fail("Invalid component cleanup identity"));
@@ -104,7 +104,7 @@ pub(super) fn drain(owner: f64) {
     }
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
-    let first_error = scope.root_nanbox_f64(undefined());
+    let mut first_error = None;
     let context = context::get(owner.get_nanbox_f64());
     if unsafe { !(*context).alive || (*context).host.is_null() } {
         return;
@@ -124,7 +124,7 @@ pub(super) fn drain(owner: f64) {
                 break;
             }
             let frame = callback::Frame::new(&scope, owner.get_nanbox_f64());
-            let result = crate::exception::catch_js_throw(|| {
+            let result = crate::exception::catch_thrown(|| {
                 encoded = serde_json::to_vec(request).unwrap();
                 let mut buffer = Buffer::default();
                 let status = unsafe {
@@ -154,7 +154,7 @@ pub(super) fn drain(owner: f64) {
             });
             if let Err(error) = result {
                 if !failed {
-                    first_error.set_nanbox_f64(error);
+                    first_error = Some(error.root(&scope));
                     failed = true;
                 }
             }
@@ -165,25 +165,29 @@ pub(super) fn drain(owner: f64) {
     }
     drop((pending, encoded, output));
     if failed {
-        crate::exception::js_throw(first_error.get_nanbox_f64());
+        crate::exception::rethrow_caught(first_error.as_ref().unwrap().caught());
     }
 }
 
 /// A primary call failure takes precedence over a cleanup failure. Root either
 /// returned value before destructors can allocate or trigger another collection.
-pub(super) fn finish_call(owner: f64, result: Result<f64, f64>) -> f64 {
+pub(super) fn finish_call(owner: f64, result: Result<f64, crate::exception::Caught>) -> f64 {
     let scope = RuntimeHandleScope::new();
     let owner = scope.root_nanbox_f64(owner);
-    let failed = result.is_err();
-    let value = scope.root_nanbox_f64(result.unwrap_or_else(|error| error));
-    let cleanup = crate::exception::catch_js_throw(|| drain(owner.get_nanbox_f64()));
-    if failed {
-        crate::exception::js_throw(value.get_nanbox_f64());
+    let result = match result {
+        Ok(value) => Ok(scope.root_nanbox_f64(value)),
+        Err(error) => Err(error.root(&scope)),
+    };
+    let cleanup = crate::exception::catch_thrown(|| drain(owner.get_nanbox_f64()));
+    match result {
+        Err(error) => crate::exception::rethrow_caught(error.caught()),
+        Ok(value) => {
+            if let Err(error) = cleanup {
+                crate::exception::rethrow_caught(error);
+            }
+            value.get_nanbox_f64()
+        }
     }
-    if let Err(error) = cleanup {
-        crate::exception::js_throw(error);
-    }
-    value.get_nanbox_f64()
 }
 
 /// A ready native result can be refused by a before hook or decoder before

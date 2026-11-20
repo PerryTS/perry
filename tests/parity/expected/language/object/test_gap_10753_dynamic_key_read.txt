@@ -1,0 +1,30 @@
+warm 4500 2500 3000
+tdz tdz:ReferenceError
+DEC 250: Cannot add member Object.prototype.x: built-in objects are read-only in a compiled program
+proto-add 40 undefined
+proto-del 40 undefined
+own-add 138 50
+own-del 40 undefined
+own-undef true 40 undefined
+dyn 570 5 undefined undefined
+long 10300
+m0 1,2,undefined
+m1 undefined,2,undefined
+m2 undefined,2,3
+m3 4,2,3
+num 0 10,20,30,undefined,3,undefined zero,one,undefined,undefined,undefined,ex
+num 1 10,20,30,undefined,3,undefined zero,one,undefined,undefined,undefined,ex
+num 2 10,20,30,undefined,3,undefined zero,one,undefined,undefined,undefined,ex
+sym 0 str,sym,undefined
+sym 1 str,sym,undefined
+sym 2 str,sym,undefined
+null 0 number,undefined,undefined
+null 1 number,undefined,undefined
+null 2 number,undefined,undefined
+null-add 1,undefined,2
+objproto 0 function,function,function,object,function,undefined
+objproto 1 function,function,function,object,function,undefined
+objproto 2 function,function,function,object,function,undefined
+ctor true true
+str 3,b,undefined
+str 3,b,undefined

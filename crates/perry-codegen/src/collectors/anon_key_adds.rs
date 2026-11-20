@@ -123,11 +123,16 @@ pub(crate) fn anon_receiver_added_keys(
 
     let mut receivers: HashMap<Binding, BTreeSet<String>> = HashMap::new();
     let mut elements: HashMap<Binding, BTreeSet<String>> = HashMap::new();
+    // Refinements feed later bindings in the same bounded round. Hash order
+    // would change how far an alias chain propagates and the birth capacity
+    // emitted for its literal. Keep the namespace and binding-id order fixed.
+    let mut ordered_lets: Vec<_> = lets.iter().collect();
+    ordered_lets.sort_unstable_by_key(|(binding, _)| **binding);
     // Each round can only add classes, and the class universe is finite, so
     // this settles; the bound keeps a pathological chain from walking long.
     for _ in 0..16 {
         let mut changed = false;
-        for (b, inits) in &lets {
+        for &(b, inits) in &ordered_lets {
             let [Some(init)] = inits.as_slice() else {
                 continue;
             };
@@ -380,6 +385,7 @@ fn visit_stmt<'a>(
             body,
             catch,
             finally,
+            ..
         } => {
             visit_stmts(body, home, stmt, expr);
             if let Some(c) = catch {
@@ -409,5 +415,47 @@ fn visit_stmt<'a>(
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
         | Stmt::ReleaseBoxes(_) => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_alias_capacity_is_stable_across_hash_seeds() {
+        let mut source = String::from("function make() { const a0 = { initial: 0 };\n");
+        for i in 1..=64 {
+            source.push_str(&format!("const a{i} = a{};\n", i - 1));
+        }
+        for i in 30..38 {
+            source.push_str(&format!("a{i}.added{i} = {i};\n"));
+        }
+        source.push_str("return a0; }\nconsole.log(make());\n");
+        let mut cache = perry_diagnostics::SourceCache::new();
+        let parsed =
+            perry_parser::parse_typescript_with_cache(&source, "capacity.ts", &mut cache).unwrap();
+        let hir = perry_hir::lower_module(&parsed.module, "capacity", "capacity.ts").unwrap();
+        let classes: HashMap<_, _> = hir.classes.iter().map(|c| (c.name.clone(), c)).collect();
+        let literal = hir.classes.iter().find(|c| c.is_literal_shape()).unwrap();
+        let facts = crate::collectors::collect_module_dispatch_facts(&hir);
+        let expected: BTreeSet<_> = (30..38).map(|i| format!("added{i}")).collect();
+        for _ in 0..32 {
+            let added = anon_receiver_added_keys(&hir, &classes, &facts);
+            assert_eq!(
+                added.get(&literal.name),
+                Some(&expected),
+                "fresh hash seeds must preserve the literal's birth capacity"
+            );
+            assert_eq!(
+                crate::lower_call::new_alloc::birth_slack_in(
+                    literal,
+                    &|name| classes.get(name).copied(),
+                    &added,
+                ),
+                8,
+                "the inferred keys must reach the allocation's capacity decision"
+            );
+        }
     }
 }

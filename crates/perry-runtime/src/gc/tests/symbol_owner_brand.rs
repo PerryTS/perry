@@ -1,16 +1,13 @@
 //! Symbol brands follow the owned GC header without address registration.
 use super::super::*;
 use super::support::*;
+#[cfg(target_pointer_width = "64")]
 #[test]
 fn symbol_brand_moves_with_its_owner() {
-    check_brand(false);
+    check_brand();
 }
-#[test]
-#[ignore = "negative control: erase the moved Symbol GC kind"]
-fn negative_control_objtables_symbol_brand() {
-    check_brand(true);
-}
-fn check_brand(erase: bool) {
+#[cfg(target_pointer_width = "64")]
+fn check_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let owner = unsafe { crate::symbol::alloc_symbol(std::ptr::null_mut(), false) };
@@ -19,11 +16,6 @@ fn check_brand(erase: bool) {
     let _ = gc_collect_minor();
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
-    if erase {
-        unsafe {
-            (*header_from_user_ptr(moved as *const u8)).obj_type = GC_TYPE_STRING;
-        }
-    }
     assert!(crate::symbol::is_registered_symbol(moved));
     assert!(!crate::symbol::is_registered_symbol(owner as usize));
     let ordinary = crate::object::js_object_alloc(0, 0);
@@ -50,16 +42,10 @@ fn a_weak_symbol_has_no_address_registry_to_keep_it_alive() {
 
 #[test]
 fn symbol_brand_rejects_matching_bytes_inside_another_allocation() {
-    check_interior_brand(false);
+    check_interior_brand();
 }
 
-#[test]
-#[ignore = "negative control: publish a false Symbol allocation start"]
-fn negative_control_objtables_symbol_allocation_start() {
-    check_interior_brand(true);
-}
-
-fn check_interior_brand(plant: bool) {
+fn check_interior_brand() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (owner, fields) = unsafe { alloc_nursery_test_object(8) };
@@ -85,9 +71,6 @@ fn check_interior_brand(plant: bool) {
                 id: 73,
             },
         );
-    }
-    if plant {
-        crate::arena::record_arena_object_start(prefix as usize, GC_TYPE_SYMBOL);
     }
     assert!(
         !crate::symbol::is_registered_symbol(fake as usize),

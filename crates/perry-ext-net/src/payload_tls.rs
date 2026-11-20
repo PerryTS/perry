@@ -7,12 +7,80 @@ use perry_ffi::turnloop_net as tl;
 use perry_ffi::{JsValue, TransientRootScope};
 use std::collections::VecDeque;
 
+impl p::TlsSessionOps for crate::turnloop_tls::TlsSession {
+    fn retained_bytes(&self) -> usize {
+        Self::retained_bytes(self)
+    }
+    fn receive(&mut self, ciphertext: &[u8]) {
+        Self::receive(self, ciphertext)
+    }
+    fn write(&mut self, plaintext: &[u8]) {
+        Self::write(self, plaintext)
+    }
+    fn close_notify(&mut self) {
+        Self::close_notify(self)
+    }
+    fn close_sent(&self) -> bool {
+        Self::close_sent(self)
+    }
+    fn pump(&mut self) -> crate::turnloop_tls::Progress {
+        Self::pump(self)
+    }
+    fn take_output(&mut self) -> Vec<u8> {
+        Self::take_output(self)
+    }
+    fn take_plaintext(&mut self) -> Vec<u8> {
+        Self::take_plaintext(self)
+    }
+    fn failure(&self) -> Option<&str> {
+        Self::failure(self)
+    }
+    fn handshake_facts(
+        &self,
+        servername: &str,
+        verify: bool,
+        data: Option<&crate::TlsClientConfigData>,
+    ) -> crate::tls::HandshakeFacts {
+        let mut facts = crate::tls::HandshakeFacts::from_session(self, servername, verify, data);
+        if self.is_client() {
+            facts.check_identity = Some(check_peer_identity);
+        }
+        facts
+    }
+}
+
+/// A listening TLS server's configuration, installed on each accepted socket.
+pub(crate) struct ServerTls(pub std::sync::Arc<rustls::ServerConfig>);
+
+impl p::TlsAcceptor for ServerTls {
+    fn install(&self, socket: f64) -> Result<(), String> {
+        install_server(socket, self.0.clone())
+    }
+}
+
+/// The client socket's `checkServerIdentity`, run once the handshake is done.
+fn check_peer_identity(owner: f64) -> f64 {
+    extern "C" {
+        fn js_tls_client_check_identity_from_metadata(owner: i64) -> f64;
+    }
+    unsafe { js_tls_client_check_identity_from_metadata(p::raw_owner(owner)) }
+}
+
 fn attach_tls_prototype(owner: f64) {
     extern "C" {
         fn js_tls_client_attach_socket_prototype(owner: i64);
     }
     unsafe {
         js_tls_client_attach_socket_prototype(p::raw_owner(owner));
+    }
+}
+
+/// The layer's driver, when the socket has a TLS session.
+fn layer_drive(link: OwnerLink) -> Option<fn(f64)> {
+    unsafe {
+        p::socket_ptr(link)
+            .ok()
+            .and_then(|payload| (*payload).ext.tls.as_ref().map(|layer| layer.drive))
     }
 }
 
@@ -64,7 +132,8 @@ pub(crate) fn install_client_config(
         (*p::socket_ptr(link).map_err(|_| "socket is closed")?)
             .ext
             .tls = Some(Box::new(TlsLayer {
-            session,
+            session: Box::new(session),
+            drive,
             servername,
             verify,
             config,
@@ -103,7 +172,8 @@ pub(crate) fn install_server(
         (*p::socket_ptr(link).map_err(|_| "socket is closed")?)
             .ext
             .tls = Some(Box::new(TlsLayer {
-            session,
+            session: Box::new(session),
+            drive,
             servername: String::new(),
             verify: true,
             config: crate::TlsClientConfigData::default(),
@@ -151,7 +221,7 @@ pub(crate) unsafe fn write_proven(
     user: u64,
 ) -> Result<usize, tl::NetError> {
     let link = window.link;
-    {
+    let drive = {
         let payload = &mut *window.payload;
         let fields = &mut payload.ext;
         if let Some(layer) = fields.tls.as_mut() {
@@ -161,6 +231,7 @@ pub(crate) unsafe fn write_proven(
                 plain_len: bytes.len(),
                 mark: None,
             });
+            layer.drive
         } else if fields.direct_tls.is_some() {
             fields.held_tls_writes.push((bytes.to_vec(), user));
             return Ok(fields
@@ -171,7 +242,7 @@ pub(crate) unsafe fn write_proven(
         } else {
             return tl::link_write(&mut payload.core, link, bytes, user);
         }
-    }
+    };
     drive(owner);
     Ok(queued(link))
 }
@@ -181,12 +252,13 @@ pub(crate) fn shutdown(owner: f64, user: u64) -> Result<(), tl::NetError> {
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
     let _account = p::AccountSocket(link);
-    unsafe {
+    let drive = unsafe {
         let fields = &mut (*p::socket_ptr(link).map_err(|_| bad_fd("shutdown"))?).ext;
         if let Some(layer) = fields.tls.as_mut() {
             layer.session.close_notify();
             layer.pending_shutdown = Some(user);
             layer.closing = true;
+            layer.drive
         } else if fields.direct_tls.is_some() {
             fields.held_tls_end = Some(user);
             return Ok(());
@@ -197,7 +269,7 @@ pub(crate) fn shutdown(owner: f64, user: u64) -> Result<(), tl::NetError> {
                 user,
             );
         }
-    }
+    };
     drive(owner.get());
     Ok(())
 }
@@ -216,21 +288,37 @@ pub(crate) fn begin_connected(owner: f64) {
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
     let _account = p::AccountSocket(link);
-    let Some(snapshot) = io::snapshot(link) else {
+    if io::snapshot(link).is_none() {
         return;
-    };
+    }
     let initial = unsafe {
         p::socket_ptr(link)
             .ok()
             .and_then(|payload| (*payload).ext.direct_tls.take())
     };
-    let Some((servername, verify, config)) = initial else {
-        if installed(link) {
+    let Some(direct) = initial else {
+        if let Some(drive) = layer_drive(link) {
             drive(owner.get());
         }
         return;
     };
-    if let Err(message) = install_client(owner.get(), servername, verify, config) {
+    (direct.begin)(owner.get(), direct);
+}
+
+/// `tls.connect` on a socket that was still connecting, now connected:
+/// install the client session, then replay the writes and the `end()` held
+/// while it connected.
+pub(crate) fn begin_direct(owner: f64, direct: crate::payload_transport::DirectTls) {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let link = socket::link(owner.get());
+    let _account = p::AccountSocket(link);
+    let Some(snapshot) = io::snapshot(link) else {
+        return;
+    };
+    if let Err(message) =
+        install_client(owner.get(), direct.servername, direct.verify, direct.config)
+    {
         if io::matches(link, &snapshot) {
             fail(owner.get(), &message, false);
         }
@@ -277,14 +365,16 @@ pub(crate) fn receive(owner: f64, bytes: &[u8]) {
     let owner = scope.root_nanbox(owner);
     let link = socket::link(owner.get());
     let _account = p::AccountSocket(link);
-    unsafe {
-        if let Ok(payload) = p::socket_ptr(link) {
-            if let Some(layer) = (*payload).ext.tls.as_mut() {
-                layer.session.receive(bytes);
-            }
-        }
+    let drive = unsafe {
+        p::socket_ptr(link).ok().and_then(|payload| {
+            let layer = (*payload).ext.tls.as_mut()?;
+            layer.session.receive(bytes);
+            Some(layer.drive)
+        })
+    };
+    if let Some(drive) = drive {
+        drive(owner.get());
     }
-    drive(owner.get());
 }
 
 pub(crate) fn wrote(owner: f64, len: usize) {
@@ -320,7 +410,7 @@ pub(crate) fn wrote(owner: f64, len: usize) {
         if !io::matches(link, &snapshot) {
             return;
         }
-        io::wrote(owner.get(), user, plain_len, queued(link));
+        io::wrote(owner.get(), user, plain_len, queued(link), false);
     }
 }
 
@@ -355,8 +445,7 @@ fn drive(owner: f64) {
             };
             let facts = if progress.handshake_done && !layer.secure_emitted {
                 layer.secure_emitted = true;
-                Some(crate::tls::HandshakeFacts::from_session(
-                    &layer.session,
+                Some(layer.session.handshake_facts(
                     &layer.servername,
                     layer.verify,
                     Some(&layer.config),
@@ -414,13 +503,8 @@ fn drive(owner: f64) {
     }
     if let Some(facts) = facts {
         publish(owner.get(), &facts);
-        if !server {
-            extern "C" {
-                fn js_tls_client_check_identity_from_metadata(owner: i64) -> f64;
-            }
-            let failure = scope.root_nanbox(unsafe {
-                js_tls_client_check_identity_from_metadata(p::raw_owner(owner.get()))
-            });
+        if let Some(check_identity) = facts.check_identity {
+            let failure = scope.root_nanbox(check_identity(owner.get()));
             if !io::matches(link, &snapshot) {
                 return;
             }

@@ -79,6 +79,18 @@ textfieldSetString(field, savedValue);
 textfieldSetSelectionRange(field, savedValue.length, savedValue.length);
 ```
 
+On the web target, `textfieldSetInputType(field, type)` sets the field's HTML
+input type so phones show the matching keyboard: `"tel"` for a phone number,
+`"email"`, `"number"`, `"url"` or `"search"`; `"text"` restores the default.
+Any other value makes the field `"text"`, as HTML does for a type it does not
+know, so the field stays a single-line text input. Use `SecureField` for
+passwords. Native backends accept the call and leave the field unchanged.
+
+```typescript,no-test
+const phone = TextField("Phone", (value: string) => {});
+textfieldSetInputType(phone, "tel");
+```
+
 ## SecureField
 
 A password input — identical signature to `TextField`, but text is masked.

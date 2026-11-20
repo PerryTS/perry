@@ -1,0 +1,1 @@
+Execution-prefix image capture (build knob, off by default): the shape stop counts the shape records minted, changed and gone between the baseline and the cut exactly, per id band, and reports the counters separately.

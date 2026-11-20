@@ -21,28 +21,16 @@ impl<'a> FuncEmitCtx<'a> {
                         func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
                     }
                     "console" => match method.as_str() {
-                        "log" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_log", 1);
+                        "log" => self.emit_console_call(func, "console_log", args),
+                        "warn" => self.emit_console_call(func, "console_warn", args),
+                        "error" => self.emit_console_call(func, "console_error", args),
+                        _ => {
+                            for a in args {
+                                self.emit_expr(func, a);
+                                func.instruction(&Instruction::Drop);
                             }
+                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                         }
-                        "warn" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_warn", 1);
-                            }
-                        }
-                        "error" => {
-                            for arg in args {
-                                self.emit_frame_begin(func, 1);
-                                self.emit_store_arg(func, 0, arg);
-                                self.emit_memcall_void(func, "console_error", 1);
-                            }
-                        }
-                        _ => {}
                     },
                     "JSON" => match method.as_str() {
                         "parse" => {
@@ -540,7 +528,8 @@ impl<'a> FuncEmitCtx<'a> {
                                 }
                                 // Array instance methods called via NativeMethodCall
                                 "push" if !args.is_empty() => {
-                                    self.emit_frame_begin(func, 2);
+                                    let argc = 1 + args.len() as u32;
+                                    self.emit_frame_begin(func, argc);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));
@@ -551,8 +540,10 @@ impl<'a> FuncEmitCtx<'a> {
                                             memory_index: 0,
                                         },
                                     ));
-                                    self.emit_store_arg(func, 1, &args[0]);
-                                    self.emit_memcall(func, "array_push", 2);
+                                    for (slot, arg) in (1..).zip(args) {
+                                        self.emit_store_arg(func, slot, arg);
+                                    }
+                                    self.emit_memcall(func, "array_push", argc);
                                     self.emit_frame_begin(func, 1);
                                     func.instruction(&Instruction::LocalSet(self.temp_local));
                                     self.emit_slot_addr(func, 0);
@@ -685,7 +676,7 @@ impl<'a> FuncEmitCtx<'a> {
                                         },
                                     ));
                                     self.emit_store_arg(func, 1, &args[0]);
-                                    self.emit_memcall_void(func, "array_for_each", 2);
+                                    self.emit_memcall_void(func, "array_forEach", 2);
                                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                                 }
                                 "find" if !args.is_empty() => {
@@ -900,8 +891,10 @@ impl<'a> FuncEmitCtx<'a> {
                                         .copied()
                                         .unwrap_or(0);
                                     // obj is already on the stack from emit_expr(obj) above
-                                    // Save obj to temp, build args array, then store all to memory
+                                    // Open the frame before any slot store, then build the args array in
+                                    // frames above it.
                                     func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 0 = obj handle
+                                    self.emit_frame_begin(func, 3);
                                     self.emit_slot_addr(func, 0);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));
                                     func.instruction(&Instruction::I64Store(
@@ -932,7 +925,6 @@ impl<'a> FuncEmitCtx<'a> {
                                         self.emit_memcall(func, "array_push", 2);
                                         // push into array, returns handle
                                     }
-                                    self.emit_frame_begin(func, 3);
                                     func.instruction(&Instruction::LocalSet(self.temp_local)); // slot 2 = args array handle
                                     self.emit_slot_addr(func, 2);
                                     func.instruction(&Instruction::LocalGet(self.temp_local));

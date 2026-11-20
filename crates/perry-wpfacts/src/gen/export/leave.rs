@@ -30,7 +30,7 @@ impl<'a> Gen<'a> {
             // DECISIONS 162: the callers' argument, stored by their units.
             _ if self.cell_flow_toks.contains(&t) && self.m.own_param_members(t).is_some() => true,
             // A global builtin is the same object in every unit (§17.16 (a)).
-            TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) if self.stand_in_cc.contains_key(&tm) => {
                 !self
                     .unit_in
@@ -91,7 +91,7 @@ impl<'a> Gen<'a> {
     /// stand-in, a builtin, an unknown value.
     fn forwarded_tok(&self, t: Tok) -> bool {
         match self.m.toks[t as usize] {
-            TokKind::Top | TokKind::BuiltinFn | TokKind::Builtin(_) => true,
+            TokKind::Top | TokKind::BuiltinFn(_) | TokKind::Builtin(_) => true,
             TokKind::Obj(tm, _) | TokKind::ClassObj(tm) => {
                 self.stand_in_cc.contains_key(&tm)
                     && !self
@@ -107,15 +107,6 @@ impl<'a> Gen<'a> {
             let all = self.m.all_fields(t);
             self.m.cons(all, Cons::TopSink { reason: r });
         }
-    }
-
-    /// Another unit's layout a published value's field may hold as its
-    /// owner publishes it (a stand-in no census broke).
-    pub(crate) fn forwarded_layout(&self, tm: TmplId) -> bool {
-        self.stand_in_cc.get(&tm).is_some_and(|c| c.literal_shape)
-            && !self
-                .unit_in
-                .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display))
     }
 
     /// A literal layout of this unit a published value's field may hold
@@ -237,13 +228,7 @@ impl<'a> Gen<'a> {
                                 match self.m.toks[x as usize] {
                                     TokKind::Obj(xtm, _)
                                         if !reported
-                                            && matches!(
-                                                self.m.tmpls[xtm as usize].kind,
-                                                TmplKind::BObj {
-                                                    what: "TypedArray",
-                                                    ..
-                                                }
-                                            )
+                                            && self.m.tmpls[xtm as usize].kind.typed_storage()
                                             && !self.stand_in_tas.iter().any(|&(_, s)| s == x)
                                             && !self.m.is_escaped(x)
                                             && !self.m.hard.contains_key(&x) =>

@@ -1,0 +1,1 @@
+A property-type proof about an object literal (or a parameter clone guarded by its contents) is kept only when no code can write that object for the binding's whole life: a delete, a store of another type, a write through an alias, a callee, a closure, Object.assign or defineProperty no longer leaves a stale number proof behind, so such reads match node.

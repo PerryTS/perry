@@ -109,7 +109,7 @@ fn params_callback_this_arg_is_passed() {
 #[test]
 fn web_unknown_receiver_stays_conservative() {
     check(
-        "const x: any = (globalThis as any).unknown; x.encode(o);",
+        "import \"unseen-host\"; const x: any = (globalThis as any).unknown; x.encode(o);",
         false,
     );
 }

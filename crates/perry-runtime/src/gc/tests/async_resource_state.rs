@@ -4,14 +4,9 @@ use super::support::*;
 
 #[test]
 fn async_resource_state_follows_its_moving_owner_and_dies_with_it() {
-    check(false);
+    check();
 }
-#[test]
-#[ignore = "negative control: remove the resource's private-state edge"]
-fn negative_control_objtables_async_resource_state() {
-    check(true);
-}
-fn check(erase: bool) {
+fn check() {
     let _guard = CopyingNurseryTestGuard::new(2);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -40,15 +35,6 @@ fn check(erase: bool) {
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved, owner as usize);
     assert_eq!(crate::async_hooks::public_async_id(ids.async_id), serial);
-    unsafe {
-        if erase {
-            crate::object::owned_state_bag::store(
-                moved,
-                crate::object::owned_state_bag::ASYNC_RESOURCE,
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-            );
-        }
-    }
     js_gc_collect();
     assert_ne!(
         crate::weakref::js_weakref_deref(f64::from_bits(js_shadow_slot_get(1))).to_bits(),
@@ -66,18 +52,13 @@ fn check(erase: bool) {
 
 #[test]
 fn scheduler_entry_owns_its_job_state() {
-    check_scheduler(false);
-}
-#[test]
-#[ignore = "negative control: the queue entry does not own its job's state token"]
-fn negative_control_objtables_scheduler_entry_state() {
-    check_scheduler(true);
+    check_scheduler();
 }
 /// A nextTick/queueMicrotask/timer job's state has one owner: its queue entry.
 /// The resource holds no edge back, so a full collection while the job is
 /// pending must keep the cell through the entry alone, and the cell dies with
 /// the entry once the job is destroyed.
-fn check_scheduler(erase: bool) {
+fn check_scheduler() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -93,10 +74,7 @@ fn check_scheduler(erase: bool) {
     let serial = crate::async_hooks::public_async_id(ids.async_id);
     assert!(crate::async_hooks::resource_state::get(ids.async_id).is_some());
     assert_ne!(serial, ids.async_id, "a hooked job gets a state token");
-    crate::builtins::test_seed_queued_job_owner(
-        if erase { 0 } else { ids.async_id },
-        resource_value,
-    );
+    crate::builtins::test_seed_queued_job_owner(ids.async_id, resource_value);
     js_gc_collect();
     js_gc_collect();
     assert!(
@@ -125,14 +103,9 @@ fn check_scheduler(erase: bool) {
 
 #[test]
 fn native_provider_state_is_leased_until_destroy() {
-    check_native(false);
+    check_native();
 }
-#[test]
-#[ignore = "negative control: remove the native provider's existing pin"]
-fn negative_control_objtables_native_async_resource_lease() {
-    check_native(true);
-}
-fn check_native(erase: bool) {
+fn check_native() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let _scan = ConservativeScanDisabledGuard::new();
@@ -140,11 +113,6 @@ fn check_native(erase: bool) {
     let id =
         unsafe { crate::async_hooks::js_async_hooks_provider_init(b"native-state".as_ptr(), 12) };
     let serial = crate::async_hooks::public_async_id(id);
-    if erase {
-        unsafe {
-            unpin_user_ptr(id as *mut u8);
-        }
-    }
     js_gc_collect();
     assert!(
         crate::async_hooks::resource_state::get(id).is_some(),

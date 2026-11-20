@@ -1204,9 +1204,7 @@ pub struct LoweringContext {
     /// #5833: names assigned by a **direct top-level** `name = ...`/`name++`
     /// expression statement — see
     /// `collect_direct_top_level_reassigned_identifiers`, which deliberately
-    /// does NOT reuse the deeper, name-only (no scope tracking)
-    /// `collect_assigned_function_binding_candidates` scan: that would
-    /// false-positive on a same-named binding shadowed in a nested block.
+    /// does NOT use the function-binding scan (`module_assigned_bindings`).
     /// Consulted when lowering a top-level `class` declaration: a class name
     /// is normally
     /// resolved purely through the class registry (`ctx.lookup_class` /

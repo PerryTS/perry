@@ -15,7 +15,10 @@ fn grown_pair() -> (*mut ArrayHeader, *mut ArrayHeader) {
     let initial = js_array_alloc_literal(1);
     let head = js_array_grow(initial, 4096);
     assert_ne!(head, initial, "growth past capacity must move the array");
-    assert!(arrays_share_identity(boxed(initial).to_bits(), boxed(head).to_bits()));
+    assert!(arrays_share_identity(
+        boxed(initial).to_bits(),
+        boxed(head).to_bits()
+    ));
     (initial, head)
 }
 
@@ -24,7 +27,10 @@ fn distinct_arrays_do_not_share_identity() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let a = js_array_alloc_literal(1);
     let b = js_array_alloc_literal(1);
-    assert!(!arrays_share_identity(boxed(a).to_bits(), boxed(b).to_bits()));
+    assert!(!arrays_share_identity(
+        boxed(a).to_bits(),
+        boxed(b).to_bits()
+    ));
     assert!(!arrays_share_identity(boxed(a).to_bits(), 1.0f64.to_bits()));
 }
 
@@ -40,12 +46,8 @@ fn object_is_sees_one_array_through_growth() {
 fn weakmap_and_weakset_find_a_grown_array_key() {
     let _triggers = crate::gc::GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let initial = js_array_alloc_literal(1);
-    let wm = f64::from_bits(
-        crate::value::POINTER_TAG | crate::weakref::js_weakmap_new() as u64,
-    );
-    let ws = f64::from_bits(
-        crate::value::POINTER_TAG | crate::weakref::js_weakset_new() as u64,
-    );
+    let wm = f64::from_bits(crate::value::POINTER_TAG | crate::weakref::js_weakmap_new() as u64);
+    let ws = f64::from_bits(crate::value::POINTER_TAG | crate::weakref::js_weakset_new() as u64);
     // Other array keys first, so the table grows and rehashes by token.
     for i in 0..32 {
         crate::weakref::js_weakmap_set(wm, boxed(js_array_alloc_literal(1)), i as f64);
@@ -56,12 +58,18 @@ fn weakmap_and_weakset_find_a_grown_array_key() {
     assert_ne!(head, initial);
     assert_eq!(crate::weakref::js_weakmap_get(wm, boxed(head)), 7.0);
     assert_eq!(crate::weakref::js_weakmap_get(wm, boxed(initial)), 7.0);
-    assert_eq!(crate::weakref::js_weakset_has(ws, boxed(head)).to_bits(), TRUE_BITS);
+    assert_eq!(
+        crate::weakref::js_weakset_has(ws, boxed(head)).to_bits(),
+        TRUE_BITS
+    );
     // Setting through the new head replaces, never duplicates.
     crate::weakref::js_weakmap_set(wm, boxed(head), 8.0);
     assert_eq!(crate::weakref::js_weakmap_get(wm, boxed(initial)), 8.0);
     crate::weakref::js_weakmap_delete(wm, boxed(head));
-    assert_ne!(crate::weakref::js_weakmap_has(wm, boxed(initial)).to_bits(), TRUE_BITS);
+    assert_ne!(
+        crate::weakref::js_weakmap_has(wm, boxed(initial)).to_bits(),
+        TRUE_BITS
+    );
     // An array never inserted has no token: a definite miss.
     assert_ne!(
         crate::weakref::js_weakmap_has(wm, boxed(js_array_alloc_literal(1))).to_bits(),
@@ -81,13 +89,25 @@ fn small_and_large_maps_find_a_grown_array_key() {
         crate::map::js_map_set(map, boxed(initial), 9.0);
         let head = js_array_grow(initial, 4096);
         assert_ne!(head, initial);
-        assert_eq!(crate::map::js_map_get(map, boxed(head)), 9.0, "fillers={fillers}");
+        assert_eq!(
+            crate::map::js_map_get(map, boxed(head)),
+            9.0,
+            "fillers={fillers}"
+        );
         let size = crate::map::js_map_size(map);
         crate::map::js_map_set(map, boxed(head), 10.0);
-        assert_eq!(crate::map::js_map_size(map), size, "fillers={fillers}: no duplicate");
+        assert_eq!(
+            crate::map::js_map_size(map),
+            size,
+            "fillers={fillers}: no duplicate"
+        );
         assert_eq!(crate::map::js_map_get(map, boxed(initial)), 10.0);
         assert_eq!(crate::map::js_map_delete(map, boxed(head)), 1);
-        assert_eq!(crate::map::js_map_has(map, boxed(initial)), 0, "fillers={fillers}");
+        assert_eq!(
+            crate::map::js_map_has(map, boxed(initial)),
+            0,
+            "fillers={fillers}"
+        );
     }
 }
 

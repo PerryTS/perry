@@ -18,7 +18,8 @@ fn workspace_root() -> PathBuf {
 #[test]
 fn module_global_buffer_stores_survive_conditional_source_indices() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let entry = workspace_root().join("test-files/test_issue_9278_buffer_conditional_index.ts");
+    let entry = workspace_root()
+        .join("tests/parity/node-suite/buffer/test_issue_9278_buffer_conditional_index.ts");
     let output = dir.path().join("main_bin");
 
     let compile = Command::new(perry_bin())

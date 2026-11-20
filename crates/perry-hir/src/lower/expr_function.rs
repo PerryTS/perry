@@ -706,7 +706,10 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     if needs_arguments_synth {
         let mapped = !strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            crate::lower_decl::mapped_argument_parameter_ids(&params)
+            crate::lower_decl::mapped_argument_parameter_ids(
+                &params,
+                fn_expr.function.body.as_ref(),
+            )
         } else {
             Vec::new()
         };
@@ -1493,6 +1496,7 @@ fn insert_class_capture_refresh_into_stmt(stmt: &mut Stmt, re_regs: &[Stmt]) {
             body,
             catch,
             finally,
+            ..
         } => {
             insert_class_capture_refresh_before_returns(body, re_regs);
             if let Some(c) = catch {
@@ -1733,6 +1737,7 @@ fn insert_class_capture_refresh_inside_expressions(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 insert_class_capture_refresh_inside_expressions(body, regs);
                 if let Some(catch) = catch {
@@ -1809,6 +1814,7 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 insert_class_capture_refresh_after_assignments(body, regs);
                 if let Some(c) = catch {

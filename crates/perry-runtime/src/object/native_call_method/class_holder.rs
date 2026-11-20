@@ -296,9 +296,7 @@ unsafe fn chain_method_admitting(
                     return ChainMethod::Get { holder };
                 }
             } else {
-                let body = if pos < crate::object::field_rep::REP_SLOTS
-                    && record.special_constfn_mask() & (1 << pos) != 0
-                {
+                let body = if record.lane_is_constfn(pos) {
                     record.constfn_info(pos).and_then(|info| {
                         (info as usize as *const crate::closure::JsFunctionInfo).as_ref()
                     })
@@ -362,6 +360,129 @@ pub(crate) unsafe fn class_instance_inherited_read(
     {
         return None;
     }
+    let chain = declared_chain(receiver, key)?;
+    let mut admit = chain.admit;
+    let found = chain_method_admitting(chain.start, &MethodKey::bytes(key), |holder| {
+        admit.admits(holder)
+    });
+    match found {
+        ChainMethod::Absent => Some(crate::JSValue::undefined()),
+        ChainMethod::Data { value, holder, .. } if holder as usize == chain.object_prototype => {
+            Some(crate::JSValue::from_bits(value))
+        }
+        _ => None,
+    }
+}
+
+/// Does no object of a declared class instance's chain before
+/// `%Object.prototype%`, the instance included, own a symbol-keyed property
+/// or a property named by one of `names`? The walk
+/// [`class_instance_inherited_read`] takes, asking each object's shape for
+/// an absence proof of every symbol key (`ShapeRecord::proves_no_symbols`)
+/// and of each name (its key list, or its family layout). `false` when the
+/// shapes do not decide it. Allocation-free, runs no code.
+///
+/// # Safety
+/// `receiver` is a pointer value; `names` is not empty.
+pub(crate) unsafe fn class_instance_chain_lacks(receiver: crate::JSValue, names: &[&[u8]]) -> bool {
+    let lacks = |obj: *const ObjectHeader| {
+        if crate::object::overflow::shadowed(obj) {
+            return false;
+        }
+        let Some(record) = crate::object::shapes::object_shape_record(obj) else {
+            return false;
+        };
+        record.proves_no_symbols()
+            && names.iter().all(|name| {
+                match crate::object::layout_desc::family_own_key(obj, name) {
+                    Some(None) => true,
+                    Some(Some(_)) => false,
+                    None => key_position(
+                        record.keys_view(),
+                        record.logical_key_count(),
+                        &MethodKey::bytes(name),
+                    )
+                    .is_none(),
+                }
+            })
+    };
+    // The guard's own-key test refuses a receiver owning `names[0]`; the
+    // walk below asks the receiver for every name again.
+    let Some(chain) = declared_chain(receiver, names[0]) else {
+        return false;
+    };
+    if !lacks(receiver.as_pointer::<ObjectHeader>()) {
+        return false;
+    }
+    let mut admit = chain.admit;
+    let mut holder = chain.start;
+    for _ in 0..MAX_CHAIN_DEPTH {
+        if holder as usize == chain.object_prototype {
+            return true;
+        }
+        if !admit.admits(holder) || !shape_answers(holder as usize) || !lacks(holder) {
+            return false;
+        }
+        match next_holder(holder) {
+            Ok(Some(next)) if next != holder => holder = next,
+            Ok(None) => return true,
+            _ => return false,
+        }
+    }
+    false
+}
+
+/// The chain of declared prototypes an instance of a declared class reads
+/// through, when its shapes decide it: the class's declared prototype it
+/// starts at, and the holder test each later object must pass.
+struct DeclaredChain {
+    start: *const ObjectHeader,
+    object_prototype: usize,
+    admit: DeclaredAdmit,
+}
+
+/// `Some(class)`: the next holder must be that class's declared prototype;
+/// `None`: the declared chain is over and the next must be
+/// `%Object.prototype%`.
+struct DeclaredAdmit {
+    class: Option<u32>,
+    object_prototype: usize,
+}
+
+impl DeclaredAdmit {
+    unsafe fn admits(&mut self, holder: *const ObjectHeader) -> bool {
+        match self.class {
+            Some(c) => {
+                if c == 0
+                    || c >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
+                    || crate::object::class_registry::class_decl_prototype_object(c).cast_const()
+                        != holder
+                    || !crate::object::class_registry::class_prototype_object(c).is_null()
+                    || crate::object::class_registry::prototype_objects::decl_prototype_relinked(
+                        c,
+                        holder.cast_mut(),
+                    )
+                {
+                    return false;
+                }
+                self.class = match crate::object::class_registry::get_parent_class_id(c) {
+                    Some(parent) if parent != 0 && parent != c => Some(parent),
+                    _ => None,
+                };
+                true
+            }
+            None => holder as usize == self.object_prototype,
+        }
+    }
+}
+
+/// [`DeclaredChain`] of `receiver`, which must not own `key` (the class
+/// receiver guard's own-key test).
+///
+/// # Safety
+/// `receiver` is a pointer value.
+#[inline]
+unsafe fn declared_chain(receiver: crate::JSValue, key: &[u8]) -> Option<DeclaredChain> {
     let recv = super::class_receiver_fast_guard(f64::from_bits(receiver.bits()), key)?;
     let obj = recv.addr as *const ObjectHeader;
     if !recv.recorded_prototype.is_null()
@@ -387,39 +508,14 @@ pub(crate) unsafe fn class_instance_inherited_read(
     if object_prototype == 0 {
         return None;
     }
-    // `Some(class)`: the next holder must be that class's declared prototype;
-    // `None`: the declared chain is over and the next must be
-    // `%Object.prototype%`.
-    let mut class = Some(named);
-    let found = chain_method_admitting(start, &MethodKey::bytes(key), |holder| match class {
-        Some(c) => {
-            if c == 0
-                || c >= crate::object::class_value::FIRST_RUNTIME_CLASS_ID
-                || crate::object::class_registry::class_decl_prototype_object(c).cast_const()
-                    != holder
-                || !crate::object::class_registry::class_prototype_object(c).is_null()
-                || crate::object::class_registry::prototype_objects::decl_prototype_relinked(
-                    c,
-                    holder.cast_mut(),
-                )
-            {
-                return false;
-            }
-            class = match crate::object::class_registry::get_parent_class_id(c) {
-                Some(parent) if parent != 0 && parent != c => Some(parent),
-                _ => None,
-            };
-            true
-        }
-        None => holder as usize == object_prototype,
-    });
-    match found {
-        ChainMethod::Absent => Some(crate::JSValue::undefined()),
-        ChainMethod::Data { value, holder, .. } if holder as usize == object_prototype => {
-            Some(crate::JSValue::from_bits(value))
-        }
-        _ => None,
-    }
+    Some(DeclaredChain {
+        start,
+        object_prototype,
+        admit: DeclaredAdmit {
+            class: Some(named),
+            object_prototype,
+        },
+    })
 }
 
 /// The class whose declared prototype `obj`'s shape names as its
@@ -819,43 +915,6 @@ pub(crate) unsafe fn call_class_instance_member(
         args_ptr,
         args_len,
     )
-}
-
-/// The tower's arm for a registered class id used as a receiver: the method
-/// `C.prototype` holds for the name, called with an undefined `this`.
-/// `None` when the prototype has no such user method.
-///
-/// # Safety
-/// `arg_handles` roots the call's arguments.
-#[inline(never)]
-pub(crate) unsafe fn call_class_ref_method(
-    class_id: u32,
-    method_name: &str,
-    arg_handles: &[crate::gc::RuntimeHandle],
-) -> Option<f64> {
-    if name_is_not_a_prototype_method(method_name.as_bytes()) {
-        return None;
-    }
-    let proto = crate::object::class_registry::class_decl_prototype_value(class_id);
-    let proto = crate::JSValue::from_bits(proto.to_bits());
-    if !proto.is_pointer() {
-        return None;
-    }
-    let key = MethodKey::bytes(method_name.as_bytes());
-    let ChainMethod::Data { value, .. } = chain_method(proto.as_pointer::<ObjectHeader>(), &key)
-    else {
-        return None;
-    };
-    if !crate::array::value_is_own_user_method(f64::from_bits(value), method_name) {
-        return None;
-    }
-    let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
-    Some(crate::closure::native_call_value_this(
-        f64::from_bits(value),
-        crate::closure::JsThis::from_f64(f64::from_bits(crate::value::TAG_UNDEFINED)),
-        args.as_ptr(),
-        args.len(),
-    ))
 }
 
 #[cfg(test)]

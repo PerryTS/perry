@@ -543,6 +543,8 @@ pub(crate) struct HandshakeFacts {
     pub(crate) own_certificate: Vec<u8>,
     pub(crate) authorized: bool,
     pub(crate) servername: String,
+    /// A client session's `checkServerIdentity` step; a server has none.
+    pub(crate) check_identity: Option<fn(f64) -> f64>,
 }
 
 impl HandshakeFacts {
@@ -564,6 +566,7 @@ impl HandshakeFacts {
             peer,
             own_certificate: own_certificate(data),
             servername: servername.to_string(),
+            check_identity: None,
         }
     }
 }
@@ -674,7 +677,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     if let Some(h) = as_string(rooted_args[0].get()) {
         // Legacy Perry positional: (host, port, servername?, verify?).
         let p = JsValue::from_bits(rooted_args[1].get().to_bits());
-        if !p.is_number() && !p.is_int32() {
+        if !p.is_number() {
             return 0;
         }
         port = p.to_number() as u16;
@@ -683,9 +686,7 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         verify = !explicitly_off(rooted_args[3].get());
         callback_arg = None;
         metadata_options_arg = None;
-    } else if JsValue::from_bits(rooted_args[0].get().to_bits()).is_number()
-        || JsValue::from_bits(rooted_args[0].get().to_bits()).is_int32()
-    {
+    } else if JsValue::from_bits(rooted_args[0].get().to_bits()).is_number() {
         // Node positional form: tls.connect(port[, host][, options][, cb]).
         js_net_validate_connect_port(rooted_args[0].get());
         port = JsValue::from_bits(rooted_args[0].get().to_bits()).to_number() as u16;
@@ -824,7 +825,12 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
     if let Ok(payload) =
         crate::payload_transport::socket_ptr(crate::payload_socket::link(owner.get()))
     {
-        (*payload).ext.direct_tls = Some((servername, verify, config));
+        (*payload).ext.direct_tls = Some(crate::payload_transport::DirectTls {
+            servername,
+            verify,
+            config,
+            begin: crate::payload_tls::begin_direct,
+        });
     }
     crate::payload_transport::raw_owner(owner.get())
 }

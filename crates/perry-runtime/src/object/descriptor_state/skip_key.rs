@@ -18,7 +18,7 @@ pub(crate) unsafe fn own_descriptors_skip_key(addr: usize, key: f64) -> bool {
     // object with an overflow keeps its attributes in the overflow's entries
     // (`overflow::set_entry_attrs`), not in its layout's summary.
     if super::shapes::object_shape_record(addr as *const ObjectHeader).is_some_and(|shape| {
-        shape.object_kind() == super::shapes::ShapeObjectKind::Ordinary && shape.summary() == 0
+        shape.kind_is(super::shapes::ShapeObjectKind::Ordinary) && shape.summary() == 0
     }) && !super::overflow::has_overflow(addr as *const ObjectHeader)
         && crate::value::JSValue::from_bits(key.to_bits()).is_any_string()
     {

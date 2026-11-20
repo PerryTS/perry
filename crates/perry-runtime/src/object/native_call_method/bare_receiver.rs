@@ -108,7 +108,7 @@
 #[inline]
 pub(super) unsafe fn canonicalize_bare_gc_receiver(object: f64) -> f64 {
     let bits = object.to_bits();
-    // Every NaN-boxed value — `INT32_TAG` and `SHORT_STRING_TAG` included — has
+    // Every NaN-boxed value — `INTERNAL_WORD_TAG` and `SHORT_STRING_TAG` included — has
     // non-zero top 16 bits, and 0 is not an address. One compare returns every
     // ordinary receiver before any probe runs.
     if bits == 0 || (bits >> 48) != 0 {

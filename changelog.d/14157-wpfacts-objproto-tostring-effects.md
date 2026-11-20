@@ -1,0 +1,1 @@
+- wpfacts: `Object.prototype.toString` reads the receiver's `@@toStringTag` (its getter can run) and `Object.prototype.toLocaleString` invokes the receiver's `toString`. Both were missing since the callee resolves to the built-in, so the activation pass excluded a getter or method that runs.

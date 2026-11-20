@@ -111,9 +111,11 @@ mod tests {
                 body: vec![Stmt::Throw(Expr::Number(42.0))],
                 catch: catch(),
                 finally: None,
+                forof_completion: None,
             }],
             catch: catch(),
             finally: Some(vec![]),
+            forof_completion: None,
         });
         let opts = crate::CompileOptions {
             emit_ir_only: true,

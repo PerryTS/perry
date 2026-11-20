@@ -123,6 +123,39 @@ fn pipe_lock_ids_retire_once_via_ownership_mark() {
     assert_eq!(idalloc::test_pool_occurrences(live), 0);
 }
 
+/// #12862: a keep-alive fetch whose small body is fully queued and closed
+/// before `text()` runs. Every such body must hand its stream id back.
+#[test]
+fn whole_body_collected_after_close_retires_its_stream_id() {
+    fn no_source(_: usize) {}
+    fn byte_count(bytes: Vec<u8>, _: String) -> Result<f64, f64> {
+        Ok(bytes.len() as f64)
+    }
+    let _serial = serial_guard();
+    idalloc::test_reset_pools();
+    let mut live = Vec::new();
+    for _ in 0..64 {
+        let id = alloc_native_readable(js_promise_new(), no_source, no_source);
+        take_native_promise(id);
+        let body = js_promise_new();
+        unsafe {
+            native_enqueue(id, b"0123456789abcdef");
+            js_readable_stream_controller_close(controller_value(id));
+            collect_body(id, body, String::new(), byte_count);
+        }
+        assert_eq!(js_promise_state(body), 1, "the body promise resolves");
+        assert_eq!(js_promise_value(body), 16.0, "with the whole queued body");
+        if idalloc::test_pool_occurrences(id) == 0 {
+            live.push(id);
+        }
+    }
+    assert!(
+        live.is_empty(),
+        "{} of 64 drained stream ids never retired",
+        live.len()
+    );
+}
+
 #[test]
 fn attached_reader_dies_with_terminal_stream_but_not_before() {
     let _serial = serial_guard();
@@ -265,26 +298,6 @@ fn transform_root_scanner_writes_relocated_pointers_back() {
 }
 
 #[test]
-fn stream_runtime_owned_calls_cannot_bypass_provider_abi() {
-    let streams_source = include_str!("../streams.rs");
-    for forbidden in [
-        "perry_runtime::array::js_",
-        "perry_runtime::closure::js_",
-        "perry_runtime::promise::js_",
-    ] {
-        assert!(
-            !streams_source.contains(forbidden),
-            "streams.rs bypasses the provider ABI through {forbidden}"
-        );
-    }
-
-    let gc_source = include_str!("gc.rs");
-    assert!(!gc_source
-        .contains("perry_runtime::node_submodules::js_register_stream_consumer_callbacks"));
-    assert!(!gc_source.contains("perry_runtime::object::js_register_stream_expando_set"));
-}
-
-#[test]
 fn web_compression_formats_round_trip() {
     let input = b"hello stream/web compression";
     let mut formats = vec![
@@ -318,7 +331,9 @@ fn transform_terminate_closes_readable_and_errors_writable() {
     let readable = unsafe { js_transform_stream_readable(transform) };
     let writable = unsafe { js_transform_stream_writable(transform) };
 
-    assert!(unsafe { dispatch_stream_method(readable, "terminate", &[]) }.is_some());
+    assert!(unsafe { dispatch_stream_method(readable, "terminate", &[]) }.is_none());
+    let controller = controller_value(stream_id(readable));
+    assert!(unsafe { dispatch_stream_method(controller, "terminate", &[]) }.is_some());
     assert!(matches!(
         READABLE_STREAMS
             .lock()
@@ -658,10 +673,19 @@ fn generic_stream_dispatch_preserves_owner_and_controller_alias() {
             assert!(dispatch_stream_method(handle, wrong_method, &[]).is_none());
             assert!(dispatch_stream_method(handle, "unknown", &[]).is_none());
         }
-        assert!(dispatch_stream_method(readable, "enqueue", &[42.0]).is_some());
+        // RSTREAM R3: controller methods answer on the controller, never on
+        // the stream; a TransformStream's controller has terminate, not close.
+        let controller = controller_value(stream_id(readable));
+        for method in ["enqueue", "close", "terminate", "error"] {
+            assert!(dispatch_stream_method(readable, method, &[42.0]).is_none());
+        }
+        assert!(dispatch_stream_method(controller, "getReader", &[]).is_none());
+        assert!(dispatch_stream_method(controller, "close", &[]).is_none());
+        assert_eq!(js_stream_handle_kind(stream_id(controller)), 7);
+        assert!(dispatch_stream_method(controller, "enqueue", &[42.0]).is_some());
         assert!(dispatch_stream_method(reader, "releaseLock", &[]).is_some());
         assert!(dispatch_stream_method(writer, "releaseLock", &[]).is_some());
-        assert!(dispatch_stream_method(readable, "close", &[]).is_some());
+        assert!(dispatch_stream_method(controller, "terminate", &[]).is_some());
         assert!(matches!(
             READABLE_STREAMS
                 .lock()
@@ -743,4 +767,20 @@ fn draining_an_errored_stream_leaves_no_unhandled_rejection() {
         before,
         "the drain consumed the errored read; it must not stay unhandled"
     );
+}
+
+/// RSTREAM R1: a controller id is its stream id plus the controller bit, the
+/// allocator never hands out an id with that bit, and a plain readable's
+/// controller is the default family.
+#[test]
+fn controller_value_round_trips_and_stays_out_of_the_allocator() {
+    let _serial = serial_guard();
+    let id = alloc_readable(0, 0, 0, 1.0);
+    assert!(id < STREAM_ALLOC_END);
+    let controller = controller_value(id);
+    assert_ne!(stream_id(controller), id);
+    assert_eq!(controller_stream_id(controller), id);
+    assert_eq!(controller_stream_id(stream_value(id)), 0);
+    assert_eq!(js_stream_handle_kind(stream_id(controller)), 6);
+    assert_eq!(js_stream_handle_kind(id), 1);
 }

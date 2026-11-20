@@ -49,14 +49,21 @@ pub(crate) unsafe fn queue_one_shot_callback(data: f64, options: f64, callback: 
     }
     js_zlib_validate_callback(callback.get());
     js_zlib_validate_buffer_arg(data.get().to_bits() as i64);
-    let max_output_length = if matches!(codec, Codec::BrotliDecompress) {
-        js_zlib_brotli_max_output_length(options.get())
+    let (max_output_length, large_window) = if matches!(codec, Codec::BrotliDecompress) {
+        (
+            js_zlib_brotli_max_output_length(options.get()),
+            js_zlib_brotli_large_window(options.get()) != 0,
+        )
     } else {
-        0
+        (0, false)
     };
     let owner = roots.root_nanbox(f64::from_bits(
         perry_ffi::alloc_null_proto_object(&[]).bits(),
     ));
+    // Read with the other options at call time; the job only consults the owner.
+    if large_window {
+        np::own(owner.get(), "brotliLargeWindow", 1.0);
+    }
     let id = js_async_hooks_provider_init(b"ZLIB".as_ptr(), 4);
     queue_job(&[
         data.get(),
@@ -214,6 +221,9 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
         ));
         np::own(snapshot.get(), "level", level.level() as f64);
         let engine = roots.root_nanbox(create_stream(codec, family, snapshot.get(), None));
+        if field(call.owner.get(), "brotliLargeWindow") == 1.0 {
+            payload(engine.get()).unwrap().allow_brotli_large_window();
+        }
         // Both jobs capture the ordinary owner; this field is traced/re-written.
         // No JS address is hidden in Completion, and no second driver exists.
         np::own(call.owner.get(), "engine", engine.get());
@@ -261,7 +271,13 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
                     .extend_from_slice(std::slice::from_raw_parts(out.out, out.out_len));
             }
             let error = if out.status == ns::StepStatus::ERROR {
-                Some((codec.error_details(out.code).0, out.code == 5))
+                let (message, name, errno) = codec.error_details(out.code);
+                // Brotli decoder failures carry the decoder's own code, as the
+                // stream form does; zlib codecs keep the message-derived code.
+                let brotli = (call.codec == Codec::BrotliDecompress as u32
+                    && name.starts_with("ERR__"))
+                .then_some((name, errno));
+                Some((message, out.code == 5, brotli))
             } else {
                 None
             };
@@ -308,10 +324,21 @@ unsafe extern "C" fn run(context: *mut c_void) -> f64 {
             )
             .bits(),
         )
-    } else if let Some((message, truncated)) = error {
-        let err = js_zlib_stream_error(message.as_ptr(), message.len(), i32::from(truncated));
+    } else if let Some((message, truncated, brotli)) = error {
+        let err = roots.root_nanbox(js_zlib_stream_error(
+            message.as_ptr(),
+            message.len(),
+            i32::from(truncated),
+        ));
         drop(message);
-        err
+        if let Some((name, errno)) = brotli {
+            let name = roots.root_nanbox(f64::from_bits(
+                JsValue::from_string_ptr(alloc_string(&name).as_raw()).bits(),
+            ));
+            error_field(err.get(), "code", name.get());
+            error_field(err.get(), "errno", errno as f64);
+        }
+        err.get()
     } else {
         f64::from_bits(JsValue::NULL.bits())
     });

@@ -1,0 +1,19 @@
+bound0 ["s","a","m","z"] {"s":"k0","a":1,"z":3}
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+bound1 ["s","a","m","z"] {"s":"k0","a":2,"z":3}
+z 3 true
+DEC 250: Cannot replace built-in member Function.prototype.bind: built-in objects are read-only in a compiled program
+bound2 ["s","a","m","z"] {"s":"k0","a":3,"z":3}
+setter y 2
+ownbind ["s","m"] {"s":0}
+setter y 2
+ownbind2 ["s","m"] {"s":0}
+mid0 ["u","v","w","x"] {"u":1,"v":0,"w":3,"x":1}
+mid1 throws TypeError
+alt setter w 3
+mid2 ["u","v","x"] {"u":1,"v":2,"x":1}
+mid3 ["u","v","w","x"] {"u":1,"v":3,"w":3,"x":1}
+twice ["spa","def","k1","copy","obj"] {"def":"D","copy":"D","obj":{"d":"D"}}
+twice calls D D D
+readd ["b","c","a"] {"b":2,"c":3,"a":"again"}
+total 867

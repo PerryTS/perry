@@ -178,11 +178,7 @@ fn literal_length_local_proves_typed_array_binding() {
         ),
         let_stmt(3, false, Expr::Integer(1_000)),
         let_stmt(4, true, Expr::Integer(0)),
-        Stmt::Expr(Expr::Update {
-            id: 4,
-            op: perry_hir::UpdateOp::Increment,
-            prefix: false,
-        }),
+        Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Integer(1)))),
         Stmt::Expr(call(
             7,
             vec![
@@ -406,7 +402,10 @@ fn site_nested_in_loop_after_toplevel_let_is_proven() {
 }
 
 #[test]
-fn sites_inside_closures_are_never_judged() {
+fn sites_inside_closures_are_judged_as_their_own_body() {
+    // A closure body runs at an unknown time, so it is judged as its own body:
+    // its literals are judged, and no binding of the enclosing body is ready
+    // there unless `definite_init` proves it for the closure at entry.
     let closure = Expr::Closure {
         func_id: 99,
         params: vec![],
@@ -424,7 +423,10 @@ fn sites_inside_closures_are_never_judged() {
     };
     let m = module_with_init(vec![let_stmt(4, false, closure)]);
     let facts = collect_spec_abi_facts(&m);
-    assert!(facts.call_sites.get(&7).is_none());
+    assert_eq!(
+        facts.call_sites.get(&7),
+        Some(&vec![vec![SpecParamRep::I32]])
+    );
 }
 
 #[test]
@@ -466,6 +468,7 @@ fn put_value_set_receiver_demotes_source_const_len() {
             value: Box::new(Expr::Integer(3)),
             receiver: Box::new(source),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),
@@ -544,6 +547,7 @@ fn local_is_reassigned_sees_closure_writes() {
 #[test]
 fn guarded_number_array_rejects_stale_or_aliasable_reads() {
     let read = || Expr::IndexGet {
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(5)),
@@ -554,6 +558,7 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
             object: Box::new(Expr::LocalGet(5)),
             index: Box::new(Expr::Integer(0)),
             value: Box::new(Expr::Integer(1)),
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         })
@@ -736,6 +741,7 @@ fn store_key_const_len(pre: Vec<Stmt>, key: Expr) -> Option<Option<i64>> {
         object: Box::new(Expr::LocalGet(1)),
         index: Box::new(key),
         value: Box::new(Expr::Integer(0)),
+        element_offset: 0,
         byte_offset: 0,
         byte_end: 0,
     }));

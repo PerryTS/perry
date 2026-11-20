@@ -1,0 +1,7 @@
+own-entry 123 0
+DEC 250: Cannot add member %ArrayIteratorPrototype%.return: built-in objects are read-only in a compiled program
+step-get-fail 17 0
+elision-get-fail 17 0
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype[Symbol(Symbol.iterator)]: built-in objects are read-only in a compiled program (adding a new member is allowed)
+prototype-entry 456 0

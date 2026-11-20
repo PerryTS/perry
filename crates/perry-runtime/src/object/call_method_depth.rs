@@ -6,12 +6,10 @@
 //! the frames it abandons; the catching landing pad pops their entries, so the
 //! counter cannot leak one level per caught throw (#5591).
 
-use std::cell::RefCell;
-
-crate::perry_thread_local! {
-    static CALL_METHOD_DEPTH: RefCell<crate::exception::CatchStack<()>> =
-        const { RefCell::new(crate::exception::CatchStack::new()) };
-}
+/// A field of the per-thread record of frame-marked stacks
+/// ([`crate::exception::marks::CatchStacks`]).
+static CALL_METHOD_DEPTH: crate::exception::marks::CatchStackKey<()> =
+    crate::exception::marks::CatchStackKey::new(|stacks| &stacks.call_method);
 const MAX_CALL_METHOD_DEPTH: usize = 512;
 
 pub(super) struct CallMethodDepthGuard {
@@ -76,7 +74,7 @@ pub(crate) fn call_method_depth_check_marks(sp: usize) {
 }
 
 /// The current `js_native_call_method` recursion depth.
-#[cfg(any(test, target_os = "wasi"))]
+#[cfg(test)]
 pub(crate) fn call_method_depth() -> u32 {
     CALL_METHOD_DEPTH.with(|d| d.borrow().len() as u32)
 }

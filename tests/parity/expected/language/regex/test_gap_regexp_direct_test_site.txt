@@ -1,0 +1,34 @@
+builtin: [true,false]
+own_exec_after_warm: [true,false]
+expando_then_exec: [true,false,["foo","exec"]]
+split_site_argument_adds_own_exec: [[true,false],1,[true,true]]
+split_site_argument_patches_proto_exec: throw TypeError
+split_site_argument_restores_builtin_exec: throw TypeError
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto_exec_override_after_warm: throw TypeError
+after_restore: [true,false]
+DEC 250: Cannot replace built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto_exec_same_function_rewritten: [true,false]
+DEC 250: Cannot delete built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+deleted_proto_exec: throw TypeError
+DEC 250: Cannot redefine built-in member RegExp.prototype.exec: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto_exec_getter: throw TypeError
+DEC 250: Cannot replace built-in member RegExp.prototype.test: built-in objects are read-only in a compiled program (adding a new member is allowed)
+proto_test_override_after_warm: throw TypeError
+subclass_exec: [true,false,true]
+subclass_plain: [true,1,true,2,false,0]
+setPrototypeOf: "p"
+symbol_match_irrelevant: [true,false]
+global_lastIndex: [true,1,true,2,false,0,true,1]
+sticky_lastIndex: [true,1,true,2,false,0,true,2]
+global_lastIndex_past_end: [false,0]
+nonglobal_lastIndex_ignored: [true,5]
+nonglobal_lastIndex_valueOf_observed: [true,1,"object"]
+global_lastIndex_valueOf: [true,1,2]
+lastIndex_nonwritable_global: throw TypeError
+lastIndex_nonwritable_nonglobal: [true,false]
+argument_coercion_order: throw TypeError
+argument_coercions: [true,true,true,true,true,true]
+receiver_not_regexp: throw TypeError
+compile_in_place: [false,true,"b"]
+unicode_and_flags: [true,false,true,false]

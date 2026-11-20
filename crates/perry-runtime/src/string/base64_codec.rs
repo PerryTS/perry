@@ -16,9 +16,9 @@ fn value_to_string_bytes(value: f64) -> &'static [u8] {
 fn throw_invalid_character() -> ! {
     let msg = b"The string to be decoded is not correctly encoded.";
     let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
-    let err = crate::error::js_error_new_with_name_message(b"InvalidCharacterError", msg_ptr);
-    crate::node_submodules::set_error_user_prop(err as usize, "code", 5.0);
-    crate::exception::js_throw(crate::value::js_nanbox_pointer(err as i64))
+    let err = crate::error::CoreError::named(b"InvalidCharacterError", msg_ptr);
+    crate::node_submodules::set_error_user_prop(err.header_addr(), "code", 5.0);
+    crate::exception::throw_core(err)
 }
 
 fn is_base64_alphabet(byte: u8) -> bool {

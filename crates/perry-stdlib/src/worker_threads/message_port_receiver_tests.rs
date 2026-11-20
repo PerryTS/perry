@@ -8,7 +8,13 @@ fn duplicate_private_id_cannot_impersonate_registered_port_identity() {
         ensure_environment_data_gc_scanner();
         let id = 999;
         MESSAGE_PORTS.with(|ports| {
-            ports.borrow_mut().insert(id, MessagePortState::default());
+            ports.borrow_mut().insert(
+                id,
+                MessagePortState {
+                    lease: port_transport::pair().0,
+                    ..Default::default()
+                },
+            );
         });
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let port = scope.root_raw_mut_ptr(message_port::message_port_object(id));
@@ -55,7 +61,13 @@ fn close_callback_uses_existing_once_listener_storage() {
         ensure_environment_data_gc_scanner();
         let id = 998;
         MESSAGE_PORTS.with(|ports| {
-            ports.borrow_mut().insert(id, MessagePortState::default());
+            ports.borrow_mut().insert(
+                id,
+                MessagePortState {
+                    lease: port_transport::pair().0,
+                    ..Default::default()
+                },
+            );
         });
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
         let port = scope.root_raw_mut_ptr(message_port::message_port_object(id));
@@ -81,7 +93,7 @@ fn close_callback_uses_existing_once_listener_storage() {
         MESSAGE_PORTS.with(|ports| {
             let mut ports = ports.borrow_mut();
             let state = ports.remove(&id).unwrap();
-            assert!(state.closed && state.close_pending);
+            assert!(state.closed() && state.close_pending);
             assert_eq!(state.close_cbs.len(), 1);
             assert!(state.close_cbs[0].once);
             assert_eq!(

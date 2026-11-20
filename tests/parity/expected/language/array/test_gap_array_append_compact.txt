@@ -1,0 +1,12 @@
+mixed 83 1.25 12 long alias string 1.25
+holes 4 false true 1.25
+frozen true
+bytes 2 undefined
+object 0 1.25
+numeric RHS 1 9
+numeric grow RHS 40 12 39
+custom 2 0 false
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+inherited 0 1 true
+DEC 250: Cannot add an array index to built-in Array.prototype: built-in objects are read-only in a compiled program (named members may be added)
+prototype receiver undefined false

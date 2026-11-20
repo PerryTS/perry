@@ -32,9 +32,9 @@ pub(super) unsafe fn call_class_object_captured_entry(
         return None;
     }
     let array = caps.as_pointer::<crate::array::ArrayHeader>();
-    if crate::value::addr_class::try_read_gc_header(array as usize)?.obj_type
-        != crate::gc::GC_TYPE_ARRAY
-        || crate::array::js_array_length(array) < sig_caps
+    if crate::gc_type_is_not_array!(
+        crate::value::addr_class::try_read_gc_header(array as usize)?.obj_type
+    ) || crate::array::js_array_length(array) < sig_caps
     {
         return None;
     }

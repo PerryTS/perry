@@ -2,19 +2,15 @@
 
 ## Current source selection
 
-The root Cargo manifest selects repository copies of the exact `turnloop` and
-`turnloop-http` alpha.9 Rust sources used for Linux qualification. The direct
-`turnloop-io` alpha.9 registry sources are byte-identical to the qualified copy.
-Builds therefore no longer require the external source overrides described in
-the historical records below. See
-[the pinned source record](../../third_party/turnloop/VENDORED.md) for registry
-checksums, source hashes, licensing and the alpha.10 API comparison. The normal
-workspace lockfile selects these copies; no Tokio or publish-age exception is
-introduced. This is a committed local source repair, not a claim that an
-unmodified published Turnloop version supplies every required API.
-The [self-contained build receipt](../../docs/validation/wasi-self-contained-turnloop-20261026.json)
-records the locked dependency graph, test binaries, source identity checks and
-standalone Rust-host qualification for this selection.
+The root Cargo manifest selects the published `turnloop`, `turnloop-io`,
+`turnloop-http`, `turnloop-tls` and `turnloop-websocket` 0.1.0-beta.2 crates
+from crates.io. beta.1 carries every provider API the earlier repository copy
+of the alpha.9/alpha.10 sources repaired, so builds need no `[patch]` and no
+external source override. The lockfile pins the registry checksums; the
+publish-age exception for these artifacts is recorded beside the `turnloop` pin
+in the root `Cargo.toml`. The
+[self-contained build receipt](../../docs/validation/wasi-self-contained-turnloop-20261026.json)
+qualifies the earlier repository-copy selection; it does not requalify beta.1.
 
 Native P3 engine integration, generated native TypeScript async calls,
 future/stream readers and producers, and supported concurrent HTTP layouts now

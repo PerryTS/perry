@@ -97,7 +97,16 @@ impl Drop for Fixture {
     }
 }
 
+/// One loop iteration's net work: a turn, then the check phase that follows
+/// it in the generated loop (which delivers an EOF parked behind data).
 fn pump() {
+    turn_only();
+    super::check_phase_begin();
+    super::check_phase_end();
+}
+
+/// A turn with no check phase after it.
+fn turn_only() {
     crate::event_pump::pump_net_for_test(Duration::from_millis(5));
 }
 
@@ -1019,4 +1028,155 @@ fn a_second_deferred_shutdown_does_not_replace_the_first() {
         let _ = super::close(conn);
     }
     pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() >= 2);
+}
+
+/// Connect a client to a fresh listener and start both reads.
+fn connected_pair() -> (i64, i64, i64) {
+    let (server, local) = listen_local();
+    let client = 2;
+    super::tcp_connect(client, SUBSYSTEM, local, true).expect("connect");
+    assert!(pump_until(|e| e.iter().any(|e| e.kind == NET_ACCEPT)));
+    let conn = accepted_id(server).expect("connection id");
+    super::read_start(conn).expect("server read");
+    super::read_start(client).expect("client read");
+    (server, client, conn)
+}
+
+/// Turn (no check phase) until `conn` has received `want` bytes.
+fn turn_until_data(conn: i64, want: usize) {
+    let limit = Instant::now() + Duration::from_secs(5);
+    while payload(NET_DATA, conn).len() < want && Instant::now() < limit {
+        turn_only();
+    }
+    assert_eq!(payload(NET_DATA, conn).len(), want, "{:?}", events());
+}
+
+/// Let a FIN that is already on the wire reach the driver, with no check
+/// phase in between.
+fn settle_turns() {
+    for _ in 0..20 {
+        turn_only();
+    }
+}
+
+#[test]
+fn an_eof_read_behind_data_waits_for_the_next_check_phase() {
+    let _fixture = Fixture::start();
+    super::defer_eof::set_enabled_for_test(true);
+    let (server, client, conn) = connected_pair();
+
+    // `end("a")`: the data and the FIN arrive together.
+    super::write(client, b"a".to_vec(), 0).expect("write");
+    super::shutdown(client, 0).expect("end");
+    turn_until_data(conn, 1);
+    settle_turns();
+    assert_eq!(
+        count(NET_EOF, conn),
+        0,
+        "parked behind its data: {:?}",
+        events()
+    );
+    assert!(
+        super::eof_parked(),
+        "the park must not block on a parked EOF"
+    );
+    assert_ne!(crate::timer::js_immediate_has_pending(), 0);
+
+    // The check phase in progress when the EOF arrived does not release it;
+    // only one that began after it does.
+    super::check_phase_begin();
+    super::check_phase_end();
+    assert_eq!(count(NET_EOF, conn), 1, "delivered after the check phase");
+    assert!(!super::eof_parked());
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+#[test]
+fn an_eof_with_no_data_before_it_is_delivered_at_once() {
+    let _fixture = Fixture::start();
+    super::defer_eof::set_enabled_for_test(true);
+    let (server, client, conn) = connected_pair();
+    // A check phase separates the connect from the close, so nothing counts
+    // as data "this phase" for the connection.
+    super::check_phase_begin();
+    super::check_phase_end();
+
+    super::shutdown(client, 0).expect("end");
+    let limit = Instant::now() + Duration::from_secs(5);
+    while count(NET_EOF, conn) == 0 && Instant::now() < limit {
+        turn_only();
+    }
+    assert_eq!(
+        count(NET_EOF, conn),
+        1,
+        "a plain close is not parked: {:?}",
+        events()
+    );
+    assert!(!super::eof_parked());
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+#[test]
+fn a_parked_eof_is_dropped_when_its_socket_closes_first() {
+    let _fixture = Fixture::start();
+    super::defer_eof::set_enabled_for_test(true);
+    let (server, client, conn) = connected_pair();
+
+    super::write(client, b"a".to_vec(), 0).expect("write");
+    super::shutdown(client, 0).expect("end");
+    turn_until_data(conn, 1);
+    settle_turns();
+    assert!(
+        super::eof_parked(),
+        "the subject must have parked: {:?}",
+        events()
+    );
+
+    // destroy() from the data handler's immediate: no 'end' afterwards.
+    let _ = super::close(conn);
+    assert!(pump_until(|e| e
+        .iter()
+        .any(|e| e.kind == NET_CLOSED && e.id == conn)));
+    assert_eq!(count(NET_EOF, conn), 0, "a closed socket's EOF is dropped");
+    assert!(!super::eof_parked(), "the Closed purges it with the entry");
+
+    for id in [client, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
+}
+
+#[test]
+fn the_switch_off_delivers_an_eof_behind_data_at_once() {
+    let _fixture = Fixture::start();
+    super::defer_eof::set_enabled_for_test(false);
+    let (server, client, conn) = connected_pair();
+
+    super::write(client, b"a".to_vec(), 0).expect("write");
+    super::shutdown(client, 0).expect("end");
+    turn_until_data(conn, 1);
+    let limit = Instant::now() + Duration::from_secs(5);
+    while count(NET_EOF, conn) == 0 && Instant::now() < limit {
+        turn_only();
+    }
+    super::defer_eof::set_enabled_for_test(true);
+    assert_eq!(
+        count(NET_EOF, conn),
+        1,
+        "PERRY_NET_DEFER_EOF=0: {:?}",
+        events()
+    );
+
+    for id in [client, conn, server] {
+        let _ = super::close(id);
+    }
+    pump_until(|e| e.iter().filter(|e| e.kind == NET_CLOSED).count() == 3);
 }

@@ -106,6 +106,7 @@ pub(crate) fn req_handle_of(handle: i64) -> i64 {
 /// heap birth may not allocate.
 pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_handle: i64) -> i64 {
     let mut response = ServerResponse::new().with_request_handle(req_handle);
+    response.http2_compat = true;
     response.socket_value = crate::server::http2_server::socket_of_session(conn_id);
     response.turnloop = Some((
         crate::server::turnloop_route::ResponseConnection::H2Session(conn_id),

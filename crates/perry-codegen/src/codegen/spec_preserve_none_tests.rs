@@ -306,6 +306,7 @@ fn a_call_inside_a_try_region_invokes_with_the_convention() {
                     body: vec![Stmt::Return(Some(Expr::Integer(0)))],
                 }),
                 finally: None,
+                forof_completion: None,
             },
             Stmt::Return(Some(Expr::Integer(0))),
         ],

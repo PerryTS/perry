@@ -27,32 +27,80 @@ impl FrameValue<'_> {
     }
 }
 
+impl crate::exception::throw_leaf::CaughtSlot for FrameValue<'_> {
+    fn get(&self) -> f64 {
+        self.get_nanbox_f64()
+    }
+    fn put(&self, value: f64) {
+        self.set_nanbox_f64(value);
+    }
+}
+
+enum ErrorSlot<'a> {
+    Vacant(FrameValue<'a>),
+    Caught(crate::exception::throw_leaf::StoredCaught<FrameValue<'a>>),
+}
+
+pub(super) struct FrameError<'a>(Cell<Option<ErrorSlot<'a>>>);
+impl<'a> FrameError<'a> {
+    // Slot reads and writes cannot allocate or reenter, so taking the carrier
+    // briefly never exposes an empty slot to a program callback or GC.
+    fn with_slot<T>(&self, read: impl FnOnce(&ErrorSlot<'a>) -> T) -> T {
+        let slot = self.0.take().unwrap();
+        let value = read(&slot);
+        self.0.set(Some(slot));
+        value
+    }
+
+    pub fn new(slot: FrameValue<'a>) -> Self {
+        Self(Cell::new(Some(ErrorSlot::Vacant(slot))))
+    }
+    pub fn is_caught(&self) -> bool {
+        self.with_slot(|slot| matches!(slot, ErrorSlot::Caught(_)))
+    }
+    pub fn get_nanbox_f64(&self) -> f64 {
+        self.with_slot(|slot| match slot {
+            ErrorSlot::Vacant(slot) => slot.get_nanbox_f64(),
+            ErrorSlot::Caught(error) => error.value(),
+        })
+    }
+    fn capture(&self, error: crate::exception::Caught) {
+        let previous = self.0.take().unwrap();
+        let next = match previous {
+            ErrorSlot::Vacant(slot) => ErrorSlot::Caught(error.store(slot)),
+            caught @ ErrorSlot::Caught(_) => caught,
+        };
+        self.0.set(Some(next));
+    }
+    fn caught(&self) -> Option<crate::exception::Caught> {
+        self.with_slot(|slot| match slot {
+            ErrorSlot::Vacant(_) => None,
+            ErrorSlot::Caught(error) => Some(error.caught()),
+        })
+    }
+}
+
 pub(super) struct Frame<'a> {
     pub owner: FrameValue<'a>,
-    pub error: FrameValue<'a>,
-    pub threw: Cell<bool>,
+    pub error: FrameError<'a>,
 }
 
 impl<'a> Frame<'a> {
     pub fn new(scope: &'a RuntimeHandleScope, owner: f64) -> Self {
         Self {
             owner: FrameValue::Root(scope.root_nanbox_f64(owner)),
-            error: FrameValue::Root(scope.root_nanbox_f64(undefined())),
-            threw: Cell::new(false),
+            error: FrameError::new(FrameValue::Root(scope.root_nanbox_f64(undefined()))),
         }
     }
     pub fn token(&self) -> u64 {
         self as *const Self as usize as u64
     }
-    pub fn capture(&self, error: f64) {
-        if !self.threw.get() {
-            self.error.set_nanbox_f64(error);
-            self.threw.set(true);
-        }
+    pub fn capture(&self, error: crate::exception::Caught) {
+        self.error.capture(error);
     }
     pub fn rethrow(&self) {
-        if self.threw.get() {
-            crate::exception::js_throw(self.error.get_nanbox_f64());
+        if let Some(error) = self.error.caught() {
+            crate::exception::rethrow_caught(error);
         }
     }
 }
@@ -118,7 +166,7 @@ pub(super) unsafe fn invoke_for(
     let mut request = None;
     let mut roots = Vec::new();
     let mut values = Vec::new();
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         let interface = std::str::from_utf8(std::slice::from_raw_parts(interface, interface_len))
             .unwrap_or_else(|_| fail("Invalid component interface name"));
         let function = std::str::from_utf8(std::slice::from_raw_parts(function, function_len))
@@ -256,7 +304,7 @@ pub(super) unsafe fn resource_for(
 ) -> i32 {
     let mut prepared = Vec::new();
     let mut parsed = Value::Null;
-    let outcome = crate::exception::catch_js_throw(|| {
+    let outcome = crate::exception::catch_thrown(|| {
         parsed = serde_json::from_slice(std::slice::from_raw_parts(event, event_len))
             .unwrap_or_else(|_| fail("Invalid component resource event"));
         if parsed["kind"] == "drain" {

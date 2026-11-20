@@ -63,6 +63,7 @@ mod tests {
     use super::*;
     use crate::inline::call_inliner::inline_calls_in_stmts;
     use crate::inline::ExactReceiverFacts;
+    use crate::local_occurrences::WriteCensus;
     use perry_hir::types::Type;
     use perry_hir::BinaryOp;
 
@@ -164,6 +165,7 @@ mod tests {
             &mut HashMap::new(),
             &mut ExactReceiverFacts::new(),
             &mut 100,
+            &WriteCensus::unwritten(),
             None,
             &HashMap::new(),
             false,

@@ -88,6 +88,7 @@ fn install_compiled_for_tests() {
         js_runtime_install_compiled();
         crate::object::js_nm_install_events();
         crate::object::js_nm_install_fs();
+        crate::cluster::install_default_value();
     });
 }
 
@@ -183,6 +184,7 @@ pub extern "C" fn js_runtime_install_compiled() {
     crate::wasi_hook_slots::install();
     js_runtime_install_messaging();
     js_runtime_install_event_target();
+    js_runtime_install_navigator();
     js_runtime_install_typedarray();
     #[cfg(feature = "dyn-eval")]
     js_runtime_install_dyn_eval();
@@ -196,6 +198,8 @@ pub extern "C" fn js_runtime_install_compiled() {
     js_runtime_install_intl_datetime();
     #[cfg(feature = "regex-engine")]
     js_runtime_install_regex_engine();
+    #[cfg(feature = "regex-engine")]
+    js_runtime_install_regex_unicode();
     #[cfg(feature = "url-engine")]
     js_runtime_install_url_engine();
     js_runtime_install_string_normalize();
@@ -253,6 +257,16 @@ pub(crate) static HEAP_SNAPSHOT_JSON: Hook<fn(crate::gc::HeapSnapshotFormat) -> 
 pub(crate) static PROCESS_REPORT_JSON: Hook<fn(&str, Option<&str>) -> String> = Hook::empty();
 
 pub(crate) static NODE_API_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
+/// Clears Node-API weak references whose targets died; set when the host installs.
+pub(crate) static NODE_API_WEAK_PRUNE: Hook<fn(&dyn Fn(usize) -> bool)> = Hook::empty();
+
+/// `gc::dead_owner` entry for Node-API weak references: a no-op until the
+/// Node-API host is installed (its TLS storage does not exist before that).
+pub(crate) fn prune_dead_node_api_weak_references(is_dead: &dyn Fn(usize) -> bool) {
+    if let Some(prune) = NODE_API_WEAK_PRUNE.peek() {
+        prune(is_dead);
+    }
+}
 pub(crate) static WASM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static DGRAM_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
 pub(crate) static NODE_TEST_ROOT_SCANNER: Hook<crate::gc::MutableRootScanner> = Hook::empty();
@@ -300,6 +314,9 @@ pub extern "C" fn js_runtime_install_diagnostics() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_dyn_eval() {
     perry_install_once!({
+        // Interpreted code can obtain a native namespace through a runtime
+        // specifier, even when the compiled source names no native module.
+        crate::object::native_module::constant_getters::install_all();
         crate::object::install_dyn_eval();
         crate::dyn_eval_hooks::install();
     });
@@ -346,6 +363,14 @@ pub extern "C" fn js_runtime_install_regex_engine() {
     perry_install_once!({
         crate::regex::install_iterator_hooks();
     });
+}
+
+/// Selected independently of the engine: ASCII-only literal programs do not
+/// retain the Unicode membership database through the common regex installer.
+#[cfg(feature = "regex-engine")]
+#[no_mangle]
+pub extern "C" fn js_runtime_install_regex_unicode() {
+    perex::install_unicode_properties();
 }
 
 /// URL value operations are available in every archive. Native module
@@ -437,6 +462,7 @@ pub extern "C" fn js_runtime_install_global_websocket() {
 #[no_mangle]
 pub extern "C" fn js_runtime_install_global_webcrypto() {
     perry_install_once!({
+        crate::object::native_module::constant_getters::webcrypto();
         crate::object::global_this::web_hooks::install_webcrypto();
     });
 }
@@ -520,7 +546,8 @@ pub extern "C" fn js_runtime_install_proxy() {
 /// Formatting can stringify without publishing a JSON namespace.
 #[no_mangle]
 pub extern "C" fn js_runtime_install_json_format() {
-    // The sole store is idempotent; no initialization work needs a Once.
+    // Cache roots are per thread; the formatting slot is process-global.
+    crate::json_hooks::register_roots();
     crate::builtins::install_json_format();
 }
 
@@ -577,6 +604,13 @@ pub extern "C" fn js_runtime_install_event_target() {
     crate::event_target_hook_slots::install();
 }
 
+/// `Navigator.prototype`'s getters (`navigator.rs`), for a program that
+/// reaches navigator.
+#[no_mangle]
+pub extern "C" fn js_runtime_install_navigator() {
+    crate::navigator::PROTOTYPE_INSTALL.set(crate::navigator::install_prototype);
+}
+
 #[no_mangle]
 pub extern "C" fn js_runtime_install_typedarray() {
     crate::typedarray_hook_slots::install();
@@ -619,4 +653,22 @@ mod installer_registration_tests {
             );
         });
     }
+}
+
+/// `family_never`: a family is claimed never only when every registered
+/// image claims it. The number of images, an image's registration index,
+/// and the most there can be.
+pub(crate) const MAX_IMAGES: usize = MAX_FEATURE_INSTALLERS;
+pub(crate) fn registered_images() -> usize {
+    FEATURE_INSTALLER_COUNT
+        .load(Ordering::Acquire)
+        .min(MAX_FEATURE_INSTALLERS)
+}
+pub(crate) fn image_index(installer: extern "C" fn()) -> Option<usize> {
+    FEATURE_INSTALLERS[..registered_images()]
+        .iter()
+        .position(|slot| {
+            slot.peek()
+                .is_some_and(|known| known as usize == installer as usize)
+        })
 }

@@ -40,6 +40,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
             value: Box::new(Expr::LocalGet(5)),
             receiver: Box::new(Expr::LocalGet(3)),
             strict: false,
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
         }),

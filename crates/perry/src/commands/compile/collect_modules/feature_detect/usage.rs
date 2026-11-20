@@ -42,6 +42,7 @@ fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr, bool) 
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(|s| stmt_any_expr(s, predicate))
                 || catch

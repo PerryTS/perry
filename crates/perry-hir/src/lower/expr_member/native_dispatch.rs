@@ -174,18 +174,11 @@ pub(crate) fn is_stream_api_member(module: &str, prop: &str) -> bool {
     match module {
         "readable_stream" => matches!(
             prop,
-            "getReader"
-                | "cancel"
-                | "tee"
-                | "pipeTo"
-                | "pipeThrough"
-                | "locked"
-                | "enqueue"
-                | "close"
-                | "error"
-                | "desiredSize"
-                | "byobRequest"
+            "getReader" | "cancel" | "tee" | "pipeTo" | "pipeThrough" | "locked"
         ),
+        // The members every controller family owns (Default, Transform,
+        // Byte); `close`, `terminate` and `byobRequest` depend on the family
+        // and go through the controller handle's dispatch.
         "readable_stream_reader" => {
             matches!(prop, "read" | "releaseLock" | "cancel" | "closed")
         }

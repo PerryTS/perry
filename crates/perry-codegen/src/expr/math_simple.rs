@@ -437,11 +437,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Math.pow (special variant — separate from Binary::Pow) --------
         Expr::MathPow(base, exp) => {
-            let b = lower_math_operand(ctx, base)?;
-            let e = lower_math_operand(ctx, exp)?;
-            Ok(ctx
-                .block()
-                .call(DOUBLE, "js_math_pow", &[(DOUBLE, &b), (DOUBLE, &e)]))
+            super::dispatch::with_math_operands(ctx, &[base, exp], |ctx, v| {
+                Ok(super::binary::lower_number_pow(ctx, &v[0], exp, &v[1]))
+            })
         }
 
         // -------- Math.imul — 32-bit wrapping integer multiply --------
@@ -497,7 +495,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let arr_box = lower_expr(ctx, &Expr::LocalGet(*array_id))?;
             let blk = ctx.block();
             let arr_handle = unbox_to_i64(blk, &arr_box);
-            Ok(blk.call(DOUBLE, "js_array_pop_f64_site", &[(I64, &arr_handle)]))
+            Ok(super::array_proto_guard::emit_array_pop_call(
+                blk,
+                &arr_box,
+                &arr_handle,
+            ))
         }
 
         // -------- arr.map(callback) (special variant) --------

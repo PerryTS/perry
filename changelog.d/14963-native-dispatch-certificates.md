@@ -1,0 +1,1 @@
+Certify narrowly proven named console and Math/Number call routes in native-dispatch facts, sharing intrinsic selection with code generation. Calls with unresolved guards or formatting protocols retain their dispatcher obligations. No linker omission is enabled.

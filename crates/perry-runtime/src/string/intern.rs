@@ -54,6 +54,18 @@ pub(crate) struct AtomTable {
     /// is an empty slot. Entries are never removed.
     slots: Vec<InternEntry>,
     len: usize,
+    /// `slots`' buffer and `slots.len() - 1`, as the keyed probe reads them
+    /// through the agent's directory (`shapes::agent_atoms`): null and 0
+    /// until the first atom. Rewritten whenever `slots` is replaced
+    /// ([`AtomTable::sync_probe`]).
+    probe_slots: *const InternEntry,
+    probe_mask: usize,
+}
+
+impl Drop for AtomTable {
+    fn drop(&mut self) {
+        crate::object::shapes::retract_agent_atoms(self as *const AtomTable as *const u8);
+    }
 }
 
 impl AtomTable {
@@ -61,6 +73,8 @@ impl AtomTable {
         AtomTable {
             slots: Vec::new(),
             len: 0,
+            probe_slots: std::ptr::null(),
+            probe_mask: 0,
         }
     }
 
@@ -229,9 +243,19 @@ impl AtomTable {
                 cap
             ],
         );
+        self.replace_from(old);
+    }
+
+    /// Re-place the live entries of `old` (the previous `slots`) into the
+    /// fresh `slots`.
+    fn replace_from(&mut self, old: Vec<InternEntry>) {
+        // A string's key word is `key_word_of_hash` of its text, and the
+        // keyed probe takes an entry's home from that word alone.
+        assert!(self.slots.len() as u64 <= 1 << 32);
         for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
             self.place(entry);
         }
+        self.sync_probe();
     }
 
     fn place(&mut self, entry: InternEntry) {
@@ -241,6 +265,227 @@ impl AtomTable {
             i = (i + 1) & mask;
         }
         self.slots[i] = entry;
+    }
+
+    /// `slots` was replaced: refresh the probe's view of it, and publish this
+    /// table in the agent's directory when it is the agent's table.
+    fn sync_probe(&mut self) {
+        self.probe_slots = self.slots.as_ptr();
+        self.probe_mask = self.slots.len().wrapping_sub(1);
+        let me = self as *const AtomTable;
+        let _ = ATOMS.try_with(|t| {
+            if std::ptr::eq(t.get() as *const AtomTable, me) {
+                crate::object::shapes::publish_agent_atoms(me as *const u8);
+            }
+        });
+    }
+}
+
+/// `StringHeader::refcount` values from here up are the string's KEY WORD:
+/// [`key_word_of_hash`] of its text's FNV-1a hash (`key_bytes_hash`, the hash
+/// the layouts and the atom index use). Below it the word is the ownership
+/// hint (0 shared, 1 unique owner). The word is a pure function of the text:
+/// it names no atom and no table position, so it is never stale, has nothing
+/// to free and is the same in every agent and in a byte image of the string.
+/// It is written only into a shared string (word 0), whose text never changes
+/// (in-place append requires the word to be 1), and never for an index-like
+/// text, so a key word also says "not an array index". A text whose word
+/// would be 0 or 1 (2 of 2^32) is not recorded; it is hashed at every use.
+pub(crate) const KEY_WORD_MIN: u32 = 2;
+
+/// The key word of a text with FNV-1a hash `hash`: the 32 bits
+/// [`AtomTable::home`] masks, so the word alone gives the entry's home, and
+/// an entry whose own hash folds to the same word is the candidate (its text
+/// is then compared; its full hash is the one the layouts want).
+#[inline(always)]
+pub(crate) fn key_word_of_hash(hash: u64) -> u32 {
+    (hash ^ (hash >> 32)) as u32
+}
+
+/// The agent's atom index as the keyed probe reads it: the slot buffer and
+/// its mask, from the agent's directory (one thread-pointer-relative load,
+/// no lazy thread-local). Null before the agent's first atom.
+#[inline(always)]
+unsafe fn agent_index(atoms: *const u8) -> (*const InternEntry, usize) {
+    let t = atoms as *const AtomTable;
+    if t.is_null() {
+        return (std::ptr::null(), 0);
+    }
+    ((*t).probe_slots, (*t).probe_mask)
+}
+
+/// Are the `len` bytes at `a` and `b` equal? Word-wise, no call. Both are
+/// string payloads, so the 8 bytes before each payload's end are inside the
+/// allocation for every length (a `StringHeader` precedes the payload): a
+/// text shorter than a word is compared in the top bytes of that word.
+#[inline(always)]
+unsafe fn text_eq(a: *const u8, b: *const u8, len: usize) -> bool {
+    let word = |p: *const u8| std::ptr::read_unaligned(p as *const u64);
+    if len < 8 {
+        if len == 0 {
+            return true;
+        }
+        return (word(a.add(len).sub(8)) ^ word(b.add(len).sub(8))) >> (64 - 8 * len) == 0;
+    }
+    let mut i = 0;
+    while i + 8 < len {
+        if word(a.add(i)) != word(b.add(i)) {
+            return false;
+        }
+        i += 8;
+    }
+    word(a.add(len - 8)) == word(b.add(len - 8))
+}
+
+/// The property atom for the short string payload `data` of `len` bytes
+/// (1..=5) with FNV-1a hash `hash`, or null: the entry's hash, then one word
+/// compare against the atom's first payload word (a property atom keeps its
+/// creation hash after its text, so that word is inside its allocation for
+/// every length). Nothing is materialised.
+///
+/// # Safety
+/// `data` holds exactly `len` text bytes from its low byte up, zero above.
+#[inline(always)]
+pub(crate) unsafe fn short_key_atom(
+    atoms: *const u8,
+    len: u32,
+    data: u64,
+    hash: u64,
+) -> *const StringHeader {
+    let a = short_key_atom_indexed(atoms, len, data, hash);
+    if !a.is_null() {
+        return a;
+    }
+    short_key_atom_miss(len, data, hash)
+}
+
+/// [`short_key_atom`] from the agent's atom index alone: null when the index
+/// has no property atom of the text. A leaf: no call.
+///
+/// # Safety
+/// As [`short_key_atom`].
+#[inline(always)]
+pub(crate) unsafe fn short_key_atom_indexed(
+    atoms: *const u8,
+    len: u32,
+    data: u64,
+    hash: u64,
+) -> *const StringHeader {
+    let (slots, mask) = agent_index(atoms);
+    if !slots.is_null() {
+        let text_mask = (1u64 << (8 * len)) - 1;
+        let mut i = AtomTable::home(hash, mask);
+        loop {
+            let entry = &*slots.add(i);
+            if entry.string_ptr == 0 {
+                break;
+            }
+            if entry.hash == hash {
+                let a = entry.string_ptr as *const StringHeader;
+                if (*a).flags & PROPERTY_ATOM != 0
+                    && (*a).byte_len == len
+                    && std::ptr::read_unaligned(string_data(a) as *const u64) & text_mask == data
+                {
+                    return a;
+                }
+            }
+            i = (i + 1) & mask;
+        }
+    }
+    std::ptr::null()
+}
+
+/// The never-seeded builtin global names (image atoms in the global
+/// object's static layout), as [`AtomTable::lookup_from`] asks them.
+#[cold]
+#[inline(never)]
+unsafe fn short_key_atom_miss(len: u32, data: u64, hash: u64) -> *const StringHeader {
+    let bytes = data.to_le_bytes();
+    match crate::object::runtime_layouts::builtin_global_atom(&bytes[..len as usize], hash) {
+        Some(a) if (*a).flags & PROPERTY_ATOM != 0 => a,
+        _ => std::ptr::null(),
+    }
+}
+
+/// The property atom of heap string `key`'s text and the text's hash, from
+/// `key`'s key word `word` (`>= KEY_WORD_MIN`): the word is the entry's home,
+/// an entry whose hash folds to the word and whose text equals `key`'s is the
+/// atom. `(null, _)` when no property atom has the text. A key that is
+/// itself the atom never comes here (its flag answers before the word is
+/// read), so there is no pointer-equal case to test.
+///
+/// # Safety
+/// `key` is a live heap `StringHeader` whose `refcount` is `word`.
+#[inline(always)]
+pub(crate) unsafe fn key_word_atom(
+    atoms: *const u8,
+    key: *const StringHeader,
+    word: u32,
+) -> (*const StringHeader, u64) {
+    let found = key_word_atom_indexed(atoms, key, word);
+    if !found.0.is_null() {
+        return found;
+    }
+    key_first_atom(key)
+}
+
+/// [`key_word_atom`] from the agent's atom index alone: `(null, 0)` when the
+/// probe from the word's home reaches an empty slot. A leaf: no call. The
+/// candidate is decided by its text (flag, length, bytes); the entry's hash
+/// is only handed out, it is not compared (equal texts have equal hashes).
+///
+/// # Safety
+/// As [`key_word_atom`].
+#[inline(always)]
+pub(crate) unsafe fn key_word_atom_indexed(
+    atoms: *const u8,
+    key: *const StringHeader,
+    word: u32,
+) -> (*const StringHeader, u64) {
+    let (slots, mask) = agent_index(atoms);
+    if !slots.is_null() {
+        let len = (*key).byte_len;
+        let mut i = word as usize & mask;
+        loop {
+            let entry = &*slots.add(i);
+            if entry.string_ptr == 0 {
+                break;
+            }
+            let a = entry.string_ptr as *const StringHeader;
+            if (*a).flags & PROPERTY_ATOM != 0
+                && (*a).byte_len == len
+                && text_eq(string_data(a), string_data(key), len as usize)
+            {
+                return (a, entry.hash);
+            }
+            i = (i + 1) & mask;
+        }
+    }
+    (std::ptr::null(), 0)
+}
+
+/// The property atom of plain heap string `key`'s text and the text's hash,
+/// by its bytes; a shared `key` takes its key word here, so its next use as a
+/// key is [`key_word_atom`]. `(null, hash)` when no property atom has the
+/// text. Allocates nothing on the GC heap.
+///
+/// # Safety
+/// `key` is a live heap `StringHeader` that is not a property atom and whose
+/// text is not index-like.
+#[cold]
+#[inline(never)]
+pub(crate) unsafe fn key_first_atom(key: *const StringHeader) -> (*const StringHeader, u64) {
+    let bytes = std::slice::from_raw_parts(string_data(key), (*key).byte_len as usize);
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    let word = key_word_of_hash(hash);
+    // A shared string's text is immutable, and an image string is not this
+    // agent's to write.
+    if word >= KEY_WORD_MIN && (*key).refcount == 0 && !super::is_image_string(key) {
+        (*(key as *mut StringHeader)).refcount = word;
+    }
+    match atom_lookup(bytes, hash) {
+        Some(a) if (*a).flags & PROPERTY_ATOM != 0 => (a, hash),
+        _ => (std::ptr::null(), hash),
     }
 }
 
@@ -878,9 +1123,37 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
             return atom;
         }
     }
-    let units = (*key).utf16_len;
-    let flags = (*key).flags;
-    let len = bytes.as_bytes().len();
+    mint_property_atom(bytes.as_bytes(), hash, (*key).utf16_len, (*key).flags)
+}
+
+/// The property atom spelled by `bytes` (UTF-8 text, as a Node-API name
+/// arrives): the existing atom when the text has one, otherwise one atom is
+/// minted straight from the bytes. No intermediate string is allocated, so a
+/// name that is already some shape's key costs one hash and one table probe.
+///
+/// # Safety
+/// The returned atom is an unrooted heap pointer: the caller hands it to a
+/// rooting consumer before anything else can allocate.
+pub(crate) unsafe fn property_atom_from_bytes(bytes: &[u8]) -> *const StringHeader {
+    let hash = crate::object::key_bytes_hash(bytes.as_ptr(), bytes.len());
+    if let Some(atom) = atom_lookup(bytes, hash) {
+        if (*atom).flags & PROPERTY_ATOM != 0 {
+            return atom;
+        }
+    }
+    let (units, flags) = super::raw_string_metadata(bytes.as_ptr(), bytes.len() as u32);
+    mint_property_atom(bytes, hash, units, flags)
+}
+
+/// Allocate the atom of `bytes` (no atom with this text exists) and publish it
+/// in the agent's atom table, replacing a plain string entry of the same text.
+unsafe fn mint_property_atom(
+    bytes: &[u8],
+    hash: u64,
+    units: u32,
+    flags: u32,
+) -> *const StringHeader {
+    let len = bytes.len();
     let atom = crate::arena::arena_alloc_gc(
         (std::mem::size_of::<StringHeader>() + len + 1 + 7) / 8 * 8 + 8,
         8,
@@ -894,7 +1167,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
         refcount: 0,
         flags: flags | PROPERTY_ATOM,
     });
-    std::ptr::copy_nonoverlapping(bytes.as_bytes().as_ptr(), string_data(atom) as *mut u8, len);
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), string_data(atom) as *mut u8, len);
     // GC_STORE_AUDIT(POINTER_FREE): Writes byte0 string terminator into property atom payload; not a managed slot.
     (string_data(atom) as *mut u8).add(len).write(0);
     // GC_STORE_AUDIT(POINTER_FREE): Writes u64 key hash into trailing payload metadata; scalar data never traced as JSValue.
@@ -904,7 +1177,7 @@ pub(crate) unsafe fn property_atom(key: *const StringHeader) -> *const StringHea
     );
     let _ = ATOMS.try_with(|t| {
         let table = &mut *t.get();
-        if let Some(existing) = table.lookup(bytes.as_bytes(), hash) {
+        if let Some(existing) = table.lookup(bytes, hash) {
             if let Some(entry) = table
                 .slots
                 .iter_mut()
@@ -971,6 +1244,11 @@ pub unsafe extern "C" fn js_string_register_property_atom(key: *const StringHead
                     return;
                 }
                 if (*existing).flags & PROPERTY_ATOM != 0 {
+                    debug_assert!(
+                        !is_program_atom(existing),
+                        "a program atom already owns {:?} at a different address",
+                        std::str::from_utf8(bytes)
+                    );
                     // A live data atom already owns this spelling. Keep canonical
                     // equality until it dies; source-name membership is immutable.
                     if !is_image_string(existing) {
@@ -1047,9 +1325,7 @@ pub(crate) fn prune_property_atoms(is_dead: &dyn Fn(usize) -> bool) {
                     capacity
                 ],
             );
-            for entry in old.into_iter().filter(|e| e.string_ptr != 0) {
-                table.place(entry);
-            }
+            table.replace_from(old);
         }
     });
 }
@@ -1136,3 +1412,7 @@ mod seed_probe_tests {
         assert_eq!(table.slots.len(), capacity);
     }
 }
+
+#[cfg(test)]
+#[path = "early_realm_atom_tests.rs"]
+mod early_realm_atom_tests;

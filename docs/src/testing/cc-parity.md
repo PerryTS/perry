@@ -30,7 +30,7 @@ with a performance threshold.
 
 ## What the check proves
 
-`tests/cc-parity/manifest.json` pins the npm tarball and extracted `package/cli.js`
+`tests/compat/cc-parity/manifest.json` pins the npm tarball and extracted `package/cli.js`
 by both size and SHA-256. Only that regular file is extracted; no package install
 hooks run. The compiler, runtime, stdlib, Wasm host, and all native extension
 archives are built together in one Cargo graph. This avoids stale runtime copies
@@ -64,7 +64,7 @@ From the repository root, with LLVM 22 and the pinned Rust toolchain available:
 export LLVM_SYS_221_PREFIX="$(brew --prefix llvm@22)"
 export CARGO_BUILD_JOBS=4
 cc_work="$(mktemp -d)"
-python3 -m unittest discover -s tests -p test_cc_parity_gate.py -v
+python3 -m unittest discover -s tests/tooling/compat -p test_cc_parity_gate.py -v
 python3 scripts/cc_parity_gate.py prepare --work-dir "$cc_work"
 python3 scripts/cc_parity_gate.py build --work-dir "$cc_work"
 python3 scripts/cc_parity_gate.py compile --timeout 4500 --work-dir "$cc_work" --perry "$PWD/target/perry-dev/perry"
@@ -95,7 +95,7 @@ This writes `logs/node-help.stdout`, `logs/node-version.stdout`, and
 `logs/node-parity.json`. A deliberate version refresh may fail the old golden
 comparison; inspect both command results, require zero exit codes and no timeout,
 and review the output changes before copying those two stdout files into
-`tests/cc-parity/`. Update their byte counts and SHA-256 values and the oracle
+`tests/compat/cc-parity/`. Update their byte counts and SHA-256 values and the oracle
 provenance in the manifest. Rerun the Node check, harness tests, native compilation,
 and native check. Commit the manifest and goldens together; never accept output
 from a failing native executable as the new oracle.

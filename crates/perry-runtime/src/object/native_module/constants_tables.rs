@@ -953,7 +953,7 @@ fn os_errno_const_reference(prop: &str) -> Option<f64> {
     {
         // Independent snapshot of the pinned Windows Node oracle.
         let values: serde_json::Value = serde_json::from_str(include_str!(
-            "../../../../../test-files/fixtures/windows_errno.json"
+            "../../../../../tests/fixtures/programs/fixtures/windows_errno.json"
         ))
         .expect("Windows errno oracle");
         values.get(prop).and_then(serde_json::Value::as_f64)

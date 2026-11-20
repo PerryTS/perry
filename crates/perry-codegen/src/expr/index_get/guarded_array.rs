@@ -282,6 +282,57 @@ pub(in crate::expr) fn emit_and_no_named_layout(
     blk.and(crate::types::I1, ok, &no_named)
 }
 
+/// The stack form of a call spread reads its parameters straight from the
+/// source array. The caller has the compile-time half of the proof: the
+/// program writes neither an iteration member nor
+/// `%ArrayIteratorPrototype%.next` (`array_iteration_facts == 0`), so an
+/// Array's iteration is the element walk. This is the run-time half, the
+/// guarded element read's own guard: an ordinary, unforwarded Array whose
+/// first `min(length, need)` slots lie in its dense prefix P (EK design §4:
+/// non-hole own data elements, no descriptor, below capacity). Those slots
+/// are then exactly the values the drain would produce. Emitted from the
+/// current block; every miss branches to `miss_l`. Returns the array handle,
+/// its length and its capacity, live in the (new) current block. Nothing
+/// between this test and the element loads allocates.
+pub(crate) fn emit_spread_stack_admission(
+    ctx: &mut FnCtx<'_>,
+    src_box: &str,
+    need: usize,
+    miss_l: &str,
+) -> (String, String, String) {
+    let deref_idx = ctx.new_block("spread.adm.deref");
+    let loads_idx = ctx.new_block("spread.adm.loads");
+    let hit_idx = ctx.new_block("spread.adm.hit");
+    let deref_l = ctx.block_label(deref_idx);
+    let loads_l = ctx.block_label(loads_idx);
+    let hit_l = ctx.block_label(hit_idx);
+    let bits = ctx.block().bitcast_double_to_i64(src_box);
+    let offset = ctx.block().sub(I64, &bits, HEAP_POINTER_BAND_BASE_I64);
+    let heap = ctx
+        .block()
+        .icmp_ult(I64, &offset, HEAP_POINTER_BAND_SPAN_I64);
+    ctx.block().cond_br(&heap, &deref_l, miss_l);
+    ctx.current_block = deref_idx;
+    let handle = ctx.block().and(I64, &bits, POINTER_MASK_I64);
+    let word = emit_array_guard_word(ctx.block(), &handle);
+    let typed = emit_array_guard_word_typed(ctx.block(), &word);
+    ctx.block().cond_br(&typed, &loads_l, miss_l);
+    ctx.current_block = loads_idx;
+    let blk = ctx.block();
+    let ptr = blk.inttoptr(I64, &handle);
+    let len = blk.load(I32, &ptr);
+    let cap_ptr = blk.gep(I8, &ptr, &[(I64, "4")]);
+    let cap = blk.load(I32, &cap_ptr);
+    let prefix = blk.array_ek_prefix(&handle);
+    let need = need.to_string();
+    let short = blk.icmp_ult(I32, &len, &need);
+    let read = blk.select(I1, &short, I32, &len, &need);
+    let dense = blk.icmp_ule(I32, &read, &prefix);
+    blk.cond_br(&dense, &hit_l, miss_l);
+    ctx.current_block = hit_idx;
+    (handle, len, cap)
+}
+
 /// Every caller already has a nonnegative signed-i32 index: the canonical
 /// runtime-key split, numeric_index_has_integer_array_index_proof, or the
 /// existing bounded receiver descriptor. No source-expression proof is added.
@@ -302,7 +353,102 @@ pub(super) fn lower_guarded_array_index_get(
         require_numeric_layout,
         coerce_numeric_fallback,
         receiver_slot,
+        None,
     )
+}
+
+/// [`lower_guarded_array_index_get`] for a key the caller has NOT tested
+/// for sign (N10, `runtime_key`'s split): every hit is behind `idx <u n`,
+/// and a miss sends a negative key to `negative_exit` before the cold read.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn lower_guarded_array_index_get_bounded(
+    ctx: &mut FnCtx<'_>,
+    arr_box: &str,
+    idx_i32: &str,
+    block_prefix: &str,
+    require_numeric_layout: bool,
+    coerce_numeric_fallback: bool,
+    receiver_slot: Option<&str>,
+    negative_exit: Option<&str>,
+) -> Result<String> {
+    lower_guarded_array_index_get_with_index(
+        ctx,
+        arr_box,
+        GuardedArrayIndex::Signed(idx_i32),
+        block_prefix,
+        require_numeric_layout,
+        coerce_numeric_fallback,
+        receiver_slot,
+        negative_exit,
+    )
+}
+
+/// N10 (CENSUS-residual cause i): the element tier a split key enters has
+/// an unsigned bound in front of every element arm, so the split's sign
+/// test can move to the tier's miss arm. The guarded tier bounds every hit
+/// (`idx <u prefix`, `idx <u length` and `idx <u capacity`) unless the
+/// observing guard of a diagnostic build takes the key first; a proven read
+/// is bounded unless its key is proven in range
+/// (`proven_array::bounds_key`).
+pub(super) fn unsigned_bound_covers(proven: Option<super::proven_array::Proven>) -> bool {
+    crate::expr::index_key::unsigned_bound()
+        && match proven {
+            Some(fact) => super::proven_array::bounds_key(fact),
+            None => !typed_feedback_emission_enabled(),
+        }
+}
+
+/// The start of a tier's miss arm under N10: a negative key leaves for
+/// `negative_exit` (the split's runtime-key arm, which reads the original
+/// key), so only a non-negative key reaches the cold read that follows,
+/// exactly as when the split tested the sign first. Check mode
+/// (`PERRY_VERIFY_FACTS=1`) tests that claim on the cold read's key; the
+/// negative control `PERRY_FACTS_SABOTAGE=unsignedbound` drops the exit.
+pub(super) fn emit_negative_exit(ctx: &mut FnCtx<'_>, idx_i32: &str, negative_exit: Option<&str>) {
+    let Some(exit) = negative_exit else {
+        return;
+    };
+    crate::verify_facts::consumed(
+        crate::verify_facts::Fact::UnsignedBound,
+        || serde_json::json!({ "bound": "unsigned" }),
+    );
+    if !super::field_base::sabotaged("unsignedbound") {
+        let cold = ctx.new_block("ubound.cold");
+        let cold_l = ctx.block_label(cold);
+        let negative = ctx.block().icmp_slt(I32, idx_i32, "0");
+        ctx.block().cond_br(&negative, exit, &cold_l);
+        ctx.current_block = cold;
+    }
+    if !crate::verify_facts::enabled() {
+        return;
+    }
+    crate::verify_facts::covered(
+        crate::verify_facts::Fact::UnsignedBound,
+        || serde_json::json!({ "bound": "unsigned" }),
+    );
+    let miss = ctx.new_block("ubound.verify_miss");
+    let next = ctx.new_block("ubound.admitted");
+    let (miss_l, next_l) = (ctx.block_label(miss), ctx.block_label(next));
+    crate::verify_facts::tick(ctx);
+    let nonnegative = ctx.block().icmp_sge(I32, idx_i32, "0");
+    ctx.block().cond_br(&nonnegative, &next_l, &miss_l);
+    ctx.current_block = miss;
+    let site = crate::verify_facts::site_arg(
+        ctx,
+        "a negative key at an element tier's cold read",
+        crate::verify_facts::Fact::UnsignedBound,
+        &[],
+    );
+    let key = ctx.block().sitofp(I32, idx_i32, DOUBLE);
+    let _ = crate::verify_facts::check(
+        ctx,
+        I32,
+        "perry_wpfacts_check_miss",
+        &[(DOUBLE, &key)],
+        &site,
+    );
+    ctx.block().unreachable();
+    ctx.current_block = next;
 }
 
 /// The same indexed read with a compiler proof of a nonnegative u32 index.
@@ -325,6 +471,7 @@ pub(super) fn lower_unsigned_array_index_get(
         false,
         false,
         receiver_slot,
+        None,
     )
 }
 
@@ -333,6 +480,7 @@ enum GuardedArrayIndex<'a> {
     Unsigned { i32_value: &'a str, number: &'a str },
 }
 
+#[allow(clippy::too_many_arguments)]
 fn lower_guarded_array_index_get_with_index(
     ctx: &mut FnCtx<'_>,
     arr_box: &str,
@@ -341,6 +489,7 @@ fn lower_guarded_array_index_get_with_index(
     require_numeric_layout: bool,
     coerce_numeric_fallback: bool,
     receiver_slot: Option<&str>,
+    negative_exit: Option<&str>,
 ) -> Result<String> {
     let canonical = matches!(index, GuardedArrayIndex::Signed(_));
     let (idx_i32, unsigned_index) = match index {
@@ -526,6 +675,7 @@ fn lower_guarded_array_index_get_with_index(
     ];
     ctx.current_block = fallback_idx;
     let cold_mode = ctx.block().phi(I64, &cold_inputs);
+    emit_negative_exit(ctx, idx_i32, negative_exit);
     crate::expr::store_census::bump(ctx, crate::expr::store_census::ELEM_READ_FALLBACK);
     let idx_box = unsigned_index
         .map(str::to_owned)
@@ -1108,6 +1258,7 @@ mod compact_read_tests {
     #[test]
     fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
         let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
@@ -1153,6 +1304,7 @@ mod compact_read_tests {
     #[test]
     fn rejected_keys_share_one_body_across_sites() {
         let read = || Expr::IndexGet {
+            element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),

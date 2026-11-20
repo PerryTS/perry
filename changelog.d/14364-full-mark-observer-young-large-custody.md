@@ -1,0 +1,1 @@
+The full mark keeps a young large container's young edges as old-page remembered-set coverage while a foreign handle observer is active. Array growth from the container after the sweep promotes it no longer drops those edges, which let the next minor leave the grown array holding stale nursery pointers (`gc-pin-latch` aborts).

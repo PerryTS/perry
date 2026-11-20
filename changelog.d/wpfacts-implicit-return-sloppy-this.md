@@ -1,0 +1,1 @@
+Whole-program facts: a function body that may complete normally returns `undefined` there, and a sloppy function's `this` is unknown once a primitive (boxed) or nullish value (the global object) reaches it. Before, the facts could prove such a call's result a Number when it was `undefined` or an object; the call-result check-mode witness found both.

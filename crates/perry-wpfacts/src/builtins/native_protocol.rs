@@ -5,7 +5,7 @@ use super::*;
 
 /// Prototype token of a native parent class (`extends EventEmitter`).
 pub fn native_proto(m: &mut Model, name: &str) -> Tok {
-    m.tok(TokKind::NativeProto(name.to_string()))
+    m.tok(TokKind::native_proto(name))
 }
 
 /// Native parents with a summary (owner decision 135.5).
@@ -25,6 +25,28 @@ pub fn native_parent_keys(name: &str) -> &'static [&'static str] {
         "EventEmitter" => &["_events", "_eventsCount", "_maxListeners"],
         _ => &[],
     }
+}
+
+/// The value of the declared constructor that class `tm`'s built-in parent
+/// names, read where the heritage binding reads it: the global object's
+/// (`extends Error`: the realm's `Error`) or the node module's export
+/// (`import { EventEmitter } from "events"`: the module's `EventEmitter`,
+/// the value the class object's [[Prototype]] holds). `None` when the class
+/// has no built-in parent or its holder declares none under that name.
+pub fn native_parent_value(m: &mut Model, tm: TmplId) -> Option<Tok> {
+    let (module, name) = m.tmpls[tm as usize].native_parent.clone()?;
+    let ns = if module == "builtin" {
+        BuiltinNs::GlobalThis
+    } else {
+        let ns = node_module_ns(&module)?;
+        m.tok(TokKind::Builtin(ns));
+        ns
+    };
+    let identity = m.namespace_property(ns, &name)?.native?;
+    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+        identity,
+        holder: None,
+    })))
 }
 
 /// `super(...)` into a native parent.
@@ -111,6 +133,122 @@ pub fn native_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// builtin prototype), `.1` a write onto `np` itself (for the global object
 /// or a global's native prototype, onto `Object.prototype` too).
 pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
+    written_by(m, np, a, false, &|_| true)
+}
+
+/// Diagnostic: the reasons of the writes [`native_written`] counts for
+/// `np`'s key `a`, with the written key (`None`: any key).
+pub fn native_writers_why(m: &Model, np: Tok, a: Atom) -> Vec<String> {
+    let mut out = Vec::new();
+    for (&(t, k), w) in m.native_writes.iter() {
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            out.push(format!(
+                "{} key={:?} top={top} own={own}: {}",
+                m.tok_name(t),
+                k.map(|k| m.atoms[k as usize].to_string()),
+                m.reasons[w.reason as usize]
+            ));
+        }
+    }
+    out
+}
+
+/// [`native_written`] for an accessor descriptor query (`__lookupGetter__`,
+/// a getter walk): only writes that may install an accessor
+/// ([`crate::model::NativeWrite`]) count; a plain store makes a data
+/// property (ECMA-262 10.1.9.2), which such a query never returns.
+pub fn native_accessor_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, false, &|w| w.accessor);
+    top || own
+}
+
+/// R9READ5: may a write other than a plain store reach `np`'s key `a`
+/// (an accessor, a definition, unknown code, a delete)? A plain store
+/// makes or updates a writable data property (10.1.9.2), so only such a
+/// write can make an OrdinarySet through `np` run code or fail.
+pub fn native_nonplain_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, false, &|w| w.accessor || w.opaque || w.absent);
+    top || own
+}
+
+/// The known getters (setters if `setter`) that writes reaching `np`'s key
+/// `a` installed (definitions through ⊤ with a known descriptor), into
+/// `dst`: what an accessor descriptor query that passes `np` returns
+/// besides `undefined` (ECMA-262 10.1.6.3: the descriptor's own functions).
+pub fn native_accessor_known(m: &mut Model, np: Tok, a: Atom, dst: NodeId, setter: bool) {
+    let mut found: Vec<Tok> = Vec::new();
+    for w in m.native_writes.values() {
+        let fns = if setter { &w.setters } else { &w.getters };
+        if fns.is_empty() {
+            continue;
+        }
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            found.extend(fns.iter().copied());
+        }
+    }
+    for f in found {
+        m.add_tok(dst, f);
+    }
+}
+
+/// May the global object's key `a` (`np` the global object or the HIR
+/// global sentinel) hold a value its field ([`global_field`]) does not
+/// carry? A program store under the named key puts its value in that
+/// field, so a read that takes the field sees it; every other writer
+/// counts as [`native_written`] does: an accessor installed on the global
+/// object, a prototype given to it, a write under any key (an unseen
+/// module, interpreted code, the object handed to unknown code), a store
+/// into ⊤ once the global object reached unmodeled code, a write onto
+/// `Object.prototype`.
+pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, true, &|_| true);
+    top || own
+}
+
+/// [`global_value_written`] past the writes that only delete (ECMA-262
+/// 13.5.1.2, OrdinaryDelete 10.1.10): a delete stores no value and runs no
+/// code (a Proxy's `deleteProperty` trap is the handler's call, modeled at
+/// the delete), so under any key, through ⊤ that may be the global object
+/// included, it can only make the binding absent. True: a writer that may
+/// have stored a value (a store, a define, an accessor, a prototype) may
+/// have written the key: the read takes ⊤ as before.
+pub fn global_value_stored(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, true, &|w| {
+        w.opaque || !w.stored.is_empty() || w.accessor || !w.getters.is_empty() || !w.setters.is_empty()
+    });
+    top || own
+}
+
+/// A global binding read (`NativeMiss::Global` into `dst`) that only
+/// deletes may have reached ([`global_value_stored`] false): it reads
+/// {its prior values} ∪ {`undefined`}; the caller keeps the read parked,
+/// so a later writer of a value replays it. A non-configurable global
+/// (`undefined`, `NaN`, `Infinity`; ECMA-262 19.1) is never removed.
+pub fn global_maybe_deleted(m: &mut Model, np: Tok, a: Atom, dst: NodeId) {
+    if !global_value_written(m, np, a) {
+        return;
+    }
+    if matches!(m.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+        return;
+    }
+    m.add_prim(dst, prim::UNDEF);
+}
+
+fn written_by(
+    m: &Model,
+    np: Tok,
+    a: Atom,
+    field_carries_stores: bool,
+    counts: &dyn Fn(&crate::model::NativeWrite) -> bool,
+) -> (bool, bool) {
+    let has = |t: Tok, k: Option<Atom>| m.native_writes.get(&(t, k)).is_some_and(counts);
+    let any_on = |t: Tok, keyed: &dyn Fn(Option<Atom>) -> bool| {
+        m.native_writes
+            .range((t, None)..=(t, Some(Atom::MAX)))
+            .any(|(&(_, k), x)| counts(x) && keyed(k))
+    };
     // An element store's write (`NUM_KEY`) is one of every numeric key and
     // of `length` (`push` on an array-like moves it).
     let num = m
@@ -126,35 +264,115 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     // A read under a number (`NUM_KEY`, DECISIONS 217 c) names a numeric key
     // only: an element store's, a computed one's, or a numeric name's.
     let num_read = m.atoms[a as usize] == crate::model::NUM_KEY;
+    // A named write onto the global object that only a program store made:
+    // its value is in the global's field.
+    let stored = |t: Tok| {
+        field_carries_stores
+            && super::global_object(m, t)
+            && !m.accessors.contains_key(&(t, a))
+            && !m.native_given.iter().any(|&(w, _)| w == t)
+    };
     let hit = |t: Tok| {
-        m.native_writes.contains_key(&(t, None))
-            || m.native_writes.contains_key(&(t, Some(a)))
-            || num.is_some_and(|n| m.native_writes.contains_key(&(t, Some(n))))
-            || (any && m.native_writes.keys().any(|&(w, _)| w == t))
+        has(t, None)
+            || (has(t, Some(a)) && !stored(t))
+            || num.is_some_and(|n| has(t, Some(n)))
+            || (any && any_on(t, &|_| true))
             || (num_read
-                && m.native_writes.keys().any(|&(w, k)| {
-                    w == t && k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
+                && any_on(t, &|k| {
+                    k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
                 }))
     };
-    let global = match &m.toks[np as usize] {
-        TokKind::NativeProto(n) => ns_by_name(n).is_some(),
-        TokKind::Builtin(BuiltinNs::GlobalThis) => true,
-        _ => false,
+    // The HIR global sentinel (`Other`, what a bare global name is read
+    // off) is the global object: a write through either token is a write
+    // of the one object.
+    let is_global = super::global_object(m, np);
+    // Taken last: a name match, after the cheap tests of the write.
+    let global = || match &m.toks[np as usize] {
+        TokKind::NativeProto(_, ns) => ns.is_some(),
+        _ => is_global,
     };
-    let is_global = matches!(m.toks[np as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
-    // A store into ⊤ writes the global object only once it reached
-    // unmodeled code. It may always write a builtin prototype: unknown code
-    // reaches every one of them without being handed one (the chain of any
-    // object or function it holds, the globals interpreted code reads), and
-    // gives them to compiled code as ⊤.
+    let other_global = |t: Tok| {
+        is_global
+            && [BuiltinNs::GlobalThis, BuiltinNs::Other]
+                .into_iter()
+                .any(|ns| {
+                    m.tok_index
+                        .get(&TokKind::Builtin(ns))
+                        .is_some_and(|&g| g != t && hit(g))
+                })
+    };
+    // ⊤ stands for the values unknown code may hold. A built-in object is
+    // one of them once it was handed to unknown code (`SharedWrite::Handed`;
+    // one reached along an escaped value's prototype chain is not handed,
+    // `Model::escape_body`), or once the global object was
+    // (`global_in_top`): unknown code then reaches every built-in by name.
+    // Only then may a store into ⊤ write it. Per unit, unknown code
+    // includes the other units' code, which holds every built-in object.
     (
-        hit(TOP) && (!is_global || m.global_in_top),
-        hit(np)
-            || (global
-                && m.tok_index
-                    .get(&TokKind::ObjectProto)
-                    .is_some_and(|&op| hit(op))),
+        hit(TOP) && (m.global_in_top || (!is_global && (m.unit_mode || handed_to_unknown(m, np)))),
+        realm_replaced(m, np, a)
+            || hit(np)
+            || other_global(np)
+            // A prototype write is a chain contribution, separate from
+            // the namespace's own hit above and its TOP reachability.
+            || (m.tok_index
+                .get(&TokKind::ObjectProto)
+                .is_some_and(|&op| hit(op))
+                && global()
+                && !locked_chain_read(m, np, a)),
     )
+}
+
+/// Unknown code holds the realm (ECMA-262 9.3, `Model::realm_held`): it may
+/// have replaced (or made an accessor of) a member of a built-in family's own
+/// prototype that the runtime's lock does not make final, with any function
+/// or value it made. A call of such a member is the realm's function or
+/// unknown code (`opaque_written` -> `NativeMiss::Call` -> `unknown_method`),
+/// a read is the realm's value or the opaque member. Monotone:
+/// `note_realm_held` replays the lookups parked before it held. A namespace
+/// member, the module's own `require` and the global object are not members
+/// it replaces (owner decisions 2026-11-18, closed world 11-14).
+fn realm_replaced(m: &Model, np: Tok, a: Atom) -> bool {
+    if !m.realm_held {
+        return false;
+    }
+    // A built-in family's own prototype (`Buffer.prototype`,
+    // `%TypedArray%.prototype`, `URL.prototype`, `Error.prototype`, ...; the
+    // holder a lookup on a value of that family passes before
+    // `Object.prototype`, `builtins::intrinsic_miss_on`): unknown code that
+    // holds the realm holds it, and its [[Set]] of `a` succeeds unless the
+    // runtime's lock refuses it (ECMA-262 10.1.9; DEC 250 `final_on`). A
+    // read the lock makes final there stays exact; `Object.prototype`
+    // (`ObjectProto`) is asked under its own lock and never here.
+    if let TokKind::NativeProto(what, _) = &m.toks[np as usize] {
+        return !super::proto_read_final(m, what, a);
+    }
+    // A namespace member (`Math.max`, `console.error`, any key of one) and
+    // the global object (`globalThis` included): owner decisions 2026-11-18
+    // (closed world 11-14). The unknown code that holds the realm is the
+    // runtime's natives, which replace no member of an intrinsic namespace
+    // and write no key of the global object. Their writes are the program's
+    // own stores (`Math.foo = v`) and its stores into ⊤ once the object is in
+    // ⊤'s reach (`Model::global_in_top`, the caller); interpreted code and
+    // unseen modules keep their any-key writes there.
+    false
+}
+
+/// Unknown code now holds the realm: the lookups parked past a member it may
+/// have replaced (`realm_replaced`) take the opaque member.
+pub fn note_realm_held(m: &mut Model) {
+    replay_native_missing(m);
+    // Unknown code may register a process listener: it is handed the
+    // process events (`Model::process_event`).
+    let (pe, e) = (m.process_event, m.esc_raise);
+    m.edge(pe, e);
+}
+
+/// Built-in object `np` was handed to unknown code (not reached along a
+/// prototype chain): `Model::escape_body` notes `SharedWrite::Handed`.
+fn handed_to_unknown(m: &Model, np: Tok) -> bool {
+    m.shared_of(np)
+        .is_some_and(|s| m.shared_out.contains(&crate::model::SharedWrite::Handed(s)))
 }
 
 /// Does a lookup of `key` pass native prototype `np` (a key it does not
@@ -164,7 +382,8 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
     let Key::Named(a) = key else {
         return false;
     };
-    let TokKind::NativeProto(native) = &m.toks[np as usize] else {
+    m.census_native_read(np, a, miss.clone());
+    let TokKind::NativeProto(native, ..) = &m.toks[np as usize] else {
         return false;
     };
     let name = m.atoms[a as usize].as_str();
@@ -172,9 +391,11 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
         || name.starts_with(WK_PREFIX)
         || name == crate::STAR_KEY
         || native_proto_keys(native).contains(&name)
-        || native_written(m, np, a)
     {
         return false;
+    }
+    if native_written(m, np, a) {
+        return answer_stored(m, np, a, miss);
     }
     m.native_missing.push((np, a, miss));
     true
@@ -184,10 +405,78 @@ pub(super) fn native_skips(m: &mut Model, np: Tok, key: Key, miss: NativeMiss) -
 /// prototype itself; `key` `None` (or computed): every key. Lookups that
 /// passed it under a now-written key run as opaque members.
 pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
+    note_write(m, t, key, what, true, None, WriteValue::Opaque)
+}
+
+/// What a write onto a native prototype stored
+/// ([`crate::model::NativeWrite`]): a program node's values (a plain store,
+/// ECMA-262 10.1.9.2), nothing (a delete: the key may be missing), or a
+/// value the solver does not name (every other writer).
+#[derive(Clone, Copy, Debug)]
+pub enum WriteValue {
+    Opaque,
+    Value(NodeId),
+    Absent,
+}
+
+/// [`note_native_write`] for a known getter (setter if `setter`) `f`
+/// installed by a definition through ⊤ (ECMA-262 10.1.6.3): an accessor
+/// query that may reach it returns `f`, not an unknown value.
+pub fn note_native_accessor(m: &mut Model, t: Tok, key: Option<Key>, f: Tok, setter: bool) {
+    note_write(
+        m,
+        t,
+        key,
+        "accessor",
+        false,
+        Some((f, setter)),
+        WriteValue::Opaque,
+    )
+}
+
+/// [`note_native_write`] for a plain store ([[Set]], ECMA-262 10.1.9.2) or a
+/// delete: it makes, changes or removes a data property, never an accessor;
+/// `value` is what it stored.
+pub fn note_native_data_write(
+    m: &mut Model,
+    t: Tok,
+    key: Option<Key>,
+    what: &str,
+    value: WriteValue,
+) {
+    note_write(m, t, key, what, false, None, value)
+}
+
+/// Does a recorded write already cover a write of `t`'s key `k` (an
+/// accessor-capable one only if `accessor`) storing `value`?
+fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool, value: WriteValue) -> bool {
+    let covers = |x: &crate::model::NativeWrite| {
+        (x.accessor || !accessor)
+            && (x.opaque
+                || match value {
+                    WriteValue::Opaque => false,
+                    WriteValue::Value(n) => x.stored.contains(&n),
+                    WriteValue::Absent => x.absent,
+                })
+    };
+    [(t, None), (t, k)]
+        .iter()
+        .any(|w| m.native_writes.get(w).is_some_and(covers))
+}
+
+fn note_write(
+    m: &mut Model,
+    t: Tok,
+    key: Option<Key>,
+    what: &str,
+    accessor: bool,
+    known: Option<(Tok, bool)>,
+    value: WriteValue,
+) {
     if t != TOP
         && !matches!(
             m.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_) | TokKind::Builtin(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..) | TokKind::Builtin(_)
         )
     {
         return;
@@ -198,15 +487,21 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
         _ => None,
     };
     if k.is_none() && !m.shared_replay && t != TOP {
-        m.global_written_own |=
-            matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis));
+        m.global_written_own |= super::global_object(m, t);
     }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
-    if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+    m.census_native_write(t, k);
+    let new_fn = known.is_some_and(|(f, setter)| {
+        !m.native_writes
+            .get(&(t, k))
+            .is_some_and(|w| if setter { &w.setters } else { &w.getters }.contains(&f))
+    });
+    if !new_fn && write_covered(m, t, k, accessor, value) {
         return;
     }
+    let fresh = !m.native_writes.contains_key(&(t, k));
     let on = if t == TOP {
         "⊤".to_string()
     } else {
@@ -218,9 +513,59 @@ pub fn note_native_write(m: &mut Model, t: Tok, key: Option<Key>, what: &str) {
             k.map(|a| m.atoms[a as usize].clone())
         );
     }
+    if fresh {
+        m.census_opener(t, k, what, None);
+    }
     let r = m.reason(&format!("native prototype may be written: {what} on {on}"));
-    m.native_writes.insert((t, k), r);
-    replay_native_missing(m);
+    let w = m
+        .native_writes
+        .entry((t, k))
+        .or_insert(crate::model::NativeWrite {
+            reason: r,
+            accessor,
+            getters: Vec::new(),
+            setters: Vec::new(),
+            opaque: false,
+            stored: Vec::new(),
+            absent: false,
+        });
+    w.accessor |= accessor;
+    // A global read only deletes reached stays parked
+    // (`global_maybe_deleted`): this entry's first stored value replays it.
+    let first_value = matches!(value, WriteValue::Value(_)) && w.stored.is_empty() && w.absent;
+    match value {
+        WriteValue::Opaque => w.opaque = true,
+        WriteValue::Value(n) => {
+            if !w.stored.contains(&n) {
+                w.stored.push(n);
+            }
+        }
+        WriteValue::Absent => w.absent = true,
+    }
+    if let Some((f, setter)) = known {
+        let fns = if setter {
+            &mut w.setters
+        } else {
+            &mut w.getters
+        };
+        if !fns.contains(&f) {
+            fns.push(f);
+        }
+    }
+    if accessor || known.is_some() || matches!(value, WriteValue::Opaque) {
+        replay_native_missing(m);
+        return;
+    }
+    // A plain store or a delete adds one stored value (or `undefined`) to
+    // this one entry: only the answered lookups the entry reaches gain it.
+    // Which lookups an entry reaches depends on its token and key and on
+    // the environment events that replay everything (`note_global_in_top`,
+    // `note_handed_to_unknown`), never on the other entries. Lookups parked
+    // unwritten change only when the entry is new.
+    feed_answered(m, (t, k), value);
+    if fresh || first_value {
+        replay_pending(m);
+    }
 }
 
 /// Once the worklist is empty: a runtime object given prototype `src`
@@ -235,24 +580,100 @@ pub fn settle_native_given(m: &mut Model) -> bool {
     for (t, src) in m.native_given.clone() {
         let mut keys = Vec::new();
         let mut seen = Vec::new();
+        let mut accessors = Vec::new();
         let known = m.nodes[src as usize]
             .pts
             .to_sorted()
             .into_iter()
-            .all(|u| chain_keys(m, u, &mut seen, &mut keys));
+            .all(|u| chain_keys(m, u, &mut seen, &mut keys, &mut accessors));
+        // GP1: on a built-in each key of `src`'s chain holds what a [[Get]]
+        // of it on `src` finds (ECMA-262 10.1.8.1), when the keys are known
+        // and none is an accessor (whose getter would run with `t` as
+        // `this`). Otherwise every member escapes once and the keys hold
+        // opaque values, as for ⊤.
+        let exact = known && accessors.is_empty();
+        if m.gives_exactly(t) && !exact && m.given_inexact.insert((t, src)) {
+            more = true;
+            let members = m.node_l("given-prototype-members");
+            let key = Key::Any(0);
+            m.cons(src, crate::model::Cons::Load { key, dst: members });
+            let r = m.reason("E6 member of a prototype given to a runtime object");
+            m.sink_node(members, r);
+        }
+        let exact = exact && m.gives_exactly(t);
+        if exact {
+            // The runtime's own lookups on `t` (its protocols) may find, and
+            // call, what `src`'s chain holds under their keys.
+            let protocol = crate::model::Protocol::runtime_keys();
+            let r = m.reason("E6 member of a prototype given to a runtime object");
+            for &a in &keys {
+                if protocol.contains(&m.atoms[a as usize].as_str()) {
+                    let n = given_read(m, src, a);
+                    m.sink_node(n, r);
+                }
+            }
+        }
         let ks: Vec<Option<Atom>> = match known {
             true => keys.into_iter().map(Some).collect(),
             false => vec![None],
         };
         for k in ks {
-            if m.native_writes.contains_key(&(t, None)) || m.native_writes.contains_key(&(t, k)) {
+            let value = match k {
+                Some(a) if exact => WriteValue::Value(given_read(m, src, a)),
+                _ => WriteValue::Opaque,
+            };
+            if write_covered(m, t, k, !exact, value) {
                 continue;
             }
             more = true;
-            note_native_write(m, t, k.map(Key::Named), "E6 prototype given");
+            // The census attributes the write to the operation that gave the
+            // prototype (its receiver node, or its call), and keeps the given
+            // value as `proto`: a ⊤ on either side makes the write derived.
+            let (by_node, by_call) = match m.census_given_by(t, src) {
+                Some((n, c)) => (
+                    if n == NO_NODE { src } else { n },
+                    (c != u32::MAX).then_some(c),
+                ),
+                None => (src, None),
+            };
+            let saved = m
+                .diagnostic
+                .as_mut()
+                .map(|d| (d.cur_call.take(), d.cause_node.replace(by_node)));
+            if let Some(d) = m.diagnostic.as_mut() {
+                d.cur_call = by_call;
+            }
+            m.census_settling(Some(src));
+            match value {
+                WriteValue::Opaque => {
+                    note_native_write(m, t, k.map(Key::Named), "E6 prototype given")
+                }
+                _ => note_native_data_write(m, t, k.map(Key::Named), "E6 prototype given", value),
+            }
+            m.census_settling(None);
+            if let (Some(d), Some(saved)) = (m.diagnostic.as_mut(), saved) {
+                (d.cur_call, d.cause_node) = saved;
+            }
         }
     }
     more
+}
+
+/// GP1: the node holding what a [[Get]] of `a` on `src`'s chain finds.
+fn given_read(m: &mut Model, src: NodeId, a: Atom) -> NodeId {
+    if let Some(&n) = m.given_reads.get(&(src, a)) {
+        return n;
+    }
+    let n = m.node_l("given-prototype-read");
+    m.cons(
+        src,
+        crate::model::Cons::Load {
+            key: Key::Named(a),
+            dst: n,
+        },
+    );
+    m.given_reads.insert((src, a), n);
+    n
 }
 
 /// Collect into `out` every key an object of token `u` or of its chain may
@@ -261,7 +682,14 @@ pub fn settle_native_given(m: &mut Model) -> bool {
 /// under a computed key: unknown), so E5 alone keeps the set known. `ObjectProto` adds none: it stands
 /// for every builtin prototype, already on every runtime object's chain. A
 /// write through ⊤ is already a write of its key on every runtime object.
-fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -> bool {
+/// The keys an accessor or a define may give go to `acc` too.
+fn chain_keys(
+    m: &mut Model,
+    u: Tok,
+    seen: &mut Vec<Tok>,
+    out: &mut Vec<Atom>,
+    acc: &mut Vec<Atom>,
+) -> bool {
     if seen.contains(&u) {
         return true;
     }
@@ -310,6 +738,9 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     for a in own {
         add(a, out);
     }
+    for &a in &tpl.accessor_keys {
+        add(a, acc);
+    }
     let late = match m.toks[u as usize] {
         TokKind::Proto(_) => &m.proto_writers,
         _ => &m.writers,
@@ -331,6 +762,7 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     let accessors = m.accessor_keys.get(&u).cloned().unwrap_or_default();
     for a in defined.into_iter().chain(accessors) {
         add(a, out);
+        add(a, acc);
     }
     // A key defined, or an accessor installed, under a computed key.
     let star = m.atom(crate::STAR_KEY);
@@ -339,7 +771,16 @@ fn chain_keys(m: &mut Model, u: Tok, seen: &mut Vec<Tok>, out: &mut Vec<Atom>) -
     }
     let pn = m.proto_node(u);
     let protos: Vec<Tok> = m.nodes[pn as usize].pts.to_sorted();
-    protos.into_iter().all(|p| chain_keys(m, p, seen, out))
+    protos.into_iter().all(|p| chain_keys(m, p, seen, out, acc))
+}
+
+/// A built-in object was handed to unknown code: the stores into ⊤ made
+/// before now may have written it (`written_by`). Lookups parked past it
+/// run again, as for the global object (`note_global_in_top`).
+pub fn note_handed_to_unknown(m: &mut Model) {
+    if m.native_writes.keys().any(|&(w, _)| w == TOP) {
+        replay_native_missing(m);
+    }
 }
 
 /// The global object may now be ⊤: stores into ⊤ may have written globals.
@@ -347,13 +788,68 @@ pub fn note_global_in_top(m: &mut Model) {
     m.global_written_own |= !m.shared_replay;
     if !m.global_in_top {
         m.global_in_top = true;
+        let fields: Vec<NodeId> = m.global_fields.iter().map(|&(_, n)| n).collect();
+        for n in fields {
+            global_field_read_by_unknown(m, n);
+        }
         replay_native_missing(m);
     }
+}
+
+/// Unknown code that holds the global object (`global_in_top`) reads its
+/// properties: what the program stored in global `n` leaves. R-GLOBAL (owner
+/// decision 2026-11-18) drops only the any-key write by that code, not its
+/// reads.
+fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
+    let r = m.reason("global property read by unknown code that holds the global object");
+    m.sink_node(n, r);
 }
 
 /// Lookups that passed a native prototype (or read a program-owned global)
 /// under a key that may now be written: they take the opaque member.
 pub(super) fn replay_native_missing(m: &mut Model) {
+    if m.native_missing.is_empty() && m.native_answered.is_empty() {
+        return;
+    }
+    replay_pending(m);
+    // Lookups answered by what the writes stored: refilled, or run as
+    // opaque members once an opaque write reaches their key.
+    m.native_replays += 1;
+    m.with_b(|m| {
+        let keys: Vec<_> = m
+            .native_answer_nodes
+            .iter()
+            .map(|(&k, &e)| (k, e))
+            .collect();
+        let mut opaque: std::collections::HashSet<(Tok, Atom)> = Default::default();
+        for ((np, a), e) in keys {
+            match stored_values(m, np, a) {
+                Some((stored, absent)) => fill_stored(m, e, &stored, absent),
+                None => {
+                    m.native_answer_nodes.remove(&(np, a));
+                    opaque.insert((np, a));
+                }
+            }
+        }
+        if opaque.is_empty() {
+            return;
+        }
+        let gone: Vec<_> = m
+            .native_answered
+            .keys()
+            .filter(|k| opaque.contains(&(k.0, k.1)))
+            .cloned()
+            .collect();
+        for (np, a, miss) in gone {
+            m.native_answered.remove(&(np, a, miss.clone()));
+            answer_opaque(m, np, a, miss);
+        }
+    });
+}
+
+/// Lookups parked past a native prototype whose key a write may now reach:
+/// answered from the stored values, or run as opaque members.
+fn replay_pending(m: &mut Model) {
     if m.native_missing.is_empty() {
         return;
     }
@@ -361,67 +857,298 @@ pub(super) fn replay_native_missing(m: &mut Model) {
     let mut keep = Vec::with_capacity(pending.len());
     m.with_b(|m| {
         for (np, a, miss) in pending {
-            if !native_written(m, np, a) {
+            m.census_native_read(np, a, miss.clone());
+            let written = match miss {
+                NativeMiss::Global(dst, _) => {
+                    let stored = global_value_stored(m, np, a);
+                    if !stored {
+                        global_maybe_deleted(m, np, a, dst);
+                    }
+                    stored
+                }
+                NativeMiss::Lookup(dst, setter) => {
+                    let unknown = native_accessor_written(m, np, a);
+                    if !unknown {
+                        native_accessor_known(m, np, a, dst, setter);
+                    }
+                    unknown
+                }
+                _ => native_written(m, np, a),
+            };
+            if !written {
                 keep.push((np, a, miss));
                 continue;
             }
-            match miss {
-                NativeMiss::Load(dst) => {
-                    let bf = builtin_fn(m, "written key replay");
-                    m.add_tok(dst, bf);
-                    m.add_top(dst, |_| {
-                        "member of a builtin prototype written through ⊤".into()
-                    });
-                    m.add_prim(dst, prim::ALL);
-                }
-                NativeMiss::Global(dst, f) => {
-                    let name = m.atoms[a as usize].clone();
-                    if m.explain && !m.shared_replay {
-                        let ws: Vec<String> = m
-                            .native_writes
-                            .iter()
-                            .map(|((w, k), r)| {
-                                format!(
-                                    "{}/{:?}: {}",
-                                    m.tok_name(*w),
-                                    k.map(|x| m.atoms[x as usize].clone()),
-                                    m.reasons[*r as usize]
-                                )
-                            })
-                            .collect();
-                        eprintln!(
-                            "perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}",
-                            m.global_in_top
-                        );
-                    }
-                    m.add_top(dst, |_| {
-                        format!("globalThis.{name} written by unmodeled code")
-                    });
-                    m.add_prim(dst, prim::ALL);
-                    // Unmodeled code may also read what the program stored.
-                    let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
-                    m.sink_node(f, r);
-                }
-                NativeMiss::Call(origin, call) => {
-                    let native = m.tok_name(np);
-                    let name = m.atoms[a as usize].clone();
-                    let prev = m.cur_this.replace(origin);
-                    unknown_method(m, call, &format!("argument of native {native}.{name}"));
-                    m.cur_this = prev;
-                }
-                NativeMiss::PrimCall(_, call) => {
-                    let name = m.atoms[a as usize].clone();
-                    unknown_method(
-                        m,
-                        call,
-                        &format!("argument of a written primitive method {name}"),
-                    );
-                }
+            if answer_stored(m, np, a, miss) {
+                continue;
             }
+            answer_opaque(m, np, a, miss);
         }
     });
     keep.append(&mut m.native_missing);
     m.native_missing = keep;
+}
+
+/// A plain store or a delete recorded in write entry `entry` (`value` not
+/// opaque): the answered lookups that entry reaches ([`written_by`]) take
+/// that one value, or `undefined` for a delete (ECMA-262 10.1.9.2, 10.1.10).
+/// No opaque write reaches an answered lookup (one turns it into an opaque
+/// member, `replay_native_missing`), so this is all the lookup gains.
+fn feed_answered(m: &mut Model, entry: (Tok, Option<Atom>), value: WriteValue) {
+    if m.native_answer_nodes.is_empty() {
+        return;
+    }
+    let Some(x) = m.native_writes.get(&entry) else {
+        return;
+    };
+    let x: *const crate::model::NativeWrite = x;
+    let t = entry.0;
+    // `written_by` counts an entry only on ⊤, the lookup's own token, the
+    // global object's tokens or `Object.prototype`.
+    let wide = t == TOP
+        || super::global_object(m, t)
+        || matches!(m.toks[t as usize], TokKind::ObjectProto);
+    let reached: Vec<NodeId> = m
+        .native_answer_nodes
+        .iter()
+        .filter(|(&(np, a), _)| {
+            (wide || np == t) && {
+                let (top, own) = written_by(m, np, a, false, &|y| std::ptr::eq(y, x));
+                top || own
+            }
+        })
+        .map(|(_, &w)| w)
+        .collect();
+    m.native_fed += reached.len() as u64;
+    m.with_b(|m| {
+        for w in reached {
+            match value {
+                WriteValue::Value(n) => m.edge(n, w),
+                WriteValue::Absent => m.add_prim(w, prim::UNDEF),
+                WriteValue::Opaque => unreachable!(),
+            }
+        }
+    });
+}
+
+/// The values the writes that may have written native prototype `np`'s key
+/// `a` stored, and whether one of them removed it (a delete): `None` when
+/// one of those writes stored a value no record names (opaque).
+fn stored_values(m: &Model, np: Tok, a: Atom) -> Option<(Vec<NodeId>, bool)> {
+    let (top, own) = written_by(m, np, a, false, &|w| w.opaque);
+    if top || own {
+        return None;
+    }
+    let mut out: Vec<NodeId> = Vec::new();
+    let mut absent = false;
+    for w in m.native_writes.values() {
+        if w.stored.is_empty() && !w.absent {
+            continue;
+        }
+        let (top, own) = written_by(m, np, a, false, &|x| std::ptr::eq(x, w));
+        if top || own {
+            for &n in &w.stored {
+                if !out.contains(&n) {
+                    out.push(n);
+                }
+            }
+            absent |= w.absent;
+        }
+    }
+    Some((out, absent))
+}
+
+fn fill_stored(m: &mut Model, w: NodeId, stored: &[NodeId], absent: bool) {
+    for &n in stored {
+        m.edge(n, w);
+    }
+    if absent {
+        m.add_prim(w, prim::UNDEF);
+    }
+}
+
+/// A read or a method call of native prototype `np`'s key `a` that writes
+/// may have written, each with a known stored value: the key holds what a
+/// store stored (ECMA-262 10.1.9.2), `undefined` after a delete, or what
+/// the chain holds where no write happened (the caller continues the
+/// lookup: true). A read yields the stored values; a call calls them, with
+/// the receiver as `this` (a primitive receiver: that primitive), and one
+/// of a value that is not callable throws (ECMA-262 7.3.14 Call), handing
+/// its arguments to no one. False: a write that stored a value no record
+/// names (opaque) may have written the key, or the lookup is of another
+/// kind; the caller runs today's opaque member.
+pub(super) fn answer_stored(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -> bool {
+    if !matches!(
+        miss,
+        NativeMiss::Load(_) | NativeMiss::Call(..) | NativeMiss::PrimCall(..)
+    ) {
+        return false;
+    }
+    let Some((stored, absent)) = stored_values(m, np, a) else {
+        return false;
+    };
+    if m.native_answered.contains_key(&(np, a, miss)) {
+        return true;
+    }
+    let w = match m.native_answer_nodes.get(&(np, a)) {
+        Some(&w) => w,
+        None => {
+            let w = m.node_l("written-value");
+            m.native_answer_nodes.insert((np, a), w);
+            w
+        }
+    };
+    match miss {
+        NativeMiss::Load(dst) => m.edge(w, dst),
+        NativeMiss::Call(origin, call) => m.cons(w, Cons::CallThis { call, this: origin }),
+        NativeMiss::PrimCall(p, call) => {
+            let c = m.calls[call as usize].clone();
+            let this = m.node_l("written-prim-this");
+            m.add_prim(this, p);
+            // One call per (root of `call`, key, primitive kinds): a stored
+            // method this call runs may reach the same written key on the
+            // same primitives again (`ObjectProtoMethod` runs every
+            // Object.prototype method on its primitive `this`); that is the
+            // call already made, joined, not a new one.
+            if let Some(call2) = m.solver_call_keyed(
+                call,
+                (crate::summary::MK_WRITTEN_PRIM, a, p as u32),
+                Some(w),
+                crate::model::CallSite {
+                    first_arg_fixed: false,
+                    this: crate::model::ThisArg::Node(this),
+                    ..c
+                },
+            ) {
+                m.cons(w, Cons::Call { call: call2 });
+            }
+        }
+        _ => unreachable!(),
+    }
+    fill_stored(m, w, &stored, absent);
+    m.native_answered.insert((np, a, miss), w);
+    true
+}
+
+/// A lookup of native prototype `np`'s key `a` that the caller answers
+/// from the intrinsic's description: parked until a write reaches the key
+/// (`replay_native_missing`), or, written already, answered by what the
+/// writes stored as well ([`answer_stored`]). True: a write of a value no
+/// record names may have written the key: the caller runs today's opaque
+/// answer instead.
+pub(super) fn opaque_written(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) -> bool {
+    if !native_written(m, np, a) {
+        m.native_missing.push((np, a, miss));
+        return false;
+    }
+    !answer_stored(m, np, a, miss)
+}
+
+/// Today's opaque member for a lookup whose key a write of an unnamed value
+/// may have written.
+fn answer_opaque(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) {
+    let saved_gate = m
+        .diagnostic
+        .as_mut()
+        .and_then(|d| d.census.as_mut())
+        .map(|c| {
+            let old = c.active_gate;
+            c.active_gate = Some((np, a));
+            old
+        });
+    match miss {
+        NativeMiss::Lookup(dst, _) => {
+            m.add_top(dst, |_| {
+                "accessor descriptor of a written intrinsic key".into()
+            });
+        }
+        NativeMiss::Load(dst) => {
+            m.add_top(dst, |_| {
+                "member of a builtin prototype written through ⊤".into()
+            });
+            m.add_prim(dst, prim::ALL);
+        }
+        NativeMiss::Global(dst, f) => {
+            let name = m.atoms[a as usize].clone();
+            if m.explain && !m.shared_replay {
+                let ws: Vec<String> = m
+                    .native_writes
+                    .iter()
+                    .map(|((w, k), r)| {
+                        format!(
+                            "{}/{:?}: {}",
+                            m.tok_name(*w),
+                            k.map(|x| m.atoms[x as usize].clone()),
+                            m.reasons[r.reason as usize]
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "perry: wpfacts explain: replay global {name} in_top {} writes {ws:?}",
+                    m.global_in_top
+                );
+            }
+            m.add_top(dst, |_| {
+                format!("globalThis.{name} written by unmodeled code")
+            });
+            m.add_prim(dst, prim::ALL);
+            // Unmodeled code may also read what the program stored.
+            let r = m.reason(&format!("globalThis.{name} reaches unmodeled code"));
+            m.sink_node(f, r);
+        }
+        NativeMiss::Store(src, site) => {
+            let prev = m.store_at.take();
+            m.store_into(np, Key::Named(a), src, site);
+            m.store_at = prev;
+        }
+        NativeMiss::Call(origin, call) => {
+            let native = m.tok_name(np);
+            let name = m.atoms[a as usize].clone();
+            if m.explain && !m.shared_replay && name.starts_with(super::WK_PREFIX) {
+                let ws: Vec<String> = m
+                    .native_writes
+                    .iter()
+                    .filter(|((_, k), _)| k.is_none() || *k == Some(a))
+                    .map(|((w, k), r)| {
+                        format!(
+                            "{}/{:?}: {}",
+                            m.tok_name(*w),
+                            k.map(|x| m.atoms[x as usize].clone()),
+                            m.reasons[r.reason as usize]
+                        )
+                    })
+                    .collect();
+                eprintln!(
+                    "perry: wpfacts explain: replay call {native}.{name} by {:?} in_top {} handed {} writes {ws:?}",
+                    native_written_by(m, np, a),
+                    m.global_in_top,
+                    handed_to_unknown(m, np)
+                );
+            }
+            let prev = m.cur_this.replace(origin);
+            unknown_method(m, call, &format!("argument of native {native}.{name}"));
+            m.cur_this = prev;
+        }
+        NativeMiss::PrimCall(_, call) => {
+            let name = m.atoms[a as usize].clone();
+            unknown_prim_method(
+                m,
+                call,
+                &format!("argument of a written primitive method {name}"),
+            );
+        }
+        NativeMiss::New(call) => {
+            let name = m.atoms[a as usize].clone();
+            let prev = m.cur_this.take();
+            unknown_method(m, call, &format!("argument of written constructor {name}"));
+            m.cur_this = prev;
+        }
+    }
+    if let Some(old) = saved_gate {
+        let c = m.diagnostic.as_mut().unwrap().census.as_mut().unwrap();
+        c.active_gate = old;
+        c.pending_gate = None;
+    }
 }
 
 /// The `cache` and `extensions` objects of [`BuiltinNs::Require`].
@@ -438,6 +1165,21 @@ pub fn require_parts(m: &mut Model) -> (Tok, Tok) {
     (c, e)
 }
 
+/// The realm's `navigator` (runtime navigator.rs: `realm { navigator, kind =
+/// namespace, extends = Navigator.prototype }`), the one object the global
+/// getter returns: an object of `Navigator.prototype`, as a declaration's
+/// `fresh(Navigator.prototype)` makes, whose loads read the getters'
+/// declared results (`effects::declared_getter`).
+pub(super) fn navigator_object(m: &mut Model) -> Tok {
+    if let Some(t) = m.navigator {
+        return t;
+    }
+    let t = anon_tmpl(m, "Navigator.prototype");
+    m.navigator = Some(t);
+    global_any_navigator(m);
+    t
+}
+
 pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
     let site = m.anon_birth_site(what);
     let tm = m.tmpls.len() as TmplId;
@@ -452,6 +1194,8 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         definite: vec![],
         declared: Vec::new(),
         reserved: Vec::new(),
+        inert_definite: Vec::new(),
+        inert_reads: Vec::new(),
         parent: None,
         ctor: None,
         native_parent: None,
@@ -463,8 +1207,10 @@ pub(super) fn anon_tmpl(m: &mut Model, what: &'static str) -> Tok {
         parent_links: Vec::new(),
         null_proto: false,
         chain_miss: false,
+        chain_miss_open: false,
         species: None,
         per_evaluation: false,
+        static_methods: Vec::new(),
     });
     m.tok(TokKind::Obj(tm, NO_CTX))
 }
@@ -477,24 +1223,293 @@ pub fn is_builtin_module(s: &str) -> bool {
     }
 }
 
-/// Object.prototype's legacy members: the only `__` names the global object
-/// inherits.
-pub const OBJECT_PROTO_DUNDER: [&str; 5] = [
-    "__proto__",
-    "__defineGetter__",
-    "__defineSetter__",
-    "__lookupGetter__",
-    "__lookupSetter__",
+/// A global-object key the program owns: the runtime realm declares it
+/// neither on the global object nor on its chain (`Object.prototype`), so
+/// only stores the solver sees put a value there (the runtime's unresolved
+/// read is `[[Get]](globalThis, name)`, absent = ReferenceError). Such a
+/// global holds what the program stored, plus ⊤ once something unmodeled
+/// may write it (`native_written`, as for native prototypes).
+///
+/// Per-unit mode (retiring) keeps the old cut: another unit may store any
+/// global, so only `__` names the realm does not declare are owned there.
+pub fn global_user_key(m: &Model, name: &str) -> bool {
+    name != crate::STAR_KEY
+        && (!m.unit_mode || name.starts_with("__"))
+        && !["%Global%", "Object.prototype"].into_iter().any(|holder| {
+            m.declarations
+                .named(holder, m)
+                .is_some_and(|s| m.declarations.property(s, name, m).is_some())
+        })
+}
+
+/// GLOBS13: a method call on the global object (`globalThis.k()`, a
+/// receiver that may be the global object) under a program-owned key
+/// (`global_user_key`) calls what [[Get]] reads there (ECMA-262 13.3.6.1
+/// EvaluateCall, 7.3.21 Invoke): the program's stores, ⊤ once unmodeled
+/// code may have written the key, else `undefined`, whose Call throws a
+/// TypeError (7.3.14 step 2) and hands no argument on.
+pub fn global_user_method(m: &Model, t: Tok, a: Atom) -> bool {
+    matches!(m.toks[t as usize], TokKind::Builtin(BuiltinNs::GlobalThis))
+        && global_user_key(m, &m.atoms[a as usize])
+}
+
+/// S8: a name on the global sentinel (HIR `GlobalGet(0)`: an identifier
+/// with no binding; `console` lowers to it too) that is a program-owned key
+/// of the global object (`global_user_key`) and that the sentinel does not
+/// route by name. Codegen lowers the Console methods (lower_call
+/// console_promise.rs; `host_of`), `resolve` / `reject` (the Promise
+/// statics) and `fromAsync` (`Array.fromAsync`) on the sentinel itself,
+/// whatever the global object holds. Any other such name is
+/// [[Get]](globalThis, name).
+pub fn sentinel_user_global(m: &Model, name: &str) -> bool {
+    global_user_key(m, name)
+        && !matches!(name, "resolve" | "reject" | "fromAsync")
+        && super::host_of(BuiltinNs::Other, name, true).is_none()
+}
+
+/// A global function the realm declares (`fetch`, `setTimeout`), stored
+/// over by the program: the global object is an ordinary object (ECMA-262
+/// 9.3, 19), so the store makes the value property `name` of it, read by
+/// the program's global reads of `name` (`tok_load`: the global's field
+/// beside the realm function). No native reads a global function by name:
+/// the runtime's by-name reads (`js_get_global_this_builtin_value`) name
+/// constructors (`Error`, `URL`, `Uint8Array`, the error and stream
+/// classes) and answer intrinsics otherwise (`builtin_constructor_value`),
+/// so the value reaches no unknown code. Constructors and namespaces keep
+/// the sink.
+pub fn program_global_fn(m: &Model, name: &str) -> bool {
+    !m.unit_mode
+        && name != crate::STAR_KEY
+        && super::global_function(m, name)
+        && super::ns_by_name(name).is_none()
+        && !NATIVE_READ_GLOBALS.contains(&name)
+}
+
+/// The global functions a native reads by name after the realm is set up
+/// and hands on (`js_get_global_this_builtin_value` / `builtin_value_core`
+/// = the live `globalThis[name]`): the module exports equal to the global
+/// (perry-runtime native_module/static_exports.rs:209, native_module.rs:1068,
+/// constants.rs:597/678, node_submodules/mod.rs:634), the `.constructor` of
+/// a fresh text-encoding stream (class_meta.rs:402) and the realm's
+/// `Navigator` (navigator.rs:119, at the first `navigator` read). A value
+/// the program stores under one of them reaches that native's caller, so
+/// the store keeps the sink. (The error classes, `Object`, `SyntaxError`
+/// are namespaces: `ns_by_name`.) The other by-name reads are the
+/// program's own (bare-name value reads, `instanceof`, the `super()` of a
+/// builtin parent: class_return.rs:15) or run before program code
+/// (populate.rs).
+pub(crate) const NATIVE_READ_GLOBALS: &[&str] = &[
+    "URL",
+    "URLSearchParams",
+    "URLPattern",
+    "Blob",
+    "File",
+    "TextEncoder",
+    "TextDecoder",
+    "TextEncoderStream",
+    "TextDecoderStream",
+    "ReadableStream",
+    "WritableStream",
+    "TransformStream",
+    "CompressionStream",
+    "DecompressionStream",
+    "Navigator",
 ];
 
-/// A global-object key the program owns: the host defines no global whose
-/// name starts with `__` beyond `Object.prototype`'s legacy members (the
-/// test `host_defines_no_dunder_global` reads the runtime's global-object
-/// sources). Such a global holds what the program stored, plus ⊤ once
-/// something unmodeled may write it (`native_written`, as for native
-/// prototypes).
-pub fn global_user_key(name: &str) -> bool {
-    name.starts_with("__") && !OBJECT_PROTO_DUNDER.contains(&name) && name != crate::STAR_KEY
+/// GLOBK G2: does a store under an unknown String key on the global object
+/// (`global_any_field`) replace global binding `n`? Every string-named
+/// own property of the global object, except the non-writable,
+/// non-configurable `undefined`, `NaN`, `Infinity` (ECMA-262 19.1: the
+/// [[Set]] returns false, a strict store throws) and the getter-only
+/// `navigator` (no setter: the same).
+pub fn global_any_names(m: &Model, n: &str) -> bool {
+    !m.unit_mode
+        && !matches!(n, "undefined" | "NaN" | "Infinity" | "navigator")
+        && n != crate::STAR_KEY
+}
+
+/// G2: what a global binding read names: one global name, the names a
+/// computed key's shape spells, or (a key of no shape) every name.
+#[derive(Clone, Debug, PartialEq)]
+pub enum GlobalAnyRead {
+    Name(String),
+    Shape(KeyShapeId),
+    All,
+}
+
+/// GLOBS4: may a store under a String key of shape `s` (0: any String)
+/// write what read `r` names? A store writes exactly the key
+/// ToPropertyKey gives (ECMA-262 10.1.9.1 OrdinarySet, 7.1.19); a read of
+/// name N sees the value only if that key can be N (10.1.8.1 OrdinaryGet).
+fn global_any_hits(m: &Model, s: KeyShapeId, r: &GlobalAnyRead) -> bool {
+    match r {
+        GlobalAnyRead::All => true,
+        GlobalAnyRead::Name(n) => m.key_may_name_str(Key::Any(s), n),
+        GlobalAnyRead::Shape(k) => m.shapes_meet(s, *k),
+    }
+}
+
+fn global_any_link(m: &mut Model, r: GlobalAnyRead, dst: NodeId) {
+    if m.unit_mode {
+        return;
+    }
+    let hits: Vec<NodeId> = m
+        .global_any_fields
+        .iter()
+        .filter(|(s, _)| global_any_hits(m, *s, &r))
+        .map(|(_, f)| *f)
+        .collect();
+    for f in hits {
+        m.edge(f, dst);
+    }
+    m.global_any_reads.push((r, dst));
+}
+
+/// G2: a read of global binding `n` (bare name, `globalThis.n`, a module
+/// export equal to a global a native reads by name) also reads what the
+/// program stored under unknown String keys that can spell `n` (GLOBS4).
+pub fn global_any_read(m: &mut Model, n: &str, dst: NodeId) {
+    global_any_link(m, GlobalAnyRead::Name(n.to_string()), dst);
+}
+
+/// G2: a read of the global object under `key`: a named key is that
+/// binding's read, a shaped key reads the stores whose shape meets it, a
+/// key of no shape reads them all.
+pub fn global_any_read_key(m: &mut Model, key: Key, dst: NodeId) {
+    let r = match key {
+        Key::Named(a) => GlobalAnyRead::Name(m.atoms[a as usize].clone()),
+        Key::Any(0) => GlobalAnyRead::All,
+        Key::Any(s) => GlobalAnyRead::Shape(s),
+    };
+    global_any_link(m, r, dst);
+}
+
+/// G2: `new K(...)` of a literal global name constructs what the program
+/// stored under unknown String keys that can spell `K` (13.3.5.1
+/// evaluates `K`).
+pub fn global_any_new(m: &mut Model, name: &str, call: CallId) {
+    if m.unit_mode {
+        return;
+    }
+    let hits: Vec<NodeId> = m
+        .global_any_fields
+        .iter()
+        .filter(|(s, _)| m.key_may_name_str(Key::Any(*s), name))
+        .map(|(_, f)| *f)
+        .collect();
+    for f in hits {
+        m.cons(f, Cons::New { call });
+    }
+    m.global_any_news.push((name.to_string(), call));
+}
+
+/// G2: the global object's field under String keys of shape `s` (0: any
+/// String), made by the first store under such a key; the reads and
+/// constructs its shape can spell are linked to it, those made before it
+/// too.
+pub fn global_any_field(m: &mut Model, s: KeyShapeId) -> NodeId {
+    if let Some(&(_, f)) = m.global_any_fields.iter().find(|(k, _)| *k == s) {
+        return f;
+    }
+    let ga = m.node_l("global-any-key");
+    m.global_any_fields.push((s, ga));
+    let reads: Vec<NodeId> = m
+        .global_any_reads
+        .iter()
+        .filter(|(r, _)| global_any_hits(m, s, r))
+        .map(|(_, d)| *d)
+        .collect();
+    for d in reads {
+        m.edge(ga, d);
+    }
+    let news: Vec<CallId> = m
+        .global_any_news
+        .iter()
+        .filter(|(n, _)| m.key_may_name_str(Key::Any(s), n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in news {
+        m.cons(ga, Cons::New { call });
+    }
+    global_any_navigator(m);
+    ga
+}
+
+/// GLOBK3: the global object's field of what a `defineProperty` under a
+/// computed key defines there (`Model::define_any_key`): every global
+/// binding the any-key field reaches, and `navigator` (a configurable
+/// accessor a define replaces, though a store cannot).
+pub fn global_def_field(m: &mut Model) -> NodeId {
+    if let Some(d) = m.global_def {
+        return d;
+    }
+    let d = m.node_l("global-define-key");
+    m.global_def = Some(d);
+    let ga = global_any_field(m, 0);
+    m.edge(d, ga);
+    for n in std::mem::take(&mut m.global_def_navs) {
+        m.edge(d, n);
+    }
+    d
+}
+
+/// GLOBK3: a read of `navigator` also reads what a computed-key define
+/// put on the global object.
+pub fn global_def_nav_read(m: &mut Model, dst: NodeId) {
+    if m.unit_mode {
+        return;
+    }
+    match m.global_def {
+        Some(d) => m.edge(d, dst),
+        None => m.global_def_navs.push(dst),
+    }
+}
+
+/// G2: the realm's navigator object takes the live `Navigator`'s
+/// `prototype` as its [[Prototype]] when the getter first runs
+/// (perry-runtime navigator.rs:119 `builtin_value_core("Navigator")`,
+/// `navigator_object_with_constructor`): with a value stored under an
+/// unknown String key that may be what `Navigator` holds then (a store
+/// whose key can spell `Navigator`, GLOBS4).
+pub fn global_any_navigator(m: &mut Model) {
+    let Some(nav) = m.navigator else {
+        return;
+    };
+    if m.global_any_nav
+        || !m
+            .global_any_fields
+            .iter()
+            .any(|(s, _)| m.key_may_name_str(Key::Any(*s), "Navigator"))
+    {
+        return;
+    }
+    m.global_any_nav = true;
+    let r = m.node_l("global-any-Navigator");
+    let p = m.node_l("global-any-Navigator.prototype");
+    let key = Key::Named(m.atom("prototype"));
+    m.cons(r, Cons::Load { key, dst: p });
+    m.given_prototype(nav, p);
+    global_any_read(m, "Navigator", r);
+}
+
+/// G2 off: a native the model does not follow reads a global by name and
+/// hands the value on (`TextEncoderStream` / `TextDecoderStream`
+/// `.constructor`, perry-runtime class_meta): the stores under unknown
+/// String keys take the realm's sink as before G2.
+pub fn global_any_disable(m: &mut Model) {
+    if m.global_any_off || m.unit_mode {
+        return;
+    }
+    m.global_any_off = true;
+    for (t, key, src, site) in std::mem::take(&mut m.global_any_stores) {
+        let prev = m.store_at.take();
+        m.store_into(t, key, src, site);
+        m.store_at = prev;
+    }
+    // GLOBK3: the computed-key defines on the global object as well.
+    for (d, g) in std::mem::take(&mut m.global_defs) {
+        m.define_any_old(d, g);
+    }
 }
 
 /// The global object's field under program-owned key `a`.
@@ -504,6 +1519,10 @@ pub fn global_field(m: &mut Model, g: Tok, a: Atom) -> NodeId {
     }
     let n = m.field(g, a);
     m.global_fields.push((a, n));
+    if m.global_in_top {
+        global_field_read_by_unknown(m, n);
+    }
+    super::loads::global_shaped_replay(m, a);
     if m.global_cells {
         m.global_late = true;
         m.global_written_own |= !m.shared_replay;
@@ -533,7 +1552,7 @@ pub(super) fn native_method(
             "EventEmitter",
             "on" | "addListener" | "once" | "prependListener" | "prependOnceListener",
         ) => {
-            if let Some(&f) = c.args.get(1) {
+            if let Some(&f) = c.arg(1) {
                 let a = m.atom("#listeners");
                 let fl = m.field(origin, a);
                 m.edge(f, fl);
@@ -541,21 +1560,36 @@ pub(super) fn native_method(
             ret_tok(m, call, origin);
         }
         ("EventEmitter", "emit") => {
+            // `emit("error", er)` with no `error` listener throws `er` itself
+            // when it is an Error (`event_emitter_error.rs`); otherwise a
+            // runtime error (always in `thrown`).
+            let thrown = m.calls[call as usize].region;
+            if let Some(&er) = c.arg(1) {
+                m.edge(er, thrown);
+            }
+            for &s in &c.spread {
+                let key = m.elem_key();
+                m.cons(s, Cons::Load { key, dst: thrown });
+            }
             let a = m.atom("#listeners");
             let fl = m.field(origin, a);
             let ret = m.node_l("emit-ret");
             let call2 = m.calls.len() as CallId;
-            m.solver_call(
+            let _call2 = m.chain_call(
                 call,
+                0,
+                fl,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Tok(origin),
-                    args: c.args.iter().skip(1).copied().collect(),
+                    args: c.args_from(1).iter().copied().collect(),
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
+                    region: m.thrown,
                 },
+                move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
             );
-            m.cons(fl, Cons::Call { call: call2 });
             ret_prim(m, call, prim::BOOL);
         }
         ("EventEmitter", "off" | "removeListener" | "removeAllListeners" | "setMaxListeners") => {
@@ -571,7 +1605,112 @@ pub(super) fn native_method(
             m.add_prim(fa, prim::STR);
             ret_tok(m, call, arr);
         }
+        // `Array.prototype` taken as a value (`Object.create(Array.prototype)`,
+        // a prototype given to an array): the runtime refuses to replace its
+        // image methods (DEC 250), so the method found is the intrinsic one,
+        // run with the receiver as `this` (`native_receiver`), as the call of
+        // that method's value is.
+        ("Array", n)
+            if array_image_method(n) && native_receiver(m, Family::Array, None, origin) =>
+        {
+            array_method_on(m, origin, n, call)
+        }
+        // Past `Array.prototype` taken as a value, under a key it does not own
+        // in the image and no write may have added: the lookup continues on
+        // `Object.prototype`, add-locked and image-locked (DEC 250), so what
+        // it finds there is final. Its method runs with the receiver as
+        // `this` (the models `proto_method` gives `Object.prototype`'s own
+        // methods); a key absent on both is no callee (the call throws).
+        // Parked: a later write of the key onto `Array.prototype` (or one that
+        // may reach it) replays the call as the opaque written member.
+        ("Array", n) if members::own(Family::Array, n).is_none() && !native_written(m, np, a) => {
+            m.native_missing
+                .push((np, a, NativeMiss::Call(origin, call)));
+            match members::member(Family::Object, n) {
+                Some(Mem::Fn) => {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, origin, Key::Named(a), call);
+                }
+                None => {}
+                Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
+            }
+        }
+        // A typed array's prototypes, under a key neither `%TypedArray%.prototype`
+        // nor the kind's own prototype declares (ECMA-262 23.2.3, 23.2.7: the
+        // realm's declarations list their members) and no write may have
+        // added: [[Get]] continues on `Object.prototype` (as for `Array`
+        // above), whose method runs with the receiver as `this`
+        // (`Object.prototype.valueOf`, 20.1.3.7: ToObject(this value), no
+        // program code). A well-known symbol key stays as before.
+        (n0, n)
+            if typed_array_proto_name(n0)
+                && !n.starts_with("@@")
+                && !typed_array_proto_declares(m, n0, n)
+                && !native_written(m, np, a) =>
+        {
+            m.native_missing
+                .push((np, a, NativeMiss::Call(origin, call)));
+            match members::member(Family::Object, n) {
+                Some(Mem::Fn) => {
+                    let op = m.tok(TokKind::ObjectProto);
+                    proto_method(m, op, origin, Key::Named(a), call);
+                }
+                None => {}
+                Some(_) => unknown_method(m, call, &format!("argument of native {native}.{name}")),
+            }
+        }
         (_, "toString") => ret_prim(m, call, prim::STR),
         _ => unknown_method(m, call, &format!("argument of native {native}.{name}")),
     }
+}
+
+/// Is `name` a method `Array.prototype` owns in the image, whose read there
+/// is final (`members::locked_read`)? `constructor`, a data member and an
+/// absent key (`Array.prototype` takes named adds) are not.
+fn array_image_method(name: &str) -> bool {
+    matches!(members::member(Family::Array, name), Some(Mem::Fn))
+        && members::locked_read(Family::Array, None, name)
+}
+
+pub(crate) fn census_native_written(m: &Model, t: Tok, a: Atom) -> bool {
+    native_written(m, t, a)
+}
+pub(crate) fn census_native_op_writes(m: &Model, np: Tok) -> bool {
+    match &m.toks[np as usize] {
+        TokKind::NativeProto(_, ns) => ns.is_some(),
+        _ => super::global_object(m, np),
+    }
+}
+
+/// `%TypedArray%.prototype` or a concrete kind's own prototype.
+fn typed_array_proto_name(n: &str) -> bool {
+    matches!(
+        n,
+        "%TypedArray%"
+            | "Int8Array"
+            | "Uint8Array"
+            | "Uint8ClampedArray"
+            | "Int16Array"
+            | "Uint16Array"
+            | "Int32Array"
+            | "Uint32Array"
+            | "Float16Array"
+            | "Float32Array"
+            | "Float64Array"
+            | "BigInt64Array"
+            | "BigUint64Array"
+    )
+}
+
+/// The realm declares `name` on `%TypedArray%.prototype` or on the kind's own
+/// prototype (`constructor`, `BYTES_PER_ELEMENT`), or on `Uint8Array.prototype`
+/// (base64/hex: those keep today's model on every kind).
+fn typed_array_proto_declares(m: &Model, native: &str, name: &str) -> bool {
+    let declared = |holder: Option<usize>| {
+        holder.is_some_and(|h| m.declarations.property(h, name, m).is_some())
+    };
+    declared(m.declarations.named("%TypedArray%.prototype", m))
+        || declared(m.declarations.named("Uint8Array.prototype", m))
+        || (native != "%TypedArray%"
+            && declared(m.declarations.named(&format!("{native}.prototype"), m)))
 }

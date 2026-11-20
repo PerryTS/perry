@@ -1,0 +1,14 @@
+start
+undefined
+after then
+a evaluated
+42
+42 undefined
+before keys
+b evaluated
+["one","two"]
+before delete
+c evaluated
+true
+TypeError
+3

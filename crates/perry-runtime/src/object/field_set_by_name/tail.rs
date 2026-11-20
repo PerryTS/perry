@@ -58,6 +58,11 @@ pub(crate) fn set_field_by_name_object_tail(
             return;
         }
     }
+    // A plain object's index key lives in its elements store (or takes one):
+    // no index key becomes a layout property beside a store.
+    if unsafe { crate::array::plain_elements::set_by_name(obj, key, value) } {
+        return;
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);
@@ -77,7 +82,7 @@ pub(crate) fn set_field_by_name_object_tail(
         let gc_header =
             (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
         let gc_type = (*gc_header).obj_type;
-        if gc_type == crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_array!(gc_type) {
             if key.is_null() {
                 return;
             }
@@ -735,7 +740,7 @@ pub(crate) fn set_field_by_name_object_tail(
                 && !super::shapes::shape_descriptor_of_receiver(
                     (super::shapes::object_shape_stamp(obj)).0,
                 )
-                .is_some_and(|d| d.special_constfn_mask != 0)
+                .is_some_and(|d| d.has_constfn_lane())
             {
                 // `publish_key_add_edge` already minted the exact ConstFn
                 // successor after writing the closure. The legacy redundant

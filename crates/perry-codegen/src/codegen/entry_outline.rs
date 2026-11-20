@@ -506,6 +506,7 @@ pub(crate) fn outlined_entry_global_let_ids(hir: &HirModule) -> HashSet<u32> {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     record_definers(body, function_id, definer, globals);
                     if let Some(catch) = catch {
@@ -910,6 +911,7 @@ fn stmt_contains_return(stmt: &perry_hir::Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_return)
                 || catch
@@ -1546,6 +1548,7 @@ mod tests {
                 body: vec![let_stmt(20, "captured", Expr::Number(2.0))],
                 catch: None,
                 finally: None,
+                forof_completion: None,
             },
             Stmt::Expr(Expr::Number(0.0)),
         ]);
@@ -1620,6 +1623,7 @@ mod tests {
             is_exported: false,
             aliases: vec![],
             is_nested: false,
+            decl_stmt: None,
             alloc_width_hint: 0,
             specialized_from: None,
         });

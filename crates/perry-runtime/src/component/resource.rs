@@ -163,12 +163,12 @@ extern "C" fn dispose(
     let context = context::get(frame.owner.get_nanbox_f64());
     let mut token = String::new();
     let mut error = Vec::new();
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         token = string(load(resource.get_nanbox_f64(), TOKEN));
         if persistent::enabled(frame.owner.get_nanbox_f64()) {
             let request =
                 serde_json::json!({"op":"resource-drop","value":{"$resource":token,"owned":true}});
-            let result = crate::exception::catch_js_throw(|| {
+            let result = crate::exception::catch_thrown(|| {
                 persistent::submit::unit(frame.owner.get_nanbox_f64(), &request)
             });
             drop(request);

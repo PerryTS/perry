@@ -601,6 +601,12 @@ pub struct FinallyRoute {
     pub completion_check_state: Option<u32>,
     /// Shared handler order with [`CatchRoute::seq`]: smaller is inner.
     pub seq: u32,
+    /// The completion local of the synchronous `for...of` whose close this
+    /// finally is (carried from the HIR `Try`). A `.return()` injected while
+    /// suspended inside the loop is a return completion: it sets the local to
+    /// 1 before this finally runs, so the loop closes its iterator
+    /// (ECMA-262 27.5.3.4 GeneratorResumeAbrupt, 14.7.5.7 IteratorClose).
+    pub forof_completion: Option<LocalId>,
 }
 
 /// The next handler sequence number. `catches` and `finallys` only ever grow
@@ -1403,6 +1409,7 @@ pub fn linearize_body(
                 body,
                 catch,
                 finally,
+                forof_completion,
             } if body_contains_yield(body)
                 || finally.as_ref().is_some_and(|f| body_contains_yield(f))
                 || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
@@ -1606,6 +1613,7 @@ pub fn linearize_body(
                             finally_entry_state: Some(finally_entry_state),
                             protected_end_state: finally_protected_end,
                             completion_check_state: Some(completion_state),
+                            forof_completion: *forof_completion,
                         });
                     } else {
                         // #4374: a non-yielding finally is inlined into the
@@ -1621,6 +1629,7 @@ pub fn linearize_body(
                             finally_entry_state: None,
                             protected_end_state: post_catch_state,
                             completion_check_state: None,
+                            forof_completion: *forof_completion,
                         });
                         for s in fin {
                             current.push(s.clone());

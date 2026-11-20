@@ -185,16 +185,13 @@ pub(super) unsafe fn dispatch_common(
         // reach this dispatch (the `call` arm below guards `class_ref_id` for
         // exactly that reason). Without the `is_int32()` half, an int32 number
         // with a locale argument would still take the arg-less default arm.
-        // A *registered ClassRef* shares INT32_TAG and must stay on the
+        // A *registered ClassRef* shares INTERNAL_WORD_TAG and must stay on the
         // default arm: `Object.prototype.toLocaleString` ignores its
         // arguments per spec, and falling through would resolve
         // `Number.prototype.toLocaleString` against a class reference.
         "toLocaleString"
             if !jsval.is_bigint()
-                && !((jsval.is_number()
-                    || (jsval.is_int32() && super::class_ref_id(object).is_none()))
-                    && args_len > 0
-                    && !args_ptr.is_null()) =>
+                && !(jsval.is_number() && args_len > 0 && !args_ptr.is_null()) =>
         {
             // An ordinary object reads `toLocaleString` off its prototype
             // chain like any method: a function-constructor, replaced or
@@ -217,18 +214,16 @@ pub(super) unsafe fn dispatch_common(
 
         // Common string methods on string values
         "toString" => {
-            // A class REFERENCE (INT32-tagged registered class id) is a
+            // A class constructor (a class function object) is a
             // function value: `C.toString()` must produce the class source,
             // not the numeric rendering of its class id ("1"). #9413 retains
             // that source at compile time; classes perry synthesized (no
             // registered source) still get the NativeFunction form, which
             // Test262's assertToStringOrNativeFunction accepts.
-            if super::class_prototype_ref_id(object).is_none() {
-                if let Some(cid) = super::native_module::class_ref_id(object) {
-                    let s = super::class_registry::class_ref_to_string(cid);
-                    let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                    return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
-                }
+            if let Some(cid) = super::native_module::class_ref_id(object) {
+                let s = super::class_registry::class_ref_to_string(cid);
+                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+                return Some(f64::from_bits(JSValue::string_ptr(str_ptr).bits()));
             }
             // A per-evaluation class object (`ClassExprFresh`) is a function too.
             if let Some(source) = super::field_get_set::class_object_default_to_string(object) {
@@ -549,8 +544,6 @@ unsafe fn apply_argument_list(
         } else {
             (args_arr_bits & 0x0000_FFFF_FFFF_FFFF) as usize
         }
-    } else if (args_arr_bits >> 48) == 0 && args_arr_bits >= 0x1000 {
-        args_arr_bits as usize
     } else {
         0
     };

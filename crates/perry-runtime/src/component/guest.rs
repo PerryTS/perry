@@ -94,7 +94,7 @@ pub extern "C" fn js_component_register(contract: f64, exports: f64) -> f64 {
     let mut contract = String::new();
     let mut expected = Value::Null;
     let mut world = Value::Null;
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = ops();
         let owner = scope.root_nanbox_f64(registry());
         if !JSValue::from_bits(self::exports(owner.get_nanbox_f64()).to_bits()).is_undefined() {
@@ -137,7 +137,7 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
     let mut interface_name = String::new();
     let mut function_name = String::new();
     let mut frame = Box::new(frame::Frame::allocate_guest_frame());
-    let result = crate::exception::catch_js_throw(|| {
+    let result = crate::exception::catch_thrown(|| {
         let ops = ops();
         let owner = scope.root_nanbox_f64(registry());
         interface_name = string(interface_input.get_nanbox_f64());
@@ -169,8 +169,8 @@ pub extern "C" fn js_component_import(interface: f64, function: f64, args: f64) 
                 input,
             )
         };
-        if let Some(error) = frame.error() {
-            crate::exception::js_throw(error);
+        if let Some(error) = frame.caught_error() {
+            crate::exception::rethrow_caught(error);
         }
         frame.get(output)
     });

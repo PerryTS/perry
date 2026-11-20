@@ -34,7 +34,7 @@ static mut STATIC_SCAN_LAYOUT: PerryLayoutDesc = PerryLayoutDesc {
     kind: 0,
     integrity: 0,
     slot_count: FIELDS as u32,
-    layout_id: 0x8000008d,
+    layout_id: 0x8000008e,
     rep: 0,
     proto: std::ptr::null(),
     keys: EMPTY_KEYS.as_ptr(),

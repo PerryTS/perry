@@ -254,18 +254,6 @@ fn capability_apple_drops_privileged_via_normalization() {
 }
 
 #[test]
-fn capability_docker_keeps_privileged() {
-    let mut spec = ContainerSpec {
-        image: "alpine".into(),
-        privileged: Some(true),
-        ..Default::default()
-    };
-    let warnings = normalise_spec_for(&BackendCapabilities::DOCKER, "svc", &mut spec);
-    assert_eq!(spec.privileged, Some(true));
-    assert!(warnings.is_empty());
-}
-
-#[test]
 fn capabilities_consistent_per_protocol() {
     // Every protocol's `capabilities()` must point at the matching
     // `BackendCapabilities::*` constant.

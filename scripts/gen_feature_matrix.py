@@ -23,8 +23,8 @@ from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = REPO_ROOT / "test-features" / "feature_matrix.toml"
-DEFAULT_MARKDOWN = REPO_ROOT / "test-features" / "feature_matrix.md"
+DEFAULT_CONFIG = REPO_ROOT / "tests" / "features" / "feature_matrix.toml"
+DEFAULT_MARKDOWN = REPO_ROOT / "tests" / "features" / "feature_matrix.md"
 DEFAULT_PERRY = REPO_ROOT / "target" / "release" / "perry"
 
 NOISE = re.compile(

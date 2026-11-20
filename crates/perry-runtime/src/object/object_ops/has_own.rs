@@ -69,20 +69,58 @@ pub extern "C" fn js_object_is(a: f64, b: f64) -> f64 {
     }
 }
 
+/// `hasOwnProperty.call(o, k)` at a call site whose `.call` value is the
+/// realm's `Function.prototype.call` body and whose target's info names the
+/// realm's `Object.prototype.hasOwnProperty` body (codegen `emit_call_lane`
+/// compares both code identities on every call): that body with `this = o`.
+/// `o` is an object, a function, null or undefined; a primitive `o` takes the
+/// call body in full.
+#[no_mangle]
+pub extern "C" fn js_object_prototype_has_own_property_call(this: f64, key: f64) -> f64 {
+    object_prototype_has_own_property(this, key)
+}
+
+/// `Object.prototype.hasOwnProperty(V)` with `this` (ECMA-262 20.1.3.2):
+/// ToPropertyKey(V) runs before ToObject(this), the reverse of
+/// `Object.hasOwn`. Only a nullish receiver can tell the two orders apart
+/// (ToObject of anything else runs no code and cannot fail), so that is the
+/// one case answered here; every other receiver is [`js_object_has_own`].
+#[inline]
+pub(crate) fn object_prototype_has_own_property(this: f64, key: f64) -> f64 {
+    let bits = this.to_bits();
+    if bits == crate::value::TAG_UNDEFINED || bits == crate::value::TAG_NULL {
+        if !super::super::property_key_coercion_is_inert(key) {
+            // May run user code and throw: that completion comes first.
+            unsafe { super::super::js_to_property_key(key) };
+        }
+        super::super::has_own_helpers::throw_to_object_nullish_type_error();
+    }
+    js_object_has_own(this, key)
+}
+
 /// Object.hasOwn(obj, key) - check if obj has its own property `key`.
 #[no_mangle]
 pub extern "C" fn js_object_has_own(obj_value: f64, key_value: f64) -> f64 {
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
-    // The probe's presence mode (`layout_probe::probe_has`), else the
-    // complete operation.
+    // The probe's presence mode (`layout_probe::probe_has`) first: it
+    // declines a deferred namespace, so the namespace arm and the complete
+    // operation only see what it cannot answer.
     match unsafe {
         crate::object::layout_probe::probe_has(obj_value.to_bits(), key_value.to_bits(), true)
     } {
-        1 => f64::from_bits(TAG_TRUE),
-        0 => f64::from_bits(TAG_FALSE),
-        _ => object_has_own_generic(obj_value, key_value),
+        1 => return f64::from_bits(TAG_TRUE),
+        0 => return f64::from_bits(TAG_FALSE),
+        _ => {}
     }
+    if let Some(result) = super::super::deferred_namespace::with_key_target(
+        obj_value,
+        key_value,
+        object_has_own_generic,
+    ) {
+        return result;
+    }
+    object_has_own_generic(obj_value, key_value)
 }
 
 /// [`js_object_has_own`] for every receiver and key the shape does not answer
@@ -97,10 +135,12 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if obj_js.is_undefined() || obj_js.is_null() {
             super::super::has_own_helpers::throw_to_object_nullish_type_error();
         }
-        if let Some((_, elements)) = crate::array::subclass_elements::backed_value(obj_value) {
-            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value) {
+        if let Some(view) = crate::array::subclass_elements::own_elements_value(obj_value) {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
                 return f64::from_bits(
-                    if crate::array::subclass_elements::has_own_key(elements, elements_key) {
+                    if crate::array::subclass_elements::has_own_key(view, elements_key) {
                         TAG_TRUE
                     } else {
                         TAG_FALSE
@@ -184,16 +224,11 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let sym_key = crate::symbol::sym_key_from_f64(key_value);
             if let Some(class_id) = super::super::class_ref_id(obj_value) {
-                let is_prototype = super::super::class_prototype_ref_id(obj_value).is_some();
-                let present = if is_prototype {
-                    let proto = super::super::class_registry::class_decl_prototype_value(class_id);
-                    crate::symbol::js_object_has_own_symbol(proto, key_value)
-                } else {
-                    crate::symbol::class_static_symbol_lookup(class_id, key_value).is_some()
-                        || super::super::class_registry::class_has_own_symbol_member(
-                            class_id, sym_key, true,
-                        )
-                };
+                let present = crate::symbol::class_static_symbol_lookup(class_id, key_value)
+                    .is_some()
+                    || super::super::class_registry::class_has_own_symbol_member(
+                        class_id, sym_key, true,
+                    );
                 return f64::from_bits(if present { TAG_TRUE } else { TAG_FALSE });
             }
             let present = crate::symbol::js_object_has_own_symbol(obj_value, key_value);
@@ -269,7 +304,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
             // An array is none of the kinds below (Buffer, typed array, class
             // value, function, exotic cell, %Function.prototype%, native
             // module): it answers from its elements and own keys.
-            Some(h) if h.obj_type == crate::gc::GC_TYPE_ARRAY => {
+            Some(h) if crate::gc_type_is_array!(h.obj_type) => {
                 let present = super::super::has_own_helpers::array_own_key_present(
                     obj_js.as_pointer::<u8>() as *const crate::array::ArrayHeader,
                     key_str,
@@ -327,7 +362,7 @@ fn object_has_own_generic(obj_value: f64, key_value: f64) -> f64 {
         if (obj as usize) >= crate::gc::GC_HEADER_SIZE + 0x1000 {
             let gc_header =
                 (obj as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            if (*gc_header).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc_header).obj_type) {
                 let present = super::super::has_own_helpers::array_own_key_present(
                     obj as *const crate::array::ArrayHeader,
                     key_str,
@@ -533,6 +568,9 @@ unsafe fn has_own_of_non_ordinary_kind(
 /// `Object.prototype.propertyIsEnumerable.call(obj, key)` (#2891).
 #[no_mangle]
 pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f64) -> f64 {
+    // A Number has no own enumerable property, whichever Number it is: one
+    // with clear top 16 bits must not reach the raw-pointer decodes below.
+    let obj_value = crate::value::addr_class::number_receiver_for_dispatch(obj_value);
     const TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
     unsafe {
@@ -555,6 +593,28 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
             let key_value = super::super::js_to_property_key(key_value);
             (f64::from_bits(obj_handle.get_nanbox_u64()), key_value)
         };
+
+        // A plain object's index keys live in its elements store, where every
+        // present element is an enumerable own property.
+        if let Some(view) =
+            crate::array::subclass_elements::own_elements_value(obj_value).filter(|view| view.plain)
+        {
+            if let Some(elements_key) = crate::array::subclass_elements::key_of_value(key_value)
+                .filter(|k| view.admits(*k) && !view.keyed(*k))
+            {
+                return f64::from_bits(
+                    if matches!(
+                        elements_key,
+                        crate::array::subclass_elements::ElementsKey::Index(_)
+                    ) && crate::array::subclass_elements::has_own_key(view, elements_key)
+                    {
+                        TAG_TRUE
+                    } else {
+                        TAG_FALSE
+                    },
+                );
+            }
+        }
 
         // Proxy receiver: resolve the descriptor via `[[GetOwnProperty]]` and
         // report its `enumerable` attribute (absent property → false) rather
@@ -585,7 +645,7 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // non-enumerable.
         if crate::symbol::js_is_symbol(key_value) != 0 {
             let bits = obj_value.to_bits();
-            if crate::object::class_value::legacy_class_value_word(bits).is_some() {
+            if crate::object::class_value::class_ref_word(bits).is_some() {
                 // ClassRef receivers: statics live in the class registry and
                 // are non-enumerable like builtin statics.
                 return f64::from_bits(TAG_FALSE);
@@ -634,28 +694,24 @@ pub extern "C" fn js_object_property_is_enumerable(obj_value: f64, key_value: f6
         // `verifyProperty(C, "f", …)`'s isEnumerable check failed (test262
         // class/elements static-field-declaration & friends).
         if let Some(class_id) = super::super::class_ref_id(obj_value) {
-            if super::super::class_prototype_ref_id(obj_value).is_none() {
-                if let Some(key_name) =
-                    super::super::has_own_helpers::str_from_string_header(key_str)
-                {
-                    let is_static_field =
-                        !super::super::field_get_set::is_internal_runtime_key(key_name)
-                            && super::super::class_registry::class_own_static_field_value(
-                                class_id, key_name,
-                            )
-                            .is_some();
-                    // #10480: a declared static accessor is non-enumerable by
-                    // ClassBody default, but a generic descriptor can flip it
-                    // (Object.defineProperty(C, "x", { enumerable: true })).
-                    let is_enumerable_static_accessor =
-                        crate::object::class_value::class_static_own_accessor(class_id, key_name)
-                            .is_some_and(|(_, enumerable, _)| enumerable);
-                    return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
-                        TAG_TRUE
-                    } else {
-                        TAG_FALSE
-                    });
-                }
+            if let Some(key_name) = super::super::has_own_helpers::str_from_string_header(key_str) {
+                let is_static_field =
+                    !super::super::field_get_set::is_internal_runtime_key(key_name)
+                        && super::super::class_registry::class_own_static_field_value(
+                            class_id, key_name,
+                        )
+                        .is_some();
+                // #10480: a declared static accessor is non-enumerable by
+                // ClassBody default, but a generic descriptor can flip it
+                // (Object.defineProperty(C, "x", { enumerable: true })).
+                let is_enumerable_static_accessor =
+                    crate::object::class_value::class_static_own_accessor(class_id, key_name)
+                        .is_some_and(|(_, enumerable, _)| enumerable);
+                return f64::from_bits(if is_static_field || is_enumerable_static_accessor {
+                    TAG_TRUE
+                } else {
+                    TAG_FALSE
+                });
             }
         }
 

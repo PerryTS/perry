@@ -1,0 +1,7 @@
+a true true {"value":99,"writable":true,"enumerable":true,"configurable":true}
+c __proto__ 1 true false
+d __proto__,z true
+DEC 250: Cannot add member Object.prototype.trap: built-in objects are read-only in a compiled program
+e 0 7 trap
+DEC 250: Cannot add member Object.prototype[Symbol(s)]: built-in objects are read-only in a compiled program
+f 0 8 1

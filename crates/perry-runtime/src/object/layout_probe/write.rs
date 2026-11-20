@@ -22,7 +22,10 @@ pub(super) unsafe fn hole_fill_admitted(
     if (*gc)._reserved
         & (crate::gc::OBJ_FLAG_SEALED
             | crate::gc::OBJ_FLAG_NO_EXTEND
-            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES)
+            | crate::gc::OBJ_FLAG_STABLE_TOMBSTONES
+            // An arguments object's named capacity is not its allocation's:
+            // refused here, so the hole test below reads the physical one.
+            | crate::gc::OBJ_FLAG_ARGUMENTS)
         != 0
         || (*obj).parent_class_id & crate::object::overflow::SHADOW_BIT != 0
     {
@@ -33,7 +36,26 @@ pub(super) unsafe fn hole_fill_admitted(
     if !meta.is_null() && (*meta).flags & crate::object::OBJECT_META_FLAG_IS_PROTOTYPE != 0 {
         return false;
     }
-    !crate::object::layout_desc::later_late_key_present(obj, keys, (*r).logical_key_count, pos)
+    // `[[Set]]` adds a plain data property. A layout whose shape summary
+    // names any attributed key leaves the add to `[[Set]]`
+    // (`layout_desc::family_add`, which fills only a plain key in place):
+    // an attributed key's slot is filled by its definition.
+    use crate::object::key_attrs::{
+        SUMMARY_ACCESSOR, SUMMARY_NON_CONFIGURABLE, SUMMARY_NON_ENUMERABLE, SUMMARY_NON_WRITABLE,
+    };
+    (*r).summary()
+        & (SUMMARY_ACCESSOR
+            | SUMMARY_NON_WRITABLE
+            | SUMMARY_NON_ENUMERABLE
+            | SUMMARY_NON_CONFIGURABLE)
+        == 0
+        && !crate::object::layout_desc::later_late_key_present(
+            obj,
+            keys,
+            (*r).logical_key_count,
+            pos,
+            crate::object::object_physical_capacity(obj),
+        )
         && chain_admits_add(dir, obj, r, key_bits, hash)
 }
 
@@ -146,6 +168,12 @@ pub(crate) unsafe fn layouts_admit_add(
     if r.is_null() || !(*r).object_kind().is_ordinary_layout() {
         return None;
     }
+    // This optional store proof reuses read indexes; deriving one for every
+    // growing prefix makes wide key additions quadratic. The caller's
+    // shape-chain proof handles cold layouts without materializing an index.
+    if (*r).probe == 0 {
+        return None;
+    }
     // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
     let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
     if !meta.is_null() && (*meta).overflow != 0 {
@@ -248,6 +276,17 @@ pub(super) unsafe fn chain_admits_add(
     key_bits: u64,
     hash: u64,
 ) -> bool {
+    // A receiver on the realm-default link: its chain is `%Object.prototype%`
+    // alone, and that link's authority answers every key but `__proto__`
+    // (as in the `Next::Unknown` arm below and `table_add_admitted`): a
+    // sealed or unmaterialized intrinsic blocks no add (DEC 250 locks it).
+    if hash != PROTO_KEY_HASH
+        && walks_from(obj, r)
+        && realm_default_link(obj, r)
+        && !crate::object::descriptor_state::object_proto_may_intercept_any()
+    {
+        return true;
+    }
     let (mut cur, mut rc) = (obj, r);
     for _ in 0..MAX_HOPS {
         if !walks_from(cur, rc) {
@@ -377,3 +416,23 @@ pub(crate) unsafe fn function_link_admits_add(link: u64, key: *const crate::Stri
     };
     link_admits_add(super::super::ordinary_dir_addr(), link, key_bits, hash)
 }
+
+/// [`function_link_admits_add`] for a symbol key (`symbol_bits`, a symbol
+/// value) added to an object whose [[Prototype]] is `link`, keyed as
+/// [`super::symbol_store`] keys it. GC leaf.
+///
+/// # Safety
+/// `symbol_bits` is a live symbol value; `link` is `TAG_NULL` or live.
+pub(crate) unsafe fn symbol_link_admits_add(link: u64, symbol_bits: u64) -> bool {
+    let symbol = (symbol_bits & POINTER_MASK) as *const crate::symbol::SymbolHeader;
+    link_admits_add(
+        super::super::ordinary_dir_addr(),
+        link,
+        symbol_bits,
+        (*symbol).id,
+    )
+}
+
+#[cfg(test)]
+#[path = "../layout_probe_write_tests.rs"]
+mod tests;

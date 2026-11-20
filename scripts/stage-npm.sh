@@ -7,7 +7,7 @@
 # with the version substituted. Each cross target in TARGET_TRIPLES
 # (scripts/publish/constants.mts) becomes npm/perry-target-<triple>/ from its
 # perry-cross-<triple>.tar.gz bundle, and each host in EXT_TRIPLES gets
-# npm/perry-ext-<triple>/ from its release archive's libperry_ext_*.a
+# independent ui, wasm-host and ext packages from its build artifact
 # (scripts/publish/stage-target.mts).
 #
 # Usage:
@@ -67,28 +67,26 @@ fi
 echo "[stage-npm] version = $VERSION"
 
 # -----------------------------------------------------------------------------
-# Platform mapping: <npm-package-dir-suffix>:<release-artifact-name>:<ui-lib-basename>:<rust-triple>
+# Platform mapping: <npm-package-dir-suffix>:<release-artifact-name>:<rust-triple>
 # Release artifact names match the `artifact:` field in release-packages.yml.
 # The triple is the one the perry binary in the archive is built for; it names
-# the host's ext package (@perryts/perry-ext-<triple>).
-# On Windows the ui lib has a .lib extension and the binary is perry.exe.
+# the host's independent ui, wasm-host and ext packages.
+# On Windows the archives have a .lib extension and the binary is perry.exe.
 # -----------------------------------------------------------------------------
 PLATFORMS=(
-  "darwin-arm64:perry-macos-aarch64:libperry_ui_macos.a:aarch64-apple-darwin"
-  "darwin-x64:perry-macos-x86_64:libperry_ui_macos.a:x86_64-apple-darwin"
-  "linux-x64:perry-linux-x86_64:libperry_ui_gtk4.a:x86_64-unknown-linux-gnu"
-  "linux-arm64:perry-linux-aarch64:libperry_ui_gtk4.a:aarch64-unknown-linux-gnu"
-  "linux-x64-musl:perry-linux-x86_64-musl:libperry_ui_gtk4.a:x86_64-unknown-linux-musl"
-  "linux-arm64-musl:perry-linux-aarch64-musl:libperry_ui_gtk4.a:aarch64-unknown-linux-musl"
-  "win32-x64:perry-windows-x86_64:perry_ui_windows.lib:x86_64-pc-windows-msvc"
-  "win32-arm64:perry-windows-aarch64:perry_ui_windows.lib:aarch64-pc-windows-msvc"
+  "darwin-arm64:perry-macos-aarch64:aarch64-apple-darwin"
+  "darwin-x64:perry-macos-x86_64:x86_64-apple-darwin"
+  "linux-x64:perry-linux-x86_64:x86_64-unknown-linux-gnu"
+  "linux-arm64:perry-linux-aarch64:aarch64-unknown-linux-gnu"
+  "linux-x64-musl:perry-linux-x86_64-musl:x86_64-unknown-linux-musl"
+  "linux-arm64-musl:perry-linux-aarch64-musl:aarch64-unknown-linux-musl"
+  "win32-x64:perry-windows-x86_64:x86_64-pc-windows-msvc"
+  "win32-arm64:perry-windows-aarch64:aarch64-pc-windows-msvc"
 )
 
-# Unix libs shared across platforms (runtime + stdlib). The UI lib is
-# handled per-platform above. Windows equivalents are baked into the case
-# block further down.
-UNIX_CORE_LIBS=(libperry_runtime.a libperry_stdlib.a)
-WIN_CORE_LIBS=(perry_runtime.lib perry_stdlib.lib)
+# The libs of every host package (runtime + stdlib); the Windows names are
+# used in the case block further down.
+
 
 # -----------------------------------------------------------------------------
 # Helpers
@@ -137,16 +135,16 @@ resolve_artifact() {
   echo "$workdir"
 }
 
-# Strip embedded LLVM bitcode (.llvmbc/.llvmcmd) from an archive's members
-# before it is compressed. The UI and wasm-host archives bundle the Rust
-# standard library from rustup's precompiled rlibs, whose objects carry their
-# bitcode (about 10 MB raw, 2.5-3 MB compressed per archive); a native link
-# never reads it, and no cargo flag removes it. llvm-objcopy rejects a whole
-# Windows .lib (import members), so every platform takes the same path: member
-# by member, original order and names, symbol table rebuilt, no other byte of
-# any object touched (scripts/strip-archive-members.py). Extra args pass
-# through (--strip-debug). Darwin archives (BSD layout) are not handled and
-# stay as built. Args: [--strip-debug] archive...
+# Strip embedded LLVM bitcode (.llvmbc/.llvmcmd; __LLVM,__bitcode in Mach-O)
+# from archive members before compression (the Windows stdlib here; the ext,
+# host UI and wasm_host archives in stage-target.mts, with the same script).
+# llvm-objcopy rejects a whole Windows .lib (import members), so every platform
+# takes the same path: member by member, original order and names, symbol
+# table rebuilt (scripts/strip-archive-members.py). Darwin archives (BSD
+# layout) take the same path; each rewritten Mach-O member is checked against
+# the original outside the __LLVM segment. Archives without bitcode (the
+# macOS UI and wasm_host archives today) stay byte-identical. Extra args pass
+# through (--strip-debug, not for Mach-O). Args: [--strip-debug] archive...
 strip_archive_bitcode() {
   python3 "$REPO_ROOT/scripts/strip-archive-members.py" "$@"
 }
@@ -195,19 +193,13 @@ compress_archives() {
   done
 }
 
-# Native-extension archives (`libperry_ext_*.a`): `perry compile` links one per
-# well-known module a program imports (http, ws, net, zlib, sharp, ...). They
-# total ~140-166 MB compressed per host, and the host packages are already
-# near the 180 MB packed budget, so they ship in a package of their own,
-# `@perryts/perry-ext-<triple>` at npm/perry-ext-<triple>, for every triple in
-# EXT_TRIPLES (constants.mts). perry finds it beside itself or fetches it from
-# the GitHub release on the first compile that needs it.
-# Args: $1 = host triple, $2 = source dir of the host's release archive.
+# Stage one host kind through the common archive-name classifier.
+# Args: host triple, extracted build artifact, kind (ext by default).
 stage_ext_package() {
-  local triple="$1" src="$2"
-  local ext_dir="$NPM_DIR/perry-ext-$triple"
-  echo "[stage-npm] ext: $triple  <-  $(basename "$src")"
-  node "$REPO_ROOT/scripts/publish/stage-target.mts" --ext "$src" "$ext_dir" "$triple" "$VERSION"
+  local triple="$1" src="$2" kind="${3:-ext}"
+  local ext_dir="$NPM_DIR/perry-$kind-$triple"
+  echo "[stage-npm] $kind: $triple  <-  $(basename "$src")"
+  node "$REPO_ROOT/scripts/publish/stage-target.mts" --"$kind" "$src" "$ext_dir" "$triple" "$VERSION"
   compress_archives "$ext_dir/lib"
 }
 
@@ -250,7 +242,7 @@ chmod +x "$NPM_DIR/perry/bin/perry.js"
 # Stage each platform package
 # -----------------------------------------------------------------------------
 for entry in "${PLATFORMS[@]}"; do
-  IFS=: read -r pkg_suffix artifact ui_lib host_triple <<< "$entry"
+  IFS=: read -r pkg_suffix artifact host_triple <<< "$entry"
   pkg_dir="$NPM_DIR/perry-$pkg_suffix"
   echo "[stage-npm] platform: $pkg_suffix  <-  $artifact"
 
@@ -274,6 +266,10 @@ for entry in "${PLATFORMS[@]}"; do
   fi
   mkdir -p "$pkg_dir/bin" "$pkg_dir/lib"
 
+  CORE_LIBS=()
+  while IFS= read -r lib; do
+    case "$lib" in *.gc-effects) ;; *) CORE_LIBS+=("$lib") ;; esac
+  done < <(node "$REPO_ROOT/scripts/publish/archive-kind.mts" --host-libs "$src_dir")
   if [ "$kind" = "win" ]; then
     # #7985: perry.exe imports the official LLVM archive's LLVM-C.dll to avoid
     # mixing its /MT + rpmalloc static objects with Rust's /MD runtime. The DLL
@@ -285,11 +281,9 @@ for entry in "${PLATFORMS[@]}"; do
     fi
     cp "$src_dir/perry.exe" "$pkg_dir/bin/perry.exe"
     cp "$src_dir/LLVM-C.dll" "$pkg_dir/bin/LLVM-C.dll"
-    for lib in "${WIN_CORE_LIBS[@]}" perry_wasm_host.lib "$ui_lib"; do
+    # UI, wasm-host and ext archives each have their own on-demand package.
+    for lib in "${CORE_LIBS[@]}"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
-    done
-    for lib in perry_wasm_host.lib "$ui_lib"; do
-      [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
     done
     # The vendored OpenSSL (openssl-src) is compiled by OpenSSL's own MSVC
     # Configure target, which hardcodes `/Zi /Fdossl_static.pdb` for every
@@ -297,7 +291,7 @@ for entry in "${PLATFORMS[@]}"; do
     # (about 37 MB raw) point at a PDB that is not shipped. Drop them with the
     # bitcode.
     [ -f "$pkg_dir/lib/perry_stdlib.lib" ] && strip_archive_bitcode --strip-debug "$pkg_dir/lib/perry_stdlib.lib"
-    stage_sidecars "$src_dir" "$pkg_dir/lib" "${WIN_CORE_LIBS[@]}"
+    stage_sidecars "$src_dir" "$pkg_dir/lib" "${CORE_LIBS[@]}"
     # No android cross-libs here: with them (#4823) the Windows packages
     # packed to ~230 MB and npm rejected the upload (413 Payload Too Large).
     # They ship once, in @perryts/perry-target-aarch64-linux-android, for
@@ -305,28 +299,26 @@ for entry in "${PLATFORMS[@]}"; do
   else
     cp "$src_dir/perry" "$pkg_dir/bin/perry"
     chmod +x "$pkg_dir/bin/perry"
-    for lib in "${UNIX_CORE_LIBS[@]}" libperry_wasm_host.a "$ui_lib"; do
+    # UI, wasm-host and ext archives each have their own on-demand package.
+    for lib in "${CORE_LIBS[@]}"; do
       [ -f "$src_dir/$lib" ] && cp "$src_dir/$lib" "$pkg_dir/lib/"
     done
-    case "$pkg_suffix" in
-      darwin-*) ;; # BSD-layout archives: see strip_archive_bitcode
-      *)
-        for lib in libperry_wasm_host.a "$ui_lib"; do
-          [ -f "$pkg_dir/lib/$lib" ] && strip_archive_bitcode "$pkg_dir/lib/$lib"
-        done
-        ;;
-    esac
-    stage_sidecars "$src_dir" "$pkg_dir/lib" "${UNIX_CORE_LIBS[@]}"
+    stage_sidecars "$src_dir" "$pkg_dir/lib" "${CORE_LIBS[@]}"
   fi
-  # The host's ext archives stay out of its package (see stage_ext_package).
+  # The host's ext, UI and wasm_host archives stay out of its package (see
+  # stage_ext_package).
   if in_list "$host_triple" "${EXT_TRIPLES[@]}"; then
     stage_ext_package "$host_triple" "$src_dir"
     staged_ext=$((staged_ext + 1))
   fi
+  for optional_kind in ui wasm-host; do
+    if read_triples --print-"$optional_kind" | grep -x "$host_triple" >/dev/null; then
+      stage_ext_package "$host_triple" "$src_dir" "$optional_kind"
+    fi
+  done
 
   # Compress the static archives so the published npm tarball stays under
-  # npm's registry upload limit (the raw archives total ~750 MB per platform;
-  # npm rejects the upload with HTTP 413). The perry binary decompresses them
+  # npm's registry upload limit (HTTP 413). The perry binary decompresses them
   # transparently on first use into a per-user cache (see compressed_libs.rs).
   # The binary in bin/ is left raw — it is exec'd directly.
   compress_archives "$pkg_dir/lib"

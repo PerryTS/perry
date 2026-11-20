@@ -99,8 +99,7 @@ fn convert_or_throw(value: f64, conversion: ScalarConversion) -> f64 {
             );
             let string =
                 crate::string::js_string_from_bytes(message.as_ptr(), message.len() as u32);
-            let error = crate::error::js_rangeerror_new(string);
-            crate::exception::js_throw(crate::value::js_nanbox_pointer(error as i64))
+            crate::exception::throw_core(crate::error::CoreError::range_error(string))
         }
     }
 }

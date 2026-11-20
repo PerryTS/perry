@@ -17,13 +17,11 @@ use super::{
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::SetClear(s) => {
-            let s_box = lower_expr(ctx, s)?;
-            let s_handle = super::unbox_collection_receiver(ctx, &s_box, "clear");
-            let blk = ctx.block();
-            blk.call_void("js_set_clear", &[(I64, &s_handle)]);
-            Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)))
-        }
+        Expr::SetClear(s) => super::collection_receiver::lower_collection_clear(
+            ctx,
+            s,
+            super::collection_receiver::ConstructedKind::Set,
+        ),
 
         // -------- String.fromCodePoint(cp) — returns single-char string --------
         Expr::StringFromCodePoint(o) => {
@@ -211,7 +209,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
         Expr::MathExp(o) => {
             let v = lower_math_operand(ctx, o)?;
-            Ok(ctx.block().call(DOUBLE, "llvm.exp.f64", &[(DOUBLE, &v)]))
+            // V8-exact exp (see `js_math_exp`), not `llvm.exp.f64`: that is the
+            // platform libm, which differs from V8 in the last bit for some inputs.
+            Ok(ctx.block().call(DOUBLE, "js_math_exp", &[(DOUBLE, &v)]))
         }
         Expr::DateSetUtcFullYear { date, args } => super::os_uri_dates::lower_date_setter(
             ctx,
@@ -377,13 +377,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let v = lower_math_operand(ctx, o)?;
             Ok(ctx.block().call(DOUBLE, "js_math_atan", &[(DOUBLE, &v)]))
         }
-        Expr::MathAtan2(y, x) => {
-            let y_v = lower_math_operand(ctx, y)?;
-            let x_v = lower_math_operand(ctx, x)?;
+        Expr::MathAtan2(y, x) => super::dispatch::with_math_operands(ctx, &[y, x], |ctx, v| {
             Ok(ctx
                 .block()
-                .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &y_v), (DOUBLE, &x_v)]))
-        }
+                .call(DOUBLE, "js_math_atan2", &[(DOUBLE, &v[0]), (DOUBLE, &v[1])]))
+        }),
 
         // -------- String.fromCharCode(code) --------
         Expr::StringFromCharCode(o) => {

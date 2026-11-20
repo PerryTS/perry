@@ -36,6 +36,7 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_math_atan", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_atan2", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_math_cos", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_math_exp", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_expm1", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log", DOUBLE, &[DOUBLE]);
     module.declare_function("js_math_log10", DOUBLE, &[DOUBLE]);
@@ -472,6 +473,11 @@ pub(crate) fn declare_core(module: &mut LlModule) {
     module.declare_function("js_static_method_entry_leave", VOID, &[]);
     module.declare_function(
         "js_class_static_call_guard",
+        I32,
+        &[I32, I32, PTR, I64, I64, PTR],
+    );
+    module.declare_function(
+        "js_class_static_super_call_guard",
         I32,
         &[I32, I32, PTR, I64, I64, PTR],
     );

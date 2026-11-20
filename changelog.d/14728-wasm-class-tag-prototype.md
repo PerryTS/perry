@@ -1,0 +1,1 @@
+`--target web`: a class instance inherits its class name from a per-class prototype instead of holding an own `__class__` property, and an object literal is a plain object, so a `fetch` headers object no longer sends a `__class__` header and `Reflect.ownKeys` lists only declared fields (#14726).

@@ -5,16 +5,6 @@
 
 use super::*;
 
-fn run(src: &str, units: bool) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "m.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "m", "m.ts").expect("lowers");
-    let list = vec![("m.ts".to_string(), &hir)];
-    match units {
-        true => crate::compute_units(&list, &FactsConfig::default()),
-        false => crate::compute(&list, &FactsConfig::default()),
-    }
-}
-
 fn proven(pf: &ProgramFacts, key: &str) -> bool {
     let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
     assert!(!s.is_empty(), "no site .{key}");
@@ -42,8 +32,9 @@ console.log(h.m);
     )
 }
 
+/// The leak stores into a global an unseen module can read.
 fn leaks(body: &str, call: &str) {
-    let src = program(body, call);
+    let src = unseen(&program(body, call));
     let w = run(&src, false);
     assert!(!proven(&w, "m"), "whole program\n{}", w.dump_text());
     assert!(
@@ -87,4 +78,14 @@ fn a_bind_of_a_bound_function_in_a_summary_keeps_the_outer_bound_argument() {
 fn a_bound_argument_made_in_a_summary_that_stays_local_is_proven() {
     let src = program("return same.bind(null, o);", "g()");
     assert!(proven(&run(&src, false), "m"), "whole program");
+}
+
+fn run(src: &str, units: bool) -> ProgramFacts {
+    let module = perry_parser::parse_typescript(src, "m.ts").expect("parses");
+    let hir = perry_hir::lower_module(&module, "m", "m.ts").expect("lowers");
+    let list = vec![("m.ts".to_string(), &hir)];
+    match units {
+        true => crate::compute(&list, &FactsConfig::default()),
+        false => crate::compute(&list, &FactsConfig::default()),
+    }
 }

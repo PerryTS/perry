@@ -37,10 +37,20 @@ fn copying_verifier_accepts_retained_growth_chains_across_root_formats() {
     let _guard = CopyingNurseryTestGuard::new(0);
     let _trigger_guard = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     let (stub, _) = unsafe { alloc_old_test_array(1) };
-    let next = crate::array::js_array_grow(stub, 2);
-    let target = crate::array::js_array_grow(next, 4);
+    // Growth can reserve more than the requested minimum. Exceed each
+    // returned capacity so the fixture contains two retained forwarding hops.
+    let next = crate::array::js_array_grow(stub, unsafe { (*stub).capacity + 1 });
+    let target = crate::array::js_array_grow(next, unsafe { (*next).capacity + 1 });
     assert_ne!(stub, next);
     assert_ne!(next, target);
+    for (source, destination) in [(stub, next), (next, target)] {
+        assert!(crate::arena::pointer_in_old_gen(source as usize));
+        assert!(crate::arena::pointer_in_old_gen(destination as usize));
+        assert_eq!(
+            unsafe { forwarding_address(header_from_user_ptr(source as *const u8)) },
+            destination as *mut u8
+        );
+    }
     let valid_ptrs = build_valid_pointer_set();
     let verifier = EvacuationVerifier::copying_minor(&valid_ptrs);
     let bits = ptr_bits(stub as usize);
