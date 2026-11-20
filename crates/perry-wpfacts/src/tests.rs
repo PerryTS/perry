@@ -192,6 +192,7 @@ mod member_heritage;
 mod memo_context;
 mod method_sites;
 mod name_folds;
+mod nested_site_fold;
 mod named_accessors;
 mod named_lengths;
 mod named_method_on_class_value;

@@ -1277,11 +1277,15 @@ impl Model {
     /// (`site_run`) is a site of that run: its key is the copy itself, one
     /// per (template site, caller run), and the caller run's key is its own
     /// site, so a run is keyed by the chain of sites from a program site.
-    /// A callee already on that chain (recursion, mutual recursion) folds
-    /// onto the run of its occurrence there: that run's executions are a
-    /// superset, and the chain holds each function token at most once, so
-    /// the runs are at most the acyclic call paths. A call in the shared
-    /// run (no site, no object) keeps the shared run.
+    /// A callee whose function is already on that chain (recursion, mutual
+    /// recursion), through any closure of it, folds onto the site of its
+    /// occurrence there: the callee's run at that site has a superset of
+    /// executions. The chain holds each function at most once, so the runs
+    /// are at most the acyclic call paths, times the closures of the
+    /// callee at a site. (Folding by token alone let a recursion that
+    /// reaches every closure of one function run each permutation of them:
+    /// three.js `WebGLShadowMap` `renderObject`, 16 closures.) A call in the
+    /// shared run (no site, no object) keeps the shared run.
     fn nested_site(&self, call: CallId, ft: Tok) -> Option<CallId> {
         if call == NO_NODE || (call as usize) < self.sum.n_prog {
             return None;
@@ -1294,13 +1298,14 @@ impl Model {
         if !self.sum.site_run.contains(&cur) {
             return None;
         }
+        let f = self.tok_fn(ft);
         loop {
             let it = &self.sum.insts[cur as usize];
             let site = it.lay & LAY_MASK;
             if it.lay & !LAY_MASK != LAY_SITE {
                 break;
             }
-            if it.tok == ft {
+            if it.f == f {
                 return Some(site);
             }
             if (site as usize) < self.sum.n_prog {
