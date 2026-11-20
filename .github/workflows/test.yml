@@ -1847,6 +1847,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
+          # Its `cargo build-perry --release` step is the gap-suite-build build;
+          # the test-profile shards compile on top of that.
           key: gap-suite-build
 
       - name: Evict stale auto-opt archives (#5892)
@@ -2056,19 +2058,6 @@ jobs:
         run: rustup toolchain install nightly-2026-08-20 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.scope.outputs.rust_work == 'true'
-
-      - uses: ./.github/actions/perry-rust-cache
-        if: steps.scope.outputs.rust_work == 'true'
-        with:
-          key: e2e-scoped
-          save: "true"
-
-      # Same reasoning as cargo-test: a rust-cache-restored auto-opt archive dir
-      # keys only on perry-runtime's source hash and would link stale ext
-      # archives into the binaries these suites compile (#5892).
-      - name: Evict stale auto-opt archives (#5892)
-        if: steps.scope.outputs.rust_work == 'true'
-        run: rm -rf target/perry-auto-* target/debug/libperry_ext_*.a 2>/dev/null || true
 
       - name: Install the pinned integration-test Node oracle
         uses: ./.github/actions/perry/actions/setup-node # v7
@@ -2661,7 +2650,8 @@ jobs:
       - uses: ./.github/actions/setup-llvm22
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: e2e-scoped
+          key: gc-stress
+          save: "true"
       - name: Install clang
         run: |
           # Third-party sources we never install from can fail `apt-get update`,
@@ -2762,7 +2752,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: e2e-scoped
+          key: compiler-output-regression
+          save: "true"
 
       - name: Install clang
         run: |
@@ -3007,7 +2998,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: e2e-scoped
+          key: repsel-census
+          save: "true"
 
       # Verdict logic first, cheaply: if the census can't tell a regression
       # from a pass, the compile-based run below is not worth the minutes.
@@ -3169,7 +3161,8 @@ jobs:
 
       - uses: ./.github/actions/perry-rust-cache
         with:
-          key: e2e-scoped
+          key: native-abi-evidence-packet
+          save: "true"
 
       - name: Install clang
         run: |
