@@ -36,3 +36,30 @@ console.log(a.length + " " + a.join("-") + " " + Array.isArray(a) + " " + new D(
         "2 2 true p,a true true\n2,4\n3 true 2 20 1 1 9 true\n2 4-5 true 1970 7 false true"
     );
 }
+
+// A built-in subclass's own methods win over the built-in's, and `super(...)` builds
+// the built-in's state as its constructor does: a Map entry is any object with keys 0
+// and 1, Array elements are own data properties past an inherited setter, and a
+// Date's time value is set without its `setTime` override. Expected output is Node's.
+#[test]
+fn a_builtin_subclass_keeps_its_overrides_and_the_builtins_construction() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A extends Array<number> { at(i: number) { return "mine" + i; } findLast() { return "fl"; } }
+const a: any = new A(); a.push(1);
+console.log(a.at(0) + " " + a.findLast() + " " + a.includes(1));
+class M extends Map<string, number> {}
+console.log(new M([{0: "key", 1: 7}] as any).get("key"));
+try { new M([1] as any); } catch (e) { console.log((e as Error).constructor.name); }
+class D extends Date { setTime(v: number) { return 0; } }
+console.log(new D(0).getTime());
+class B extends Array<string> {}
+Object.defineProperty(B.prototype, "0", { set(v) { console.log("setter"); }, configurable: true });
+const b = new B("x", "y");
+console.log(b.length + " " + Object.prototype.hasOwnProperty.call(b, "0"));
+"#
+        ),
+        "mine0 fl true\n7\nTypeError\n0\n2 true"
+    );
+}

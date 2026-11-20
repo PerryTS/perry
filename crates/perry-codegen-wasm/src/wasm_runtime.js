@@ -2649,19 +2649,26 @@ const __memDispatch = {
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
   // A collection's entries go through the instance's own `set`/`add`, so a subclass
-  // override sees them, as the built-in constructor does.
+  // override sees them, and a Map entry is any object with keys 0 and 1, as the built-in
+  // constructors do. Array elements are own data properties and a Date's time value is
+  // set directly, past any accessor or override on the subclass.
   host_super_init: (obj, args) => {
     const a = Array.isArray(args) ? args : [];
     if (obj instanceof Map || obj instanceof WeakMap) {
-      if (a[0] != null) for (const [k, v] of a[0]) obj.set(k, v);
+      if (a[0] != null) for (const e of a[0]) {
+        if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
+        obj.set(e[0], e[1]);
+      }
     } else if (obj instanceof Set || obj instanceof WeakSet) {
       if (a[0] != null) for (const v of a[0]) obj.add(v);
     } else if (Array.isArray(obj)) {
       const made = Array(...a);
       obj.length = made.length;
-      for (const i of Object.keys(made)) obj[i] = made[i];
+      for (const i of Object.keys(made)) {
+        Object.defineProperty(obj, i, { value: made[i], writable: true, enumerable: true, configurable: true });
+      }
     } else if (obj instanceof Date) {
-      obj.setTime(new Date(...a).getTime());
+      Date.prototype.setTime.call(obj, new Date(...a).getTime());
     }
     return obj;
   },
@@ -6175,10 +6182,11 @@ function __classDispatch(objVal, mname, rawArgs) {
   if (typeof objVal !== 'object' && typeof objVal !== 'function') {
     const fn = Reflect.get(Object.getPrototypeOf(objVal), mname, objVal);
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
-  } else if (Array.isArray(objVal)) {
+  } else if (Array.isArray(objVal) && !__classOf(objVal)) {
     // Array methods whose JS-native impls need a plain-JS callback (not a Perry closure
     // handle) are routed through __memDispatch before reaching here — this fallback
-    // catches methods the codegen doesn't special-case (at, findLast, flat, etc.).
+    // catches methods the codegen doesn't special-case (at, findLast, flat, etc.). An
+    // Array subclass instance reads its class's methods first.
     const fn = Array.prototype[mname];
     if (typeof fn === 'function') return __callHostFunction(fn, rawArgs, objVal);
   }
