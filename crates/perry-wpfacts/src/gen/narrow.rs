@@ -248,12 +248,13 @@ impl<'a> Gen<'a> {
         true
     }
 
-    /// Walking the update (`true`) or the body (`false`) of the innermost
-    /// narrowing.
-    pub(crate) fn narrow_in_update(&mut self, on: bool) {
-        if let Some(n) = self.narrow.last_mut() {
-            n.in_update = on;
-            n.written = on;
+    /// Walking the update (`true`) or the body (`false`) of the `n`
+    /// innermost narrowings (the ones a `for` loop pushed).
+    pub(crate) fn narrow_in_update(&mut self, n: usize, on: bool) {
+        let len = self.narrow.len();
+        for x in &mut self.narrow[len - n..] {
+            x.in_update = on;
+            x.written = on;
         }
     }
 
@@ -1437,6 +1438,18 @@ impl<'a> Gen<'a> {
     /// (false) for the code walked next (module docs, "Guards"); how many
     /// narrowings to pop after it (`narrow_pop`).
     pub(crate) fn narrow_guard(&mut self, fx: &Fx, cond: &Expr, positive: bool) -> usize {
+        self.narrow_guard_skip(fx, cond, positive, None)
+    }
+
+    /// `narrow_guard` without the facts of local `skip` (a `for` counter
+    /// `narrow_for` narrows).
+    pub(crate) fn narrow_guard_skip(
+        &mut self,
+        fx: &Fx,
+        cond: &Expr,
+        positive: bool,
+        skip: Option<u32>,
+    ) -> usize {
         if !self.guard_ranges && !self.guard_presence {
             return 0;
         }
@@ -1467,6 +1480,7 @@ impl<'a> Gen<'a> {
         // only (a unit does not see the other units' stores into it).
         let unit_mode = self.m.unit_mode;
         facts.retain(|x| match x {
+            Implied::Clip(id, ..) | Implied::Present(id, _) if Some(*id) == skip => false,
             Implied::Clip(..) => self.guard_ranges && local_scope,
             Implied::Present(GLOBAL_LOCAL, _) => self.guard_presence && !unit_mode,
             Implied::Present(..) => self.guard_presence && local_scope,

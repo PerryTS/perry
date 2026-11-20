@@ -1937,15 +1937,23 @@ impl<'a> Gen<'a> {
                     update.as_ref(),
                     body,
                 );
-                if narrowed {
-                    self.narrow_in_update(true);
-                }
+                // `for (init; c; u) B` is `init; while (c) { B; u }`: B and
+                // u see `c` true, as a `while` body does. The counter
+                // `narrow_for` narrows keeps its ranges alone.
+                let counter = match (narrowed, init.as_deref()) {
+                    (true, Some(Stmt::Let { id, .. })) => Some(*id),
+                    _ => None,
+                };
+                let k = match condition {
+                    Some(c) => self.narrow_guard_skip(fx, c, true, counter),
+                    None => 0,
+                };
+                let pushed = k + usize::from(narrowed);
+                self.narrow_in_update(pushed, true);
                 if let Some(u) = update {
                     let _ = self.expr_zs(fx, u);
                 }
-                if narrowed {
-                    self.narrow_in_update(false);
-                }
+                self.narrow_in_update(pushed, false);
                 let scope = self.enum_scope(fx, body);
                 let scoped = scope.is_some();
                 if let Some(s) = scope {
@@ -1958,6 +1966,7 @@ impl<'a> Gen<'a> {
                 if scoped {
                     self.for_in_reads.pop();
                 }
+                self.narrow_pop(k);
                 if narrowed {
                     self.narrow_end();
                 }

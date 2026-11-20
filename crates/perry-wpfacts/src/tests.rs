@@ -132,6 +132,7 @@ mod for_in_keys;
 mod for_in_runs_per_key;
 mod for_of_next_argument;
 mod for_of_yield;
+mod for_guard_narrow;
 mod forin_key_string;
 mod fresh_static_blocks;
 mod function_call_value;
