@@ -2458,6 +2458,9 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "math_minmax_tests.rs"]
+mod math_minmax;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(
