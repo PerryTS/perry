@@ -327,30 +327,26 @@ impl WasmModuleEmitter {
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                match op {
-                    BinaryOp::Add => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
-                    BinaryOp::Sub => format!("({} - {})", l, r),
-                    BinaryOp::Mul => format!("({} * {})", l, r),
-                    BinaryOp::Div => format!("({} / {})", l, r),
-                    BinaryOp::Mod => format!("({} % {})", l, r),
-                    BinaryOp::Pow
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr => {
-                        let js_op = match op {
-                            BinaryOp::Pow => "**",
-                            BinaryOp::BitAnd => "&",
-                            BinaryOp::BitOr => "|",
-                            BinaryOp::BitXor => "^",
-                            BinaryOp::Shl => "<<",
-                            BinaryOp::Shr => ">>",
-                            _ => ">>>",
-                        };
-                        format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
-                    }
+                // `bridged`: the operator runs on the decoded JS values; the rest run on the
+                // f64 encodings directly.
+                let (js_op, bridged) = match op {
+                    BinaryOp::Add => ("+", true),
+                    BinaryOp::Sub => ("-", false),
+                    BinaryOp::Mul => ("*", false),
+                    BinaryOp::Div => ("/", false),
+                    BinaryOp::Mod => ("%", false),
+                    BinaryOp::Pow => ("**", true),
+                    BinaryOp::BitAnd => ("&", true),
+                    BinaryOp::BitOr => ("|", true),
+                    BinaryOp::BitXor => ("^", true),
+                    BinaryOp::Shl => ("<<", true),
+                    BinaryOp::Shr => (">>", true),
+                    BinaryOp::UShr => (">>>", true),
+                };
+                if bridged {
+                    format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
+                } else {
+                    format!("({l} {js_op} {r})")
                 }
             }
             // The same bridge as the WASM arm, so `in` agrees between sync and async bodies.
@@ -779,14 +775,10 @@ impl WasmModuleEmitter {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
             }
-            // `for (k in o)`'s key snapshot: the enumerable string keys of `o` and its
-            // prototype chain; a primitive is boxed and null/undefined have none.
+            // The same bridge as the WASM arm, so `for...in` agrees between sync and async bodies.
             Expr::ForInKeys(o) => {
                 let o = self.emit_js_expr(o, locals);
-                format!(
-                    "fromJsValue(((__o) => {{ const __ks = []; if (__o !== null && __o !== undefined) for (const __k in Object(__o)) __ks.push(__k); return __ks; }})(toJsValue({})))",
-                    o
-                )
+                format!("fromJsValue(__memDispatch.for_in_keys(toJsValue({o})))")
             }
             Expr::ObjectRest {
                 object,
