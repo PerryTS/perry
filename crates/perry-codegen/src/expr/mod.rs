@@ -1820,6 +1820,10 @@ pub(crate) struct FnCtx<'a> {
     pub suffix_cursor_locals: std::collections::HashSet<u32>,
     /// Stack storage holds byte/UTF-16 offsets only, never a GC pointer.
     pub suffix_cursors: std::collections::HashMap<u32, String>,
+    /// Parameters the body never rebinds, each with its lazily allocated
+    /// `charCodeAt` cursor (`lower_string_method/char_code_at.rs`). The slot
+    /// holds byte/UTF-16 offsets only, never a GC pointer.
+    pub utf16_cursors: std::collections::HashMap<u32, Option<String>>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by

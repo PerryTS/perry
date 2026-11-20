@@ -77,7 +77,7 @@ impl Index {
 }
 
 #[inline]
-fn code_unit(cp: u32, units: usize, first: bool) -> u16 {
+pub(super) fn code_unit(cp: u32, units: usize, first: bool) -> u16 {
     if units == 2 {
         let v = cp.wrapping_sub(0x10000);
         if first {
