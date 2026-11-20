@@ -2263,11 +2263,11 @@ const __memDispatch = {
   },
   array_shift: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.shift(); },
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
-  // Array.prototype.join: a nested array joins with ",", null and undefined are empty,
-  // and an object is its toString().
+  // The host join owns element conversion (nested arrays, nullish elements) and the
+  // separator's: an undefined one is ",", not "undefined".
   array_join: (arr, separator) => {
     if (!Array.isArray(arr)) return '';
-    return arr.join(String(separator));
+    return arr.join(separator);
   },
   array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
   array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
