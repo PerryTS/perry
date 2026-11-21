@@ -143,3 +143,49 @@ fn accregion_read_never_takes_setter_throw() {
         "{k:?}\n{dump}"
     );
 }
+
+/// A throwing setter on `Vol.prototype` and a value defined over its key.
+const VOL_SETTER: &str = "class Vol {
+        _v: any = 0;
+        get v(): any { return this._v; }
+        set v(x: any) { if (process.argv[3] === \"y\") throw \"s\"; this._v = x; }
+    }
+    const vol = new Vol();
+    function h() { try { k(process.argv[2]); } catch (e: any) { box.value = e; } }
+    function desc(): any { return { value: 1, configurable: true }; }\n";
+
+/// STOREREGION: `Object.defineProperty` with a data descriptor the solver
+/// reads (`define_by_data`) is [[DefineOwnProperty]] (ECMA-262 20.1.2.4,
+/// 10.1.6.3): it runs no setter, so the catch around the define sees only
+/// `k`'s own throw.
+#[test]
+fn storeregion_define_runs_no_setter() {
+    let src = format!(
+        "{CAUGHT}{VOL_SETTER}
+        function k(s: string) {{ if (s === \"x\") throw 7; Object.defineProperty(vol, \"v\", desc()); }}
+        console.log(vol.v);
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 == 0,
+        "{k:?}\n{dump}"
+    );
+}
+
+/// Control: an ordinary store in the same place runs the setter, whose
+/// throw completes the store and so reaches the catch around `k`.
+#[test]
+fn storeregion_set_still_runs_setter() {
+    let src = format!(
+        "{CAUGHT}{VOL_SETTER}
+        function k(s: string) {{ if (s === \"x\") throw 7; (vol as any).v = desc(); }}
+        console.log(vol.v);
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 != 0,
+        "{k:?}\n{dump}"
+    );
+}
