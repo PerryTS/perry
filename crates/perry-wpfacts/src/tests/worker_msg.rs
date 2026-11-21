@@ -60,6 +60,26 @@ fn hostev_event_fields_are_the_runtime_record() {
     assert!(!held, "the realm is not held: {tops:?}");
 }
 
+// Chain W (PERFNOW77/79, c17 and c23 on a base before HOSTEV): an "error"
+// event resolved and a method called on it. worker_pump.rs hands a web
+// listener of "error" `event_object(event, worker, None)` (data only for
+// "message"): the five own fields, no any key, so the resolve's `then` is
+// the Object.prototype chain and `e.type` is a string.
+#[test]
+fn hostev_error_event_resolved_and_method_called_holds_nothing() {
+    let main = a_main("    resolve(e);\n    e.type.toUpperCase();\n", "error");
+    let (tops, held, _, _) = solve(&[("main", &main), ("w", EMPTY)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "the realm is not held: {tops:?}");
+}
+
+// Chain W good: the same listener without the method call.
+#[test]
+fn hostev_error_event_resolved_holds_nothing() {
+    let main = a_main("    resolve(e);\n", "error");
+    let (tops, held, _, _) = solve(&[("main", &main), ("w", EMPTY)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "the realm is not held: {tops:?}");
+}
+
 const B_MAIN: &str = "import { Worker } from \"node:worker_threads\";\n\
     new Worker(\"./w.ts\");\n";
 
