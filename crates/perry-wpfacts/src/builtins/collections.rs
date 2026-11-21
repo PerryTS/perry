@@ -1657,6 +1657,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // W-HOST (LADDER18): the host Worker's own methods
         // (`worker_method`).
         ("Worker", Some(n)) if worker_method(m, t, n, call) => {}
+        // A member neither the Worker nor `Worker.prototype` owns is its
+        // declared chain's (`EventEmitter.prototype`, `Object.prototype`) or
+        // absent: `then`, read by a resolve function (27.2.1.3.2), is absent.
+        ("Worker", Some(n)) if members::worker_inherited(n).is_some() => {
+            let p = members::worker_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of Worker.{n}"))
+        }
         // An object a realm declaration made (`fresh(P)`) has `P` as its
         // [[Prototype]]: the method is the member of `P`'s declared chain,
         // or absent (`realm_born_method`).
