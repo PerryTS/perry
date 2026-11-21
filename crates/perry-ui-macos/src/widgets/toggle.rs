@@ -47,21 +47,25 @@ define_class!(
         fn toggle_changed(&self, sender: &AnyObject) {
             let key = self.ivars().callback_key.get();
             crate::catch_callback_panic("toggle callback", std::panic::AssertUnwindSafe(|| {
-                TOGGLE_CALLBACKS.with(|cbs| {
-                    if let Some(&closure_f64) = cbs.borrow().get(&key) {
-                        let state: i64 = unsafe { msg_send![sender, state] };
-                        let value = if state != 0 {
-                            f64::from_bits(TAG_TRUE)
-                        } else {
-                            f64::from_bits(TAG_FALSE)
-                        };
+                // Copy the closure out and release the borrow before calling
+                // into JS: the callback may create another widget of this kind
+                // (which inserts into this map) or trigger a GC root scan
+                // (which borrows it mutably) — either panicked with
+                // "RefCell already borrowed" while the borrow was held.
+                let callback = TOGGLE_CALLBACKS.with(|cbs| cbs.borrow().get(&key).copied());
+                if let Some(closure_f64) = callback {
+                    let state: i64 = unsafe { msg_send![sender, state] };
+                    let value = if state != 0 {
+                        f64::from_bits(TAG_TRUE)
+                    } else {
+                        f64::from_bits(TAG_FALSE)
+                    };
 
-                        let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
-                        unsafe {
-                            js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, value);
-                        }
+                    let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
+                    unsafe {
+                        js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, value);
                     }
-                });
+                }
             }));
         }
     }
