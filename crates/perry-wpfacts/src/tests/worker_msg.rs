@@ -60,3 +60,56 @@ fn hostev_event_fields_are_the_runtime_record() {
     assert!(!held, "the realm is not held: {tops:?}");
 }
 
+const B_MAIN: &str = "import { Worker } from \"node:worker_threads\";\n\
+    new Worker(\"./w.ts\");\n";
+
+// B (RED before WGPOST): the worker module's bare `postMessage(null)`.
+#[test]
+fn wgpost_worker_bare_post_message_is_the_clone() {
+    let w = "postMessage(null);\nexport {};\n";
+    let (tops, held, side, _) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert_eq!(side, vec![false, true]);
+    assert!(!has(&tops, "Other.postMessage"), "{tops:?}");
+    assert!(!held, "the realm is not held: {tops:?}");
+}
+
+// B good: the worker module without the call.
+#[test]
+fn wgpost_pair_good_holds_nothing() {
+    let (tops, held, _, _) = solve(&[("main", B_MAIN), ("w", EMPTY)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "{tops:?}");
+}
+
+// The clone reads the value's own getters, as Worker.postMessage's does.
+#[test]
+fn wgpost_clone_runs_the_own_getter() {
+    let w = "function f(x: any): void { console.log(x); }\n\
+        postMessage({ get v() { f(1); return 1; } });\nexport {};\n";
+    let (tops, held, _, ps) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "{tops:?}");
+    assert!(ps.len() == 1, "{ps:?}");
+}
+
+// A program store under a key that may spell `postMessage` (R-GLOBAL:
+// program stores are exact) may have replaced the native: the bare call
+// calls the stored function with the argument.
+#[test]
+fn wgpost_stored_global_is_called() {
+    let w = "function f(x: any): void { console.log(x); }\n\
+        (globalThis as any)[String(Date.now())] = (v: any) => { f(v); };\n\
+        postMessage({ a: 1 });\nexport {};\n";
+    let (tops, held, _, ps) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "{tops:?}");
+    assert!(ps.len() == 1 && ps[0] > 0, "the stored function gets the message: {ps:?}");
+}
+
+// The same under the name itself.
+#[test]
+fn wgpost_named_store_is_called() {
+    let w = "function f(x: any): void { console.log(x); }\n\
+        (globalThis as any).postMessage = (v: any) => { f(v); };\n\
+        postMessage({ a: 1 });\nexport {};\n";
+    let (tops, held, _, ps) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert!(!held, "{tops:?}");
+    assert!(ps.len() == 1 && ps[0] > 0, "the stored function gets the message: {ps:?}");
+}
