@@ -218,6 +218,7 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     }
     unsafe {
         js_stdlib_process_pending();
+        crate::ws::js_ws_process_pending();
         // Turn this thread's turnloop: fetch / node:http progress only on a turn.
         {
             extern "C" {

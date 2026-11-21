@@ -926,6 +926,25 @@ fn condvar_park(budget: Duration) {
     spin_streak_reset();
 }
 
+thread_local! {
+    static HOST_KEEPS_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Called by a UI host before it runs `main()` on a thread that keeps running
+/// JavaScript afterwards (the Android UI thread: `main()` returns to the
+/// looper and every widget callback runs there). The generated exit epilogue
+/// then leaves the thread's event loop and per-thread allocations alone
+/// instead of tearing them down as if the process were exiting.
+#[no_mangle]
+pub extern "C" fn perry_host_keeps_thread_after_main() {
+    HOST_KEEPS_THREAD.with(|keep| keep.set(true));
+}
+
+/// Whether [`perry_host_keeps_thread_after_main`] was called on this thread.
+pub(crate) fn host_keeps_thread_after_main() -> bool {
+    HOST_KEEPS_THREAD.with(std::cell::Cell::get)
+}
+
 /// Exit like Node does when top-level module evaluation is still pending but
 /// the event loop has no refed work left to drive it.
 #[no_mangle]
