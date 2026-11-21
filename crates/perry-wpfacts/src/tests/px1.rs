@@ -677,3 +677,28 @@ fn pxkey_proxy_as_computed_key() {
         "ToPropertyKey runs `toString` with `this` = the Proxy: {v:?}"
     );
 }
+
+// PERFNOW50 rule PXCASE: a node holding a String and a Proxy is the receiver
+// of `toLowerCase` (web tokens.ts getPropertyValue `name.toLowerCase()` with
+// `name` = the style Proxy). The case-map rule (K7) is the String receivers';
+// for the Proxy the call is its get trap's result. RED on base: the rule
+// degraded the Proxy ("E9 Proxy target (casemap)"). The receiver is the
+// `string` parameter of an object literal's arrow, as the app's is
+// (tokens.ts:154): with `any`, or a `string` parameter of a plain arrow,
+// the rule is not reached (pn51 d3: no E9 there on 779be4fa25).
+const PROXY_CASE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return k === "toLowerCase" ? (() => "px" + o.n) : o[k]; } });
+}
+const p = mk();
+const api = { gv: (name: string): string => name.toLowerCase() };
+console.log(api.gv("AB" + N), api.gv(p as any));
+"#;
+
+#[test]
+fn pxcase_proxy_case_map_receiver() {
+    let (tops, held) = solve(PROXY_CASE);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}

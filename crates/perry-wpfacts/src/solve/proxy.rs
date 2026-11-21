@@ -655,6 +655,14 @@ impl Model {
             // first argument (`may_hold_percent` reads the node's strings);
             // a Proxy is an object, never one, and runs no trap there.
             | Cons::ConsoleFormat { .. }
+            // Rule PXCASE (K7 on a Proxy): `name.toLowerCase()` on a node that
+            // holds Strings and the Proxy. The case map is the result rule of
+            // the String receivers (22.1.3.28 / .29); for the Proxy the call
+            // is p.[[Get]]("toLowerCase") (the Load arm: the get trap) and a
+            // call of what it returns. The rule runs no internal method of
+            // the Proxy, and an object receiver gives any String in the
+            // ordinary rule (`case_map_strs`), as for any other object.
+            | Cons::CaseMap { .. }
             // The KEY of a computed store `o[proxy] = v` (the rule sits on
             // the key node): ToPropertyKey (7.1.19) is ToPrimitive with hint
             // String, its own rule (`Cons::Implicit` on every computed key,
