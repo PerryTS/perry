@@ -645,3 +645,35 @@ console.log(out.join(","), Object.keys(p).length, Object.getOwnPropertyNames(q).
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
 }
+
+// PERFNOW49 rule PXKEY: a Proxy used as a computed KEY (`arr[p]`, `rec[p]`)
+// runs no internal method of the Proxy in the receiver's [[Get]]: its
+// ToPropertyKey (7.1.19) is ToPrimitive (7.1.1), the key's own rule
+// (`proxy_to_primitive`: the target's `toString` runs with `this` = the
+// Proxy). The rules on the key node (`ElemUndef`, `IdxKey`) read the key's
+// value only. RED on base: they degraded the Proxy (web tokens.ts
+// `item: (i) => read()[i]`, "E9 Proxy target (elemundef)").
+const PROXY_KEY: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t = { n: 1, toString(): string { return "1" + this.n; } };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+const arr: string[] = ["a" + N, "b"];
+const rec: Record<string, string> = { a: N };
+const item = (i: any): string => arr[i] ?? "";
+const pick = (k: any): string => rec[k] ?? "";
+console.log(item(p), item(1), pick(p), pick("a"));
+"#;
+
+#[test]
+fn pxkey_proxy_as_computed_key() {
+    let (tops, held) = solve(PROXY_KEY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+    let v = verdicts(PROXY_KEY, "n");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s.contains("Proxy")),
+        "ToPropertyKey runs `toString` with `this` = the Proxy: {v:?}"
+    );
+}

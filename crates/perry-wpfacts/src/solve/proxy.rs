@@ -662,7 +662,21 @@ impl Model {
             // `valueOf`, `toString`). The store then uses that primitive; the
             // ordinary rule reads no internal method of an object key (the
             // any-key store, or the ToPrimitive result key: `implicit`).
-            | Cons::StoreIndexed { .. } => {
+            | Cons::StoreIndexed { .. }
+            // Rule PXKEY: the rules a computed read puts on its KEY node
+            // (`o[proxy]`, `o[proxy](...)`): the past-the-end `undefined`
+            // (`ElemUndef`, also on the length node, which holds Numbers
+            // only), the read under the key's names (`IdxKey`,
+            // `IdxKeyCall`) and the own read (`IdxOwnKey`). Each reads the
+            // key's value only: ToPropertyKey is ToPrimitive, the key's own
+            // rule (`Cons::Implicit`, `proxy_to_primitive`), and the
+            // receiver's [[Get]] runs no internal method of the key. The
+            // ordinary rule treats an object key as one that may spell any
+            // name and is no index, exactly as for any other object.
+            | Cons::ElemUndef { .. }
+            | Cons::IdxKey { .. }
+            | Cons::IdxKeyCall { .. }
+            | Cons::IdxOwnKey { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
