@@ -928,6 +928,7 @@ pub(crate) fn construct_into(
             key: ek,
             src: elems,
             site,
+            region: m.thrown,
         },
     );
     let la = m.atom("length");
@@ -939,6 +940,7 @@ pub(crate) fn construct_into(
             key: Key::Named(la),
             src: len,
             site,
+            region: m.thrown,
         },
     );
     m.edge(made, ret);
@@ -1151,7 +1153,7 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
     let own = m.num_fields(t);
     let elems = m.field_any(t);
     m.edge(own, elems);
-    m.plain_key(t, ChainAct::Load(elems));
+    m.plain_key(t, ChainAct::Load(elems, m.thrown));
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1174,6 +1176,7 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
                 key: length,
                 src: num,
                 site,
+                region: m.thrown,
             },
         );
     }

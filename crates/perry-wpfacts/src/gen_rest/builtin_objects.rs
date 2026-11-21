@@ -1011,6 +1011,7 @@ impl<'a> Gen<'a> {
                         key: Key::Named(ea),
                         src: arr,
                         site,
+                        region: self.region(),
                     },
                 );
                 n
@@ -1108,6 +1109,7 @@ impl<'a> Gen<'a> {
                     key: Key::Named(a),
                     src,
                     site,
+                    region: self.region(),
                 },
             );
         }

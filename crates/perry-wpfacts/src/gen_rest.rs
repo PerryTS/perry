@@ -370,7 +370,7 @@ impl<'a> Gen<'a> {
                     let r = self.expr(fx, receiver);
                     let dst = self.tmp("super.get");
                     let homes = self.expr(fx, home);
-                    self.super_access(homes, r, k, ChainAct::Load(dst));
+                    self.super_access(homes, r, k, ChainAct::Load(dst, self.region()));
                     dst
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),
@@ -387,7 +387,7 @@ impl<'a> Gen<'a> {
                     let v = self.expr(fx, value);
                     self.store(fx, r, k, v, "super.x=".into(), None, false);
                     let homes = self.expr(fx, home);
-                    self.super_access(homes, r, k, ChainAct::Store(v));
+                    self.super_access(homes, r, k, ChainAct::Store(v, self.region()));
                     v
                 }
                 None => self.fail_closed(fx, e, "object-literal super"),

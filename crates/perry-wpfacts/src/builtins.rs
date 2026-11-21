@@ -4077,6 +4077,7 @@ fn ns_method_inner(
                         key: Key::Named(a),
                         src: s,
                         site,
+                        region: m.thrown,
                     },
                 );
             }

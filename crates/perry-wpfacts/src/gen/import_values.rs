@@ -927,7 +927,15 @@ impl<'a> Gen<'a> {
                         let src =
                             self.stored_value(mi, this, c, &params, i as u32, false, None, Some(k));
                         let key = crate::model::Key::Named(self.m.atom(k));
-                        self.m.cons(p, Cons::Store { key, src, site });
+                        self.m.cons(
+                            p,
+                            Cons::Store {
+                                key,
+                                src,
+                                site,
+                                region: self.region(),
+                            },
+                        );
                     }
                 }
                 ks => {
@@ -951,6 +959,7 @@ impl<'a> Gen<'a> {
                                 key,
                                 src: top,
                                 site,
+                                region: self.region(),
                             },
                         );
                     }
@@ -981,6 +990,7 @@ impl<'a> Gen<'a> {
                         key: crate::model::Key::any(),
                         src: p,
                         site,
+                        region: self.region(),
                     },
                 );
             }
@@ -1091,7 +1101,15 @@ impl<'a> Gen<'a> {
                 Some(k) => crate::model::Key::Named(self.m.atom(k)),
                 None => crate::model::Key::any(),
             };
-            self.m.cons(q, Cons::Store { key, src, site });
+            self.m.cons(
+                q,
+                Cons::Store {
+                    key,
+                    src,
+                    site,
+                    region: self.region(),
+                },
+            );
         }
         // What it returns, as the defining unit described it.
         let res = crate::units::Described {

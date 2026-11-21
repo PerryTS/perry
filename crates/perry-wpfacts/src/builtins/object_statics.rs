@@ -264,6 +264,7 @@ fn define_computed(m: &mut Model, call: CallId, o: NodeId, desc: NodeId, r: u32)
             key: Key::any(),
             src: v,
             site,
+            region: m.thrown,
         },
     );
     for (f, setter) in [(dget, false), (dset, true)] {

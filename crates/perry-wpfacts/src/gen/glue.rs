@@ -167,6 +167,7 @@ impl<'a> Gen<'a> {
                     src: v,
                     site,
                     subj: NO_NODE,
+                    region: self.region(),
                 },
             );
         }
@@ -454,6 +455,7 @@ impl<'a> Gen<'a> {
                         key: Key::any(),
                         src: value,
                         site,
+                        region: self.region(),
                     },
                 );
                 let out = self.tmp("rest-append");

@@ -294,6 +294,7 @@ pub(super) fn expand(
                         key,
                         src: call.args[i],
                         site,
+                        region: call.region,
                     },
                 ));
             }
@@ -315,6 +316,7 @@ pub(super) fn expand(
                     key,
                     src: elems,
                     site,
+                    region: call.region,
                 },
             ));
         }

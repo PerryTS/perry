@@ -148,7 +148,13 @@ pub enum Cons {
     /// the published value itself for a raw publication.
     CjsPublish { dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
-    Store { key: Key, src: NodeId, site: SiteId },
+    Store {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+        /// The throw region the store runs in: a setter it runs throws there.
+        region: NodeId,
+    },
     /// The node is a callee.
     Call { call: CallId },
     /// The node is a callee whose `this` is fixed to one receiver token
@@ -723,6 +729,8 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
         subj: NodeId,
+        /// The throw region of the store (`Cons::Store::region`).
+        region: NodeId,
     },
     /// ENUM3: on the subject `s` of `for (k in s)` (`from: None`) or on the
     /// prototype node of its chain link `from`: `o[k] = src` stores under
@@ -754,6 +762,8 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
         shape: KeyShapeId,
+        /// The throw region of the store (`Cons::Store::region`).
+        region: NodeId,
     },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under

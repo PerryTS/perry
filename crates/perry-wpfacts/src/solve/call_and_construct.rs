@@ -773,6 +773,7 @@ impl Model {
                 key: ek,
                 src: relay,
                 site,
+                region: self.thrown,
             },
         );
         relay

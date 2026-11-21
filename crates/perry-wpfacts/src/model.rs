@@ -1016,13 +1016,16 @@ impl OwnStopped {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     /// Return the installed accessor function, without invoking its body.
-    Lookup {
-        dst: NodeId,
-        setter: bool,
-    },
-    Load(NodeId),
+    Lookup { dst: NodeId, setter: bool },
+    /// Load into the first node. The second is the throw region the access
+    /// runs in (ECMA-262 10.1.8.1 step 7: a getter runs inside the [[Get]]):
+    /// what a getter it runs throws reaches it.
+    Load(NodeId, NodeId),
+    /// A call runs in its call site's region (`CallSite::region`).
     Call(CallId),
-    Store(NodeId),
+    /// Store the first node; the second is the access's throw region
+    /// (10.1.9.2 step 7: a setter runs inside the [[Set]]).
+    Store(NodeId, NodeId),
 }
 
 /// HARD escape families (design section 4).
@@ -2280,7 +2283,7 @@ pub struct Model {
     pub builtin_callee: crate::pts::FxHashSet<NodeId>,
     /// Shared accessor walks: (receiver, start, key, load/store/call) → the
     /// node the walk's accessors feed (load/call) or read from (store).
-    pub walk_nodes: FxHashMap<(Tok, Tok, Key, u8), NodeId>,
+    pub walk_nodes: FxHashMap<(Tok, Tok, Key, u8), (NodeId, NodeId)>,
     /// Store walks that have found no setter (and no unknown prototype) yet:
     /// the sites' source nodes wait here instead of flowing into the walk
     /// node, which nothing reads until then.
@@ -2910,6 +2913,8 @@ pub struct Model {
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
+    /// The throw region of that `Cons::Store` (`Cons::Store::region`).
+    pub store_region: Option<NodeId>,
     /// A call's constant first argument as a property-key spelling. Value
     /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
@@ -3548,6 +3553,13 @@ pub struct AccGroup {
     pub ar: NodeId,
     pub st: NodeId,
     pub sp: NodeId,
+    /// What the group's getters throw: it reaches the region of every
+    /// read or call that runs them (`group_hit`); [[Get]] runs only the
+    /// getter (ECMA-262 10.1.8.1).
+    pub rg: NodeId,
+    /// What the group's setters throw: it reaches the region of every
+    /// store that runs them; [[Set]] runs only the setter (10.1.9.2).
+    pub rs: NodeId,
     pub has_setter: bool,
     /// Store sources waiting for a first setter.
     pub pending: Vec<NodeId>,

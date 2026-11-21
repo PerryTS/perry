@@ -22,7 +22,7 @@ impl Model {
             Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),
             Cons::LenPermuted { t } => format!("lenpermuted {n} {t}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
-            Cons::Store { key, src, site } => {
+            Cons::Store { key, src, site, .. } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
             }
             Cons::Call { call } => format!("call {n} {call}"),
@@ -252,7 +252,9 @@ impl Model {
                 reason,
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
-            Cons::StoreKeyed { o, src, site, subj } => {
+            Cons::StoreKeyed {
+                o, src, site, subj, ..
+            } => {
                 format!("storekeyed {n} {o} {src} {site} {subj}")
             }
             Cons::EnumKeyStore { o, src, from, .. } => {

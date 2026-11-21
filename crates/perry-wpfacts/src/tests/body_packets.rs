@@ -105,6 +105,7 @@ fn direct_seeds_and_store_stay_inert_until_seal() {
             key: Key::Named(key),
             src: constant,
             site: 0,
+            region: m.thrown,
         },
     );
     assert!(

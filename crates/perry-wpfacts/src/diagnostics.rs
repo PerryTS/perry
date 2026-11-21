@@ -2131,6 +2131,7 @@ impl Model {
                         key: Key::Named(a),
                         src,
                         site,
+                        ..
                     } if Some(*a) == name_a => stores.push((n, *src, *site)),
                     Cons::Call { call } if Some(*call) == uc => callee.push((n, "Call".into())),
                     Cons::New { call } | Cons::NewProgram { call } if Some(*call) == uc => {

@@ -139,6 +139,7 @@ impl Model {
                 key: Key::Named(key),
                 src: v,
                 site,
+                region: self.thrown,
             },
         );
         self.define_accessors(d, o, key);
@@ -394,6 +395,7 @@ impl Model {
                     key: Key::any(),
                     src: d.value,
                     site: d.site,
+                    region: self.thrown,
                 },
             );
         }
@@ -454,6 +456,7 @@ impl Model {
                 key: Key::any(),
                 src: value,
                 site,
+                region: self.thrown,
             },
         );
     }

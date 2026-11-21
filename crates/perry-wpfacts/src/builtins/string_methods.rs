@@ -821,6 +821,7 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             key: Key::Named(li),
             src: q,
             site,
+            region: m.thrown,
         },
     );
     let z = method_call(m, call, splitter, "exec", vec![s]);

@@ -190,7 +190,7 @@ impl<'a> Gen<'a> {
                     Cons::SuperFrom {
                         recv: rv,
                         key,
-                        act: ChainAct::Load(out),
+                        act: ChainAct::Load(out, self.region()),
                     },
                 );
                 if self.m.is_proto_key(key) {
@@ -229,7 +229,7 @@ impl<'a> Gen<'a> {
                     Cons::SuperFrom {
                         recv: rv,
                         key,
-                        act: ChainAct::Store(v),
+                        act: ChainAct::Store(v, self.region()),
                     },
                 );
                 self.prim_node(prim::BOOL)

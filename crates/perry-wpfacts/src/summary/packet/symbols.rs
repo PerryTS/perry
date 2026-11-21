@@ -55,7 +55,7 @@ impl Model {
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
-            Cons::Store { key, src, site } => format!(
+            Cons::Store { key, src, site, .. } => format!(
                 "Store key={:?} src={:?} site={:?}",
                 self.packet_key(key),
                 src,
@@ -471,6 +471,7 @@ impl Model {
                 src,
                 site,
                 shape,
+                ..
             } => format!(
                 "StoreIndexed o={:?} src={:?} site={:?} shape={:?}",
                 o,

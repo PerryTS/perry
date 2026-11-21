@@ -160,7 +160,7 @@ impl Model {
                     self.cons(len, c);
                 }
             }
-            self.plain_key(t, ChainAct::Load(dst));
+            self.plain_key(t, ChainAct::Load(dst, self.thrown));
             self.cons(
                 idx,
                 Cons::IdxKey {
@@ -236,7 +236,7 @@ impl Model {
             .idx_done
             .insert((idx, t, dst, crate::model::IDX_ENUM_READ))
         {
-            self.accessor_walk(t, t, key, ChainAct::Load(dst));
+            self.accessor_walk(t, t, key, ChainAct::Load(dst, self.thrown));
             let pn = self.proto_node(t);
             self.cons(
                 pn,
@@ -521,6 +521,7 @@ impl Model {
                 key: Key::Named(a),
                 src,
                 site,
+                region: self.thrown,
             },
         );
     }
@@ -537,7 +538,15 @@ impl Model {
     pub(super) fn enum_key_any(&mut self, o: NodeId, src: NodeId, site: SiteId) {
         if self.enum_key_done.insert((o, TOP, src, site as NodeId)) {
             let key = Key::Any(self.any_string_shape());
-            self.cons(o, Cons::Store { key, src, site });
+            self.cons(
+                o,
+                Cons::Store {
+                    key,
+                    src,
+                    site,
+                    region: self.thrown,
+                },
+            );
         }
     }
 
@@ -597,7 +606,7 @@ impl Model {
         if let Some(&a) = self.key_nodes.get(&idx) {
             let f = self.field_r(t, a);
             self.edge(f, dst);
-            self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst));
+            self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst, self.thrown));
             return;
         }
         if self.idx_done.insert((idx, t, dst, IDX_OWN_KEY)) {
@@ -619,7 +628,7 @@ impl Model {
         // again here: the two keys may differ. ⊤ may be such an object.
         if !toks.is_empty() && self.idx_done.insert((n, obj, dst, IDX_OWN_ANY)) {
             self.own_read_census[2] += 1;
-            self.plain_key(obj, ChainAct::Load(dst));
+            self.plain_key(obj, ChainAct::Load(dst, self.thrown));
             self.load_from(obj, obj, Key::Any(shape), dst);
         }
         let key = Key::Any(shape);
@@ -628,7 +637,7 @@ impl Model {
         {
             let f = self.key_fields(obj, key);
             self.edge(f, dst);
-            self.accessor_walk(obj, obj, key, ChainAct::Load(dst));
+            self.accessor_walk(obj, obj, key, ChainAct::Load(dst, self.thrown));
         }
         // ToPropertyKey of a Number or BigInt is a numeric string: the own
         // numeric fields, and an accessor under a numeric name.
@@ -636,7 +645,7 @@ impl Model {
             let f = self.num_fields(obj);
             self.edge(f, dst);
             if self.numeric_accessor {
-                self.accessor_walk(obj, obj, Key::any(), ChainAct::Load(dst));
+                self.accessor_walk(obj, obj, Key::any(), ChainAct::Load(dst, self.thrown));
             }
         }
         // ToPropertyKey of `true`, `false`, `null`, `undefined` is a named key.
@@ -653,7 +662,7 @@ impl Model {
                     let a = self.atom(k);
                     let f = self.field_r(obj, a);
                     self.edge(f, dst);
-                    self.accessor_walk(obj, obj, Key::Named(a), ChainAct::Load(dst));
+                    self.accessor_walk(obj, obj, Key::Named(a), ChainAct::Load(dst, self.thrown));
                 }
             }
         }

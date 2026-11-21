@@ -15,7 +15,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
         return;
     }
     match act {
-        ChainAct::Load(dst) => {
+        ChainAct::Load(dst, _) => {
             if !intrinsic_miss(m, num, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
             }
@@ -27,7 +27,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
                 m.cur_this = prev;
             }
         }
-        ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+        ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
     }
 }
 

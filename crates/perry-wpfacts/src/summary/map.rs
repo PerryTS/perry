@@ -16,8 +16,8 @@ pub(super) fn act_map(
             dst: n(dst),
             setter,
         },
-        ChainAct::Load(x) => ChainAct::Load(n(x)),
-        ChainAct::Store(x) => ChainAct::Store(n(x)),
+        ChainAct::Load(x, r) => ChainAct::Load(n(x), n(r)),
+        ChainAct::Store(x, r) => ChainAct::Store(n(x), n(r)),
         ChainAct::Call(c) => ChainAct::Call(k(c)),
     }
 }
@@ -51,10 +51,16 @@ pub fn map_cons(
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
-        Store { key, src, site } => Store {
+        Store {
+            key,
+            src,
+            site,
+            region,
+        } => Store {
             key,
             src: n(src),
             site,
+            region: n(region),
         },
         Call { call } => Call { call: k(call) },
         CallThis { call, this } => CallThis {
@@ -402,7 +408,14 @@ pub fn map_cons(
             reason,
             accessor,
         },
-        StoreKeyed { o, src, site, subj } => StoreKeyed {
+        StoreKeyed {
+            o,
+            src,
+            site,
+            subj,
+            region,
+        } => StoreKeyed {
+            region: n(region),
             o: n(o),
             src: n(src),
             site,
@@ -424,7 +437,9 @@ pub fn map_cons(
             src,
             site,
             shape,
+            region,
         } => StoreIndexed {
+            region: n(region),
             o: n(o),
             src: n(src),
             site,

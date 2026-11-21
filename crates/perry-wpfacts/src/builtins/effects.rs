@@ -323,7 +323,15 @@ pub(super) fn setter_store(m: &mut Model, e: &'static RealmEntry, t: Tok, src: N
         }
         let key = step_key(m, last);
         let site = m.anon_store_site();
-        m.cons(at, Cons::Store { key, src, site });
+        m.cons(
+            at,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: m.thrown,
+            },
+        );
     }
 }
 
@@ -1250,6 +1258,7 @@ fn run(
                             key,
                             src: value,
                             site,
+                            region: m.thrown,
                         },
                     );
                 }

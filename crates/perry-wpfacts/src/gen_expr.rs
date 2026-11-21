@@ -294,7 +294,15 @@ impl<'a> Gen<'a> {
         birth: bool,
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, birth);
-        self.m.cons(recv, Cons::Store { key, src, site });
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: self.region(),
+            },
+        );
         site
     }
 
@@ -322,7 +330,15 @@ impl<'a> Gen<'a> {
         self.m.stores[site as usize].key_value = key_value;
         self.mark_fn_phase(fx, e, object, site);
         self.mark_rooted(e, site);
-        self.m.cons(recv, Cons::Store { key, src, site });
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: self.region(),
+            },
+        );
         site
     }
 
@@ -350,7 +366,15 @@ impl<'a> Gen<'a> {
         self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
         match key {
-            Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
+            Key::Named(_) => self.m.cons(
+                recv,
+                Cons::Store {
+                    key,
+                    src,
+                    site,
+                    region: self.region(),
+                },
+            ),
             // The key's values decide: an index or any key (`StoreIndexed`).
             Key::Any(shape) => self.m.cons(
                 key_value,
@@ -359,6 +383,7 @@ impl<'a> Gen<'a> {
                     src,
                     site,
                     shape,
+                    region: self.region(),
                 },
             ),
         }
@@ -1445,6 +1470,7 @@ impl<'a> Gen<'a> {
                                     key,
                                     src: nm,
                                     site: ps,
+                                    region: self.region(),
                                 },
                             );
                         }
@@ -1456,6 +1482,7 @@ impl<'a> Gen<'a> {
                                 src: v,
                                 site,
                                 subj,
+                                region: self.region(),
                             },
                         );
                     }
@@ -1492,7 +1519,15 @@ impl<'a> Gen<'a> {
                         self.m.stores[site as usize].key_value = Some(k);
                         self.in_bounds_site(fx, e, o, key, site);
                         match key {
-                            Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
+                            Key::Named(_) => self.m.cons(
+                                o,
+                                Cons::Store {
+                                    key,
+                                    src: v,
+                                    site,
+                                    region: self.region(),
+                                },
+                            ),
                             // The key's values decide: an index or any key.
                             Key::Any(shape) => self.m.cons(
                                 k,
@@ -1501,6 +1536,7 @@ impl<'a> Gen<'a> {
                                     src: v,
                                     site,
                                     shape,
+                                    region: self.region(),
                                 },
                             ),
                         }
@@ -1717,6 +1753,7 @@ impl<'a> Gen<'a> {
                                 key,
                                 src: nm,
                                 site: ps,
+                                region: self.region(),
                             },
                         );
                     }
@@ -1728,6 +1765,7 @@ impl<'a> Gen<'a> {
                             src: v,
                             site,
                             subj,
+                            region: self.region(),
                         },
                     );
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
@@ -2621,7 +2659,12 @@ impl<'a> Gen<'a> {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
                 let homes = self.super_homes(fx);
-                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
+                self.super_access(
+                    homes,
+                    fx.this,
+                    Key::Named(a),
+                    ChainAct::Load(dst, self.region()),
+                );
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
@@ -2629,7 +2672,7 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, value);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
                 let homes = self.super_homes(fx);
-                self.super_access(homes, fx.this, k, ChainAct::Store(v));
+                self.super_access(homes, fx.this, k, ChainAct::Store(v, self.region()));
                 v
             }
 

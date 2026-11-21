@@ -83,6 +83,7 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
                 key: Key::Named(a),
                 src: v,
                 site,
+                region: m.thrown,
             },
         );
     }

@@ -439,10 +439,10 @@ impl Model {
     /// may call them with any receiver and catch what they throw
     /// (`escape_fn_params`: their throw region feeds ESCRAISE).
     fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w, self.thrown));
         let r = self.node_l("escaped-load");
         self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r, self.thrown));
         let fns = self.esc_accessors;
         for setter in [false, true] {
             self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
@@ -1197,7 +1197,7 @@ impl Model {
         // writes into each other's storage: the overlap is not transitive.
         if builtins::builtin_function(self, t) {
             let read = self.node_l("escaped-native-fields");
-            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read, self.thrown));
             if !self.unit_mode {
                 self.proto_value(t, read);
             }

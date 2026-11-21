@@ -92,6 +92,7 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
                 key: Key::any(),
                 src: v,
                 site,
+                region: m.thrown,
             },
         );
     }

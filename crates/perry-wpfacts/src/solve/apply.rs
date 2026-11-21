@@ -142,13 +142,20 @@ impl Model {
                     }
                 }
             }
-            Cons::Store { key, src, site } => {
+            Cons::Store {
+                key,
+                src,
+                site,
+                region,
+            } => {
                 self.store_at = Some(n);
+                self.store_region = Some(region);
                 for &t in toks {
                     self.prov_tok(pv, t);
                     self.store_into(t, key, src, site);
                 }
                 self.store_at = None;
+                self.store_region = None;
             }
             Cons::Call { call } => {
                 for &t in toks {
@@ -1147,7 +1154,7 @@ impl Model {
                     .walk_nodes
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
-                    self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.accessor_walk(target, target, Key::any(), ChainAct::Store(n, self.thrown));
                     self.note_unnamed_set(target);
                 }
             }
@@ -1490,6 +1497,7 @@ impl Model {
                                 key: k,
                                 src: fa,
                                 site,
+                                region: self.thrown,
                             },
                         );
                         let reason = self.reason("accessor of unknown function value");
@@ -1678,11 +1686,11 @@ impl Model {
                 for &q in toks {
                     match self.toks[q as usize] {
                         TokKind::Top => match act {
-                            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                            ChainAct::Load(dst, _) | ChainAct::Lookup { dst, .. } => {
                                 self.add_tok(dst, TOP)
                             }
                             ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
-                            ChainAct::Store(_) => {}
+                            ChainAct::Store(_, _) => {}
                         },
                         TokKind::ObjectProto
                         | TokKind::NativeProto(..)
@@ -1693,9 +1701,9 @@ impl Model {
                         _ => {
                             let f = self.num_fields(q);
                             match act {
-                                ChainAct::Load(dst) => self.edge(f, dst),
+                                ChainAct::Load(dst, _) => self.edge(f, dst),
                                 ChainAct::Call(call) => self.bind_via(f, call, origin),
-                                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+                                ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
                             }
                         }
                     }
@@ -1851,7 +1859,7 @@ impl Model {
                         .idx_done
                         .insert((n, q, dst, crate::model::IDX_ENUM_CHAIN))
                     {
-                        self.accessor_walk(of, q, key, ChainAct::Load(dst));
+                        self.accessor_walk(of, q, key, ChainAct::Load(dst, self.thrown));
                         let up = self.proto_node(q);
                         let link = Cons::EnumChain {
                             key,
@@ -2064,7 +2072,7 @@ impl Model {
                         .insert((n, obj, dst, crate::model::IDX_NUM_EXACT))
                     {
                         let key = self.elem_key();
-                        self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                        self.builtin_field_use(obj, key, ChainAct::Load(dst, self.thrown));
                         self.edge(slot, dst);
                     }
                 } else if !self.is_marker(obj)
@@ -2074,7 +2082,7 @@ impl Model {
                         .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
                 {
                     let key = self.elem_key();
-                    self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                    self.builtin_field_use(obj, key, ChainAct::Load(dst, self.thrown));
                     if self.typed_array_number_key(obj, prim, named) {
                         // Rule TYPED-ELEM (`typed_array_number_key`): the
                         // element, a Number (BigInt) or `undefined`. Under
@@ -2274,7 +2282,13 @@ impl Model {
                     }
                 }
             }
-            Cons::StoreKeyed { o, src, site, subj } => {
+            Cons::StoreKeyed {
+                o,
+                src,
+                site,
+                subj,
+                region,
+            } => {
                 // FORIN1: a key that holds String constants only (a shared
                 // for-in run over the keys `for_in_keys` lists,
                 // `for_in_named_run`) is one of them: a named store per
@@ -2294,6 +2308,7 @@ impl Model {
                                     key: Key::Named(a),
                                     src,
                                     site,
+                                    region,
                                 },
                             );
                         }
@@ -2311,6 +2326,7 @@ impl Model {
                                 key: Key::Named(a),
                                 src,
                                 site,
+                                region,
                             },
                         ),
                         None if subj != NO_NODE => self.cons(
@@ -2342,6 +2358,7 @@ impl Model {
                 src,
                 site,
                 shape,
+                region,
             } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
@@ -2420,7 +2437,15 @@ impl Model {
                         Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
                         None => self.elem_key(),
                     };
-                    self.cons(o, Cons::Store { key: ek, src, site });
+                    self.cons(
+                        o,
+                        Cons::Store {
+                            key: ek,
+                            src,
+                            site,
+                            region,
+                        },
+                    );
                 }
                 if index {
                     // `a[i] = v` may write past the end; `push` appends. At
@@ -2486,6 +2511,7 @@ impl Model {
                                             src,
                                             site,
                                             shape,
+                                            region,
                                         },
                                     );
                                 }
@@ -2522,6 +2548,7 @@ impl Model {
                                 key: Key::Any(s),
                                 src,
                                 site,
+                                region,
                             },
                         );
                     }
@@ -2534,6 +2561,7 @@ impl Model {
                                 key: Key::Named(a),
                                 src,
                                 site,
+                                region,
                             },
                         );
                     }
@@ -2545,7 +2573,15 @@ impl Model {
                 if digits {
                     if self.index_store_done.insert((n, o, src, site, 5)) {
                         let key = self.digits_key();
-                        self.cons(o, Cons::Store { key, src, site });
+                        self.cons(
+                            o,
+                            Cons::Store {
+                                key,
+                                src,
+                                site,
+                                region,
+                            },
+                        );
                     }
                 } else if any && self.index_store_done.insert((n, o, src, site, kind)) {
                     // Diagnostic (off: one flag read): why a store keeps the any key.
@@ -2568,6 +2604,7 @@ impl Model {
                             key: Key::Any(shape),
                             src,
                             site,
+                            region,
                         },
                     );
                 }
@@ -2995,7 +3032,15 @@ impl Model {
                     let v = self.node_l("spread-string-chars");
                     self.add_prim(v, prim::STR);
                     let key = self.elem_key();
-                    self.cons(into, Cons::Store { key, src: v, site });
+                    self.cons(
+                        into,
+                        Cons::Store {
+                            key,
+                            src: v,
+                            site,
+                            region: self.thrown,
+                        },
+                    );
                 }
                 for &s in toks {
                     self.cons(

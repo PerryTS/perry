@@ -296,6 +296,7 @@ impl<'a> Gen<'a> {
                 key: ek,
                 src: v,
                 site,
+                region: self.region(),
             },
         );
         let offset = match e {

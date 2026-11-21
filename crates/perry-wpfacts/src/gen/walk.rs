@@ -1445,6 +1445,7 @@ impl<'a> Gen<'a> {
                             key: Key::any(),
                             src: v,
                             site,
+                            region: self.region(),
                         },
                     );
                 }
@@ -1466,6 +1467,7 @@ impl<'a> Gen<'a> {
                             key: Key::Named(a),
                             src: v,
                             site,
+                            region: self.region(),
                         },
                     );
                 }

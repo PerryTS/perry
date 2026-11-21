@@ -75,7 +75,7 @@ impl Model {
         let cv = self.cv_of(t, Key::Named(a), !shadow);
         self.edge(cv, n);
         if shadow {
-            self.note_shadowed(t, a, crate::model::ChainAct::Load(n), false);
+            self.note_shadowed(t, a, crate::model::ChainAct::Load(n, self.thrown), false);
         }
         // DECISIONS 231(c): the receiver token's own field is what this
         // unit's code stores under `a` into instances and receivers of the

@@ -666,7 +666,12 @@ impl Model {
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
-                self.accessor_walk(t, t, key, ChainAct::Store(src));
+                self.accessor_walk(
+                    t,
+                    t,
+                    key,
+                    ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+                );
                 let cp = self.cp(t);
                 if self.callthis_done.insert((cp, u32::MAX, t)) {
                     self.cons(cp, Cons::StoreTopProto { origin: t, src });
@@ -1159,10 +1164,19 @@ impl Model {
         }
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native.
-        self.builtin_field_use(t, key, ChainAct::Store(src));
+        self.builtin_field_use(
+            t,
+            key,
+            ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+        );
         // A setter a declaration made the receiver with (`onabort`).
         self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
-        self.accessor_walk(t, t, key, ChainAct::Store(src));
+        self.accessor_walk(
+            t,
+            t,
+            key,
+            ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+        );
         if !self.is_array_like(t) {
             let cp = self.cp(t);
             if self.callthis_done.insert((cp, u32::MAX, t)) {

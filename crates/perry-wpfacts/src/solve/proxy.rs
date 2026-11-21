@@ -622,7 +622,12 @@ impl Model {
             // [[Set]] (10.5.9): trap `set( t, key, V, receiver )`.
             // One trap call per key, passed every stored value; the forward
             // once per store.
-            Cons::Store { key, src, site } => {
+            Cons::Store {
+                key,
+                src,
+                site,
+                region,
+            } => {
                 let t = self.proxies[p as usize].target;
                 let v = match self.proxies[p as usize].ops.get(&ProxyOp::SetTrap(key)) {
                     Some(&v) => v,
@@ -638,7 +643,7 @@ impl Model {
                 };
                 self.edge(src, v);
                 if !self.proxy_made(p, ProxyOp::SetFwd(key, src, site)) {
-                    self.cons(t, Cons::Store { key, src, site });
+                    self.cons(t, Cons::Store { key, src, site, region });
                 }
             }
             // [[HasProperty]] (10.5.7): trap `has( t, key )`.
