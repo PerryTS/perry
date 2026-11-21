@@ -32,6 +32,7 @@ pub(crate) use worker_async_dispose::install as install_worker_async_dispose;
 pub(crate) use worker_metadata::install_worker_metadata_getters;
 pub use worker_metadata::{
     register_worker_metadata_provider, worker_id, worker_object_with_id, WorkerMetadataField,
+    WORKER_OWN_KEYS,
 };
 
 type MessageChannelFactory = extern "C" fn() -> f64;
