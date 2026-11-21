@@ -194,15 +194,17 @@ fn the_solver_knows_every_key_the_realm_declares() {
 
 #[test]
 fn twin_a_key_the_description_lacks_is_reported() {
-    // Date is described from the realm (its key set is the realm's), so a twin
-    // key is reported; RegExp stays undescribed and keeps every key opaque.
+    // Date and RegExp are described from the realm (their key sets are the
+    // realm's), so a twin key on either is reported: Perry's RegExp owns no
+    // `lineMap` (nor any of node's legacy statics).
     let twin = "ns\tObject\tlineMap\nproto\tFunction.prototype\tlineMap\nns\tDate\tlineMap\nns\tRegExp\tlineMap\n";
     assert_eq!(
         missing(twin),
         [
             "Object.lineMap",
             "Function.prototype.lineMap",
-            "Date.lineMap"
+            "Date.lineMap",
+            "RegExp.lineMap"
         ]
     );
 }

@@ -1154,9 +1154,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
             NsProto::Constructor(BuiltinNs::Error),
             Some(&[("prototype", Mem::Proto)]),
         ),
-        // Undescribed: node's RegExp owns the legacy accessors (`$1`,
-        // `lastMatch`, `input` ...), which the realm does not declare.
-        BuiltinNs::RegExp => (NsProto::Function, None),
+        // Perry's RegExp owns exactly its realm declaration (`length`,
+        // `name`, `prototype`, `escape`, `@@species`): it has none of node's
+        // legacy accessors (`$1`, `lastMatch`, `input` ...).
+        BuiltinNs::RegExp => return realm_statics(ns, NsProto::Function),
         // Their own statics are the realm's declaration of them (node:
         // `length`, `name`, `prototype`, `Date.now`/`parse`/`UTC`,
         // `ArrayBuffer.isView`, `%TypedArray%.from`/`of`, `@@species`, ...): a
@@ -1692,9 +1693,10 @@ fn realm_described_statics_are_the_realm_declaration() {
         ns_member(BuiltinNs::ArrayBuffer, "@@__perry_wk_species"),
         Some(Some(Mem::Ctor))
     );
-    // node's RegExp owns legacy accessors the realm does not declare.
-    assert!(ns_statics(BuiltinNs::RegExp).members.is_none());
-    assert_eq!(ns_member(BuiltinNs::RegExp, "replace"), None);
+    // Perry's RegExp owns its realm declaration, no legacy accessors.
+    assert!(ns_statics(BuiltinNs::RegExp).members.is_some());
+    assert!(matches!(ns_member(BuiltinNs::RegExp, "escape"), Some(Some(_))));
+    assert_eq!(ns_member(BuiltinNs::RegExp, "$1"), Some(None));
 }
 
 #[test]
