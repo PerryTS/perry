@@ -2030,6 +2030,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let p = members::regexp_inherited(n).expect("inherited");
             realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
         }
+        // The same for a Date (21.4.4): `then`, read by a resolve function
+        // (27.2.1.3.2), is `Object.prototype`'s or absent.
+        ("Date", Some(n)) if members::date_inherited(n).is_some() => {
+            let p = members::date_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of Date.{n}"))
+        }
         (
             "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "Timer",
             Some(n),
