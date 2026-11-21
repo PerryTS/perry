@@ -3584,7 +3584,10 @@ fn ns_method_inner(
             let c = m.calls[call as usize].clone();
             let stored = m.node_l("worker-global-stored");
             loads::tok_load(m, g, Key::Named(a), stored);
-            let r = collections::cb_call(m, call, stored, ThisArg::Undef, c.args);
+            let r = {
+                let thrown = m.thrown;
+                collections::cb_call_in(m, call, stored, ThisArg::Undef, c.args, thrown)
+            };
             m.edge(r, c.ret);
         }
         // A global function the realm declares (`fetch`), while the global
@@ -3773,7 +3776,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret,
                         site: call2,
-                        region: m.thrown,
+                        region: m.calls[call as usize].region,
                     },
                 )
                 .is_some()
@@ -3811,7 +3814,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret: made,
                         site: c.site,
-                        region: m.thrown,
+                        region: m.calls[call as usize].region,
                     },
                 );
                 construct_into(m, this, mc, arr, made, c.ret);
@@ -3874,7 +3877,7 @@ fn ns_method_inner(
                             spread: vec![],
                             ret,
                             site: call2,
-                            region: m.thrown,
+                            region: m.calls[call as usize].region,
                         },
                         move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
                     );

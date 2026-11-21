@@ -598,7 +598,7 @@ impl Model {
                 spread: c.spread.clone(),
                 ret: c.ret,
                 site: c.site,
-                region: self.thrown,
+                region: self.calls[call as usize].region,
             },
         ) else {
             return;
@@ -1034,7 +1034,7 @@ impl Model {
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
-                        region: self.thrown,
+                        region: self.calls[call as usize].region,
                     },
                 ) else {
                     return;
@@ -1083,7 +1083,7 @@ impl Model {
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
-                        region: self.thrown,
+                        region: self.calls[call as usize].region,
                     },
                 ) else {
                     return;

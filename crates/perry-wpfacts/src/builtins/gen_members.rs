@@ -77,7 +77,7 @@ fn pulled(m: &mut Model, t: Tok, call: CallId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
-                region: m.thrown,
+                region: m.calls[call as usize].region,
             },
         );
         m.protocol_calls.insert(c2);

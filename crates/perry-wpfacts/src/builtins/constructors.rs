@@ -19,7 +19,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
-            region: m.thrown,
+            region: c.region,
         });
         m.why_mint(c2, None, u32::MAX);
         return new_builtin_ns(m, ns, c2);

@@ -447,7 +447,10 @@ impl Model {
     /// count past `n_prog` and are program sites all the same.
     pub(crate) fn prog_call(&self, call: CallId) -> bool {
         (call as usize) < self.sum.n_prog
-            || (self.calls.get(call as usize).is_some_and(|c| c.site == call)
+            || (self
+                .calls
+                .get(call as usize)
+                .is_some_and(|c| c.site == call)
                 && self.call_place.contains_key(&call))
     }
 
@@ -571,6 +574,7 @@ impl Model {
                     .map(|_| fresh(self, "native-call-spread"))
                     .collect::<Vec<_>>();
                 let ret = fresh(self, "native-call-ret");
+                let raise = fresh(self, "native-call-raise");
                 let tg = fresh(self, "native-call-target");
                 let id = self.calls.len() as CallId;
                 let site = if cs.site == id { id } else { cs.site };
@@ -583,7 +587,7 @@ impl Model {
                         spread,
                         ret,
                         site,
-                        region: cs.region,
+                        region: raise,
                     },
                 );
                 self.chain_calls.insert(k, (id, tg));
@@ -610,6 +614,11 @@ impl Model {
         }
         if sc.ret != cs.ret {
             self.edge(sc.ret, cs.ret);
+        }
+        // The shared call's own throw node reaches every joining maker's
+        // region, as its result reaches every joining maker's result.
+        if sc.region != cs.region {
+            self.edge(sc.region, cs.region);
         }
         if target != tg {
             self.edge(target, tg);
@@ -746,6 +755,9 @@ impl Model {
             if mc.ret != cs.ret {
                 self.edge(mc.ret, cs.ret);
             }
+            if mc.region != cs.region {
+                self.edge(mc.region, cs.region);
+            }
             if let (Some(a), Some(b)) = (target, tgt) {
                 if a != b {
                     self.edge(a, b);
@@ -753,7 +765,18 @@ impl Model {
             }
             return None;
         }
-        let id = self.solver_call_raw(by, cs);
+        // The one call is joined by every maker under the root: its own
+        // throw node reaches each maker's region (one edge per maker).
+        let region = cs.region;
+        let raise = self.node_l("solver-call-raise");
+        self.edge(raise, region);
+        let id = self.solver_call_raw(
+            by,
+            CallSite {
+                region: raise,
+                ..cs
+            },
+        );
         self.solver_keyed.insert(k, (id, target));
         Some(id)
     }

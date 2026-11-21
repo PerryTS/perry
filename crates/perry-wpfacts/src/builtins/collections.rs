@@ -110,7 +110,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             ) {
                 m.call_tok(call2, t, None);
@@ -136,7 +136,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread,
                     ret: c.ret,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             ) {
                 m.call_tok(call2, t, None);
@@ -242,7 +242,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: vec![],
                     ret: raw,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             );
             m.call_tok(call2, t, Some(t));
@@ -330,8 +330,11 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
-    let thrown = m.thrown;
-    cb_call_in(m, by, cb, this, args, thrown)
+    // CALLREGION (ECMA-262 7.3.14 Call, 14.15): the builtin calls `cb`
+    // synchronously, so an abrupt completion of `cb` is the builtin's
+    // own, thrown into the region of the call `by` made it for.
+    let region = m.calls[by as usize].region;
+    cb_call_in(m, by, cb, this, args, region)
 }
 
 /// `cb_call` whose callback throws into `region` (a job's own promise, or
@@ -409,7 +412,7 @@ fn recv_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         callee,
     )
@@ -532,7 +535,7 @@ fn regexp_species_constructor(m: &mut Model, t: Tok, call: CallId) {
             spread: vec![],
             ret: made,
             site: c.site,
-            region: m.thrown,
+            region: m.calls[call as usize].region,
         },
     );
     m.cons(sp, Cons::NewProgram { call: mc });
@@ -659,8 +662,8 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         settled
     };
     let thrown = m.thrown;
-    let _ = cb_call(m, by, res, ThisArg::Undef, vec![value]);
-    let _ = cb_call(m, by, rej, ThisArg::Undef, vec![thrown]);
+    let _ = cb_call_in(m, by, res, ThisArg::Undef, vec![value], thrown);
+    let _ = cb_call_in(m, by, rej, ThisArg::Undef, vec![thrown], thrown);
     tok
 }
 
@@ -687,7 +690,7 @@ pub(crate) fn method_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region: m.calls[call as usize].region,
         },
     );
     m.cons(
@@ -723,7 +726,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
-                region: m.thrown,
+                region: m.calls[call as usize].region,
             },
         ) else {
             return ret;
@@ -961,7 +964,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             spread: vec![],
             ret: made,
             site: c.site,
-            region: m.thrown,
+            region: m.calls[call as usize].region,
         },
     );
     construct_into(m, sc, Some(mc), out, made, c.ret);
@@ -1903,7 +1906,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
                 move |m, tg, nested| {
                     m.cons(

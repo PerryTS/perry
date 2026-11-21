@@ -216,7 +216,11 @@ pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// have written the key: the read takes ⊤ as before.
 pub fn global_value_stored(m: &Model, np: Tok, a: Atom) -> bool {
     let (top, own) = written_by(m, np, a, true, &|w| {
-        w.opaque || !w.stored.is_empty() || w.accessor || !w.getters.is_empty() || !w.setters.is_empty()
+        w.opaque
+            || !w.stored.is_empty()
+            || w.accessor
+            || !w.getters.is_empty()
+            || !w.setters.is_empty()
     });
     top || own
 }
@@ -230,7 +234,10 @@ pub fn global_maybe_deleted(m: &mut Model, np: Tok, a: Atom, dst: NodeId) {
     if !global_value_written(m, np, a) {
         return;
     }
-    if matches!(m.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+    if matches!(
+        m.atoms[a as usize].as_str(),
+        "undefined" | "NaN" | "Infinity"
+    ) {
         return;
     }
     m.add_prim(dst, prim::UNDEF);
@@ -1596,7 +1603,7 @@ pub(super) fn native_method(
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
                 move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
             );

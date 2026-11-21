@@ -50,7 +50,7 @@
 //! declaration runs only on a call of the value (never by name, never as a
 //! construct), and such a native is a value only as a fresh object's field.
 
-use super::collections::cb_call;
+use super::collections::cb_call_in;
 use super::*;
 use crate::pts::FxHashMap;
 use perry_hir::realm_manifest::{
@@ -1170,7 +1170,12 @@ fn run(
                     Some(cb) => {
                         let this = run.this_arg(m, this);
                         let args: Vec<NodeId> = args.iter().map(|a| run.operand(m, a)).collect();
-                        cb_call(m, call, cb, this, args)
+                        {
+                            // A declared effect says nothing of when the
+                            // callback runs: its throws stay program-wide.
+                            let thrown = m.thrown;
+                            cb_call_in(m, call, cb, this, args, thrown)
+                        }
                     }
                     None => m.node_l("cb-ret"),
                 };

@@ -187,7 +187,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         move |m, tg, call| {
             m.cons(
@@ -863,7 +863,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         move |m, tg, call| m.cons(tg, Cons::New { call }),
     );
