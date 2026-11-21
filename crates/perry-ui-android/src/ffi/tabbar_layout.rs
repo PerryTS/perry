@@ -226,7 +226,7 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
     // Fill (0) means children stretch to fill the cross-axis — we don't set gravity
     // so that MATCH_PARENT on children takes effect.
     if let Some(view_ref) = widgets::get_widget(handle) {
-        jni_bridge::with_env(|env| {
+        let orientation = jni_bridge::with_env(|env| {
             let _ = jni_bridge::push_local_frame(env, 8);
 
             // Determine orientation: 0=HORIZONTAL (HStack), 1=VERTICAL (VStack)
@@ -272,7 +272,18 @@ pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
-        })
+            orientation
+        });
+        // VStack: leading/center/trailing keep each child's own width (like
+        // UIStackView); only fill stretches. Done outside the env closure
+        // because it walks the children with its own JNI frame.
+        if orientation == 1 {
+            match alignment as i64 {
+                0 => widgets::set_vstack_fill(handle, true),
+                1 | 3 | 4 => widgets::set_vstack_fill(handle, false),
+                _ => {}
+            }
+        }
     }
 }
 
