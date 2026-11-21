@@ -284,31 +284,54 @@ impl<'a> Gen<'a> {
 
     /// A write of `vn` into local `id`: it reaches every narrowing's end
     /// node, and later reads see the end.
+    ///
+    /// An outlined for-in body (`Gen::for_in_body`) is its own function but
+    /// runs the enclosing function's statements: its write of the enclosing
+    /// function's local reaches that function's narrowings and collectors
+    /// too, as a capture of their nodes (the body's runs copy them per run
+    /// of the enclosing function, as they do the local's node).
     pub(crate) fn narrowed_write(&mut self, mi: u32, id: u32, vn: NodeId) {
-        let f = self.m.cur_fn;
+        let cur = self.m.cur_fn;
+        let fs = self.write_fns(cur);
         let ends: Vec<NodeId> = self
             .narrow
             .iter_mut()
-            .filter(|n| n.mi == mi && n.id == id && n.f == f && !n.in_update)
+            .filter(|n| n.mi == mi && n.id == id && fs.contains(&n.f) && !n.in_update)
             .map(|n| {
                 n.written = true;
                 n.end
             })
             .collect();
-        for e in ends {
-            self.m.edge(vn, e);
-        }
         // Rule DA: the write reaches the collector of every `if`/`switch`
         // being walked that writes the local on each normal completion.
         let cs: Vec<NodeId> = self
             .def_collect
             .iter()
-            .filter(|c| c.0 == mi && c.1 == id && c.2 == f)
+            .filter(|c| c.0 == mi && c.1 == id && fs.contains(&c.2))
             .map(|c| c.3)
             .collect();
-        for c in cs {
-            self.m.edge(vn, c);
+        for e in ends.into_iter().chain(cs) {
+            if self.m.node_fn[e as usize] != cur {
+                self.m.captures.insert((e, cur));
+            }
+            self.m.edge(vn, e);
         }
+    }
+
+    /// The functions whose locals a write in `f` writes: `f`, and while `f`
+    /// is an outlined for-in body being walked, the function enclosing it.
+    fn write_fns(&self, mut f: crate::model::FnIdx) -> Vec<crate::model::FnIdx> {
+        let mut fs = vec![f];
+        while f != NO_FN
+            && self
+                .for_in_key
+                .iter()
+                .any(|&(_, _, k)| self.m.node_fn[k as usize] == f)
+        {
+            f = self.m.funcs[f as usize].parent;
+            fs.push(f);
+        }
+        fs
     }
 
     /// Before walking a branch of an `if`: each narrowing's `written`.

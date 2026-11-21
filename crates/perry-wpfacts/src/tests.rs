@@ -130,6 +130,7 @@ mod for_in_enumerable_keys;
 mod for_in_key_read_enumerable;
 mod for_in_key_store;
 mod for_in_keys;
+mod for_in_outer_local;
 mod for_in_runs_per_key;
 mod for_of_next_argument;
 mod for_of_yield;
