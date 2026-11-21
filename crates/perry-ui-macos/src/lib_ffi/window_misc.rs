@@ -147,18 +147,25 @@ pub extern "C" fn perry_ui_table_get_filter_text(handle: i64) -> i64 {
 }
 
 // =============================================================================
-// Splitview / VBox stubs — these are iOS-only layout containers.
-// macOS uses NSStackView which handles all layouts fine.
-// Stubs are needed so the linker resolves the symbols.
+// SplitView — NSSplitView with a draggable vertical divider.
+// The dispatch table calls `SplitView()` with no arguments and
+// `splitViewAddChild(parent, child)` with two, so `_left_width` / `_index`
+// carry whatever is left in those registers and are ignored.
 // =============================================================================
 
 #[no_mangle]
 pub extern "C" fn perry_ui_splitview_create(_left_width: f64) -> i64 {
-    0
+    widgets::splitview::create()
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_splitview_add_child(_parent: i64, _child: i64, _index: i64) {}
+pub extern "C" fn perry_ui_splitview_add_child(parent: i64, child: i64, _index: i64) {
+    widgets::splitview::add_child(parent, child);
+}
+
+// =============================================================================
+// VBox stub — an iOS-only layout container; macOS uses NSStackView.
+// =============================================================================
 
 #[no_mangle]
 pub extern "C" fn perry_ui_vbox_create() -> i64 {
