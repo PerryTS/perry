@@ -769,6 +769,33 @@ impl Model {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
+            // Rule PXVAL: rules that read the Proxy as a value and run no
+            // internal method of it. `LenIndex`, `LenPermuted`, `IndexHole`,
+            // `IndexHoleIn` and `IndexKept` are rules of an Array exotic
+            // object (10.4.2), which a Proxy is not (`is_arr`): the index
+            // store into it is its [[Set]] (10.5.9), the Store arm.
+            // `ArrayLenArg`: `Array(p)` holds the Proxy as its one element
+            // (23.1.1.1 step 4: an argument that is no Number).
+            // `NotObjectProto` (7.2.16 IsStrictlyEqual), `ObjTagProbe` (a
+            // value a [[Get]] returned: an object there widens ToString, as
+            // any object does), `TopIfAny`, `TopIfTop` and `ForInMeet` test
+            // the value only. `ThisInst`: the run binds `this` = the Proxy;
+            // the body's reads of `this` reach the Load arm (the get trap).
+            Cons::LenIndex { .. }
+            | Cons::LenPermuted { .. }
+            | Cons::IndexHole
+            | Cons::IndexHoleIn { .. }
+            | Cons::IndexKept
+            | Cons::ArrayLenArg { .. }
+            | Cons::NotObjectProto { .. }
+            | Cons::ObjTagProbe { .. }
+            | Cons::TopIfAny { .. }
+            | Cons::TopIfTop { .. }
+            | Cons::ForInMeet { .. }
+            | Cons::ThisInst { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
             // ToPrimitive (7.1.1), and ToPropertyKey's (7.1.19, hint String).
             Cons::Implicit {
                 reason,
