@@ -863,7 +863,21 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
 pub(super) fn regexp_inherited(
     name: &str,
 ) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
-    let p = realm_entry("RegExp.prototype").filter(|e| e.kind == RealmKind::Prototype)?;
+    proto_inherited("RegExp.prototype", name)
+}
+
+/// `Date.prototype`'s realm declaration when a Date's member `name` is not
+/// one of its own (21.4.4), as `regexp_inherited`.
+pub(super) fn date_inherited(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    proto_inherited("Date.prototype", name)
+}
+
+/// The realm prototype `proto` when `name` is not one of its own members.
+fn proto_inherited(
+    proto: &str,
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let p = realm_entry(proto).filter(|e| e.kind == RealmKind::Prototype)?;
     let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
     (!own).then_some(p)
 }
