@@ -39,16 +39,20 @@ define_class!(
         fn slider_changed(&self, sender: &AnyObject) {
             let key = self.ivars().callback_key.get();
             crate::catch_callback_panic("slider callback", std::panic::AssertUnwindSafe(|| {
-                SLIDER_CALLBACKS.with(|cbs| {
-                    if let Some(&closure_f64) = cbs.borrow().get(&key) {
-                        let value: f64 = unsafe { msg_send![sender, doubleValue] };
+                // Copy the closure out and release the borrow before calling
+                // into JS: the callback may create another widget of this kind
+                // (which inserts into this map) or trigger a GC root scan
+                // (which borrows it mutably) — either panicked with
+                // "RefCell already borrowed" while the borrow was held.
+                let callback = SLIDER_CALLBACKS.with(|cbs| cbs.borrow().get(&key).copied());
+                if let Some(closure_f64) = callback {
+                    let value: f64 = unsafe { msg_send![sender, doubleValue] };
 
-                        let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
-                        unsafe {
-                            js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, value);
-                        }
+                    let closure_ptr = unsafe { js_nanbox_get_pointer(closure_f64) };
+                    unsafe {
+                        js_closure_call1(closure_ptr as *const u8, perry_ffi::JsThis::UNDEFINED, value);
                     }
-                });
+                }
             }));
         }
     }
