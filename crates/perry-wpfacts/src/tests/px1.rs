@@ -838,3 +838,34 @@ fn pxval_value_only_rules() {
     }
     assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
 }
+
+// PERFNOW53 rule PXSTR: a Proxy as an operand of the String constant folds
+// (indexOf, substring, replace's receiver and search value). RED on
+// 1ef1a09bb2: "E9 Proxy target (strindex)" / "(strsubstring)" /
+// "(strreplace)".
+const PXSTR_PRE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t: any = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+"#;
+const PXSTR: &[(&str, &str)] = &[
+    ("strindex", r#"const api = { ix: (s: string): number => ("ab" + N).indexOf(s) }; console.log(api.ix(N), api.ix(p as any));"#),
+    ("strreplace_search", r#"const api = { r: (s: string): string => ("ab" + N).replace(s, "x") }; console.log(api.r(N), api.r(p as any));"#),
+    ("strreplace_recv", r#"const api = { r: (s: string): string => s.replace("a", "x") }; console.log(api.r(N), api.r(p as any));"#),
+    ("strsubstring", r#"const api = { s: (k: number): string => ("abcdef" + N).substring(k) }; console.log(api.s(1), api.s(p as any));"#),
+];
+
+#[test]
+fn pxstr_string_fold_operands() {
+    let mut bad = Vec::new();
+    for (name, body) in PXSTR {
+        let (tops, held) = solve(&format!("{PXSTR_PRE}{body}\n"));
+        let holds: Vec<&String> = tops.iter().filter(|t| t.contains("E9")).collect();
+        if e9(&tops) || held {
+            bad.push(format!("{name} held={held} e9={holds:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
+}
