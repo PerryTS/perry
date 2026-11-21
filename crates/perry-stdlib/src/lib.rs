@@ -18,7 +18,7 @@
 // Anchors are `#[used(compiler)]`: retained by rustc, not ld64 dead-strip roots.
 #![feature(used_with_arg)]
 // `common::wrapper_imports`: weak defaults for the wrapper archives' symbols.
-#![cfg_attr(target_env = "msvc", feature(linkage))]
+#![cfg_attr(any(target_env = "msvc", target_os = "android"), feature(linkage))]
 // Re-export the updater crate so its #[no_mangle] FFI symbols are
 // retained in libperry_stdlib.a (Cargo would otherwise drop unused
 // rlib deps during the staticlib bundle step).

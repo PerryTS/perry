@@ -263,6 +263,8 @@ fn service_runtime_deadlines() {
         js_interval_timer_tick();
     }
     perry_runtime::event_pump::perry_poll();
+    // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+    perry_runtime::event_pump::js_loop_turn_nonblocking();
     // Preserve the previous 2 ms incremental-GC maintenance budget, but run it
     // at a deadline/wake boundary instead of after a fixed UI timer message.
     unsafe {

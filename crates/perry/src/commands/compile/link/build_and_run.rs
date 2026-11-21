@@ -94,6 +94,15 @@ pub(crate) fn build_and_run_link(
              (glibc) Linux target, or drop perry/ui for a headless musl build."
         );
     }
+    // Android: the version script exports only the JNI entry points (see
+    // below). Companion shared libraries bundled next to libperry_app.so
+    // (native libraries whose `lib_name` is a `.so`, e.g. a Play Billing
+    // bridge built on perry-ffi) resolve Perry's runtime C surface
+    // (`perry_ffi_*`, `js_*`) from it at load time, so whatever they import
+    // is added to the export list once those libraries are known.
+    let mut android_exports_script: Option<PathBuf> = None;
+    let mut android_companion_imports: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
     let is_windows = is_windows_target(target);
     let is_cross_windows = is_windows && !cfg!(target_os = "windows");
     let is_cross_ios = is_ios && !cfg!(target_os = "macos");
@@ -265,11 +274,9 @@ pub(crate) fn build_and_run_link(
             if is_android {
                 let script = ctx.cache_dir.join("android-exports.map");
                 fs::create_dir_all(&ctx.cache_dir)?;
-                fs::write(
-                    &script,
-                    "{\n  global:\n    Java_*;\n    JNI_On*;\n    ANativeActivity_on*;\n  local:\n    *;\n};\n",
-                )?;
+                fs::write(&script, android_exports_map(&android_companion_imports))?;
                 cmd.arg(format!("-Wl,--version-script={}", script.display()));
+                android_exports_script = Some(script);
             }
         } else if is_cross_ios || is_cross_visionos || is_cross_macos || is_cross_tvos {
             // ld64.lld called directly — no -Wl, prefix needed
@@ -1595,6 +1602,10 @@ pub(crate) fn build_and_run_link(
                             let stem = lib_name.strip_prefix("lib").unwrap_or(lib_name);
                             let stem = stem.strip_suffix(".so").unwrap_or(stem);
                             cmd.arg(format!("-l{}", stem));
+                            for symbol in perry_imports_of_shared_lib(&lib) {
+                                cmd.arg(format!("-Wl,-u,{symbol}"));
+                                android_companion_imports.insert(symbol);
+                            }
                         } else {
                             // When building a plugin host on macOS, force-load plugin-related native
                             // libraries so their symbols are available for dlopen'd plugin dylibs.
@@ -1962,6 +1973,12 @@ pub(crate) fn build_and_run_link(
         }
     }
 
+    if let Some(script) = &android_exports_script {
+        if !android_companion_imports.is_empty() {
+            fs::write(script, android_exports_map(&android_companion_imports))?;
+        }
+    }
+
     let link_cache_status = prepare_link_cache_status(
         &ctx.cache_dir,
         target,
@@ -2044,6 +2061,42 @@ pub(crate) fn build_and_run_link(
 /// `-Zbuild-std` / `-Zbuild-std-features` exactly as the workspace's
 /// `.cargo/config.toml` `[unstable]` table sets them for every perry archive.
 /// A native crate built outside the workspace gets them on its command line.
+/// The Android version script: the JNI entry points (patterns: lld rejects
+/// a named global the program doesn't define) plus, by name, the Perry
+/// symbols that bundled companion `.so` files import.
+fn android_exports_map(companion_imports: &std::collections::BTreeSet<String>) -> String {
+    let mut map =
+        String::from("{\n  global:\n    Java_*;\n    JNI_On*;\n    ANativeActivity_on*;\n");
+    for symbol in companion_imports {
+        map.push_str(&format!("    {symbol};\n"));
+    }
+    map.push_str("  local:\n    *;\n};\n");
+    map
+}
+
+/// The undefined dynamic symbols of a shared library that Perry's runtime
+/// or stdlib provide (`perry_*` / `js_*`). Empty if llvm-nm is unavailable.
+fn perry_imports_of_shared_lib(lib: &Path) -> Vec<String> {
+    let Some(nm) = find_llvm_tool("llvm-nm") else {
+        return Vec::new();
+    };
+    let Ok(out) = Command::new(nm)
+        .args(["-D", "--undefined-only", "--format=just-symbols"])
+        .arg(lib)
+        .output()
+    else {
+        return Vec::new();
+    };
+    if !out.status.success() {
+        return Vec::new();
+    }
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(|l| l.trim().split('@').next().unwrap_or("").to_string())
+        .filter(|s| s.starts_with("perry_") || s.starts_with("js_"))
+        .collect()
+}
+
 fn workspace_build_std_args() -> Vec<String> {
     const CONFIG: &str = include_str!("../../../../../../.cargo/config.toml");
     let config: toml::Table = CONFIG.parse().expect("workspace .cargo/config.toml parses");

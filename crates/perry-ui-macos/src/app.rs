@@ -1335,6 +1335,7 @@ define_class!(
             crate::catch_callback_panic("pump", std::panic::AssertUnwindSafe(|| {
                 extern "C" {
                     fn js_run_stdlib_pump();
+                    fn js_loop_turn_nonblocking();
                     // perry-runtime's embedder GC stepper: spends up to
                     // `budget_us` advancing an ACTIVE budgeted collection
                     // in bounded work units; a cheap status probe when no
@@ -1362,6 +1363,8 @@ define_class!(
                     // Process deferred promise resolutions from perry-stdlib tokio workers.
                     // No-op if perry-stdlib is not linked (function pointer not registered).
                     js_run_stdlib_pump();
+                    // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+                    js_loop_turn_nonblocking();
                     // #6183 (2026-07-09 GC audit): spend a bounded idle
                     // budget on any active budgeted GC cycle at the pump
                     // boundary — the JS stack is fully unwound here, so

@@ -30,9 +30,6 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 
     sourceSets {
         getByName("main") {
@@ -54,4 +51,12 @@ dependencies {
     // perry/background (#538) — WorkManager-backed deferred / periodic
     // tasks. PerryBackgroundWorker.kt extends `androidx.work.Worker`.
     implementation("androidx.work:work-runtime-ktx:2.9.0")
+}
+
+// Kotlin 2.2+ (needed by libraries such as Play Billing 9, whose metadata is
+// 2.3) rejects the old `kotlinOptions {}` block.
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }

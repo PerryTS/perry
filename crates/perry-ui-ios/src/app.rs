@@ -719,6 +719,11 @@ define_class!(
                     // this, `await fetch(...)` never resolves on iOS — the
                     // macOS pump has always called it; iOS omitted it.
                     js_run_stdlib_pump();
+                    // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+                    {
+                        extern "C" { fn js_loop_turn_nonblocking(); }
+                        js_loop_turn_nonblocking();
+                    }
                     // #6183 (2026-07-09 GC audit): spend a bounded idle
                     // budget on any active budgeted GC cycle at the pump
                     // boundary — the JS stack is fully unwound here, so this

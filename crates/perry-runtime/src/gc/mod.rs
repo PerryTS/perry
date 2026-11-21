@@ -1536,6 +1536,12 @@ pub unsafe extern "C" fn js_gc_init_with_layouts(
 /// See `emit_schedule_liveness_verdict`.
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
+    // A UI host that runs `main()` on its UI thread and keeps dispatching
+    // callbacks there afterwards (Android) is not exiting: keep the thread's
+    // loop and tapes, which those callbacks still use.
+    if crate::event_pump::host_keeps_thread_after_main() {
+        return;
+    }
     crate::json_tape_store::release_current_thread_lazy_tapes();
     // Every process-exit path funnels through here — the generated exit
     // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own

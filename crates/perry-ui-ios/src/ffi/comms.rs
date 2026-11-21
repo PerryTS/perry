@@ -100,13 +100,35 @@ pub extern "C" fn __wrapper_hone_ws_close(handle: f64) {
 #[no_mangle]
 pub extern "C" fn perry_ui_show_toast(_msg_ptr: i64) {}
 
+/// `Text(content, id)`: register the label under `id` so `state.set(...)`
+/// (lowered to `setText(id, …)`) can find it. Port of the macOS fix for
+/// #599; the iOS stub ignored the id, so no state-bound text ever updated.
 #[no_mangle]
-pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, _id_ptr: i64) -> i64 {
-    crate::ffi::widgets_basic::perry_ui_text_create(text_ptr)
+pub extern "C" fn perry_ui_text_create_with_id(text_ptr: i64, id_ptr: i64) -> i64 {
+    let handle = crate::ffi::widgets_basic::perry_ui_text_create(text_ptr);
+    if id_ptr != 0 {
+        // SAFETY: the FFI contract supplies a runtime string.
+        let id = unsafe { perry_ffi::copy_string_from_raw(id_ptr as *const u8) };
+        crate::widgets::text_registry::register_text_id_handler(handle, id.as_ptr(), id.len());
+    }
+    handle
 }
 
+/// `setText(id, value)`: direct C-ABI entry point (port of macOS).
 #[no_mangle]
-pub extern "C" fn perry_ui_set_text(_id_ptr: i64, _value_ptr: i64) {}
+pub extern "C" fn perry_ui_set_text(id_ptr: i64, value_ptr: i64) {
+    if id_ptr == 0 {
+        return;
+    }
+    // SAFETY: non-null FFI arguments point to runtime strings.
+    let id = unsafe { perry_ffi::copy_string_from_raw(id_ptr as *const u8) };
+    let value = (value_ptr != 0)
+        .then(|| unsafe { perry_ffi::copy_string_from_raw(value_ptr as *const u8) });
+    let (value_data, value_len) = value
+        .as_ref()
+        .map_or((std::ptr::null(), 0), |value| (value.as_ptr(), value.len()));
+    crate::widgets::text_registry::set_text_handler(id.as_ptr(), id.len(), value_data, value_len);
+}
 
 // =============================================================================
 // perry/media — streaming media playback (issue #351). AVPlayer-backed.
