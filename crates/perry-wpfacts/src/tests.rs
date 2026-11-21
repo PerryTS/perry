@@ -1744,5 +1744,6 @@ mod w3j;
 mod w3k;
 mod w3l;
 mod worker_msg;
+mod regexp_statics;
 mod worker_then;
 mod whyhold1;
