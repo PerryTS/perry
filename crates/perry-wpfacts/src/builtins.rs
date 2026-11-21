@@ -3550,6 +3550,43 @@ fn ns_method_inner(
             let e = effects::declared_member(&format!("process.{n}")).expect("the guard found it");
             effects::run_function(m, e, call);
         }
+        // WGPOST: `postMessage(v, t)`, a bare call on the global sentinel.
+        // S8 (gen_call.rs) keeps it a member call only in a module a Worker
+        // may run (`Model::worker_side`); on the main realm the name is
+        // [[Get]](globalThis, "postMessage"), absent: a ReferenceError that
+        // calls nothing. In the Worker it is the Worker global's own
+        // `postMessage` (perry-stdlib worker_surface.rs
+        // `install_web_worker_globals`, `web_worker_post_message`), which
+        // ignores `this` and is Worker.postMessage's structured clone: its
+        // model (`worker_post_message`). A write under the name by code the
+        // model does not see (now, or later in the solve: the replay) is the
+        // unknown call again. A program store under the name (named, or
+        // under a key that may spell it: R-GLOBAL, program stores are
+        // exact) replaces the native's property: [[Get]](globalThis,
+        // "postMessage") reads it (`loads::tok_load`, the global's field of
+        // a program-owned key), and the call calls it with `this` undefined
+        // (ECMA-262 13.3.6.1 EvaluateCall, 9.1.1.4.6 GetBindingValue), as
+        // the bare call of a module no Worker runs does (gen_call.rs S8).
+        (BuiltinNs::Other, "postMessage")
+            if !m.unit_mode
+                && native_protocol::sentinel_user_global(m, "postMessage")
+                && m.calls[call as usize].spread.is_empty() =>
+        {
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom("postMessage");
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, "argument of builtin Other.postMessage");
+                m.cur_this = prev;
+            } else {
+                collections::worker_post_message(m, call);
+            }
+            let c = m.calls[call as usize].clone();
+            let stored = m.node_l("worker-global-stored");
+            loads::tok_load(m, g, Key::Named(a), stored);
+            let r = collections::cb_call(m, call, stored, ThisArg::Undef, c.args);
+            m.edge(r, c.ret);
+        }
         // A global function the realm declares (`fetch`), while the global
         // holds it: what its declaration says. A write under the name (now,
         // or later in the solve: the replay) is the unknown call again.

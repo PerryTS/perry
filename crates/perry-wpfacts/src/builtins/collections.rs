@@ -2195,6 +2195,62 @@ fn dataview_access(n: &str) -> Option<(bool, bool)> {
     }
 }
 
+/// `postMessage(v, transfer)` of a Worker (`worker_method`) and of the
+/// Worker global (WGPOST, builtins.rs: perry-stdlib worker_surface.rs
+/// `web_worker_post_message` ignores `this` and calls the same
+/// `js_worker_threads_post_message`): StructuredSerialize of `v`, the
+/// transfer list's items detached, `undefined` returned. A call with a
+/// spread argument is not this (the callers keep the generic path).
+pub(super) fn worker_post_message(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if let Some(&v) = c.arg(0) {
+        let r = m.reason("Worker postMessage value cloned");
+        m.cons(
+            v,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Clone,
+            },
+        );
+    }
+    if let Some(&tl) = c.arg(1) {
+        let rb = m.reason("B3 transfer list");
+        let inner = m.node_l("worker-transfer");
+        m.cons(
+            tl,
+            Cons::Load {
+                key: Key::any(),
+                dst: inner,
+            },
+        );
+        let ta = m.atom("transfer");
+        m.cons(
+            tl,
+            Cons::Load {
+                key: Key::Named(ta),
+                dst: inner,
+            },
+        );
+        let items = m.node_l("worker-transfer-item");
+        m.edge(inner, items);
+        m.cons(
+            inner,
+            Cons::Load {
+                key: Key::any(),
+                dst: items,
+            },
+        );
+        m.cons(
+            items,
+            Cons::Hard {
+                kind: Hard::B3Transfer,
+                reason: rb,
+            },
+        );
+    }
+    ret_prim(m, call, prim::UNDEF);
+}
+
 /// W-HOST (LADDER18): a method of the host Worker `t` (perry-stdlib
 /// worker_threads/worker_surface.rs, worker_pump.rs; Node worker_threads,
 /// HTML Workers). `false`: a member this does not describe (generic).
@@ -2218,54 +2274,7 @@ fn worker_method(m: &mut Model, t: Tok, n: &str, call: CallId) -> bool {
         return false;
     }
     match n {
-        "postMessage" => {
-            if let Some(&v) = c.arg(0) {
-                let r = m.reason("Worker postMessage value cloned");
-                m.cons(
-                    v,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Clone,
-                    },
-                );
-            }
-            if let Some(&tl) = c.arg(1) {
-                let rb = m.reason("B3 transfer list");
-                let inner = m.node_l("worker-transfer");
-                m.cons(
-                    tl,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: inner,
-                    },
-                );
-                let ta = m.atom("transfer");
-                m.cons(
-                    tl,
-                    Cons::Load {
-                        key: Key::Named(ta),
-                        dst: inner,
-                    },
-                );
-                let items = m.node_l("worker-transfer-item");
-                m.edge(inner, items);
-                m.cons(
-                    inner,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: items,
-                    },
-                );
-                m.cons(
-                    items,
-                    Cons::Hard {
-                        kind: Hard::B3Transfer,
-                        reason: rb,
-                    },
-                );
-            }
-            ret_prim(m, call, prim::UNDEF);
-        }
+        "postMessage" => worker_post_message(m, call),
         "addEventListener"
         | "on"
         | "once"
