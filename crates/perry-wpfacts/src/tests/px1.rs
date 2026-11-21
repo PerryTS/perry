@@ -809,3 +809,32 @@ fn pxcallr_keep_callable_method_stays_e9() {
         "callable target: {tops:?}"
     );
 }
+
+// PERFNOW53 rule PXVAL: the Array-only and value-only rules on a Proxy (c09:
+// three.js setupRenderTarget, an index store whose receiver may be a Proxy).
+// RED on 1ef1a09bb2: "E9 Proxy target (lenindex)" / "(thisinst)".
+const PXVAL_PRE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t: any = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+"#;
+const PXVAL: &[(&str, &str)] = &[
+    ("lenindex", r#"const api = { put: (a: any, i: number) => { a[i] = 1; return a; } };
+console.log(api.put([0, 0], N.length).length, api.put(p, 1).n);"#),
+    ("thisinst", r#"const o = { f(this: any) { return this.n; } }; console.log(o.f.call(N), o.f.call(p));"#),
+];
+
+#[test]
+fn pxval_value_only_rules() {
+    let mut bad = Vec::new();
+    for (name, body) in PXVAL {
+        let (tops, held) = solve(&format!("{PXVAL_PRE}{body}\n"));
+        let holds: Vec<&String> = tops.iter().filter(|t| t.contains("E9")).collect();
+        if e9(&tops) || held {
+            bad.push(format!("{name} held={held} e9={holds:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
+}
