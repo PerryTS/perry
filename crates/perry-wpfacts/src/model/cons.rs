@@ -937,6 +937,14 @@ pub enum Cons {
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
+    /// Rule PXCALL: the node is the target of Proxy `p`, which a program
+    /// call or `new` has as its callee. ProxyCreate (10.5.14 step 7) gives
+    /// `p` a [[Call]] (and [[Construct]]) only when its target is callable:
+    /// a value here that may be callable gives `p` its [[Call]]
+    /// (`Model::proxy_callable`); a non-callable one adds nothing (the
+    /// call throws a TypeError, 7.3.14 Call step 2: no trap runs). Re-made
+    /// as the node's tokens grow, never decided once.
+    ProxyCallee { p: u32 },
     /// The node holds prototypes on a named-key accessor lookup's chain:
     /// `pass` ⊇ the holders the lookup passes through (and continues
     /// above), `stop` ⊇ the prototypes where a declared member ends it.
@@ -1164,6 +1172,7 @@ impl Cons {
             Cons::ThisInst { .. } => "thisinst",
             Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",
+            Cons::ProxyCallee { .. } => "proxycallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",
             Cons::VisitStop { .. } => "visitstop",

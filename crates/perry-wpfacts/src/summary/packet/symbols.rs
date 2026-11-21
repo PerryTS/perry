@@ -590,6 +590,7 @@ impl Model {
                 self.packet_token(f, packet)
             ),
             Cons::BuiltinCallee => format!("BuiltinCallee"),
+            Cons::ProxyCallee { p } => format!("ProxyCallee p={p}"),
             Cons::HolderStep { key, pass, stop } => format!(
                 "HolderStep key={:?} pass={:?} stop={:?}",
                 self.packet_key(key),

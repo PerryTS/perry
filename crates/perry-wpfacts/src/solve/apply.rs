@@ -3088,6 +3088,15 @@ impl Model {
                     self.accessor_hit(origin, h, key, act);
                 }
             }
+            // Rule PXCALL: a value of Proxy `p`'s target that may be
+            // callable (not an ordinary object without [[Call]],
+            // `no_call_tok`; a marker, ⊤ or a builtin may be one) gives `p`
+            // its [[Call]]. A Proxy here reaches `proxy_apply` instead.
+            Cons::ProxyCallee { p } => {
+                if toks.iter().any(|&t| !self.no_call_tok(t)) {
+                    self.proxy_callable(p);
+                }
+            }
             Cons::BuiltinCallee => {
                 for &t in toks {
                     if self.per_receiver_callee(t) {

@@ -44,6 +44,12 @@ pub struct ProxyRec {
     /// first use made (its trap call, its forward to the target), which
     /// every later use of the class joins.
     pub ops: crate::pts::FxHashMap<ProxyOp, NodeId>,
+    /// Rule PXCALL: the target may be callable, so the Proxy has a
+    /// [[Call]] (`Model::proxy_callable`).
+    pub callable: bool,
+    /// Rule PXCALL: the calls of the Proxy (callee node, rule) made while
+    /// its target held no callable value; they run when it gets one.
+    pub calls: Vec<(NodeId, Cons)>,
 }
 
 /// An operation class of one Proxy. Each is made once: its trap call and
@@ -72,6 +78,9 @@ pub enum ProxyOp {
     OwnKeys,
     /// [[GetPrototypeOf]]: the `getPrototypeOf` trap (a for-in walk).
     ProtoTrap,
+    /// Rule PXCALL: the `ProxyCallee` rule of the called Proxy (the id) on
+    /// this Proxy's target: a Proxy is callable when its target is.
+    Callee(u32),
 }
 
 impl Model {
@@ -96,6 +105,8 @@ impl Model {
                     handler,
                     degraded: false,
                     ops: Default::default(),
+                    callable: false,
+                    calls: Vec::new(),
                 });
                 self.proxy_index.insert(key, p);
                 p
@@ -539,6 +550,58 @@ impl Model {
         );
     }
 
+    /// Rule PXCALL: the callee node `n` of a call or `new` (rule `c`) holds
+    /// Proxy `p`.
+    /// ProxyCreate (10.5.14 step 7) gives `p` a [[Call]] and [[Construct]]
+    /// only when its target is callable (a constructor); otherwise the
+    /// call is that of an ordinary object without [[Call]] (7.3.14 Call
+    /// step 2, a TypeError): no trap runs, nothing flows. The decision is
+    /// the target node's rule (`Cons::ProxyCallee`), re-made as its tokens
+    /// grow; until a callable value reaches it, the call waits.
+    fn proxy_call(&mut self, n: NodeId, c: Cons, p: u32) {
+        if self.proxies[p as usize].callable {
+            self.proxy_degrade(p, "call");
+            return self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+        }
+        // Array.prototype.toString (23.1.3.36 step 3) on a non-callable
+        // `join`: the String of Object.prototype.toString, as for any
+        // object without [[Call]] (`call_tok`).
+        if let Cons::Call { call } | Cons::CallThis { call, .. } = c {
+            if self.tostring_join_calls.contains(&call) {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::STR);
+            }
+        }
+        self.proxies[p as usize].calls.push((n, c));
+        self.proxy_callee_rule(p, p);
+    }
+
+    /// Rule PXCALL: the `ProxyCallee` rule of called Proxy `of` on the
+    /// target of Proxy `p` (`of` itself, or a Proxy its target holds: a
+    /// Proxy is callable when its target is). Once per pair.
+    fn proxy_callee_rule(&mut self, of: u32, p: u32) {
+        if !self.proxy_made(p, ProxyOp::Callee(of)) {
+            let t = self.proxies[p as usize].target;
+            self.cons(t, Cons::ProxyCallee { p: of });
+        }
+    }
+
+    /// Rule PXCALL: Proxy `p`'s target may be callable. The Proxy's
+    /// [[Call]] is the `apply` trap or the forward (10.5.12), its
+    /// [[Construct]] the `construct` trap or the forward (10.5.13): not
+    /// modeled, today's path (the degrade, and each waiting call of ⊤).
+    pub(crate) fn proxy_callable(&mut self, p: u32) {
+        if self.proxies[p as usize].callable {
+            return;
+        }
+        self.proxies[p as usize].callable = true;
+        self.proxy_degrade(p, "call");
+        let calls = std::mem::take(&mut self.proxies[p as usize].calls);
+        for (n, c) in calls {
+            self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+        }
+    }
+
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
@@ -619,6 +682,13 @@ impl Model {
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
             Cons::Identity { .. } | Cons::Raise { .. } => {}
+            // Rule PXCALL: a call or `new` of the Proxy (`proxy_call`).
+            Cons::Call { .. }
+            | Cons::CallThis { .. }
+            | Cons::New { .. } => self.proxy_call(n, *c, p),
+            // Rule PXCALL: Proxy `p` in the target of called Proxy `of`:
+            // `of` is callable when `p` is, so the rule moves to `p`'s target.
+            Cons::ProxyCallee { p: of } => self.proxy_callee_rule(of, p),
             // A test of the value itself: `=== null`, `=== lit`, `!== null`
             // (IsStrictlyEqual 7.2.16, no internal method), ToBoolean (7.1.2:
             // an object is truthy), the `??` and `&&` operands, typeof

@@ -561,6 +561,7 @@ pub fn map_cons(
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
+        ProxyCallee { p } => ProxyCallee { p },
         HolderStep { key, pass, stop } => HolderStep {
             key,
             pass: n(pass),

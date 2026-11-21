@@ -362,7 +362,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::ThisTo { .. }
         | Cons::ThisInst { .. }
         | Cons::OverrideThis { .. }
-        | Cons::BuiltinCallee => Reject(R5Proto(c.kind_name().into())),
+        | Cons::BuiltinCallee
+        | Cons::ProxyCallee { .. } => Reject(R5Proto(c.kind_name().into())),
         Cons::NativeThis { .. } => Reject(R5Native {
             site: "native".into(),
             slot: "this".into(),

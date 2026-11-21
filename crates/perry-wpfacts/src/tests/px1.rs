@@ -476,13 +476,15 @@ fn px10_proxy_as_a_computed_store_key() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: a called Proxy still takes the old path (E9), also when it is a
-// store key.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): a call of the
+// store-key Proxy, whose target (an object literal) is not callable: a
+// TypeError, no trap runs (10.5.14 step 7, 7.3.14 Call step 2).
 #[test]
-fn px10_keep_called_proxy_key_stays_e9() {
+fn px10_called_proxy_key_runs_no_trap() {
     let src = KEY.replace("g[p] = 7;", "g[p] = 7;\ntry { p(); } catch (e) {}");
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PXSO1 R1: a Proxy whose target may be itself (one birth site in a loop):
@@ -699,6 +701,64 @@ console.log(api.gv("AB" + N), api.gv(p as any));
 #[test]
 fn pxcase_proxy_case_map_receiver() {
     let (tops, held) = solve(PROXY_CASE);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// PERFNOW51 rule PXCALL: a Proxy has a [[Call]] / [[Construct]] only when its
+// target is callable (ProxyCreate 10.5.14 step 7). Over an object literal, a
+// plain call and `new` each throw a TypeError (7.3.14 Call step 2, 7.3.15
+// Construct) and run no trap. RED on PXCASE: proxy_apply had no call arm.
+const PROXY_CALL: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { n: N };
+  const px: any = new Proxy(api, { get(t: any, k: any) { return k === "self" ? px : t[k]; } });
+  return px;
+}
+const p = mk();
+try { p(); } catch (e) { console.log(e instanceof TypeError); }
+try { new p(); } catch (e) { console.log(e instanceof TypeError); }
+console.log(p.n, typeof p);
+"#;
+
+#[test]
+fn pxcall_non_callable_target_has_no_call() {
+    let (tops, held) = solve(PROXY_CALL);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a callable target gives the Proxy a [[Call]] (the `apply` trap or
+// the forward, 10.5.12), not modeled: the old path (an "E9 Proxy target"
+// degrade). Also when the target node holds an object literal first and a
+// function stored after the call (one birth site in a loop: the rule is
+// the target node's, re-made as its tokens grow), and through a Proxy of a
+// Proxy (callable when its target is). The Proxies are made in functions:
+// a call of a `new Proxy` binding is its own HIR form (`ProxyApply`).
+#[test]
+fn pxcall_keep_callable_target_stays_e9() {
+    let wraps = "function wrap1(t: any): any { return new Proxy(t, {}); }\nfunction wrap2(t: any): any { return new Proxy(t, {}); }\n";
+    let late = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst box: any = {{ f: {{ a: 1 }} }};\nfor (let i = 0; i < 2; i++) {{ const q: any = wrap1(box.f); try {{ q(); }} catch (e) {{}} box.f = (): string => N; }}"),
+    );
+    let nested = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst q: any = wrap1(wrap2(function (): string {{ return N; }}));\ntry {{ q(); }} catch (e) {{}}"),
+    );
+    for src in [late, nested] {
+        let (tops, _) = solve(&src);
+        assert!(
+            tops.iter().any(|t| t.starts_with("E9 Proxy target")),
+            "callable target: {tops:?}"
+        );
+    }
+    // A Proxy of a Proxy over an object literal: no [[Call]] either.
+    let plain = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst q: any = wrap1(wrap2({{ a: 1 }}));\ntry {{ q(); }} catch (e) {{}}"),
+    );
+    let (tops, held) = solve(&plain);
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
 }

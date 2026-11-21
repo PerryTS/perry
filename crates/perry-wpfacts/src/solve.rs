@@ -926,6 +926,7 @@ impl Model {
                     | Cons::ThisInst { .. }
                     | Cons::NativeThis { .. }
                     | Cons::BuiltinCallee
+                    | Cons::ProxyCallee { .. }
                     | Cons::HolderStep { .. }
                     | Cons::VisitHolders { .. }
                     | Cons::VisitStop { .. }

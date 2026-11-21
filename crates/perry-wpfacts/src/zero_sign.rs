@@ -195,6 +195,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NewNamed { .. }
         | Cons::CallArgs { .. }
         | Cons::BuiltinCallee
+        | Cons::ProxyCallee { .. }
         | Cons::ThisTo { .. }
         | Cons::DeleteKey { .. }
         | Cons::DefineKey { .. }
