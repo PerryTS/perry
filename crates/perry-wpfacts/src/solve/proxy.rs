@@ -796,6 +796,25 @@ impl Model {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
+            // Rule PXSTR: the constant folds of String and RegExp methods
+            // (`StrIndex` KEY2a, `StrSubstring` KEY2b, `StrReplace` M6,
+            // `ClassReplace` M9, `Captures` RT) read the operand's String
+            // constants only; an object operand gives any Number or String,
+            // as every object does. The operand's ToString and
+            // ToIntegerOrInfinity (7.1.17, 7.1.5: ToPrimitive 7.1.1) are its
+            // own rule (`coerce_operands` / `to_prim`: `Cons::Implicit`
+            // ToPrimitive, `proxy_to_primitive`), and so are replace's
+            // GetMethod(searchValue, @@replace) (22.1.3.19 step 2,
+            // `sym_call`: the Load arm, the get trap) and a callable
+            // replaceValue (step 6, `replace_value`).
+            Cons::StrIndex { .. }
+            | Cons::StrSubstring { .. }
+            | Cons::StrReplace { .. }
+            | Cons::ClassReplace { .. }
+            | Cons::Captures { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
             // ToPrimitive (7.1.1), and ToPropertyKey's (7.1.19, hint String).
             Cons::Implicit {
                 reason,
