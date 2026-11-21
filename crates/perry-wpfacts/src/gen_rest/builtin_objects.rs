@@ -1134,8 +1134,9 @@ impl<'a> Gen<'a> {
     ///   `addEventListener`) gets an event of `[[WorkerEvent]]`: for a
     ///   message a fresh MessageEvent (chain %MessageEvent.prototype% ->
     ///   %Event.prototype% -> %Object.prototype%) whose `[[data]]` is the
-    ///   clone tree; for any other event a fresh plain record whose values
-    ///   are the Worker (`target`, `currentTarget`) and primitives.
+    ///   clone tree; for any other event a fresh plain record (HOSTEV) of
+    ///   own `type`, `target` and `currentTarget` (the Worker),
+    ///   `defaultPrevented` and `constructor` (a plain `{ name: "Event" }`).
     /// - A property handler is called with `this` = the Worker and the
     ///   event; its throw is reported by the host
     ///   (`run_resource_scope_catching`): no program `catch` sees it.
@@ -1185,15 +1186,34 @@ impl<'a> Gen<'a> {
         for &x in &tree {
             self.m.add_tok(data, x);
         }
-        // Any other event (`error`, `messageerror`): the plain object of
-        // worker_threads.rs `event_object` (own type, target,
-        // currentTarget, defaultPrevented, constructor; Object.prototype).
+        // HOSTEV: any other event (`error`, `messageerror`, `exit`) is the
+        // plain object of perry-stdlib worker_threads.rs `event_object`
+        // (Object.prototype): exactly the own data fields `type` (the event
+        // name), `target` and `currentTarget` (the Worker),
+        // `defaultPrevented` (false) and `constructor`, a fresh plain object
+        // whose one own field `name` is "Event". No clone value reaches it
+        // (worker_pump.rs hands `data` to the "message" event only), so a
+        // read of any other key (`e.data`) is the Object.prototype chain.
         let (ev, _) = self.bobj(mi, "hostrecord");
-        let efa = self.m.field_any(ev);
-        self.m.add_prim(efa, prim::ALL);
-        self.m.add_tok(efa, t);
-        for &x in &tree {
-            self.m.add_tok(efa, x);
+        let (ctor, _) = self.bobj(mi, "hostrecord");
+        let na = self.m.atom("name");
+        let name = self.m.field(ctor, na);
+        self.m.add_prim(name, prim::STR);
+        for (k, p, v) in [
+            ("type", prim::STR, None),
+            ("target", 0, Some(t)),
+            ("currentTarget", 0, Some(t)),
+            ("defaultPrevented", prim::FALSE, None),
+            ("constructor", 0, Some(ctor)),
+        ] {
+            let a = self.m.atom(k);
+            let f = self.m.field(ev, a);
+            if p != 0 {
+                self.m.add_prim(f, p);
+            }
+            if let Some(v) = v {
+                self.m.add_tok(f, v);
+            }
         }
         let ea = crate::builtins::worker_slot_atom(&mut self.m, "WorkerEvent");
         let evn = self.m.field_r(t, ea);
