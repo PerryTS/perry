@@ -926,7 +926,7 @@ fn condvar_park(budget: Duration) {
     spin_streak_reset();
 }
 
-thread_local! {
+crate::perry_thread_local! {
     static HOST_KEEPS_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
