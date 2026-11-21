@@ -56,6 +56,7 @@ objc2-app-kit = { version = "0.3", features = [
     "NSBox",
     "NSSwitch",
     "NSSlider",
+    "NSSplitView",
     "NSScrollView",
     "NSClipView",
     "NSPasteboard",
