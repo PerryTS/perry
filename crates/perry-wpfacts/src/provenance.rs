@@ -75,17 +75,29 @@ impl Prov {
             }
             _ => None,
         };
-        let stop = match std::env::var("PERRY_FACTS_STOP").ok().as_deref() {
+        let mut stop = match std::env::var("PERRY_FACTS_STOP").ok().as_deref() {
             Some("hold") => STOP_HOLD,
             Some("realm") => STOP_REALM,
             Some("realm-all") => STOP_REALM_ALL,
             Some("wide") => STOP_WIDE,
             _ => STOP_NONE,
         };
+        // `PERRY_FACTS_STOP_SOLVE=<n>` (diagnostic): the stop applies in
+        // solve n only (1 is the activation pass), so a later solve's hold
+        // can be traced past an earlier one. The other solves still count.
+        let only = std::env::var("PERRY_FACTS_STOP_SOLVE")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok());
+        let counted = (stop != STOP_NONE && only.is_some())
+            .then(|| SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
+        if counted.is_some() && counted != only {
+            stop = STOP_NONE;
+        }
         let why = (stop != STOP_NONE
             || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1"))
         .then(|| {
-            let solve = SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            let solve = counted
+                .unwrap_or_else(|| SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
             let sel = parse_sel();
             let mut sel_nodes: crate::pts::FxHashMap<NodeId, usize> = Default::default();
             for (i, x) in sel.iter().enumerate() {
