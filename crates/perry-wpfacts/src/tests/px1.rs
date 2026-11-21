@@ -869,3 +869,22 @@ fn pxstr_string_fold_operands() {
     }
     assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
 }
+
+// PERFNOW64: the Proxy as the method a builtin receiver's member read finds
+// (c08-B1 second chain, pn63 DIAG52N: `kind=thisto label="builtin-member-read"
+// c=ThisTo{origin}`: web Canvas2D::solidRect `data.copyWithin(...)`, `data`
+// a builtin whose any-key copy stored the style Proxy). The member is a
+// program value on a builtin (`builtin-member-read`, lookup.rs), bound by the
+// relays of PXCALLR: over an object literal the Proxy has no [[Call]] (7.3.14
+// Call step 2, a TypeError) and no trap runs. RED on 1ef1a09bb2 (before
+// PXCALLR): "E9 Proxy target (thisto)".
+#[test]
+fn pxthis_builtin_member_read_of_proxy_has_no_call() {
+    let src = PROXY_CALLR.replace(
+        "console.log(p.n);",
+        "const m: any = Math;\nm.zz = p.self;\ntry { m.zz(N); } catch (e) { console.log(e instanceof TypeError); }\nconsole.log(p.n);",
+    );
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
