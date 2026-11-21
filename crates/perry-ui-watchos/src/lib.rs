@@ -1460,8 +1460,8 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_start() -> f64 {
-    audio::start() as f64
+pub extern "C" fn perry_system_audio_start() -> i64 {
+    audio::start()
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_stop() {

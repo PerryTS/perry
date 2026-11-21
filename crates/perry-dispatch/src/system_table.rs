@@ -162,7 +162,10 @@ pub static PERRY_SYSTEM_TABLE: &[MethodRow] = &[
         method: "audioStart",
         runtime: "perry_system_audio_start",
         args: &[],
-        ret: ReturnKind::F64,
+        // Every backend returns i64 (1 = started, 0 = not). Declaring F64
+        // read the result out of the FP return register, so callers saw
+        // denormal garbage / 0 instead of 1 even when capture was running.
+        ret: ReturnKind::I64AsF64,
     },
     MethodRow {
         method: "audioStop",
