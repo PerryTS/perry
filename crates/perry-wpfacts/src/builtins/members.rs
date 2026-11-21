@@ -868,6 +868,35 @@ pub(super) fn regexp_inherited(
     (!own).then_some(p)
 }
 
+/// The own keys perry-stdlib's `worker_object` (worker_threads/
+/// worker_surface.rs) sets on every Worker it makes.
+const WORKER_OWN: &[&str] = &[
+    "stdin", "stdout", "stderr", "performance", "getHeapStatistics", "cpuUsage",
+    "getHeapSnapshot", "startCpuProfile", "startHeapProfile", "postMessage", "terminate",
+    "reload", "ref", "unref", "on", "addListener", "once", "off", "removeListener",
+    "addEventListener", "removeEventListener", "onmessage", "onmessageerror", "onerror",
+];
+
+/// The accessors the runtime installs on `Worker.prototype` beyond its
+/// realm declaration (messaging/worker_metadata.rs
+/// `install_worker_metadata_getters`; `@@asyncDispose` is a well-known key).
+const WORKER_PROTO_ACCESSORS: &[&str] = &["threadId", "threadName", "resourceLimits"];
+
+/// `Worker.prototype`'s realm declaration when a Worker's member `name` is
+/// neither one of the Worker's own keys nor `Worker.prototype`'s: the
+/// runtime Worker (`worker_object_with_id`) has the worker_threads
+/// constructor's prototype as its [[Prototype]], whose declared chain is
+/// `EventEmitter.prototype`, then `Object.prototype`.
+pub(super) fn worker_inherited(name: &str) -> Option<&'static RealmEntry> {
+    let own = name.starts_with(super::WK_PREFIX)
+        || WORKER_OWN.contains(&name)
+        || WORKER_PROTO_ACCESSORS.contains(&name);
+    if own {
+        return None;
+    }
+    realm_entry("node:worker_threads.Worker.prototype").filter(|e| e.kind == RealmKind::Prototype)
+}
+
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
 /// (`realm_born`): its realm-declared own properties, then those of its
 /// declared [[Prototype]]s, to `null`.
