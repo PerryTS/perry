@@ -573,16 +573,17 @@ console.log(JSON.stringify([p, { q: p }]), N);
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: an operation the rule does not model (a call of the Proxy) still
-// takes the old path: its target is E9.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): a call of the
+// style Proxy over an object literal throws a TypeError and runs no trap.
 #[test]
-fn proxy11_keep_called_proxy_stays_e9() {
+fn proxy11_called_proxy_runs_no_trap() {
     let src = JSONP.replace(
         "console.log(e);",
         "console.log(e);\ntry { (e.style as any)(); } catch (x) {}",
     );
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PROXY12 (RED on 8742219af8: "E9 Proxy target (fieldtruthy)", the cube
@@ -612,15 +613,17 @@ fn proxy12_field_truthy_of_a_proxy() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: the same program with a call of the Proxy still takes the old path.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): the same program
+// with a call of the Proxy (an object-literal target): no trap runs.
 #[test]
-fn proxy12_keep_called_proxy_stays_e9() {
+fn proxy12_called_proxy_runs_no_trap() {
     let src = TRUTHY.replace(
         "const e = new El();",
         "const e = new El();\ntry { (e.style as any)(); } catch (x) {}",
     );
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PROXY12 R-PXKEYS (RED on the FieldTruthy head: "E9 Proxy target (implicit
@@ -761,4 +764,48 @@ fn pxcall_keep_callable_target_stays_e9() {
     let (tops, held) = solve(&plain);
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
+}
+
+// PERFNOW55 rule PXCALLR: a method call that finds the Proxy through a
+// receiver (`o.m()` whose `m` the get trap answers with the Proxy itself, web
+// tokens.ts: `valueOf` returns `this`; a computed-key method call) binds it
+// by relays: the `this` (ThisTo), the arguments and result (CallArgs) and the
+// per-receiver builtin run (BuiltinCallee). Each is part of the Proxy's
+// [[Call]]: over an object literal there is none (7.3.14 Call step 2, a
+// TypeError) and no trap runs. RED on PXCALL without the relay arms: "E9
+// Proxy target (thisto)", "(callargs)", "(builtincallee)".
+const PROXY_CALLR: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { n: N };
+  const px: any = new Proxy(api, { get(t: any, k: any) { return k === "self" ? px : t[k]; } });
+  return px;
+}
+const p = mk();
+const o: any = { m: p.self };
+try { o.m(N); } catch (e) { console.log(e instanceof TypeError); }
+const r: Record<string, any> = { k: p };
+try { r["k" + (N.length > 9 ? "x" : "")](1); } catch (e) { console.log(e instanceof TypeError); }
+console.log(p.n);
+"#;
+
+#[test]
+fn pxcallr_method_of_non_callable_proxy_has_no_call() {
+    let (tops, held) = solve(PROXY_CALLR);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a Proxy over a function found as a method has a [[Call]] (10.5.12),
+// not modeled: the old path ("E9 Proxy target"), as for a plain call.
+#[test]
+fn pxcallr_keep_callable_method_stays_e9() {
+    let src = PROXY_CALLR.replace(
+        "console.log(p.n);",
+        "function wrap1(t: any): any { return new Proxy(t, {}); }\nconst f: any = { m: wrap1((): string => N) };\nconsole.log(f.m(), p.n);",
+    );
+    let (tops, _) = solve(&src);
+    assert!(
+        tops.iter().any(|t| t.starts_with("E9 Proxy target")),
+        "callable target: {tops:?}"
+    );
 }

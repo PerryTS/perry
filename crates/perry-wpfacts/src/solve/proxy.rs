@@ -550,8 +550,9 @@ impl Model {
         );
     }
 
-    /// Rule PXCALL: the callee node `n` of a call or `new` (rule `c`) holds
-    /// Proxy `p`.
+    /// Rule PXCALL: the callee node `n` of a call or `new` (rule `c`, or
+    /// one of the relays of a method call through a receiver, rule
+    /// PXCALLR: `ThisTo`, `CallArgs`, `BuiltinCallee`) holds Proxy `p`.
     /// ProxyCreate (10.5.14 step 7) gives `p` a [[Call]] and [[Construct]]
     /// only when its target is callable (a constructor); otherwise the
     /// call is that of an ordinary object without [[Call]] (7.3.14 Call
@@ -685,7 +686,17 @@ impl Model {
             // Rule PXCALL: a call or `new` of the Proxy (`proxy_call`).
             Cons::Call { .. }
             | Cons::CallThis { .. }
-            | Cons::New { .. } => self.proxy_call(n, *c, p),
+            | Cons::New { .. }
+            // Rule PXCALLR: the relays of a method call that found the
+            // Proxy through a receiver (`bind_via`): the `this` it binds
+            // (`ThisTo`, the thisArg of the [[Call]]), its arguments and
+            // result (`CallArgs`, the call's relay node) and its run per
+            // (call, receiver) for a builtin namespace value
+            // (`BuiltinCallee`). Each is a part of the Proxy's [[Call]]:
+            // the same decision as the call (`proxy_call`).
+            | Cons::ThisTo { .. }
+            | Cons::CallArgs { .. }
+            | Cons::BuiltinCallee => self.proxy_call(n, *c, p),
             // Rule PXCALL: Proxy `p` in the target of called Proxy `of`:
             // `of` is callable when `p` is, so the rule moves to `p`'s target.
             Cons::ProxyCallee { p: of } => self.proxy_callee_rule(of, p),
