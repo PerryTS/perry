@@ -283,6 +283,13 @@ const SYMBOL_ATTRIBUTE_DIRECTIVES: &[&str] = &[
     ".cold",
     // COFF
     ".weak_anti_dep",
+    // COFF symbol definitions (`MCAsmStreamer::beginCOFFSymbolDef` and friends):
+    // `.def sym; .scl 2; .type 32; .endef` describes a function symbol and emits
+    // no bytes. LLVM can print one for the next function inside the stack-map
+    // block, ahead of that function's section switch. (`.type` is listed above.)
+    ".def",
+    ".scl",
+    ".endef",
 ];
 
 fn is_zero_width_directive(directive: &str) -> bool {
