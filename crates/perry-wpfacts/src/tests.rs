@@ -146,6 +146,7 @@ mod global_namespace_store;
 mod global_sentinel;
 mod gopd_key;
 mod held_lengths;
+mod hold_once;
 mod host_objects;
 mod hub_tokens;
 mod identity_routes;

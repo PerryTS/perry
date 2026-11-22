@@ -369,6 +369,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
                 None,
             );
         }
+        if m.restart_on_hold && !m.hold_restart {
+            m.hold_why = Some(why.to_string());
+        }
         m.hold_realm(r);
     }
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {

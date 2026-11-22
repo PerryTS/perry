@@ -45,7 +45,15 @@ fn one_array_used_by_fifty_calls_has_one_helper_node_of_each_kind() {
     let mut cfg = crate::FactsConfig::default();
     cfg.max_work.get_or_insert(50_000_000);
     let sorted = [("t.ts", &hir)];
-    let (mut g, _, _) = crate::generate(&sorted, &cfg, None, None, None, std::time::Instant::now());
+    let (mut g, _, _) = crate::generate(
+        &sorted,
+        &cfg,
+        None,
+        None,
+        None,
+        crate::Hold::Midway,
+        std::time::Instant::now(),
+    );
     g.m.solve();
     let m = &g.m;
     let count = |l: &str| m.labels.iter().filter(|&&x| x == l).count();

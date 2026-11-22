@@ -465,6 +465,19 @@ use program_facts::{
     big_nodes, builtin_fields, field_truthy_filters, field_truthy_rows, solve_counters,
 };
 
+/// When the analysis holds the realm (`Model::restart_on_hold`).
+#[derive(Clone, PartialEq, Eq)]
+enum Hold {
+    /// At the first hold, wherever the solve meets it (the activation pass).
+    Midway,
+    /// The first hold met in generation or the solve stops the analysis,
+    /// which then runs again `Seeded`.
+    Once,
+    /// Held from the seed, for the first hold's unknown code when its site
+    /// named it (`Model::hold_why`).
+    Seeded(Option<String>),
+}
+
 /// Generation and the summaries for one analysis of `sorted` (with `act`,
 /// DECISIONS 225: only the bodies that can run are walked; an unfixed set
 /// is the activation pass, which walks each body once it is activated).
@@ -474,6 +487,7 @@ fn generate<'a>(
     published: Option<&'a units::Published>,
     view: Option<&'a decl_units::UnitView>,
     act: Option<model::Act>,
+    hold: Hold,
     t0: std::time::Instant,
 ) -> (gen::Gen<'a>, f64, std::time::Instant) {
     let loud = act.as_ref().is_none_or(|a| a.fixed);
@@ -488,6 +502,21 @@ fn generate<'a>(
     );
     // DECISIONS 225: a body is walked once its function can run.
     g.m.act = act;
+    match hold {
+        Hold::Once => g.m.restart_on_hold = !cfg.unit && loud && g.m.prov.is_none(),
+        Hold::Seeded(why) => {
+            let r = match why {
+                Some(w) => g.m.reason(&format!(
+                    "an intrinsic of the realm: unknown code holds the realm ({w})"
+                )),
+                None => {
+                    g.m.reason("an intrinsic of the realm: unknown code holds the realm")
+                }
+            };
+            g.m.hold_realm(r);
+        }
+        Hold::Midway => {}
+    }
     if cfg.diagnostics && loud {
         g.diagnostic = Some(Default::default());
         g.m.diagnostic.get_or_insert_with(Default::default);
@@ -811,7 +840,7 @@ fn activation_pass<'a>(
         sabotage,
         ..Default::default()
     };
-    let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), t0);
+    let (mut g, _, _) = generate(sorted, cfg, None, None, Some(act), Hold::Midway, t0);
     crate::diagnostics::keysnap_plan(&mut g);
     g.m.solve();
     while !g.m.aborted && g.walk_activated() {
@@ -884,10 +913,25 @@ fn compute_act<'a>(
         Some(None) => activation_pass(&sorted, cfg, t0).map(|(a, _)| a),
     };
     let activation = act.as_ref().map(|a| a.on.len());
-    let (mut g, gen_ms, t1) = generate(&sorted, cfg, published, view, act, t0);
+    let again = act.clone();
+    let (mut g, mut gen_ms, mut t1) = generate(&sorted, cfg, published, view, act, Hold::Once, t0);
     crate::diagnostics::keysnap_plan(&mut g);
     let activation = activation.map(|n| format!("active={n} functions={}", g.m.funcs.len()));
+    // The whole program: a hold met in generation or the solve restarts the
+    // analysis with the realm held from the seed (`Model::restart_on_hold`).
+    // Provenance runs (they trace the first hold) keep the one analysis.
     g.m.solve();
+    if g.m.hold_restart {
+        let why = g.m.hold_why.take();
+        drop(g);
+        let t2 = std::time::Instant::now();
+        let (g2, _, t3) = generate(&sorted, cfg, published, view, again, Hold::Seeded(why), t2);
+        g = g2;
+        gen_ms += t3.duration_since(t2).as_secs_f64() * 1000.0;
+        t1 = t3;
+        crate::diagnostics::keysnap_plan(&mut g);
+        g.m.solve();
+    }
     let first_solve_ms = t1.elapsed().as_secs_f64() * 1000.0;
     // Past the bound the unit claims nothing (sound): its contracts are
     // neither checked nor published (113-CWL3).

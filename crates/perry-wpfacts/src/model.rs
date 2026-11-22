@@ -2638,6 +2638,23 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// The whole-program solve (`compute_act`): its first hold stops it
+    /// (`hold_restart`), and it runs again with the realm held from its
+    /// seed. The hold is a fact of the whole program (unknown code exists),
+    /// not of a moment of the solve: what the rules made under
+    /// `!realm_held` before a flip midway would stay in the result.
+    pub restart_on_hold: bool,
+    /// The solve met its first hold under `restart_on_hold` and stopped.
+    pub hold_restart: bool,
+    /// The unknown code of that first hold, when its site names it
+    /// (`unknown_method_at`, e.g. E14 dynamic code): the seeded analysis
+    /// holds the realm for that reason, so a value the held realm makes
+    /// unknown names the code that holds it (`ledger::route`).
+    pub hold_why: Option<String>,
+    /// The reason the realm is held (`hold_realm`): an intrinsic the held
+    /// realm reaches later (`realm_hold_tok`, a lazily made built-in) is
+    /// unknown for that reason, so it names the code that holds the realm.
+    pub(crate) hold_reason: Option<u32>,
     /// `PERRY_FACTS_LEDGER` only (`hold_ledger`): the realm is never held
     /// and each hold's effects carry their root. `None` otherwise.
     pub(crate) ledger: Option<Box<crate::hold_ledger::HoldLedger>>,

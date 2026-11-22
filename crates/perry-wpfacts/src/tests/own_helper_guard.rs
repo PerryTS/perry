@@ -88,6 +88,7 @@ fn helper_summary_body_site_proven() {
         None,
         None,
         None,
+        crate::Hold::Midway,
         std::time::Instant::now(),
     );
     let get =
