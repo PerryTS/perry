@@ -373,9 +373,14 @@ pub extern "C" fn js_ws_process_pending() -> i32 {
     count
 }
 
-/// Called from the pump timer on every tick.
-/// Processes pending WebSocket promise resolves.
+/// Fallback for runtime-only links, where no perry-stdlib provides
+/// `js_stdlib_process_pending`. Weak, so perry-stdlib's real drain (fetch,
+/// timers, every async native completion) replaces it whenever it is linked:
+/// a strong definition here shadowed it — rustc bound the pump's call to this
+/// crate's copy and inlined it, so no fetch promise ever settled on Android.
+/// The pump drains the WebSocket queue itself.
 #[no_mangle]
+#[linkage = "weak"]
 pub extern "C" fn js_stdlib_process_pending() -> i32 {
     js_ws_process_pending()
 }

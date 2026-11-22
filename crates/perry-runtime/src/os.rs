@@ -38,6 +38,9 @@ pub extern "C" fn js_os_platform() -> *mut StringHeader {
     let platform = "darwin";
     #[cfg(target_os = "linux")]
     let platform = "linux";
+    // Node reports "android" there (and so does `node_platform_name`).
+    #[cfg(target_os = "android")]
+    let platform = "android";
     #[cfg(target_os = "windows")]
     let platform = "win32";
     #[cfg(target_os = "freebsd")]
@@ -46,6 +49,7 @@ pub extern "C" fn js_os_platform() -> *mut StringHeader {
         target_os = "macos",
         target_os = "ios",
         target_os = "linux",
+        target_os = "android",
         target_os = "windows",
         target_os = "freebsd"
     )))]
