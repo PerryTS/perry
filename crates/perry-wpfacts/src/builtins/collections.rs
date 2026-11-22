@@ -469,6 +469,7 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
 }
@@ -545,6 +546,7 @@ fn regexp_species_constructor(m: &mut Model, t: Tok, call: CallId) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::Any,
+            region: m.thrown,
         },
     );
 }
@@ -1480,6 +1482,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     Cons::Implicit {
                         reason: why,
                         proto: Protocol::ToPrimitive,
+                        region: m.thrown,
                     },
                 );
             }
@@ -1565,6 +1568,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                         Cons::Implicit {
                             reason: why,
                             proto: Protocol::ToPrimitive,
+                            region: m.thrown,
                         },
                     );
                 },
@@ -1582,6 +1586,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 Cons::Implicit {
                     reason: why,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
             implicit_args(m, call, "join separator", Protocol::ToPrimitive);
@@ -2127,6 +2132,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: m.thrown,
                     },
                 );
             }
@@ -2229,6 +2235,7 @@ pub(super) fn worker_post_message(m: &mut Model, call: CallId) {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::Clone,
+                region: m.thrown,
             },
         );
     }

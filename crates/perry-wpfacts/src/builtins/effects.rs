@@ -16,7 +16,7 @@
 //!   it, own or on the chain, runs with the slot's object as `this`. A bare
 //!   slot or its elements: the solver's ordinary chain reach of the
 //!   receiver, as the hand models had it.
-//! - `coerce(slot, P)`: `Cons::Implicit { proto: P }` on the slot's node.
+//! - `coerce(slot, P)`: `Cons::Implicit { proto: P, region: self.thrown }` on the slot's node.
 //! - `calls(callee, this, args)`: `cb_call` with the operands; its result
 //!   node is `returned(N)` for the N-th declared call. A callee argument the
 //!   call does not pass is no function: no call, nothing returned.
@@ -1158,7 +1158,14 @@ fn run(
                 let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
                 let proto = protocol(*p);
                 for n in v.nodes {
-                    m.cons(n, Cons::Implicit { reason, proto });
+                    m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason,
+                            proto,
+                            region: m.thrown,
+                        },
+                    );
                 }
                 if !v.spread.is_empty() {
                     let n = m.node_l("native-elems");
@@ -1170,7 +1177,14 @@ fn run(
                         },
                         n,
                     );
-                    m.cons(n, Cons::Implicit { reason, proto });
+                    m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason,
+                            proto,
+                            region: m.thrown,
+                        },
+                    );
                 }
             }
             RealmEffect::Calls { callee, this, args } => {
@@ -1323,7 +1337,14 @@ pub(crate) fn strkey_set(
             if slot.root == arg && slot.steps.is_empty() {
                 let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
                 let proto = protocol(*p);
-                m.cons(src, Cons::Implicit { reason, proto });
+                m.cons(
+                    src,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: m.thrown,
+                    },
+                );
             }
         }
     }

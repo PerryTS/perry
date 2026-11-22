@@ -296,6 +296,7 @@ pub(crate) fn function_ctor_runs_code(
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -431,7 +432,14 @@ fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
     let r = m.reason(why);
     for &a in c.args.iter().chain(c.spread.iter()) {
         m.why_implicit(a, r, call);
-        m.cons(a, Cons::Implicit { reason: r, proto });
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto,
+                region: m.thrown,
+            },
+        );
     }
 }
 
@@ -2025,6 +2033,7 @@ pub(crate) fn error_to_string(m: &mut Model, r: Tok, call: CallId) {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -3212,7 +3221,14 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             } else {
                 Protocol::Inspect
             };
-            m.cons(a, Cons::Implicit { reason: r, proto });
+            m.cons(
+                a,
+                Cons::Implicit {
+                    reason: r,
+                    proto,
+                    region: c.region,
+                },
+            );
         }
         for &d in &elems {
             m.cons(
@@ -3220,6 +3236,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::Inspect,
+                    region: c.region,
                 },
             );
         }
@@ -3267,6 +3284,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::InspectShown,
+                region: c.region,
             },
         );
     }
@@ -3276,7 +3294,14 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             m.edge(a, agg);
         }
         for &f in &firsts {
-            m.cons(f, Cons::ConsoleFormat { reason: r, agg });
+            m.cons(
+                f,
+                Cons::ConsoleFormat {
+                    reason: r,
+                    agg,
+                    region: c.region,
+                },
+            );
         }
     }
     ret_prim(m, call, prim::UNDEF);
@@ -3831,7 +3856,14 @@ fn ns_method_inner(
                 } else {
                     (rr, Protocol::Any)
                 };
-                m.cons(a, Cons::Implicit { reason, proto });
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: m.thrown,
+                    },
+                );
             }
             for &a in &c.spread {
                 m.cons(
@@ -3839,6 +3871,7 @@ fn ns_method_inner(
                     Cons::Implicit {
                         reason: rr,
                         proto: Protocol::Any,
+                        region: m.thrown,
                     },
                 );
             }

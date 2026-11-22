@@ -913,7 +913,14 @@ impl<'a> Gen<'a> {
             }
             // The protocols the callee runs on it, each with its own keys.
             for proto in Protocol::of_touches(u) {
-                self.m.cons(p, Cons::Implicit { reason: r, proto });
+                self.m.cons(
+                    p,
+                    Cons::Implicit {
+                        reason: r,
+                        proto,
+                        region: self.m.thrown,
+                    },
+                );
             }
             // The keys the callee stores into the argument (DECISIONS 84):
             // what it stores under each (DECISIONS 118), a store this unit
@@ -1045,7 +1052,14 @@ impl<'a> Gen<'a> {
                                 },
                             );
                             for proto in Protocol::of_touches(touches) {
-                                self.m.cons(q, Cons::Implicit { reason: r, proto });
+                                self.m.cons(
+                                    q,
+                                    Cons::Implicit {
+                                        reason: r,
+                                        proto,
+                                        region: self.m.thrown,
+                                    },
+                                );
                             }
                             self.reach_touch.push((touches, q));
                             q

@@ -1843,13 +1843,13 @@ impl Model {
             match self.toks[t as usize] {
                 // `instanceof` a bound function runs its target's.
                 TokKind::Bound(_) => self.escape(t, reason),
-                _ => self.implicit(t, reason, Protocol::HasInstance),
+                _ => self.implicit(t, reason, Protocol::HasInstance, self.thrown),
             }
             return;
         }
         let arg = self.has_instance_node(t);
         self.edge(lhs, arg);
-        self.implicit(t, reason, Protocol::HasInstance);
+        self.implicit(t, reason, Protocol::HasInstance, self.thrown);
     }
 
     /// The argument node of the `@@hasInstance` call on `t`, one per token.
@@ -1879,20 +1879,45 @@ impl Model {
         )
     }
 
+    /// The throw region of touch `proto` on `t`, fed into `region`: `None`
+    /// when the touch is already made (its region then feeds `region` too),
+    /// else the new region its calls and nested touches throw into.
+    pub(crate) fn implicit_throw(
+        &mut self,
+        t: Tok,
+        proto: Protocol,
+        region: NodeId,
+    ) -> Option<NodeId> {
+        if let Some(&throw) = self.implicit_done.get(&(t, proto)) {
+            self.edge(throw, region);
+            return None;
+        }
+        let throw = self.node_l("implicit-throw");
+        self.implicit_done.insert((t, proto), throw);
+        self.edge(throw, region);
+        Some(throw)
+    }
+
     /// Builtin protocol touch on `t` (ToPrimitive, iteration, toJSON, then,
     /// inspect …): every function reachable as a property of `t` or its
     /// chain runs with `this` = `t` and unknown primitive arguments, or for
     /// `@@hasInstance` the `instanceof` left-hand sides (`has_instance`).
-    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol) {
+    /// What those calls throw completes the operation that asked for the
+    /// touch (the runtime catches nothing: a throw from a console
+    /// argument's `toJSON` or `[util.inspect.custom]` completes that
+    /// `console.log`), so it reaches `region`: one `implicit-throw` node per
+    /// `(t, proto)` is the region of the touch's calls and of the touches it
+    /// runs in turn, and feeds the region of every request.
+    pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
         // the formatter shows it running no trap (`proxy_inspect_shown`),
         // JSON serializes it through its internal methods (`proxy_json`).
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
-                Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason),
-                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason),
-                Protocol::Json => return self.proxy_json(p, reason),
-                Protocol::Inspect => return self.proxy_inspect(p, reason),
+                Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
+                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason, region),
+                Protocol::Json => return self.proxy_json(p, reason, region),
+                Protocol::Inspect => return self.proxy_inspect(p, reason, region),
                 _ => {}
             }
         }
@@ -1903,7 +1928,7 @@ impl Model {
         // reads, never a value only the formatter shows (a chain member,
         // a class's `prototype`).
         if proto == Protocol::Inspect {
-            self.implicit(t, reason, Protocol::Json);
+            self.implicit(t, reason, Protocol::Json, region);
         }
         // The touch looks up and calls the protocol's keys and reads its
         // values, nothing else.
@@ -1944,7 +1969,7 @@ impl Model {
             eprintln!(
                 "perry: wpfacts implsrc: tok={t} marker={} done={} proto={proto:?} reason={:?} name={:?} kind={}",
                 self.is_marker(t),
-                self.implicit_done.contains(&(t, proto)),
+                self.implicit_done.contains_key(&(t, proto)),
                 self.reasons[reason as usize],
                 self.tok_name(t),
                 &kind[..kind.len().min(80)]
@@ -1980,9 +2005,12 @@ impl Model {
             }
             return;
         }
-        if t == TOP || !self.implicit_done.insert((t, proto)) {
+        if t == TOP {
             return;
         }
+        let Some(throw) = self.implicit_throw(t, proto, region) else {
+            return;
+        };
         // The protocol calls on a marker family's token are of its run
         // (`call_run`): what they find on it is the family's.
         let home = self.fam_home(t);
@@ -1996,7 +2024,14 @@ impl Model {
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
             for &proto in proto.read_touches() {
-                self.cons(dst, Cons::Implicit { reason, proto });
+                self.cons(
+                    dst,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: throw,
+                    },
+                );
             }
             self.add_tok(recv, t);
         }
@@ -2008,7 +2043,14 @@ impl Model {
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::OwnValues { dst });
             for &proto in proto.read_touches() {
-                self.cons(dst, Cons::Implicit { reason, proto });
+                self.cons(
+                    dst,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: throw,
+                    },
+                );
             }
             self.add_tok(recv, t);
         }
@@ -2064,7 +2106,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region: throw,
         });
         self.protocol_calls.insert(call);
         self.why_mint(call, Some(t), reason);
@@ -2101,6 +2143,7 @@ impl Model {
                 Cons::Implicit {
                     reason,
                     proto: next,
+                    region: throw,
                 },
             );
         }

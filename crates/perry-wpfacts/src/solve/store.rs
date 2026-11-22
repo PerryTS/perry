@@ -1050,6 +1050,7 @@ impl Model {
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: self.thrown,
                 },
             );
             return;

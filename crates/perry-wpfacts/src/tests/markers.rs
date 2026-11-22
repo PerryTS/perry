@@ -505,7 +505,7 @@ fn a_protocol_touch_of_an_argument_marker_reads_nothing() {
     let r = m.arg_marker(n0);
     let nodes = m.nodes.len();
     for p in [Protocol::Json, Protocol::IterResult, Protocol::ToPrimitive] {
-        m.implicit(r, 0, p);
+        m.implicit(r, 0, p, m.thrown);
     }
     let reads = (nodes..m.nodes.len())
         .filter(|&n| m.labels[n].starts_with("implicit"))

@@ -193,7 +193,15 @@ pub fn map_cons(
             site,
             reason,
         },
-        Implicit { reason, proto } => Implicit { reason, proto },
+        Implicit {
+            reason,
+            proto,
+            region,
+        } => Implicit {
+            reason,
+            proto,
+            region: n(region),
+        },
         HasInstance { reason, arg } => HasInstance {
             reason,
             arg: n(arg),
@@ -499,9 +507,14 @@ pub fn map_cons(
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
-        ConsoleFormat { reason, agg } => ConsoleFormat {
+        ConsoleFormat {
+            reason,
+            agg,
+            region,
+        } => ConsoleFormat {
             reason,
             agg: n(agg),
+            region: n(region),
         },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },

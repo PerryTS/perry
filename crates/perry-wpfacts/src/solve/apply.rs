@@ -1085,7 +1085,11 @@ impl Model {
                     }
                 }
             }
-            Cons::Implicit { reason, proto } => {
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            } => {
                 for &t in toks {
                     // The uncaught report of a native Error (perry-runtime
                     // exception.rs `print_uncaught`: `ptr_is_native_error`,
@@ -1118,13 +1122,13 @@ impl Model {
                         TokKind::Bound(b) if proto == Protocol::Any => {
                             let target = self.bound[b as usize].0;
                             self.bound_call(target, t, reason);
-                            self.implicit(t, reason, proto);
+                            self.implicit(t, reason, proto, region);
                         }
                         // `instanceof` a bound function runs its target's.
                         TokKind::Bound(_) if proto == Protocol::HasInstance => {
                             self.escape(t, reason)
                         }
-                        _ => self.implicit(t, reason, proto),
+                        _ => self.implicit(t, reason, proto, region),
                     }
                 }
             }
@@ -2496,7 +2500,12 @@ impl Model {
                     for &t in toks {
                         let ret = match t != TOP && !self.is_marker(t) {
                             true => {
-                                self.implicit(t, r, crate::model::Protocol::ToPrimitive);
+                                self.implicit(
+                                    t,
+                                    r,
+                                    crate::model::Protocol::ToPrimitive,
+                                    self.thrown,
+                                );
                                 self.to_prim_ret.get(&t).copied()
                             }
                             false => None,
@@ -2769,7 +2778,11 @@ impl Model {
             // Rule K7: the case map of the receiver keeps its infix entries.
             // Rule CONSOLE-PCT: a first argument that may hold `%` lets the
             // specifiers consume the later arguments.
-            Cons::ConsoleFormat { reason, agg } => {
+            Cons::ConsoleFormat {
+                reason,
+                agg,
+                region,
+            } => {
                 let fired = self.nodes[agg as usize].cons.iter().any(|c| {
                     matches!(
                         c,
@@ -2790,6 +2803,7 @@ impl Model {
                         Cons::Implicit {
                             reason,
                             proto: Protocol::Inspect,
+                            region,
                         },
                     );
                 }

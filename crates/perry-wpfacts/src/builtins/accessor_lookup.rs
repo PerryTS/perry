@@ -53,6 +53,7 @@ pub(crate) fn realm_accessor_call(m: &mut Model, r: Option<Tok>, call: CallId) {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -130,6 +131,7 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -142,6 +144,7 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -153,7 +156,7 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
         return;
     };
     if origin == TOP || (m.is_marker(origin) && !m.virt_protos.contains_key(&origin)) {
-        m.implicit(origin, reason, Protocol::Any);
+        m.implicit(origin, reason, Protocol::Any, m.thrown);
         m.add_top(c.ret, |_| {
             "accessor descriptor on an unknown receiver".into()
         });

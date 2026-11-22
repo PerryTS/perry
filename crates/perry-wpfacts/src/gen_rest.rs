@@ -505,6 +505,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::OwnKeys,
+                            region: self.m.thrown,
                         },
                     );
                     ops.push(v);
@@ -848,6 +849,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let out = self.tmp("primop");
@@ -873,6 +875,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 self.prim_node(prim::NUM)
@@ -901,6 +904,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let empty = self.str_literal("");
@@ -974,6 +978,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                 }

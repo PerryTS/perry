@@ -2253,7 +2253,7 @@ pub struct Model {
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
     /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
-    pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
+    pub implicit_done: crate::pts::FxHashMap<(Tok, Protocol), NodeId>,
     /// The one argument node of the `@@hasInstance` touch on a token: every
     /// `instanceof` whose right-hand side holds the token adds its
     /// left-hand side (`Solver::has_instance`).

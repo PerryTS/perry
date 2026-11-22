@@ -104,6 +104,7 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
 }

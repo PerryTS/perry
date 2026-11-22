@@ -216,7 +216,7 @@ impl Model {
                 self.reasons.get(reason as usize)
             ),
             Cons::AddsKeys => format!("AddsKeys"),
-            Cons::Implicit { reason, proto } => format!(
+            Cons::Implicit { reason, proto, .. } => format!(
                 "Implicit reason={:?} proto={:?}",
                 self.reasons.get(reason as usize),
                 proto
@@ -502,7 +502,7 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
-            Cons::ConsoleFormat { reason, agg } => {
+            Cons::ConsoleFormat { reason, agg, .. } => {
                 format!("ConsoleFormat reason={reason} agg={:?}", agg)
             }
             Cons::BoundCall { reason, bound } => format!(

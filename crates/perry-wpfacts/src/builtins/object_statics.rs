@@ -174,6 +174,7 @@ pub(crate) fn group_by(m: &mut Model, k: NodeId, group: NodeId, t: Tok) {
         Cons::Implicit {
             reason: why,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
     let fa = m.field_any(t);
@@ -363,6 +364,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
             define_value_call(m, call, o, k, d, r);
@@ -390,6 +392,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
             let t = site_tmpl(m, call, "descriptor");

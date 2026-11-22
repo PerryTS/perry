@@ -1157,6 +1157,7 @@ impl Model {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: self.thrown,
             },
         );
         let ek = self.elem_key();

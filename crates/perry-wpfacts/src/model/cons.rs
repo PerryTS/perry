@@ -420,8 +420,14 @@ pub enum Cons {
     },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
-    /// Builtin protocol touch: what `proto` reads on every token.
-    Implicit { reason: u32, proto: Protocol },
+    /// Builtin protocol touch: what `proto` reads on every token. What the
+    /// program code it runs throws completes the operation that asked for
+    /// the touch, so it reaches that operation's `region`.
+    Implicit {
+        reason: u32,
+        proto: Protocol,
+        region: NodeId,
+    },
     /// InstanceofOperator (13.10.2) with the node as its right-hand side:
     /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
     /// left-hand side value (`Call(instOfHandler, C, « V »)`).
@@ -819,7 +825,11 @@ pub enum Cons {
     /// `%`: once the node may hold a String with `%`
     /// (`Model::may_hold_percent`), `agg`, which holds every argument a
     /// specifier may consume, takes `Protocol::Inspect` with `reason`.
-    ConsoleFormat { reason: u32, agg: NodeId },
+    ConsoleFormat {
+        reason: u32,
+        agg: NodeId,
+        region: NodeId,
+    },
     /// Rule RT: the node is the input of an `exec` of the regex literal of
     /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
     /// derived groups hold the captures (`Model::capture_strs`).

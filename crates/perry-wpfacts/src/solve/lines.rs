@@ -131,8 +131,12 @@ impl Model {
                 "definedesc {n} {o} {} {site} {reason}",
                 self.key_name(Key::Named(*key))
             ),
-            Cons::Implicit { reason, proto } => {
-                format!("implicit {n} {reason} {}", proto.name())
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            } => {
+                format!("implicit {n} {reason} {} {region}", proto.name())
             }
             Cons::HasInstance { reason, arg } => format!("hasinstance {n} {reason} {arg}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
@@ -226,7 +230,11 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
-            Cons::ConsoleFormat { reason, agg } => format!("consolefmt {n} {reason} {agg}"),
+            Cons::ConsoleFormat {
+                reason,
+                agg,
+                region,
+            } => format!("consolefmt {n} {reason} {agg} {region}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::EnumLoad { dst, .. } => format!("enumload {n} {dst}"),

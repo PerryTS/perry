@@ -229,3 +229,68 @@ fn callregion_proxy_set_trap_throw_reaches_catch() {
         "{k:?}\n{dump}"
     );
 }
+
+const CONSOLE: &str = "class Tex {
+        toJSON(): any { if (process.argv[3] === \"y\") throw \"s\"; return 1; }
+    }
+    const tex = new Tex();
+    function h() { try { k(process.argv[2]); } catch (e: any) { box.value = e; } }\n";
+
+/// RED: `console.log("%j", { t: tex })` inside a try, where the nested
+/// `toJSON` throws a string. The runtime's `%j` runs JSON.stringify
+/// (perry-runtime formatting/util_format.rs `format_json_arg`, json/
+/// stringify.rs `object_get_to_json`) and catches nothing, so the string
+/// completes that `console.log` and reaches that try only, never the catch
+/// of `h`.
+#[test]
+fn callregion_console_tojson_stays_in_its_try() {
+    let src = format!(
+        "{CAUGHT}{CONSOLE}
+        function k(s: string) {{ if (s === \"x\") throw 7; }}
+        function safe() {{ try {{ console.log(\"%j\", {{ t: tex }}); }} catch (e) {{ console.log(\"no\"); }} }}
+        safe();
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 == 0,
+        "{k:?}\n{dump}"
+    );
+}
+
+/// Control: the same `console.log` inside `k`, under `h`'s try: the
+/// `toJSON` throw completes it and so reaches `h`'s catch, with `k`'s own.
+#[test]
+fn callregion_console_tojson_throw_reaches_catch() {
+    let src = format!(
+        "{CAUGHT}{CONSOLE}
+        function k(s: string) {{ if (s === \"x\") throw 7; console.log(\"%j\", {{ t: tex }}); }}
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 != 0,
+        "{k:?}\n{dump}"
+    );
+}
+
+/// RED: the same throw through a Proxy of `tex` in the console argument:
+/// the runtime serializes the Proxy (json/stringify_proxy.rs), its
+/// `toJSON` a [[Get]] forwarded to `tex`; the throw completes that
+/// `console.log` and stays in its try.
+#[test]
+fn callregion_console_proxy_tojson_stays_in_its_try() {
+    let src = format!(
+        "{CAUGHT}{CONSOLE}
+        const ptex: any = new Proxy(tex, {{}});
+        function k(s: string) {{ if (s === \"x\") throw 7; }}
+        function safe() {{ try {{ console.log(\"%j\", {{ t: ptex }}); }} catch (e) {{ console.log(\"no\"); }} }}
+        safe();
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 == 0,
+        "{k:?}\n{dump}"
+    );
+}

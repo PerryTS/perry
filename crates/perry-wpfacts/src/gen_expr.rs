@@ -132,7 +132,14 @@ impl<'a> Gen<'a> {
         let r = self.m.reason(why);
         for o in operands {
             let v = self.expr(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r, proto });
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: r,
+                    proto,
+                    region: self.m.thrown,
+                },
+            );
         }
         let out = self.tmp("primop");
         self.m.add_prim(out, result);
@@ -955,6 +962,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let out = self.tmp("update");
@@ -1009,6 +1017,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                 }
@@ -1081,6 +1090,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                     let out = self.tmp("unary");
@@ -1574,6 +1584,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let nv2 = self.tmp("update-val");
@@ -1809,6 +1820,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r2,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let nv = self.tmp("update-val");

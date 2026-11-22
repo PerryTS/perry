@@ -134,6 +134,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let key = self.const_key(mi, k);
@@ -362,6 +363,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::Json,
+                            region: self.m.thrown,
                         },
                     );
                     self.m.identity(v, IdentityRoute::JsonReplacer);
@@ -493,6 +495,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::Any,
+                            region: self.m.thrown,
                         },
                     );
                     self.m.cons(v, Cons::ShareBuffer { ta: t });
@@ -555,6 +558,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::Clone,
+                        region: self.m.thrown,
                     },
                 );
                 let o = self.expr(fx, options);
@@ -830,6 +834,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: rf,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 if let Some(o) = options {
@@ -841,6 +846,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: rc,
                             proto: Protocol::Clone,
+                            region: self.m.thrown,
                         },
                     );
                     let item = self.load(opt, Key::any());
@@ -850,6 +856,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: rs,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                     let rb = self.m.reason("B3 transfer list");

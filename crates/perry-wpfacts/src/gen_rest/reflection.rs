@@ -17,6 +17,7 @@ impl<'a> Gen<'a> {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: self.m.thrown,
             },
         );
     }
@@ -146,6 +147,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let rv = self.expr(fx, receiver);
@@ -155,6 +157,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: rr,
                         proto: Protocol::Any,
+                        region: self.m.thrown,
                     },
                 );
                 let key = match key.as_ref() {
@@ -212,6 +215,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let v = self.expr(fx, value);
@@ -303,6 +307,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 // EvaluateImportCall step 10: the runtime reads `options.with`

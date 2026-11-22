@@ -492,7 +492,15 @@ impl Model {
                 self.sink_node(q, reason);
             } else {
                 for proto in Protocol::of_touches(c.reach) {
-                    self.cons(q, Cons::Implicit { reason, proto });
+                    let region = self.thrown;
+                    self.cons(
+                        q,
+                        Cons::Implicit {
+                            reason,
+                            proto,
+                            region,
+                        },
+                    );
                 }
             }
             self.add_tok(h, t);
