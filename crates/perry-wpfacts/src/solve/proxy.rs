@@ -63,6 +63,9 @@ pub enum ProxyOp {
     Get(Key, NodeId),
     /// The `set` trap call for `key`: the node of the values it is passed.
     SetTrap(Key),
+    /// The throw region of the `set` trap call for `key`: what the trap
+    /// throws, which reaches the region of every store that ran it.
+    SetThrow(Key),
     /// The forward of one store (`key`, value node, site) to the target.
     SetFwd(Key, NodeId, SiteId),
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
@@ -180,8 +183,21 @@ impl Model {
     }
 
     /// Call the trap `name` of Proxy `p` with `this = handler` and `args`,
-    /// its result into `ret`.
+    /// its result into `ret`, what it throws into the shared thrown cell.
     fn proxy_trap(&mut self, p: u32, name: &str, args: Vec<NodeId>, ret: NodeId) {
+        let thrown = self.thrown;
+        self.proxy_trap_in(p, name, args, ret, thrown);
+    }
+
+    /// `proxy_trap` with what the trap throws into `region`.
+    fn proxy_trap_in(
+        &mut self,
+        p: u32,
+        name: &str,
+        args: Vec<NodeId>,
+        ret: NodeId,
+        region: NodeId,
+    ) {
         let h = self.proxies[p as usize].handler;
         let trap = self.node_l("proxy-trap");
         let a = self.atom(name);
@@ -200,7 +216,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region,
         });
         self.why_mint(call, None, u32::MAX);
         self.cons(trap, Cons::Call { call });
@@ -621,7 +637,10 @@ impl Model {
             }
             // [[Set]] (10.5.9): trap `set( t, key, V, receiver )`.
             // One trap call per key, passed every stored value; the forward
-            // once per store.
+            // once per store. Step 7 is `? Call( trap, ... )`: what the trap
+            // throws completes this [[Set]], so it reaches the store's own
+            // region (the trap call's region node feeds every store's),
+            // never the program-wide thrown cell.
             Cons::Store {
                 key,
                 src,
@@ -629,19 +648,24 @@ impl Model {
                 region,
             } => {
                 let t = self.proxies[p as usize].target;
-                let v = match self.proxies[p as usize].ops.get(&ProxyOp::SetTrap(key)) {
-                    Some(&v) => v,
+                let ops = &self.proxies[p as usize].ops;
+                let made = ops.get(&ProxyOp::SetTrap(key)).zip(ops.get(&ProxyOp::SetThrow(key)));
+                let (v, throw) = match made.map(|(&v, &throw)| (v, throw)) {
+                    Some(made) => made,
                     None => {
                         let v = self.node_l("proxy-set-value");
+                        let throw = self.node_l("proxy-set-throw");
                         self.proxies[p as usize].ops.insert(ProxyOp::SetTrap(key), v);
+                        self.proxies[p as usize].ops.insert(ProxyOp::SetThrow(key), throw);
                         let k = self.proxy_key_arg(key, NO_NODE);
                         let recv = self.proxy_recv(p);
                         let ret = self.node_l("proxy-set-ret");
-                        self.proxy_trap(p, "set", vec![t, k, v, recv], ret);
-                        v
+                        self.proxy_trap_in(p, "set", vec![t, k, v, recv], ret, throw);
+                        (v, throw)
                     }
                 };
                 self.edge(src, v);
+                self.edge(throw, region);
                 if !self.proxy_made(p, ProxyOp::SetFwd(key, src, site)) {
                     self.cons(t, Cons::Store { key, src, site, region });
                 }

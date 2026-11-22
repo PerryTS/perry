@@ -189,3 +189,43 @@ fn storeregion_set_still_runs_setter() {
         "{k:?}\n{dump}"
     );
 }
+
+const PXSET: &str = "const px: any = new Proxy({ v: 0 } as any, {
+        set(t: any, k: any, x: any): boolean { if (process.argv[3] === \"y\") throw \"s\"; t[k] = x; return true; },
+    });
+    function h() { try { k(process.argv[2]); } catch (e: any) { box.value = e; } }\n";
+
+/// RED: a Proxy `set` trap that throws a string, run by a store inside a
+/// try (10.5.9 step 7, `? Call( trap, ... )`): the string completes that
+/// store and reaches that try only, never the catch of `h`.
+#[test]
+fn callregion_proxy_set_trap_stays_in_its_try() {
+    let src = format!(
+        "{CAUGHT}{PXSET}
+        function k(s: string) {{ if (s === \"x\") throw 7; }}
+        function safe() {{ try {{ px.v = 1; }} catch (e) {{ console.log(\"no\"); }} }}
+        safe();
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 == 0,
+        "{k:?}\n{dump}"
+    );
+}
+
+/// Control: the same store inside `k`, under `h`'s try: the trap's throw
+/// completes the store and so reaches `h`'s catch, with `k`'s own.
+#[test]
+fn callregion_proxy_set_trap_throw_reaches_catch() {
+    let src = format!(
+        "{CAUGHT}{PXSET}
+        function k(s: string) {{ if (s === \"x\") throw 7; px.v = 1; }}
+        h();"
+    );
+    let (k, dump) = caught(&src);
+    assert!(
+        !k.top && k.mask() & 1 != 0 && k.mask() & 2 != 0,
+        "{k:?}\n{dump}"
+    );
+}
