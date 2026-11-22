@@ -689,8 +689,17 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         }
     }
     let Some(mem) = members::ns_member(ns, &name) else {
-        anyfall("undescribed namespace member", &ns, &name);
-        undescribed_member(m, dst);
+        // The `[util.inspect.custom]` hook's key: no realm object carries
+        // the hook (perry-runtime formatting.rs `inspect_custom_hook`: an
+        // own Symbol entry or the class vtable slot HIR names
+        // `INSPECT_CUSTOM_METHOD`), so it is absent on an undescribed
+        // namespace too; only a write can put it there.
+        if name == crate::model::INSPECT_CUSTOM_METHOD {
+            m.add_prim(dst, prim::UNDEF);
+        } else {
+            anyfall("undescribed namespace member", &ns, &name);
+            undescribed_member(m, dst);
+        }
         if opaque_written(m, t, a, NativeMiss::Load(dst)) {
             return opaque_member(m, dst);
         }

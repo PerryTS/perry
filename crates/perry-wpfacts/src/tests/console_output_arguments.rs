@@ -125,3 +125,44 @@ fn an_inspect_hook_runs_past_a_top_store() {
     );
     assert!(!proven(&pf, "size"), "{}", pf.dump_text());
 }
+
+/// A shown object that holds the global object (browser.ts
+/// `document.defaultView = globalThis`): the formatter looks up the
+/// `[util.inspect.custom]` hook of each realm object it reaches (`console`,
+/// the global object) and finds none: no realm object carries the hook
+/// (perry-runtime formatting.rs `inspect_custom_hook`: an own Symbol entry
+/// or a class vtable slot HIR names `__perry_inspect_custom__`), so no
+/// unknown function runs and the realm is not held. three.js: `log(...)`.
+#[test]
+fn a_realm_object_shown_runs_no_inspect_hook() {
+    for method in ["log", "warn"] {
+        let pf = facts_of(&format!(
+            r#"
+            const doc: any = {{ title: "d" }};
+            doc.defaultView = globalThis;
+            const s = new Svc();
+            console.{method}(doc, console);
+            console.warn(s);
+            console.log(g(s), h(s));
+            "#
+        ));
+        assert!(proven(&pf, "size"), "{method}: {}", pf.dump_text());
+        assert!(proven(&pf, "ping"), "{method}: {}", pf.dump_text());
+    }
+}
+
+/// Control: a hook the program installs on the global object runs.
+#[test]
+fn a_program_hook_on_the_global_object_runs() {
+    let pf = facts_of(
+        r#"
+        const s = new Svc();
+        (globalThis as any)[inspect.custom] = function () { unknown.keep(s); return "G"; };
+        const doc: any = { title: "d" };
+        doc.defaultView = globalThis;
+        console.log(doc);
+        console.log(g(s));
+        "#,
+    );
+    assert!(!proven(&pf, "size"), "{}", pf.dump_text());
+}
