@@ -184,9 +184,11 @@ impl Model {
 
     /// Call the trap `name` of Proxy `p` with `this = handler` and `args`,
     /// its result into `ret`, what it throws into the shared thrown cell.
-    fn proxy_trap(&mut self, p: u32, name: &str, args: Vec<NodeId>, ret: NodeId) {
+    /// `key`: the access's key when 10.5.x passes the trap P (rule PXGET:
+    /// the trap runs per key shape), `None` for a trap without one.
+    fn proxy_trap(&mut self, p: u32, name: &str, key: Option<Key>, args: Vec<NodeId>, ret: NodeId) {
         let thrown = self.thrown;
-        self.proxy_trap_in(p, name, args, ret, thrown);
+        self.proxy_trap_in(p, name, key, args, ret, thrown);
     }
 
     /// `proxy_trap` with what the trap throws into `region`.
@@ -194,6 +196,7 @@ impl Model {
         &mut self,
         p: u32,
         name: &str,
+        key: Option<Key>,
         args: Vec<NodeId>,
         ret: NodeId,
         region: NodeId,
@@ -218,6 +221,13 @@ impl Model {
             site: 0,
             region,
         });
+        if let Some(k) = key {
+            let sh = match k {
+                Key::Named(a) => a,
+                Key::Any(_) => crate::summary::TRAP_ANY,
+            };
+            self.sum.trap_shape.insert(call, sh);
+        }
         self.why_mint(call, None, u32::MAX);
         self.cons(trap, Cons::Call { call });
     }
@@ -250,7 +260,7 @@ impl Model {
         let t = self.proxies[p as usize].target;
         let k = self.proxy_key_arg(key, idx);
         let recv = self.proxy_recv(p);
-        self.proxy_trap(p, "get", vec![t, k, recv], g);
+        self.proxy_trap(p, "get", Some(key), vec![t, k, recv], g);
         if idx == NO_NODE {
             self.cons(t, Cons::Load { key, dst: g });
         } else {
@@ -403,12 +413,12 @@ impl Model {
         let target = self.proxies[p as usize].target;
         // [[OwnPropertyKeys]]: the trap, the list read off its result.
         let keys = self.node_l("proxy-ownkeys-ret");
-        self.proxy_trap(p, "ownKeys", vec![target], keys);
+        self.proxy_trap(p, "ownKeys", None, vec![target], keys);
         self.proxy_result_reads(keys, &["length"], true, reason);
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
-        self.proxy_trap(p, "getOwnPropertyDescriptor", vec![target, k], desc);
+        self.proxy_trap(p, "getOwnPropertyDescriptor", Some(Key::any()), vec![target, k], desc);
         self.proxy_result_reads(
             desc,
             &[
@@ -448,7 +458,7 @@ impl Model {
         }
         let target = self.proxies[p as usize].target;
         let proto = self.node_l("proxy-getprototypeof-ret");
-        self.proxy_trap(p, "getPrototypeOf", vec![target], proto);
+        self.proxy_trap(p, "getPrototypeOf", None, vec![target], proto);
         self.cons(
             proto,
             Cons::Implicit {
@@ -668,7 +678,7 @@ impl Model {
                         let k = self.proxy_key_arg(key, NO_NODE);
                         let recv = self.proxy_recv(p);
                         let ret = self.node_l("proxy-set-ret");
-                        self.proxy_trap_in(p, "set", vec![t, k, v, recv], ret, throw);
+                        self.proxy_trap_in(p, "set", Some(key), vec![t, k, v, recv], ret, throw);
                         (v, throw)
                     }
                 };
@@ -686,7 +696,7 @@ impl Model {
                 let t = self.proxies[p as usize].target;
                 let k = self.proxy_key_arg(key, idx);
                 let ret = self.node_l("proxy-has-ret");
-                self.proxy_trap(p, "has", vec![t, k], ret);
+                self.proxy_trap(p, "has", Some(key), vec![t, k], ret);
                 self.cons(t, Cons::HasProp { key, idx });
             }
             // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
@@ -702,7 +712,7 @@ impl Model {
                 let ret = self.node_l("proxy-gopd-ret");
                 let r = self.reason("Proxy getOwnPropertyDescriptor trap result");
                 self.sink_node(ret, r);
-                self.proxy_trap(p, "getOwnPropertyDescriptor", vec![t, k], ret);
+                self.proxy_trap(p, "getOwnPropertyDescriptor", Some(key), vec![t, k], ret);
                 self.cons(t, Cons::OwnProp { key, idx });
             }
             // [[Delete]] (10.5.10): trap `deleteProperty( t, key )`.
@@ -711,7 +721,7 @@ impl Model {
                 if !self.proxy_made(p, ProxyOp::DelTrap(key)) {
                     let k = self.proxy_key_arg(Key::Named(key), NO_NODE);
                     let ret = self.node_l("proxy-delete-ret");
-                    self.proxy_trap(p, "deleteProperty", vec![t, k], ret);
+                    self.proxy_trap(p, "deleteProperty", Some(Key::Named(key)), vec![t, k], ret);
                 }
                 if !self.proxy_made(p, ProxyOp::DelFwd(key, reason)) {
                     self.cons(t, Cons::DeleteKey { key, reason });

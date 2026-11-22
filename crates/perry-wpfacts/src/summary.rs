@@ -223,6 +223,9 @@ pub struct Inst {
 /// No value keys the run (`Inst::val`, the fourth key component).
 pub const NO_VAL: u32 = u32::MAX;
 
+/// Rule PXGET: the key shape of a trap call for an access under any key.
+pub const TRAP_ANY: u32 = u32::MAX;
+
 /// Rule M1: the run of every primitive value of the switched argument
 /// that is no String (`VAL_PRIM | kinds`, the `prim` bits): strictly equal
 /// to no string-literal case (ECMA-262 7.2.16: another type), it enters
@@ -252,6 +255,7 @@ pub struct SumState {
     /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b),
     /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
     /// the call's template, so one run per site of the program text).
+    /// 8 a Proxy trap's run for one key shape (rule PXGET: `trap_ctx`).
     /// The fourth component is the function value a run's called
     /// parameter is bound to (`Summary::called`), else `NO_VAL`.
     /// Nothing in a key is another instance: the count is (sites +
@@ -277,6 +281,15 @@ pub struct SumState {
     /// (call, function token) whose receiver node binds per token
     /// (`Cons::ThisInst`).
     pub this_inst: FxHashSet<(CallId, Tok)>,
+    /// Rule PXGET: a Proxy trap call that ECMA-262 10.5.x makes with the
+    /// key P of one access (get 10.5.8, set 10.5.9, has 10.5.7,
+    /// deleteProperty 10.5.10, getOwnPropertyDescriptor 10.5.5) -> that
+    /// access's key shape: the atom of a named key, `TRAP_ANY` for any key.
+    pub trap_shape: FxHashMap<CallId, u32>,
+    /// Kind-8 run contexts: id -> (the receiver context kind 1 would use,
+    /// key shape), interned (`Model::trap_ctx`).
+    pub trap_ctx: Vec<(u32, u32)>,
+    pub trap_ctx_of: FxHashMap<(u32, u32), u32>,
     /// A call an instance made -> the instance's lexical context
     /// (`Inst::lay`): what the call births is per (site, context).
     pub call_lay: FxHashMap<CallId, (u32, u32)>,
@@ -1109,6 +1122,7 @@ impl Model {
             0 | 7 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
             1 if this != NO_NODE => key.1,
+            8 if this != NO_NODE => self.sum.trap_ctx[key.1 as usize].0,
             2 if this != NO_NODE => self.layout_of(TOP),
             _ if ctx == NO_CTX => LAY_NONE,
             _ => self.sum.ctx_lay[ctx as usize],
@@ -1142,7 +1156,7 @@ impl Model {
             val,
         });
         self.sum.inst_key.insert(vkey, inst);
-        if matches!(key.0, 0 | 5 | 6 | 7) || (key.0 == 1 && key.1 != LAY_NONE) {
+        if matches!(key.0, 0 | 5 | 6 | 7 | 8) || (key.0 == 1 && key.1 != LAY_NONE) {
             self.sum.site_run.insert(inst);
         }
         self.sum.pending.push((inst, base));
@@ -1159,6 +1173,18 @@ impl Model {
         self.sum.vctx.push(k);
         self.sum.vctx_of.insert(k, v);
         v
+    }
+
+    /// Rule PXGET: the kind-8 context of receiver context `lay` and key
+    /// shape `sh`, made on first use.
+    fn trap_ctx(&mut self, lay: u32, sh: u32) -> u32 {
+        if let Some(&c) = self.sum.trap_ctx_of.get(&(lay, sh)) {
+            return c;
+        }
+        let c = self.sum.trap_ctx.len() as u32;
+        self.sum.trap_ctx.push((lay, sh));
+        self.sum.trap_ctx_of.insert((lay, sh), c);
+        c
     }
 
     /// A call an instance made at a call its summary expanded `f` into:
@@ -1213,6 +1239,10 @@ impl Model {
             _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             _ if let Some(site) = self.nested_site(call, ft) => (0, site, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
+            // Rule PXGET: a trap call passed the key of one access runs
+            // the run of its key shape (10.5.8 step 8: the trap gets that
+            // access's P, never another access's).
+            _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
             _ => (1, lay, ft),
         };
         // Widened (`past_work_bound`): no new calling context. The call
@@ -1221,7 +1251,7 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7
+            0 | 1 | 7 | 8
                 if self.widened
                     && !self
                         .sum
