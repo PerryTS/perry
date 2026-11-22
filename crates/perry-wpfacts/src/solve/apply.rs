@@ -688,9 +688,20 @@ impl Model {
                     // `test` (`guard::TRUTHY`: an object, function, marker,
                     // ⊤, or any primitive kind but `undefined`/`null`/`false`;
                     // `IS_FALSE`: the `false` kind, a marker or ⊤; ...).
-                    let one = self.node_l("field-truthy-token");
-                    self.add_tok(one, t);
-                    let read = self.node_l("field-truthy-read");
+                    // The read depends on (token, key) alone: one pair per
+                    // (token, key) for every test and output
+                    // (`Model::ft_reads`); each test adds its own guard,
+                    // which `cons` replays on what the read already holds.
+                    let (one, read, fresh) = match self.ft_reads.get(&(t, key)) {
+                        Some(&(one, read)) => (one, read, false),
+                        None => {
+                            let one = self.node_l("field-truthy-token");
+                            self.add_tok(one, t);
+                            let read = self.node_l("field-truthy-read");
+                            self.ft_reads.insert((t, key), (one, read));
+                            (one, read, true)
+                        }
+                    };
                     self.cons(
                         read,
                         Cons::Guard {
@@ -699,9 +710,11 @@ impl Model {
                             dst,
                         },
                     );
-                    // A rule, not a one-off lookup: a later store on the
-                    // chain (an `Object.prototype` member) re-runs it.
-                    self.cons(one, Cons::Load { key, dst: read });
+                    if fresh {
+                        // A rule, not a one-off lookup: a later store on the
+                        // chain (an `Object.prototype` member) re-runs it.
+                        self.cons(one, Cons::Load { key, dst: read });
+                    }
                 }
             }
             Cons::Objects { dst } => {

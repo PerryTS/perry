@@ -215,3 +215,53 @@ fn named_store_into_top_without_a_path_to_the_token_filters() {
     ));
     assert!(only_color(&pf), "{:?}", set_call(&pf));
 }
+
+/// FTSHARE: a token's read of `key` depends on (token, key) alone, so every
+/// test of that read shares one `field-truthy-read` node (`Model::ft_reads`);
+/// each test adds only its own guard. Three tests of `cur.isColor` on the
+/// same two tokens make at most one read per (token, key), and each branch
+/// still gets the receivers its own test lets through.
+#[test]
+fn tests_of_one_read_share_its_node() {
+    let s = "class Color { v: any; set(v: any) { this.v = v; } put(v: any) { this.v = v; } add(v: any) { this.v = v; } }
+         (Color.prototype as any).isColor = true;
+         class Attr { w: any; set(v: any) { this.w = v; } put(v: any) { this.w = v; } add(v: any) { this.w = v; } }
+         function apply(cur: any, val: any) {
+           if (cur.isColor) { cur.set(val); }
+           if (!cur.isColor) { cur.put(val); }
+           if (cur && cur.isColor) { cur.add(val); }
+         }
+         const a: any = new Attr();
+         apply(new Color(), 1);
+         apply(a, 2);
+         console.log(a.w);";
+    let src: &'static str = Box::leak(s.to_string().into_boxed_str());
+    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
+    let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
+    g.m.max_work = 5_000_000;
+    g.register_all();
+    g.link_exports();
+    g.walk_all();
+    g.feed_parent_values();
+    g.m.summarize_and_replay();
+    g.m.solve();
+    let m = &g.m;
+    let reads = m.labels.iter().filter(|l| **l == "field-truthy-read").count();
+    assert!(!m.ft_reads.is_empty(), "no FieldTruthy test applied");
+    assert_eq!(reads, m.ft_reads.len(), "one read node per (token, key)");
+    assert!(reads <= 2, "{reads} reads for 2 tokens and one key");
+
+    let pf = facts(s);
+    let recv = |key: &str| {
+        let site = pf.sites.iter().filter(|s| s.key == key && s.is_call).last().unwrap();
+        let mut r: Vec<String> =
+            site.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+        r.sort();
+        r.dedup();
+        r
+    };
+    assert_eq!(recv("set"), vec!["Color".to_string()]);
+    assert_eq!(recv("add"), vec!["Color".to_string()]);
+    assert!(recv("put").contains(&"Attr".to_string()), "{:?}", recv("put"));
+}

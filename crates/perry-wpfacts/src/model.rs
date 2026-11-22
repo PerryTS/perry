@@ -3314,6 +3314,9 @@ pub struct Model {
     /// (`Model::filter_check`).
     pub ft_check: Option<FxHashMap<NodeId, Vec<NodeId>>>,
     pub ft_violations: u32,
+    /// Rule G2/G1 (`Cons::FieldTruthy`): per (token, key), the token's
+    /// node and its read of `key`, shared by every test of that read.
+    pub ft_reads: FxHashMap<(Tok, Key), (NodeId, NodeId)>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
