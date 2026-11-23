@@ -96,6 +96,9 @@ pub struct StopTop {
     /// Generation operations without a position, by HIR expression variant
     /// (the variant that carries no source offset).
     pub(crate) gen_gap: FxHashMap<&'static str, u64>,
+    /// HIR operations of the site-identity kinds whose own offset is 0
+    /// (`unlocated_kind`), by kind: the lowering gaps left to close.
+    pub(crate) self_gap: FxHashMap<&'static str, u64>,
     /// The solver phase running (`Model::prof_mark`).
     pub(crate) phase: &'static str,
     /// Escapes in progress: (token, reason id, node the rule ran on).
@@ -251,6 +254,33 @@ pub(crate) fn variant(e: &impl std::fmt::Debug, pre: &str) -> &'static str {
 
 /// The byte offset an expression carries (0: built by the compiler with
 /// no source position).
+/// The site-identity kind of `e` when its own source offset is 0 (the
+/// census of `nopos-self`); `None` when located or of another kind.
+pub(crate) fn unlocated_kind(e: &perry_hir::Expr) -> Option<&'static str> {
+    use perry_hir::Expr;
+    Some(match e {
+        Expr::Call { byte_offset: 0, .. } => "Call",
+        Expr::CallSpread { byte_offset: 0, .. } => "CallSpread",
+        Expr::PropertyGet { byte_offset: 0, .. } => "PropertyGet",
+        Expr::PropertySet { byte_offset: 0, .. } => "PropertySet",
+        Expr::PropertyUpdate { byte_offset: 0, .. } => "PropertyUpdate",
+        Expr::IndexGet { byte_offset: 0, .. } => "IndexGet",
+        Expr::IndexSet { byte_offset: 0, .. } => "IndexSet",
+        Expr::IndexUpdate { byte_offset: 0, .. } => "IndexUpdate",
+        Expr::IndexGet {
+            element_offset: 0, ..
+        } => "IndexGet.element",
+        Expr::IndexSet {
+            element_offset: 0, ..
+        } => "IndexSet.element",
+        Expr::NativeMethodCall { byte_offset: 0, .. } => "NativeMethodCall",
+        Expr::New { byte_offset: 0, .. } => "New",
+        Expr::StaticMethodCall { .. } => "StaticMethodCall",
+        Expr::ObjectSuperMethodCall { .. } => "ObjectSuperMethodCall",
+        _ => return None,
+    })
+}
+
 pub(crate) fn expr_offset(e: &perry_hir::Expr) -> Option<u32> {
     e.byte_offset().filter(|&o| o != 0)
 }
@@ -620,6 +650,11 @@ impl Model {
             g.sort_by(|a, b| b.cmp(a));
             for (n, k) in g {
                 eprintln!("TOPSTOP nopos-hir {k} {n}");
+            }
+            let mut g: Vec<_> = s.self_gap.iter().map(|(&k, &n)| (n, k)).collect();
+            g.sort_by(|a, b| b.cmp(a));
+            for (n, k) in g {
+                eprintln!("TOPSTOP nopos-self {k} {n}");
             }
             eprintln!(
                 "TOPSTOP nopos-ops total {ops} (root operations that can stop); inherited {inh} (inside a rule without a position); nopos-edges total {edges}; edges with a position {}; shared operations {}",

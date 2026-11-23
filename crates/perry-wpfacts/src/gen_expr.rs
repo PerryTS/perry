@@ -826,6 +826,13 @@ impl<'a> Gen<'a> {
             Some(s) => {
                 let p0 = (s.gen_pos, s.gen_kind);
                 s.gen_kind = crate::topstop::variant(e, "");
+                if let Some(k) = crate::topstop::unlocated_kind(e) {
+                    *s.self_gap.entry(k).or_default() += 1;
+                    if std::env::var("PERRY_HIRPOS_SAMPLE").is_ok_and(|v| v == k) {
+                        let d = format!("{e:?}");
+                        eprintln!("HPSAMPLE {k} m{} {}", fx.module, &d[..d.len().min(600)]);
+                    }
+                }
                 if let Some(o) = crate::topstop::expr_offset(e) {
                     s.gen_pos = (fx.module, o);
                 }
