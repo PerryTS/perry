@@ -247,8 +247,7 @@ pub fn launch_ios_simulator(
         println!();
     }
 
-    let launch = Command::new("xcrun")
-        .args(["simctl", "launch", "--console-pty", udid, bundle_id])
+    let launch = simctl_launch_command(udid, bundle_id, perry_env())
         .status()
         .map_err(|e| anyhow!("Failed to run xcrun simctl launch: {}", e))?;
 
@@ -285,17 +284,7 @@ pub fn launch_ios_device(
         println!();
     }
 
-    let launch = Command::new("xcrun")
-        .args([
-            "devicectl",
-            "device",
-            "process",
-            "launch",
-            "--console",
-            "--device",
-            udid,
-            bundle_id,
-        ])
+    let launch = devicectl_launch_command(udid, bundle_id, perry_env())
         .status()
         .map_err(|e| anyhow!("Failed to run xcrun devicectl launch: {}", e))?;
 
@@ -303,6 +292,116 @@ pub fn launch_ios_device(
         return Err(anyhow!("App exited with error on device"));
     }
     Ok(())
+}
+
+/// The `PERRY_*` variables of this process, sorted. Only this prefix is
+/// forwarded: the app runs in its own sandbox with its own PATH and HOME.
+fn perry_env() -> Vec<(String, String)> {
+    let mut vars: Vec<_> = std::env::vars()
+        .filter(|(k, _)| k.starts_with("PERRY_"))
+        .collect();
+    vars.sort();
+    vars
+}
+
+/// simctl hands the launched app every variable of its own environment
+/// prefixed `SIMCTL_CHILD_`, with the prefix stripped.
+fn simctl_launch_command(udid: &str, bundle_id: &str, vars: Vec<(String, String)>) -> Command {
+    let mut cmd = Command::new("xcrun");
+    cmd.args(["simctl", "launch", "--console-pty", udid, bundle_id]);
+    for (key, value) in vars {
+        cmd.env(format!("SIMCTL_CHILD_{key}"), value);
+    }
+    cmd
+}
+
+/// devicectl takes the app environment as one JSON object argument.
+fn devicectl_launch_command(udid: &str, bundle_id: &str, vars: Vec<(String, String)>) -> Command {
+    let mut cmd = Command::new("xcrun");
+    cmd.args([
+        "devicectl",
+        "device",
+        "process",
+        "launch",
+        "--console",
+        "--device",
+        udid,
+    ]);
+    if !vars.is_empty() {
+        let env: serde_json::Map<_, _> = vars
+            .into_iter()
+            .map(|(k, v)| (k, serde_json::Value::String(v)))
+            .collect();
+        cmd.arg("--environment-variables")
+            .arg(serde_json::Value::Object(env).to_string());
+    }
+    cmd.arg(bundle_id);
+    cmd
+}
+
+#[cfg(test)]
+mod apple_launch_env_tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    fn vars() -> Vec<(String, String)> {
+        vec![
+            ("PERRY_UI_TEST_MODE".into(), "1".into()),
+            ("PERRY_Q".into(), "a\"b".into()),
+        ]
+    }
+
+    #[test]
+    fn simctl_launch_forwards_perry_vars_with_the_simctl_child_prefix() {
+        let cmd = simctl_launch_command("UDID", "com.x.app", vars());
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            ["simctl", "launch", "--console-pty", "UDID", "com.x.app"]
+        );
+        let envs: Vec<_> = cmd.get_envs().collect();
+        assert!(envs.contains(&(
+            OsStr::new("SIMCTL_CHILD_PERRY_UI_TEST_MODE"),
+            Some(OsStr::new("1"))
+        )));
+        assert!(envs.contains(&(OsStr::new("SIMCTL_CHILD_PERRY_Q"), Some(OsStr::new("a\"b")))));
+    }
+
+    #[test]
+    fn devicectl_launch_passes_perry_vars_as_one_json_object_before_the_bundle() {
+        let cmd = devicectl_launch_command("UDID", "com.x.app", vars());
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_str().unwrap().to_string())
+            .collect();
+        let n = args.len();
+        assert_eq!(args[n - 3], "--environment-variables");
+        assert_eq!(args[n - 1], "com.x.app");
+        let json: serde_json::Value = serde_json::from_str(&args[n - 2]).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"PERRY_UI_TEST_MODE": "1", "PERRY_Q": "a\"b"})
+        );
+    }
+
+    #[test]
+    fn devicectl_launch_without_perry_vars_omits_the_environment_flag() {
+        let cmd = devicectl_launch_command("UDID", "com.x.app", Vec::new());
+        let args: Vec<_> = cmd.get_args().collect();
+        assert_eq!(
+            args,
+            [
+                "devicectl",
+                "device",
+                "process",
+                "launch",
+                "--console",
+                "--device",
+                "UDID",
+                "com.x.app"
+            ]
+        );
+    }
 }
 
 /// Launch a web build: open HTML in browser
