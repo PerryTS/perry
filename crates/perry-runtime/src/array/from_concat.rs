@@ -374,7 +374,8 @@ unsafe fn concat_with_species(
     } else {
         scope.root_nanbox_f64_slice(std::slice::from_raw_parts(args_ptr, count as usize))
     };
-    let recv_value = f64::from_bits(JSValue::pointer(recv_handle.get_raw_const_ptr::<u8>()).bits());
+    let recv_value =
+        recv_handle.with_const_ptr::<u8, _>(|recv| f64::from_bits(JSValue::pointer(recv).bits()));
     let (result_box, species_was_default) =
         crate::array::species::array_species_create_with_capacity(recv_value, 0, cap_hint);
     let result_handle = scope.root_nanbox_f64(result_box);
@@ -384,30 +385,31 @@ unsafe fn concat_with_species(
         js_array_alloc(cap_hint)
     };
     let staging_handle = scope.root_raw_mut_ptr(staging);
-    let grown = append_spread_array(
-        staging_handle.get_raw_mut_ptr::<ArrayHeader>(),
-        recv_handle.get_raw_const_ptr::<ArrayHeader>(),
-    );
+    let grown = staging_handle.with_mut_ptr::<ArrayHeader, _>(|staging| {
+        recv_handle.with_const_ptr::<ArrayHeader, _>(|recv| append_spread_array(staging, recv))
+    });
     staging_handle.set_raw_mut_ptr(grown);
     for handle in &arg_handles {
-        let grown = append_concat_arg(
-            staging_handle.get_raw_mut_ptr::<ArrayHeader>(),
-            handle.get_nanbox_f64(),
-        );
+        let grown = staging_handle.with_mut_ptr::<ArrayHeader, _>(|staging| {
+            append_concat_arg(staging, handle.get_nanbox_f64())
+        });
         staging_handle.set_raw_mut_ptr(grown);
     }
     if species_was_default {
-        return staging_handle.get_raw_mut_ptr::<ArrayHeader>();
+        return staging_handle.with_mut_ptr::<ArrayHeader, _>(|staging| staging);
     }
-    let len = (*staging_handle.get_raw_mut_ptr::<ArrayHeader>()).length as usize;
+    let len = staging_handle.with_mut_ptr::<ArrayHeader, _>(|staging| (*staging).length) as usize;
     let value_handle = scope.root_nanbox_f64(f64::from_bits(crate::value::TAG_UNDEFINED));
     for i in 0..len {
-        let staging = staging_handle.get_raw_mut_ptr::<ArrayHeader>();
-        if i >= (*staging).capacity as usize {
+        // The element is read out before species_result_define can run user code.
+        let Some(v) = staging_handle.with_mut_ptr::<ArrayHeader, _>(|staging| {
+            (i < (*staging).capacity as usize).then(|| {
+                *(crate::array::array_elements_ptr(staging as *const ArrayHeader) as *const f64)
+                    .add(i)
+            })
+        }) else {
             break; // past the backing store: holes
-        }
-        let elems = crate::array::array_elements_ptr(staging as *const ArrayHeader) as *const f64;
-        let v = *elems.add(i);
+        };
         if v.to_bits() == crate::value::TAG_HOLE {
             continue;
         }

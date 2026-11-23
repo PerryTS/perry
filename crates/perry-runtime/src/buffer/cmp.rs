@@ -367,36 +367,32 @@ pub extern "C" fn js_buffer_to_json(buf_ptr: f64) -> f64 {
     let handles = crate::gc::RuntimeHandleScope::new();
     let obj = handles.root_raw_mut_ptr(crate::object::js_object_alloc(0, 2));
     {
+        // The value is rooted across the key's allocation, which can move it.
+        let type_val = handles.root_nanbox_f64(f64::from_bits(
+            crate::JSValue::string_ptr(crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6))
+                .bits(),
+        ));
         let type_key = crate::string::js_string_from_bytes(b"type".as_ptr(), 4);
-        let type_val = crate::string::js_string_from_bytes(b"Buffer".as_ptr(), 6);
-        crate::object::js_object_set_field_by_name(
-            obj.get_raw_mut_ptr(),
-            type_key,
-            f64::from_bits(crate::JSValue::string_ptr(type_val).bits()),
-        );
+        obj.with_mut_ptr(|obj| {
+            crate::object::js_object_set_field_by_name(obj, type_key, type_val.get_nanbox_f64())
+        });
 
         let arr = handles.root_raw_mut_ptr(crate::array::js_array_alloc(0));
         if let Some(source) = source.as_ref() {
             for byte in source.iter() {
-                arr.set_raw_mut_ptr(crate::array::js_array_push_f64(
-                    arr.get_raw_mut_ptr(),
-                    *byte as f64,
-                ));
+                let grown = arr.with_mut_ptr(|a| crate::array::js_array_push_f64(a, *byte as f64));
+                arr.set_raw_mut_ptr(grown);
             }
         }
         let data_key = crate::string::js_string_from_bytes(b"data".as_ptr(), 4);
-        crate::object::js_object_set_field_by_name(
-            obj.get_raw_mut_ptr(),
-            data_key,
-            f64::from_bits(
-                crate::JSValue::pointer(arr.get_raw_mut_ptr::<ArrayHeader>() as *mut u8).bits(),
-            ),
-        );
+        let data = arr.with_mut_ptr::<ArrayHeader, _>(|a| {
+            f64::from_bits(crate::JSValue::pointer(a as *mut u8).bits())
+        });
+        obj.with_mut_ptr(|obj| crate::object::js_object_set_field_by_name(obj, data_key, data));
     }
-    f64::from_bits(
-        crate::JSValue::pointer(obj.get_raw_mut_ptr::<crate::object::ObjectHeader>() as *mut u8)
-            .bits(),
-    )
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        f64::from_bits(crate::JSValue::pointer(obj as *mut u8).bits())
+    })
 }
 
 fn ordering(order: std::cmp::Ordering) -> i32 {

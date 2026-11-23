@@ -81,7 +81,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             unsafe {
                 // The old owner can move during allocation: reload its root.
                 init_string_header(new, 0, 0, next, 0, STRING_FLAG_WTF8_VALIDATED);
-                ptr::copy_nonoverlapping(string_data(owner.get_raw_const_ptr()), data, len);
+                owner.with_const_ptr(|old| ptr::copy_nonoverlapping(string_data(old), data, len));
                 // GC_STORE_AUDIT(POINTER_FREE): one byte in the newly allocated string payload.
                 data.add(len).write(probe[0]);
             }
@@ -90,7 +90,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             len += 1;
         } else {
             let n = unsafe {
-                let data = string_data(owner.get_raw_const_ptr()).cast_mut().add(len);
+                let data = owner.with_const_ptr(|s| string_data(s)).cast_mut().add(len);
                 let spare = slice::from_raw_parts_mut(
                     data.cast::<MaybeUninit<u8>>(),
                     (capacity as usize - len).min(READ_WINDOW),
@@ -113,10 +113,10 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
             len += n;
         }
         // Only initialized bytes are exposed, including a pending UTF-8 tail.
-        let bytes = unsafe { slice::from_raw_parts(string_data(owner.get_raw_const_ptr()), len) };
+        let bytes = unsafe { slice::from_raw_parts(owner.with_const_ptr(|s| string_data(s)), len) };
         progress.scan(bytes);
     }
-    let header: *mut StringHeader = owner.get_raw_mut_ptr();
+    let header: *mut StringHeader = owner.with_mut_ptr(|header| header);
     unsafe {
         // A shrinking file or overestimate leaves private spare capacity.
         // Initialize it before publishing the object to heap diagnostics.
@@ -158,7 +158,7 @@ pub(crate) fn read_utf8<R: Read + ?Sized>(
     // This may drain an already active non-moving cycle: the canonical result
     // is rooted, and its native source/output borrows have ended. Reload it.
     crate::gc::allocation_pacing::burst_boundary();
-    Ok(owner.get_raw_mut_ptr())
+    Ok(owner.with_mut_ptr(|header| header))
 }
 
 #[cfg(test)]
