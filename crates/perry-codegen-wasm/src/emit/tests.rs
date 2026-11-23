@@ -2461,6 +2461,9 @@ mod builtin_subclass;
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 
+#[path = "thread_callback_tests.rs"]
+mod thread_callback;
+
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
 
@@ -2490,23 +2493,5 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
 "#
         ),
         "phone tel\nemail email\ncount number\nbox text\npin password"
-    );
-}
-
-// A thread callback that declares more parameters than it is passed receives undefined
-// in the rest, as every other table call does (#15140).
-#[test]
-fn a_thread_callback_with_unpassed_parameters_receives_undefined() {
-    assert_eq!(
-        run_web_source(
-            r#"
-import { parallelFilter, parallelMap, spawn } from "perry/thread";
-const k = 1;
-console.log(parallelMap([1, 2], (n: number, m?: number) => n + k + ":" + m).join(","));
-console.log(parallelFilter([1, 2], (n: number, m?: number) => m === undefined && n > k).join(","));
-spawn((m?: number) => "spawn " + m).then((v: string) => console.log(v));
-"#
-        ),
-        "2:undefined,3:undefined\n2\nspawn undefined"
     );
 }
