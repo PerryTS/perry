@@ -3459,7 +3459,16 @@ self.onmessage = async function(e) {
     if (!fn) { self.postMessage({ type: "error", message: "Function not found at index " + msg.funcIdx }); return; }
 
     const captures = (msg.captures || []).map(c => __jsValueToBits(c));
-    const call = (...args) => { while (args.length < fn.length) args.push(TAG_UNDEFINED); return fn(...args); };
+    // A rest parameter's exported slot counts the captures; the arguments from it on become one array.
+    const rest = wasmInst.exports["__wasm_rest_" + fn.name];
+    const call = (...args) => {
+      if (rest) {
+        while (args.length < rest.value) args.push(TAG_UNDEFINED);
+        args.push(__jsValueToBits(args.splice(rest.value).map(__bitsToJsValue)));
+      }
+      while (args.length < fn.length) args.push(TAG_UNDEFINED);
+      return fn(...args);
+    };
 
     if (msg.type === "map") {
       const results = [];
