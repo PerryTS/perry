@@ -53,7 +53,7 @@ fn pieces(f: &Function) -> Option<(&Expr, &Expr, &Expr)> {
         [Stmt::Return(Some(Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         }), _)] => Some((condition, then_expr, else_expr)),
         _ => None,
     }

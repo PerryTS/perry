@@ -830,7 +830,7 @@ where
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             f(condition);
             f(then_expr);

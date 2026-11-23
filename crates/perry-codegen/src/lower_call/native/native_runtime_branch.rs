@@ -85,22 +85,22 @@
                 return Ok(crate::expr::i32_bool_to_nanbox(ctx.block(), &needs));
             }
             "arrayRecordForUpdate" => {
-                return lower_expr(ctx, &Expr::Conditional {
+                return lower_expr(ctx, &Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(args[0].clone()),
                     then_expr: Box::new(Expr::Number(0.0)),
                     else_expr: Box::new(args[1].clone()),
                 });
             }
             "arrayRecordForValue" => {
-                return lower_expr(ctx, &Expr::Conditional {
+                return lower_expr(ctx, &Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(args[0].clone()),
                     then_expr: Box::new(args[1].clone()), else_expr: Box::new(args[2].clone()),
                 });
             }
             "arrayRecordForBound" => {
-                return lower_expr(ctx, &Expr::Sequence(vec![args[4].clone(), Expr::Conditional {
+                return lower_expr(ctx, &Expr::Sequence(vec![args[4].clone(), Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(args[0].clone()),
-                    then_expr: Box::new(Expr::Conditional {
+                    then_expr: Box::new(Expr::Conditional { byte_offset: 0 /*HPOS*/,
                         condition: Box::new(args[3].clone()),
                         then_expr: Box::new(args[2].clone()),
                         else_expr: Box::new(Expr::Number(f64::INFINITY)),

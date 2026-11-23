@@ -1246,7 +1246,7 @@ fn cell_flag_set(id: LocalId) -> Expr {
 /// `on_dead_zone` runs before the throw.
 fn cell_checked(id: LocalId, name: &str, on_initialized: Expr, on_dead_zone: Option<Expr>) -> Expr {
     let throw = perry_hir::tdz_check::throw(name);
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(cell_slot(id, 1)),
         then_expr: Box::new(on_initialized),
         else_expr: Box::new(match on_dead_zone {

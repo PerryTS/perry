@@ -85,7 +85,7 @@ impl SH for Expr {
             Expr::ObjectAssign { target, sources } => { tag(h, 32); target.as_ref().hash(h); sources.hash(h); }
             Expr::Array(items, _) => { tag(h, 33); items.hash(h); }
             Expr::ArraySpread(items) => { tag(h, 34); items.hash(h); }
-            Expr::Conditional { condition, then_expr, else_expr, } => { tag(h, 35); condition.as_ref().hash(h); then_expr.as_ref().hash(h); else_expr.as_ref().hash(h); }
+            Expr::Conditional { condition, then_expr, else_expr, .. } => { tag(h, 35); condition.as_ref().hash(h); then_expr.as_ref().hash(h); else_expr.as_ref().hash(h); }
             Expr::TypeOf(e) => { tag(h, 36); e.as_ref().hash(h); }
             Expr::Void(e) => { tag(h, 37); e.as_ref().hash(h); }
             Expr::InstanceOf { expr, ty, ty_expr } => { tag(h, 38); expr.as_ref().hash(h); ty.hash(h); ty_expr.hash(h); }

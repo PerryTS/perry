@@ -328,7 +328,7 @@ pub(crate) fn lower_array_pattern_binding(
                         &assign_pat.right,
                         single_name_target(&assign_pat.left).as_deref(),
                     )?;
-                    let with_default = Expr::Conditional {
+                    let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
                         condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id), assign_pat.span.lo.0)),
                         then_expr: Box::new(default_val),
                         else_expr: Box::new(Expr::LocalGet(value_id)),
@@ -616,7 +616,7 @@ pub(crate) fn lower_pattern_binding_into(
             )?;
             // A destructuring default applies only when the source is strictly
             // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
-            let with_default = Expr::Conditional {
+            let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
                 condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id), assign_pat.span.lo.0)),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
@@ -877,7 +877,7 @@ pub(crate) fn lower_pattern_binding_into(
                             });
                             let default_val =
                                 lower_default_named(ctx, default_expr, Some(name.as_str()))?;
-                            Expr::Conditional {
+                            Expr::Conditional { byte_offset: assign.span.lo.0,
                                 condition: Box::new(is_strictly_undefined(
                                     Expr::LocalGet(val_tmp_id),
                                     assign.span.lo.0,

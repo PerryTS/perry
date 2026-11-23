@@ -149,7 +149,7 @@ impl IteratorRecordPlan {
             name,
             ty: Type::Any,
             mutable: true,
-            init: Some(Expr::Conditional {
+            init: Some(Expr::Conditional { byte_offset,
                 condition: Box::new(Expr::Compare { byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(use_iter)),
@@ -198,7 +198,7 @@ impl IteratorRecordPlan {
             };
             return init.iter().enumerate().rev().fold(
                 Expr::LocalGet(*last),
-                |otherwise, (i, id)| Expr::Conditional {
+                |otherwise, (i, id)| Expr::Conditional { byte_offset: self.byte_offset,
                     condition: Box::new(Expr::Compare { byte_offset: self.byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),
@@ -226,7 +226,7 @@ impl IteratorRecordPlan {
         if let Some(values) = &self.scalars {
             // Close may expose the original built-in iterator, even when next
             // was replaced after entry. Materialize only for an observable return.
-            return Expr::Conditional {
+            return Expr::Conditional { byte_offset: self.byte_offset,
                 condition: Box::new(runtime("arrayRecordCloseAbsent", vec![], self.byte_offset)),
                 then_expr: Box::new(Expr::Undefined),
                 else_expr: Box::new(runtime(
@@ -265,7 +265,7 @@ impl IteratorRecordPlan {
     }
 
     pub(crate) fn guarded_get_iterator(&mut self, payload: LocalId) -> Expr {
-        let value = Expr::Conditional {
+        let value = Expr::Conditional { byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(self.source)))),
             else_expr: Box::new(Expr::LocalGet(self.source)),
@@ -286,7 +286,7 @@ impl IteratorRecordPlan {
     }
 
     pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
-        Expr::Conditional {
+        Expr::Conditional { byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(crate::lower::iterator_next_method_call(iter_id, self.byte_offset)),
             else_expr: Box::new(Expr::Undefined),
@@ -325,7 +325,7 @@ impl IteratorRecordPlan {
                     Expr::Bool(true),
                 ])
             };
-            return Expr::Conditional {
+            return Expr::Conditional { byte_offset: self.byte_offset,
                 condition: Box::new(self.iterator_mode()),
                 then_expr: Box::new(protocol),
                 else_expr: Box::new(indexed),
@@ -350,10 +350,10 @@ impl IteratorRecordPlan {
         // selects the ordinary indexed backend without narrowing the cursor.
         success.push(advance);
         success.push(Expr::Bool(false));
-        Expr::Conditional {
+        Expr::Conditional { byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(protocol),
-            else_expr: Box::new(Expr::Conditional {
+            else_expr: Box::new(Expr::Conditional { byte_offset: self.byte_offset,
                 condition: Box::new(Expr::Compare { byte_offset: self.byte_offset,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(self.index)),
@@ -424,7 +424,7 @@ impl IteratorRecordPlan {
                             ],
                             plan.byte_offset,
                         );
-                        *expr = Expr::Conditional {
+                        *expr = Expr::Conditional { byte_offset: plan.byte_offset,
                             condition: Box::new(plan.iterator_mode()),
                             then_expr: Box::new(expr.clone()),
                             else_expr: Box::new(array_close),

@@ -425,7 +425,7 @@ fn collect_used_new_fields_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_used_new_fields_in_expr(condition, non_escaping_news, used);
             collect_used_new_fields_in_expr(then_expr, non_escaping_news, used);

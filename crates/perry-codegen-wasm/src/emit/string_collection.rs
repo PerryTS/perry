@@ -627,7 +627,7 @@ impl WasmModuleEmitter {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.collect_strings_in_expr(condition);
                 self.collect_strings_in_expr(then_expr);

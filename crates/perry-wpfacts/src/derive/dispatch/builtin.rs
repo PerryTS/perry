@@ -153,7 +153,7 @@ fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
     if let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = e
     {
         if matches!(condition.as_ref(), Expr::NamespacePatched(_)) {
@@ -262,7 +262,7 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                 Expr::Conditional {
                     condition,
                     then_expr,
-                    else_expr,
+                    else_expr, ..
                 } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                     let Expr::NamespacePatched(ns) = condition.as_ref() else {
                         unreachable!()

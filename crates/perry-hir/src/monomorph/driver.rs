@@ -455,7 +455,7 @@ fn collect_instantiations_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_instantiations_in_expr(condition, ctx, module, idx);
             collect_instantiations_in_expr(then_expr, ctx, module, idx);

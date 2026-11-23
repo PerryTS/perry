@@ -746,7 +746,7 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
             property: then.to_string(),
         };
     }
-    Some(Expr::Conditional {
+    Some(Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::NamespacePatched(ns.to_string())),
         then_expr: Box::new(Expr::TypeOf(Box::new(live))),
         else_expr: Box::new(Expr::String("function".to_string())),

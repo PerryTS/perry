@@ -247,7 +247,7 @@ pub(crate) fn inline_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             inline_calls_in_expr(
                 condition,

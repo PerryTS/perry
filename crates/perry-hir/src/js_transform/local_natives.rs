@@ -591,7 +591,7 @@ pub fn fix_class_field_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             fix_class_field_expr(condition, class_field_natives, user_classes, current_class);
             fix_class_field_expr(then_expr, class_field_natives, user_classes, current_class);
@@ -1143,7 +1143,7 @@ pub fn fix_native_instance_expr_with_locals(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             fix_native_instance_expr_with_locals(condition, native_instances, local_id_instances);
             fix_native_instance_expr_with_locals(then_expr, native_instances, local_id_instances);

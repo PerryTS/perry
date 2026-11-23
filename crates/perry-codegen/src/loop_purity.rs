@@ -237,7 +237,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_alloc_free(condition, is_inert)
                 && expr_alloc_free(then_expr, is_inert)
@@ -708,7 +708,7 @@ fn expr_writes_outside(e: &Expr, body_locals: &HashSet<u32>) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_writes_outside(condition, body_locals)
                 || expr_writes_outside(then_expr, body_locals)
@@ -753,7 +753,7 @@ fn expr_is_pure(e: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => expr_is_pure(condition) && expr_is_pure(then_expr) && expr_is_pure(else_expr),
         Expr::TypeOf(operand) => expr_is_pure(operand),
         Expr::Void(operand) => expr_is_pure(operand),

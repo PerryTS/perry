@@ -282,7 +282,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             condition,
             then_expr,
             else_expr,
-        } => Expr::Conditional {
+            byte_offset,
+        } => Expr::Conditional { byte_offset: *byte_offset,
             condition: Box::new(substitute_expr(condition, substitutions)),
             then_expr: Box::new(substitute_expr(then_expr, substitutions)),
             else_expr: Box::new(substitute_expr(else_expr, substitutions)),

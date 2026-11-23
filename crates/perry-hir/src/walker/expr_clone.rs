@@ -443,7 +443,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             condition,
             then_expr,
             else_expr,
-        } => Expr::Conditional {
+            byte_offset,
+        } => Expr::Conditional { byte_offset: *byte_offset,
             condition: Shallow::shallow(condition, n),
             then_expr: Shallow::shallow(then_expr, n),
             else_expr: Shallow::shallow(else_expr, n),

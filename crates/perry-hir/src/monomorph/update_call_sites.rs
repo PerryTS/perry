@@ -272,7 +272,7 @@ fn update_call_sites_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             update_call_sites_in_expr(condition, ctx, lookup);
             update_call_sites_in_expr(then_expr, ctx, lookup);

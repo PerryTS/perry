@@ -46,7 +46,7 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
     let then_expr = lower_expr(ctx, &cond.cons);
     let else_expr = lower_expr(ctx, &cond.alt);
     ctx.lowering_call_callee = prev_call_callee;
-    Ok(Expr::Conditional {
+    Ok(Expr::Conditional { byte_offset: cond.span.lo.0,
         condition: Box::new(condition?),
         then_expr: Box::new(then_expr?),
         else_expr: Box::new(else_expr?),

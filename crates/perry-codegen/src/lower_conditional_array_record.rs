@@ -113,7 +113,7 @@ fn finish(expr: &Expr) -> Option<Vec<Expr>> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = expr
     else {
         return None;
@@ -200,7 +200,7 @@ pub(crate) fn abrupt_args(catch: &perry_hir::CatchClause, finally: &[Stmt]) -> O
             body: body.clone(),
         };
         let mut args = abrupt_args(&plain, cleanup)?;
-        args[4] = Expr::Conditional {
+        args[4] = Expr::Conditional { byte_offset: 0 /*HPOS*/,
             condition: Box::new(flag_test.clone()),
             then_expr: Box::new(Expr::Number(2.0)),
             else_expr: Box::new(args[4].clone()),

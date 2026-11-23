@@ -154,7 +154,7 @@ fn tail_guard(ctx: &FnCtx<'_>, tail: &[Stmt]) -> Option<(u32, String)> {
             Some(Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             }),
         ..
     }) = tail.first()
@@ -508,7 +508,7 @@ fn resolve_guards_in_expr(expr: &mut Expr, binding: u32, is_first: bool) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } if matches!(
             condition.as_ref(),
             Expr::ClassIsFirstEvaluation { value, .. }

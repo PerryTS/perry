@@ -152,7 +152,7 @@ pub(crate) fn admitted_typed_array_holder(
         mutable: false,
         init: Some(source),
     });
-    Expr::Conditional {
+    Expr::Conditional { byte_offset,
         condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)], byte_offset)),
@@ -572,7 +572,7 @@ fn literal_for_of(
         let body = body?;
         let mut select = Expr::LocalGet(temps[n - 1].0);
         for (i, (id, _)) in temps.iter().enumerate().take(n - 1).rev() {
-            select = Expr::Conditional {
+            select = Expr::Conditional { byte_offset: stmt.span.lo.0,
                 condition: Box::new(Expr::Compare { byte_offset: stmt.span.lo.0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(counter)),

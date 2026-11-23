@@ -133,7 +133,7 @@ fn simple(e: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => simple(condition) && simple(then_expr) && simple(else_expr),
         Expr::IndexGet { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(_)) && simple(index)

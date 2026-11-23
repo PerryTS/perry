@@ -208,7 +208,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ready);
                 }
                 lower_expr(ctx, &args[4])?;
-                let predicate = Expr::Conditional {
+                let predicate = Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(args[0].clone()),
                     then_expr: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: perry_hir::CompareOp::Eq,

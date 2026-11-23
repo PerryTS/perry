@@ -580,7 +580,7 @@ fn literal_selection_range(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             // Range consumers can lower an enclosing arithmetic tree natively.
             // Its other operands' facts must survive this condition, so do not

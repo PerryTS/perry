@@ -420,7 +420,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, condition);

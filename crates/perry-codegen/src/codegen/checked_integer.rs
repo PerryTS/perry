@@ -36,7 +36,7 @@ fn expr_ok(e: &Expr, f: &Function, recursive: &mut bool) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             matches!(condition.as_ref(), Expr::Compare { .. })
                 && condition_ok(condition, f, recursive)
@@ -216,7 +216,7 @@ impl Lowerer<'_> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 let c = self.expr(condition);
                 let before = self.checked_stack;

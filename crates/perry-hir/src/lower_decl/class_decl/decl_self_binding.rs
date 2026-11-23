@@ -127,7 +127,7 @@ pub(crate) fn guard_shared_first_new(ctx: &LoweringContext, expr: Expr) -> Expr 
     } else {
         construct
     };
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::ClassIsFirstEvaluation {
             value: Box::new(Expr::LocalGet(*binding)),
             template,
@@ -156,7 +156,7 @@ pub(crate) fn guard_shared_first_static_get(ctx: &LoweringContext, expr: Expr) -
     if !statics.iter().any(|name| name == property) {
         return expr;
     }
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::ClassIsFirstEvaluation {
             value: Box::new(Expr::LocalGet(*binding)),
             template: template.clone(),
@@ -193,7 +193,7 @@ pub(crate) fn guard_shared_first_static_call(ctx: &LoweringContext, expr: Expr) 
     if !ctx.has_static_method(template, property) || args.iter().any(defines_code) {
         return expr;
     }
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::ClassIsFirstEvaluation {
             value: Box::new(Expr::LocalGet(*binding)),
             template: template.clone(),
@@ -222,7 +222,7 @@ pub(crate) fn guard_shared_first_capture_snapshot(
     let Stmt::Expr(register) = snapshot else {
         return snapshot;
     };
-    Stmt::Expr(Expr::Conditional {
+    Stmt::Expr(Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::ClassIsFirstEvaluation {
             value: Box::new(Expr::LocalGet(*binding)),
             template: class_name.to_string(),

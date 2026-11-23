@@ -2232,7 +2232,7 @@ fn expr_is_numeric_shaped(expr: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_is_numeric_shaped(condition)
                 && expr_is_numeric_shaped(then_expr)

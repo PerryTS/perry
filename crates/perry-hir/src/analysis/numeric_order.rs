@@ -521,7 +521,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 let v = self.expr(condition, env)?;
                 let b = self.truth(&v)?;

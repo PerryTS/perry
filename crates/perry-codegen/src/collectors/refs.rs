@@ -380,7 +380,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             walk(condition, out);
             walk(then_expr, out);

@@ -562,7 +562,7 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::IsUndefinedOrBareNan(operand) | Expr::ParseFloat(operand) => {
             check_object_literal_escapes_in_expr(operand, candidates, escaped);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional { condition, then_expr, else_expr, .. } => {
             check_object_literal_escapes_in_expr(condition, candidates, escaped);
             check_object_literal_escapes_in_expr(then_expr, candidates, escaped);
             check_object_literal_escapes_in_expr(else_expr, candidates, escaped);

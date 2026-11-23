@@ -457,7 +457,7 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_may_trigger_gc(ctx, condition)
                 || expr_may_trigger_gc(ctx, then_expr)
@@ -554,7 +554,7 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } if crate::expr::inert_math_enabled() => {
             expr_is_inert_primitive(ctx, condition)
                 && expr_is_inert_primitive(ctx, then_expr)
