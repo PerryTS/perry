@@ -936,11 +936,11 @@ fn collect_module_one(
                     byte_end: 0,
                     object: Box::new(perry_hir::Expr::GlobalGet(0)),
                     property: "globalThis".to_string(),
-                    byte_offset: 0,
+                    byte_offset: hir_module.byte_offset,
                 }),
                 property: "Bun".to_string(),
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
-                byte_offset: 0,
+                byte_offset: hir_module.byte_offset,
                 byte_end: 0,
             }),
         );

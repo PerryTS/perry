@@ -161,7 +161,7 @@ pub(crate) fn for_head_binding_stmts(
                     object,
                     property: prop.sym.to_string(),
                     value: Box::new(source),
-                    byte_offset: 0,
+                    byte_offset: member.span.lo.0,
                     byte_end: 0,
                 },
                 ast::MemberProp::Computed(c) => Expr::IndexSet {
@@ -190,7 +190,7 @@ pub(crate) fn for_head_binding_stmts(
                         object,
                         property,
                         value: Box::new(source),
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         byte_end: 0,
                     }
                 }

@@ -158,7 +158,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
                                                     byte_end: 0,
-                                                    byte_offset: 0,
+                                                    byte_offset: inner_member.span.lo.0,
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
                                                 }),
@@ -187,7 +187,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                                 object: Box::new(Expr::This),
                                                 property: field_name,
                                                 value: Box::new(Expr::LocalGet(temp_id)),
-                                                byte_offset: 0,
+                                                byte_offset: call.span.lo.0,
                                                 byte_end: 0,
                                             }));
 
