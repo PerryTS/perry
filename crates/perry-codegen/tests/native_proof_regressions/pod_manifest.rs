@@ -15,7 +15,7 @@ fn pod_i64_and_u64_materialization_uses_safe_integer_guards() {
                 packet_ty,
                 vec![("signed", int(-7)), ("unsigned", int(9))],
             ),
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     );
 
@@ -65,7 +65,7 @@ fn nested_pod_initializers_and_local_assignments_preserve_value_semantics() {
                 mutable: true,
                 init: Some(local(1)),
             },
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     );
 
@@ -118,7 +118,7 @@ fn pod_local_assigned_to_any_stays_at_the_managed_boundary() {
                 mutable: true,
                 init: Some(local(1)),
             },
-            Stmt::Return(Some(local(2))),
+            Stmt::Return(Some(local(2)), 0),
         ],
     );
 
@@ -224,7 +224,7 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
                     ),
                 ],
             ),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -302,7 +302,7 @@ fn mismatched_checked_native_scalar_conversion_does_not_prove_pod_field() {
                     native_module_call("perry/native", "u32", vec![local(1)]),
                 )],
             ),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -362,7 +362,7 @@ fn native_library_manifest_pod_param_lowers_region_local_record_to_ptr() {
                 ],
             ),
             Stmt::Expr(extern_call("native_use_packet", vec![local(1)], Type::Void)),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -431,7 +431,7 @@ fn native_library_manifest_pod_param_rejects_layout_mismatch() {
                 vec![("tag", int(7)), ("gain", number(1.5))],
             ),
             Stmt::Expr(extern_call("native_use_packet", vec![local(1)], Type::Void)),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -484,7 +484,7 @@ fn native_library_manifest_pod_view_param_lowers_to_ptr_and_count_with_proof() {
             native_arena_owner_let(1, "owner", int(4096), false),
             native_pod_view_let(2, "view", view_ty, 1, int(0), int(128)),
             Stmt::Expr(extern_call("native_batch", vec![local(2)], Type::Void)),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -608,7 +608,7 @@ fn native_pod_view_explicit_public_type_lowers_without_left_hand_annotation() {
                     view_type: Some(view_ty),
                 }),
             },
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -643,7 +643,7 @@ fn native_pod_view_length_survives_immutable_local_alias() {
                 object: Box::new(local(3)),
                 property: "length".to_string(),
                 byte_offset: 0,
-            })),
+            }), 0),
         ],
     );
 
@@ -685,7 +685,7 @@ fn native_pod_view_embedded_type_survives_any_expected_type() {
                     view_type: Some(view_ty),
                 }),
             },
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -713,7 +713,7 @@ fn native_pod_view_embedded_type_lowers_without_expected_context() {
                 count: Box::new(int(8)),
                 view_type: Some(view_ty),
             }),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -736,7 +736,7 @@ fn native_pod_view_hidden_intrinsic_without_expected_type_still_errors() {
                 count: Box::new(int(8)),
                 view_type: None,
             }),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -774,7 +774,7 @@ fn native_library_manifest_pod_view_param_rejects_layout_mismatch() {
             native_arena_owner_let(1, "owner", int(1024), false),
             native_pod_view_let(2, "view", view_ty, 1, int(0), int(4)),
             Stmt::Expr(extern_call("native_batch", vec![local(2)], Type::Void)),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 

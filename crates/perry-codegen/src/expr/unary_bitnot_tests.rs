@@ -39,7 +39,7 @@ fn bitnot(operand: Expr) -> Expr {
 
 #[test]
 fn double_bitnot_of_coercive_number_result_stays_native() {
-    let quotient = Expr::Binary {
+    let quotient = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(Expr::LocalGet(X)),
         right: Box::new(Expr::Integer(32)),
@@ -103,7 +103,7 @@ fn potentially_bigint_binary_result_retains_bitnot_dispatch() {
         object: Box::new(Expr::LocalGet(id)),
         property: "value".to_string(),
     };
-    let dynamic_and = Expr::Binary {
+    let dynamic_and = Expr::Binary { byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(unknown_value(X)),
         right: Box::new(unknown_value(Y)),
@@ -129,7 +129,7 @@ const B: u32 = 12;
 const D: u32 = 13;
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -140,7 +140,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 /// const d = q | 0; return <ret>; }`, as IR. Every fixture shares the module
 /// and function names, so two fixtures compare equal when their code does.
 fn int32_locals_fn_ir(ret: Expr) -> String {
-    let param = |id: u32| Param {
+    let param = |id: u32| Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Number,
@@ -164,7 +164,7 @@ fn int32_locals_fn_ir(ret: Expr) -> String {
         type_args: Vec::new(),
         byte_offset: 0,
     }));
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -173,7 +173,7 @@ fn int32_locals_fn_ir(ret: Expr) -> String {
         body: vec![
             int32_const(B, P),
             int32_const(D, Q),
-            Stmt::Return(Some(ret)),
+            Stmt::Return(Some(ret), 0),
         ],
         is_async: false,
         is_generator: false,

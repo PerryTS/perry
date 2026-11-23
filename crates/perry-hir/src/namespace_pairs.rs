@@ -330,7 +330,7 @@ mod tests {
             byte_offset: offset,
             byte_end: 0,
         };
-        Expr::Conditional {
+        Expr::Conditional { byte_offset: 0,
             condition: Box::new(Expr::NamespacePatched("Math".into())),
             then_expr: Box::new(Expr::Call {
                 callee: Box::new(member),
@@ -351,7 +351,7 @@ mod tests {
         let ast = perry_parser::parse_typescript(source, "t.ts").expect("source parses");
         let mut m = crate::lower_module(&ast, "t", "t.ts").expect("source lowers");
         for (f, offset) in m.functions.iter_mut().zip([10, 20]) {
-            f.body = vec![Stmt::Return(Some(pair(offset)))];
+            f.body = vec![Stmt::Return(Some(pair(offset)), 0)];
         }
         let closure = m
             .functions
@@ -362,11 +362,11 @@ mod tests {
             + 1;
         m.functions[1].body.insert(
             0,
-            Stmt::Expr(Expr::Closure {
+            Stmt::Expr(Expr::Closure { byte_offset: 0,
                 func_id: closure,
                 params: Vec::new(),
                 return_type: crate::types::Type::Any,
-                body: vec![Stmt::Return(Some(pair(30)))],
+                body: vec![Stmt::Return(Some(pair(30)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -394,9 +394,9 @@ mod tests {
         for f in &m.functions {
             for st in &f.body {
                 match st {
-                    Stmt::Return(Some(e)) => out.push(of(e)),
+                    Stmt::Return(Some(e), _) => out.push(of(e)),
                     Stmt::Expr(Expr::Closure { body, .. }) => {
-                        if let [Stmt::Return(Some(e))] = &body[..] {
+                        if let [Stmt::Return(Some(e), _)] = &body[..] {
                             out.push(of(e));
                         }
                     }

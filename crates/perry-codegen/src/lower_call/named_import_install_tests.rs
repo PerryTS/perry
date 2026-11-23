@@ -6,7 +6,7 @@ use perry_hir::{
 
 fn compile_lookup(module_name: &str, property: &str) -> String {
     let mut module = Module::new("named_import_install.ts");
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "lookup".into(),
         type_params: Vec::new(),
@@ -25,7 +25,7 @@ fn compile_lookup(module_name: &str, property: &str) -> String {
             ],
             type_args: Vec::new(),
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

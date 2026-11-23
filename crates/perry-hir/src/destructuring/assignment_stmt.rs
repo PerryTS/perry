@@ -804,7 +804,7 @@ mod iterator_close_tests {
         ) {
             assert!(
                 matches!(&body[rest + 2], Stmt::If {
-                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+                condition: Expr::Compare { op: CompareOp::Eq, left, right, .. }, ..
             } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
                 && matches!(right.as_ref(), Expr::Bool(true))),
                 "drain must test the saved pre-drain done bit"
@@ -872,7 +872,7 @@ mod shorthand_default_tests {
         let Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } = stores[0]
         else {
             panic!("`{name}` must be assigned through its default, got a bare read");

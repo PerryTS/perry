@@ -819,15 +819,15 @@ mod exit_tests {
     use super::*;
     #[test]
     fn generated_exit_guards_keep_boolean_constructor_evidence() {
-        let mut body = vec![Stmt::Try {
+        let mut body = vec![Stmt::Try { byte_offset: 0,
             body: vec![Stmt::If {
                 condition: Expr::LocalGet(1),
-                then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)))],
+                then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)), 0)],
                 else_branch: None,
             }],
             catch: Some(perry_hir::CatchClause {
                 param: Some((2, "error".into())),
-                body: vec![Stmt::Return(Some(Expr::Number(9.0)))],
+                body: vec![Stmt::Return(Some(Expr::Number(9.0)), 0)],
             }),
             finally: Some(vec![Stmt::Expr(Expr::Number(5.0))]),
             forof_completion: None,
@@ -865,7 +865,7 @@ mod exit_tests {
             panic!("catch guard");
         };
         assert!(matches!(condition, Expr::Compare {
-            op: perry_hir::CompareOp::Eq, left, right
+            op: perry_hir::CompareOp::Eq, left, right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
         let Stmt::If {
             condition: Expr::Unary { operand, .. },
@@ -875,7 +875,7 @@ mod exit_tests {
             panic!("finally guard");
         };
         assert!(matches!(operand.as_ref(), Expr::Compare {
-            op: perry_hir::CompareOp::Eq, left, right
+            op: perry_hir::CompareOp::Eq, left, right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
     }
 }

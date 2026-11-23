@@ -40,7 +40,7 @@ fn proven_boolean_arithmetic_uses_native_conversion_and_ops() {
             vec![
                 proven_flag(),
                 result(
-                    Expr::Binary {
+                    Expr::Binary { byte_offset: 0,
                         op,
                         left: Box::new(Expr::LocalGet(FLAG)),
                         right: Box::new(Expr::Number(2.0)),
@@ -68,7 +68,7 @@ fn proven_boolean_relational_compare_uses_native_fcmp() {
         vec![
             proven_flag(),
             result(
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(FLAG)),
                     right: Box::new(Expr::Number(2.0)),
@@ -103,10 +103,10 @@ fn proven_boolean_compare_rejects_declared_only_nested_add() {
                 init: Some(Expr::String("4".to_string())),
             },
             result(
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(FLAG)),
-                    right: Box::new(Expr::Binary {
+                    right: Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(LIAR)),
                         right: Box::new(Expr::Number(1.0)),
@@ -137,14 +137,14 @@ fn invalidated_boolean_proof_keeps_dynamic_coercion_and_add_dispatch() {
                 Box::new(Expr::String("4".to_string())),
             )),
             result(
-                Expr::Binary {
+                Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(FLAG)),
                     right: Box::new(Expr::Number(2.0)),
                 },
                 Type::Any,
             ),
-            Stmt::Expr(Expr::Binary {
+            Stmt::Expr(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Mul,
                 left: Box::new(Expr::LocalGet(FLAG)),
                 right: Box::new(Expr::Number(2.0)),

@@ -921,11 +921,11 @@ mod tests {
     use perry_hir::{Param, TypeAlias};
 
     fn function(id: u32, name: &str, body: Vec<Stmt>, payload: &Type) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id,
             name: name.to_string(),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: id * 10,
                 name: "value".to_string(),
                 ty: payload.clone(),
@@ -992,7 +992,7 @@ mod tests {
         let identity = function(
             1,
             "identity",
-            vec![Stmt::Return(Some(Expr::LocalGet(10)))],
+            vec![Stmt::Return(Some(Expr::LocalGet(10)), 0)],
             &payload,
         );
         let forward = function(
@@ -1012,14 +1012,14 @@ mod tests {
                         byte_offset: 0,
                     }),
                 },
-                Stmt::Return(Some(Expr::LocalGet(99))),
+                Stmt::Return(Some(Expr::LocalGet(99)), 0),
             ],
             &payload,
         );
         let liar = function(
             3,
             "liar",
-            vec![Stmt::Return(Some(Expr::Undefined))],
+            vec![Stmt::Return(Some(Expr::Undefined), 0)],
             &payload,
         );
         let escaping = function(
@@ -1037,15 +1037,15 @@ mod tests {
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(40))),
+                Stmt::Return(Some(Expr::LocalGet(40)), 0),
             ],
             &payload,
         );
-        let one_pass_number = Function {
+        let one_pass_number = Function { byte_offset: 0,
             id: 5,
             name: "onePassNumber".to_string(),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 50,
                 name: "value".to_string(),
                 ty: payload.clone(),
@@ -1086,7 +1086,7 @@ mod tests {
                     ],
                     condition: Expr::Bool(false),
                 },
-                Stmt::Return(Some(Expr::LocalGet(51))),
+                Stmt::Return(Some(Expr::LocalGet(51)), 0),
             ],
             is_async: false,
             is_generator: false,

@@ -41,7 +41,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 /// Compile a one-function module and return its LLVM IR.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),

@@ -841,7 +841,7 @@ mod tests {
     use std::collections::HashSet;
 
     fn param(id: LocalId) -> Param {
-        Param {
+        Param { byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -853,12 +853,12 @@ mod tests {
     }
 
     fn capturing_closure(func_id: u32, capture: LocalId, body_param: LocalId) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id,
             params: vec![param(body_param)],
             return_type: Type::Any,
             // Body reads the captured local — what makes it a real capture.
-            body: vec![Stmt::Return(Some(Expr::LocalGet(capture)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(capture)), 0)],
             captures: vec![capture],
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -889,7 +889,7 @@ mod tests {
         let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
             array: Box::new(Expr::LocalGet(99)),
             callback: Box::new(capturing_closure(7, 1, 2)),
-        }))];
+        }), 0)];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(
             body_contains_closure_capturing(&body, &param_ids),
@@ -903,7 +903,7 @@ mod tests {
         let body = vec![Stmt::Return(Some(Expr::ArrayMap {
             array: Box::new(Expr::LocalGet(99)),
             callback: Box::new(capturing_closure(7, 1, 2)),
-        }))];
+        }), 0)];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }
@@ -916,7 +916,7 @@ mod tests {
             array: Box::new(Expr::LocalGet(99)),
             // Captures id 5, but we only ask about param id 1.
             callback: Box::new(capturing_closure(7, 5, 2)),
-        }))];
+        }), 0)];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(!body_contains_closure_capturing(&body, &param_ids));
     }
@@ -930,7 +930,7 @@ mod tests {
             args: vec![capturing_closure(7, 1, 2)],
             type_args: Vec::new(),
             byte_offset: 0,
-        }))];
+        }), 0)];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }

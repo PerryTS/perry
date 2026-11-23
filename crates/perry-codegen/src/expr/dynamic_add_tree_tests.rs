@@ -37,7 +37,7 @@ fn erased_bigint_local(id: u32, name: &str, value: &str) -> Vec<Stmt> {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -45,7 +45,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 }
 
 fn arithmetic(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -176,7 +176,7 @@ const G: u32 = 16;
 const ARGS: u32 = 17;
 
 fn param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -188,7 +188,7 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: name.into(),
         type_params: Vec::new(),
@@ -253,7 +253,7 @@ fn left_chain_over_parameters_keeps_one_shared_guard() {
     let ir = function_ir(function(
         "params_chain",
         params,
-        vec![Stmt::Return(Some(chain))],
+        vec![Stmt::Return(Some(chain), 0)],
     ));
     assert_eq!(
         ir.matches("\nguarded_add.numeric.").count(),
@@ -284,7 +284,7 @@ fn left_chain_over_an_assigned_uncaptured_let_keeps_the_fold() {
             Expr::LocalGet(P_A),
             Expr::LocalGet(P_B),
             Expr::LocalGet(Z),
-        ]))),
+        ])), 0),
     ];
     let ir = function_ir(function(
         "uncaptured_let",
@@ -310,7 +310,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_property_read() {
     let ir = function_ir(function(
         "property_late",
         params_abc(),
-        vec![Stmt::Return(Some(chain))],
+        vec![Stmt::Return(Some(chain), 0)],
     ));
     assert_eq!(
         fadds(&ir),
@@ -337,7 +337,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
             name: "g".into(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Closure {
+            init: Some(Expr::Closure { byte_offset: 0,
                 func_id: 2,
                 params: Vec::new(),
                 return_type: Type::Any,
@@ -358,7 +358,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
             Expr::LocalGet(P_A),
             Expr::LocalGet(P_B),
             Expr::LocalGet(Z),
-        ]))),
+        ])), 0),
     ];
     let ir = function_ir(function(
         "captured_late",
@@ -392,7 +392,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_mapped_arguments_parameter() {
             Expr::LocalGet(P_A),
             Expr::LocalGet(P_B),
             Expr::LocalGet(P_C),
-        ])))],
+        ])), 0)],
     );
     f.is_strict = false;
     let ir = function_ir(f);
@@ -436,7 +436,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_module_global() {
         Vec::new(),
         vec![
             Stmt::Expr(Expr::LocalSet(C, Box::new(Expr::Integer(100)))),
-            Stmt::Return(Some(Expr::Undefined)),
+            Stmt::Return(Some(Expr::Undefined), 0),
         ],
     ));
     let ir = String::from_utf8(
@@ -475,7 +475,7 @@ fn declared_number_left_chain_declines_when_a_late_leaf_is_an_element_read() {
             elem(0),
             elem(1),
             elem(2),
-        ])))],
+        ])), 0)],
     ));
     assert!(
         ir.contains("\nguarded_add.numeric."),

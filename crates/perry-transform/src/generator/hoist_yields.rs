@@ -500,7 +500,7 @@ mod tests {
     #[test]
     fn comma_before_yield_runs_left_operand_first() {
         let side_effect = Expr::LocalSet(5, Box::new(Expr::Integer(1)));
-        let yld = Expr::Yield {
+        let yld = Expr::Yield { byte_offset: 0,
             value: Some(Box::new(Expr::Null)),
             delegate: false,
         };

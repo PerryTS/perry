@@ -644,19 +644,19 @@ mod tests {
         let body = vec![
             row_alias(8, 7),
             perry_hir::Stmt::Expr(index(index(Expr::LocalGet(7), 0), 1)),
-            perry_hir::Stmt::Return(Some(index(Expr::LocalGet(8), 2))),
+            perry_hir::Stmt::Return(Some(index(Expr::LocalGet(8), 2)), 0),
         ];
         assert!(flat_const_array_uses_are_read_only(&body, 7));
     }
 
     #[test]
     fn flat_const_rejects_rows_used_as_javascript_values() {
-        let returned_directly = vec![perry_hir::Stmt::Return(Some(index(Expr::LocalGet(7), 0)))];
+        let returned_directly = vec![perry_hir::Stmt::Return(Some(index(Expr::LocalGet(7), 0)), 0)];
         assert!(!flat_const_array_uses_are_read_only(&returned_directly, 7));
 
         let returned_alias = vec![
             row_alias(8, 7),
-            perry_hir::Stmt::Return(Some(Expr::LocalGet(8))),
+            perry_hir::Stmt::Return(Some(Expr::LocalGet(8)), 0),
         ];
         assert!(!flat_const_array_uses_are_read_only(&returned_alias, 7));
     }
@@ -741,7 +741,7 @@ mod tests {
                 object: Box::new(Expr::LocalGet(7)),
                 property: "v".to_string(),
                 byte_offset: 0,
-            })),
+            }), 0),
         ];
         assert!(body_contains_call(&body));
         // and the escape-shaped predicate is exactly what does NOT see it
@@ -756,11 +756,11 @@ mod tests {
             property: "v".to_string(),
             byte_offset: 0,
         };
-        let body = vec![perry_hir::Stmt::Return(Some(Expr::Binary {
+        let body = vec![perry_hir::Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(read),
             right: Box::new(Expr::Integer(1)),
-        }))];
+        }), 0)];
         assert!(!body_contains_call(&body));
     }
 
@@ -774,7 +774,7 @@ mod tests {
                 name: "x".to_string(),
                 ty: perry_hir::types::Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary {
+                init: Some(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Integer(1)),
                     right: Box::new(call(102, vec![Expr::Integer(2)])),

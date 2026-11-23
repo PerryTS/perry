@@ -20,7 +20,7 @@ mod mutations;
 mod widgets;
 
 pub(crate) fn empty_module() -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: "test".to_string(),
         imports: vec![],
         exports: vec![],
@@ -64,7 +64,7 @@ pub(crate) fn empty_module() -> Module {
 }
 
 pub(crate) fn nmc(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -74,7 +74,7 @@ pub(crate) fn nmc(method: &str, args: Vec<Expr>) -> Expr {
 }
 
 pub(crate) fn app_with_body(body: Expr) -> Stmt {
-    Stmt::Expr(Expr::NativeMethodCall {
+    Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -84,7 +84,7 @@ pub(crate) fn app_with_body(body: Expr) -> Stmt {
 }
 
 pub(crate) fn closure_stub() -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
         return_type: perry_hir::types::Type::Any,
@@ -105,7 +105,7 @@ pub(crate) fn closure_stub() -> Expr {
 // ----- Phase 2 v6: state<T> reactive container helpers -----
 
 pub(crate) fn state_call(initial: Expr) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -132,7 +132,7 @@ pub(crate) fn state_method_call(state_id: u32, method: &str, args: Vec<Expr>) ->
 // ─── #369 perry/media drain glue helper ────────────────────────────
 
 pub(crate) fn media_call(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/media".to_string(),
         class_name: None,
         object: None,
@@ -156,7 +156,7 @@ pub(crate) fn let_widget(id: LocalId, name: &str, init: Expr) -> Stmt {
 
 /// Helper: a perry/ui mutator call expression, e.g. widgetAddChild(parent, child).
 pub(crate) fn mutator_stmt(method: &str, args: Vec<Expr>) -> Stmt {
-    Stmt::Expr(Expr::NativeMethodCall {
+    Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,

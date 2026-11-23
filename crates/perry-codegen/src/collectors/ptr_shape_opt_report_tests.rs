@@ -20,7 +20,7 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Stmt};
 
 fn field(name: &str) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -132,11 +132,11 @@ fn contained_local_wins_and_returned_local_is_denied_with_its_rule() {
         store_x(1),
         let_c(2, "escaped"),
         store_x(2),
-        Stmt::Return(Some(Expr::Conditional {
+        Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
             condition: Box::new(Expr::Bool(true)),
             then_expr: Box::new(Expr::LocalGet(2)),
             else_expr: Box::new(Expr::Undefined),
-        })),
+        }), 0),
     ];
 
     let session = Session::start();
@@ -186,7 +186,7 @@ fn escape_kinds_are_discriminated() {
 
     let captured = vec![
         let_c(1, "captured"),
-        Stmt::Expr(Expr::Closure {
+        Stmt::Expr(Expr::Closure { byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -363,7 +363,7 @@ fn unbound_allocation_sites_are_reported() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let facts = run(&stmts, &classes);
@@ -393,7 +393,7 @@ fn nothing_is_recorded_when_the_report_is_off() {
     // this test's subject is the report gate, not the proof.
     let stmts = vec![
         let_c(1, "escaped"),
-        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None))),
+        Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None)), 0),
     ];
 
     // Take the same lock the enabled sessions use — otherwise a
@@ -512,7 +512,7 @@ fn a_return_in_a_return_shape_producer_is_reported_as_served() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_function_region("mk", true);
@@ -538,7 +538,7 @@ fn a_return_in_a_method_shape_producer_is_reported_as_served() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let guard = crate::opt_report::enter_method_region("Factory.make", true);
@@ -564,7 +564,7 @@ fn a_return_in_a_plain_function_is_still_a_rule_1_denial() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_function_region("mk", false);
@@ -598,7 +598,7 @@ fn a_closure_region_without_the_fact_is_still_a_rule_1_denial() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_closure("mk", 7, false);
@@ -632,7 +632,7 @@ fn a_closure_region_with_the_fact_reports_a_served_return() {
     let c = class_with_fields("C", &["x"]);
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_closure("mk", 7, true);
@@ -670,7 +670,7 @@ fn only_the_return_position_is_marked_served() {
         type_args: Vec::new(),
         byte_offset: 0,
         cap_args_appended: 0,
-    }))];
+    }), 0)];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_function_region("mk", true);
@@ -700,7 +700,7 @@ fn only_the_return_position_is_marked_served() {
         args: vec![new_c()],
         type_args: Vec::new(),
         byte_offset: 0,
-    }))];
+    }), 0)];
 
     let _guard = crate::opt_report::enter_function_region("mk", true);
     let _ = run(&called, &classes);
@@ -794,7 +794,7 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
 // different producer-side guard happens to reject the region.
 
 fn ternary(a: Expr, b: Expr) -> Expr {
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(a),
         else_expr: Box::new(b),
@@ -825,7 +825,7 @@ fn a_conditional_result_arm_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(ternary(new_c(), new_c())))];
+    let stmts = vec![Stmt::Return(Some(ternary(new_c(), new_c())), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -853,11 +853,11 @@ fn a_conditional_condition_is_not_a_return_shape_source() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::Conditional {
+    let stmts = vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
         condition: Box::new(new_c()),
         then_expr: Box::new(new_c()),
         else_expr: Box::new(new_c()),
-    }))];
+    }), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -887,11 +887,11 @@ fn a_logical_result_operand_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::Logical {
+    let stmts = vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
         op: perry_hir::LogicalOp::And,
         left: Box::new(Expr::Bool(true)),
         right: Box::new(new_c()),
-    }))];
+    }), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -919,11 +919,11 @@ fn a_consumed_logical_operand_is_not_a_return_shape_source() {
         byte_offset: 0,
         cap_args_appended: 0,
     };
-    let stmts = vec![Stmt::Return(Some(Expr::Logical {
+    let stmts = vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
         op: perry_hir::LogicalOp::Or,
         left: Box::new(new_c()),
         right: Box::new(new_d),
-    }))];
+    }), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -949,7 +949,7 @@ fn an_awaited_operand_under_a_return_is_not_a_return_position() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::Await(Box::new(new_c()))))];
+    let stmts = vec![Stmt::Return(Some(Expr::Await(Box::new(new_c()), 0)), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -970,7 +970,7 @@ fn a_member_base_under_a_return_is_not_a_return_position() {
         object: Box::new(new_c()),
         property: "x".to_string(),
         byte_offset: 0,
-    }))];
+    }), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -987,7 +987,7 @@ fn a_bare_return_is_still_a_return_position_and_still_served() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(new_c()))];
+    let stmts = vec![Stmt::Return(Some(new_c()), 0)];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -1018,7 +1018,7 @@ fn a_selected_promotion_with_no_access_site_names_its_mechanism() {
     // Proven, and nothing in the body reads or writes a field of it.
     let session = Session::start();
     let facts = run(
-        &[let_c(1, "idle"), Stmt::Return(Some(Expr::LocalGet(1)))],
+        &[let_c(1, "idle"), Stmt::Return(Some(Expr::LocalGet(1)), 0)],
         &classes,
     );
     let entries = session.entries();
@@ -1058,7 +1058,7 @@ fn a_selected_promotion_with_no_access_site_names_its_mechanism() {
         &[
             let_c(2, "used"),
             store_x(2),
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         &classes,
     );

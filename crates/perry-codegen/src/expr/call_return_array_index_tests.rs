@@ -3,7 +3,7 @@ use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -21,7 +21,7 @@ fn function(
     return_type: Type,
     body: Vec<Stmt>,
 ) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -64,7 +64,7 @@ fn store_class(receiver_selector: i64) -> Class {
         vec![Stmt::Return(Some(Expr::Array(
             vec![Expr::Number(0.0)],
             None,
-        )))],
+        )), 0)],
     );
     let write = function(
         3,

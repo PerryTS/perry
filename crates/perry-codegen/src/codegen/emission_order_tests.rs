@@ -144,7 +144,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn empty_module(name: &str) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -231,7 +231,7 @@ fn closure_display_module() -> Module {
             name: format!("_f{:02}", k),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Closure {
+            init: Some(Expr::Closure { byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Void,
@@ -313,13 +313,13 @@ fn closure_display_name_emission_is_run_to_run_deterministic() {
 // ---------------------------------------------------------------------------
 
 fn method_fn(id: u32, name: &str) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        body: vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -383,11 +383,11 @@ fn dispatch_tower_module() -> Module {
             method_fn(200 + k, "m"),
         ));
     }
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 700,
         name: "callm".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 701,
             name: "o".to_string(),
             ty: Type::Any,
@@ -843,7 +843,7 @@ fn header_mode_replaces_bodies_with_a_di_header() {
     let mut module = empty_module("function_source_header.ts");
     let mut foo = method_fn(100, "foo");
     foo.params = vec![
-        Param {
+        Param { byte_offset: 0,
             id: 1,
             name: "a".to_string(),
             ty: Type::Any,
@@ -852,7 +852,7 @@ fn header_mode_replaces_bodies_with_a_di_header() {
             is_rest: false,
             arguments_object: None,
         },
-        Param {
+        Param { byte_offset: 0,
             id: 2,
             name: "b".to_string(),
             ty: Type::Any,

@@ -49,7 +49,7 @@ fn accepts_scalar_consumption_with_utf16_strides() {
     for count in [0, 2, 5, i32::MAX] {
         let mut stmts = body();
         stmts.push(Stmt::Expr(assign(vec![Expr::Integer(count as i64)])));
-        stmts.push(Stmt::Return(Some(property("length"))));
+        stmts.push(Stmt::Return(Some(property("length")), 0));
         assert!(selected(&stmts));
     }
 }
@@ -68,7 +68,7 @@ fn leaves_unrelated_and_immutable_locals_alone() {
 #[test]
 fn rejects_escapes_aliases_captures_and_unsupported_updates() {
     let cases = [
-        Stmt::Return(Some(Expr::LocalGet(1))),
+        Stmt::Return(Some(Expr::LocalGet(1)), 0),
         Stmt::Let {
             id: 2,
             name: "alias".into(),
@@ -76,7 +76,7 @@ fn rejects_escapes_aliases_captures_and_unsupported_updates() {
             mutable: false,
             init: Some(Expr::LocalGet(1)),
         },
-        Stmt::Return(Some(assign(vec![Expr::Integer(1)]))),
+        Stmt::Return(Some(assign(vec![Expr::Integer(1)])), 0),
         Stmt::Expr(assign(vec![Expr::Integer(-1)])),
         Stmt::Expr(assign(vec![Expr::Integer(1), Expr::Integer(2)])),
         Stmt::Expr(assign(vec![Expr::LocalGet(3)])),

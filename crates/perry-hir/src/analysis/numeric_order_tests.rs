@@ -7,21 +7,21 @@ fn num(n: f64) -> Expr {
     Expr::Number(n)
 }
 fn compare(op: CompareOp, a: Expr, b: Expr) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0,
         op,
         left: Box::new(a),
         right: Box::new(b),
     }
 }
 fn sub(a: Expr, b: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(a),
         right: Box::new(b),
     }
 }
 fn ternary(c: Expr, a: Expr, b: Expr) -> Expr {
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0,
         condition: Box::new(c),
         then_expr: Box::new(a),
         else_expr: Box::new(b),
@@ -45,11 +45,11 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     }
 }
 fn callback(body: Vec<Stmt>) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 99,
         params: [17, 23]
             .into_iter()
-            .map(|id| Param {
+            .map(|id| Param { byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Any,
@@ -74,7 +74,7 @@ fn callback(body: Vec<Stmt>) -> Expr {
     }
 }
 fn ret(e: Expr) -> Vec<Stmt> {
-    vec![Stmt::Return(Some(e))]
+    vec![Stmt::Return(Some(e), 0)]
 }
 fn branches() -> Vec<Stmt> {
     vec![
@@ -88,7 +88,7 @@ fn branches() -> Vec<Stmt> {
             then_branch: ret(num(1.0)),
             else_branch: None,
         },
-        Stmt::Return(Some(num(0.0))),
+        Stmt::Return(Some(num(0.0)), 0),
     ]
 }
 #[test]
@@ -149,9 +149,9 @@ fn sign_proof_accepts_control_flow_coercions_aliases_and_both_directions() {
 #[test]
 fn sign_proof_closes_helpers_and_projection_bodies_transitively() {
     let helper = callback(branches());
-    let project = Expr::Closure {
+    let project = Expr::Closure { byte_offset: 0,
         func_id: 100,
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 17,
             name: "x".into(),
             ty: Type::Any,
@@ -217,7 +217,7 @@ fn sign_proof_refuses_inconsistency_effects_captures_and_mixed_domains() {
         ret(call(local(500), vec![local(17), local(23)])),
         vec![
             Stmt::Expr(Expr::LocalSet(17, Box::new(num(0.0)))),
-            Stmt::Return(Some(sub(local(17), local(23)))),
+            Stmt::Return(Some(sub(local(17), local(23))), 0),
         ],
         ret(ternary(
             compare(CompareOp::Eq, local(17), local(23)),
@@ -228,7 +228,7 @@ fn sign_proof_refuses_inconsistency_effects_captures_and_mixed_domains() {
         assert_eq!(pure_numeric_order(&callback(body)), None);
     }
     let mut bad = branches();
-    bad[2] = Stmt::Return(Some(num(1.0)));
+    bad[2] = Stmt::Return(Some(num(1.0)), 0);
     assert_eq!(pure_numeric_order(&callback(bad)), None);
 }
 #[test]
@@ -255,7 +255,7 @@ fn recursive_or_effectful_resolved_helpers_are_not_pure() {
     );
     let helper = callback(vec![
         Stmt::Expr(Expr::LocalSet(7, Box::new(num(3.0)))),
-        Stmt::Return(Some(sub(local(17), local(23)))),
+        Stmt::Return(Some(sub(local(17), local(23))), 0),
     ]);
     assert_eq!(
         numeric_order_with(&outer, &|_| NumericCallable::closure(&helper)),
@@ -276,7 +276,7 @@ fn optimized_integer_constants_have_the_same_numeric_meaning() {
             then_branch: ret(Expr::Integer(42)),
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::Integer(0))),
+        Stmt::Return(Some(Expr::Integer(0)), 0),
     ];
     assert_eq!(
         pure_numeric_order(&callback(body)),
@@ -291,7 +291,7 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
         num(-0.0),
         num(0.0),
     );
-    let reciprocal = Expr::Binary {
+    let reciprocal = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(num(1.0)),
         right: Box::new(zero),
@@ -315,7 +315,7 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
                 local(50),
                 num(0.0),
             ),
-        ))),
+        )), 0),
     ];
     assert_eq!(pure_numeric_order(&callback(body)), None);
 }
@@ -326,7 +326,7 @@ fn helper_fallthrough_and_bare_return_remain_undefined_until_the_consumer() {
         let mut body = branches();
         body.pop();
         if bare_return {
-            body.push(Stmt::Return(None));
+            body.push(Stmt::Return(None, 0));
         }
         let helper = callback(body);
         let mut direct = callback(ret(call(local(500), vec![local(17), local(23)])));

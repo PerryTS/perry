@@ -27,7 +27,7 @@ mod tests {
     }
 
     fn closure(body: Vec<Stmt>, captures: Vec<LocalId>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id: 900,
             params: Vec::new(),
             return_type: perry_hir::types::Type::Any,
@@ -48,7 +48,7 @@ mod tests {
     // ── End-to-end: the transform emits the complete terminal release set ──
 
     fn async_module(body: Vec<Stmt>) -> Module {
-        let f = Function {
+        let f = Function { byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),
@@ -109,7 +109,7 @@ mod tests {
                 Stmt::Let { init: Some(e), .. }
                 | Stmt::Expr(e)
                 | Stmt::Throw(e)
-                | Stmt::Return(Some(e)) => out.push(e),
+                | Stmt::Return(Some(e), _) => out.push(e),
                 Stmt::If { condition, .. } => out.push(condition),
                 Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
                     out.push(condition)
@@ -174,7 +174,7 @@ mod tests {
             name: "v".into(),
             ty: perry_hir::types::Type::Any,
             mutable: false,
-            init: Some(Expr::Await(Box::new(Expr::Integer(1)))),
+            init: Some(Expr::Await(Box::new(Expr::Integer(1)), 0)),
         }
     }
 
@@ -186,7 +186,7 @@ mod tests {
         let mut m = async_module(vec![
             awaited_let(50),
             awaited_let(51),
-            Stmt::Return(Some(local_get(50))),
+            Stmt::Return(Some(local_get(50)), 0),
         ]);
         run_async_pipeline(&mut m);
         assert_eq!(
@@ -211,7 +211,7 @@ mod tests {
     /// await still does.
     #[test]
     fn a_state_local_binding_gets_no_frame_cell_but_a_crossing_one_does() {
-        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)))]);
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(local_get(50)), 0)]);
         run_async_pipeline(&mut m);
         assert!(
             !preallocated(&m.functions[0].body).contains(&50),
@@ -221,7 +221,7 @@ mod tests {
         let mut m = async_module(vec![
             awaited_let(50),
             awaited_let(51),
-            Stmt::Return(Some(local_get(50))),
+            Stmt::Return(Some(local_get(50)), 0),
         ]);
         run_async_pipeline(&mut m);
         assert!(
@@ -236,8 +236,8 @@ mod tests {
     /// capturing closure dies.
     #[test]
     fn a_body_local_an_escaping_closure_can_see_is_deferred_at_runtime() {
-        let escaping = closure(vec![Stmt::Return(Some(local_get(50)))], Vec::new());
-        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(escaping))]);
+        let escaping = closure(vec![Stmt::Return(Some(local_get(50)), 0)], Vec::new());
+        let mut m = async_module(vec![awaited_let(50), Stmt::Return(Some(escaping), 0)]);
         run_async_pipeline(&mut m);
         assert_eq!(
             count_release_stores(&m.functions[0].body, 50),
@@ -259,7 +259,7 @@ mod tests {
         let mut m = async_module(vec![
             awaited_let(50),
             awaited_let(51),
-            Stmt::Return(Some(local_get(50))),
+            Stmt::Return(Some(local_get(50)), 0),
         ]);
         run_async_pipeline(&mut m);
         let body = &m.functions[0].body;
@@ -307,9 +307,9 @@ mod tests {
                 name: "w".into(),
                 ty: perry_hir::types::Type::Any,
                 mutable: true,
-                init: Some(Expr::Await(Box::new(Expr::LocalGet(50)))),
+                init: Some(Expr::Await(Box::new(Expr::LocalGet(50)), 0)),
             },
-            Stmt::Return(Some(local_get(51))),
+            Stmt::Return(Some(local_get(51)), 0),
         ]);
         run_async_pipeline(&mut m);
         let body = &m.functions[0].body;
@@ -359,7 +359,7 @@ mod tests {
                 Stmt::Let { init: Some(e), .. }
                 | Stmt::Expr(e)
                 | Stmt::Throw(e)
-                | Stmt::Return(Some(e)) => exprs.push(e),
+                | Stmt::Return(Some(e), _) => exprs.push(e),
                 Stmt::If { condition, .. } => exprs.push(condition),
                 Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
                     exprs.push(condition)

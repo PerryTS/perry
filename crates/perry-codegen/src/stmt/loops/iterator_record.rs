@@ -458,7 +458,7 @@ mod tests {
     use perry_hir::types::Type;
     use perry_hir::{BinaryOp, Module, UpdateOp};
     fn rt(method: &str, args: Vec<Expr>) -> Expr {
-        Expr::NativeMethodCall {
+        Expr::NativeMethodCall { byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -503,7 +503,7 @@ mod tests {
         let array_id = if union { 6 } else { 0 };
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_counted");
-        let mode = Expr::Compare {
+        let mode = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Bool(true)),
@@ -541,7 +541,7 @@ mod tests {
                     Type::Number,
                     rt("arrayRecordIndex", vec![Expr::Integer(0)]),
                 ))),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(rt(
@@ -589,7 +589,7 @@ mod tests {
                     Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Number(0.0)))),
                     Stmt::Expr(Expr::LocalSet(
                         5,
-                        Box::new(Expr::Binary {
+                        Box::new(Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(5)),
                             right: Box::new(Expr::LocalGet(3)),
@@ -731,7 +731,7 @@ mod tests {
     fn array_and_protocol_heads_share_one_body() {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_arm");
-        let mode = Expr::Compare {
+        let mode = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Bool(true)),
@@ -769,7 +769,7 @@ mod tests {
                     Type::Number,
                     rt("arrayRecordIndex", vec![Expr::Integer(0)]),
                 ))),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(rt(
@@ -819,7 +819,7 @@ mod tests {
                     },
                     Stmt::Expr(Expr::LocalSet(
                         5,
-                        Box::new(Expr::Binary {
+                        Box::new(Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(5)),
                             right: Box::new(Expr::PropertyGet {
@@ -873,7 +873,7 @@ mod tests {
         let mut m = Module::new("source_walk");
         let walk = Stmt::For {
             init: Some(Box::new(local(2, Type::Number, Expr::Integer(0)))),
-            condition: Some(Expr::Compare {
+            condition: Some(Expr::Compare { byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::PropertyGet {
@@ -904,7 +904,7 @@ mod tests {
                 },
                 Stmt::Expr(Expr::LocalSet(
                     1,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(Expr::LocalGet(3)),
@@ -920,7 +920,7 @@ mod tests {
             ),
             local(1, Type::Number, Expr::Number(0.0)),
             Stmt::If {
-                condition: Expr::Compare {
+                condition: Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(rt(
                         "arrayRecordNeedsIterator",

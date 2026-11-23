@@ -5,7 +5,7 @@ use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 
 fn function(id: u32, name: &str, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -31,7 +31,7 @@ fn module(constructor: bool) -> Module {
         property: "m".to_string(),
         byte_offset: 0,
     };
-    let probe = function(2, "read", vec![Stmt::Return(Some(read.clone()))]);
+    let probe = function(2, "read", vec![Stmt::Return(Some(read.clone()), 0)]);
     let mut m = Module::new("method_value_shapes.ts");
     m.classes.push(Class {
         id: 101,
@@ -44,16 +44,16 @@ fn module(constructor: bool) -> Module {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: constructor
-            .then(|| function(3, "constructor", vec![Stmt::Expr(read), Stmt::Return(None)])),
+            .then(|| function(3, "constructor", vec![Stmt::Expr(read), Stmt::Return(None, 0)])),
         methods: if constructor {
             vec![function(
                 1,
                 "m",
-                vec![Stmt::Return(Some(Expr::Number(1.0)))],
+                vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
             )]
         } else {
             vec![
-                function(1, "m", vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+                function(1, "m", vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
                 probe,
             ]
         },

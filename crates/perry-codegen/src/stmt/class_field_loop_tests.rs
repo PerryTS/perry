@@ -101,7 +101,7 @@ fn counter_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField {
+        fields: vec![ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "value".to_string(),
             key_expr: None,
@@ -142,7 +142,7 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
     let params: Vec<perry_hir::Param> = fields
         .iter()
         .enumerate()
-        .map(|(i, f)| perry_hir::Param {
+        .map(|(i, f)| perry_hir::Param { byte_offset: 0,
             id: 9000 + i as u32,
             name: f.name.clone(),
             ty: f.ty.clone(),
@@ -164,7 +164,7 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
             })
         })
         .collect();
-    perry_hir::Function {
+    perry_hir::Function { byte_offset: 0,
         id: 9000,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -190,7 +190,7 @@ fn bump_stmt(recv_id: u32, strict: bool) -> Stmt {
     Stmt::Expr(Expr::PutValueSet {
         target: Box::new(Expr::LocalGet(recv_id)),
         key: Box::new(Expr::String("value".to_string())),
-        value: Box::new(Expr::Binary {
+        value: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::PropertyGet {
                 byte_end: 0,
@@ -237,7 +237,7 @@ fn method_calls_module(bound: Expr, extra_init: Vec<Stmt>, strict: bool) -> Modu
             mutable: true,
             init: Some(Expr::Integer(0)),
         })),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(7)),
             right: Box::new(bound),
@@ -372,7 +372,7 @@ fn class_field_versioned_loop_fires_in_strict_mode() {
 #[test]
 fn class_loop_replacement_restores_straight_line_receiver_proof() {
     let mut module = method_calls_module(Expr::Integer(200), Vec::new(), false);
-    module.init.push(Stmt::Expr(Expr::Binary {
+    module.init.push(Stmt::Expr(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,

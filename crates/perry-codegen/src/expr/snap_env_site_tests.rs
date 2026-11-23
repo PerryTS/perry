@@ -67,7 +67,7 @@ fn at0(receiver: Expr) -> Expr {
 }
 
 fn concat(e: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(e),
         right: Box::new(Expr::String(String::new())),

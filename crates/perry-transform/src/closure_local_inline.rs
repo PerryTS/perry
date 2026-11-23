@@ -797,7 +797,7 @@ mod tests {
     }
 
     fn param(id: LocalId, name: &str) -> Param {
-        Param {
+        Param { byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -809,11 +809,11 @@ mod tests {
     }
 
     fn arrow(func_id: u32, params: Vec<Param>, ret: Expr, captures_this: bool) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id,
             params,
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(ret))],
+            body: vec![Stmt::Return(Some(ret), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this,
@@ -854,7 +854,7 @@ mod tests {
 
     fn guard(id: LocalId, default: Expr) -> Stmt {
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(Expr::Undefined),
@@ -1110,11 +1110,11 @@ mod tests {
                 mutable: false,
                 init: Some(arrow(1, vec![], Expr::Integer(1), false)),
             },
-            Stmt::Return(Some(Expr::Closure {
+            Stmt::Return(Some(Expr::Closure { byte_offset: 0,
                 func_id: 2,
                 params: vec![],
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(call_local(F, vec![])))],
+                body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
                 captures: vec![F],
                 mutable_captures: vec![],
                 captures_this: false,
@@ -1125,7 +1125,7 @@ mod tests {
                 is_async: false,
                 is_generator: false,
                 is_strict: true,
-            })),
+            }), 0),
         ];
         let before = stmts.clone();
         let mut next = 100;
@@ -1295,13 +1295,13 @@ mod tests {
     }
 
     fn function_calling_f() -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: 3,
             name: "h".to_string(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(call_local(F, vec![])))],
+            body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
             is_async: false,
             is_generator: false,
             is_strict: true,

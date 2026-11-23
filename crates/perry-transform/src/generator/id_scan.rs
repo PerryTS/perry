@@ -541,9 +541,9 @@ mod tests {
     /// closure keeps its ids visible.
     #[test]
     fn object_assign_sources_visible_to_id_scans() {
-        let closure = Expr::Closure {
+        let closure = Expr::Closure { byte_offset: 0,
             func_id: 7,
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 9,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -553,7 +553,7 @@ mod tests {
                 arguments_object: None,
             }],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            body: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -590,16 +590,16 @@ mod tests {
     }
 
     fn arrow_field(name: &str, func_id: FuncId) -> ClassField {
-        ClassField {
+        ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,
             ty: Type::Any,
-            init: Some(Expr::Closure {
+            init: Some(Expr::Closure { byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::Integer(0)))],
+                body: vec![Stmt::Return(Some(Expr::Integer(0)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -685,14 +685,14 @@ mod tests {
     /// state/done LocalId colliding with a field-init local and corrupt codegen.
     #[test]
     fn class_field_initializer_locals_visible_to_max_local_id() {
-        let field = ClassField {
+        let field = ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "request".to_string(),
             key_expr: None,
             ty: Type::Any,
-            init: Some(Expr::Closure {
+            init: Some(Expr::Closure { byte_offset: 0,
                 func_id: 3,
-                params: vec![Param {
+                params: vec![Param { byte_offset: 0,
                     id: 91,
                     name: "input".to_string(),
                     ty: Type::Any,
@@ -702,7 +702,7 @@ mod tests {
                     arguments_object: None,
                 }],
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(91)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(91)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -737,9 +737,9 @@ mod tests {
     /// deadlock class).
     #[test]
     fn default_param_closure_ids_visible_to_max_scans() {
-        let default_closure = Expr::Closure {
+        let default_closure = Expr::Closure { byte_offset: 0,
             func_id: 42,
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 77,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -749,7 +749,7 @@ mod tests {
                 arguments_object: None,
             }],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(77)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(77)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -762,11 +762,11 @@ mod tests {
             is_strict: false,
         };
         let mut module = Module::new("test");
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 2,
                 name: "cb".to_string(),
                 ty: Type::Any,
@@ -803,11 +803,11 @@ mod tests {
     /// (methods/ctor/getters/setters share the hand-rolled param loops).
     #[test]
     fn method_default_param_closure_ids_visible_to_max_scans() {
-        let default_closure = Expr::Closure {
+        let default_closure = Expr::Closure { byte_offset: 0,
             func_id: 60,
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(88)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(88)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -820,11 +820,11 @@ mod tests {
             is_strict: false,
         };
         let mut class = class_with_fields("C", Vec::new());
-        class.methods.push(Function {
+        class.methods.push(Function { byte_offset: 0,
             id: 2,
             name: "m".to_string(),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 3,
                 name: "cb".to_string(),
                 ty: Type::Any,
@@ -866,11 +866,11 @@ mod tests {
     fn function_and_class_decorator_arg_closure_ids_visible_to_max_scans() {
         let dec_with_closure = |func_id: FuncId, local_id: LocalId| Decorator {
             name: "dec".to_string(),
-            args: vec![Expr::Closure {
+            args: vec![Expr::Closure { byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(local_id)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(local_id)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -887,7 +887,7 @@ mod tests {
             byte_offset: 0,
         };
         let mut module = Module::new("test");
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),
@@ -922,13 +922,13 @@ mod tests {
     fn class_member_without_nested_closures_reserves_its_emitted_identity() {
         let mut module = Module::new("test");
         let mut class = class_with_fields("Methods", Vec::new());
-        let member = |id| Function {
+        let member = |id| Function { byte_offset: 0,
             id,
             name: "member".into(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            body: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
             is_async: false,
             is_generator: false,
             is_strict: false,

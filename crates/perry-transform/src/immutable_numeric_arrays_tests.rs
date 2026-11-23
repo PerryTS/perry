@@ -3,7 +3,7 @@ use perry_hir::types::Type;
 use perry_hir::Function;
 
 fn function(body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "scan".into(),
         params: vec![],
@@ -56,7 +56,7 @@ fn fixture(compound: bool, live: bool) -> Module {
     let update = if compound {
         Expr::LocalSet(
             2,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::Integer(1)),
@@ -77,13 +77,13 @@ fn fixture(compound: bool, live: bool) -> Module {
             mutable: true,
             init: Some(Expr::Integer(0)),
         })),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(if live { length() } else { Expr::Integer(8) }),
         }),
         update: Some(update),
-        body: vec![Stmt::Return(Some(read(Expr::LocalGet(2))))],
+        body: vec![Stmt::Return(Some(read(Expr::LocalGet(2))), 0)],
     }]));
     m
 }
@@ -100,7 +100,7 @@ fn eval(e: &Expr, i: i64) -> i64 {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             let Expr::Compare {
                 op: CompareOp::Lt,
@@ -142,7 +142,7 @@ fn live_and_fixed_scans_fold_for_both_increment_spellings() {
                 panic!()
             };
             assert!(matches!(right.as_ref(), Expr::Integer(8)));
-            let Stmt::Return(Some(value)) = &body[0] else {
+            let Stmt::Return(Some(value), _) = &body[0] else {
                 panic!()
             };
             for (i, n) in [-17, -16, -15, -1, 1, 15, 16, 17].iter().enumerate() {
@@ -172,7 +172,7 @@ fn aliases_exports_deletes_and_hidden_uses_decline() {
             4 => m.functions[0].captures.push(1),
             5 => m.functions[0]
                 .body
-                .push(Stmt::Return(Some(Expr::LocalGet(1)))),
+                .push(Stmt::Return(Some(Expr::LocalGet(1)), 0)),
             6 => m.functions[0].body.push(Stmt::Expr(Expr::LocalSet(
                 1,
                 Box::new(Expr::Array(vec![], None)),
@@ -199,10 +199,10 @@ fn counter_writes_and_out_of_bounds_reads_keep_lookup() {
                 0,
                 Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::Integer(20)))),
             ),
-            1 => body[0] = Stmt::Return(Some(read(Expr::Number(0.5)))),
-            2 => body[0] = Stmt::Return(Some(read(Expr::Integer(8)))),
-            3 => body[0] = Stmt::Return(Some(read(Expr::Number(f64::NAN)))),
-            4 => body[0] = Stmt::Return(Some(read(Expr::String("0".into())))),
+            1 => body[0] = Stmt::Return(Some(read(Expr::Number(0.5))), 0),
+            2 => body[0] = Stmt::Return(Some(read(Expr::Integer(8))), 0),
+            3 => body[0] = Stmt::Return(Some(read(Expr::Number(f64::NAN))), 0),
+            4 => body[0] = Stmt::Return(Some(read(Expr::String("0".into()))), 0),
             _ => unreachable!(),
         }
         run(&mut m);
@@ -226,15 +226,15 @@ fn literal_values_preserve_nan_and_negative_zero_but_holes_decline() {
     values[0] = Expr::Number(-0.0);
     values[1] = Expr::Number(f64::NAN);
     m.functions[0].body = vec![
-        Stmt::Return(Some(read(Expr::Integer(0)))),
-        Stmt::Return(Some(read(Expr::Integer(1)))),
+        Stmt::Return(Some(read(Expr::Integer(0))), 0),
+        Stmt::Return(Some(read(Expr::Integer(1))), 0),
     ];
     run(&mut m);
-    let Stmt::Return(Some(Expr::Number(n))) = &m.functions[0].body[0] else {
+    let Stmt::Return(Some(Expr::Number(n)), _) = &m.functions[0].body[0] else {
         panic!()
     };
     assert_eq!(n.to_bits(), (-0.0f64).to_bits());
-    let Stmt::Return(Some(Expr::Number(n))) = &m.functions[0].body[1] else {
+    let Stmt::Return(Some(Expr::Number(n)), _) = &m.functions[0].body[1] else {
         panic!()
     };
     assert!(n.is_nan());
@@ -259,12 +259,12 @@ fn folded_reads_keep_temporal_dead_zone_checks() {
         panic!()
     };
     *object = Box::new(Expr::Sequence(vec![
-        perry_hir::tdz_check::check(1, "steps"),
+        perry_hir::tdz_check::check(1, "steps", 0),
         Expr::LocalGet(1),
     ]));
-    m.functions[0].body = vec![Stmt::Return(Some(e))];
+    m.functions[0].body = vec![Stmt::Return(Some(e), 0)];
     run(&mut m);
-    let Stmt::Return(Some(Expr::Sequence(parts))) = &m.functions[0].body[0] else {
+    let Stmt::Return(Some(Expr::Sequence(parts)), _) = &m.functions[0].body[0] else {
         panic!("{:?}", m.functions[0].body)
     };
     assert_eq!(perry_hir::tdz_check::checked_binding(&parts[0]), Some(1));
@@ -289,7 +289,7 @@ fn an_unproven_read_keeps_even_length_and_other_inbounds_reads_live() {
         "an inherited getter can change length"
     );
     assert!(
-        matches!(&body[0], Stmt::Return(Some(Expr::IndexGet { .. }))),
+        matches!(&body[0], Stmt::Return(Some(Expr::IndexGet { .. }), _)),
         "that getter can also replace own values"
     );
 }
@@ -307,7 +307,7 @@ fn a_rejected_array_cannot_prove_another_arrays_index_range() {
     let Stmt::For { body, .. } = &mut m.functions[0].body[0] else {
         panic!()
     };
-    let Stmt::Return(Some(Expr::IndexGet { object, .. })) = &mut body[0] else {
+    let Stmt::Return(Some(Expr::IndexGet { object, .. }), _) = &mut body[0] else {
         panic!()
     };
     *object = Box::new(Expr::LocalGet(3));
@@ -318,7 +318,7 @@ fn a_rejected_array_cannot_prove_another_arrays_index_range() {
     };
     assert!(matches!(
         &body[0],
-        Stmt::Return(Some(Expr::IndexGet { .. }))
+        Stmt::Return(Some(Expr::IndexGet { .. }), _)
     ));
 }
 

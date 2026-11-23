@@ -359,7 +359,7 @@ mod tests {
     const MATMUL: u32 = 5;
 
     fn param(id: u32, name: &str) -> Param {
-        Param {
+        Param { byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Number,
@@ -371,7 +371,7 @@ mod tests {
     }
 
     fn matmul_fn(body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: MATMUL,
             name: "matmul".to_string(),
             type_params: Vec::new(),

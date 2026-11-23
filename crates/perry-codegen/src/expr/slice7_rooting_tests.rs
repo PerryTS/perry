@@ -29,7 +29,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 /// Compile a one-function module and return its LLVM IR.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -454,7 +454,7 @@ fn process_env_literal_key_loads_below_the_value() {
 
 fn await_body(n: usize) -> Vec<Stmt> {
     (0..n)
-        .map(|i| Stmt::Expr(Expr::Await(Box::new(allocating(&format!("p{i}"))))))
+        .map(|i| Stmt::Expr(Expr::Await(Box::new(allocating(&format!("p{i}"))), 0)))
         .collect()
 }
 

@@ -755,7 +755,7 @@ export function perfHooksDefault() {
             object,
             property,
             ..
-        }))] if property == "default"
+        }), _)] if property == "default"
             && matches!(object.as_ref(), crate::ir::Expr::NativeModuleRef(module) if module == "perf_hooks")
     ));
 }
@@ -788,7 +788,7 @@ export function perfHooksDefaultImport() {
             object,
             property,
             ..
-        }))] if property == "default"
+        }), _)] if property == "default"
             && matches!(object.as_ref(), crate::ir::Expr::NativeModuleRef(module) if module == "perf_hooks")
     ));
 }
@@ -1070,7 +1070,7 @@ fn test_perry_ui_state_value_uses_native_getter() {
         .find(|function| function.name == "main")
         .expect("main function");
     let value = main.body.iter().find_map(|stmt| match stmt {
-        Stmt::Return(Some(expr)) => Some(expr),
+        Stmt::Return(Some(expr), _) => Some(expr),
         _ => None,
     });
 
@@ -1082,7 +1082,7 @@ fn test_perry_ui_state_value_uses_native_getter() {
                 class_name: None,
                 object: Some(_),
                 method,
-                args,
+                args, ..
             }) if module == "perry/ui" && method == "value" && args.is_empty()
         ),
         "State.value must lower through perry_ui_state_get, got: {value:#?}"

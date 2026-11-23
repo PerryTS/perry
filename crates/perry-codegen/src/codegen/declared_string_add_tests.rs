@@ -31,7 +31,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -43,11 +43,11 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn probe_fn(params: Vec<Param>, body: Expr) -> Function {
-    probe_fn_with_body(params, vec![Stmt::Return(Some(body))])
+    probe_fn_with_body(params, vec![Stmt::Return(Some(body), 0)])
 }
 
 fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -67,7 +67,7 @@ fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
 }
 
 fn module_with(function: Function) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: "declared_string_add.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -148,7 +148,7 @@ fn module_ir(module: Module) -> String {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -378,7 +378,7 @@ fn a_self_append_chain_fuses_the_accumulator_and_suffix() {
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(value)))],
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     ));
     let ir = function_ir(module);
@@ -445,7 +445,7 @@ fn a_self_append_chain_keeps_an_opaque_numeric_head_pair_intact() {
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::LocalSet(1, Box::new(value)))],
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     ));
     let ir = function_ir(module);
@@ -470,7 +470,7 @@ fn a_module_global_self_append_uses_the_amortized_path_and_demotes_extractions()
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::LocalSet(GLOBAL, Box::new(value)))],
             },
-            Stmt::Return(Some(Expr::LocalGet(GLOBAL))),
+            Stmt::Return(Some(Expr::LocalGet(GLOBAL)), 0),
         ],
     ));
     module.init.push(Stmt::Let {
@@ -514,11 +514,11 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
                 name: "reader".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure {
+                init: Some(Expr::Closure { byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::String,
-                    body: vec![Stmt::Return(Some(Expr::LocalGet(ACC)))],
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(ACC)), 0)],
                     captures: vec![ACC],
                     mutable_captures: vec![ACC],
                     captures_this: false,
@@ -535,7 +535,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
                 condition: Expr::Bool(false),
                 body: vec![Stmt::Expr(Expr::LocalSet(ACC, Box::new(value)))],
             },
-            Stmt::Return(Some(Expr::LocalGet(ACC))),
+            Stmt::Return(Some(Expr::LocalGet(ACC)), 0),
         ],
     ));
     let ir = function_ir(module);
@@ -569,7 +569,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                 name: "append".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure {
+                init: Some(Expr::Closure { byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::String,
@@ -584,7 +584,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                                 )),
                             ))],
                         },
-                        Stmt::Return(Some(Expr::LocalGet(ACC))),
+                        Stmt::Return(Some(Expr::LocalGet(ACC)), 0),
                     ],
                     captures: vec![ACC],
                     mutable_captures: vec![ACC],
@@ -598,7 +598,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                     is_strict: true,
                 }),
             },
-            Stmt::Return(Some(Expr::LocalGet(APPENDER))),
+            Stmt::Return(Some(Expr::LocalGet(APPENDER)), 0),
         ],
     ));
     let ir = module_ir(module);
@@ -674,7 +674,7 @@ fn assigning_one_local_to_another_demotes_a_possible_string_alias() {
         vec![str_param(), param(2, "snapshot", Type::String)],
         vec![
             Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::LocalGet(1)))),
-            Stmt::Return(Some(Expr::Number(0.0))),
+            Stmt::Return(Some(Expr::Number(0.0)), 0),
         ],
     ));
     let ir = function_ir(module);
@@ -745,7 +745,7 @@ fn loop_number_fixed_point_elides_assignment_string_alias_guard() {
                     Stmt::Expr(Expr::LocalSet(11, Box::new(Expr::LocalGet(10)))),
                 ],
             },
-            Stmt::Return(Some(Expr::LocalGet(11))),
+            Stmt::Return(Some(Expr::LocalGet(11)), 0),
         ],
     ));
     let ir = function_ir(module);
@@ -766,7 +766,7 @@ fn annotation_only_numeric_assignment_keeps_string_alias_guard() {
         ],
         vec![
             Stmt::Expr(Expr::LocalSet(2, Box::new(Expr::LocalGet(1)))),
-            Stmt::Return(Some(Expr::Number(0.0))),
+            Stmt::Return(Some(Expr::Number(0.0)), 0),
         ],
     ));
     let ir = function_ir(module);

@@ -1204,12 +1204,12 @@ mod compact_read_tests {
 
     fn ir(body: Vec<Stmt>) -> String {
         let mut module = Module::new("compact_array_reads");
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 1,
             name: "read".into(),
             type_params: vec![],
             params: vec![
-                Param {
+                Param { byte_offset: 0,
                     id: 1,
                     name: "array".into(),
                     ty: Type::Array(Box::new(Type::Any)),
@@ -1218,7 +1218,7 @@ mod compact_read_tests {
                     is_rest: false,
                     arguments_object: None,
                 },
-                Param {
+                Param { byte_offset: 0,
                     id: 2,
                     name: "key".into(),
                     ty: Type::Any,
@@ -1264,7 +1264,7 @@ mod compact_read_tests {
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::Integer(1)),
-        }))]);
+        }), 0)]);
         assert!(ll.contains("33023"), "type and forwarding word");
         assert!(
             !ll.contains("icmp ne i64"),
@@ -1293,7 +1293,7 @@ mod compact_read_tests {
             object: Box::new(Expr::LocalGet(1)),
             property: "length".into(),
             byte_offset: 0,
-        }))]);
+        }), 0)]);
         assert!(ll.contains("plen.check_gc") && ll.contains("33023"));
         assert!(ll.contains("uitofp i32"));
         assert!(ll.contains("call double @js_value_length_property_f64"));
@@ -1311,7 +1311,7 @@ mod compact_read_tests {
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
         };
-        let ll = ir(vec![Stmt::Expr(read()), Stmt::Return(Some(read()))]);
+        let ll = ir(vec![Stmt::Expr(read()), Stmt::Return(Some(read()), 0)]);
         assert_eq!(
             ll.lines()
                 .filter(|l| l.starts_with("define ") && l.contains("@perry_array_read_cold_"))

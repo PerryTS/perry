@@ -1,7 +1,7 @@
 use super::*;
 
 fn modulo(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Mod,
         left: Box::new(left),
         right: Box::new(right),
@@ -22,7 +22,7 @@ fn factorial_shaped_ir(divisor: Expr) -> String {
                     Box::new(add(local(1), modulo(local(2), divisor))),
                 ))],
             ),
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     )
 }
@@ -157,7 +157,7 @@ fn i32_counter_mod_unsafe_or_nonliteral_divisors_use_checked_path() {
                     Box::new(add(local(1), modulo(local(2), local(3)))),
                 ))],
             ),
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     );
     assert_checked_modulo(&dynamic_ir);
@@ -169,7 +169,7 @@ fn non_i32_left_operands_use_checked_path_with_number_mod_fallback() {
         "value_first_f64_modulo.ts",
         vec![
             number_let(1, "value", false, number(5.5)),
-            Stmt::Return(Some(modulo(local(1), int(2)))),
+            Stmt::Return(Some(modulo(local(1), int(2))), 0),
         ],
     );
     assert_checked_modulo(&f64_ir);
@@ -184,7 +184,7 @@ fn non_i32_left_operands_use_checked_path_with_number_mod_fallback() {
             number_let(3, "iterations", false, int(64)),
             Stmt::For {
                 init: Some(Box::new(number_let(2, "i", true, ushr_zero(int(0))))),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(local(2)),
                     right: Box::new(local(3)),
@@ -198,7 +198,7 @@ fn non_i32_left_operands_use_checked_path_with_number_mod_fallback() {
                     Box::new(add(local(1), modulo(local(2), int(7)))),
                 ))],
             },
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     );
     assert_checked_modulo(&u32_ir);

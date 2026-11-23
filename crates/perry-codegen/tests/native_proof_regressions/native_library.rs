@@ -26,7 +26,7 @@ fn native_library_exact_width_scalars_use_distinct_guards_and_c_abi_slots() {
             Stmt::Expr(extern_call("native_ret_i16", vec![], Type::Number)),
             Stmt::Expr(extern_call("native_ret_u8", vec![], Type::Number)),
             Stmt::Expr(extern_call("native_ret_u16", vec![], Type::Number)),
-            Stmt::Return(Some(extern_call("native_ret_isize", vec![], Type::Number))),
+            Stmt::Return(Some(extern_call("native_ret_isize", vec![], Type::Number)), 0),
         ],
     );
     let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
@@ -111,7 +111,7 @@ fn native_library_manifest_lowercase_abi_returns_emit_signatures_and_artifacts()
                 "native_ret_promise",
                 Vec::new(),
                 Type::Number,
-            ))),
+            )), 0),
         ],
     );
     let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
@@ -252,7 +252,7 @@ fn native_library_manifest_native_async_promise_artifact_records_metadata() {
             "native_ret_native_async",
             Vec::new(),
             Type::Number,
-        )))],
+        )), 0)],
     );
 
     let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
@@ -337,7 +337,7 @@ fn native_library_manifest_lowercase_abi_params_emit_c_abi_signature() {
                 ],
                 Type::Void,
             )),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
     let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
@@ -442,7 +442,7 @@ fn native_library_manifest_json_param_serializes_before_call() {
             "native_take_descriptor",
             vec![Expr::Number(7.0), Expr::Number(42.0)],
             Type::Number,
-        )))],
+        )), 0)],
     );
     let ir = String::from_utf8(compile_module(&module, opts.clone()).unwrap()).unwrap();
 

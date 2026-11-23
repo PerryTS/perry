@@ -25,7 +25,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
     let params: Vec<_> = ["x", "y"]
         .iter()
         .enumerate()
-        .map(|(index, field)| Param {
+        .map(|(index, field)| Param { byte_offset: 0,
             id: 100 + index as u32,
             name: field.to_string(),
             ty: Type::Any,
@@ -59,7 +59,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
         heritage_lexically_shadowed: false,
         fields: ["x", "y"]
             .iter()
-            .map(|field| ClassField {
+            .map(|field| ClassField { byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: field.to_string(),
                 key_expr: None,
@@ -114,7 +114,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
     }
     body.push(Stmt::For {
         init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(3)),
             right: Box::new(Expr::Integer(64)),
@@ -128,7 +128,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
             store(Expr::LocalGet(1), "y", Expr::LocalGet(3)),
             Stmt::Expr(Expr::LocalSet(
                 2,
-                Box::new(Expr::Binary {
+                Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(property(Expr::LocalGet(1), "x")),
@@ -136,14 +136,14 @@ fn scalar_loop(poison: Option<Expr>) -> String {
             )),
         ],
     });
-    body.push(Stmt::Return(Some(Expr::Binary {
+    body.push(Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(2)),
         right: Box::new(property(Expr::LocalGet(1), "y")),
-    })));
+    }), 0));
     let mut module = probe_module(
         "scalar_own_read.ts",
-        vec![Param {
+        vec![Param { byte_offset: 0,
             id: 99,
             name: "branch".into(),
             ty: Type::Boolean,

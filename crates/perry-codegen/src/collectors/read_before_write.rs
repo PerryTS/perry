@@ -742,7 +742,7 @@ mod tests {
     }
 
     fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op,
             left: Box::new(l),
             right: Box::new(r),
@@ -765,7 +765,7 @@ mod tests {
             },
             let_(N, Some(Expr::Integer(5))),
             set(N, bin(BinaryOp::Shr, get(N), Expr::Integer(1))),
-            Stmt::Return(Some(bin(BinaryOp::Add, get(R), get(N)))),
+            Stmt::Return(Some(bin(BinaryOp::Add, get(R), get(N))), 0),
         ]
     }
 
@@ -775,7 +775,7 @@ mod tests {
             let_(X, Some(Expr::Undefined)),
             set(X, Expr::Integer(4)),
             set(X, Expr::Integer(6)),
-            Stmt::Return(Some(get(X))),
+            Stmt::Return(Some(get(X)), 0),
         ]
     }
 
@@ -824,7 +824,7 @@ mod tests {
     }
 
     fn switch(cases: Vec<SwitchCase>) -> Stmt {
-        Stmt::Switch {
+        Stmt::Switch { byte_offset: 0,
             discriminant: get(K),
             cases,
         }
@@ -838,7 +838,7 @@ mod tests {
     fn flags_x(stmts: Vec<Stmt>) -> bool {
         let mut body = vec![let_(X, None)];
         body.extend(stmts);
-        body.push(Stmt::Return(Some(get(X))));
+        body.push(Stmt::Return(Some(get(X)), 0));
         reads_before_write(&body, &HashSet::from([X])).contains(&X)
     }
 
@@ -862,7 +862,7 @@ mod tests {
                 Some(Expr::Integer(2)),
                 vec![set(X, Expr::Integer(1)), Stmt::Break]
             ),
-            case(None, vec![Stmt::Return(None)]),
+            case(None, vec![Stmt::Return(None, 0)]),
         ])]));
     }
 
@@ -920,7 +920,7 @@ mod tests {
     fn an_if_with_one_returning_arm_continues_only_through_the_other() {
         assert!(!flags_x(vec![Stmt::If {
             condition: get(K),
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: Some(vec![set(X, Expr::Integer(1))]),
         }]));
         // Without the return the then-path reaches the read unwritten.
@@ -933,7 +933,7 @@ mod tests {
 
     #[test]
     fn a_try_whose_catch_rethrows_continues_only_from_the_block() {
-        let try_ = |catch_body: Vec<Stmt>| Stmt::Try {
+        let try_ = |catch_body: Vec<Stmt>| Stmt::Try { byte_offset: 0,
             body: vec![set(X, Expr::Integer(1))],
             catch: Some(CatchClause {
                 param: None,
@@ -951,17 +951,17 @@ mod tests {
         // A finally that returns: nothing continues past the try.
         assert!(!flags_x(vec![Stmt::If {
             condition: get(K),
-            then_branch: vec![Stmt::Try {
+            then_branch: vec![Stmt::Try { byte_offset: 0,
                 body: vec![],
                 catch: None,
-                finally: Some(vec![Stmt::Return(None)]),
+                finally: Some(vec![Stmt::Return(None, 0)]),
                 forof_completion: None,
             }],
             else_branch: Some(vec![set(X, Expr::Integer(1))]),
         }]));
         // A finally that completes does not make an unwritten catch path
         // terminate.
-        assert!(flags_x(vec![Stmt::Try {
+        assert!(flags_x(vec![Stmt::Try { byte_offset: 0,
             body: vec![set(X, Expr::Integer(1))],
             catch: Some(CatchClause {
                 param: None,
@@ -971,7 +971,7 @@ mod tests {
             forof_completion: None,
         }]));
         // A finally's write counts after the try ...
-        assert!(!flags_x(vec![Stmt::Try {
+        assert!(!flags_x(vec![Stmt::Try { byte_offset: 0,
             body: vec![],
             catch: None,
             finally: Some(vec![set(X, Expr::Integer(1))]),
@@ -980,7 +980,7 @@ mod tests {
         // ... but a read in it still sees the state before the block.
         let body = vec![
             let_(X, None),
-            Stmt::Try {
+            Stmt::Try { byte_offset: 0,
                 body: vec![set(X, Expr::Integer(1))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(get(X))]),
@@ -1064,7 +1064,7 @@ mod tests {
         // A labeled break leaves the labeled loop, not just the switch: the
         // read after the loop is reached by it unwritten.
         let mut after = labeled(vec![Stmt::LabeledBreak("outer".into())]);
-        after.push(Stmt::Return(Some(get(X))));
+        after.push(Stmt::Return(Some(get(X)), 0));
         assert!(reads_before_write(&after, &c).contains(&X));
         // An unlabeled break here leaves only the switch.
         assert!(reads_before_write(&labeled(vec![Stmt::Break]), &c).contains(&X));
@@ -1085,7 +1085,7 @@ mod tests {
                 ),
                 case(None, vec![throw()]),
             ]),
-            Stmt::Return(Some(bin(BinaryOp::BitOr, get(X), Expr::Integer(0)))),
+            Stmt::Return(Some(bin(BinaryOp::BitOr, get(X), Expr::Integer(0))), 0),
         ];
         let ints = integer_locals(&body);
         assert!(ints.contains(&X), "{ints:?}");
@@ -1152,7 +1152,7 @@ mod tests {
     const G: u32 = 11;
 
     fn closure(func_id: u32, captures: Vec<u32>, body: Vec<Stmt>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: HirType::Any,
@@ -1187,7 +1187,7 @@ mod tests {
             Stmt::PreallocateBoxes(vec![X]),
             let_(
                 F,
-                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)))])),
+                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)), 0)])),
             ),
         ];
         body.extend(before);
@@ -1217,7 +1217,7 @@ mod tests {
             Stmt::PreallocateBoxes(vec![X]),
             let_(
                 F,
-                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)))])),
+                Some(closure(100, vec![X], vec![Stmt::Return(Some(get(X)), 0)])),
             ),
             let_(X, None),
             Stmt::Expr(call(
@@ -1236,7 +1236,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(N, Box::new(get(F)))),
             Stmt::If {
                 condition: get(K),
-                then_branch: vec![Stmt::Return(Some(get(F)))],
+                then_branch: vec![Stmt::Return(Some(get(F)), 0)],
                 else_branch: None,
             },
         ];
@@ -1254,7 +1254,7 @@ mod tests {
             Some(closure(
                 101,
                 vec![F],
-                vec![Stmt::Return(Some(call(get(F), vec![])))],
+                vec![Stmt::Return(Some(call(get(F), vec![])), 0)],
             )),
         );
         let mut body = hoisted(vec![Stmt::Expr(call(get(G), vec![]))], vec![]);
@@ -1273,7 +1273,7 @@ mod tests {
                     BinaryOp::Add,
                     get(X),
                     call(get(G), vec![]),
-                )))],
+                )), 0)],
             )),
         );
         let g = let_(
@@ -1281,7 +1281,7 @@ mod tests {
             Some(closure(
                 101,
                 vec![F],
-                vec![Stmt::Return(Some(call(get(F), vec![])))],
+                vec![Stmt::Return(Some(call(get(F), vec![])), 0)],
             )),
         );
         let pair = |at_end: bool| {
@@ -1304,7 +1304,7 @@ mod tests {
             vec![closure(
                 102,
                 vec![F],
-                vec![Stmt::Return(Some(call(get(F), vec![])))],
+                vec![Stmt::Return(Some(call(get(F), vec![])), 0)],
             )],
         ));
         assert!(flagged(&hoisted(vec![arrow.clone()], vec![])));

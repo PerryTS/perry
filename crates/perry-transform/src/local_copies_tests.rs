@@ -3,11 +3,11 @@ use perry_hir::types::Type;
 use perry_hir::{ArgumentsObjectMeta, Param};
 
 fn function(body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "copies".into(),
         type_params: vec![],
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: Type::Any,
@@ -41,7 +41,7 @@ fn alias(id: u32, src: u32) -> Stmt {
 }
 
 fn ret(id: u32) -> Stmt {
-    Stmt::Return(Some(Expr::LocalGet(id)))
+    Stmt::Return(Some(Expr::LocalGet(id)), 0)
 }
 
 fn set(id: u32, value: Expr) -> Stmt {
@@ -70,7 +70,7 @@ fn transitive_aliases_become_the_original_value() {
     ]));
     assert!(matches!(
         f.body.as_slice(),
-        [Stmt::Return(Some(Expr::LocalGet(1)))]
+        [Stmt::Return(Some(Expr::LocalGet(1)), _)]
     ));
 }
 
@@ -84,7 +84,7 @@ fn unread_assignments_and_their_declaration_disappear() {
     ]));
     assert!(matches!(
         f.body.as_slice(),
-        [Stmt::Return(Some(Expr::LocalGet(1)))]
+        [Stmt::Return(Some(Expr::LocalGet(1)), _)]
     ));
 }
 
@@ -215,11 +215,11 @@ fn effectful_use_keeps_evaluation_order_but_loses_the_alias() {
         type_args: vec![],
         byte_offset: 17,
     };
-    let f = optimize(function(vec![alias(2, 1), Stmt::Return(Some(call))]));
+    let f = optimize(function(vec![alias(2, 1), Stmt::Return(Some(call), 0)]));
     assert_eq!(f.body.len(), 1);
     let Stmt::Return(Some(Expr::Call {
         args, byte_offset, ..
-    })) = &f.body[0]
+    }), _) = &f.body[0]
     else {
         panic!()
     };
