@@ -1,0 +1,1 @@
+The exception object Perry hands the system unwinder (`UnwindException`) is 16-byte aligned, as the Itanium unwind ABI requires. LLVM libunwind stores through it with `movaps`, so an 8-aligned object crashed with SIGSEGV when a throw reached the system unwinder, as in a Rust host on `x86_64-unknown-linux-musl` linking `--output-type staticlib` output (#14789).
