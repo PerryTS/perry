@@ -75,6 +75,17 @@ pub fn collect_non_escaping_news(
             else if class_chain_has_private_instance_elements(class, classes) {
                 escaped.insert(*id);
             }
+            // Scalar replacement binds the inlined constructor's parameters
+            // to the `new`-site arguments one by one. A rest or `arguments`
+            // parameter takes the argument list packed into an array, which
+            // the heap path's `lower_new` builds.
+            if inlined_constructor(class, classes).is_some_and(|(_, ctor)| {
+                ctor.params
+                    .iter()
+                    .any(|p| p.is_rest || p.arguments_object.is_some())
+            }) {
+                escaped.insert(*id);
+            }
         }
     }
 
