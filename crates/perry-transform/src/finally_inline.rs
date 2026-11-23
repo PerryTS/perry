@@ -208,8 +208,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
 // This binding is fresh and this pass writes only Boolean literals to it.
 // Keep that constructor evidence in the condition rather than asking codegen
 // to trust a user binding's erased Boolean annotation.
-fn exited_test(id: LocalId) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+fn exited_test(id: LocalId, byte_offset: u32) -> Expr {
+    Expr::Compare {
+        byte_offset,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Bool(true)),
@@ -367,7 +368,7 @@ fn process_stmts(
                         finally = Some(vec![Stmt::If {
                             condition: Expr::Unary {
                                 op: perry_hir::UnaryOp::Not,
-                                operand: Box::new(exited_test(id)),
+                                operand: Box::new(exited_test(id, byte_offset)),
                             },
                             then_branch: once,
                             else_branch: None,
@@ -419,7 +420,7 @@ fn process_stmts(
                             }
                         };
                         c.body = vec![Stmt::If {
-                            condition: exited_test(id),
+                            condition: exited_test(id, byte_offset),
                             then_branch: vec![Stmt::Throw(Expr::LocalGet(err_id))],
                             else_branch: Some(std::mem::take(&mut c.body)),
                         }];

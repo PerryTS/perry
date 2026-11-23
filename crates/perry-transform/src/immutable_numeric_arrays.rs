@@ -428,19 +428,19 @@ fn with_checks(receiver: &Expr, value: Expr) -> Expr {
     }
 }
 
-fn lookup(values: &[Expr], base: i64, index: LocalId) -> Expr {
+fn lookup(values: &[Expr], base: i64, index: LocalId, byte_offset: u32) -> Expr {
     if values.len() == 1 {
         return values[0].clone();
     }
     let middle = values.len() / 2;
     Expr::Conditional {
-        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(index)),
             right: Box::new(Expr::Integer(base + middle as i64)),
         }),
-        then_expr: Box::new(lookup(&values[..middle], base, index)),
-        else_expr: Box::new(lookup(&values[middle..], base + middle as i64, index)),
+        then_expr: Box::new(lookup(&values[..middle], base, index, byte_offset)),
+        else_expr: Box::new(lookup(&values[middle..], base + middle as i64, index, byte_offset)),
     }
 }
 
@@ -452,11 +452,19 @@ fn rewrite_expr(e: &mut Expr, arrays: &Arrays, ranges: &Ranges) {
         return;
     }
     walk_expr_children_mut(e, &mut |child| rewrite_expr(child, arrays, ranges));
-    let (object, index) = match e {
+    let (object, index, read_offset) = match e {
         Expr::PropertyGet {
-            object, property, ..
-        } if property == "length" => (object, None),
-        Expr::IndexGet { object, index, .. } => (object, Some(index)),
+            object,
+            property,
+            byte_offset,
+            ..
+        } if property == "length" => (object, None, *byte_offset),
+        Expr::IndexGet {
+            object,
+            index,
+            byte_offset,
+            ..
+        } => (object, Some(index), *byte_offset),
         _ => return,
     };
     let Expr::LocalGet(id) = perry_hir::tdz_check::without_checks(object) else {
@@ -484,6 +492,7 @@ fn rewrite_expr(e: &mut Expr, arrays: &Arrays, ranges: &Ranges) {
                     &values[range.first as usize..=range.last as usize],
                     range.first,
                     *i,
+                    read_offset,
                 )
             } else {
                 return;
