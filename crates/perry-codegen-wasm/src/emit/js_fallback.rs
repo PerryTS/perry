@@ -888,6 +888,18 @@ impl WasmModuleEmitter {
                 );
                 format!("fromJsValue(__memDispatch.object_create(toJsValue({proto}), {props}))")
             }
+            Expr::ObjectDefineProperty(obj, key, desc) => {
+                let (obj, key, desc) = (
+                    self.emit_js_expr(obj, locals),
+                    self.emit_js_expr(key, locals),
+                    self.emit_js_expr(desc, locals),
+                );
+                format!("fromJsValue(__memDispatch.object_define_property(toJsValue({obj}), toJsValue({key}), toJsValue({desc})))")
+            }
+            Expr::ObjectDefineProperties(obj, props) => {
+                let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
+                format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
+            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
