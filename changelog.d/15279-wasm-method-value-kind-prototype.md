@@ -1,0 +1,1 @@
+- wasm/web: `Object.getPrototypeOf` answers the async, generator or async generator function prototype for a class method value and for a closure passed to a host function such as `Reflect.apply` (#15276).
