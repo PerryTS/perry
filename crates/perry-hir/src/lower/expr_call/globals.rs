@@ -563,7 +563,7 @@ pub(super) fn try_global_builtins(
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: call.span.lo.0,
                         object: Box::new(Expr::GlobalGet(0)),
                         property: "fetch".to_string(),
                     }),
@@ -924,7 +924,7 @@ pub(super) fn try_global_builtins(
                             byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "createSecretKey".to_string(),
                             }),
@@ -947,7 +947,7 @@ pub(super) fn try_global_builtins(
                             byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "generateKeySync".to_string(),
                             }),

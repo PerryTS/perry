@@ -1,5 +1,6 @@
 //! Recursive lowering of binding patterns (`let { a, b } = expr`).
 
+use swc_common::Spanned;
 use super::array_fast::{self, ArraySource};
 use super::*;
 
@@ -710,7 +711,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 }
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -735,7 +736,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 }
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -745,7 +746,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 static_keys.push(key.clone());
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -870,7 +871,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 mutable: false,
                                 init: Some(Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: assign.span.lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: name.clone(),
                                 }),
@@ -888,7 +889,7 @@ pub(crate) fn lower_pattern_binding_into(
                         } else {
                             Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: assign.span.lo.0,
                                 object: Box::new(Expr::LocalGet(tmp_id)),
                                 property: name.clone(),
                             }

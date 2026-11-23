@@ -251,7 +251,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object,
                         property,
                     }
@@ -362,7 +362,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                             object: Box::new(obj.clone()),
                             property: id.sym.to_string(),
                         },
@@ -388,7 +388,7 @@ pub(crate) fn lower_opt_chain_expr(
                                 expr_member::private_storage_property(ctx, &private_name);
                             Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: member.span.lo.0,
                                 object: guarded,
                                 property,
                             }

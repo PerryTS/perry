@@ -415,7 +415,7 @@ fn emit_for_of_pattern_binding_indexed(
                         let key = assign.key.sym.to_string();
                         let prop_access = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: assign.span.lo.0,
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             property: key,
                         };

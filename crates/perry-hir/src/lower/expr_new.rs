@@ -100,7 +100,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
                 }),
@@ -220,7 +220,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                     object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                     property: "Stream".to_string(),
                 }),
@@ -565,7 +565,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: method_name,
                     }),
@@ -637,7 +637,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
                     }),
@@ -668,7 +668,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: export,
                     }),
@@ -709,7 +709,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
                         property: "GCProfiler".to_string(),
                     }),
@@ -926,7 +926,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     if args_slice.iter().any(|a| a.spread.is_some()) {
                         let callee = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: new_byte_offset,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Function".to_string(),
                         };
@@ -1746,7 +1746,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: new_byte_offset,
                             object: Box::new(Expr::NativeModuleRef(module.to_string())),
                             property: export.to_string(),
                         }),

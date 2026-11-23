@@ -171,7 +171,7 @@ pub(super) fn try_url_date_weakref_instance(
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: call.span.lo.0,
                             object: Box::new(recv_expr),
                             property: "toJSON".to_string(),
                         }),
