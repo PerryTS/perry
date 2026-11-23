@@ -146,8 +146,11 @@ pub(super) fn al_set_length(recv: f64, len: i64) {
             "Cannot assign to read only property 'length' of object",
         );
     }
-    let raw = raw_addr as *mut crate::object::ObjectHeader;
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv = scope.root_nanbox_f64(recv);
     let key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
+    let raw = (recv.get_nanbox_f64().to_bits() & 0x0000_FFFF_FFFF_FFFF)
+        as *mut crate::object::ObjectHeader;
     crate::object::js_object_set_field_by_name(raw, key, len as f64);
 }
 
@@ -215,6 +218,18 @@ pub(super) fn arg_at(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
     }
 }
 
+/// Roots the call's arguments: `args_ptr` is a raw buffer no collection rewrites.
+fn root_args<'s>(
+    scope: &'s crate::gc::RuntimeHandleScope,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> Vec<crate::gc::RuntimeHandle<'s>> {
+    let values: Vec<f64> = (0..args_len)
+        .map(|i| arg_at(args_ptr, args_len, i))
+        .collect();
+    scope.root_nanbox_f64_slice(&values)
+}
+
 /// `Array.prototype.pop` over an array-like object receiver.
 pub(crate) fn object_pop(recv: f64) -> f64 {
     // Accessors and traps on `recv` may collect: re-read it from the root.
@@ -227,10 +242,10 @@ pub(crate) fn object_pop(recv: f64) -> f64 {
         return undef();
     }
     let new_len = len - 1;
-    let element = al_get(recv(), new_len);
+    let element = scope.root_nanbox_f64(al_get(recv(), new_len));
     al_delete(recv(), new_len);
     al_set_length(recv(), new_len);
-    element
+    element.get_nanbox_f64()
 }
 
 /// `Array.prototype.shift` over an array-like object receiver.
@@ -244,17 +259,18 @@ pub(crate) fn object_shift(recv: f64) -> f64 {
         al_set_length(recv(), 0);
         return undef();
     }
-    let first = al_get(recv(), 0);
+    let first = scope.root_nanbox_f64(al_get(recv(), 0));
     for k in 1..len {
         if al_has(recv(), k) {
-            al_set(recv(), k - 1, al_get(recv(), k));
+            let v = al_get(recv(), k);
+            al_set(recv(), k - 1, v);
         } else {
             al_delete(recv(), k - 1);
         }
     }
     al_delete(recv(), len - 1);
     al_set_length(recv(), len - 1);
-    first
+    first.get_nanbox_f64()
 }
 
 /// `Array.prototype.push` over an array-like object receiver. Returns the new
@@ -264,6 +280,7 @@ pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
     let recv = || recv_handle.get_nanbox_f64();
+    let args = root_args(&scope, args_ptr, args_len);
     let len = al_length(recv());
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
     if len > MAX_SAFE_INTEGER - args_len.min(MAX_SAFE_INTEGER as usize) as i64 {
@@ -272,7 +289,7 @@ pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f
         );
     }
     for i in 0..args_len {
-        al_set(recv(), len + i as i64, arg_at(args_ptr, args_len, i));
+        al_set(recv(), len + i as i64, args[i].get_nanbox_f64());
     }
     let new_len = len + args_len as i64;
     al_set_length(recv(), new_len);
@@ -286,6 +303,7 @@ pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
     let recv = || recv_handle.get_nanbox_f64();
+    let args = root_args(&scope, args_ptr, args_len);
     let len = al_length(recv());
     let count = args_len as i64;
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
@@ -302,14 +320,15 @@ pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -
             let from = k - 1;
             let to = from + count;
             if al_has(recv(), from) {
-                al_set(recv(), to, al_get(recv(), from));
+                let v = al_get(recv(), from);
+                al_set(recv(), to, v);
             } else {
                 al_delete(recv(), to);
             }
             k -= 1;
         }
         for j in 0..count {
-            al_set(recv(), j, arg_at(args_ptr, args_len, j as usize));
+            al_set(recv(), j, args[j as usize].get_nanbox_f64());
         }
     }
     let new_len = len + count;
@@ -331,20 +350,21 @@ pub(crate) fn object_reverse(recv: f64) -> f64 {
         let upper = len - 1 - lower;
         let lower_exists = al_has(recv(), lower);
         let upper_exists = al_has(recv(), upper);
-        let lower_val = al_get(recv(), lower);
-        let upper_val = al_get(recv(), upper);
+        let pair = crate::gc::RuntimeHandleScope::new();
+        let lower_val = pair.root_nanbox_f64(al_get(recv(), lower));
+        let upper_val = pair.root_nanbox_f64(al_get(recv(), upper));
         match (lower_exists, upper_exists) {
             (true, true) => {
-                al_set(recv(), lower, upper_val);
-                al_set(recv(), upper, lower_val);
+                al_set(recv(), lower, upper_val.get_nanbox_f64());
+                al_set(recv(), upper, lower_val.get_nanbox_f64());
             }
             (false, true) => {
-                al_set(recv(), lower, upper_val);
+                al_set(recv(), lower, upper_val.get_nanbox_f64());
                 al_delete(recv(), upper);
             }
             (true, false) => {
                 al_delete(recv(), lower);
-                al_set(recv(), upper, lower_val);
+                al_set(recv(), upper, lower_val.get_nanbox_f64());
             }
             (false, false) => {}
         }
@@ -360,14 +380,16 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv_handle = scope.root_nanbox_f64(recv);
     let recv = || recv_handle.get_nanbox_f64();
+    let args = root_args(&scope, args_ptr, args_len);
+    let arg = |i: usize| args.get(i).map_or_else(undef, |h| h.get_nanbox_f64());
     let len = al_length(recv());
-    let actual_start = relative_index(arg_at(args_ptr, args_len, 0), len);
+    let actual_start = relative_index(arg(0), len);
     let delete_count = if args_len == 0 {
         0
     } else if args_len == 1 {
         len - actual_start
     } else {
-        let dc = to_integer_or_infinity(arg_at(args_ptr, args_len, 1));
+        let dc = to_integer_or_infinity(arg(1));
         dc.max(0.0).min((len - actual_start) as f64) as i64
     };
     // Removed elements -> fresh plain array (holes preserved). ArrayCreate
@@ -394,7 +416,8 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
             let from = k + delete_count;
             let to = k + item_count;
             if al_has(recv(), from) {
-                al_set(recv(), to, al_get(recv(), from));
+                let v = al_get(recv(), from);
+                al_set(recv(), to, v);
             } else {
                 al_delete(recv(), to);
             }
@@ -413,7 +436,8 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
             let from = k + delete_count - 1;
             let to = k + item_count - 1;
             if al_has(recv(), from) {
-                al_set(recv(), to, al_get(recv(), from));
+                let v = al_get(recv(), from);
+                al_set(recv(), to, v);
             } else {
                 al_delete(recv(), to);
             }
@@ -422,11 +446,7 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
     }
     // Write the inserted items.
     for j in 0..item_count {
-        al_set(
-            recv(),
-            actual_start + j,
-            arg_at(args_ptr, args_len, 2 + j as usize),
-        );
+        al_set(recv(), actual_start + j, arg(2 + j as usize));
     }
     al_set_length(recv(), len - delete_count + item_count);
     nanbox_arr(removed.arr())
