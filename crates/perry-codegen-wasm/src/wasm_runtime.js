@@ -6093,15 +6093,26 @@ function __hostDescriptor(desc) {
   for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
     if (!(field in desc)) continue;
     const v = desc[field];
-    copy[field] = (field === 'get' || field === 'set') && __isPerryClosure(v)
-      ? function (...args) {
-          const result = __callClosureMethod(v, this, args);
-          __memDispatch.propagate_exception(true);
-          return result;
-        }
-      : v;
+    copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
   }
   return copy;
+}
+
+// One wrapper per closure, so redefining a non-configurable accessor with the same
+// closure is a no-op, as it is for a host function.
+const hostAccessors = new WeakMap();
+function __hostAccessor(v) {
+  if (!__isPerryClosure(v)) return v;
+  let fn = hostAccessors.get(v);
+  if (!fn) {
+    fn = function (...args) {
+      const result = __callClosureMethod(v, this, args);
+      __memDispatch.propagate_exception(true);
+      return result;
+    };
+    hostAccessors.set(v, fn);
+  }
+  return fn;
 }
 
 // A descriptor map of `__hostDescriptor` copies; the caller's map stays as it is.

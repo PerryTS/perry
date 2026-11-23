@@ -76,3 +76,23 @@ inAsync().then((v) => console.log("async " + v));
         "7,6,7\nasync 8"
     );
 }
+
+// The same closure redefines a non-configurable accessor, as the same host function
+// does. Expected output is Node's.
+#[test]
+fn define_property_same_closure_redefines_an_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {};
+const d: any = { get: () => 7 };
+Object.defineProperty(o, "x", d);
+Object.defineProperty(o, "x", d);
+let threw = "no";
+try { Object.defineProperty(o, "x", { get: () => 8 }); } catch (e: any) { threw = e.name; }
+console.log([o.x, threw].join(","));
+"#
+        ),
+        "7,TypeError"
+    );
+}
