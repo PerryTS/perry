@@ -1,1 +1,1 @@
-- wasm/web: `Object.getPrototypeOf` answers the async, generator or async generator function prototype for a class method value and for a closure passed to a host function such as `Reflect.apply` (#15276).
+`--target web`: `Object.getPrototypeOf` on a class method value (an async, generator or async generator method, instance or static) and on a closure passed to a host function such as `Reflect.apply` returns its function kind's prototype instead of `Function.prototype` (#15276).
