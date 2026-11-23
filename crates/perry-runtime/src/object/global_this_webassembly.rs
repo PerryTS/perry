@@ -937,7 +937,7 @@ pub(super) fn create_webassembly_namespace() -> f64 {
     install_webassembly_proto_getter(
         table_ctor,
         "length",
-        crate::fn_info!(#[realm("WebAssembly.Table.prototype.length.<get>")] export crate::object::global_this::global_this_webassembly::webassembly_table_length_getter_thunk, 0; with_name("get length"), with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+        crate::fn_info!(#[realm("WebAssembly.Table.prototype.length.<get>", effects = { returns(prim(num)) })] export crate::object::global_this::global_this_webassembly::webassembly_table_length_getter_thunk, 0; with_name("get length"), with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
     );
     install_webassembly_proto_fn(
         table_ctor,

@@ -364,9 +364,9 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
     match name {
         "MessageEvent" => super::message_event::install(proto),
         "BroadcastChannel" => {
-            accessor(proto, "onmessage", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessage.<get>")] export crate::event_target::prototype::get_onmessage, 0; with_name("get onmessage")),
+            accessor(proto, "onmessage", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessage.<get>", effects = { returns(islot(this, onmessage) | prim(null)) })] export crate::event_target::prototype::get_onmessage, 0; with_name("get onmessage")),
                 Some(crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessage.<set>")] export crate::event_target::prototype::set_onmessage, 1; with_name("set onmessage"))), true);
-            accessor(proto, "onmessageerror", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessageerror.<get>")] export crate::event_target::prototype::get_onmessageerror, 0; with_name("get onmessageerror")),
+            accessor(proto, "onmessageerror", crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessageerror.<get>", effects = { returns(islot(this, onmessageerror) | prim(null)) })] export crate::event_target::prototype::get_onmessageerror, 0; with_name("get onmessageerror")),
                 Some(crate::fn_info!(#[realm("BroadcastChannel.prototype.onmessageerror.<set>")] export crate::event_target::prototype::set_onmessageerror, 1; with_name("set onmessageerror"))), true);
         }
         "EventTarget" => {
@@ -416,31 +416,31 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             get(
                 "target",
-                crate::fn_info!(#[realm("Event.prototype.target.<get>")] export crate::event_target::prototype::get_target, 0; with_name("get target"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.target.<get>", effects = { returns(islot(this, target) | prim(null)) })] export crate::event_target::prototype::get_target, 0; with_name("get target"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "currentTarget",
-                crate::fn_info!(#[realm("Event.prototype.currentTarget.<get>")] export crate::event_target::prototype::get_current_target, 0; with_name("get currentTarget"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.currentTarget.<get>", effects = { returns(islot(this, target) | prim(null)) })] export crate::event_target::prototype::get_current_target, 0; with_name("get currentTarget"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "srcElement",
-                crate::fn_info!(#[realm("Event.prototype.srcElement.<get>")] export crate::event_target::prototype::get_target, 0; with_name("get srcElement"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.srcElement.<get>", effects = { returns(islot(this, target) | prim(null)) })] export crate::event_target::prototype::get_target, 0; with_name("get srcElement"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "type",
-                crate::fn_info!(#[realm("Event.prototype.type.<get>")] export crate::event_target::prototype::get_type, 0; with_name("get type"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.type.<get>", effects = { returns(prim(str)) })] export crate::event_target::prototype::get_type, 0; with_name("get type"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "cancelable",
-                crate::fn_info!(#[realm("Event.prototype.cancelable.<get>")] export crate::event_target::prototype::get_cancelable, 0; with_name("get cancelable"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.cancelable.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_cancelable, 0; with_name("get cancelable"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "defaultPrevented",
-                crate::fn_info!(#[realm("Event.prototype.defaultPrevented.<get>")] export crate::event_target::prototype::get_default_prevented, 0; with_name("get defaultPrevented"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.defaultPrevented.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_default_prevented, 0; with_name("get defaultPrevented"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "timeStamp",
-                crate::fn_info!(#[realm("Event.prototype.timeStamp.<get>")] export crate::event_target::prototype::get_timestamp, 0; with_name("get timeStamp"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.timeStamp.<get>", effects = { returns(prim(num)) })] export crate::event_target::prototype::get_timestamp, 0; with_name("get timeStamp"), with_flags(crate::closure::FN_BUILTIN)),
             );
             method(
                 "composedPath",
@@ -452,26 +452,26 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             accessor(
                 proto,
                 "returnValue",
-                crate::fn_info!(#[realm("Event.prototype.returnValue.<get>")] export crate::event_target::prototype::get_return_value, 0; with_name("get returnValue"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.returnValue.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_return_value, 0; with_name("get returnValue"), with_flags(crate::closure::FN_BUILTIN)),
                 Some(crate::fn_info!(#[realm("Event.prototype.returnValue.<set>")] export crate::event_target::prototype::set_return_value, 1; with_name("set returnValue"), with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
             get(
                 "bubbles",
-                crate::fn_info!(#[realm("Event.prototype.bubbles.<get>")] export crate::event_target::prototype::get_bubbles, 0; with_name("get bubbles"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.bubbles.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_bubbles, 0; with_name("get bubbles"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "composed",
-                crate::fn_info!(#[realm("Event.prototype.composed.<get>")] export crate::event_target::prototype::get_composed, 0; with_name("get composed"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.composed.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_composed, 0; with_name("get composed"), with_flags(crate::closure::FN_BUILTIN)),
             );
             get(
                 "eventPhase",
-                crate::fn_info!(#[realm("Event.prototype.eventPhase.<get>")] export crate::event_target::prototype::get_phase, 0; with_name("get eventPhase"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.eventPhase.<get>", effects = { returns(prim(num)) })] export crate::event_target::prototype::get_phase, 0; with_name("get eventPhase"), with_flags(crate::closure::FN_BUILTIN)),
             );
             accessor(
                 proto,
                 "cancelBubble",
-                crate::fn_info!(#[realm("Event.prototype.cancelBubble.<get>")] export crate::event_target::prototype::get_cancel_bubble, 0; with_name("get cancelBubble"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.cancelBubble.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_cancel_bubble, 0; with_name("get cancelBubble"), with_flags(crate::closure::FN_BUILTIN)),
                 Some(crate::fn_info!(#[realm("Event.prototype.cancelBubble.<set>")] export crate::event_target::prototype::set_cancel_bubble, 1; with_name("set cancelBubble"), with_flags(crate::closure::FN_BUILTIN))),
                 true,
             );
@@ -484,12 +484,12 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             get(
                 "isTrusted",
-                crate::fn_info!(#[realm("Event.prototype.isTrusted.<get>")] export crate::event_target::prototype::get_trusted, 0; with_name("get isTrusted"), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm("Event.prototype.isTrusted.<get>", effects = { returns(prim(bool)) })] export crate::event_target::prototype::get_trusted, 0; with_name("get isTrusted"), with_flags(crate::closure::FN_BUILTIN)),
             );
         }
         "CustomEvent" => get(
             "detail",
-            crate::fn_info!(#[realm("CustomEvent.prototype.detail.<get>")] export crate::event_target::prototype::get_detail, 0; with_name("get detail"), with_flags(crate::closure::FN_BUILTIN)),
+            crate::fn_info!(#[realm("CustomEvent.prototype.detail.<get>", effects = { returns(islot(this, detail)) })] export crate::event_target::prototype::get_detail, 0; with_name("get detail"), with_flags(crate::closure::FN_BUILTIN)),
         ),
         "AbortController" => {
             get(
