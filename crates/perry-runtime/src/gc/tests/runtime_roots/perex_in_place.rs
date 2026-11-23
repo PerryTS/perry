@@ -347,6 +347,7 @@ fn perex_test_entry_decided_in_one_quantum_holds_no_handle() {
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
     register_host_roots();
+    perex::install_unicode_properties();
     let scope = RuntimeHandleScope::new();
     let receiver = regex(&scope, "^\\p{Default_Ignorable_Code_Point}$", "u");
     let hit = text(&scope, "\u{200B}".as_bytes());
