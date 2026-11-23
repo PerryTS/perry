@@ -1019,6 +1019,19 @@ fn compute_act<'a>(
         }
     }
     g.m.dump_meta();
+    // Whether the analysis runs beside code it does not see
+    // (`Model::foreign_code`): every rule that keeps a whole-program premise
+    // reads it.
+    if std::env::var("PERRY_FACTS_REPORT").is_ok_and(|v| v == "1") {
+        eprintln!(
+            "perry: wpfacts: foreign code {} (unit {} unseen module {} interpreter linked {} runs {})",
+            g.m.foreign_code() as u8,
+            g.m.unit_mode as u8,
+            g.m.unseen_module_runs as u8,
+            g.m.interp_linked as u8,
+            g.m.interp_runs as u8
+        );
+    }
     #[cfg(test)]
     tests::delivery_boundaries::record(&g.m);
     #[cfg(test)]
