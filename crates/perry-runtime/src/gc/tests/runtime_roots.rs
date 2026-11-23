@@ -2,6 +2,7 @@ use super::super::*;
 use super::support::*;
 use std::cell::Cell;
 mod arraylike_callbacks;
+mod arraylike_mutators;
 mod bound_method_builder;
 mod call_argument_lists;
 mod callback_scanners;
