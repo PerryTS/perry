@@ -159,13 +159,15 @@ impl Model {
     }
 
     /// The key argument a trap receives: ToPropertyKey's result (a String
-    /// or a Symbol). Named: that string (or the well-known symbol); else
-    /// the key value itself when the operation has one, or any string.
+    /// or a Symbol). Named: that string (or the well-known symbol); else any
+    /// string or symbol. A computed key's value is never passed itself: a
+    /// Number index reaches the trap as its string (`p[2]` passes `"2"`).
     fn proxy_key_arg(&mut self, key: Key, idx: NodeId) -> NodeId {
-        if idx != NO_NODE {
-            return idx;
-        }
         let k = self.node_l("proxy-key");
+        if idx != NO_NODE {
+            self.add_prim(k, prim::STR | prim::SYMBOL);
+            return k;
+        }
         match key {
             Key::Named(a) if self.atoms[a as usize].starts_with(builtins::WK_PREFIX) => {
                 self.add_prim(k, prim::SYMBOL);
