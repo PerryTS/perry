@@ -215,6 +215,7 @@ pub(super) fn try_static_method_and_instance(
                             && !static_call_has_spread
                         {
                             return Ok(Ok(Expr::StaticMethodCall {
+                                byte_offset: call.span.lo.0,
                                 class_name: resolved_class,
                                 method_name,
                                 args,

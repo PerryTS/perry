@@ -1374,6 +1374,7 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "timeout" | "abort" | "any") {
                         return Ok(Ok(Expr::StaticMethodCall {
+                            byte_offset: call.span.lo.0,
                             class_name: "AbortSignal".to_string(),
                             method_name: method_name.to_string(),
                             args,

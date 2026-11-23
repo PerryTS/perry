@@ -793,7 +793,9 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             class_name,
             method_name,
             args,
+            byte_offset,
         } => Expr::StaticMethodCall {
+            byte_offset: *byte_offset,
             class_name: class_name.clone(),
             method_name: method_name.clone(),
             args: Shallow::shallow(args, n),
@@ -847,7 +849,9 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             key,
             receiver,
             args,
+            byte_offset,
         } => Expr::ObjectSuperMethodCall {
+            byte_offset: *byte_offset,
             home: Shallow::shallow(home, n),
             key: Shallow::shallow(key, n),
             receiver: Shallow::shallow(receiver, n),

@@ -542,6 +542,7 @@ fn lower_call_inner(
                     ast::SuperProp::Ident(ident) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: call.span.lo.0,
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(Expr::String(ident.sym.to_string())),
                                 receiver: Box::new(Expr::This),
@@ -562,6 +563,7 @@ fn lower_call_inner(
                     ast::SuperProp::Computed(computed) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: call.span.lo.0,
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),
@@ -619,6 +621,7 @@ fn lower_call_inner(
                                 }
                             };
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: call.span.lo.0,
                                 home: Box::new(home),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),

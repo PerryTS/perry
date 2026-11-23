@@ -436,6 +436,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             key,
             receiver,
             args,
+            ..
         } => {
             fill_defaults_in_expr(home, cx);
             fill_defaults_in_expr(key, cx);

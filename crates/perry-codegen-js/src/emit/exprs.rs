@@ -560,7 +560,7 @@ impl JsEmitter {
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::StaticMethodCall { class_name, method_name, args } => {
+            Expr::StaticMethodCall { class_name, method_name, args, .. } => {
                 let _ = write!(self.output, "{}.{}(", class_name, method_name);
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }

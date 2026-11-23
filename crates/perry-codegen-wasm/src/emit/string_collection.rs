@@ -758,6 +758,7 @@ impl WasmModuleEmitter {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(method_name);

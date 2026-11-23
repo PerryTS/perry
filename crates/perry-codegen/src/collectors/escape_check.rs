@@ -877,7 +877,7 @@ pub fn check_escapes_in_expr(
             home,
             key,
             receiver,
-            args,
+            args, ..
         } => {
             check_escapes_in_expr(home, candidates, classes, escaped);
             check_escapes_in_expr(key, candidates, classes, escaped);
