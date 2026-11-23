@@ -39,6 +39,8 @@ perry run ios --remote     # Use Perry Hub build server
 
 Perry auto-discovers available simulators (via `simctl`) and physical devices (via `devicectl`). When multiple targets are found, an interactive prompt lets you choose.
 
+Perry forwards the `PERRY_*` variables set in the shell that runs `perry run` to the app (for example `PERRY_UI_TEST_MODE=1 perry run ios`), skipping any whose name or value is not UTF-8. It forwards no other variable itself. On a simulator, `simctl` still passes on the shell's own `SIMCTL_CHILD_*` variables; on a device, the `PERRY_*` set replaces the shell's `DEVICECTL_CHILD_*` variables whenever it is non-empty.
+
 For physical devices, Perry handles code signing automatically — it reads your signing identity and team ID from `~/.perry/config.toml` (set up via `perry setup ios`), embeds the provisioning profile, and signs the `.app` before installing.
 
 If you don't have the iOS cross-compilation toolchain installed locally, `perry run ios` automatically falls back to Perry Hub's remote build server.

@@ -1,0 +1,1 @@
+`perry run` forwards the `PERRY_*` variables of the calling shell to iOS, visionOS, watchOS and tvOS apps on simulators and devices, so knobs such as `PERRY_UI_TEST_MODE` reach the app: simulator launches set them as `SIMCTL_CHILD_*` for `simctl`, device launches pass them as one `devicectl --environment-variables` JSON object. Perry forwards no other variable itself.
