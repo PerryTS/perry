@@ -83,7 +83,10 @@ The native parity matrix currently marks `setFillColor`, `setStrokeColor`,
 `setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`, and
 stateful `stroke` unsupported. `setFont` and `fillText` draw text natively on
 macOS, iOS, tvOS, visionOS, Android, Linux and Windows, in the current fill
-color with `y` on the alphabetic baseline; watchOS ignores them. `Canvas()` creation,
+color with `y` on the alphabetic baseline; watchOS ignores them. Windows draws
+text opaque, because GDI text has no alpha, and Linux uses only the first
+family of the font list. `setFont` reads the CSS `font` shorthand with `px` or
+`pt` sizes; any other spec leaves the font unchanged. `Canvas()` creation,
 clear/begin/move/line primitives, the lower-level colored stroke and gradient
 entries, and image drawing have native implementations, but that lower-level
 surface does not make the HTML-style examples above fully functional.

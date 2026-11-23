@@ -62,6 +62,8 @@ struct CanvasState {
     density: f32,
     cmds: Vec<DrawCmd>,
     last_cmds: Vec<DrawCmd>,
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    carried: Vec<DrawCmd>,
 }
 
 // Global (not thread-local) because canvas is created on the perry-native thread
@@ -116,6 +118,27 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
                 | DrawCmd::FillText(..)
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(
+            cmd,
+            DrawCmd::SetFillColor(_)
+                | DrawCmd::SetStrokeColor(_)
+                | DrawCmd::SetLineWidth(_)
+                | DrawCmd::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 pub fn create(width: f64, height: f64) -> i64 {
@@ -217,6 +240,7 @@ pub fn create(width: f64, height: f64) -> i64 {
                 density,
                 cmds: Vec::new(),
                 last_cmds: Vec::new(),
+                carried: Vec::new(),
             },
         );
 
@@ -455,7 +479,7 @@ fn repaint(handle: i64) {
             let cmds = if st.cmds.is_empty() || !command_batch_renders(&st.cmds) {
                 st.last_cmds.clone()
             } else {
-                let cmds = std::mem::take(&mut st.cmds);
+                let cmds = carry_state(&mut st.carried, std::mem::take(&mut st.cmds));
                 st.last_cmds = cmds.clone();
                 cmds
             };
@@ -953,7 +977,7 @@ pub fn clear(handle: i64) {
     {
         let mut states = CANVAS_STATES.lock().unwrap();
         if let Some(state) = states.get_mut(&handle) {
-            state.cmds.clear();
+            carry_state(&mut state.carried, std::mem::take(&mut state.cmds));
             state.last_cmds.clear();
             state.cmds.push(DrawCmd::Clear);
         }

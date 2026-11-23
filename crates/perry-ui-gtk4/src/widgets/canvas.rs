@@ -82,11 +82,31 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
     })
 }
 
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(
+            cmd,
+            DrawCommand::SetFillColor { .. } | DrawCommand::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
+}
+
 thread_local! {
     /// Pending canvas commands, keyed by widget handle
     static CANVAS_COMMANDS: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Last rendered command batch, used for native repaints that arrive before new commands.
     static CANVAS_LAST_FRAME: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by widget handle
     static CANVAS_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGES: RefCell<HashMap<i64, gtk4::gdk_pixbuf::Pixbuf>> = RefCell::new(HashMap::new());
@@ -170,7 +190,12 @@ pub fn create(width: f64, height: f64) -> i64 {
                     if pending.is_empty() || !command_batch_renders(pending) {
                         None
                     } else {
-                        let commands = std::mem::take(pending);
+                        let commands = CANVAS_STATE.with(|s| {
+                            carry_state(
+                                s.borrow_mut().entry(handle).or_default(),
+                                std::mem::take(pending),
+                            )
+                        });
                         CANVAS_LAST_FRAME.with(|last| {
                             last.borrow_mut().insert(handle, commands.clone());
                         });
@@ -416,7 +441,12 @@ mod tests {
 pub fn clear(handle: i64) {
     CANVAS_COMMANDS.with(|cmds| {
         if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
-            commands.clear();
+            CANVAS_STATE.with(|s| {
+                carry_state(
+                    s.borrow_mut().entry(handle).or_default(),
+                    std::mem::take(commands),
+                )
+            });
         }
     });
     CANVAS_LAST_FRAME.with(|last| {
@@ -470,7 +500,8 @@ pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
     if !(x.is_finite() && y.is_finite()) {
         return;
     }
-    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) };
+    // cairo's show_text panics on an interior NUL.
+    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) }.replace('\0', "");
     push_cmd(handle, DrawCommand::FillText { text, x, y });
     if let Some(widget) = super::get_widget(handle) {
         if let Some(area) = widget.downcast_ref::<DrawingArea>() {

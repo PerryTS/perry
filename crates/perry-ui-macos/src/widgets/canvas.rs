@@ -173,11 +173,61 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
     })
 }
 
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(
+            cmd,
+            DrawCommand::SetFillColor { .. }
+                | DrawCommand::SetStrokeColor { .. }
+                | DrawCommand::SetLineWidth(_)
+                | DrawCommand::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
+}
+
+/// Drains the pending commands for one paint. Canvas calls between paints form a single
+/// frame, so frame-loop apps don't replay every historical command. The last rendered batch
+/// is kept for native repaints that arrive before the app submits new canvas commands.
+fn take_frame(key: usize) -> Option<Vec<DrawCommand>> {
+    CANVAS_COMMANDS
+        .with(|cmds| {
+            let mut cmds = cmds.borrow_mut();
+            cmds.get_mut(&key).and_then(|pending| {
+                if pending.is_empty() || !command_batch_renders(pending) {
+                    None
+                } else {
+                    let commands = CANVAS_STATE.with(|s| {
+                        carry_state(
+                            s.borrow_mut().entry(key).or_default(),
+                            std::mem::take(pending),
+                        )
+                    });
+                    CANVAS_LAST_FRAME.with(|last| {
+                        last.borrow_mut().insert(key, commands.clone());
+                    });
+                    Some(commands)
+                }
+            })
+        })
+        .or_else(|| CANVAS_LAST_FRAME.with(|last| last.borrow().get(&key).cloned()))
+}
+
 thread_local! {
     /// Pending canvas commands, keyed by view address.
     static CANVAS_COMMANDS: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Last rendered command batch, used for native repaints that arrive before new commands.
     static CANVAS_LAST_FRAME: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by view address
     static CANVAS_SIZES: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGES: RefCell<HashMap<i64, CanvasImage>> = RefCell::new(HashMap::new());
@@ -259,26 +309,7 @@ define_class!(
                 s.borrow().get(&key).copied().unwrap_or((0.0, 0.0))
             });
 
-            // Drain pending commands for this paint. Canvas calls between paints
-            // form a single frame, so frame-loop apps don't replay every historical
-            // command. Keep only the last rendered batch for native repaint events
-            // that arrive before the app submits new canvas commands.
-            let commands = CANVAS_COMMANDS
-                .with(|cmds| {
-                    let mut cmds = cmds.borrow_mut();
-                    cmds.get_mut(&key).and_then(|pending| {
-                        if pending.is_empty() || !command_batch_renders(pending) {
-                            None
-                        } else {
-                            let commands = std::mem::take(pending);
-                            CANVAS_LAST_FRAME.with(|last| {
-                                last.borrow_mut().insert(key, commands.clone());
-                            });
-                            Some(commands)
-                        }
-                    })
-                })
-                .or_else(|| CANVAS_LAST_FRAME.with(|last| last.borrow().get(&key).cloned()));
+            let commands = take_frame(key);
 
             if let Some(commands) = commands {
                     // Track current path points for gradient fill.
@@ -581,7 +612,12 @@ pub fn clear(handle: i64) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
-                commands.clear();
+                CANVAS_STATE.with(|s| {
+                    carry_state(
+                        s.borrow_mut().entry(key).or_default(),
+                        std::mem::take(commands),
+                    )
+                });
             }
         });
         CANVAS_LAST_FRAME.with(|last| {
@@ -1016,6 +1052,33 @@ mod tests {
             "setFont and fillText record in call order, and an invalid font records nothing"
         );
         assert!(command_batch_renders(&commands[2..]));
+    }
+
+    #[test]
+    fn drawing_state_carries_into_the_next_batch() {
+        use crate::lib_ffi::style_and_canvas as ffi;
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        ffi::perry_ui_canvas_set_fill_color(canvas, 1.0, 0.0, 0.0, 1.0);
+        ffi::perry_ui_canvas_set_font(canvas, perry_str("24px serif"));
+        ffi::perry_ui_canvas_fill_text(canvas, perry_str("a"), 0.0, 10.0);
+        let key = get_canvas_key(canvas).unwrap();
+        assert!(take_frame(key).is_some());
+        ffi::perry_ui_canvas_fill_text(canvas, perry_str("b"), 0.0, 20.0);
+        let batch = take_frame(key).unwrap();
+        assert!(
+            matches!(
+                batch.as_slice(),
+                [
+                    DrawCommand::SetFillColor { r, .. },
+                    DrawCommand::SetFont(font),
+                    DrawCommand::FillText { text, .. },
+                ] if *r == 1.0 && font.size == 24.0 && text == "b"
+            ),
+            "a later batch replays with the fill color and font set before the previous paint"
+        );
     }
 
     #[test]

@@ -25,16 +25,19 @@ impl Default for CanvasFont {
 }
 
 /// Parses `[style] [variant] [weight] size[/line-height] family[, family…]`.
-/// Only `px` and `pt` sizes are accepted.
+/// Only `px` and `pt` sizes are accepted; a line height is validated and
+/// dropped, since `fillText` draws a single line.
 pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
-    let spec = spec.trim();
     let mut font = CanvasFont {
         families: Vec::new(),
         ..CanvasFont::default()
     };
-    let mut rest = spec;
+    let mut rest = spec.trim();
     loop {
-        let (word, tail) = rest.split_once(char::is_whitespace)?;
+        let end = rest
+            .find(|c: char| c.is_whitespace() || c == '/')
+            .unwrap_or(rest.len());
+        let (word, tail) = rest.split_at(end);
         let lower = word.to_ascii_lowercase();
         if let Some(size) = parse_size(&lower) {
             font.size = size;
@@ -49,19 +52,51 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
             w => font.bold = w.parse::<u16>().ok().filter(|n| (1..=1000).contains(n))? >= 600,
         }
         rest = tail.trim_start();
-    }
-    for family in rest.split(',') {
-        let family = family.trim().trim_matches(|c| c == '"' || c == '\'');
-        if family.is_empty() {
+        if rest.is_empty() {
             return None;
         }
-        font.families.push(family.to_string());
+    }
+    if let Some(after) = rest.strip_prefix('/') {
+        let after = after.trim_start();
+        let end = after.find(char::is_whitespace).unwrap_or(after.len());
+        if !is_line_height(&after[..end].to_ascii_lowercase()) {
+            return None;
+        }
+        rest = after[end..].trim_start();
+    }
+    for family in rest.split(',') {
+        let family = family.trim();
+        let quoted = family.len() >= 2
+            && (family.starts_with('"') && family.ends_with('"')
+                || family.starts_with('\'') && family.ends_with('\''));
+        let name = if quoted {
+            &family[1..family.len() - 1]
+        } else {
+            family
+        };
+        // CSS-wide keywords are not family names unless quoted; control
+        // characters (NUL among them) cannot reach a platform font API.
+        if name.is_empty()
+            || name.chars().any(char::is_control)
+            || !quoted && CSS_WIDE_KEYWORDS.contains(&name.to_ascii_lowercase().as_str())
+        {
+            return None;
+        }
+        font.families.push(name.to_string());
     }
     (!font.families.is_empty()).then_some(font)
 }
 
+const CSS_WIDE_KEYWORDS: &[&str] = &[
+    "inherit",
+    "initial",
+    "unset",
+    "revert",
+    "revert-layer",
+    "default",
+];
+
 fn parse_size(word: &str) -> Option<f64> {
-    let word = word.split('/').next()?;
     let (num, scale) = if let Some(n) = word.strip_suffix("px") {
         (n, 1.0)
     } else {
@@ -69,6 +104,14 @@ fn parse_size(word: &str) -> Option<f64> {
     };
     let size = num.parse::<f64>().ok()? * scale;
     (size.is_finite() && size > 0.0).then_some(size)
+}
+
+fn is_line_height(word: &str) -> bool {
+    let num = ["px", "pt", "em", "%"]
+        .iter()
+        .find_map(|unit| word.strip_suffix(unit))
+        .unwrap_or(word);
+    word == "normal" || num.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)
 }
 
 #[cfg(test)]
@@ -107,6 +150,14 @@ mod tests {
             parse_canvas_font("300 14px serif"),
             Some(font(14.0, false, false, &["serif"]))
         );
+        assert_eq!(
+            parse_canvas_font("16px / 1.5 Menlo"),
+            Some(font(16.0, false, false, &["Menlo"]))
+        );
+        assert_eq!(
+            parse_canvas_font("bold 16px/normal 'inherit', serif"),
+            Some(font(16.0, true, false, &["inherit", "serif"]))
+        );
     }
 
     #[test]
@@ -121,6 +172,11 @@ mod tests {
             "-4px serif",
             "heavy 12px serif",
             "2em serif",
+            "16px/nonsense Menlo",
+            "16px / Menlo",
+            "12px inherit",
+            "12px serif, initial",
+            "12px Ex\u{0}ample",
         ] {
             assert_eq!(parse_canvas_font(bad), None, "{bad:?}");
         }

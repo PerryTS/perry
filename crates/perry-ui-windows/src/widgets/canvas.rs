@@ -50,9 +50,26 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
     })
 }
 
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(cmd, DrawCmd::SetFillColor(..) | DrawCmd::SetFont(_)) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
+}
+
 thread_local! {
     static CANVAS_CMDS: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_LAST_FRAME: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_PATHS: RefCell<HashMap<i64, String>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
@@ -161,7 +178,12 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                     if pending.is_empty() || !command_batch_renders(pending) {
                         None
                     } else {
-                        let commands = std::mem::take(pending);
+                        let commands = CANVAS_STATE.with(|s| {
+                            carry_state(
+                                s.borrow_mut().entry(handle).or_default(),
+                                std::mem::take(pending),
+                            )
+                        });
                         CANVAS_LAST_FRAME.with(|last| {
                             last.borrow_mut().insert(handle, commands.clone());
                         });
@@ -488,7 +510,12 @@ pub fn clear(handle: i64) {
     CANVAS_CMDS.with(|cmds| {
         let mut cmds = cmds.borrow_mut();
         if let Some(list) = cmds.get_mut(&handle) {
-            list.clear();
+            CANVAS_STATE.with(|s| {
+                carry_state(
+                    s.borrow_mut().entry(handle).or_default(),
+                    std::mem::take(list),
+                )
+            });
             list.push(DrawCmd::Clear);
         }
     });
