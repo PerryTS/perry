@@ -162,7 +162,7 @@ pub(super) fn try_buffer_uint8array_statics(
                         }),
                         args: vec![b],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: call.span.lo.0,
                     }));
                 }
                 _ => {} // Fall through to generic handling

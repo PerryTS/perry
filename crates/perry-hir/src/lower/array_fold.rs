@@ -21,8 +21,13 @@ use crate::ir::*;
 /// array method name and the arity matches; returns `None` otherwise so the
 /// caller can fall back to the generic `Expr::Call` form.
 pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
-    let (callee, args) = match call {
-        Expr::Call { callee, args, .. } => (callee, args),
+    let (callee, args, byte_offset) = match call {
+        Expr::Call {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => (callee, args, byte_offset),
         other => return other,
     };
     let (object, property) = match *callee {
@@ -35,7 +40,7 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
                 callee: Box::new(other),
                 args,
                 type_args: Vec::new(),
-                byte_offset: 0,
+                byte_offset,
             };
         }
     };
@@ -44,13 +49,13 @@ pub(crate) fn try_fold_array_method_call(call: Expr) -> Expr {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: obj,
             property: prop,
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     };
     match property.as_str() {
         "map" if !args.is_empty() => {

@@ -1245,7 +1245,7 @@ fn cell_flag_set(id: LocalId) -> Expr {
 /// access of a dead-zone cell, where `on_initialized` is the access itself and
 /// `on_dead_zone` runs before the throw.
 fn cell_checked(id: LocalId, name: &str, on_initialized: Expr, on_dead_zone: Option<Expr>) -> Expr {
-    let throw = perry_hir::tdz_check::throw(name);
+    let throw = perry_hir::tdz_check::throw(name, 0 /*HPOS LocalGet/LocalSet: the access offset*/);
     Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(cell_slot(id, 1)),
         then_expr: Box::new(on_initialized),

@@ -117,7 +117,7 @@ pub(crate) fn generator_executing_guard(
 
 pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool, fn_offset: u32) -> Stmt {
     if is_async_generator {
-        Stmt::Return(Some(promise_reject(value)), fn_offset)
+        Stmt::Return(Some(promise_reject(value, fn_offset)), fn_offset)
     } else {
         Stmt::Throw(value)
     }
@@ -129,18 +129,18 @@ pub(crate) fn generator_executing_type_error() -> Expr {
     )))
 }
 
-pub(crate) fn promise_reject(value: Expr) -> Expr {
+pub(crate) fn promise_reject(value: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: "reject".to_string(),
         }),
         args: vec![value],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 

@@ -91,7 +91,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     // and died on React's "Invalid hook call" null-dispatcher TypeError.
     // (`createElement` reads `props.children` the same way the jsx-runtime
     // does, so folding children into props is shared between both paths.)
-    if let Some(react_element_call) = react_create_element_call(ctx, type_expr.clone(), &props_expr)
+    if let Some(react_element_call) = react_create_element_call(ctx, type_expr.clone(), &props_expr, jsx.span.lo.0)
     {
         return Ok(react_element_call);
     }
@@ -105,7 +105,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         }),
         args: vec![type_expr, props_expr],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: jsx.span.lo.0,
     })
 }
 
@@ -116,6 +116,7 @@ fn react_create_element_call(
     ctx: &mut LoweringContext,
     type_expr: Expr,
     props_expr: &Expr,
+    byte_offset: u32,
 ) -> Option<Expr> {
     let react_local = ctx.react_default_import_local.clone()?;
     // Resolve the react binding the same way ordinary ident lowering would:
@@ -135,13 +136,13 @@ fn react_create_element_call(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(object),
             property: "createElement".to_string(),
         }),
         args: vec![type_expr, props_expr.clone()],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     })
 }
 
@@ -197,7 +198,7 @@ pub(crate) fn lower_jsx_fragment(
             }),
             property: "Fragment".to_string(),
         };
-        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr) {
+        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr, jsx.span.lo.0) {
             return Ok(call);
         }
     }
@@ -213,7 +214,7 @@ pub(crate) fn lower_jsx_fragment(
         // `type === "__Fragment"` to detect fragment elements.
         args: vec![Expr::String("__Fragment".to_string()), props_expr],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: jsx.span.lo.0,
     })
 }
 

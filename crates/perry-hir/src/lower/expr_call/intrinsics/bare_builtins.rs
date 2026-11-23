@@ -196,7 +196,7 @@ pub(crate) fn try_iterator_from(
             }),
             args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: call.span.lo.0,
             byte_end: 0,
         }));
     }

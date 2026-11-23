@@ -34,12 +34,12 @@ pub(super) fn is_filehandle_readlines_for_await_target(
     )
 }
 
-pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
+pub(super) fn async_iterator_method_call(iterable: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
@@ -48,7 +48,7 @@ pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 

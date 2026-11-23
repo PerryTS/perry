@@ -684,7 +684,7 @@ fn try_indirect_eval_super_private(ctx: &LoweringContext, call: &ast::CallExpr) 
         // other parse failures stay on the existing fallthrough path.
         Err(_) => {
             if body.contains("super") || body.contains("new.target") {
-                return Some(super::eval_super_scan::throw_eval_super_unexpected_expr());
+                return Some(super::eval_super_scan::throw_eval_super_unexpected_expr(call.span.lo.0));
             }
             return None;
         }
@@ -696,7 +696,7 @@ fn try_indirect_eval_super_private(ctx: &LoweringContext, call: &ast::CallExpr) 
             _ => return None,
         }
     }
-    super::eval_super_scan::check_indirect_eval_super_private(&stmts)
+    super::eval_super_scan::check_indirect_eval_super_private(&stmts, call.span.lo.0)
 }
 
 /// General indirect-eval fold for a `(0, eval)('<const>')` site whose body is
@@ -722,7 +722,7 @@ pub(crate) fn try_indirect_eval_general(
         Ok(m) => m,
         Err(_) => {
             return Ok(Some(
-                super::eval_super_scan::throw_eval_syntax_error_public("Unexpected end of input"),
+                super::eval_super_scan::throw_eval_syntax_error_public("Unexpected end of input", call.span.lo.0),
             ))
         }
     };
@@ -735,12 +735,13 @@ pub(crate) fn try_indirect_eval_general(
                 return Ok(Some(
                     super::eval_super_scan::throw_eval_syntax_error_public(
                         "Cannot use import/export statements in eval code",
+                        call.span.lo.0,
                     ),
                 ))
             }
         }
     }
-    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
+    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts, call.span.lo.0) {
         return Ok(Some(throw));
     }
     // Indirect eval runs as *global* code: its body sees only the global
@@ -909,7 +910,7 @@ fn try_direct_eval_this_fold(ctx: &mut LoweringContext, call: &ast::CallExpr) ->
             _ => None,
         };
     }
-    if let Some(expr) = try_direct_eval_simple_assignment_fold(ctx, &body) {
+    if let Some(expr) = try_direct_eval_simple_assignment_fold(ctx, &body, call.span.lo.0) {
         return Some(expr);
     }
     try_direct_eval_constant_add_fold(&body)
@@ -975,7 +976,7 @@ fn parse_eval_literal(src: &str) -> Option<Expr> {
     parse_eval_number_literal(s).map(Expr::Number)
 }
 
-fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str) -> Option<Expr> {
+fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str, byte_offset: u32) -> Option<Expr> {
     let src = body.trim().trim_end_matches(';').trim();
     let is_var_assignment = src.starts_with("var ");
     // A sloppy direct eval at global-script top level performs
@@ -1004,6 +1005,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
                 if is_strict_reserved_word(&name) {
                     return Some(super::eval_super_scan::throw_eval_syntax_error_public(
                         &format!("Unexpected strict mode reserved word `{name}`"),
+                        byte_offset,
                     ));
                 }
                 return Some(Expr::Undefined);
@@ -1012,6 +1014,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
                 if !ctx.var_hoisted_ids.contains(&id) {
                     return Some(super::eval_super_scan::throw_eval_syntax_error_public(
                         &format!("Identifier '{name}' has already been declared"),
+                        byte_offset,
                     ));
                 }
                 return Some(Expr::Undefined);
@@ -1046,6 +1049,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
         if is_strict_reserved_word(name) {
             return Some(super::eval_super_scan::throw_eval_syntax_error_public(
                 &format!("Unexpected strict mode reserved word `{name}`"),
+                byte_offset,
             ));
         }
         return Some(Expr::Undefined);
@@ -1054,6 +1058,7 @@ fn try_direct_eval_simple_assignment_fold(ctx: &mut LoweringContext, body: &str)
         if is_var_assignment && !ctx.var_hoisted_ids.contains(&id) {
             return Some(super::eval_super_scan::throw_eval_syntax_error_public(
                 &format!("Identifier '{name}' has already been declared"),
+                byte_offset,
             ));
         }
         Some(finish(Expr::LocalSet(id, Box::new(value))))
@@ -1529,14 +1534,14 @@ fn try_const_fold_eval(
     // PerformEval early errors: `super()` / `super.x` outside a context that
     // provides them, and private names with no declaring class in scope, are
     // SyntaxErrors thrown when the eval call evaluates.
-    if let Some(throw) = super::eval_super_scan::check_direct_eval_super_private(ctx, &body_stmts) {
+    if let Some(throw) = super::eval_super_scan::check_direct_eval_super_private(ctx, &body_stmts, span.lo.0) {
         return Ok(Some(throw));
     }
 
     // PerformEval parse-level early errors: a top-level `return`, or an
     // unlabeled `break`/`continue` with no enclosing loop/switch in the eval
     // source, is a SyntaxError thrown when the eval call evaluates.
-    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts) {
+    if let Some(throw) = super::eval_super_scan::check_eval_illegal_abrupt(&body_stmts, span.lo.0) {
         return Ok(Some(throw));
     }
 
@@ -1700,7 +1705,7 @@ fn build_eval_completion_iife(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: span.lo.0,
     }))
 }
 

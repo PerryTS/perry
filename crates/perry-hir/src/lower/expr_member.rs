@@ -9,6 +9,7 @@
 //! (regular object vs class static vs enum vs builtin namespace) then
 //! emit the right HIR variant.
 
+use swc_common::Spanned;
 use crate::types::Type;
 use anyhow::Result;
 use swc_ecma_ast as ast;
@@ -201,7 +202,7 @@ pub(crate) fn try_fold_symbol_well_known_member(
                         key_expr,
                     ],
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset: obj.span().lo.0,
                 }));
             }
         },
@@ -567,7 +568,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                         });
                     }
                     _ => {}
@@ -698,7 +699,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                         });
                     }
                     _ => {}

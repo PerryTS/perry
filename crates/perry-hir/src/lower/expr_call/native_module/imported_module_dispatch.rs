@@ -183,7 +183,7 @@ pub(super) fn try_imported_module_dispatch(
                         }),
                         args: Vec::new(),
                         type_args: Vec::new(),
-                        byte_offset: 0,
+                        byte_offset: call.span.lo.0,
                     });
                     return Ok(Ok(Expr::Sequence(exprs)));
                 }
@@ -222,12 +222,12 @@ pub(super) fn try_imported_module_dispatch(
                     if normalized_module == "stream"
                         && matches!(imported_method, None | Some("Stream"))
                     {
-                        return Ok(Ok(event_emitter_constructor_call(args)));
+                        return Ok(Ok(event_emitter_constructor_call(args, call.span.lo.0)));
                     }
                     if normalized_module == "events"
                         && matches!(imported_method, Some("EventEmitter"))
                     {
-                        return Ok(Ok(event_emitter_constructor_call(args)));
+                        return Ok(Ok(event_emitter_constructor_call(args, call.span.lo.0)));
                     }
                     // #4973: named-import form of the inherits
                     // pattern — `const { Server } = require('http');
@@ -258,7 +258,7 @@ pub(super) fn try_imported_module_dispatch(
                             }),
                             args: call_args,
                             type_args: Vec::new(),
-                            byte_offset: 0,
+                            byte_offset: call.span.lo.0,
                         }));
                     }
                     if imported_callable {

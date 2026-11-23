@@ -571,7 +571,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     }),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -1152,7 +1152,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(nonconstructable_builtin_throw_expr(&class_name, args));
+                return Ok(nonconstructable_builtin_throw_expr(&class_name, args, new_byte_offset));
             }
             if class_name == "Proxy" && !shadowed_by_user_binding {
                 let args = new_expr
@@ -1342,7 +1342,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                crate::lower::class_binding_read(ctx, &name)
+                                                crate::lower::class_binding_read(ctx, &name, ident.span.lo.0)
                                             } else {
                                                 continue;
                                             };

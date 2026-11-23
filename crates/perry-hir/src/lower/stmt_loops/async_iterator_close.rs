@@ -5,7 +5,7 @@ use super::*;
 
 /// Spec "If innerResult is not an Object, throw a TypeError" check for
 /// IteratorNext / AsyncIteratorClose results.
-fn iterator_result_validated(call: Expr) -> Expr {
+fn iterator_result_validated(call: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -15,7 +15,7 @@ fn iterator_result_validated(call: Expr) -> Expr {
         }),
         args: vec![call],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -49,7 +49,7 @@ pub(crate) fn emit_driver(
             Expr::LocalGet(value_id),
         ])),
     };
-    let mut driver = iter_driver_while_stmt(result_id, iterator_result_validated(next_call), body);
+    let mut driver = iter_driver_while_stmt(result_id, iterator_result_validated(next_call, byte_offset), body);
     let Stmt::While {
         body: loop_body, ..
     } = &mut driver
@@ -91,7 +91,7 @@ pub(crate) fn emit_driver(
                     this_arg: Box::new(Expr::LocalGet(iter_id)),
                     args: Box::new(Expr::Array(vec![], None)),
                 }),
-                         byte_offset,)))],
+                         byte_offset,), byte_offset))],
             else_branch: None,
         },
     ];

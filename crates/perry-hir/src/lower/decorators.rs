@@ -216,7 +216,7 @@ fn append_method_decorator_init(
                 Expr::String(method.name.clone()),
             ],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: method.byte_offset,
         },
     )]);
     append_decorator_invocations(

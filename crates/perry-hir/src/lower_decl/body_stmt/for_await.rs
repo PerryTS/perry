@@ -32,7 +32,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: for_of_stmt.span.lo.0,
     };
     let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     result.push(Stmt::Let {

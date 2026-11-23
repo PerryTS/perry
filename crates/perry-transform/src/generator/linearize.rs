@@ -85,7 +85,7 @@ impl DelegationRoute {
             }),
             args: call_args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: self.byte_offset,
         };
         self.await_result(call)
     }
@@ -117,7 +117,7 @@ fn passthrough_yield(result_id: LocalId, kind_id: LocalId, byte_offset: u32) -> 
             }),
             args: vec![Expr::LocalGet(result_id), Expr::LocalGet(kind_id)],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: byte_offset,
         })),
         delegate: false,
     }
@@ -298,7 +298,7 @@ fn delegate_next_call(
 /// A sync pull's step kind: 0 a raw yielded value, 1 a raw completion value
 /// (a fixed-state delegate stepped through its intrinsic `next`, read from its
 /// record), or 2 an inner result object. It reads one record control.
-fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalId) -> Stmt {
+fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalId, byte_offset: u32) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         kind_id,
         Box::new(Expr::Call {
@@ -310,7 +310,7 @@ fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalI
             }),
             args: vec![Expr::LocalGet(del_iter_id), Expr::LocalGet(del_next_id)],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }),
     ))
 }
@@ -392,7 +392,7 @@ fn emit_yield_star_loop(
         catches,
         finallys,
     );
-    current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
+    current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)));
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
     current.extend(delegate_result_object_check(del_result_id, byte_offset));
@@ -431,7 +431,7 @@ fn emit_yield_star_loop(
             ), byte_offset)),
         )),
     ];
-    while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
+    while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)));
     // Same Object-check on the in-loop pull (async generators only).
     while_body.extend(delegate_result_object_check(del_result_id, byte_offset));
     let not_done = Expr::Unary {

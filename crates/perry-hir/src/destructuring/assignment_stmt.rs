@@ -30,7 +30,7 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Exp
     }
 }
 
-fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
+fn extern_call(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -40,7 +40,7 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -500,6 +500,7 @@ fn object_property_get_expr(
             let key_expr = extern_call(
                 "js_object_literal_to_property_key",
                 vec![lower_expr(ctx, &computed.expr)?],
+                computed.span.lo.0,
             );
             let (key_id, key_name) = fresh_destruct_local(ctx, "destruct_key", Type::Any);
             computed_key_temps.push(key_id);
