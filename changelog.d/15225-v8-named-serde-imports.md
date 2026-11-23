@@ -1,0 +1,1 @@
+Named `node:v8` imports of `Serializer`, `DefaultSerializer`, `Deserializer` and `DefaultDeserializer` construct real serde instances; `new DefaultSerializer()` no longer returns an empty object without methods (#15148).
