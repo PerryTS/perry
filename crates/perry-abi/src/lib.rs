@@ -918,11 +918,15 @@ pub const JS_FUNCTION_INFO_PARAMS_OFFSET: usize = 8;
 pub const JS_FUNCTION_INFO_FLAGS_OFFSET: usize = 12;
 pub const JS_FUNCTION_INFO_OWN_SLOTS_OFFSET: usize = 64;
 pub const JS_FUNCTION_INFO_SIZE: usize = 72;
+/// The size on ILP32 (wasm32), which the host compiler lays tails out after.
+pub const JS_FUNCTION_INFO_SIZE_ILP32: usize = 64;
 #[cfg(target_pointer_width = "64")]
 const _: () = {
     assert!(core::mem::offset_of!(JsFunctionInfo, own_slots) == JS_FUNCTION_INFO_OWN_SLOTS_OFFSET);
     assert!(core::mem::size_of::<JsFunctionInfo>() == JS_FUNCTION_INFO_SIZE);
 };
+#[cfg(target_pointer_width = "32")]
+const _: () = assert!(core::mem::size_of::<JsFunctionInfo>() == JS_FUNCTION_INFO_SIZE_ILP32);
 /// Former zero padding; nonzero records opt in to plain closure dispatch.
 pub const JS_FUNCTION_INFO_PLAIN_PARAMS_OFFSET: usize =
     core::mem::offset_of!(JsFunctionInfo, plain_params);
