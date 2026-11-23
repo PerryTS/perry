@@ -4186,9 +4186,6 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     if relinked && !m.json_relink.contains(&t) {
         return Err("__proto__ relink".into());
     }
-    if let Some(why) = m.writer_escape_why(t) {
-        return Err(format!("escape: {why}"));
-    }
     if let Some((k, r)) = m.hard.get(&t) {
         return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));
     }

@@ -241,9 +241,9 @@ console.log(x);
     );
 }
 
-/// Own data or absent of a `JSON.parse` object (`own_data_or_absent_why`'s
-/// escape check; a JSON value is no contracted token, so every escape of it
-/// is writer level): handed to a ⊤ callee, that code may define an accessor
+/// Own data or absent of a `JSON.parse` object (a JSON value is no
+/// contracted token, so every escape of it is writer level; the escape
+/// itself is decided by `own_data_or_absent_tok`'s other conditions): handed to a ⊤ callee, that code may define an accessor
 /// under the key, so the read is not proven.
 #[test]
 fn k2d_keep_a_json_object_given_to_a_top_callee_is_not_own_data() {
