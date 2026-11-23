@@ -1,0 +1,1 @@
+- `bcrypt.hash` accepts a salt string as its second argument and normalizes a cost like `hashSync` (`0` means 10, other values clamp to 4..31), instead of rejecting both (#15152).
