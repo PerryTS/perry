@@ -805,7 +805,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         // reads LC_ALL / LANG on first use, not while the realm is populated.
         {
             let getter = crate::closure::js_closure_alloc(
-                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined])] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined], effects = { stores(fresh); returns(namespace("navigator")) })] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
                 1,
             );
             let getter_bits = if getter.is_null() {

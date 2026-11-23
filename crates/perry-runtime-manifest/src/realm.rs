@@ -452,6 +452,86 @@ impl RealmManifest {
                 }
             }
         }
+        self.validate_namespace_values()
+    }
+
+    /// Every own member of a host namespace object (`%Global%`, `process`,
+    /// `node:<m>` and their sub-namespaces) has a value side: a data value
+    /// (a runtime-computed one names its primitive type, or the exotic
+    /// declaration of the one host object it is declares what that object
+    /// holds), or an accessor whose getter declares what it returns, with
+    /// no `open` effect and no `unknown` operand. A read of such a member is
+    /// then the declared value, never an unknown one.
+    fn validate_namespace_values(&self) -> Result<(), String> {
+        use self::{RealmEffect as E, RealmOperand as O};
+        fn unknown(o: &O) -> bool {
+            match o {
+                O::Unknown => true,
+                O::Fresh {
+                    elems,
+                    fields,
+                    slots,
+                    ..
+                } => {
+                    elems.iter().any(unknown)
+                        || fields.iter().chain(slots.iter()).any(|f| unknown(&f.value))
+                }
+                O::Promise { value, reject } => value.iter().chain(reject.iter()).any(unknown),
+                O::Species { args, .. } => args.iter().any(unknown),
+                O::Union(members) => members.iter().any(unknown),
+                O::Prim(_) | O::Slot(_) | O::Native(_) | O::Namespace(_) | O::Bound | O::Json => {
+                    false
+                }
+            }
+        }
+        let decl = |name: &str| self.declarations.iter().find(|d| d.name == name);
+        for d in self
+            .declarations
+            .iter()
+            .filter(|d| d.kind == RealmKind::Namespace)
+        {
+            for p in &d.properties {
+                let member = format!("{}.{}", d.name, p.key);
+                match (&p.value, &p.get) {
+                    (Some(RealmValue::Dynamic(provider)), _) if p.value_type.is_none() => {
+                        let typed = self.declarations.iter().any(|h| {
+                            h.kind == RealmKind::Exotic
+                                && h.value.as_ref() == p.value.as_ref()
+                                && (h.elements.is_some() || h.values.is_some())
+                        });
+                        if !typed {
+                            return Err(format!(
+                                "namespace member {member}: runtime value {provider} declares no type \
+                                 (`runtime(path, kind)`, or an exotic declaration with `elements`/`values`)"
+                            ));
+                        }
+                    }
+                    (Some(_), _) => {}
+                    (None, Some(get)) => {
+                        let Some(g) = decl(get) else {
+                            return Err(format!("namespace member {member}: undeclared getter {get}"));
+                        };
+                        let returns = g.effects.iter().any(|e| matches!(e, E::Returns(_)));
+                        let open = g.effects.iter().any(|e| matches!(e, E::Open));
+                        let unknown_operand = g.effects.iter().any(|e| match e {
+                            E::Returns(o) => unknown(o),
+                            E::Calls { this, args, .. } => unknown(this) || args.iter().any(unknown),
+                            _ => false,
+                        });
+                        if !returns || open || unknown_operand {
+                            return Err(format!(
+                                "namespace member {member}: getter {get} ({}:{}) must declare \
+                                 `returns(..)` with no `open` effect and no `unknown` operand",
+                                g.source, g.line
+                            ));
+                        }
+                    }
+                    (None, None) => {
+                        return Err(format!("namespace member {member} has no value and no getter"));
+                    }
+                }
+            }
+        }
         Ok(())
     }
 }
