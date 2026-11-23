@@ -431,9 +431,6 @@ impl Model {
             s.node_pos.resize(id as usize + 1, crate::topstop::NOPOS);
             s.node_pos[id as usize] = p;
             let at = std::panic::Location::caller();
-            if p == crate::topstop::NOPOS {
-                *s.nopos.entry(at).or_default() += 1;
-            }
             // Made outside a program expression: the node whose rule runs
             // (else the escape's node, else the sender) made it.
             let from = match (s.rule, s.esc.last()) {
