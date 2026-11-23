@@ -12,7 +12,9 @@ use perry_dispatch::{MethodRow, ReturnKind, PERRY_SYSTEM_TABLE};
 use std::path::{Path, PathBuf};
 
 fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
@@ -78,5 +80,9 @@ fn f64_rows_are_backed_by_f64_natives() {
     assert!(!files.is_empty(), "no perry-ui-* backend sources found");
 
     let bad = check_table("PERRY_SYSTEM_TABLE", PERRY_SYSTEM_TABLE, &files);
-    assert!(bad.is_empty(), "return-kind / native ABI mismatches:\n{}", bad.join("\n"));
+    assert!(
+        bad.is_empty(),
+        "return-kind / native ABI mismatches:\n{}",
+        bad.join("\n")
+    );
 }

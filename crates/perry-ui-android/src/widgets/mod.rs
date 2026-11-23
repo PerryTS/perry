@@ -212,11 +212,18 @@ pub fn set_vstack_fill(handle: i64, fill: bool) {
             set.insert(handle);
         }
     }
-    let Some(parent_ref) = get_widget(handle) else { return };
+    let Some(parent_ref) = get_widget(handle) else {
+        return;
+    };
     jni_bridge::with_env(|env| {
         let _ = jni_bridge::push_local_frame(env, 16);
         let count = env
-            .call_method(parent_ref.as_obj(), jni::jni_str!("getChildCount"), jni::jni_sig!("()I"), &[])
+            .call_method(
+                parent_ref.as_obj(),
+                jni::jni_str!("getChildCount"),
+                jni::jni_sig!("()I"),
+                &[],
+            )
             .and_then(|v| v.i())
             .unwrap_or(0);
         let (from, to) = if fill { (-2, -1) } else { (-1, -2) };
@@ -251,7 +258,12 @@ pub fn set_vstack_fill(handle: i64, fill: bool) {
                 .and_then(|v| v.i())
                 .unwrap_or(0);
             if cur_w == from {
-                let _ = env.set_field(&lp_obj, jni::jni_str!("width"), jni::jni_sig!("I"), JValue::Int(to));
+                let _ = env.set_field(
+                    &lp_obj,
+                    jni::jni_str!("width"),
+                    jni::jni_sig!("I"),
+                    JValue::Int(to),
+                );
                 let _ = env.call_method(
                     &child,
                     jni::jni_str!("setLayoutParams"),

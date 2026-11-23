@@ -722,7 +722,9 @@ fn coff_symbol_definitions_inside_the_block_are_carried() {
         .expect("the stack map must be rewritten");
     assert_eq!(stats.functions, 1);
     assert_eq!(stats.roots, 1);
-    let def = out.find("\t.def\tperry_method_m__C__f$pshape;\n").expect(".def carried");
+    let def = out
+        .find("\t.def\tperry_method_m__C__f$pshape;\n")
+        .expect(".def carried");
     let scl = out.find("\t.scl\t2;\n").expect(".scl carried");
     let ty = out.find("\t.type\t32;\n").expect(".type carried");
     let end = out.find("\t.endef\n").expect(".endef carried");

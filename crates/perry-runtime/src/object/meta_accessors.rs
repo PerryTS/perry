@@ -10,8 +10,6 @@ use super::*;
 /// or it is `RuntimeBornOnly`, which debug builds check at the funnel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MetaReason {
-    /// An `arguments` object's birth word and exotic state.
-    Arguments,
     Spill,
     SpillReserve,
     Overflow,
@@ -105,7 +103,6 @@ impl MetaReason {
             MetaReason::ArrayIteratorBrand => RuntimeBornOnly,
             MetaReason::ClosureProps => RuntimeBornOnly,
             MetaReason::CellExpando => RuntimeBornOnly,
-            MetaReason::Arguments => RuntimeBornOnly,
         }
     }
 }

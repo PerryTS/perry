@@ -464,6 +464,8 @@ fn tail_val(b: &[u8], o: &mut usize) -> Option<Val> {
 }
 
 /// The census line of the stops of kind `STOP_MINT_CENSUS`, or `None` without one.
+// Only the compiler, which includes this file by path, calls it outside tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn mint_census_text(stops: &[Stop]) -> Option<String> {
     let mut v: Vec<u64> = Vec::new();
     for _ in 0..MINT_CENSUS_ITEMS {

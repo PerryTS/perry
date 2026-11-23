@@ -71,7 +71,9 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
         // view's own even split but stays below
         // NSLayoutPriorityDragThatCanResizeSplitView (510); the constraint is
         // dropped on the first mouse-down so a dragged divider stays put.
-        let width = child.widthAnchor().constraintEqualToConstant(FIRST_PANE_WIDTH);
+        let width = child
+            .widthAnchor()
+            .constraintEqualToConstant(FIRST_PANE_WIDTH);
         width.setPriority(490.0);
         width.setActive(true);
         let obj: &AnyObject = split.as_ref();

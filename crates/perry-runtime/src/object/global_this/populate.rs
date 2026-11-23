@@ -479,7 +479,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // dispatch so direct property reads and rebound calls match bare calls.
     const FUNCTIONS_IN_REST: u64 = super::phase_rows::rest_mask(GLOBAL_THIS_BUILTIN_FUNCTIONS);
     for (index, name) in GLOBAL_THIS_BUILTIN_FUNCTIONS.iter().copied().enumerate() {
-        if !phases.binds(FUNCTIONS_IN_REST & (1 << index) != 0) {
+        if !phases.binds((FUNCTIONS_IN_REST >> index) & 1 != 0) {
             continue;
         }
         let (info, arity, enumerable) = match name {

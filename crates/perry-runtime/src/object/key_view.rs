@@ -94,17 +94,8 @@ unsafe fn slot_word(obj: *const ObjectHeader, slot: u32, cap: u32) -> Option<u64
     super::spill::spill_get_present(obj as usize, slot as usize)
 }
 
-/// Does storage slot `slot` of `obj` hold the hole?
-///
-/// # Safety
-/// `obj` is a live object header.
-#[inline(always)]
-pub(crate) unsafe fn slot_holds_hole(obj: *const ObjectHeader, slot: u32) -> bool {
-    slot_word(obj, slot, super::object_inline_capacity(obj)) == Some(TAG_HOLE)
-}
-
-/// [`slot_holds_hole`] with `obj`'s inline capacity `cap` read once by a
-/// caller that tests many slots.
+/// Does storage slot `slot` of `obj` hold the hole? `cap` is `obj`'s inline
+/// capacity, read once by a caller that tests many slots.
 ///
 /// # Safety
 /// `obj` is a live object header; `cap` is its [`super::object_inline_capacity`].
