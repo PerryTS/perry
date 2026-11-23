@@ -1258,6 +1258,9 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "array_from_tests.rs"]
+mod array_from;
+
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 

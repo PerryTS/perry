@@ -91,6 +91,7 @@ impl WasmModuleEmitter {
             "array_flat",
             "array_is_array",
             "array_from",
+            "array_from_mapped",
             "array_push_spread",
             "string_charAt",
             "string_substring",
