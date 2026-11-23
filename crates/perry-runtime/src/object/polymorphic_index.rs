@@ -328,14 +328,10 @@ fn get_index_polymorphic_rest(obj_handle: i64, idx: f64) -> f64 {
     if !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let (gc_type, header_flags) = unsafe {
-        let gc_header_addr = raw.wrapping_sub(crate::gc::GC_HEADER_SIZE as u64) as usize;
-        if gc_header_addr < 0x1000 {
-            return f64::from_bits(crate::value::TAG_UNDEFINED);
-        }
-        let header = &*(gc_header_addr as *const crate::gc::GcHeader);
-        (header.obj_type, header._reserved)
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }) else {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
+    let (gc_type, header_flags) = (header.obj_type, header._reserved);
 
     if gc_type == crate::gc::GC_TYPE_STRING {
         return crate::string::js_string_index_get_boxed(

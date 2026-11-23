@@ -211,3 +211,4 @@ crates/perry-runtime/src/snap_image.rs | as *const GcHeader | cell_headers / bui
 crates/perry-runtime/src/snap_image.rs | as *mut GcHeader | build / mark_live: h is one of cell_headers()'s allocator-held headers (mark_live only reaches cells by index into that list), read in place at the cut with no collection.
 crates/perry-runtime/src/snap_image/tests.rs | super::tls_window(0x10_0000 | tls_window unit test: 0x10_0000 is a synthetic thread pointer for pure offset arithmetic, never dereferenced or compared with an address band.
 crates/perry-runtime/src/snap_image/tests.rs | assert_eq!(lo, 0x10_0000 - 0x2ed80); | tls_window unit test: the expected window start for the synthetic thread pointer above; arithmetic only.
+crates/perry-runtime/src/snap_image/tests.rs | (0x10_0000 - 0x100, 0x100) | TLS-window arithmetic over a synthetic thread pointer; the literal is an address offset, not a handle-band boundary.

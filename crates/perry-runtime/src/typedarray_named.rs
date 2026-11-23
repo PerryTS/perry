@@ -181,8 +181,8 @@ pub unsafe extern "C" fn perry_typed_array_proto_get(
     hash: u64,
 ) -> f64 {
     let hole = f64::from_bits(crate::value::TAG_HOLE);
-    let header = (handle as usize - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if !crate::gc::is_typed_array_type((*header).obj_type) {
+    let header = crate::value::addr_class::honest_header(handle as usize);
+    if !crate::gc::is_typed_array_type(header.obj_type) {
         return hole;
     }
     let kind = crate::typedarray_hook_slots::element_kind(

@@ -1357,6 +1357,8 @@ impl ShapeTable {
             (*r).logical_key_count = keys.count();
             (*r).set_keys_node(keys.node());
             (*r).probe = 0;
+            // GC_STORE_AUDIT(POINTER_FREE): rewrites the record in place with only its scalar
+            // summary changed; every pointer word is the one already stored above.
             std::ptr::write(r, std::ptr::read(r).with_summary(keyed));
             keyed
         };

@@ -57,3 +57,5 @@ crates/perry-runtime/src/symbol/iterator.rs | js_get_iterator | 3 | Heap-only it
 crates/perry-runtime/src/symbol/iterator.rs | js_to_primitive | 1 | Looks up [Symbol.toPrimitive] on a heap object; a handle returns unchanged to OrdinaryToPrimitive, which routes it to its native toString.
 crates/perry-runtime/src/thread/clone_write.rs | slot | 1 | structuredClone: heap values serialize by header; a HANDLE_TAG value is rejected as an unsupported native handle.
 crates/perry-runtime/src/thread/clone_write.rs | value | 1 | structuredClone: heap values serialize by header; a HANDLE_TAG value is rejected as an unsupported native handle.
+crates/perry-runtime/src/builtins/arithmetic.rs | object_to_primitive_is_default_string | 1 | Shape-read fast path over the heap object's class chain; a native handle answers false and takes the complete ToPrimitive.
+crates/perry-runtime/src/object/instanceof/dynamic_dispatch.rs | typed_array_instanceof_front | 2 | Both operands' GC headers are read next; a handle on either side answers None and takes the complete instanceof.
