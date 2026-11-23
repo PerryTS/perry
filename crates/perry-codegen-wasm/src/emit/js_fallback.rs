@@ -229,13 +229,8 @@ impl WasmModuleEmitter {
                 let cond = self.emit_js_expr(condition, locals);
                 out.push_str(&format!("{pad}    }} while (isTruthy({cond}));\n"));
             }
-            Stmt::Labeled { label: name, body }
-                if matches!(
-                    **body,
-                    Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
-                ) =>
-            {
-                self.emit_js_labeled_stmt(out, body, locals, indent, &format!("{name}: "));
+            Stmt::Labeled { label: name, body } if labels_a_loop(body) => {
+                self.emit_js_labeled_stmt(out, body, locals, indent, &format!("{label}{name}: "));
             }
             Stmt::Labeled { label, body } => {
                 out.push_str(&format!("{pad}    {}: {{\n", label));
@@ -1421,4 +1416,13 @@ fn js_string_literal(s: &str) -> String {
         .replace('\n', "\\n")
         .replace('\r', "\\r");
     format!("\"{}\"", escaped)
+}
+
+/// Whether a label chain ending in `stmt` labels an iteration statement.
+fn labels_a_loop(stmt: &Stmt) -> bool {
+    match stmt {
+        Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => true,
+        Stmt::Labeled { body, .. } => labels_a_loop(body),
+        _ => false,
+    }
 }
