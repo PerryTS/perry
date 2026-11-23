@@ -267,6 +267,7 @@ pub fn build_async_step_driver_direct(
     ];
     let mut resume_body = vec![
         Stmt::Try {
+            byte_offset: fn_offset,
             body: vec![labeled_loop],
             catch: Some(CatchClause {
                 param: Some((catch_e_id, "__step_catch_e".to_string())),

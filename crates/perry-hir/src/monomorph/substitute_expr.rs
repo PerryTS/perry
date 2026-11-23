@@ -1188,7 +1188,9 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             catch,
             finally,
             forof_completion,
+            byte_offset,
         } => Stmt::Try {
+            byte_offset: *byte_offset,
             body: substitute_stmts(body, substitutions),
             catch: catch.as_ref().map(|c| CatchClause {
                 param: c.param.clone(),

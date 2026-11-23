@@ -572,6 +572,8 @@ pub struct CatchRoute {
     /// routes whose interval holds a state the smallest `seq` is the
     /// innermost handler.
     pub seq: u32,
+    /// Source offset of the `try` statement this route desugars.
+    pub byte_offset: u32,
 }
 
 /// A `finally` block that protects a state interval. On abrupt completion
@@ -614,6 +616,8 @@ pub struct FinallyRoute {
     /// 1 before this finally runs, so the loop closes its iterator
     /// (ECMA-262 27.5.3.4 GeneratorResumeAbrupt, 14.7.5.7 IteratorClose).
     pub forof_completion: Option<LocalId>,
+    /// Source offset of the `try` statement this route desugars.
+    pub byte_offset: u32,
 }
 
 /// The next handler sequence number. `catches` and `finallys` only ever grow
@@ -1421,6 +1425,7 @@ pub fn linearize_body(
                 catch,
                 finally,
                 forof_completion,
+                byte_offset: try_offset,
             } if body_contains_yield(body)
                 || finally.as_ref().is_some_and(|f| body_contains_yield(f))
                 || catch.as_ref().is_some_and(|c| body_contains_yield(&c.body)) =>
@@ -1553,6 +1558,7 @@ pub fn linearize_body(
                         post_catch_state,
                         protected_end_state,
                         catch_entry_state: Some(catch_entry_state),
+                        byte_offset: *try_offset,
                     });
                 } else {
                     post_catch_state = *state_num;
@@ -1625,6 +1631,7 @@ pub fn linearize_body(
                             protected_end_state: finally_protected_end,
                             completion_check_state: Some(completion_state),
                             forof_completion: *forof_completion,
+                            byte_offset: *try_offset,
                         });
                     } else {
                         // #4374: a non-yielding finally is inlined into the
@@ -1641,6 +1648,7 @@ pub fn linearize_body(
                             protected_end_state: post_catch_state,
                             completion_check_state: None,
                             forof_completion: *forof_completion,
+                            byte_offset: *try_offset,
                         });
                         for s in fin {
                             current.push(s.clone());

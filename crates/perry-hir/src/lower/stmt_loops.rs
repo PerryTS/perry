@@ -260,6 +260,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         else_branch: None,
     };
     Stmt::Try {
+        byte_offset: loop_byte_offset,
         body,
         catch: Some(CatchClause {
             param: Some((err_id, err_name)),
@@ -420,6 +421,7 @@ fn mark_iterator_completion_on_abrupt(
                 mut catch,
                 mut finally,
                 forof_completion,
+                byte_offset,
             } => {
                 mark_iterator_completion_on_abrupt(
                     ctx,
@@ -461,6 +463,7 @@ fn mark_iterator_completion_on_abrupt(
                     );
                 }
                 rewritten.push(Stmt::Try {
+                    byte_offset,
                     body,
                     catch,
                     finally,
