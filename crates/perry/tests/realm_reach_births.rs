@@ -371,6 +371,20 @@ console.log(typeof stream.Stream.prototype.pipe);
     );
 }
 
+/// node:v8 alone (no stream import): getHeapSnapshot returns a Readable.
+#[test]
+fn get_heap_snapshot_reaches_the_stream_layouts() {
+    case(
+        r#"import { getHeapSnapshot } from "node:v8";
+const stream = getHeapSnapshot();
+stream.on("end", () => console.log("end", stream.readableEnded));
+stream.resume();
+"#,
+        "end true\n",
+        "STREAM_PROTOTYPE",
+    );
+}
+
 #[test]
 fn create_require_reaches_the_module_it_loads() {
     case(
