@@ -161,7 +161,7 @@ pub(super) fn try_module_class_static(
                                     )
                             })
                         {
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                                 module: module_name.to_string(),
                                 class_name: Some(class_name.to_string()),
                                 object: None,

@@ -20,8 +20,8 @@ fn fresh_destruct_local(ctx: &mut LoweringContext, prefix: &str, ty: Type) -> (L
     (id, name)
 }
 
-fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -119,7 +119,7 @@ fn lower_array_assignment_from_expr(
             name: next_name,
             ty: Type::Any,
             mutable: false,
-            init: Some(source.next_init(iter_id)),
+            init: Some(source.next_init(iter_id, arr_pat.span.lo.0)),
         },
         Stmt::Let {
             id: done_id,
@@ -217,6 +217,7 @@ fn lower_array_assignment_from_expr(
     let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+        arr_pat.span.lo.0,
     )));
     let (exc_id, exc_name) = fresh_destruct_local(ctx, "destruct_error", Type::Any);
     result.push(Stmt::Try {
@@ -232,6 +233,7 @@ fn lower_array_assignment_from_expr(
                         Expr::LocalGet(done_id),
                         Expr::LocalGet(exc_id),
                     ],
+                    arr_pat.span.lo.0,
                 ))),
                 Stmt::Throw(Expr::LocalGet(exc_id)),
             ],
@@ -268,7 +270,7 @@ fn iterator_next_value_stmts(
                     Expr::LocalGet(next_id),
                     Expr::LocalSet(
                         value_id,
-                        Box::new(Expr::NativeMethodCall {
+                        Box::new(Expr::NativeMethodCall { byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -278,6 +280,7 @@ fn iterator_next_value_stmts(
                     ),
                     Expr::Bool(read_value),
                 ],
+                byte_offset,
             )),
         },
         Stmt::If {

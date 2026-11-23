@@ -50,7 +50,7 @@ fn runtime<'a>(expr: &'a Expr, name: &str) -> Option<&'a [Expr]> {
             class_name: None,
             object: None,
             method,
-            args,
+            args, ..
         } if module == "__perry_runtime" && method == name => Some(args),
         _ => None,
     }

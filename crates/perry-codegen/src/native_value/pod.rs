@@ -270,7 +270,7 @@ fn checked_native_scalar_conversion_matches(rep: &NativeRep, value: &Expr) -> bo
         class_name,
         object,
         method,
-        args,
+        args, ..
     } = value
     else {
         return false;

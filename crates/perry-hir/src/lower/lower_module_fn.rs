@@ -1599,7 +1599,7 @@ pub fn lower_module_full_with_platform_globals(
         module.init = implicit_globals;
     }
 
-    if let Some(id) = ctx.import_meta_require_local {
+    if let Some((id, require_offset)) = ctx.import_meta_require_local {
         let (url, _, _) = super::expr_misc::import_meta_paths(&ctx);
         // Reuse createRequire's synchronous builtin/compiled-module resolver,
         // rooted in module storage and initialized before source statements.
@@ -1610,7 +1610,7 @@ pub fn lower_module_full_with_platform_globals(
                 name: format!("__perry_import_meta_require_{id}"),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::NativeMethodCall {
+                init: Some(Expr::NativeMethodCall { byte_offset: require_offset,
                     module: "module".to_string(),
                     class_name: None,
                     object: None,

@@ -73,7 +73,7 @@ fn rewrite(
             i += 1;
             continue;
         };
-        let Stmt::Expr(Expr::Call { callee, args, .. }) = body.remove(i) else {
+        let Stmt::Expr(Expr::Call { callee, args, byte_offset, .. }) = body.remove(i) else {
             unreachable!();
         };
         let Expr::PropertyGet { object, .. } = *callee else {
@@ -91,7 +91,7 @@ fn rewrite(
                     mutable: true,
                     init: Some(*object),
                 },
-                Stmt::Expr(Expr::NativeMethodCall {
+                Stmt::Expr(Expr::NativeMethodCall { byte_offset,
                     module: "array".into(),
                     class_name: None,
                     method: "push_field_single".into(),

@@ -398,7 +398,7 @@ pub fn fix_class_field_expr(
     }
 
     match expr {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, byte_offset, .. } => {
             // `<receiver>.<field>.<method>(args)` → NativeMethodCall.
             // First check if the call shape matches and capture the
             // owned data we'd need; if so, build the replacement after
@@ -511,7 +511,7 @@ pub fn fix_class_field_expr(
                         module,
                         class,
                         method,
-                    } => Expr::NativeMethodCall {
+                    } => Expr::NativeMethodCall { byte_offset: *byte_offset,
                         module,
                         class_name: Some(class),
                         object: Some(Box::new(receiver)),
@@ -522,7 +522,7 @@ pub fn fix_class_field_expr(
                         module,
                         result_class,
                         method,
-                    } => Expr::NativeMethodCall {
+                    } => Expr::NativeMethodCall { byte_offset: *byte_offset,
                         module,
                         class_name: Some(result_class),
                         object: Some(Box::new(receiver)),
@@ -534,7 +534,7 @@ pub fn fix_class_field_expr(
         }
         Expr::Await(inner, _) => {
             // `await <receiver>.<field>.<method>(args)`
-            if let Expr::Call { callee, args, .. } = inner.as_mut() {
+            if let Expr::Call { callee, args, byte_offset, .. } = inner.as_mut() {
                 if let Expr::PropertyGet {
                     object: outer_obj,
                     property: method_name,
@@ -567,7 +567,7 @@ pub fn fix_class_field_expr(
                             let module_owned = module_name.clone();
                             let class_owned = class_name.clone();
                             let method_owned = method_name.clone();
-                            *inner.as_mut() = Expr::NativeMethodCall {
+                            *inner.as_mut() = Expr::NativeMethodCall { byte_offset: *byte_offset,
                                 module: module_owned,
                                 class_name: Some(class_owned),
                                 object: Some(Box::new(receiver)),
@@ -940,7 +940,7 @@ pub fn fix_native_instance_expr_with_locals(
 ) {
     match expr {
         // The key case: method calls that might be on native instances
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, byte_offset, .. } => {
             let mut recursed_into_property_object = false;
 
             // Check if this is a method call: obj.method(args)
@@ -964,7 +964,7 @@ pub fn fix_native_instance_expr_with_locals(
                         let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                         // Transform to NativeMethodCall
-                        *expr = Expr::NativeMethodCall {
+                        *expr = Expr::NativeMethodCall { byte_offset: *byte_offset,
                             module: native_module.clone(),
                             class_name: Some(native_class.clone()),
                             object: Some(Box::new(object_expr)),
@@ -989,7 +989,7 @@ pub fn fix_native_instance_expr_with_locals(
                         let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                         // Transform to NativeMethodCall
-                        *expr = Expr::NativeMethodCall {
+                        *expr = Expr::NativeMethodCall { byte_offset: *byte_offset,
                             module: native_module.clone(),
                             class_name: Some(native_class.clone()),
                             object: Some(Box::new(object_expr)),
@@ -1029,7 +1029,7 @@ pub fn fix_native_instance_expr_with_locals(
         }
         Expr::Await(inner, _) => {
             // Handle Await(Call{PropertyGet{LocalGet...}}) pattern for async method calls
-            if let Expr::Call { callee, args, .. } = inner.as_mut() {
+            if let Expr::Call { callee, args, byte_offset, .. } = inner.as_mut() {
                 if let Expr::PropertyGet {
                     object, property, ..
                 } = callee.as_mut()
@@ -1051,7 +1051,7 @@ pub fn fix_native_instance_expr_with_locals(
                             let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                             // Replace the inner Call with NativeMethodCall (wrapped by Await)
-                            *inner.as_mut() = Expr::NativeMethodCall {
+                            *inner.as_mut() = Expr::NativeMethodCall { byte_offset: *byte_offset,
                                 module: native_module.clone(),
                                 class_name: Some(native_class.clone()),
                                 object: Some(Box::new(object_expr)),
@@ -1076,7 +1076,7 @@ pub fn fix_native_instance_expr_with_locals(
                             let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                             // Replace the inner Call with NativeMethodCall (wrapped by Await)
-                            *inner.as_mut() = Expr::NativeMethodCall {
+                            *inner.as_mut() = Expr::NativeMethodCall { byte_offset: *byte_offset,
                                 module: native_module.clone(),
                                 class_name: Some(native_class.clone()),
                                 object: Some(Box::new(object_expr)),
@@ -1103,7 +1103,7 @@ pub fn fix_native_instance_expr_with_locals(
                     Some((module, class)) if module == "bun:sqlite" && class == "Statement"
                 ) {
                     let object = std::mem::replace(array.as_mut(), Expr::Undefined);
-                    *expr = Expr::NativeMethodCall {
+                    *expr = Expr::NativeMethodCall { byte_offset: 0 /*HPOS ArrayValues*/,
                         module: "bun:sqlite".to_string(),
                         class_name: Some("Statement".to_string()),
                         object: Some(Box::new(object)),

@@ -218,6 +218,9 @@ pub enum Expr {
         object: Option<Box<Expr>>,
         method: String,
         args: Vec<Expr>,
+        /// Source byte offset of the call this native method call lowers;
+        /// excluded from stable-hashing, like `Call.byte_offset`.
+        byte_offset: u32,
     },
 
     // Object/property access

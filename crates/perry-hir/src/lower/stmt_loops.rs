@@ -102,8 +102,8 @@ fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) 
 
 /// Native step writes the compiler-owned value binding and returns done.
 /// The LocalSet operand records the output write for every HIR visitor.
-pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: LocalId) -> Expr {
-    Expr::NativeMethodCall {
+pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: LocalId, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -113,7 +113,7 @@ pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: L
             Expr::LocalGet(next_id),
             Expr::LocalSet(
                 value_id,
-                Box::new(Expr::NativeMethodCall {
+                Box::new(Expr::NativeMethodCall { byte_offset,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -125,8 +125,8 @@ pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: L
     }
 }
 
-pub(crate) fn iterator_next_method_call(iter_id: LocalId) -> Expr {
-    Expr::NativeMethodCall {
+pub(crate) fn iterator_next_method_call(iter_id: LocalId, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -141,6 +141,7 @@ pub(crate) fn lazy_iter_for_stmts(
     iter_id: LocalId,
     result_id: LocalId,
     loop_body: Vec<Stmt>,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let next_id = ctx.fresh_local();
     ctx.locals
@@ -151,7 +152,7 @@ pub(crate) fn lazy_iter_for_stmts(
             name: format!("__iter_next_{next_id}"),
             ty: Type::Any,
             mutable: false,
-            init: Some(iterator_next_method_call(iter_id)),
+            init: Some(iterator_next_method_call(iter_id, byte_offset)),
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
@@ -163,7 +164,7 @@ pub(crate) fn lazy_iter_for_stmts(
             })),
             condition: Some(Expr::Unary {
                 op: UnaryOp::Not,
-                operand: Box::new(iterator_step_call(iter_id, next_id, result_id)),
+                operand: Box::new(iterator_step_call(iter_id, next_id, result_id, byte_offset)),
             }),
             update: None,
             body: loop_body,
@@ -173,8 +174,8 @@ pub(crate) fn lazy_iter_for_stmts(
 
 /// Use the runtime GetMethod/Call entry: read `return` once and preserve
 /// the iterator as the receiver without consulting a user-visible `.call`.
-fn iterator_close_stmt(iter_id: LocalId) -> Stmt {
-    Stmt::Expr(Expr::NativeMethodCall {
+fn iterator_close_stmt(iter_id: LocalId, byte_offset: u32) -> Stmt {
+    Stmt::Expr(Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -245,7 +246,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         },
         then_branch: vec![
             iterator_completion_stmt(state_id, 2.0),
-            Stmt::Throw(Expr::NativeMethodCall {
+            Stmt::Throw(Expr::NativeMethodCall { byte_offset: loop_byte_offset,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,
@@ -274,7 +275,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
             },
             then_branch: vec![
                 iterator_completion_stmt(state_id, 2.0),
-                iterator_close_stmt(iter_id),
+                iterator_close_stmt(iter_id, loop_byte_offset),
             ],
             else_branch: None,
         }]),
@@ -821,7 +822,7 @@ pub(super) fn lower_stmt_for_of_inner(
         } else if is_readline_interface_for_await {
             // rl.iterator() -> readline async-iterator object; .next() then
             // awaits each line. Dispatched explicitly to js_readline_iterator.
-            Expr::NativeMethodCall {
+            Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                 module: "readline".to_string(),
                 class_name: Some("Interface".to_string()),
                 object: Some(Box::new(iter_expr)),
@@ -1011,7 +1012,7 @@ pub(super) fn lower_stmt_for_of_inner(
             };
             module
                 .init
-                .extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body));
+                .extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body, for_of_stmt.span.lo.0));
         }
 
         ctx.pop_block_scope(for_scope_mark);
@@ -1092,7 +1093,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 name: format!("__reader_{}", reader_id),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::NativeMethodCall {
+                init: Some(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                     module: "readable_stream".to_string(),
                     class_name: Some("ReadableStream".to_string()),
                     object: Some(Box::new(stream_expr)),
@@ -1103,7 +1104,7 @@ pub(super) fn lower_stmt_for_of_inner(
 
             // let __res = await __reader.read();
             let read_call = |reader_id: u32| {
-                Expr::Await(Box::new(Expr::NativeMethodCall {
+                Expr::Await(Box::new(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                     module: "readable_stream_reader".to_string(),
                     class_name: Some("ReadableStreamDefaultReader".to_string()),
                     object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1169,7 +1170,7 @@ pub(super) fn lower_stmt_for_of_inner(
             ));
 
             // reader.releaseLock(); — best-effort cleanup.
-            module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            module.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                 module: "readable_stream_reader".to_string(),
                 class_name: Some("ReadableStreamDefaultReader".to_string()),
                 object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1226,7 +1227,7 @@ pub(super) fn lower_stmt_for_of_inner(
     // Lower the iterable expression (the array)
     let arr_expr = lower_expr(ctx, &for_of_stmt.right)?;
     let arr_expr = if is_headers_iter {
-        Expr::NativeMethodCall {
+        Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
             module: "Headers".to_string(),
             class_name: Some("Headers".to_string()),
             object: Some(Box::new(arr_expr)),

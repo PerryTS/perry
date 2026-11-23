@@ -588,7 +588,7 @@ impl WasmModuleEmitter {
                 method,
                 args,
                 class_name,
-                object,
+                object, ..
             } => {
                 for a in args {
                     self.collect_strings_in_expr(a);

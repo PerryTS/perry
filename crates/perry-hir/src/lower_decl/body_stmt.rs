@@ -1331,7 +1331,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         name: format!("__reader_{}", reader_id),
                         ty: Type::Any,
                         mutable: false,
-                        init: Some(Expr::NativeMethodCall {
+                        init: Some(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                             module: "readable_stream".to_string(),
                             class_name: Some("ReadableStream".to_string()),
                             object: Some(Box::new(stream_expr)),
@@ -1345,7 +1345,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     ctx.locals
                         .push((format!("__res_{}", res_id), res_id, Type::Any));
                     let read_call = || {
-                        Expr::Await(Box::new(Expr::NativeMethodCall {
+                        Expr::Await(Box::new(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                             module: "readable_stream_reader".to_string(),
                             class_name: Some("ReadableStreamDefaultReader".to_string()),
                             object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1415,7 +1415,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
                     // reader.releaseLock(); — best-effort cleanup so the
                     // stream stays usable after the loop body falls out.
-                    result.push(Stmt::Expr(Expr::NativeMethodCall {
+                    result.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                         module: "readable_stream_reader".to_string(),
                         class_name: Some("ReadableStreamDefaultReader".to_string()),
                         object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1546,7 +1546,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         byte_offset: 0,
                     }
                 } else if is_readline_interface_for_await {
-                    Expr::NativeMethodCall {
+                    Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
                         module: "readline".to_string(),
                         class_name: Some("Interface".to_string()),
                         object: Some(Box::new(iter_expr_raw)),
@@ -1706,7 +1706,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             user_body,
                         ));
                     }
-                    result.extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body));
+                    result.extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body, for_of_stmt.span.lo.0));
                 }
 
                 ctx.pop_block_scope(scope_mark);

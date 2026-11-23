@@ -163,7 +163,7 @@ fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(Strin
         class_name: None,
         object: Some(object),
         method,
-        args,
+        args, ..
     }) = stmt
     else {
         return None;

@@ -17,7 +17,7 @@ pub(super) fn user_info_expr_for_call(call: &ast::CallExpr, args: Vec<Expr>) -> 
     match static_encoding_decision(call) {
         Some(true) => Expr::OsUserInfoBuffer,
         Some(false) => Expr::OsUserInfo,
-        None => Expr::NativeMethodCall {
+        None => Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "os".to_string(),
             class_name: None,
             object: None,

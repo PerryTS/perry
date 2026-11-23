@@ -16,6 +16,7 @@ pub(super) fn try_process_module_methods(
     member: &ast::MemberExpr,
     obj_name: &str,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     // Check for process module methods. `import processModule from
     // "node:process"` registers as the native `process` object, while
@@ -76,7 +77,7 @@ pub(super) fn try_process_module_methods(
                 | "removeAllListeners"
                 | "setMaxListeners"
                 | "getMaxListeners" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -103,7 +104,7 @@ pub(super) fn try_process_module_methods(
                     }
                 }
                 "ref" | "unref" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -112,7 +113,7 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 method_name if is_process_active_array_helper(method_name) => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -129,7 +130,7 @@ pub(super) fn try_process_module_methods(
                     // argument is a boolean (else ERR_INVALID_ARG_TYPE),
                     // matching Node. Lower to the runtime setter,
                     // passing the original argument for validation.
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -138,7 +139,7 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 "getBuiltinModule" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -147,7 +148,7 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 "execve" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -156,7 +157,7 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 "dlopen" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -165,7 +166,7 @@ pub(super) fn try_process_module_methods(
                     }));
                 }
                 "hasUncaughtExceptionCaptureCallback" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -175,7 +176,7 @@ pub(super) fn try_process_module_methods(
                 }
                 "setUncaughtExceptionCaptureCallback" | "addUncaughtExceptionCaptureCallback" => {
                     let method_name = method_ident.sym.as_ref().to_string();
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -194,7 +195,7 @@ pub(super) fn try_process_module_methods(
                     // Keep the original JS value: the runtime handles
                     // omitted/undefined/null defaulting plus Buffer
                     // and file-URL path objects.
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -284,7 +285,7 @@ pub(super) fn try_process_module_methods(
                     // the generic NativeMethodCall path; the
                     // node_core table row routes to
                     // `js_process_getgroups`.
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -299,7 +300,7 @@ pub(super) fn try_process_module_methods(
                 // out-of-scope note).
                 "setuid" | "seteuid" | "setgid" | "setegid" => {
                     let method_name = method_ident.sym.as_ref().to_string();
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -314,7 +315,7 @@ pub(super) fn try_process_module_methods(
                 // both pass through the generic NativeMethodCall.
                 "setgroups" | "initgroups" => {
                     let method_name = method_ident.sym.as_ref().to_string();
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,
@@ -360,7 +361,7 @@ pub(super) fn try_process_module_methods(
                 // `process.hasOwnProperty(k)`: inherited from Object.prototype,
                 // dispatched by name on the process object at runtime.
                 "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                         module: "process".to_string(),
                         class_name: None,
                         object: None,

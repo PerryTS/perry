@@ -7,8 +7,8 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -325,7 +325,7 @@ pub(super) fn protocol_only(stmts: &[Stmt], id: LocalId) -> bool {
                 object: None,
                 class_name: None,
                 method,
-                args,
+                args, ..
             } if module == "__perry_runtime"
                 && matches!(
                     method.as_str(),
@@ -718,7 +718,7 @@ fn lower_list(
         replacement.extend(setup);
         replacement.push(Stmt::Expr(Expr::LocalSet(
             id,
-            Box::new(runtime("privateResumeFrame", vec![link])),
+            Box::new(runtime("privateResumeFrame", vec![link], frame_offset)),
         )));
         // Keep compiler-owned child slots lexical, including at module init:
         // they must never be promoted to mutable module globals.
@@ -758,6 +758,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
             module,
             method,
             args,
+            byte_offset,
             ..
         } = e
         {
@@ -777,6 +778,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
                                 Expr::Integer(i64::from(fid)),
                                 args[2].clone(),
                             ],
+                            *byte_offset,
                         );
                         return;
                     }
@@ -791,6 +793,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
                                 "privateResumeFrameClose"
                             },
                             a,
+                            *byte_offset,
                         );
                         return;
                     }

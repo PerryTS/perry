@@ -142,8 +142,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             class_name,
             object,
             method,
-            args,
-        } => Expr::NativeMethodCall {
+            args, byte_offset,
+        } => Expr::NativeMethodCall { byte_offset: *byte_offset,
             module: module.clone(),
             class_name: class_name.clone(),
             object: object
