@@ -143,6 +143,9 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 client_events::fire_request_close_once(request_handle);
                 finish_agent_request(request_handle, false);
             }
+            PendingHttpEvent::ResponseDestroyed { request_handle } => {
+                client_events::handle_response_destroyed_event(request_handle);
+            }
             PendingHttpEvent::Flushed { request_handle } => {
                 client_events::handle_flushed_event(request_handle);
             }

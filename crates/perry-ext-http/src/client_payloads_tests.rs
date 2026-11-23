@@ -1,4 +1,4 @@
-//! A finished exchange's payloads on a real collector (perry-feather#111).
+//! A finished exchange's payloads on a real collector.
 use super::*;
 use perry_ffi::handle_exists;
 use perry_ffi::handle_lifecycle::is_parked;
@@ -239,6 +239,9 @@ fn a_native_closure_capture_names_its_request() {
         collect();
         collect();
         assert!(handle_exists(req), "the capture names the request");
+        // A moving collection may have relocated the closure: read it back
+        // through its root.
+        let closure = (root.get_nanbox_u64() & PTR_MASK) as *const RawClosureHeader;
         assert_eq!(
             unsafe { client_payloads::capture_handle_at(closure, 0) },
             req

@@ -432,15 +432,34 @@ pub extern "C" fn js_http_client_request_destroy(handle: Handle, _error: f64) ->
     }
     // #4909 — Node teardown: destroying an in-flight request (sent, no
     // response yet) emits the coded ECONNRESET "socket hang up" on
-    // `'error'`, then `'close'`. A request that never went out, or whose
-    // response already arrived (Node aborts the response instead), just gets
-    // the (once-only) `'close'`.
-    let in_flight = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
+    // `'error'`, then `'close'`. Once a response is streaming, Node aborts
+    // the response instead (`PendingHttpEvent::ResponseDestroyed`). A request
+    // that never went out, or whose response completed, just gets the
+    // (once-only) `'close'`.
+    let (in_flight, incoming) = with_handle_mut::<ClientRequestHandle, _, _>(handle, |req| {
         let was_completed = req.completed;
         req.completed = true;
-        req.ended && !was_completed && req.incoming_handle == 0
+        let open = !was_completed && req.ended;
+        (
+            open && req.incoming_handle == 0,
+            if open { req.incoming_handle } else { 0 },
+        )
     })
-    .unwrap_or(false);
+    .unwrap_or((false, 0));
+    let response_open = incoming != 0
+        && perry_ffi::with_handle::<IncomingMessageHandle, _, _>(incoming, |im| !im.complete)
+            .unwrap_or(false);
+    if response_open {
+        client_incoming_read::mark_destroyed(incoming);
+        crate::client_turnloop::cancel(handle);
+        unsafe {
+            finish_agent_request(handle, false);
+        }
+        push_event(PendingHttpEvent::ResponseDestroyed {
+            request_handle: handle,
+        });
+        return handle;
+    }
     if in_flight {
         unsafe {
             client_events::fire_request_error_listeners(

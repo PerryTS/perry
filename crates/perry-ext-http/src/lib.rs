@@ -213,6 +213,10 @@ pub(crate) enum PendingHttpEvent {
     /// after the caller returns instead of invoking listeners from inside
     /// `abort()`; `'close'` follows it in the same queued drain.
     Abort { request_handle: Handle },
+    /// `req.destroy()` while its response was still streaming: the response
+    /// is aborted (Node's `'aborted'`, the request's `'close'`, then the
+    /// response's ECONNRESET `'error'` and `'close'`).
+    ResponseDestroyed { request_handle: Handle },
     /// #4909 — the request body was handed to the transport at `end()`.
     /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
     /// then the `end(..., cb)` callback — Node's flush ordering.
@@ -776,6 +780,7 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
         | PendingHttpEvent::TransportError { request_handle, .. }
         | PendingHttpEvent::Timeout { request_handle }
         | PendingHttpEvent::Abort { request_handle }
+        | PendingHttpEvent::ResponseDestroyed { request_handle }
         | PendingHttpEvent::Flushed { request_handle }
         | PendingHttpEvent::Continue { request_handle }
         | PendingHttpEvent::DeferredArmContinue { request_handle } => *request_handle,
@@ -793,6 +798,7 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
             | PendingHttpEvent::CodedError { .. }
             | PendingHttpEvent::TransportError { .. }
             | PendingHttpEvent::Abort { .. }
+            | PendingHttpEvent::ResponseDestroyed { .. }
     )
 }
 
