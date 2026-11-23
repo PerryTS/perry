@@ -1,0 +1,1 @@
+`Array.prototype.{pop,shift,push,unshift,reverse,splice}` called on a non-array object keep the receiver rooted while its `length` getter, index accessors and setters run, so a collection inside one of them no longer leaves the mutator reading and writing a moved object (#15159). `splice` also roots the array of removed elements it builds.
