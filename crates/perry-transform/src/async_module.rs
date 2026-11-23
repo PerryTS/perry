@@ -8,7 +8,7 @@ pub fn lower_async_module_body(module: &mut Module) {
     let id = crate::generator::compute_max_func_id(module) + 1;
     let mut body = std::mem::take(&mut module.init);
     lift_bindings(&mut body, &mut module.init);
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0 /*HPOS*/,
         id,
         name: format!("__async_module_body_{id}"),
         type_params: Vec::new(),

@@ -161,7 +161,7 @@ fn scalar_method_straight_line_body<'a>(
             }) if matches!(object.as_ref(), Expr::This) && field_write.is_none() => {
                 field_write = Some((property.as_str(), value.as_ref()));
             }
-            Stmt::Return(Some(expr)) if idx + 1 == method.body.len() => {
+            Stmt::Return(Some(expr), _) if idx + 1 == method.body.len() => {
                 return Some(ScalarMethodStraightLineBody {
                     return_expr: expr,
                     local_temps,
@@ -423,7 +423,7 @@ fn stmts_write_this_property(stmts: &[Stmt], property: &str) -> bool {
 fn stmt_writes_this_property(stmt: &Stmt, property: &str) -> bool {
     match stmt {
         Stmt::Expr(expr) | Stmt::Throw(expr) => expr_writes_this_property(expr, property),
-        Stmt::Return(Some(expr)) => expr_writes_this_property(expr, property),
+        Stmt::Return(Some(expr), _) => expr_writes_this_property(expr, property),
         Stmt::Let {
             init: Some(expr), ..
         } => expr_writes_this_property(expr, property),
@@ -485,7 +485,7 @@ fn stmt_writes_this_property(stmt: &Stmt, property: &str) -> bool {
                 })
         }
         Stmt::Labeled { body, .. } => stmt_writes_this_property(body, property),
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Let { init: None, .. }
         | Stmt::Break
         | Stmt::Continue

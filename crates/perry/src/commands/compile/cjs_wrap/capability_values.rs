@@ -651,7 +651,7 @@ impl<'a> Proof<'a> {
             Stmt::Expr(e) => {
                 self.expr(e, f);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 let v = e
                     .as_ref()
                     .map_or_else(|| one(Origin::Undefined), |e| self.expr(e, f));

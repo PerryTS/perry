@@ -127,7 +127,7 @@ fn clean_function(f: &mut Function, captured: &HashSet<LocalId>) {
                 init.as_ref()
             }
             Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
-            Stmt::Return(e) => e.as_ref(),
+            Stmt::Return(e, _) => e.as_ref(),
             _ => return,
         };
         if expr.is_some_and(|e| !inspect_expr(e, &mut uses)) {
@@ -142,7 +142,7 @@ fn clean_function(f: &mut Function, captured: &HashSet<LocalId>) {
     let mut available: HashSet<_> = f.params.iter().map(|p| p.id).collect();
     for stmt in &f.body {
         let expr = match stmt {
-            Stmt::Let { init, .. } | Stmt::Return(init) => init.as_ref(),
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => init.as_ref(),
             Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
             _ => unreachable!(),
         };
@@ -167,7 +167,7 @@ fn clean_function(f: &mut Function, captured: &HashSet<LocalId>) {
         // Rewrite only reads, in source order: earlier reads must retain TDZ
         // behavior, and assignment targets must keep their original binding.
         let expr = match stmt {
-            Stmt::Let { init, .. } | Stmt::Return(init) => init.as_mut(),
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => init.as_mut(),
             Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
             _ => unreachable!(),
         };

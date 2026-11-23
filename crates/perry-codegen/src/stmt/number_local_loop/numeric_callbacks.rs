@@ -241,7 +241,7 @@ pub(super) fn scalar_loop(
         use perry_hir::Stmt;
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr(ctx, e, n),
-            Stmt::Let { init, .. } | Stmt::Return(init) => {
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                 init.as_ref().is_none_or(|e| expr(ctx, e, n))
             }
             Stmt::If {

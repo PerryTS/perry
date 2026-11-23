@@ -309,7 +309,7 @@ fn scan_stmts(
     for s in stmts {
         let mut expr = |e: &Expr| scan_expr(e, arrays, ranges, allowed);
         match s {
-            Stmt::Let { init, .. } | Stmt::Return(init) => {
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                 if let Some(e) = init {
                     expr(e);
                 }

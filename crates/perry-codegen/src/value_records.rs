@@ -1188,14 +1188,14 @@ impl Rewriter<'_> {
             Stmt::Expr(e) => self.discarded(e),
             // VR-3b: a record-returning body writes the value into its
             // result lanes and returns their copy.
-            Stmt::Return(Some(e)) if self.ret.is_some() => {
+            Stmt::Return(Some(e), _) if self.ret.is_some() => {
                 let ret = self.ret.expect("result lanes");
                 let v = std::mem::replace(e, undefined());
                 let list = self.assign(ret, v);
                 *e = seq(list, self.copy(ret));
             }
-            Stmt::Return(Some(e)) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) | Stmt::Throw(e) => self.expr(e),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,

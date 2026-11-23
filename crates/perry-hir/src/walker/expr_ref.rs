@@ -133,7 +133,7 @@ where
         | Expr::GlobalSet(_, v)
         | Expr::TypeOf(v)
         | Expr::Void(v)
-        | Expr::Await(v)
+        | Expr::Await(v, _)
         | Expr::Delete(v)
         | Expr::Unary { operand: v, .. }
         | Expr::PropertyGet { object: v, .. }

@@ -136,7 +136,7 @@ fn unshared(f: &Function) -> FxHashMap<u32, u32> {
                 lits.insert(*id);
             }
         }
-        Stmt::Return(Some(Expr::LocalGet(id))) => *allowed.entry(*id).or_default() += 1,
+        Stmt::Return(Some(Expr::LocalGet(id)), _) => *allowed.entry(*id).or_default() += 1,
         Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             bad.extend(ids.iter().copied())
         }

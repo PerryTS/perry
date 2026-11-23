@@ -442,7 +442,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "js_typeof", 1);
             }
 
-            Expr::Await(e) => {
+            Expr::Await(e, _) => {
                 // Evaluate inner expression, then call await_promise bridge
                 // If the value is a promise handle, tries to get resolved value
                 // If not a promise, returns the value as-is

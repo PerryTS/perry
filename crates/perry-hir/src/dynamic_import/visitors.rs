@@ -226,7 +226,7 @@ fn visit_stmt_for_dyn_imports<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) => visit_expr_for_dyn_imports(e, f),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 visit_expr_for_dyn_imports(e, f);
             }
@@ -331,7 +331,7 @@ fn visit_stmt_for_dyn_imports_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) => visit_expr_for_dyn_imports_ref(e, f),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 visit_expr_for_dyn_imports_ref(e, f);
             }
@@ -513,7 +513,7 @@ fn visit_stmt_for_worker_new<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) => visit_expr_for_worker_new(e, f),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 visit_expr_for_worker_new(e, f);
             }
@@ -618,7 +618,7 @@ fn visit_stmt_for_worker_new_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) => visit_expr_for_worker_new_ref(e, f),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 visit_expr_for_worker_new_ref(e, f);
             }

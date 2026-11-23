@@ -240,7 +240,7 @@ fn stmt(s: &mut Stmt, open: bool) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => expr(e, open),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 expr(e, open);
             }

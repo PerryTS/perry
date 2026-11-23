@@ -1214,7 +1214,7 @@ pub fn lower_class_decl(
                     .filter(|m| m.name.starts_with("__perry_static_init_"))
                     .count();
                 let synthetic_name = format!("__perry_static_init_{}", block_idx);
-                static_methods.push(Function {
+                static_methods.push(Function { byte_offset: block.span.lo.0,
                     id: ctx.fresh_func(),
                     name: synthetic_name,
                     type_params: Vec::new(),
@@ -1498,6 +1498,7 @@ pub fn lower_class_decl(
     synthesize_class_captures(
         ctx,
         &name,
+        class_decl.class.span.lo.0,
         capture_parent_name.as_deref(),
         extends.is_some()
             || extends_name.is_some()

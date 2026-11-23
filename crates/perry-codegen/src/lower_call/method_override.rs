@@ -87,8 +87,8 @@ fn block_constructively_returns_boolean(stmts: &[perry_hir::Stmt]) -> (bool, boo
     use perry_hir::Stmt;
     for stmt in stmts {
         match stmt {
-            Stmt::Return(Some(expr)) => return (expr_constructs_boolean(expr), true),
-            Stmt::Return(None) => return (false, true),
+            Stmt::Return(Some(expr), _) => return (expr_constructs_boolean(expr), true),
+            Stmt::Return(None, _) => return (false, true),
             Stmt::Throw(_) => return (true, true),
             Stmt::If {
                 then_branch,
@@ -168,7 +168,7 @@ fn constructive_method_truthiness(
                     .methods
                     .get(&(class_name.to_string(), method.name.clone()))
                     .is_some_and(|name| name == direct_fn);
-            let [perry_hir::Stmt::Return(Some(expr))] = method.body.as_slice() else {
+            let [perry_hir::Stmt::Return(Some(expr), _)] = method.body.as_slice() else {
                 return None;
             };
             (is_target && crate::expr::is_u32_bitset_test(expr))

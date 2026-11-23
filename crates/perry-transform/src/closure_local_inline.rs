@@ -267,7 +267,7 @@ fn arrow_candidate(
     {
         return None;
     }
-    let [Stmt::Return(Some(expr))] = body.as_slice() else {
+    let [Stmt::Return(Some(expr), _)] = body.as_slice() else {
         return None;
     };
     // #10567: a param captured by a closure NESTED inside `expr` (e.g. `(f,
@@ -612,7 +612,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -666,7 +666,7 @@ pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut 
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }

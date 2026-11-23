@@ -492,7 +492,7 @@ impl<'a> CensusWalker<'a> {
                 }
                 self.declare(*id, name, scope, top && loop_depth == 0);
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
                 self.expr(e, scope, loop_depth)
             }
             Stmt::If {
@@ -554,7 +554,7 @@ impl<'a> CensusWalker<'a> {
                     self.stmts(&case.body, scope, loop_depth, false);
                 }
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -630,7 +630,7 @@ fn demote_redeclarations_stmt(
         }
     };
     match stmt {
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             demote_redeclarations_expr(e, ids, seen)
         }
         Stmt::If {
@@ -693,7 +693,7 @@ fn demote_redeclarations_stmt(
             }
         }
         Stmt::Let { .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -1315,7 +1315,7 @@ fn for_each_child_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Stmt)) {
 fn for_each_top_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(Some(e)) => f(e),
+        Stmt::Return(Some(e), _) => f(e),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => f(condition),
@@ -1413,7 +1413,7 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => rewrite_expr(e, shared, index_uses),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 rewrite_expr(e, shared, index_uses);
             }

@@ -13,7 +13,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
     // Generate specialized name
     let specialized_name = generate_specialized_name(&func.name, type_args);
 
-    Function {
+    Function { byte_offset: func.byte_offset,
         id: new_id,
         name: specialized_name,
         type_params: Vec::new(), // Specialized function has no type params
@@ -87,7 +87,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 decorators: f.decorators.clone(),
             })
             .collect(),
-        constructor: class.constructor.as_ref().map(|ctor| Function {
+        constructor: class.constructor.as_ref().map(|ctor| Function { byte_offset: ctor.byte_offset,
             id: ctor.id,
             name: ctor_name.clone(),
             type_params: Vec::new(),
@@ -123,7 +123,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .methods
             .iter()
             .map(|m| {
-                Function {
+                Function { byte_offset: m.byte_offset,
                     id: m.id,
                     name: m.name.clone(),
                     type_params: m.type_params.clone(), // Methods can still be generic
@@ -163,7 +163,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .map(|(name, f)| {
                 (
                     name.clone(),
-                    Function {
+                    Function { byte_offset: f.byte_offset,
                         id: f.id,
                         name: f.name.clone(),
                         type_params: Vec::new(),
@@ -189,7 +189,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .map(|(name, f)| {
                 (
                     name.clone(),
-                    Function {
+                    Function { byte_offset: f.byte_offset,
                         id: f.id,
                         name: f.name.clone(),
                         type_params: Vec::new(),
@@ -234,7 +234,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .map(|member| ClassComputedMember {
                 key_expr: substitute_expr(&member.key_expr, &substitutions),
                 source_order: member.source_order,
-                function: Function {
+                function: Function { byte_offset: member.function.byte_offset,
                     id: member.function.id,
                     name: member.function.name.clone(),
                     type_params: member.function.type_params.clone(),

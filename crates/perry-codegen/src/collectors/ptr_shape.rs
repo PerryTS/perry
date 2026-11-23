@@ -1313,7 +1313,7 @@ impl<'a> UseWalk<'a> {
             }
             Stmt::Expr(e) => self.walk_expr(e),
             Stmt::Throw(e) => self.with_ctx(report::ESC_THROWN, |w| w.walk_expr(e)),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     // #7034 §4: `return <tracked local>` is exempt — see the
                     // module doc, rule 2. Only the bare form: `return {a: o}`

@@ -50,7 +50,7 @@ pub(crate) fn fix_imported_enums_in_stmts(
             Stmt::Let {
                 init: Some(expr), ..
             } => fix_imported_enums_in_expr(expr, enums),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 fix_imported_enums_in_expr(expr, enums);
             }
             Stmt::If {
@@ -132,7 +132,7 @@ pub(crate) fn fix_imported_enums_in_stmts(
             // `DoWhile` / `Labeled` fall through unnoticed. Adding a new
             // `Stmt` variant should be a compile error, not a silent miss.
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

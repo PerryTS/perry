@@ -59,7 +59,7 @@ fn widen_mutable_captures_stmt(
             init: Some(expr), ..
         } => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::Expr(expr) => widen_mutable_captures_expr(expr, scope_mutable),
-        Stmt::Return(Some(expr)) => widen_mutable_captures_expr(expr, scope_mutable),
+        Stmt::Return(Some(expr), _) => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::Throw(expr) => widen_mutable_captures_expr(expr, scope_mutable),
         Stmt::If {
             condition,
@@ -251,7 +251,7 @@ fn widen_mutable_captures_expr(
         Expr::LocalSet(_, value) | Expr::GlobalSet(_, value) => {
             widen_mutable_captures_expr(value, scope_mutable);
         }
-        Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
+        Expr::Await(inner, _) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             widen_mutable_captures_expr(inner, scope_mutable);
         }
         Expr::InstanceOf { expr, ty_expr, .. } => {
@@ -383,7 +383,7 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
             init: Some(expr), ..
         } => collect_closure_assigned_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_assigned_expr(expr, out),
-        Stmt::Return(Some(expr)) => collect_closure_assigned_expr(expr, out),
+        Stmt::Return(Some(expr), _) => collect_closure_assigned_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_assigned_expr(expr, out),
         Stmt::If {
             condition,
@@ -566,7 +566,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::LocalSet(_, value) | Expr::GlobalSet(_, value) => {
             collect_closure_assigned_expr(value, out);
         }
-        Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
+        Expr::Await(inner, _) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             collect_closure_assigned_expr(inner, out);
         }
         Expr::InstanceOf { expr, ty_expr, .. } => {
@@ -691,7 +691,7 @@ fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
             init: Some(expr), ..
         } => collect_closure_captures_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_captures_expr(expr, out),
-        Stmt::Return(Some(expr)) => collect_closure_captures_expr(expr, out),
+        Stmt::Return(Some(expr), _) => collect_closure_captures_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_captures_expr(expr, out),
         Stmt::If {
             condition,
@@ -866,7 +866,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             }
         }
         Expr::ArrayPush { value, .. }
-        | Expr::Await(value)
+        | Expr::Await(value, _)
         | Expr::TypeOf(value)
         | Expr::Void(value)
         | Expr::Delete(value) => {
@@ -987,7 +987,7 @@ fn collect_scope_level_assigns_stmt(stmt: &Stmt, out: &mut std::collections::Has
             init: Some(expr), ..
         } => collect_scope_level_assigns_expr(expr, out),
         Stmt::Expr(expr) => collect_scope_level_assigns_expr(expr, out),
-        Stmt::Return(Some(expr)) => collect_scope_level_assigns_expr(expr, out),
+        Stmt::Return(Some(expr), _) => collect_scope_level_assigns_expr(expr, out),
         Stmt::Throw(expr) => collect_scope_level_assigns_expr(expr, out),
         Stmt::If {
             condition,
@@ -1116,7 +1116,7 @@ fn collect_closure_assigned_in_closure_body_stmt(
             init: Some(expr), ..
         } => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::Expr(expr) => collect_closure_assigned_in_body_expr(expr, out),
-        Stmt::Return(Some(expr)) => collect_closure_assigned_in_body_expr(expr, out),
+        Stmt::Return(Some(expr), _) => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::Throw(expr) => collect_closure_assigned_in_body_expr(expr, out),
         Stmt::If {
             condition,
@@ -1307,7 +1307,7 @@ fn collect_closure_assigned_in_body_expr(
             }
         }
         Expr::GlobalSet(_, value) => collect_closure_assigned_in_body_expr(value, out),
-        Expr::Await(inner) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
+        Expr::Await(inner, _) | Expr::TypeOf(inner) | Expr::Void(inner) | Expr::Delete(inner) => {
             collect_closure_assigned_in_body_expr(inner, out);
         }
         Expr::InstanceOf { expr, ty_expr, .. } => {

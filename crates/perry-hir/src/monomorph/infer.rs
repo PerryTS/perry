@@ -58,7 +58,7 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
         // Await unwraps a Promise
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             if let Some(Type::Promise(inner_ty)) = infer_expr_type(inner, module, idx) {
                 Some(*inner_ty)
             } else {

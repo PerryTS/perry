@@ -641,7 +641,7 @@ impl Planner<'_, '_> {
                 let _ = self.expr(e, st);
                 None
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let _ = self.expr(e, st);
                 }
@@ -801,7 +801,7 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
     fn e_bad(e: &Expr) -> bool {
         if matches!(
             e,
-            Expr::Closure { .. } | Expr::Yield { .. } | Expr::Await(_)
+            Expr::Closure { .. } | Expr::Yield { .. } | Expr::Await(_, _)
         ) {
             return true;
         }
@@ -812,8 +812,8 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
     fn s_bad(s: &Stmt) -> bool {
         match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_bad(e),
-            Stmt::Return(Some(e)) => e_bad(e),
-            Stmt::Let { .. } | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+            Stmt::Return(Some(e), _) => e_bad(e),
+            Stmt::Let { .. } | Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => false,
             Stmt::If {
                 condition,
                 then_branch,
@@ -863,7 +863,7 @@ pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
     fn s_n(s: &Stmt) -> usize {
         1 + match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_n(e),
-            Stmt::Return(Some(e)) => e_n(e),
+            Stmt::Return(Some(e), _) => e_n(e),
             Stmt::If {
                 condition,
                 then_branch,
@@ -927,7 +927,7 @@ pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => e_walk(e, out),
-            Stmt::Return(Some(e)) => e_walk(e, out),
+            Stmt::Return(Some(e), _) => e_walk(e, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -1041,7 +1041,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
     fn s_walk<'e>(s: &'e Stmt, out: &mut Vec<(Recv, String, bool, usize, Option<&'e Expr>)>) {
         match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_walk(e, out),
-            Stmt::Return(Some(e)) => e_walk(e, out),
+            Stmt::Return(Some(e), _) => e_walk(e, out),
             Stmt::If {
                 condition,
                 then_branch,

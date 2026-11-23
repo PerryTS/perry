@@ -251,7 +251,7 @@ fn process_stmts(
         });
 
         match stmt {
-            Stmt::Return(value) if !enclosing.is_empty() => {
+            Stmt::Return(value, off) if !enclosing.is_empty() => {
                 // Hoist the return operand into a fresh `let` so it
                 // evaluates BEFORE the inlined finally body. Critical
                 // for `return await foo()` (issue #536's pool.query
@@ -285,7 +285,7 @@ fn process_stmts(
                     label_depths,
                     next_local_id,
                 );
-                out.push(Stmt::Return(return_value));
+                out.push(Stmt::Return(return_value, off));
             }
             Stmt::Break => {
                 inline_finallies_for_break(
@@ -730,7 +730,7 @@ fn inline_finallies_for_labeled(
 fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => f(e),
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => f(e),
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => f(e),
         // Only the statement's OWN operand expressions. Descending into a nested
         // statement list here would visit its closures a SECOND time, because
         // `process_stmts` recurses into every one of these bodies itself and calls

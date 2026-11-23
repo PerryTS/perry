@@ -164,7 +164,7 @@ pub(crate) fn build_completion_resume_stmts(
     return_fallback.push(Stmt::Return(Some(make_iter_result(
         Expr::LocalGet(pending_value_id),
         true,
-    ))));
+    )), 0 /*HPOS*/));
     let resume_return = build_abrupt_routing(
         &[],
         finallys,
@@ -604,7 +604,7 @@ pub(crate) fn build_yield_star_return_routes(
                 Stmt::Return(Some(make_iter_result(
                     Expr::LocalGet(return_param_id),
                     true,
-                ))),
+                )), 0 /*HPOS*/),
             ],
             else_branch: None,
         };
@@ -647,7 +647,7 @@ pub(crate) fn build_yield_star_return_routes(
                         property: "value".to_string(),
                     },
                     true,
-                ))),
+                )), 0 /*HPOS*/),
             ],
             else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
                 Expr::PropertyGet {
@@ -657,7 +657,7 @@ pub(crate) fn build_yield_star_return_routes(
                     property: "value".to_string(),
                 },
                 false,
-            )))]),
+            )), 0 /*HPOS*/)]),
         };
 
         let protocol = if route.is_async {
@@ -667,7 +667,7 @@ pub(crate) fn build_yield_star_return_routes(
             // generator too: run its enclosing finally through the shared path.
             if let Stmt::If { else_branch, .. } = &mut dispatch_done {
                 // GeneratorYield returns an unfinished inner result unchanged.
-                *else_branch = Some(vec![Stmt::Return(Some(Expr::LocalGet(r_id)))]);
+                *else_branch = Some(vec![Stmt::Return(Some(Expr::LocalGet(r_id)), 0 /*HPOS*/)]);
             }
             if let Stmt::If { then_branch, .. } = &mut dispatch_done {
                 *then_branch = vec![Stmt::Expr(Expr::LocalSet(
@@ -961,7 +961,7 @@ pub(crate) fn build_yield_star_throw_routes(
                 ))],
                 // Keep the existing suspended resume state so next(v) drives
                 // delegate.next(v), rather than re-yielding this throw result.
-                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(route.result_id)))]),
+                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(route.result_id)), 0 /*HPOS*/)]),
             }
         };
 

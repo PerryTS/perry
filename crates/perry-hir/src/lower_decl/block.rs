@@ -1077,7 +1077,7 @@ pub fn collect_refs_in_closure_bodies_stmt(
 ) {
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e) => collect_refs_in_closure_bodies_expr(e, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_refs_in_closure_bodies_expr(e, out);
             }
@@ -1665,7 +1665,7 @@ fn lower_stmts_using_aware_inner(
                     byte_offset: 0,
                 };
                 if is_async {
-                    call_expr = Expr::Await(Box::new(call_expr));
+                    call_expr = Expr::Await(Box::new(call_expr), using_decl.span.lo.0);
                 }
 
                 // catch (__d) { if (__has) __pending = new SuppressedError(__d,

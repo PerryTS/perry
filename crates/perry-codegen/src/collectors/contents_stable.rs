@@ -211,8 +211,8 @@ impl Scan {
             Stmt::Let { id, init, .. } => self.bind(*id, init.as_ref()),
             Stmt::Expr(e) => self.expr(e, Use::Consume),
             Stmt::Throw(e) => self.expr(e, Use::Value),
-            Stmt::Return(Some(e)) => self.expr(e, Use::Return),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) => self.expr(e, Use::Return),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,

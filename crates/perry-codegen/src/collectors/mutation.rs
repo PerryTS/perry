@@ -121,7 +121,7 @@ fn flat_const_stmts_are_safe(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
             }
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
             }
             Stmt::If {
@@ -296,7 +296,7 @@ fn any_top_level_expr(
             Stmt::Expr(e) | Stmt::Throw(e) if pred(e) => {
                 return true;
             }
-            Stmt::Return(Some(e)) if pred(e) => {
+            Stmt::Return(Some(e), _) if pred(e) => {
                 return true;
             }
             Stmt::Let { init: Some(e), .. } if pred(e) => {
@@ -530,7 +530,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)

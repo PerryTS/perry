@@ -714,7 +714,7 @@ fn for_each_expr_in_stmt_shallow(stmt: &Stmt, f: &mut impl FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -1342,7 +1342,7 @@ fn for_each_expr_in_stmt_shallow_mut(stmt: &mut Stmt, f: &mut impl FnMut(&mut Ex
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }

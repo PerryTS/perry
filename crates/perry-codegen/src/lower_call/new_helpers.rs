@@ -464,7 +464,7 @@ fn stmt_any(
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_pred),
         Stmt::Expr(e) | Stmt::Throw(e) => expr_pred(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_pred),
+        Stmt::Return(opt, _) => opt.as_ref().is_some_and(expr_pred),
         Stmt::If {
             condition,
             then_branch,
@@ -724,7 +724,7 @@ pub(crate) fn ctor_body_has_value_return(body: &[perry_hir::Stmt]) -> bool {
     ctor_body_any(
         body,
         &|_| false,
-        &|s| matches!(s, perry_hir::Stmt::Return(Some(e)) if !matches!(e, Expr::Undefined)),
+        &|s| matches!(s, perry_hir::Stmt::Return(Some(e), _) if !matches!(e, Expr::Undefined)),
     )
 }
 

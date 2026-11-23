@@ -467,7 +467,7 @@ fn iife_return_kind(
     module_globals: &HashMap<u32, String>,
     depth: usize,
 ) -> Option<Kind> {
-    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_)))) {
+    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_), _))) {
         return None;
     }
     let t = collect_typed_locals(body, &HashMap::new(), boxed_vars, module_globals);
@@ -493,7 +493,7 @@ fn iife_return_kind(
     fn returns<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(Option<&'a Expr>)) {
         for s in stmts {
             match s {
-                Stmt::Return(e) => f(e.as_ref()),
+                Stmt::Return(e, _) => f(e.as_ref()),
                 Stmt::If {
                     then_branch,
                     else_branch,

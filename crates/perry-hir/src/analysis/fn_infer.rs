@@ -664,7 +664,7 @@ fn for_each_stmt_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
                 f(e)
             }
         }
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e)
             }
@@ -819,7 +819,7 @@ fn walk_stmts<'a>(
         }
         // Expressions directly owned by this statement (not nested stmts).
         match s {
-            Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => walk_local(e, on_expr),
+            Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => walk_local(e, on_expr),
             Stmt::Expr(e) | Stmt::Throw(e) => walk_local(e, on_expr),
             Stmt::If { condition, .. }
             | Stmt::While { condition, .. }
@@ -1471,7 +1471,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                 };
                 lets.push((*id, t));
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 rets.push(match e {
                     Some(e) => ty_of(e, &env, cx),
                     None => Type::Void,
@@ -1557,7 +1557,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
             _ => {}
         };
         walk_stmts(body, &mut on_stmt, &mut on_expr);
-        if let Some(Stmt::Return(_)) | Some(Stmt::Throw(_)) = body.last() {
+        if let Some(Stmt::Return(_, _)) | Some(Stmt::Throw(_)) = body.last() {
             falls_off = false;
         }
         for (id, t) in lets.into_iter().chain(sets) {

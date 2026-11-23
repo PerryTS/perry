@@ -153,7 +153,7 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
         return expr;
     }
     let id = params[0].id;
-    let Some((Stmt::Return(Some(Expr::LocalGet(result))), definitions)) = body.split_last() else {
+    let Some((Stmt::Return(Some(Expr::LocalGet(result)), _), definitions)) = body.split_last() else {
         return expr;
     };
     // Only the compiler-generated static accessor definitions qualify. If
@@ -184,7 +184,7 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
     let sequence = body
         .into_iter()
         .map(|stmt| match stmt {
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) => expr,
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) => expr,
             _ => unreachable!(),
         })
         .collect();

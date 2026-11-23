@@ -239,7 +239,7 @@ impl<'a> Flow<'a> {
                     }
                     self.expression(scope, e);
                 }
-                Stmt::Return(Some(e)) => {
+                Stmt::Return(Some(e), _) => {
                     self.edge(expr(e), Node::Return(scope));
                     self.expression(scope, e);
                 }
@@ -651,7 +651,7 @@ fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => expr_mut(e, f),
+            | Stmt::Return(Some(e), _) => expr_mut(e, f),
             Stmt::If {
                 condition,
                 then_branch,

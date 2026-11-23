@@ -230,19 +230,19 @@ pub(super) fn record_step_kinds(stmts: &mut Vec<Stmt>, step_id: LocalId) {
             Some(Stmt::Expr(Expr::LocalSet(id, _))) if *id == step_id
         );
         match stmt {
-            Stmt::Return(Some(expr)) if !already_recorded => match transform_iter_result(&expr) {
+            Stmt::Return(Some(expr), off) if !already_recorded => match transform_iter_result(&expr) {
                 Some((value, done)) => {
                     out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
-                    out.push(Stmt::Return(Some(value)));
+                    out.push(Stmt::Return(Some(value), off));
                 }
                 None => {
                     out.push(set_step(step_id, 2.0));
-                    out.push(Stmt::Return(Some(expr)));
+                    out.push(Stmt::Return(Some(expr), off));
                 }
             },
-            Stmt::Return(None) if !already_recorded => {
+            Stmt::Return(None, off) if !already_recorded => {
                 out.push(set_step(step_id, 2.0));
-                out.push(Stmt::Return(None));
+                out.push(Stmt::Return(None, off));
             }
             other => out.push(other),
         }

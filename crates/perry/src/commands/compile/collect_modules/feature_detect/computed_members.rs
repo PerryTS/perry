@@ -265,7 +265,7 @@ fn date_receiver(
     }
     fn returns_value(body: &[Stmt]) -> bool {
         body.iter().any(|stmt| match stmt {
-            Stmt::Return(Some(_)) => true,
+            Stmt::Return(Some(_), _) => true,
             Stmt::If {
                 then_branch,
                 else_branch,

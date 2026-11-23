@@ -46,7 +46,7 @@ fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
             .map(expr_uses_global_crypto_namespace)
             .unwrap_or(false),
         Stmt::Expr(expr) | Stmt::Throw(expr) => expr_uses_global_crypto_namespace(expr),
-        Stmt::Return(expr) => expr
+        Stmt::Return(expr, _) => expr
             .as_ref()
             .map(expr_uses_global_crypto_namespace)
             .unwrap_or(false),

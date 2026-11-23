@@ -144,7 +144,7 @@ fn leading_read_requires_numeric(body: &[Stmt], array_id: u32, counter_id: u32) 
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr,
+        | Stmt::Return(Some(expr), _) => expr,
         // `if (arr[i] < 0) ...`: the leading read lives in the CONDITION.
         // A read only in the branches keeps the conservative answer.
         Stmt::If { condition, .. } => condition,
@@ -163,7 +163,7 @@ fn leading_read_requires_u32_index(body: &[Stmt], array_id: u32, counter_id: u32
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr,
+        | Stmt::Return(Some(expr), _) => expr,
         _ => return false,
     };
     target_is_index_key(expr, array_id, counter_id)
@@ -197,7 +197,7 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => {
+        | Stmt::Return(Some(expr), _) => {
             expr_flags(expr, array_id, counter_id, &mut target, &mut call);
         }
         // A conditional's reads and calls count — in the CONDITION and in
@@ -257,7 +257,7 @@ fn body_target_read_count(body: &[Stmt], array_id: u32, counter_id: u32) -> usiz
             }
             | Stmt::Expr(expr)
             | Stmt::Throw(expr)
-            | Stmt::Return(Some(expr)) => target_read_count(expr, array_id, counter_id),
+            | Stmt::Return(Some(expr), _) => target_read_count(expr, array_id, counter_id),
             _ => 0,
         })
         .sum()
@@ -367,7 +367,7 @@ fn body_blocks_repeated_read_cache(ctx: &FnCtx<'_>, body: &[Stmt]) -> bool {
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr_blocks_repeated_read_cache(ctx, expr),
+        | Stmt::Return(Some(expr), _) => expr_blocks_repeated_read_cache(ctx, expr),
         _ => false,
     })
 }

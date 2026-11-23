@@ -759,7 +759,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 // allocation hotness are keyed by it (`compile_method` reads
                 // `method.id`). A synthesized default constructor has no HIR
                 // function, so it gets an id nothing is keyed by.
-                let ctor_as_method = perry_hir::Function {
+                let ctor_as_method = perry_hir::Function { byte_offset: 0 /*HPOS*/,
                     id: class.constructor.as_ref().map_or(u32::MAX, |c| c.id),
                     name: format!("{}_constructor", class.name),
                     type_params: Vec::new(),

@@ -381,7 +381,7 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                 self.expr(expr, &mut state.set, true);
                 *state = state.dead_copy();
             }
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(expr) = value {
                     self.expr(expr, &mut state.set, false);
                 }

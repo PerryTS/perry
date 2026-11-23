@@ -10,7 +10,7 @@ pub fn collect_closure_refs_in_stmts<'a>(
             crate::Stmt::Expr(e) | crate::Stmt::Throw(e) => {
                 collect_closure_refs_in_expr(e, seen, out);
             }
-            crate::Stmt::Return(opt) => {
+            crate::Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_closure_refs_in_expr(e, seen, out);
                 }

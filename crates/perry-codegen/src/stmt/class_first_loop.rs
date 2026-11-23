@@ -234,7 +234,7 @@ fn guards_outside_loops(stmts: &[Stmt], binding: u32) -> bool {
     stmts.iter().any(|s| match s {
         Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. } => false,
         Stmt::Let { init: Some(e), .. }
-        | Stmt::Return(Some(e))
+        | Stmt::Return(Some(e), _)
         | Stmt::Expr(e)
         | Stmt::Throw(e) => guards(e),
         Stmt::If {
@@ -432,7 +432,7 @@ fn resolve_guards_in_stmt(stmt: &mut Stmt, binding: u32, is_first: bool) {
         }
     };
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 exprs(e);
             }

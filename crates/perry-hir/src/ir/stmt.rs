@@ -17,8 +17,12 @@ pub enum Stmt {
     },
     /// Expression statement
     Expr(Expr),
-    /// Return statement
-    Return(Option<Expr>),
+    /// Return statement. The second field is the source byte offset
+    /// (`span.lo.0`) of the `return` statement; a synthesized return takes
+    /// the offset of the source construct it is made for (a concise arrow
+    /// body, the generator/async function its driver belongs to, a rewritten
+    /// return). Read through [`Stmt::byte_offset`].
+    Return(Option<Expr>, u32),
     /// If statement
     If {
         condition: Expr,
@@ -111,4 +115,14 @@ pub struct SwitchCase {
 pub struct CatchClause {
     pub param: Option<(LocalId, String)>,
     pub body: Vec<Stmt>,
+}
+
+impl Stmt {
+    /// Source byte offset of the statement, for the variants that carry one.
+    pub fn byte_offset(&self) -> Option<u32> {
+        match self {
+            Stmt::Return(_, o) => Some(*o),
+            _ => None,
+        }
+    }
 }

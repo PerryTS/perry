@@ -173,7 +173,7 @@ pub(crate) fn try_desugar_reactive_text(
         inner_captures.dedup();
         inner_captures = ctx.filter_module_level_captures(inner_captures);
 
-        let inner_closure = Expr::Closure {
+        let inner_closure = Expr::Closure { byte_offset: call.span.lo.0,
             func_id: inner_func_id,
             params: vec![v_param],
             return_type: Type::Any,
@@ -199,7 +199,7 @@ pub(crate) fn try_desugar_reactive_text(
         }));
     }
 
-    outer_body.push(Stmt::Return(Some(Expr::LocalGet(widget_id))));
+    outer_body.push(Stmt::Return(Some(Expr::LocalGet(widget_id)), call.span.lo.0));
     ctx.exit_scope(outer_scope);
 
     let mut outer_refs = Vec::new();
@@ -215,7 +215,7 @@ pub(crate) fn try_desugar_reactive_text(
     outer_captures.dedup();
     outer_captures = ctx.filter_module_level_captures(outer_captures);
 
-    let outer_closure = Expr::Closure {
+    let outer_closure = Expr::Closure { byte_offset: call.span.lo.0,
         func_id: outer_func_id,
         params: vec![],
         return_type: Type::Any,

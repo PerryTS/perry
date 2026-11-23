@@ -364,7 +364,7 @@ fn mark_iterator_completion_on_abrupt(
                 });
                 rewritten.push(Stmt::LabeledContinue(label));
             }
-            Stmt::Return(value) => {
+            Stmt::Return(value, off) => {
                 // Operand failure remains a throw, not an outgoing return.
                 // Register the value as Any so cleanup can allocate/collect
                 // while the pending return remains rooted.
@@ -382,7 +382,7 @@ fn mark_iterator_completion_on_abrupt(
                     Expr::LocalGet(id)
                 });
                 rewritten.push(iterator_completion_stmt(state_id, 1.0));
-                rewritten.push(Stmt::Return(value));
+                rewritten.push(Stmt::Return(value, off));
             }
             Stmt::If {
                 condition,
@@ -602,7 +602,7 @@ fn lower_runtime_for_await_iterator(
         type_args: vec![],
         byte_offset: 0,
     };
-    let next_call = Expr::Await(Box::new(raw_next_call));
+    let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     module.init.push(Stmt::Let {
         id: result_id,
         name: format!("__result_{}", result_id),
@@ -658,6 +658,7 @@ fn lower_runtime_for_await_iterator(
         result_id,
         next_call,
         body_stmts,
+        for_of_stmt.span.lo.0,
     );
 
     ctx.pop_block_scope(for_scope_mark);
@@ -862,7 +863,7 @@ pub(super) fn lower_stmt_for_of_inner(
             byte_offset: 0,
         };
         let next_call = if needs_await {
-            Expr::Await(Box::new(raw_next_call))
+            Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0)
         } else {
             raw_next_call
         };
@@ -977,6 +978,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 result_id,
                 next_call,
                 body_stmts,
+                for_of_stmt.span.lo.0,
             );
         } else {
             let loop_body = if guard_binding {
@@ -1102,7 +1104,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     object: Some(Box::new(Expr::LocalGet(reader_id))),
                     method: "read".to_string(),
                     args: vec![],
-                }))
+                }), for_of_stmt.span.lo.0)
             };
             let res_id = ctx.fresh_local();
             ctx.locals
@@ -1637,7 +1639,7 @@ pub(super) fn lower_stmt_for_of_inner(
                         index: Box::new(Expr::LocalGet(idx_id)),
                     };
                     if for_of_stmt.is_await {
-                        Expr::Await(Box::new(raw_item_expr))
+                        Expr::Await(Box::new(raw_item_expr), for_of_stmt.span.lo.0)
                     } else {
                         raw_item_expr
                     }
@@ -1774,7 +1776,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
             };
             if for_of_stmt.is_await && !use_lazy_iter {
-                source = Expr::Await(Box::new(source));
+                source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
             }
             for_head_binding_stmts(ctx, binding, source, elem_type.clone())?
         }

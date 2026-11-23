@@ -208,8 +208,8 @@ fn function_returns_literal_number(ctx: &FnCtx<'_>, id: u32) -> bool {
     }
     fn returns_ok(stmts: &[Stmt]) -> bool {
         stmts.iter().all(|s| match s {
-            Stmt::Return(Some(e)) => literal(e),
-            Stmt::Return(None) => false,
+            Stmt::Return(Some(e), _) => literal(e),
+            Stmt::Return(None, _) => false,
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -223,7 +223,7 @@ fn function_returns_literal_number(ctx: &FnCtx<'_>, id: u32) -> bool {
             _ => true,
         })
     }
-    matches!(f.body.last(), Some(Stmt::Return(Some(e))) if literal(e)) && returns_ok(&f.body)
+    matches!(f.body.last(), Some(Stmt::Return(Some(e), _)) if literal(e)) && returns_ok(&f.body)
 }
 
 /// A selection of numeric literals returns a canonical Number regardless of

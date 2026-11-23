@@ -587,8 +587,8 @@ fn collect_local_candidate_defs_from_frames<'a>(
                     defs.entry(*id).or_default().push(e);
                     stack.push(LocalCandidateFrame::Expr(e));
                 }
-                Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
-                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
+                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
                     stack.push(LocalCandidateFrame::Expr(e));
                 }
                 Stmt::If {
@@ -793,10 +793,10 @@ fn collect_param_literal_sets_from_frames(
                 Stmt::Let { init: Some(e), .. }
                 | Stmt::Expr(e)
                 | Stmt::Throw(e)
-                | Stmt::Return(Some(e)) => {
+                | Stmt::Return(Some(e), _) => {
                     stack.push(ParamFrame::Expr(e));
                 }
-                Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
                 Stmt::If {
                     condition,
                     then_branch,
@@ -939,10 +939,10 @@ fn collect_const_locals_from_frames<'a>(
                         stack.push(ConstFrame::Expr(e));
                     }
                     Stmt::Let { init: None, .. } => {}
-                    Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                    Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
                         stack.push(ConstFrame::Expr(e));
                     }
-                    Stmt::Return(None) => {}
+                    Stmt::Return(None, _) => {}
                     Stmt::If {
                         condition,
                         then_branch,
@@ -1060,10 +1060,10 @@ fn scan_mutations_from_frames(
                     Stmt::Let { init: Some(e), .. }
                     | Stmt::Expr(e)
                     | Stmt::Throw(e)
-                    | Stmt::Return(Some(e)) => {
+                    | Stmt::Return(Some(e), _) => {
                         stack.push(MutationFrame::Expr(e as *const Expr));
                     }
-                    Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                    Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
                     Stmt::If {
                         condition,
                         then_branch,

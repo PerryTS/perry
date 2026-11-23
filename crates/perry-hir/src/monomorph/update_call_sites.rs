@@ -49,7 +49,7 @@ fn update_call_sites_in_stmt(
             }
         }
         Stmt::Expr(expr) => update_call_sites_in_expr(expr, ctx, lookup),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 update_call_sites_in_expr(e, ctx, lookup);
             }
@@ -291,7 +291,7 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(t, ctx, lookup);
             }
         }
-        Expr::Await(inner) => update_call_sites_in_expr(inner, ctx, lookup),
+        Expr::Await(inner, _) => update_call_sites_in_expr(inner, ctx, lookup),
         Expr::SuperCall(args) => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);

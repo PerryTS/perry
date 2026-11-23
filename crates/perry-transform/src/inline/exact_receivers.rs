@@ -142,7 +142,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                     visit_expr(init, facts);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 visit_expr(expr, facts);
             }
             Stmt::If {
@@ -204,7 +204,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                 }
             }
             Stmt::Labeled { body, .. } => visit_stmt(body, facts),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -325,10 +325,10 @@ pub fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFa
                 }
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
             invalidate_exact_receivers_for_expr(expr, facts);
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -465,7 +465,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
                 collect_exact_receiver_refs_in_expr(init, facts, out);
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
             collect_exact_receiver_refs_in_expr(expr, facts, out);
         }
         Stmt::If {
@@ -543,7 +543,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
                 }
             }
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

@@ -310,7 +310,7 @@ pub(super) fn lower_nested_fn_decl(
     };
     ctx.closure_display_names.insert(func_id, display_name);
 
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: fn_decl.function.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,

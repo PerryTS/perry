@@ -212,7 +212,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             }
             let terminal_this_return = allow_terminal_this_return
                 && index + 1 == func.body.len()
-                && matches!(s, Stmt::Return(Some(Expr::This)));
+                && matches!(s, Stmt::Return(Some(Expr::This), _));
             safe &= terminal_this_return || self.stmt_this_safe(s, &ctx);
         }
         safe
@@ -225,7 +225,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 .map(|e| self.expr_this_safe(e, ctx))
                 .unwrap_or(true),
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr_this_safe(e, ctx),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 // A constructor `return <expr>` can OVERRIDE the `new` result
                 // (`js_ctor_return_override`): the provenance proof "the local
                 // holds exactly a C instance" would be wrong. Disqualify any
@@ -561,7 +561,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
                     visit(e, found);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => visit(e, found),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => visit(e, found),
             Stmt::If {
                 condition,
                 then_branch,

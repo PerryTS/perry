@@ -125,7 +125,7 @@ pub fn check_escapes_in_stmts(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 check_escapes_in_expr(e, candidates, classes, escaped)
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     check_escapes_in_expr(e, candidates, classes, escaped);
                 }
@@ -487,7 +487,7 @@ pub fn check_escapes_in_expr(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand) | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)

@@ -283,7 +283,7 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                 init: Some(Expr::Yield { .. }),
                 ..
             } => return true,
-            Stmt::Return(Some(Expr::Yield { .. })) => return true,
+            Stmt::Return(Some(Expr::Yield { .. }), _) => return true,
             // #6728: in an async generator, a statement-level `await` (post
             // `hoist_awaits_in_stmts`: bare / `let =` / `return` / `throw`) is a
             // suspend point too — it must be split into its own state via
@@ -298,17 +298,17 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
             // generators — plain async fns rewrite `await`→`yield` upstream),
             // so plain generators / async functions are unaffected. Mirrors the
             // four `Expr::Await` statement arms in `linearize.rs`.
-            Stmt::Expr(Expr::Await(_)) if super::linearize::linearize_async_generator() => {
+            Stmt::Expr(Expr::Await(_, _)) if super::linearize::linearize_async_generator() => {
                 return true
             }
             Stmt::Let {
-                init: Some(Expr::Await(_)),
+                init: Some(Expr::Await(_, _)),
                 ..
             } if super::linearize::linearize_async_generator() => return true,
-            Stmt::Return(Some(Expr::Await(_))) if super::linearize::linearize_async_generator() => {
+            Stmt::Return(Some(Expr::Await(_, _)), _) if super::linearize::linearize_async_generator() => {
                 return true
             }
-            Stmt::Throw(Expr::Await(_)) if super::linearize::linearize_async_generator() => {
+            Stmt::Throw(Expr::Await(_, _)) if super::linearize::linearize_async_generator() => {
                 return true
             }
             Stmt::If {

@@ -147,7 +147,7 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => pick(e, proven),
+            | Stmt::Return(Some(e), _) => pick(e, proven),
             Stmt::If {
                 condition,
                 then_branch,

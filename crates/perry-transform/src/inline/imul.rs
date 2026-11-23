@@ -45,7 +45,7 @@ pub fn detect_math_imul_polyfill(f: &Function) -> bool {
     }
 
     // Last stmt: Return(Some(Binary { BitOr, ..., Integer(0) }))
-    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. })) if matches!(right.as_ref(), Expr::Integer(0)))
+    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. }), _) if matches!(right.as_ref(), Expr::Integer(0)))
 }
 
 /// Check if an expression extracts the hi or lo 16-bit half of a parameter.

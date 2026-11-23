@@ -363,7 +363,7 @@ fn lower_scalar_method_inline_body(
             {
                 lower_expr(ctx, expr)?;
             }
-            perry_hir::Stmt::Return(Some(expr)) => {
+            perry_hir::Stmt::Return(Some(expr), _) => {
                 result = Some(lower_expr(ctx, expr)?);
                 break;
             }
@@ -463,7 +463,7 @@ fn lower_scalar_method_int32_inline_body(
                 ctx.local_types.insert(*id, ty.clone());
                 ctx.proven_local_types.insert(*id, Type::Int32);
             }
-            perry_hir::Stmt::Return(Some(expr)) => {
+            perry_hir::Stmt::Return(Some(expr), _) => {
                 raw_i32 = Some(lower_expr_as_i32(ctx, expr)?);
                 break;
             }

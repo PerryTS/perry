@@ -383,7 +383,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 rewrite_array_field_reads(expr, aliases);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     rewrite_array_field_reads(expr, aliases);
                 }

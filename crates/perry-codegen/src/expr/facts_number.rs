@@ -533,8 +533,8 @@ fn targets_return_number(ctx: &FnCtx<'_>, cids: &[u32], property: &str, depth: u
 fn block_returns_number(ctx: &FnCtx<'_>, stmts: &[Stmt], cids: &[u32], depth: u8) -> (bool, bool) {
     for stmt in stmts {
         match stmt {
-            Stmt::Return(Some(expr)) => return (expr_is_number(ctx, expr, cids, depth), true),
-            Stmt::Return(None) => return (false, true),
+            Stmt::Return(Some(expr), _) => return (expr_is_number(ctx, expr, cids, depth), true),
+            Stmt::Return(None, _) => return (false, true),
             Stmt::Throw(_) => return (true, true),
             Stmt::If {
                 then_branch,

@@ -38,7 +38,7 @@ pub(crate) fn discard_inlined_returns(stmts: Vec<Stmt>) -> Option<Vec<Stmt>> {
     let mut stmts = stmts.into_iter();
     while let Some(stmt) = stmts.next() {
         match stmt {
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if !stmts.as_slice().is_empty() {
                     return None;
                 }
@@ -93,7 +93,7 @@ pub(crate) fn discard_inlined_returns(stmts: Vec<Stmt>) -> Option<Vec<Stmt>> {
 /// the continuation on that path.
 fn can_complete_normally(stmts: &[Stmt]) -> bool {
     !stmts.iter().any(|stmt| match stmt {
-        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::Return(_, _) | Stmt::Throw(_) => true,
         Stmt::If {
             then_branch,
             else_branch: Some(else_branch),

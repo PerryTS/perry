@@ -42,8 +42,8 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
     fn check_stmt(s: &Stmt) -> bool {
         match s {
             Stmt::Let { init, .. } => init.as_ref().is_none_or(check_expr),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => check_expr(e),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => true,
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => check_expr(e),
+            Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => true,
             Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
             Stmt::If {
                 condition,
@@ -501,8 +501,8 @@ fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
                     visit(expr);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => visit(expr),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => visit(expr),
+            Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
             Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
             Stmt::If {
                 condition,
@@ -958,8 +958,8 @@ fn walk_stmts_mut(stmts: &mut [Stmt], visit: &mut impl FnMut(&mut Expr)) {
                     visit(expr);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => visit(expr),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => visit(expr),
+            Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
             Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
             Stmt::If {
                 condition,
@@ -1197,8 +1197,8 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
     fn check_stmt(s: &Stmt, extern_names: &mut Vec<String>) -> bool {
         match s {
             Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| check_expr(e, extern_names)),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => check_expr(e, extern_names),
-            Stmt::Return(None) | Stmt::Break | Stmt::Continue => true,
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => check_expr(e, extern_names),
+            Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => true,
             Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
             Stmt::If {
                 condition,

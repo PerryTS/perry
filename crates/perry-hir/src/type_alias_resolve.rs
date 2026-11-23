@@ -443,7 +443,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
                     fix_expr(init, table);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 fix_expr(expr, table);
             }
             Stmt::If {
@@ -505,7 +505,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
                     fix_stmts(finally, table);
                 }
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

@@ -191,7 +191,7 @@ fn check_uses_in_stmt(
             used_array_indices,
             length_only_array_indices,
         ),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 check_uses_in_expr(
                     expr,

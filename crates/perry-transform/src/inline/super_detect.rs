@@ -112,7 +112,7 @@ fn expr_contains_lexical_super(expr: &Expr) -> bool {
 fn stmt_contains_lexical_super(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_contains_lexical_super),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             expr_contains_lexical_super(expr)
         }
         Stmt::If {
@@ -166,7 +166,7 @@ fn stmt_contains_lexical_super(stmt: &Stmt) -> bool {
                         || case.body.iter().any(stmt_contains_lexical_super)
                 })
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

@@ -100,7 +100,7 @@ impl<'r, 'a> Walk<'r, 'a> {
     fn stmt(&mut self, s: &'a Stmt, in_loop: bool, reload: bool) {
         match s {
             Stmt::Let { init: Some(e), .. } => self.expr(e, in_loop, reload),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => self.expr(e, in_loop, reload),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => self.expr(e, in_loop, reload),
             Stmt::If {
                 condition,
                 then_branch,

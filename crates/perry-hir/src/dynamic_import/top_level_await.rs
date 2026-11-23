@@ -15,7 +15,7 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_top_level_await),
         Stmt::Expr(e) => expr_has_top_level_await(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_has_top_level_await),
+        Stmt::Return(opt, _) => opt.as_ref().is_some_and(expr_has_top_level_await),
         Stmt::If {
             condition,
             then_branch,
@@ -81,7 +81,7 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
 }
 
 fn expr_has_top_level_await(expr: &Expr) -> bool {
-    if matches!(expr, Expr::Await(_)) {
+    if matches!(expr, Expr::Await(_, _)) {
         return true;
     }
     let mut found = false;

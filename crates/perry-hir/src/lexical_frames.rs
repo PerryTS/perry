@@ -341,7 +341,7 @@ impl Remap {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }

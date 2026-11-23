@@ -506,12 +506,12 @@ impl JsEmitter {
             }
 
             // --- Await / Yield ---
-            Expr::Await(expr) => {
+            Expr::Await(expr, _) => {
                 self.output.push_str("(await ");
                 self.emit_expr(expr);
                 self.output.push(')');
             }
-            Expr::Yield { value, delegate } => {
+            Expr::Yield { value, delegate, .. } => {
                 if *delegate {
                     self.output.push_str("yield* ");
                 } else {

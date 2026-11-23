@@ -65,7 +65,7 @@ fn stmts_ok(body: &[Stmt], f: &Function, recursive: &mut bool) -> Option<bool> {
     let mut returns = false;
     for stmt in body {
         match stmt {
-            Stmt::Return(Some(e)) if expr_ok(e, f, recursive) => {
+            Stmt::Return(Some(e), _) if expr_ok(e, f, recursive) => {
                 // Comparisons are Boolean, not integer return values.
                 if matches!(e, Expr::Compare { .. }) {
                     return None;
@@ -247,7 +247,7 @@ impl Lowerer<'_> {
                 break;
             }
             match s {
-                Stmt::Return(Some(e)) => {
+                Stmt::Return(Some(e), _) => {
                     let v = self.expr(e);
                     self.block().ret(I32, &v);
                 }

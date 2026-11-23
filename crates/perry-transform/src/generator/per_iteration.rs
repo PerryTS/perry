@@ -278,7 +278,7 @@ fn stmt_contains_suspend(stmt: &Stmt) -> bool {
 }
 
 fn expr_contains_suspend(expr: &Expr) -> bool {
-    if matches!(expr, Expr::Yield { .. } | Expr::Await(_)) {
+    if matches!(expr, Expr::Yield { .. } | Expr::Await(_, _)) {
         return true;
     }
     if matches!(expr, Expr::Closure { .. }) {
@@ -303,7 +303,7 @@ fn each_expr<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 f(e);
             }
@@ -678,7 +678,7 @@ fn each_expr_mut<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 f(e);
             }

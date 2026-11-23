@@ -268,10 +268,10 @@ pub fn fix_class_field_stmt(
                 fix_class_field_expr(e, class_field_natives, user_classes, current_class);
             }
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             fix_class_field_expr(e, class_field_natives, user_classes, current_class)
         }
-        Stmt::Return(None) => {}
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -532,7 +532,7 @@ pub fn fix_class_field_expr(
                 };
             }
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             // `await <receiver>.<field>.<method>(args)`
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
                 if let Expr::PropertyGet {
@@ -826,10 +826,10 @@ pub fn fix_native_instance_stmt_with_locals(
                 fix_native_instance_expr_with_locals(e, native_instances, local_id_instances);
             }
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             fix_native_instance_expr_with_locals(e, native_instances, local_id_instances)
         }
-        Stmt::Return(None) => {}
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -1027,7 +1027,7 @@ pub fn fix_native_instance_expr_with_locals(
                 fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
             }
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             // Handle Await(Call{PropertyGet{LocalGet...}}) pattern for async method calls
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
                 if let Expr::PropertyGet {
@@ -1335,7 +1335,7 @@ pub fn detect_native_instance_creation_with_context(
                 _ => None,
             }
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             // Async creation: await mysql.createConnection() or await pool.getConnection() or await fetch()
             detect_native_instance_creation_with_context(inner, local_ids)
         }

@@ -24,7 +24,7 @@ pub(super) fn scoped_js_names(stmts: &[Stmt]) -> BTreeSet<String> {
         let mut active = BTreeMap::new();
         for stmt in stmts {
             match stmt {
-                Stmt::Let { init, .. } | Stmt::Return(init) => {
+                Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                     if let Some(e) = init {
                         expr(e, &mut active, names);
                     }

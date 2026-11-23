@@ -38,7 +38,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
             Stmt::Let {
                 init: Some(expr), ..
             } => check_expr(expr),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => check_expr(expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -115,7 +115,7 @@ pub fn body_references_dynamic_this(stmts: &[Stmt]) -> bool {
         match stmt {
             Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
             Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
-            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::Return(expr, _) => expr.as_ref().is_some_and(check_expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -174,7 +174,7 @@ pub fn method_body_blocks_this_substitution(stmts: &[Stmt]) -> bool {
         match stmt {
             Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
             Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
-            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::Return(expr, _) => expr.as_ref().is_some_and(check_expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -296,8 +296,8 @@ pub fn collect_closure_captured_local_ids(
     fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
         match s {
             Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
-            Stmt::Return(None) => {}
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -408,8 +408,8 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
     fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
         match s {
             Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
-            Stmt::Return(None) => {}
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -570,8 +570,8 @@ pub fn is_pure_function(func: &Function) -> bool {
         match s {
             Stmt::Let { init: Some(e), .. } => expr_is_pure(e, known),
             Stmt::Let { init: None, .. } => true,
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => expr_is_pure(e, known),
-            Stmt::Return(None) => true,
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => expr_is_pure(e, known),
+            Stmt::Return(None, _) => true,
             Stmt::If {
                 condition,
                 then_branch,
@@ -616,7 +616,7 @@ pub fn has_simple_control_flow(stmts: &[Stmt]) -> bool {
             // `if (!cond) { throw new Error(...) }` — without inlining,
             // the assertion is an unconditional cross-module dispatch
             // per call.
-            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(_) | Stmt::Throw(_) => {}
+            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(_, _) | Stmt::Throw(_) => {}
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -725,10 +725,10 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
                     check_expr(expr, max_id);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 check_expr(expr, max_id);
             }
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -1000,7 +1000,7 @@ pub fn collect_declared_local_ids(stmts: &[Stmt], out: &mut std::collections::Ha
                 }
             }
             Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue

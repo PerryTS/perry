@@ -111,7 +111,7 @@ fn shape(f: &perry_hir::Function) -> Option<Shape> {
     {
         return None;
     }
-    let [Stmt::Return(Some(e))] = f.body.as_slice() else {
+    let [Stmt::Return(Some(e), _)] = f.body.as_slice() else {
         return None;
     };
     let (read, default) = match e {

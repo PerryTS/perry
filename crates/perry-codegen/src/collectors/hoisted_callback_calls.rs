@@ -41,7 +41,7 @@ fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
             }
         }
         Stmt::Expr(expr) | Stmt::Throw(expr) => walk_expr(expr, visit),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 walk_expr(expr, visit);
             }
@@ -340,7 +340,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
                 init: Some(expr), ..
             } => scan_expr(expr, loop_depth, out),
             Stmt::Expr(expr) | Stmt::Throw(expr) => scan_expr(expr, loop_depth, out),
-            Stmt::Return(Some(expr)) => scan_expr(expr, loop_depth, out),
+            Stmt::Return(Some(expr), _) => scan_expr(expr, loop_depth, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -392,7 +392,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
             }
             Stmt::Labeled { body, .. } => scan_stmt(body, loop_depth, out),
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

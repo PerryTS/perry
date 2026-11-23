@@ -641,6 +641,11 @@ pub struct Decorator {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub id: FuncId,
+    /// Source byte offset (`span.lo.0`) of the function construct (the
+    /// declaration, method, accessor or function expression); a synthesized
+    /// function takes the offset of the construct it is made for. Excluded
+    /// from stable-hashing, like `Expr::Call::byte_offset`.
+    pub byte_offset: u32,
     pub name: String,
     /// Generic type parameters (e.g., T, K in function<T, K>)
     pub type_params: Vec<TypeParam>,

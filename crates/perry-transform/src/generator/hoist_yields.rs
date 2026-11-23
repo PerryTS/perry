@@ -57,7 +57,7 @@ fn hoist_yields_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         Stmt::Expr(e) => {
             hoist_yields_avoiding_top_level(e, next_id, hoisted);
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             hoist_yields_avoiding_top_level(e, next_id, hoisted);
         }
         Stmt::Throw(e) => {

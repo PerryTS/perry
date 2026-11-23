@@ -69,20 +69,20 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
         let yield_value: Option<&mut Option<Box<Expr>>> = match &mut stmt {
             Stmt::Expr(Expr::Yield {
                 value,
-                delegate: false,
+                delegate: false, ..
             }) => Some(value),
             Stmt::Let {
                 init:
                     Some(Expr::Yield {
                         value,
-                        delegate: false,
+                        delegate: false, ..
                     }),
                 ..
             } => Some(value),
             Stmt::Return(Some(Expr::Yield {
                 value,
-                delegate: false,
-            })) => Some(value),
+                delegate: false, ..
+            }), _) => Some(value),
             _ => None,
         };
         if let Some(value) = yield_value {
@@ -94,7 +94,7 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
                 name: format!("__ayield_{}", tmp),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Await(Box::new(operand))),
+                init: Some(Expr::Await(Box::new(operand), 0 /*HPOS*/)),
             });
         }
         out.push(stmt);

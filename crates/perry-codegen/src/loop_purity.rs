@@ -534,7 +534,7 @@ fn stmt_is_pure(s: &Stmt) -> bool {
     match s {
         Stmt::Expr(e) => expr_is_pure(e),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(expr_is_pure),
-        Stmt::Return(_) | Stmt::Throw(_) => false,
+        Stmt::Return(_, _) | Stmt::Throw(_) => false,
         Stmt::If {
             condition,
             then_branch,
@@ -650,7 +650,7 @@ fn stmt_writes_outside(s: &Stmt, body_locals: &HashSet<u32>) -> bool {
         Stmt::Let { init, .. } => init
             .as_ref()
             .is_some_and(|e| expr_writes_outside(e, body_locals)),
-        Stmt::Return(opt) => opt
+        Stmt::Return(opt, _) => opt
             .as_ref()
             .is_some_and(|e| expr_writes_outside(e, body_locals)),
         Stmt::If {

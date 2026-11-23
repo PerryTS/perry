@@ -603,7 +603,7 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     matches!(
         ss.last(),
         Some(
-            Stmt::Return(_)
+            Stmt::Return(_, _)
                 | Stmt::Throw(_)
                 | Stmt::Break
                 | Stmt::Continue
@@ -670,7 +670,7 @@ pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
             body,
             ..
         } => !breaks_out(body),
-        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::Return(_, _) | Stmt::Throw(_) => true,
         Stmt::If {
             then_branch,
             else_branch: Some(else_branch),
@@ -1362,7 +1362,7 @@ fn case_leaves(c: &perry_hir::SwitchCase) -> bool {
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
-                | Stmt::Return(_)
+                | Stmt::Return(_, _)
                 | Stmt::Throw(_)
         )
     )
@@ -1442,7 +1442,7 @@ pub(crate) fn predicate_of(f: &perry_hir::Function) -> Option<Predicate<'_>> {
     match f.body.as_slice() {
         // A write in the expression would make a later read of a parameter
         // no longer the argument.
-        [Stmt::Return(Some(e))]
+        [Stmt::Return(Some(e), _)]
             if !expr_has(e, &mut |x| {
                 matches!(
                     x,
@@ -1869,7 +1869,7 @@ fn da_list(ss: &[Stmt], x: u32, sw: bool) -> Da {
 fn da_stmt(s: &Stmt, x: u32, sw: bool) -> Da {
     match s {
         Stmt::Expr(Expr::LocalSet(l, _)) if *l == x => Da::Assigns,
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
+        Stmt::Return(_, _) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
         Stmt::Break if sw => Da::Escape,
         Stmt::Break => Da::Exits,
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => Da::Escape,

@@ -28,7 +28,7 @@ fn builder_body(expr: &Expr) -> Option<&[Stmt]> {
         return None;
     }
     let (last, steps) = body.split_last()?;
-    if !matches!(last, Stmt::Return(Some(Expr::LocalGet(id))) if *id == param.id)
+    if !matches!(last, Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == param.id)
         || !steps
             .iter()
             .all(|stmt| matches!(stmt, Stmt::Let { .. } | Stmt::Expr(_)))

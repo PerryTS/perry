@@ -148,7 +148,7 @@ fn plain_bodies(g: &Gen<'_>) -> FxHashSet<(u32, u32)> {
             let lowered_generator = f.body.iter().any(|s| {
                 matches!(
                     s,
-                    perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype { .. }))
+                    perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype { .. }), _)
                 )
             });
             if !(f.is_async || f.is_generator || f.was_plain_async || lowered_generator) {

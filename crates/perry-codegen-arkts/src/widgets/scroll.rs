@@ -197,7 +197,7 @@ pub(crate) fn emit_lazy_vstack(
         let (param_name, body_str) = match callback.as_ref() {
             Expr::Closure { params, body, .. } if !params.is_empty() => {
                 let body_expr = body.iter().find_map(|s| match s {
-                    Stmt::Return(Some(e)) => Some(e.clone()),
+                    Stmt::Return(Some(e), _) => Some(e.clone()),
                     Stmt::Expr(e) => Some(e.clone()),
                     _ => None,
                 });

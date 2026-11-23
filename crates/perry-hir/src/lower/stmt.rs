@@ -910,7 +910,7 @@ fn lower_stmt_inner(
                         for s in &stmts {
                             if let Stmt::Let {
                                 name,
-                                init: Some(Expr::Await(inner)),
+                                init: Some(Expr::Await(inner, _)),
                                 ..
                             } = s
                             {

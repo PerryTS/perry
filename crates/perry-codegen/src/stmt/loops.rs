@@ -6009,7 +6009,7 @@ fn stmt_is_packed_f64_loop_safe(
         Stmt::Break | Stmt::Continue => packed_loop_abrupt_enabled(),
         // Same argument, once the returned expression itself is safe — it is
         // evaluated in the loop body like any other operand.
-        Stmt::Return(value) => {
+        Stmt::Return(value, _) => {
             packed_loop_abrupt_enabled()
                 && value
                     .as_ref()
@@ -7640,7 +7640,7 @@ fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>)
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => out.push(e),
+            | Stmt::Return(Some(e), _) => out.push(e),
             Stmt::If {
                 condition,
                 then_branch,
@@ -8984,10 +8984,10 @@ fn collect_guarded_array_aliases_in_stmt(
             collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, expr, aliases)
                 | collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
         }),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -9609,10 +9609,10 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
         Stmt::Let { init, .. } => init
             .as_ref()
             .is_some_and(|expr| expr_mutates_local(expr, local_id)),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             expr_mutates_local(expr, local_id)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -9744,7 +9744,7 @@ fn stmt_array_length_effect(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }
-        Stmt::Return(opt) => opt.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
+        Stmt::Return(opt, _) => opt.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
             expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::Let { init, .. } => init.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
@@ -10085,7 +10085,7 @@ fn expr_array_length_effect(
             LoopArrayLengthEffect::UnknownCallEscape
         }
         Expr::Closure { .. } => LoopArrayLengthEffect::UnknownCallEscape,
-        Expr::Await(operand) | Expr::QueueMicrotask(operand) => {
+        Expr::Await(operand, _) | Expr::QueueMicrotask(operand) => {
             let operand_effect = walk(operand);
             if operand_effect != LoopArrayLengthEffect::Preserves {
                 operand_effect
@@ -10201,7 +10201,7 @@ pub(crate) fn stmt_preserves_array_length(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }
-        Stmt::Return(opt) => opt.as_ref().is_none_or(|e| {
+        Stmt::Return(opt, _) => opt.as_ref().is_none_or(|e| {
             expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| {
@@ -10575,7 +10575,7 @@ pub(crate) fn expr_preserves_array_length(
         // Await can resume after user code/microtasks have run, so it cannot
         // preserve cached array length or bounded-index facts without a future
         // effect summary for the awaited value.
-        Expr::Await(_) => false,
+        Expr::Await(_, _) => false,
         Expr::Conditional {
             condition,
             then_expr,

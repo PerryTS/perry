@@ -597,9 +597,9 @@ impl<'a> UseWalk<'a> {
             // A bare `return <local>` hands the alias out only when the
             // function is DONE on that path — no later in-function access can
             // observe an external mutation through it.
-            Stmt::Return(Some(Expr::LocalGet(id))) if self.is_candidate(*id) => {}
+            Stmt::Return(Some(Expr::LocalGet(id)), _) if self.is_candidate(*id) => {}
             Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.walk_expr(e);
                 }

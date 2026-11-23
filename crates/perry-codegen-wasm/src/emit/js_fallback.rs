@@ -102,11 +102,11 @@ impl WasmModuleEmitter {
                 let val = self.emit_js_expr(e, locals);
                 out.push_str(&format!("{pad}    {val};\n"));
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 let val = self.emit_js_expr(e, locals);
                 out.push_str(&format!("{pad}    return {val};\n"));
             }
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 out.push_str(&format!("{pad}    return u64ToF64(TAG_UNDEFINED);\n"));
             }
             Stmt::If {
@@ -445,7 +445,7 @@ impl WasmModuleEmitter {
                     UnaryOp::Pos => format!("fromJsValue(+toJsValue({}))", o),
                 }
             }
-            Expr::Await(inner) => {
+            Expr::Await(inner, _) => {
                 let v = self.emit_js_expr(inner, locals);
                 // In JS async context, we can truly await
                 format!("fromJsValue(await toJsValue({}))", v)

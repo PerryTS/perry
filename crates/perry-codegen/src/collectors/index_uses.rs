@@ -65,7 +65,7 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
             }
             Stmt::Let { init: None, .. } => {}
             Stmt::Expr(e) | Stmt::Throw(e) => absorb_writes_in_expr(e, out),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     absorb_writes_in_expr(e, out);
                 }
@@ -183,7 +183,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -225,7 +225,7 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
     for s in stmts {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => walk_index_uses_in_expr(e, out),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_index_uses_in_expr(e, out);
                 }
@@ -434,7 +434,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)

@@ -228,7 +228,7 @@ fn lower_private_method_in_scope(
         }
     }
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params,
@@ -288,7 +288,7 @@ fn lower_private_getter_in_scope(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: ctx.fresh_func(),
         name,
         type_params: Vec::new(),
@@ -377,7 +377,7 @@ fn lower_private_setter_in_scope(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: ctx.fresh_func(),
         name,
         type_params: Vec::new(),

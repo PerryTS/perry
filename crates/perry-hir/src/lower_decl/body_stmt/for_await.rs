@@ -34,7 +34,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         type_args: vec![],
         byte_offset: 0,
     };
-    let next_call = Expr::Await(Box::new(raw_next_call));
+    let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     result.push(Stmt::Let {
         id: result_id,
         name: format!("__result_{}", result_id),
@@ -81,6 +81,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         result_id,
         next_call,
         body_stmts,
+        for_of_stmt.span.lo.0,
     );
 
     ctx.pop_block_scope(scope_mark);

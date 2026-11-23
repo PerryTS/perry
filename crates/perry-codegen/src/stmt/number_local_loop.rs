@@ -128,7 +128,7 @@ impl<'a> LoopFacts<'a> {
                 init.as_ref().is_none_or(|init| self.walk_expr(ctx, init))
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => self.walk_expr(ctx, expr),
-            Stmt::Return(value) => value
+            Stmt::Return(value, _) => value
                 .as_ref()
                 .is_none_or(|value| self.walk_expr(ctx, value)),
             Stmt::Break | Stmt::Continue => true,
@@ -190,7 +190,7 @@ impl<'a> LoopFacts<'a> {
             // frame's storage protocol, and other receiver accesses belong to the
             // region tier that runs after this one.
             Expr::Closure { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
             | Expr::Yield { .. }
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }

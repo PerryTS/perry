@@ -1490,7 +1490,7 @@ fn expr_region_ender_with_trusted_operation(
         // ---- Suspension ----------------------------------------------------
         // Control reaches the microtask pump, whose outermost boundary runs
         // the moving minor collection.
-        Expr::Await(_) | Expr::Yield { .. } | Expr::AsyncFirstCall { .. } => {
+        Expr::Await(_, _) | Expr::Yield { .. } | Expr::AsyncFirstCall { .. } => {
             Some(RegionEnder::Suspension)
         }
 
@@ -1636,10 +1636,10 @@ fn enders_in_stmt(
             enders_in_expr(e, is_inert, is_trusted_operation, out);
             out.push(RegionEnder::UnwindEdge);
         }
-        Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             enders_in_expr(e, is_inert, is_trusted_operation, out)
         }
-        Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+        Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,

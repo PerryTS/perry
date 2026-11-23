@@ -124,7 +124,7 @@ impl LoweringContext {
                     "String" => Expr::StringCoerce(Box::new(Expr::LocalGet(param_id))),
                     _ => unreachable!(),
                 };
-                return Expr::Closure {
+                return Expr::Closure { byte_offset: ident.span.lo.0,
                     func_id,
                     params: vec![Param {
                         id: param_id,
@@ -136,7 +136,7 @@ impl LoweringContext {
                         arguments_object: None,
                     }],
                     return_type: Type::Any,
-                    body: vec![Stmt::Return(Some(coerce_body))],
+                    body: vec![Stmt::Return(Some(coerce_body), ident.span.lo.0)],
                     captures: vec![],
                     mutable_captures: vec![],
                     captures_this: false,
@@ -877,6 +877,7 @@ impl LoweringContext {
     pub(crate) fn synthesize_anon_shape_class(
         &mut self,
         field_shapes: &[(String, Type)],
+        byte_offset: u32,
     ) -> String {
         // Canonical shape key: each field as `name:tag` joined by ',' in source
         // order. Different declaration orders -> different classes (preserves
@@ -907,7 +908,7 @@ impl LoweringContext {
             shape_key.push_str(tag(ty));
             shape_key.push(',');
         }
-        self.mint_anon_shape_class(shape_key, field_shapes, 0)
+        self.mint_anon_shape_class(shape_key, field_shapes, 0, byte_offset)
     }
 
     /// #6812 (w16): mint a UNIQUE per-source-site 0-field anon-shape class
@@ -930,7 +931,7 @@ impl LoweringContext {
         width_hint: u32,
     ) -> String {
         let site_key = format!("@empty-site:{}:{}", self.baked_source_path(), byte_offset);
-        self.mint_anon_shape_class(site_key, &[], width_hint)
+        self.mint_anon_shape_class(site_key, &[], width_hint, byte_offset)
     }
 
     fn mint_anon_shape_class(
@@ -938,6 +939,9 @@ impl LoweringContext {
         shape_key: String,
         field_shapes: &[(String, Type)],
         alloc_width_hint: u32,
+        // Source offset of the construct that mints the class; its
+        // synthesized constructor stands there.
+        byte_offset: u32,
     ) -> String {
         // Field names in source order, so a call-site can recover a config
         // object's keys after the literal is lowered to `New { class_name }`.
@@ -1017,7 +1021,7 @@ impl LoweringContext {
                 byte_end: 0,
             }));
         }
-        let constructor = Function {
+        let constructor = Function { byte_offset: byte_offset,
             id: self.fresh_func(),
             name: "constructor".to_string(),
             type_params: Vec::new(),
