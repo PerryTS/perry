@@ -495,6 +495,11 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
                 }
             },
+            Expr::ObjectCoerce(val) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, val);
+                self.emit_memcall(func, "object_coerce", 1);
+            }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.
                 self.emit_frame_begin(func, 2);
