@@ -502,10 +502,14 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.
+                let (object, bridge) = match object.as_ref() {
+                    Expr::ObjectCoerce(inner) => (inner.as_ref(), "object_coerce_has_property"),
+                    other => (other, "object_has_property"),
+                };
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 1, property);
                 self.emit_store_arg(func, 0, object);
-                self.emit_memcall_i32(func, "object_has_property", 2);
+                self.emit_memcall_i32(func, bridge, 2);
                 // Convert i32 to NaN-boxed boolean
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
