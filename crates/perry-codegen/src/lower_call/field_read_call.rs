@@ -68,6 +68,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
         .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX));
     let index = if int32 {
         Expr::Binary {
+            byte_offset: *byte_offset,
             op: perry_hir::BinaryOp::BitOr,
             left: Box::new(index),
             right: Box::new(Expr::Integer(0)),

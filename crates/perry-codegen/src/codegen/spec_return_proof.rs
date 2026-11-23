@@ -296,7 +296,7 @@ fn infer_expr(
             }
             Some(ctx.functions.get(function_id)?.return_type.clone())
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             use perry_hir::BinaryOp;
             let left = infer_expr(ctx, locals, left, depth + 1)?;
             let right = infer_expr(ctx, locals, right, depth + 1)?;

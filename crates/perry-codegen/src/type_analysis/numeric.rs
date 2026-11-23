@@ -82,7 +82,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Nested bigint arithmetic — `(n * 10n) + d` must see the
         // inner `n * 10n` as bigint so the outer `+` routes through
         // the bigint dispatch instead of the float fallback.
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 BinaryOp::Add
@@ -308,7 +308,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             (is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right))
                 // CLS D2: Numbers and primitive-kind field reads (facts).
@@ -895,7 +895,7 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
         // A Number-returning `String.prototype` method on a proven string
         // lowers to a real double whose only NaN is the canonical quiet NaN
@@ -1198,7 +1198,7 @@ fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: boo
                 None
             }
         }
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             BinaryOp::Add | BinaryOp::Sub => {
                 let l = recurse(left)?;
                 let r = recurse(right)?;

@@ -89,12 +89,12 @@ pub(crate) fn catch_route_condition(
     };
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare {
+        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare {
+        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(upper as f64)),
@@ -118,12 +118,12 @@ pub(crate) fn finally_abrupt_condition(
     };
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare {
+        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare {
+        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_end_state as f64)),
@@ -182,7 +182,7 @@ pub(crate) fn build_completion_resume_stmts(
     );
     vec![
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -194,7 +194,7 @@ pub(crate) fn build_completion_resume_stmts(
             else_branch: None,
         },
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(2.0)),
@@ -461,7 +461,7 @@ pub(crate) fn finally_route_condition(
 ) -> Expr {
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare {
+        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: if inclusive_lower {
                 CompareOp::Ge
             } else {
@@ -470,7 +470,7 @@ pub(crate) fn finally_route_condition(
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare {
+        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.post_finally_state as f64)),
@@ -484,19 +484,19 @@ pub(crate) fn finally_route_condition(
 fn not_object_condition(result: Expr) -> Expr {
     Expr::Logical {
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare {
+        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(result.clone()),
             right: Box::new(Expr::Null),
         }),
         right: Box::new(Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare {
+            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result.clone()))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare {
+            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -560,12 +560,12 @@ pub(crate) fn build_yield_star_return_routes(
 
         let in_interval = Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare {
+            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare {
+            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -589,12 +589,12 @@ pub(crate) fn build_yield_star_return_routes(
         let mut no_method = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare {
+                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),
@@ -698,7 +698,7 @@ pub(crate) fn build_yield_star_return_routes(
                 else_branch,
             } = &mut no_method
             {
-                *condition = Expr::Compare {
+                *condition = Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(r_id)),
                     right: Box::new(Expr::Undefined),
@@ -813,12 +813,12 @@ pub(crate) fn build_yield_star_throw_routes(
 
         let in_interval = Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare {
+            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare {
+            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -862,12 +862,12 @@ pub(crate) fn build_yield_star_throw_routes(
         let close_inner = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::And,
-                left: Box::new(Expr::Compare {
+                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Null),
@@ -898,12 +898,12 @@ pub(crate) fn build_yield_star_throw_routes(
         let no_method = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare {
+                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),

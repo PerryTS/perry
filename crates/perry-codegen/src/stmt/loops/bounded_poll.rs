@@ -474,7 +474,7 @@ fn step_write<'a>(e: &'a Expr, id: u32) -> Option<Step<'a>> {
             UpdateOp::Decrement => Dir::Down,
         })),
         Expr::LocalSet(i, value) if *i == id => {
-            let Expr::Binary { op, left, right } = value.as_ref() else {
+            let Expr::Binary { op, left, right, .. } = value.as_ref() else {
                 return None;
             };
             let is_c = |x: &Expr| matches!(x, Expr::LocalGet(l) if *l == id);
@@ -745,7 +745,7 @@ fn guard_window(e: &Expr, id: u32) -> (i64, i64) {
             let (a, b) = (guard_window(left, id), guard_window(right, id));
             (a.0.max(b.0), a.1.min(b.1))
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             use perry_hir::CompareOp::{Ge, Gt, Le, Lt};
             // `c op bound`, or `bound op c` read from the other side.
             let (op, bound) = if is_c(left) {

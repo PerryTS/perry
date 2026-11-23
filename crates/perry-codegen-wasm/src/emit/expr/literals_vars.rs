@@ -189,7 +189,7 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 match op {
                     BinaryOp::Add => {
                         // Use js_add for dynamic dispatch (handles string+number etc.)
@@ -257,7 +257,7 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 self.emit_expr(func, left);
                 self.emit_expr(func, right);
                 // For strict equality on mixed types, use JS bridge

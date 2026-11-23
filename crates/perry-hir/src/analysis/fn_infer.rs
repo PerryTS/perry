@@ -409,7 +409,7 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
                 None => infer_expr_type(e, env),
             },
         },
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let l = ty_of(left, env, cx);
             let r = ty_of(right, env, cx);
             if matches!(l, Type::Never) || matches!(r, Type::Never) {
@@ -1519,7 +1519,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                     }
                 }
             }
-            Expr::Compare { op, left, right }
+            Expr::Compare { op, left, right, .. }
                 if matches!(
                     op,
                     CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
@@ -1547,7 +1547,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                     calls.push((fid, args.iter().map(|a| ty_of(a, &env, cx)).collect()));
                 }
             }
-            Expr::Binary { op, left, right } if !matches!(op, BinaryOp::Add) => {
+            Expr::Binary { op, left, right, .. } if !matches!(op, BinaryOp::Add) => {
                 for side in [left, right] {
                     if let Expr::LocalGet(id) = side.as_ref() {
                         hint_v.push((*id, Type::Number));
@@ -1717,7 +1717,7 @@ fn unit_stats(cx: &Ctx<'_>, st: &State, ui: usize) -> FnStats {
         }
         let operands = match e {
             Expr::Binary { left, right, .. } => Some((left, right)),
-            Expr::Compare { op, left, right }
+            Expr::Compare { op, left, right, .. }
                 if matches!(
                     op,
                     CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge

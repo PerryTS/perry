@@ -53,7 +53,7 @@ fn versioned_loop_value_expr(
         perry_hir::Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             versioned_loop_value_expr(left, param_ids, capture_ids)
                 && versioned_loop_value_expr(right, param_ids, capture_ids)

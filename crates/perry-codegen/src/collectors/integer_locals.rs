@@ -112,7 +112,7 @@ pub(crate) fn static_index_window(e: &perry_hir::Expr) -> Option<(i64, i64)> {
     if let Some(n) = int_constant(e) {
         return Some((n, n));
     }
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary { op, left, right, .. } = e else {
         return None;
     };
     match op {
@@ -991,7 +991,7 @@ fn int32_producing_deps(
                 false
             }
         }
-        Expr::Binary { op, left, right }
+        Expr::Binary { op, left, right, .. }
             if matches!(
                 op,
                 BinaryOp::BitAnd
@@ -1354,7 +1354,7 @@ pub fn is_int32_producing_expr(
         {
             true
         }
-        Expr::Binary { op, left, right }
+        Expr::Binary { op, left, right, .. }
             if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
         {
             is_int32_producing_expr(

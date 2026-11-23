@@ -108,7 +108,7 @@ impl NotBigIntFacts {
                     | BinaryOp::Shl
                     | BinaryOp::Shr,
                 left,
-                right,
+                right, ..
             } => self.expr_is_not_bigint(left) || self.expr_is_not_bigint(right),
             Expr::Unary {
                 op: UnaryOp::BitNot,

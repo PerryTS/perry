@@ -751,7 +751,7 @@ pub(crate) fn try_fold_bound_agg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<Str
             let Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right,
+                right, ..
             } = condition.as_ref()
             else {
                 return None;

@@ -109,7 +109,7 @@ fn match_candidate(
         Expr::Compare {
             op: CompareOp::Lt,
             left,
-            right,
+            right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match right.as_ref() {
                 Expr::LocalGet(id) => *id,

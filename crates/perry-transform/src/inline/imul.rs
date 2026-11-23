@@ -57,7 +57,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
         Expr::Binary {
             op: BinaryOp::BitAnd,
             left,
-            right,
+            right, ..
         } => {
             if !matches!(right.as_ref(), Expr::Integer(0xffff)) {
                 return None;
@@ -66,7 +66,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
                 Expr::Binary {
                     op: BinaryOp::UShr | BinaryOp::Shr,
                     left: inner,
-                    right: shift_amt,
+                    right: shift_amt, ..
                 } => {
                     if !matches!(shift_amt.as_ref(), Expr::Integer(16)) {
                         return None;

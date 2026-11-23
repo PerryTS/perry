@@ -42,7 +42,7 @@ fn shape(
     let Some(Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right,
+        right, ..
     }) = condition
     else {
         return None;

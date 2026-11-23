@@ -902,7 +902,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
-            right,
+            right, ..
         } if matches!(
             (left.as_ref(), right.as_ref()),
             (Expr::Bool(_), Expr::PropertyGet { .. }) | (Expr::PropertyGet { .. }, Expr::Bool(_))
@@ -971,7 +971,7 @@ fn implied<'p>(
         // only when it is that object (7.2.15 step 1, 7.2.16 step 2). The
         // global's other values let every value through
         // (`guard::NOT_OBJECT_CTOR`).
-        Expr::Compare { op, left, right } if object_prototype(left) || object_prototype(right) => {
+        Expr::Compare { op, left, right, .. } if object_prototype(left) || object_prototype(right) => {
             let x = if object_prototype(right) { left } else { right };
             let holds = matches!(
                 (op, positive),
@@ -993,7 +993,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
-            right,
+            right, ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && match (left.as_ref(), right.as_ref()) {
                 (Expr::PropertyGet { .. }, l) | (l, Expr::PropertyGet { .. }) => {
@@ -1044,7 +1044,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
-            right,
+            right, ..
         } if typeof_unbound_global(left, right).is_some() => {
             use crate::model::guard;
             let Some(name) = typeof_unbound_global(left, right) else {
@@ -1064,7 +1064,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
-            right,
+            right, ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && typeof_member_test(left, right).is_some() =>
         {
@@ -1087,7 +1087,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
-            right,
+            right, ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && typeof_local_mask(left, right).is_some() =>
         {
@@ -1111,7 +1111,7 @@ fn implied<'p>(
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe),
             left,
-            right,
+            right, ..
         } if (matches!(op, CompareOp::Ne | CompareOp::LooseNe) == positive)
             && matches!(
                 (left.as_ref(), right.as_ref()),
@@ -1152,7 +1152,7 @@ fn implied<'p>(
         // `undefined`. Rule T1: `local === null` false, `!==` true: not
         // `null` (7.2.16: only `null` is strictly equal to `null`;
         // `undefined` passes). `!= null` excludes both (7.2.15 steps 2-3).
-        Expr::Compare { op, left, right }
+        Expr::Compare { op, left, right, .. }
             if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
                 || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
         {
@@ -1176,7 +1176,7 @@ fn implied<'p>(
                 out.push(Implied::Present(id, p));
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             // The clip of `local OP bound`, `OP` read for a true comparison.
             let k = |op: &CompareOp, positive: bool| -> Option<u8> {
                 Some(match (op, positive) {
@@ -1404,7 +1404,7 @@ fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
             },
             _ => None,
         },
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let op = match op {
                 BinaryOp::Add => RangeOp::Add,
                 BinaryOp::Sub => RangeOp::Sub,
@@ -1735,7 +1735,7 @@ impl<'a> Gen<'a> {
         let Some(lit) = cases[i].test.as_ref() else {
             return 0;
         };
-        let cond = Expr::Compare {
+        let cond = Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(disc.clone()),
             right: Box::new(lit.clone()),

@@ -215,7 +215,7 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
     let Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right,
+        right, ..
     } = condition
     else {
         return None;

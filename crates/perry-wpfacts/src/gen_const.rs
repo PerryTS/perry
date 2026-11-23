@@ -48,7 +48,7 @@ impl<'a> Gen<'a> {
                 op: UnaryOp::Not,
                 operand,
             } => Const::Bool(!self.const_eval(mi, operand)?.truthy()),
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let l = self.const_eval(mi, left)?;
                 let r = self.const_eval(mi, right)?;
                 Const::Bool(compare(*op, &l, &r)?)

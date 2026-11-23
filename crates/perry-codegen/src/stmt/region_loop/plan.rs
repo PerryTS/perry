@@ -48,7 +48,7 @@ pub(super) fn fact_tree_leaves<'e>(
         if let Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } = e
         {
             leaves(left, out);
@@ -162,7 +162,7 @@ fn condition_number_locals(e: &Expr, out: &mut HashSet<u32>) {
         Expr::Compare {
             op: CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge,
             left,
-            right,
+            right, ..
         } => {
             number_operand_locals(left, out);
             number_operand_locals(right, out);
@@ -192,7 +192,7 @@ pub(super) fn prim(e: &Expr) -> bool {
         | Expr::Undefined
         | Expr::Null
         | Expr::TypeOf(_) => true,
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             !matches!(op, BinaryOp::Add) || (prim(left) && prim(right))
         }
         Expr::Compare { .. } => true,
@@ -535,7 +535,7 @@ impl Planner<'_, '_> {
                 }
                 st
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 if self.record
                     && matches!(
                         op,

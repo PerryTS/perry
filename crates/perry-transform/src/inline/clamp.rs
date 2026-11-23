@@ -10,7 +10,7 @@ pub fn is_clamp3(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Lt,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,
@@ -34,7 +34,7 @@ pub fn is_clamp3(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Gt,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,
@@ -67,7 +67,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Lt,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,
@@ -92,7 +92,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Gt,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,

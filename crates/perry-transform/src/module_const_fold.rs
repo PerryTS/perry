@@ -176,7 +176,7 @@ fn known_string(expr: &Expr, known: &HashMap<LocalId, String>) -> Option<String>
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             let mut text = known_string(left, known)?;
             text.push_str(&known_string(right, known)?);

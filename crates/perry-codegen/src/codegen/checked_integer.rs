@@ -31,7 +31,7 @@ fn expr_ok(e: &Expr, f: &Function, recursive: &mut bool) -> bool {
         Expr::Binary {
             op: BinaryOp::Add | BinaryOp::Sub,
             left,
-            right,
+            right, ..
         } => expr_ok(left, f, recursive) && expr_ok(right, f, recursive),
         Expr::Conditional {
             condition,
@@ -168,7 +168,7 @@ impl Lowerer<'_> {
             Expr::Integer(n) => n.to_string(),
             Expr::Number(n) => (*n as i64).to_string(),
             Expr::LocalGet(id) => self.values[id].clone(),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 let a = self.expr(left);
                 let b = self.expr(right);
                 let v = match op {
@@ -178,7 +178,7 @@ impl Lowerer<'_> {
                 };
                 v
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let a = self.expr(left);
                 let b = self.expr(right);
                 match op {

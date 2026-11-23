@@ -671,7 +671,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if let Expr::Binary {
                     op: BinaryOp::Add,
                     left,
-                    right,
+                    right, ..
                 } = value.as_ref()
                 {
                     if let Expr::LocalGet(left_id) = left.as_ref() {

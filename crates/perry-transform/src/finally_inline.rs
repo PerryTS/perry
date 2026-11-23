@@ -209,7 +209,7 @@ pub fn inline_finally_into_returns(module: &mut Module) {
 // Keep that constructor evidence in the condition rather than asking codegen
 // to trust a user binding's erased Boolean annotation.
 fn exited_test(id: LocalId) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Bool(true)),

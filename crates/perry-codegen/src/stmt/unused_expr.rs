@@ -93,7 +93,7 @@ fn unused_expr_is_pure_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> b
             crate::type_analysis::is_numeric_expr(ctx, operand)
                 && unused_expr_is_pure_nonthrowing(ctx, operand)
         }
-        perry_hir::Expr::Binary { op, left, right } => {
+        perry_hir::Expr::Binary { op, left, right, .. } => {
             unused_binary_is_pure_nonthrowing(ctx, op, left, right)
                 && unused_expr_is_pure_nonthrowing(ctx, left)
                 && unused_expr_is_pure_nonthrowing(ctx, right)

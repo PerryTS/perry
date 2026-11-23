@@ -94,7 +94,7 @@ pub(crate) fn counter_step(update: &Expr, counter_id: u32) -> Option<CounterStep
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right,
+                right, ..
             } => match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(l), _) if *l == counter_id => Some(CounterStep::Add(right)),
                 (_, Expr::LocalGet(r)) if *r == counter_id => Some(CounterStep::Add(left)),
@@ -126,7 +126,7 @@ fn is_nonnegative_integer_valued<F: CounterRangeFacts + ?Sized>(facts: &F, expr:
         Expr::Binary {
             op: BinaryOp::Add | BinaryOp::Mul,
             left,
-            right,
+            right, ..
         } => {
             is_nonnegative_integer_valued(facts, left)
                 && is_nonnegative_integer_valued(facts, right)
@@ -183,7 +183,7 @@ pub(crate) fn classify_for_counter_range<F: CounterRangeFacts + ?Sized>(
         _ => return None,
     };
     let cond = cond?;
-    let Expr::Compare { op, left, right } = cond else {
+    let Expr::Compare { op, left, right, .. } = cond else {
         return None;
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {

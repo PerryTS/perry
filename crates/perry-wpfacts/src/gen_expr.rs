@@ -172,7 +172,7 @@ impl<'a> Gen<'a> {
     /// anything else tests its own value's truthiness.
     pub(crate) fn guard_test(&mut self, fx: &Fx, condition: &Expr) -> (NodeId, u8, u8) {
         use crate::model::guard::*;
-        if let Expr::Compare { op, left, right } = condition {
+        if let Expr::Compare { op, left, right, .. } = condition {
             let (operand, nil) = match (left.as_ref(), right.as_ref()) {
                 (x, Expr::Undefined) | (Expr::Undefined, x) => (Some(x), Expr::Undefined),
                 (x, Expr::Null) | (Expr::Null, x) => (Some(x), Expr::Null),
@@ -1048,7 +1048,7 @@ impl<'a> Gen<'a> {
                 self.narrowed_write(mi, *id, out);
                 out
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
@@ -1174,7 +1174,7 @@ impl<'a> Gen<'a> {
                     out
                 }
             },
-            Expr::Compare { op, left, right } => self.compare_expr(fx, op, left, right),
+            Expr::Compare { op, left, right, .. } => self.compare_expr(fx, op, left, right),
             Expr::Logical { op, left, right } => {
                 let plan = match op {
                     LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),

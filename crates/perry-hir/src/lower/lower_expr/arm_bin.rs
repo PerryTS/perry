@@ -245,75 +245,75 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                     return Ok(Expr::String(folded));
                 }
             }
-            Ok(Expr::Binary {
+            Ok(Expr::Binary { byte_offset: bin.span.lo.0,
                 op: BinaryOp::Add,
                 left,
                 right,
             })
         }
-        ast::BinaryOp::Sub => Ok(Expr::Binary {
+        ast::BinaryOp::Sub => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Sub,
             left,
             right,
         }),
-        ast::BinaryOp::Mul => Ok(Expr::Binary {
+        ast::BinaryOp::Mul => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Mul,
             left,
             right,
         }),
-        ast::BinaryOp::Div => Ok(Expr::Binary {
+        ast::BinaryOp::Div => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Div,
             left,
             right,
         }),
-        ast::BinaryOp::Mod => Ok(Expr::Binary {
+        ast::BinaryOp::Mod => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Mod,
             left,
             right,
         }),
-        ast::BinaryOp::Exp => Ok(Expr::Binary {
+        ast::BinaryOp::Exp => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Pow,
             left,
             right,
         }),
 
         // Comparison (treat == same as === for typed code)
-        ast::BinaryOp::EqEq => Ok(Expr::Compare {
+        ast::BinaryOp::EqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::LooseEq,
             left,
             right,
         }),
-        ast::BinaryOp::EqEqEq => Ok(Expr::Compare {
+        ast::BinaryOp::EqEqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Eq,
             left,
             right,
         }),
-        ast::BinaryOp::NotEq => Ok(Expr::Compare {
+        ast::BinaryOp::NotEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::LooseNe,
             left,
             right,
         }),
-        ast::BinaryOp::NotEqEq => Ok(Expr::Compare {
+        ast::BinaryOp::NotEqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Ne,
             left,
             right,
         }),
-        ast::BinaryOp::Lt => Ok(Expr::Compare {
+        ast::BinaryOp::Lt => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Lt,
             left,
             right,
         }),
-        ast::BinaryOp::LtEq => Ok(Expr::Compare {
+        ast::BinaryOp::LtEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Le,
             left,
             right,
         }),
-        ast::BinaryOp::Gt => Ok(Expr::Compare {
+        ast::BinaryOp::Gt => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Gt,
             left,
             right,
         }),
-        ast::BinaryOp::GtEq => Ok(Expr::Compare {
+        ast::BinaryOp::GtEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
             op: CompareOp::Ge,
             left,
             right,
@@ -337,32 +337,32 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         }),
 
         // Bitwise
-        ast::BinaryOp::BitAnd => Ok(Expr::Binary {
+        ast::BinaryOp::BitAnd => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::BitAnd,
             left,
             right,
         }),
-        ast::BinaryOp::BitOr => Ok(Expr::Binary {
+        ast::BinaryOp::BitOr => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::BitOr,
             left,
             right,
         }),
-        ast::BinaryOp::BitXor => Ok(Expr::Binary {
+        ast::BinaryOp::BitXor => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::BitXor,
             left,
             right,
         }),
-        ast::BinaryOp::LShift => Ok(Expr::Binary {
+        ast::BinaryOp::LShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Shl,
             left,
             right,
         }),
-        ast::BinaryOp::RShift => Ok(Expr::Binary {
+        ast::BinaryOp::RShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::Shr,
             left,
             right,
         }),
-        ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary {
+        ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
             op: BinaryOp::UShr,
             left,
             right,

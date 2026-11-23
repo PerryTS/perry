@@ -834,7 +834,7 @@ pub(super) fn try_module_static_methods(
                                 let mut acc =
                                     Expr::StringFromCharCode(Box::new(iter.next().unwrap()));
                                 for arg in iter {
-                                    acc = Expr::Binary {
+                                    acc = Expr::Binary { byte_offset: call.span.lo.0,
                                         op: crate::ir::BinaryOp::Add,
                                         left: Box::new(acc),
                                         right: Box::new(Expr::StringFromCharCode(Box::new(arg))),
@@ -857,7 +857,7 @@ pub(super) fn try_module_static_methods(
                                 let mut acc =
                                     Expr::StringFromCodePoint(Box::new(iter.next().unwrap()));
                                 for arg in iter {
-                                    acc = Expr::Binary {
+                                    acc = Expr::Binary { byte_offset: call.span.lo.0,
                                         op: crate::ir::BinaryOp::Add,
                                         left: Box::new(acc),
                                         right: Box::new(Expr::StringFromCodePoint(Box::new(arg))),

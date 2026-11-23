@@ -1460,7 +1460,7 @@ impl Census<'_> {
                     self.call_site = saved;
                 }
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let address = match op {
                     CompareOp::Eq | CompareOp::Ne => true,
                     CompareOp::LooseEq | CompareOp::LooseNe => {

@@ -405,12 +405,12 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
             },
             LogicalOp::Coalesce => Expr::Logical {
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare {
+                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Null),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Undefined),

@@ -105,7 +105,7 @@ impl ArraySource {
                 init: Some(Expr::Undefined),
             },
             Stmt::If {
-                condition: Expr::Compare {
+                condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(done)),
                     right: Box::new(Expr::Bool(true)),

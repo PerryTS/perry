@@ -82,7 +82,7 @@ fn reads(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe,
             left,
-            right,
+            right, ..
         } if (matches!(left.as_ref(), Expr::LocalGet(l) if *l == id)
             && matches!(right.as_ref(), Expr::Null))
             || (matches!(right.as_ref(), Expr::LocalGet(l) if *l == id)

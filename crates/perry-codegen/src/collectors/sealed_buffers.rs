@@ -803,7 +803,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => key_never_string_shape(left, deps) && key_never_string_shape(right, deps),
         Expr::Binary { .. } | Expr::Unary { .. } | Expr::Compare { .. } | Expr::Update { .. } => {
             true

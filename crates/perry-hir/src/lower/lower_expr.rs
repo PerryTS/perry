@@ -394,7 +394,7 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
 
                 for (i, expr) in tpl.exprs.iter().enumerate() {
                     let lowered = lower_expr(ctx, expr)?;
-                    result = Expr::Binary {
+                    result = Expr::Binary { byte_offset: tagged.span.lo.0,
                         op: BinaryOp::Add,
                         left: Box::new(result),
                         right: Box::new(lowered),
@@ -403,7 +403,7 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
                     if let Some(quasi) = tpl.quasis.get(i + 1) {
                         let quasi_str: &str = quasi.raw.as_ref();
                         if !quasi_str.is_empty() {
-                            result = Expr::Binary {
+                            result = Expr::Binary { byte_offset: tagged.span.lo.0,
                                 op: BinaryOp::Add,
                                 left: Box::new(result),
                                 right: Box::new(Expr::String(quasi_str.to_string())),

@@ -35,7 +35,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Operations
-        Expr::Binary { op, left, right } => Expr::Binary {
+        Expr::Binary { op, left, right, byte_offset } => Expr::Binary { byte_offset: *byte_offset,
             op: *op,
             left: Box::new(substitute_expr(left, substitutions)),
             right: Box::new(substitute_expr(right, substitutions)),
@@ -44,7 +44,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             op: *op,
             operand: Box::new(substitute_expr(operand, substitutions)),
         },
-        Expr::Compare { op, left, right } => Expr::Compare {
+        Expr::Compare { op, left, right, byte_offset } => Expr::Compare { byte_offset: *byte_offset,
             op: *op,
             left: Box::new(substitute_expr(left, substitutions)),
             right: Box::new(substitute_expr(right, substitutions)),

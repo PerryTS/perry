@@ -109,7 +109,7 @@ fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => basis(ctx, left, depth - 1).max(basis(ctx, right, depth - 1)),
         Expr::Conditional {
             then_expr,

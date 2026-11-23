@@ -189,7 +189,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right,
+        right, ..
     } = expr
     {
         if let Expr::NativeMethodCall {
@@ -210,12 +210,12 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 lower_expr(ctx, &args[4])?;
                 let predicate = Expr::Conditional {
                     condition: Box::new(args[0].clone()),
-                    then_expr: Box::new(Expr::Compare {
+                    then_expr: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: perry_hir::CompareOp::Eq,
                         left: Box::new(args[3].clone()),
                         right: Box::new(Expr::Bool(false)),
                     }),
-                    else_expr: Box::new(Expr::Compare {
+                    else_expr: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: perry_hir::CompareOp::Lt,
                         left: left.clone(),
                         right: Box::new(args[1].clone()),
@@ -233,7 +233,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
     // An integer product, sum or difference the intervals bound is compared
     // as integers.
-    if let Expr::Compare { op, left, right } = expr {
+    if let Expr::Compare { op, left, right, .. } = expr {
         if let Some(bit) = crate::expr::int_product::try_lower_compare(ctx, *op, left, right)? {
             return Ok(bit);
         }

@@ -116,7 +116,7 @@ fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             guarded_numeric_add_push_candidate(ctx, left)
                 && guarded_numeric_add_push_candidate(ctx, right)

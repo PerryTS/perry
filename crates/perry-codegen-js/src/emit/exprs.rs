@@ -15,7 +15,7 @@ impl JsEmitter {
             return false;
         };
         if !matches!(then_expr.as_ref(), Expr::Undefined)
-            || !matches!(condition.as_ref(), Expr::Compare { op: CompareOp::LooseEq, left, right } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id) && matches!(right.as_ref(), Expr::Null))
+            || !matches!(condition.as_ref(), Expr::Compare { op: CompareOp::LooseEq, left, right, .. } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id) && matches!(right.as_ref(), Expr::Null))
         {
             return false;
         }
@@ -176,7 +176,7 @@ impl JsEmitter {
             }
 
             // --- Binary operations ---
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {
@@ -209,7 +209,7 @@ impl JsEmitter {
             }
 
             // --- Comparison ---
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {

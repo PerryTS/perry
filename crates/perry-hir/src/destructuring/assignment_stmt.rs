@@ -255,7 +255,7 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -287,7 +287,7 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare {
+        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),

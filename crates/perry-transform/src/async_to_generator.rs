@@ -1169,7 +1169,7 @@ fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
                 operand: Box::new(Expr::LocalGet(temp_id)),
             },
             LogicalOp::And => Expr::LocalGet(temp_id),
-            LogicalOp::Coalesce => Expr::Compare {
+            LogicalOp::Coalesce => Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(temp_id)),
                 right: Box::new(Expr::Null),

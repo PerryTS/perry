@@ -202,7 +202,7 @@ fn loop_range(
     let Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right,
+        right, ..
     } = condition
     else {
         return None;
@@ -239,7 +239,7 @@ fn loop_range(
             ..
         } => i == id,
         Expr::LocalSet(i, value) if i == id => matches!(value.as_ref(),
-            Expr::Binary { op: BinaryOp::Add, left, right }
+            Expr::Binary { op: BinaryOp::Add, left, right, .. }
                 if matches!(left.as_ref(), Expr::LocalGet(i) if i == id) && integer(right) == Some(1)),
         _ => false,
     };
@@ -434,7 +434,7 @@ fn lookup(values: &[Expr], base: i64, index: LocalId) -> Expr {
     }
     let middle = values.len() / 2;
     Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(index)),
             right: Box::new(Expr::Integer(base + middle as i64)),
