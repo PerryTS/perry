@@ -572,7 +572,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
-            // DESIGN-p4l4 VR-3b: a record `$sig` returns its result lanes.
+            // VR-3b: a record `$sig` returns its result lanes.
             if let Some(r) = ctx.sig_record_return {
                 return crate::codegen::record_sig::lower_return(ctx, r, Some(e));
             }
@@ -631,7 +631,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                 ctx.block().br(&target.after_label);
                 return Ok(());
             }
-            // DESIGN-p4l4 VR-3b: `return;` of a record `$sig` is the absent
+            // VR-3b: `return;` of a record `$sig` is the absent
             // record.
             if let Some(r) = ctx.sig_record_return {
                 return crate::codegen::record_sig::lower_return(ctx, r, None);

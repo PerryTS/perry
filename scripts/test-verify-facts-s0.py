@@ -327,7 +327,7 @@ def main():
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
 
-    # Value records (DESIGN-p4l4 §10.3, VR-2): check mode keeps records on and
+    # Value records (VR-2): check mode keeps records on and
     # claims every instance of an admitted template at birth; the facts say
     # its identity is never compared, so a compiled identity compare that
     # sees a claimed operand reports "value record identity".
@@ -360,7 +360,7 @@ def main():
                 assert observed.returncode == 0 and observed.stdout == oracle(source), observed
             save(arm, status=observed.returncode)
 
-    # P3 B1 (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): this arm sabotages the
+    # P3 B1 (REVIEW-p3 D4): this arm sabotages the
     # RUNTIME, not the facts. `js_math_round` built with
     # PERRY_FACTS_SABOTAGE=canonnum returns an INT32-boxed word, and the
     # canonical-number witness must report it with rc 86 exactly.

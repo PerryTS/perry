@@ -1,4 +1,4 @@
-//! P2 (DESIGN-p2-typed-signatures rev 2.1): one representation-typed
+//! P2: one representation-typed
 //! signature per function, and the call sites that use it.
 //!
 //! `Signature` is a per-function view of the one representation fact
@@ -69,7 +69,7 @@ impl Signature {
             && self.params.iter().all(|r| r.encoding() == Enc::Boxed)
     }
 
-    /// A parameter or the result is a value record (DESIGN-p4l4 §5.2).
+    /// A parameter or the result is a value record.
     pub fn has_record(&self) -> bool {
         self.params
             .iter()
@@ -215,7 +215,7 @@ pub(crate) fn collect(
             });
             params.push(rep);
         }
-        // DESIGN-p4l4 VR-3b: a Record slot exists only with record
+        // VR-3b: a Record slot exists only with record
         // signatures on.
         if !m.record_signatures {
             for p in &mut params {
@@ -249,7 +249,7 @@ pub(crate) fn collect(
     }
     // Typed call sites (§2, E3).
     let targets = call_targets(g, sites);
-    // DESIGN-p4l4 VR-3b: a Record slot is the callee's ABI, so every call
+    // VR-3b: a Record slot is the callee's ABI, so every call
     // that enters the body by a source call site must be one of its typed
     // calls, in the body's own module (codegen's typed calls are
     // same-module). A function with a site that is not keeps its Record
@@ -542,7 +542,7 @@ fn refusal(
     };
     sig.params.iter().enumerate().find_map(|(i, &rep)| {
         // A Record slot's arguments are the parameter node's own values:
-        // tokens of its one template (and `undefined`), DESIGN-p4l4 §1.1.
+        // tokens of its one template (and `undefined`).
         if matches!(rep.encoding(), Enc::Boxed | Enc::Record) {
             return None;
         }

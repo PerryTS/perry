@@ -232,7 +232,7 @@ pub enum FactsElemRep {
     I32,
 }
 
-/// wpfacts `RecRep` (DESIGN-p4l4 §1.1): the admitted template, and whether
+/// wpfacts `RecRep`: the admitted template, and whether
 /// `undefined` is among the values (`opt`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FactsRecRep {
@@ -256,7 +256,7 @@ pub struct FactsRecordLayout {
     pub int32: Vec<bool>,
 }
 
-/// DESIGN-p4l4 VR-3b: the locals that hold a record's lanes (`value_records`):
+/// VR-3b: the locals that hold a record's lanes (`value_records`):
 /// the presence local when the record may be absent, and one local per
 /// layout key.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -394,7 +394,7 @@ pub struct ElisionFacts {
     /// admits `-0` for them only.
     pub zero_tolerant_fields: std::collections::BTreeSet<(u32, String)>,
     /// Local id → the representation the whole-program facts give it
-    /// (representation RFC §10.3, wpfacts `BindingFacts::rep`). A local the
+    /// (`internals/representation.md` §3, wpfacts `BindingFacts::rep`). A local the
     /// facts cover takes exactly this one; codegen does not choose.
     pub local_reps: std::collections::BTreeMap<u32, FactsRep>,
     /// The `int32_inputs` whose interval is non-negative.
@@ -466,13 +466,13 @@ pub struct ElisionFacts {
     /// `undefined` or `null` into (wpfacts `FieldFacts::nullish_booleans`).
     pub nullish_boolean_fields: std::collections::BTreeSet<(u32, String)>,
     /// Class ids of the literal-shape classes whose template the facts admit
-    /// as a value record (DESIGN-p4l4 VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
+    /// as a value record (VR-2, `PERRY_FACTS_VALUE_RECORDS=1`):
     /// check mode claims their instances at birth and witnesses every
     /// compiled identity comparison (`expr/record_witness.rs`). Empty with
     /// the switch off.
     pub record_classes: std::collections::BTreeSet<u32>,
     /// Local id → the value record it holds (wpfacts `Rep::Record` of the
-    /// binding, DESIGN-p4l4 VR-3a): its fields by value (`value_records`).
+    /// binding, VR-3a): its fields by value (`value_records`).
     /// Empty with `PERRY_FACTS_VALUE_RECORDS` off.
     pub record_locals: std::collections::BTreeMap<u32, FactsRecRep>,
     /// Template id → the layout of an admitted value record that some
@@ -521,10 +521,10 @@ pub struct ElisionFacts {
     /// receiver (wpfacts `ModuleBindings::field_read_calls`, b1).
     pub field_read_calls: std::collections::BTreeMap<u32, FactsFieldReadCall>,
     /// P2: typed signatures by HIR function id (wpfacts
-    /// `ModuleBindings::signatures`, DESIGN-p2 §1).
+    /// `ModuleBindings::signatures`).
     pub signatures: std::collections::BTreeMap<u32, FactsSignature>,
     /// P2: call byte offset -> the one same-module body (HIR function id) a
-    /// typed entry serves (wpfacts `typed_calls`, DESIGN-p2 §2).
+    /// typed entry serves (wpfacts `typed_calls`).
     pub typed_calls: std::collections::BTreeMap<u32, u32>,
     /// Element reads (by `element_offset`) whose value the facts prove a
     /// plain Number; `true` when it may also be `undefined` (wpfacts
@@ -813,7 +813,7 @@ pub(crate) fn emit_contract_section(llmod: &mut LlModule, module_prefix: &str, b
 /// operation of the program ever changes.
 /// b1: a method call proven to be `this.field[arg] ?? default` on its
 /// receiver, which can neither throw nor run user code (wpfacts
-/// P2: a function's typed signature (wpfacts `Signature`, DESIGN-p2 §1).
+/// P2: a function's typed signature (wpfacts `Signature`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FactsSignature {
     pub params: Vec<FactsRep>,
@@ -825,7 +825,7 @@ pub struct FactsSignature {
     /// −0 tolerance (wpfacts PR D): an I32 parameter may receive `-0` (no
     /// use observes it); the check-mode entry witness admits it.
     pub zero_ok: bool,
-    /// DESIGN-p4l4 VR-3b: per parameter, the value record it is (wpfacts
+    /// VR-3b: per parameter, the value record it is (wpfacts
     /// `Rep::Record`, its layout in `ElisionFacts::record_layouts`); such a
     /// slot's `params` entry is Boxed. Empty when no parameter is one.
     pub record_params: Vec<Option<FactsRecRep>>,

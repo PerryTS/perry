@@ -1,4 +1,4 @@
-// VR-4b S0 arm `vrarrjoin` (DESIGN-p4l4 §10.3, finding 1): one body over a
+// VR-4b S0 arm `vrarrjoin` (finding 1): one body over a
 // record array and over a Number array. Correct: R6Join rejects the record
 // (a holder of a record array holds nothing else), which stays a heap
 // object in an ordinary Array. Sabotaged (the join ignored): `len`'s

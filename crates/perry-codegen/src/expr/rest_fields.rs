@@ -1,4 +1,4 @@
-//! I32 at rest, PR C (representation RFC §10.7; DESIGN-n1-at-rest §4, §6):
+//! I32 at rest, PR C (`internals/representation.md` §7):
 //! the I32 field lanes of a class and every site of their keys.
 //!
 //! wpfacts (`rest_fields`) admits a class's I32-rep fields (`FactsField::rest`)

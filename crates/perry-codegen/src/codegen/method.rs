@@ -296,7 +296,7 @@ pub(super) fn compile_method(
         && !generator_owner
         && super::index_entry::raw_i32_enabled();
     let raw_index_param_ids: HashSet<u32> = match sig {
-        // P2: `M$sig`'s I32 registers are raw i32 (DESIGN-p2 §3.1).
+        // P2: `M$sig`'s I32 registers are raw i32.
         Some(tm) => super::signature_entry::raw_i32_params(method, &tm.plan),
         None => nonnegative_index_params
             .filter(|_| raw_index_entry)
@@ -339,7 +339,7 @@ pub(super) fn compile_method(
         llvm_name
     };
     let sig_return = sig.and_then(|tm| tm.plan.signature.as_ref()).map(|s| s.ret);
-    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // VR-3b: a record result is written to the caller's result
     // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
     let sig_record_return = sig
         .and_then(|tm| tm.plan.record.as_ref())

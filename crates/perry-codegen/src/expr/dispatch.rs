@@ -80,7 +80,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // chain guard entirely. An own property still beats the builtin, so the
     // same diamond is applied here, at the one place every folded node
     // passes through.
-    // DESIGN-p4l4 VR-3b: a record result of a typed call is bound to its
+    // VR-3b: a record result of a typed call is bound to its
     // lanes (`record_sig`).
     if let Some(value) = crate::codegen::record_sig::try_fold_bound_agg(ctx, expr) {
         return Ok(value);

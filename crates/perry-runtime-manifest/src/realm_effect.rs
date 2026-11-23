@@ -211,7 +211,7 @@ pub enum RealmEffect {
     Returns(RealmOperand),
     /// Compares the slot's values by identity (SameValue, SameValueZero,
     /// IsStrictlyEqual, a Map hash of an object): the program could tell a
-    /// copy from the original there (DESIGN-p4l4 §2.2). Reads nothing,
+    /// copy from the original there. Reads nothing,
     /// keeps nothing.
     Identity(RealmSlot),
     /// Unknown code: today's handling, named.

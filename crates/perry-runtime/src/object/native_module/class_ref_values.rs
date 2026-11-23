@@ -28,7 +28,7 @@ pub(crate) fn class_constructor_key_bits(class_id: u32) -> u64 {
 /// A class method's home word: the capture-0 marker of a method declaration
 /// value (`class_method_declaration_value_bytes`) naming the class whose
 /// prototype is the method's `[[HomeObject]]`. Runtime-internal, in the 0x7FFE
-/// space (DESIGN-p3 §1.2, R4): only `js_class_method_home` and
+/// space (R4): only `js_class_method_home` and
 /// `class_method_value_target` read it, and it is never a JS value.
 pub(crate) fn class_method_home_word(class_id: u32) -> f64 {
     f64::from_bits(

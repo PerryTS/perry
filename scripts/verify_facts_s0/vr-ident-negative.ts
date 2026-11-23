@@ -1,4 +1,4 @@
-// VR-2 S0 arm `vrident` (DESIGN-p4l4 §10.3): two records from one site are
+// VR-2 S0 arm `vrident`: two records from one site are
 // compared by identity. Correct: the template is rejected (R4Identity) and
 // nothing is claimed. Sabotaged (`===` ignored): it is admitted, its
 // instances are claimed at birth, and the compiled `===` aborts with 86.

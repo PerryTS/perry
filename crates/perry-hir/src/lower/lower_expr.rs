@@ -117,7 +117,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             _ => {}
         }
     }
-    // E3 (DESIGN-p2, CWN 11-09): a call's and a member's span end, with its
+    // E3 (CWN 11-09): a call's and a member's span end, with its
     // offset, names the source call every copy of it (an inlined body, a
     // for…of arm) shares. Stable hashing ignores it.
     if let Ok(value) = &mut result {

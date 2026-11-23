@@ -183,7 +183,7 @@ pub struct TemplateFacts {
     pub sabotaged: bool,
     /// Class ids of the parent chain (leaf's parent first).
     pub ancestors: Vec<u32>,
-    /// Value records (DESIGN-p4l4 §2, `records`): the template's instances
+    /// Value records (`records`): the template's instances
     /// are their fields by value, or the reason they are heap objects.
     /// `Off` unless `PERRY_FACTS_VALUE_RECORDS=1`.
     pub record: Result<crate::records::RecordLayout, crate::records::Rejected>,
@@ -1373,7 +1373,7 @@ fn template_facts(
         } else {
             crate::bindings::Rep::Boxed
         };
-        // I32 at rest (RFC §10.7, PR A): a whole-life field that holds only
+        // I32 at rest (`internals/representation.md` §7, PR A): a whole-life field that holds only
         // Numbers has the Number representation of its joined nodes.
         let mut zero_tol = false;
         let rep = if rep == crate::bindings::Rep::Boxed
