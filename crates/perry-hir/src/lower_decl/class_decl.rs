@@ -1272,7 +1272,7 @@ pub fn lower_class_decl(
                             } else {
                                 crate::ClassFieldOrigin::Definition
                             };
-                            param_prop_fields.push(ClassField {
+                            param_prop_fields.push(ClassField { byte_offset: ts_prop.span.lo.0,
                                 origin,
                                 name: param_name,
                                 key_expr: None,
@@ -1396,6 +1396,9 @@ pub fn lower_class_decl(
                 && !method_names.contains(&fname)
             {
                 fields.push(ClassField {
+                    // No source member: a constructor store reserves it, and
+                    // that store carries its own position.
+                    byte_offset: 0,
                     origin: crate::ClassFieldOrigin::ConstructorStore,
                     name: fname,
                     key_expr: None,

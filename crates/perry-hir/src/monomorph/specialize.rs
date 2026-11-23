@@ -72,7 +72,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
         fields: class
             .fields
             .iter()
-            .map(|f| ClassField {
+            .map(|f| ClassField { byte_offset: f.byte_offset,
                 origin: f.origin,
                 name: f.name.clone(),
                 key_expr: f

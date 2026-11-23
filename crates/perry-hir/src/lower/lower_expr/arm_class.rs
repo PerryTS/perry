@@ -237,6 +237,13 @@ pub(crate) fn lower_class_expr(
     // these need the same per-evaluation treatment, otherwise a class
     // expression returned from a factory (effect's `make`) shares one
     // template class and `.ast` is undefined/clobbered.
+    // Each named static's declaration offset, in `named_statics` order.
+    let named_static_offsets: Vec<u32> = class
+        .static_fields
+        .iter()
+        .filter(|sf| sf.key_expr.is_none())
+        .map(|sf| sf.byte_offset)
+        .collect();
     let named_statics: Vec<(String, Expr)> = class
         .static_fields
         .iter()
@@ -492,7 +499,7 @@ pub(crate) fn lower_class_expr(
                 let Some((name, value)) = named_statics.get(index as usize).cloned() else {
                     continue;
                 };
-                seq.push(Expr::StaticFieldSet { byte_offset: 0 /*HPOS ClassField*/,
+                seq.push(Expr::StaticFieldSet { byte_offset: named_static_offsets[index as usize],
                     class_name: synthetic_name.clone(),
                     field_name: name,
                     value: Box::new(value),

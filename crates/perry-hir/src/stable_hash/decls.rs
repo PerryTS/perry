@@ -98,6 +98,7 @@ impl SH for ClassField {
             is_private,
             is_readonly,
             decorators,
+            byte_offset: _,
         } = self;
         (*origin as u8).hash(h);
         name.hash(h);
