@@ -43,7 +43,9 @@ fn mono(v: &str) -> bool {
 
 /// Does unknown code hold the realm after the solve (`Model::realm_held`)?
 fn held(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -64,7 +66,10 @@ fn k10_store_into_top_writes_no_intrinsic() {
     let src = format!(
         "{DECL}{OBJ}sink(globalThis);\nget().now = (x: any) => {{ x.m = () => 2; }};\n(performance as any).now(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
     );
-    assert!(mono(&m_after(&src, "/*A*/")), "a store into ⊤ wrote performance.now");
+    assert!(
+        mono(&m_after(&src, "/*A*/")),
+        "a store into ⊤ wrote performance.now"
+    );
 }
 
 /// K10 keep: a program store onto the named intrinsic is still its write.
@@ -73,15 +78,23 @@ fn k10_keep_program_store_onto_the_intrinsic() {
     let src = format!(
         "{DECL}{OBJ}sink(globalThis);\n(performance as any).now = (x: any) => {{ x.m = () => 2; }};\n(performance as any).now(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
     );
-    assert!(!mono(&m_after(&src, "/*A*/")), "the program's own performance.now was lost");
+    assert!(
+        !mono(&m_after(&src, "/*A*/")),
+        "the program's own performance.now was lost"
+    );
 }
 
 /// K8: a call and a `new` of an unknown value hold nothing, whole program.
 #[test]
 fn k8_unknown_call_holds_no_realm() {
-    assert!(!held(&format!("{DECL}const r = get();\nconsole.log(r);\n")), "⊤ call held the realm");
     assert!(
-        !held(&format!("{DECL}const C: any = get();\nconst r = new C(1);\nconsole.log(r);\n")),
+        !held(&format!("{DECL}const r = get();\nconsole.log(r);\n")),
+        "⊤ call held the realm"
+    );
+    assert!(
+        !held(&format!(
+            "{DECL}const C: any = get();\nconst r = new C(1);\nconsole.log(r);\n"
+        )),
         "⊤ new held the realm"
     );
 }
@@ -105,15 +118,22 @@ fn k2_contract_escape_writes_no_key() {
             .expect("toFixed site");
         let v = format!("{:?}", s.verdict);
         eprintln!("AMP-LOOP {h}: {v}");
-        assert!(!v.starts_with("No("), "a contract hand-off wrote o.n: {h}: {v}");
+        assert!(
+            !v.starts_with("No("),
+            "a contract hand-off wrote o.n: {h}: {v}"
+        );
     }
 }
 
 /// K2 keep: `o` handed to a ⊤ callee may be written under any key.
 #[test]
 fn k2_keep_top_callee_writes() {
-    let src = format!("{DECL}{OBJ}const f = get();\nf(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n");
-    assert!(!mono(&m_after(&src, "/*A*/")), "a ⊤ callee's argument kept o.m");
+    let src =
+        format!("{DECL}{OBJ}const f = get();\nf(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n");
+    assert!(
+        !mono(&m_after(&src, "/*A*/")),
+        "a ⊤ callee's argument kept o.m"
+    );
 }
 
 /// K2 keep (upgrade): handed by contract first, then to a ⊤ callee.
@@ -122,7 +142,10 @@ fn k2_keep_contract_then_top_callee() {
     let src = format!(
         "{DECL}{OBJ}process.stdout.write(o as any);\nconst f = get();\nf(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
     );
-    assert!(!mono(&m_after(&src, "/*A*/")), "a ⊤ callee holding p could not write o.m");
+    assert!(
+        !mono(&m_after(&src, "/*A*/")),
+        "a ⊤ callee holding p could not write o.m"
+    );
 }
 
 /// K2 keep: a program store through `x` ∈ {o, ⊤} writes `o` (o handed by
@@ -132,7 +155,10 @@ fn k2_keep_store_through_top_beside_contract_escape() {
     let src = format!(
         "{DECL}{OBJ}process.stdout.write(o as any);\nconst x: any = Math.random() > 0.5 ? o : get();\nx.m = () => 2;\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
     );
-    assert!(!mono(&m_after(&src, "/*A*/")), "the store through x missed o.m");
+    assert!(
+        !mono(&m_after(&src, "/*A*/")),
+        "the store through x missed o.m"
+    );
 }
 
 /// The verdict of the first site of `key` (a call when `call`) after `marker`.
@@ -176,16 +202,23 @@ fn k2d_contract_escape_keeps_the_prototype() {
 fn k2d_contract_escape_keeps_own_data() {
     let src = format!("const o = {{ m() {{ return 1; }}, n: 5 }};\n{STREAM}const x = /*A*/ o.n;\nconsole.log(x);\n");
     let v = site_after(&src, "/*A*/", "n", false);
-    assert!(!v.starts_with("No("), "a contract hand-off made o.n unknown: {v}");
+    assert!(
+        !v.starts_with("No("),
+        "a contract hand-off made o.n unknown: {v}"
+    );
 }
 
 /// K2 derive keep: handed to a ⊤ callee, the layout is open (the reason
 /// names that code).
 #[test]
 fn k2d_keep_top_callee_changes_the_layout() {
-    let src = format!("{DECL}{OBJ}const f = get();\nf(o);\nconst x = /*A*/ o.m;\nconsole.log(x);\n");
+    let src =
+        format!("{DECL}{OBJ}const f = get();\nf(o);\nconst x = /*A*/ o.m;\nconsole.log(x);\n");
     let v = site_after(&src, "/*A*/", "m", false);
-    assert!(v.starts_with("No("), "a ⊤ callee's argument kept o's layout: {v}");
+    assert!(
+        v.starts_with("No("),
+        "a ⊤ callee's argument kept o's layout: {v}"
+    );
 }
 
 /// K2 keep: only an escape a builtin contract states keeps the layout
@@ -194,13 +227,18 @@ fn k2d_keep_top_callee_changes_the_layout() {
 /// does not model, so the layout is open.
 #[test]
 fn k2d_keep_an_escape_no_contract_states_changes_the_layout() {
-    let src = format!("{DECL}{OBJ}const F: any = get();
+    let src = format!(
+        "{DECL}{OBJ}const F: any = get();
 console.log(o instanceof F);
 const x = /*A*/ o.m;
 console.log(x);
-");
+"
+    );
     let v = site_after(&src, "/*A*/", "m", false);
-    assert!(v.starts_with("No("), "an unknown Symbol.hasInstance kept o's layout: {v}");
+    assert!(
+        v.starts_with("No("),
+        "an unknown Symbol.hasInstance kept o's layout: {v}"
+    );
 }
 
 /// Own data or absent of a `JSON.parse` object (`own_data_or_absent_why`'s
@@ -213,5 +251,36 @@ fn k2d_keep_a_json_object_given_to_a_top_callee_is_not_own_data() {
         "{DECL}const j: any = JSON.parse(\"{{\\\"n\\\": 1}}\");\nconst f = get();\nf(j);\nconst x = /*A*/ j.n;\nconsole.log(x);\n"
     );
     let v = site_after(&src, "/*A*/", "n", false);
-    assert!(v.starts_with("No("), "a ⊤ callee's JSON argument kept own data: {v}");
+    assert!(
+        v.starts_with("No("),
+        "a ⊤ callee's JSON argument kept own data: {v}"
+    );
+}
+
+/// K2 derive keep (`accessor_one`): a program prototype on the chain handed
+/// to a ⊤ callee may gain the key, so the store is not proven.
+#[test]
+fn k2d_keep_a_prototype_given_to_a_top_callee_may_gain_the_key() {
+    let src = format!(
+        "{DECL}class P {{}}\nclass C extends P {{ m() {{ return 1; }} }}\nsink(P.prototype);\nconst o: any = new C();\nif (Math.random() > 0.5) /*A*/ o.f = () => 2;\nconsole.log(o.f);\n"
+    );
+    let v = site_after(&src, "/*A*/", "f", false);
+    assert!(
+        v.starts_with("No("),
+        "a ⊤ callee's prototype kept f absent: {v}"
+    );
+}
+
+/// K2 derive keep (`accessor_one`): beside an unseen module (foreign code)
+/// every hand-off may write any key, `Object.prototype`'s too.
+#[test]
+fn k2d_keep_foreign_code_writes_a_contract_hand_off() {
+    let src = format!(
+        "import {{ sink }} from \"./unseen\";\nsink(0);\nconst o: any = {{ m() {{ return 1; }} }};\nif (Math.random() > 0.5) /*A*/ o.f = () => 2;\n{STREAM}console.log(o.f);\n"
+    );
+    let v = site_after(&src, "/*A*/", "f", false);
+    assert!(
+        v.starts_with("No("),
+        "foreign code left the hand-off unwritten: {v}"
+    );
 }

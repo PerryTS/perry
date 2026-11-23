@@ -1797,7 +1797,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         if m.stop_top.is_some() {
                             // TOPSTOP2: what the unguarded set held (the
                             // site's `top=1` says only "E0 by the guard").
-                            let held: Vec<String> = toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
+                            let held: Vec<String> =
+                                toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
                             eprintln!(
                                 "TOPSTOP e0-guard: {} .{} unguarded top={} {:?}; unguarded receivers [{}] prims {prim:#x}",
                                 m.pos_text((s.module as u32, s.byte_offset as u32)),
@@ -3040,7 +3041,7 @@ enum AccOne {
 /// accessor property. `t` must not own the key in any form (no field node
 /// with values, no computed store, no own accessor); each prototype on the
 /// way neither holds the key as data nor may gain it (computed store,
-/// escape, hard operation), and the chain cannot end at `null` before the
+/// writer escape, hard operation), and the chain cannot end at `null` before the
 /// holder. Every holder found names the same getter and setter lists.
 fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String> {
     let has = |n: NodeId| {
@@ -3062,6 +3063,22 @@ fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String>
     let mut ended = false;
     let mut seen: FxHashSet<Tok> = FxHashSet::default();
     let mut todo = vec![t];
+    // A prototype gains the key by a computed store, a hard operation or
+    // code that may write it under any key (`writer_escape_why`, as the
+    // template's chain check reads it): code handed it by a builtin contract
+    // writes only what the contract states, which the solve models (Phase B,
+    // owner 2026-11-23). `Object.prototype` escapes along the chain of every
+    // handed value, and unknown code never writes a member of an intrinsic
+    // it reaches along a handed value's chain (owner premise 2026-11-19,
+    // the closed world): only the program's writes (`computed`, `holds`,
+    // its accessors) and a hard operation give it the key. Code beside the
+    // program (`foreign_code`) may write it.
+    let objproto = m.tok_index.get(&TokKind::ObjectProto).copied();
+    let may_gain = |p: Tok| {
+        computed(p)
+            || m.hard.contains_key(&p)
+            || ((Some(p) != objproto || m.foreign_code()) && m.writer_escape_why(p).is_some())
+    };
     while let Some(h) = todo.pop() {
         let protos: Vec<Tok> = match m.proto_node.get(&h) {
             Some(&pn) if m.nodes[pn as usize].prim != 0 => {
@@ -3081,7 +3098,7 @@ fn accessor_one(m: &Model, t: Tok, a: Atom, set: bool) -> Result<AccOne, String>
             if p == TOP || m.is_marker(p) {
                 return Err("a prototype from unmodeled code".into());
             }
-            if computed(p) || m.is_escaped(p) || m.hard.contains_key(&p) {
+            if may_gain(p) {
                 return Err("a prototype on the chain may gain the key".into());
             }
             match m.accessors.get(&(p, a)) {
