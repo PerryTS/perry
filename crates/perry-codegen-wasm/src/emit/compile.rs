@@ -847,6 +847,8 @@ impl WasmModuleEmitter {
                         .or_default()
                         .insert(method.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds
+                        .insert(user_func_idx, FnProtoKind::of_function(module, method));
                     self.record_rest_param(user_func_idx, 1, &method.params);
                     user_func_idx += 1;
                 }
@@ -865,6 +867,8 @@ impl WasmModuleEmitter {
                     self.func_name_map
                         .insert(format!("{}_{}", class.name, method.name), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds
+                        .insert(user_func_idx, FnProtoKind::of_function(module, method));
                     self.record_rest_param(user_func_idx, 0, &method.params);
                     user_func_idx += 1;
                 }
@@ -1676,9 +1680,18 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        func.instruction(&Instruction::I32Const(0xFF18));
+                        func.instruction(&Instruction::I64Const(
+                            self.fn_proto_code(func_idx).to_bits() as i64,
+                        ));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csm_id = self.string_map.get(bridge).copied().unwrap_or(0);
                         func.instruction(&f64_const(csm_id as f64));
-                        func.instruction(&f64_const(3.0));
+                        func.instruction(&f64_const(4.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);

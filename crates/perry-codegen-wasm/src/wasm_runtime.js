@@ -680,11 +680,12 @@ function buildImports() {
       class_new: (classNameVal, fieldCount) => {
         return nanboxPointer(allocHandle(__classInstance(getString(classNameVal))));
       },
-      // class_set_method(class_id_str, method_name_str, func_table_idx)
-      class_set_method: (classId, methodName, funcIdx) => {
+      // class_set_method(class_id_str, method_name_str, func_table_idx, proto_kind)
+      class_set_method: (classId, methodName, funcIdx, protoKind) => {
         const cls = getString(classId);
         if (!classMethodTable[cls]) classMethodTable[cls] = {};
         classMethodTable[cls][getString(methodName)] = funcIdx | 0;
+        if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
       },
       // class_call_method(handle, method_name_id, args_array_handle) -> result
       // method_name_id is a plain f64 string table index (not NaN-boxed).
@@ -1688,6 +1689,13 @@ const __fnKindProtos = [
   Object.getPrototypeOf(function* () {}),
   Object.getPrototypeOf(async function* () {}),
 ];
+// A compiled method's `__fnKindProtos` index by table index, when not plain.
+const __methodProtoKinds = new Map();
+// A host function standing for a function of `kind` has that kind's prototype.
+function __withKindProto(fn, kind) {
+  if (kind) Object.setPrototypeOf(fn, __fnKindProtos[kind]);
+  return fn;
+}
 // A closure's host prototype is its class's; the program sees its kind's.
 function __programPrototype(obj, proto) {
   return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
@@ -2012,7 +2020,7 @@ function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   };
   Object.defineProperty(fn, 'name', { value: name });
   __classMethodFns.add(fn);
-  return fn;
+  return __withKindProto(fn, __methodProtoKinds.get(funcIdx));
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
 // after its captures, or a class method value with no table entry of its own through
@@ -2869,14 +2877,16 @@ const __memDispatch = {
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
   },
-  class_set_method: (classId, methodName, funcIdx) => {
+  class_set_method: (classId, methodName, funcIdx, protoKind) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
     classMethodTable[cls][String(methodName)] = funcIdx | 0;
+    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
   },
   // A class value made before registration gets the method too.
-  class_set_static_method: (classId, methodName, funcIdx) => {
+  class_set_static_method: (classId, methodName, funcIdx, protoKind) => {
     const cls = String(classId);
+    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
     const name = String(methodName);
     (classStaticMethodTable[cls] ||= Object.create(null))[name] = funcIdx | 0;
     __classStaticMethodValues.get(cls)?.delete(name);
@@ -6157,11 +6167,11 @@ function __hostDescriptors(props) {
 function __hostCallback(value) {
   if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
-    hostCallbacks.set(value, (...args) => {
+    hostCallbacks.set(value, __withKindProto((...args) => {
       const result = callWasmClosure(value, ...args);
       __memDispatch.propagate_exception(true);
       return result;
-    });
+    }, __PerryClosure.protoKindOf(value)));
   }
   return hostCallbacks.get(value);
 }
@@ -6188,6 +6198,7 @@ function __classMethodValue(cls, mname, evaluation) {
     __defineHidden(fn, 'funcIdx', funcIdx);
     __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
     __classMethodFns.add(fn);
+    __withKindProto(fn, __methodProtoKinds.get(funcIdx));
     byName.set(mname, fn);
   }
   return fn;
