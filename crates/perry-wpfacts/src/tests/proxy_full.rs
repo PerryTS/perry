@@ -318,3 +318,57 @@ fn proxy_delete_computed_key_passes_the_key() {
         site("{}", h, &op, proven).unwrap_or_else(|e| panic!("Reflect {key}: {e}"));
     }
 }
+
+/// Rule PXNEWT: `Reflect.construct( p, args, newTarget )` is
+/// p.[[Construct]]( args, newTarget ) (28.1.2): the `construct` trap gets
+/// argArray and newTarget.
+#[test]
+fn proxy_reflect_construct_runs_the_construct_trap() {
+    let t = "class { constructor(x: any) {} }";
+    let h = "construct(t: any, a: any, nt: any) { external(a[0]); return {}; }";
+    site(t, h, "Reflect.construct(px, [payload]);", false).unwrap();
+    site(t, h, "Reflect.construct(px, [1]);", true).unwrap();
+    let h = "construct(t: any, a: any, nt: any) { external(nt.q); return {}; }";
+    let n = "class N { static q: any = payload; }\n";
+    site(t, h, &format!("{n}Reflect.construct(px, [], N);"), false).unwrap();
+    let n = "class N { static q: any = 1; }\n";
+    site(t, h, &format!("{n}Reflect.construct(px, [], N);"), true).unwrap();
+}
+
+/// The forward Construct( target, argumentsList, newTarget ) (10.5.13
+/// step 6) keeps newTarget: an inner Proxy's `construct` trap sees the
+/// outer Proxy (its `nt.q` runs the outer `get` trap), and what that trap
+/// returns is the `new`'s as returned, no prototype set on it.
+#[test]
+fn proxy_construct_forward_keeps_the_new_target() {
+    let ic = "construct(t: any, a: any, nt: any) { external(nt.q); return {}; }";
+    let ipx = format!("new Proxy(class {{}}, {{ {ic} }})");
+    let out = "get(t: any, k: any) { return payload; }";
+    let keep = "get(t: any, k: any) { return 1; }";
+    site(&ipx, out, "new px();", false).unwrap();
+    site(&ipx, keep, "new px();", true).unwrap();
+    site(&ipx, out, "Reflect.construct(px, []);", false).unwrap();
+    let ir = "new Proxy(class {}, { construct(t: any, a: any, nt: any) { return payload; } })";
+    site(ir, "", "new px();", true).unwrap();
+}
+
+/// Rule PXNEWT: with a Proxy newTarget the new object's prototype is
+/// Get( newTarget, "prototype" ) alone (10.1.14), here the forward to the
+/// Proxy's target class (its `m`), never the constructed class's own; the
+/// constructed class's (or function's) body runs on that object.
+#[test]
+fn proxy_new_target_prototype_comes_from_its_get() {
+    let tc = "class T { constructor(x: any) { external(x); } m() { external(payload); } }\n";
+    let op = format!("{tc}const o: any = Reflect.construct(T, [1], px); o.m();");
+    site("class { m() { return 1; } }", "", &op, true).unwrap();
+    site("class { m() { external(payload); } }", "", &op, false).unwrap();
+    let t = "class { m() { return 1; } }";
+    site(t, "", &format!("{tc}Reflect.construct(T, [payload], px);"), false).unwrap();
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    site(t, h, &format!("{tc}Reflect.construct(T, [1], px);"), false).unwrap();
+    let h = "get(t: any, k: any) { return t[k]; }";
+    site(t, h, &format!("{tc}Reflect.construct(T, [1], px);"), true).unwrap();
+    let f = "function F(this: any, x: any) { external(x); }\n";
+    site(t, "", &format!("{f}Reflect.construct(F, [payload], px);"), false).unwrap();
+    site(t, "", &format!("{f}Reflect.construct(F, [1], px);"), true).unwrap();
+}

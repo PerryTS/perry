@@ -92,8 +92,12 @@ pub enum ProxyOp {
     HardFwd(Hard),
     /// Rule PXAPPLY: the [[Call]] of one call site: its `this` node.
     Apply(CallId),
-    /// Rule PXAPPLY: the [[Construct]] of one call site (`NewProgram`).
-    Construct(CallId, bool),
+    /// Rule PXAPPLY: the [[Construct]] of one call site with its newTarget
+    /// node (`NO_NODE`: `new`, the Proxy itself; else Reflect.construct's).
+    Construct(CallId, NodeId),
+    /// Rule PXNEWT: GetPrototypeFromConstructor(p) (10.1.14): the objects
+    /// p.[[Get]]("prototype") returns, or the realm's default prototype.
+    NtProto,
     /// Rule PXAPPLY: the receivers of the `ThisTo` relays.
     ThisTo,
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
@@ -1298,8 +1302,18 @@ impl Model {
                 let th = self.proxy_this_to(p);
                 self.add_tok(th, origin);
             }
-            Cons::New { call } => self.proxy_construct(p, call, false),
-            Cons::NewProgram { call } => self.proxy_construct(p, call, true),
+            Cons::New { call } | Cons::NewProgram { call } => {
+                self.proxy_construct(p, call, NO_NODE)
+            }
+            // Reflect.construct( p, args, newTarget ) (28.1.2):
+            // p.[[Construct]]( args, newTarget ).
+            Cons::ReflectNew { call, new_target } => self.proxy_construct(p, call, new_target),
+            // Reflect.construct( T, args, p ): the Proxy is the newTarget
+            // (IsConstructor(p): its target is a constructor).
+            Cons::ReflectNewTarget { call, target } => {
+                let pt = self.tok(TokKind::Proxy(p));
+                self.reflect_construct(call, target, pt);
+            }
             _ => {}
         }
     }
@@ -1382,45 +1396,81 @@ impl Model {
         }
     }
 
-    /// Rule PXAPPLY: p.[[Construct]](argumentsList, newTarget) (10.5.13)
-    /// of `new p( ... )` (newTarget = p): trap `construct( target,
-    /// argArray, newTarget )`; its result is the `new`'s only when it is an
-    /// object (step 11: otherwise a TypeError), `Cons::Objects`. Without a
-    /// trap (step 6) Construct(target, argumentsList, newTarget): the
-    /// target's [[Construct]], whose new object's [[Prototype]] is
-    /// Get(newTarget, "prototype") (10.1.13 GetPrototypeFromConstructor):
-    /// p.[[Get]]("prototype"), the get trap and its forward
-    /// (`Cons::ProtoFrom` on the forward's result). A `prototype` that is
-    /// no Object (a primitive; ⊤ or a marker may be one) gives the realm's
-    /// intrinsic default prototype of the constructor's kind (10.1.14 step
-    /// 4: `%Object.prototype%` for an ordinary function, the builtin's own
-    /// for a builtin): `ObjectProto`, which stands for every builtin
-    /// prototype. `program`: the call's `NewProgram` rule
-    /// (`construct_program`). Once per (call, rule).
-    fn proxy_construct(&mut self, p: u32, call: CallId, program: bool) {
-        if self.proxy_made(p, ProxyOp::Construct(call, program)) {
+    /// Rule PXAPPLY / PXNEWT: p.[[Construct]](argumentsList, newTarget)
+    /// (10.5.13) of call `call`: trap `construct( target, argArray,
+    /// newTarget )` with `this` = the handler, only an Object result the
+    /// call's (step 11); without a trap (step 6) Construct(target,
+    /// argumentsList, newTarget), the forward: `Cons::ReflectNew` on the
+    /// target with the same newTarget, so a Proxy target runs its own
+    /// [[Construct]] with it and an ordinary target makes its object with
+    /// newTarget's prototype (`reflect_construct`, `proxy_nt_inst`); the
+    /// forward's result is the call's as made. `given`: the newTarget node
+    /// of `Reflect.construct( p, args, newTarget )`, whose omitted
+    /// argument (undefined) is p itself (28.1.2 step 2); `NO_NODE` for
+    /// `new p(...)`, whose newTarget is p. Once per (call, given).
+    fn proxy_construct(&mut self, p: u32, call: CallId, given: NodeId) {
+        if self.proxy_made(p, ProxyOp::Construct(call, given)) {
             return;
         }
         let t = self.proxies[p as usize].target;
         let (ret, region) = (self.calls[call as usize].ret, self.calls[call as usize].region);
         let arr = self.proxy_args_array(call);
-        let nt = self.node_l("proxy-new-target");
         let pt = self.tok(TokKind::Proxy(p));
-        self.add_tok(nt, pt);
+        let nt = self.node_l("proxy-new-target");
+        if given == NO_NODE {
+            self.add_tok(nt, pt);
+        } else {
+            self.cons(given, Cons::Objects { dst: nt });
+            let omitted = self.node_l("proxy-new-target-omitted");
+            self.cons(
+                given,
+                Cons::TypeIs {
+                    mask: prim::UNDEF,
+                    dst: omitted,
+                },
+            );
+            let own = self.node_l("proxy-new-target-self");
+            self.add_tok(own, pt);
+            self.cons(
+                omitted,
+                Cons::TopIfAny {
+                    dst: nt,
+                    from: own,
+                    reason: None,
+                },
+            );
+        }
         let tr = self.node_l("proxy-construct-ret");
         self.proxy_trap_in(p, "construct", None, vec![t, arr, nt], tr, region);
         self.cons(tr, Cons::Objects { dst: ret });
         let fr = self.node_l("proxy-construct-fwd");
         let call2 = self.proxy_fwd_call(call, ThisArg::Undef, fr);
-        let rule = match program {
-            true => Cons::NewProgram { call: call2 },
-            false => Cons::New { call: call2 },
-        };
-        self.cons(t, rule);
+        self.cons(
+            t,
+            Cons::ReflectNew {
+                call: call2,
+                new_target: nt,
+            },
+        );
+        self.edge(fr, ret);
+    }
+
+    /// Rule PXNEWT: GetPrototypeFromConstructor(p, intrinsicDefaultProto)
+    /// (10.1.14) for Proxy newTarget `p`: the Objects p.[[Get]]("prototype")
+    /// returns (its `get` trap and the forward); a non-Object gives the
+    /// realm's intrinsic default (step 4: `%Object.prototype%` for a class
+    /// or function, `ObjectProto`, which stands for every builtin
+    /// prototype). The node of those prototypes; once per Proxy.
+    pub(crate) fn proxy_nt_proto(&mut self, p: u32) -> NodeId {
+        if let Some(&n) = self.proxies[p as usize].ops.get(&ProxyOp::NtProto) {
+            return n;
+        }
+        let out = self.node_l("proxy-new-target-proto");
+        self.proxies[p as usize].ops.insert(ProxyOp::NtProto, out);
         let pa = self.atom("prototype");
         let pr = self.proxy_get(p, Key::Named(pa), NO_NODE);
-        self.cons(fr, Cons::ProtoFrom { src: pr });
-        let prim_pr = self.node_l("proxy-construct-proto-not-object");
+        self.cons(pr, Cons::Objects { dst: out });
+        let prim_pr = self.node_l("proxy-new-target-proto-not-object");
         self.cons(
             pr,
             Cons::TypeIs {
@@ -1428,20 +1478,48 @@ impl Model {
                 dst: prim_pr,
             },
         );
-        let realm = self.node_l("proxy-construct-realm-default-proto");
+        let realm = self.node_l("proxy-new-target-realm-default-proto");
         let op = self.tok(TokKind::ObjectProto);
         self.add_tok(realm, op);
-        let dflt = self.node_l("proxy-construct-default-proto");
         self.cons(
             prim_pr,
             Cons::TopIfAny {
-                dst: dflt,
+                dst: out,
                 from: realm,
                 reason: None,
             },
         );
-        self.cons(fr, Cons::ProtoFrom { src: dflt });
-        self.edge(fr, ret);
+        out
+    }
+
+    /// Rule PXNEWT: OrdinaryCreateFromConstructor(newTarget) of
+    /// `Reflect.construct( target, args, p )` (or a Proxy's forward) with
+    /// Proxy newTarget `p` and a class or function `target`: an object of
+    /// target's layout per (call, Proxy, target), a birth of its own,
+    /// whose prototype is `proxy_nt_proto(p)` alone (`proxy_nt_toks`).
+    /// `None`: another unit's layout (one token for all its instances),
+    /// which cannot carry a prototype of its own.
+    pub(crate) fn proxy_nt_inst(&mut self, call: CallId, p: u32, target: Tok) -> Option<Tok> {
+        if let Some(&i) = self.proxy_nt_inst.get(&(call, p, target)) {
+            return Some(i);
+        }
+        let tm = match self.toks[target as usize] {
+            TokKind::ClassObj(tm) => tm,
+            TokKind::Func(f, _) => self.fn_inst_template(f),
+            _ => return None,
+        };
+        if self.foreign.contains_key(&tm) {
+            return None;
+        }
+        let birth = self.node_l("proxy-new-target-birth");
+        let ctx = self.proxy_fwd_call(call, ThisArg::Undef, birth);
+        let inst = self.site_tok(tm, ctx);
+        self.proxy_nt_toks.insert(inst);
+        self.proxy_nt_inst.insert((call, p, target), inst);
+        let pr = self.proxy_nt_proto(p);
+        let protos = self.proto_node(inst);
+        self.edge(pr, protos);
+        Some(inst)
     }
 
     /// Rule PXCALL: the `ProxyCallee` rule of called Proxy `of` on the
@@ -1759,6 +1837,8 @@ impl Model {
             | Cons::CallThis { .. }
             | Cons::New { .. }
             | Cons::NewProgram { .. }
+            | Cons::ReflectNew { .. }
+            | Cons::ReflectNewTarget { .. }
             // Rule PXCALLR: the relays of a method call that found the
             // Proxy through a receiver (`bind_via`): the `this` it binds
             // (`ThisTo`, the thisArg of the [[Call]]), its arguments and
@@ -1952,6 +2032,11 @@ impl Model {
             Cons::OwnNames { dst } => {
                 self.add_prim(dst, prim::STR);
             }
+            // Rule PXNEWT: a Proxy as the newTarget of Reflect.construct
+            // gives no class layout a foreign birth: the object made is
+            // its own birth of the target's layout (`proxy_nt_inst`),
+            // its prototype Get( newTarget, "prototype" ) (10.1.14).
+            Cons::NewTargetHard { .. } => {}
             // Another protocol touch: its hold names the protocol and the
             // touch's own reason.
             Cons::Implicit { reason, proto, .. } => {

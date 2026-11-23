@@ -129,6 +129,16 @@ impl Model {
                 self.reflect_construct(call, TOP, new_target);
                 return;
             }
+            // Rule PXNEWT: a builtin target with a Proxy newTarget: the
+            // builtin's own construct, its object given the prototype
+            // Get(newTarget, "prototype") returns (a superset: the
+            // builtin's default prototype stays).
+            if let TokKind::Proxy(np) = self.toks[new_target as usize] {
+                self.construct(call, target);
+                let pr = self.proxy_nt_proto(np);
+                self.cons(c.ret, Cons::ProtoFrom { src: pr });
+                return;
+            }
             self.new_target_unknown(call, new_target);
             self.construct(call, TOP);
             return;
@@ -138,7 +148,16 @@ impl Model {
                 let ctx = self.birth_ctx(call);
                 self.site_tok(tm, ctx)
             }
-            // A function/proxy or unknown new target need not select a
+            // Rule PXNEWT: a Proxy new target: an object of target's layout
+            // with the prototype the Proxy's `prototype` [[Get]] returns.
+            TokKind::Proxy(np) => match self.proxy_nt_inst(call, np, target) {
+                Some(i) => i,
+                None => {
+                    self.new_target_unknown(call, new_target);
+                    TOP
+                }
+            },
+            // A function or unknown new target need not select a
             // registered class layout. Its result and the body's this stay
             // unknown; a provisional instance of target would be false.
             _ => {

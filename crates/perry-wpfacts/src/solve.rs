@@ -1404,6 +1404,11 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
         self.rel(|| format!("protonode {n} {t}"));
+        // Rule PXNEWT: an object made with a Proxy new target has the
+        // prototype its `prototype` [[Get]] gives (`proxy_nt_inst`) only.
+        if self.proxy_nt_toks.contains(&t) {
+            return n;
+        }
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {

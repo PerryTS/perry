@@ -2348,6 +2348,13 @@ pub struct Model {
     /// left-hand side (`Solver::has_instance`).
     pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// Rule PXNEWT: the object `Reflect.construct( T, args, P )` with a Proxy
+    /// new target P makes, per (call, Proxy, T) (`proxy_nt_inst`).
+    pub proxy_nt_inst: crate::pts::FxHashMap<(CallId, u32, Tok), Tok>,
+    /// Rule PXNEWT: those objects. Their prototype is what
+    /// Get(P, "prototype") returns alone (10.1.14), so `proto_node` seeds
+    /// no static prototype for them.
+    pub proxy_nt_toks: crate::pts::FxHashSet<Tok>,
     /// (`new` call, summarized constructor) -> the node its runs' body
     /// result reaches instead of the call's result: the `new` result takes
     /// only its objects, and the this-object while it holds a non-object
