@@ -7,8 +7,7 @@
 
 // Issue #552: force libperry_ui_android.a to bundle perry-ext-sharp's
 // `js_sharp_*` symbols (resize / jpeg / toBuffer / etc). Without this `extern
-// crate` reference, the rlib dep would be optimized out and the stubs in
-// stdlib_stubs.rs would mask sharp at link time.
+// crate` reference, the rlib dep would be optimized out of the archive.
 extern crate perry_ext_sharp;
 
 pub mod app;
@@ -41,7 +40,6 @@ pub mod pointer;
 pub mod screenshot;
 pub mod sheet;
 pub mod state;
-pub mod stdlib_stubs;
 pub mod system;
 pub mod toolbar;
 pub mod widgets;
