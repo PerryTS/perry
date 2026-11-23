@@ -12,8 +12,19 @@
 //!   exists (a rule applied to a node that holds ⊤, an escape into unknown
 //!   code, a throw by unknown code that runs because of ⊤).
 //!
+//! - (M) marker: the second representation of "unknown": a marker that
+//!   reads as ⊤ (`Model::set_marker_top`, DECISIONS 42/119) is made, or a
+//!   token is marked escaped so that beside ⊤ it is that ⊤
+//!   (`escaped_beside_top`, `mark_escaped`).
+//!
+//! Every block names a program line: a node the solver made outside
+//! generation is traced to the node of the rule that made it
+//! (`StopTop::node_from`), step by step, until a node generation made at a
+//! program expression.
+//!
 //! `PERRY_FACTS_STOP_ON_TOP_SKIP=<n>`: pass the first n creations, stop at
-//! creation n+1. `PERRY_FACTS_STOP_ON_TOP_CLASS=S|A|SA` (default SA).
+//! creation n+1. `PERRY_FACTS_STOP_ON_TOP_CLASS=<letters of S, A, M>`
+//! (default all).
 //! The process exits with code 86 after printing one block to stderr.
 //! Off: `Model::stop_top` is `None`, and nothing of this runs.
 
@@ -28,7 +39,7 @@ pub const NOPOS: (u32, u32) = (u32::MAX, u32::MAX);
 pub struct StopTop {
     skip: u64,
     seen: u64,
-    /// bit 1: stop on S, bit 2: stop on A.
+    /// bit 1: stop on S, bit 2: stop on A, bit 4: stop on M.
     class: u8,
     capture: bool,
     done: bool,
@@ -37,6 +48,9 @@ pub struct StopTop {
     /// that carries a source offset.
     pub(crate) gen_pos: (u32, u32),
     pub(crate) node_pos: Vec<(u32, u32)>,
+    /// A node made without a program position (by the solver, after
+    /// generation): the node whose rule was running, and that rule.
+    pub(crate) node_from: Vec<(NodeId, Option<Cons>)>,
     pub(crate) fn_pos: FxHashMap<u32, (u32, u32)>,
     /// Named ⊤ holders (`Model::top_val` under the switch): why, the solver
     /// line that made it, the program position.
@@ -74,10 +88,23 @@ impl StopTop {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0);
-        let class = match std::env::var("PERRY_FACTS_STOP_ON_TOP_CLASS").ok().as_deref() {
-            Some("S") => 1,
-            Some("A") => 2,
-            _ => 3,
+        let class = match std::env::var("PERRY_FACTS_STOP_ON_TOP_CLASS") {
+            Ok(v) if !v.is_empty() => {
+                let mut c = 0u8;
+                for ch in v.chars() {
+                    c |= match ch {
+                        'S' => 1,
+                        'A' => 2,
+                        'M' => 4,
+                        _ => {
+                            eprintln!("PERRY_FACTS_STOP_ON_TOP_CLASS: letters S, A, M only (got {v:?})");
+                            std::process::exit(2);
+                        }
+                    };
+                }
+                c
+            }
+            _ => 7,
         };
         Some(Box::new(StopTop {
             skip,
@@ -126,6 +153,8 @@ impl Model {
         let src_ok = src != NO_NODE && (src as usize) < self.nodes.len();
         let src_top = src_ok && self.nodes[src as usize].pts.contains_tok(TOP);
         let rule = s.rule.filter(|&(rn, _)| rn == src);
+        // The rule that runs, also when its body sends from another node.
+        let rule_any = s.rule;
         let esc = s.esc.last().copied();
         let wtext = if why != u32::MAX { Some(self.reason_text(why)) } else { s.why.clone() };
         // (class, rule name, trigger)
@@ -212,17 +241,38 @@ impl Model {
             at.line()
         ));
         b.push_str(&format!("  value:   {}\n", self.node_words(n)));
-        let p = self.node_program_pos(n);
-        b.push_str(&format!("  where:   {}\n", self.pos_text(p)));
-        if let Some(l) = self.source_line(p) {
-            b.push_str(&format!("  source:  {l}\n"));
-        }
+        self.push_where(&mut b, n);
         if let Some(t) = trigger {
             b.push_str(&format!("  cause:   {t}\n"));
         }
-        if let Some((rn, c)) = rule {
+        // The node(s) the rule was applied to, each with its own origin.
+        let mut inputs: Vec<NodeId> = Vec::new();
+        if src_ok {
+            inputs.push(src);
+        }
+        if let Some((_, _, sink)) = esc {
+            if sink != NO_NODE && !inputs.contains(&sink) {
+                inputs.push(sink);
+            }
+        }
+        if let Some((rn, _)) = rule_any {
+            if rn != NO_NODE && (rn as usize) < self.nodes.len() && !inputs.contains(&rn) {
+                inputs.insert(0, rn);
+            }
+        }
+        if inputs.is_empty() {
+            b.push_str("  input:   none (the rule adds ⊤ directly, no node is read)\n");
+        }
+        for i in inputs {
+            b.push_str(&format!("  input:   {}\n", self.input_words(i)));
+        }
+        if let Some((rn, c)) = rule_any {
             b.push_str(&format!("  context: constraint {:?} on node {rn}\n", c));
         }
+        self.finish_block(b, capture);
+    }
+
+    fn finish_block(&self, b: String, capture: bool) {
         if capture {
             if let Some(v) = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
                 v.push(b);
@@ -265,7 +315,217 @@ impl Model {
         s.node_pos.get(n as usize).copied().unwrap_or(NOPOS)
     }
 
-    fn pos_text(&self, p: (u32, u32)) -> String {
+    /// `where:` and `source:` of node `n` (its program origin), and the
+    /// steps that led there (`via:`) when the solver made it.
+    fn push_where(&self, b: &mut String, n: NodeId) {
+        let (p, steps) = self.program_origin(n);
+        b.push_str(&format!("  where:   {}\n", self.pos_text(p)));
+        if let Some(l) = self.source_line(p) {
+            b.push_str(&format!("  source:  {l}\n"));
+        }
+        let k = steps.len();
+        for (i, st) in steps.into_iter().enumerate() {
+            if i == 3 && k > 4 {
+                b.push_str(&format!("  via:     ... {} more steps\n", k - 4));
+            }
+            if i < 3 || i + 1 == k {
+                b.push_str(&format!("  via:     {st}\n"));
+            }
+        }
+    }
+
+    /// The program position of `n`: its own; for a node the solver made,
+    /// that of the node whose rule made it, step by step (each step named);
+    /// for a solver-made call's result or throw region without a maker, the
+    /// program call the solver call was made for (`made_root`); last, the
+    /// first program position of its function (named as nearest).
+    pub(crate) fn program_origin(&self, n: NodeId) -> ((u32, u32), Vec<String>) {
+        let mut steps = Vec::new();
+        let Some(s) = self.stop_top.as_ref() else {
+            return (NOPOS, steps);
+        };
+        let mut cur = n;
+        for _ in 0..256 {
+            let p = self.node_program_pos(cur);
+            if p != NOPOS {
+                return (p, steps);
+            }
+            if let Some(&(from, c)) = s.node_from.get(cur as usize) {
+                if from != NO_NODE && from != cur {
+                    let r = match c {
+                        Some(c) => format!("rule {}", c.kind_name()),
+                        None => "the sender".into(),
+                    };
+                    steps.push(format!(
+                        "node {cur} `{}` was made by the solver applying {r} on node {from} `{}`",
+                        self.labels[cur as usize], self.labels[from as usize]
+                    ));
+                    cur = from;
+                    continue;
+                }
+            }
+            let call = self
+                .calls
+                .iter()
+                .position(|c| c.ret == cur || c.region == cur)
+                .map(|c| c as u32);
+            if let Some(r) = call.and_then(|c| self.made_root.get(&c).copied().filter(|&r| r != c)) {
+                let rn = self.calls[r as usize].ret;
+                steps.push(format!(
+                    "node {cur} belongs to solver call #{} made for program call #{r}",
+                    call.unwrap()
+                ));
+                cur = rn;
+                continue;
+            }
+            break;
+        }
+        let f = self.node_fn.get(cur as usize).copied().unwrap_or(crate::model::NO_FN);
+        if f != crate::model::NO_FN {
+            if let Some(&p) = s.fn_pos.get(&(f as u32)) {
+                steps.push(format!(
+                    "node {cur} `{}` has no own program position: nearest is the first one in its function `{}`",
+                    self.labels[cur as usize],
+                    self.funcs[f as usize].name
+                ));
+                return (p, steps);
+            }
+        }
+        steps.push(format!(
+            "node {cur} `{}`: no maker recorded and no function (a solver-global node)",
+            self.labels[cur as usize]
+        ));
+        (NOPOS, steps)
+    }
+
+    /// An input node: what it is, its program origin, what it holds.
+    fn input_words(&self, n: NodeId) -> String {
+        if n == NO_NODE || n as usize >= self.nodes.len() {
+            return "(none)".into();
+        }
+        let label = self.labels[n as usize];
+        let (p, steps) = self.program_origin(n);
+        let toks = self.nodes[n as usize].pts.to_sorted();
+        let mut held: Vec<String> = toks.iter().take(6).map(|&t| self.tok_words(t)).collect();
+        if toks.len() > 6 {
+            held.push(format!("{} more", toks.len() - 6));
+        }
+        let prim = self.nodes[n as usize].prim;
+        format!(
+            "node {n} `{label}` ({}), from {}{}; holds [{}]{}",
+            self.node_words_short(n),
+            self.pos_text(p),
+            if steps.is_empty() { String::new() } else { format!(" (traced over {} solver steps)", steps.len()) },
+            held.join("; "),
+            if prim != 0 { format!(" + primitives {prim:#x}") } else { String::new() }
+        )
+    }
+
+    fn node_words_short(&self, n: NodeId) -> String {
+        let w = self.node_words(n);
+        match w.find(", holds [") {
+            Some(i) => w[..i].to_string(),
+            None => w,
+        }
+    }
+
+    /// A token in words: class X, function Y at file:line, builtin Z.
+    pub(crate) fn tok_words(&self, t: Tok) -> String {
+        use crate::model::TokKind as K;
+        match &self.toks[t as usize] {
+            K::Top => "⊤ (unknown)".into(),
+            K::Func(f, _) => {
+                let p = self.stop_top.as_ref().and_then(|s| s.fn_pos.get(f).copied()).unwrap_or(NOPOS);
+                format!("function `{}` at {}", self.funcs[*f as usize].name, self.pos_text(p))
+            }
+            K::ClassObj(tm) => format!("class {}", self.tmpls[*tm as usize].display),
+            K::Proto(tm) => format!("prototype of class {}", self.tmpls[*tm as usize].display),
+            K::Obj(tm, _) if self.param_marker.contains_key(&t) => {
+                let (f, i) = self.param_marker[&t];
+                format!(
+                    "marker {} (parameter #{} of `{}`)",
+                    self.tmpls[*tm as usize].display,
+                    i + 1,
+                    self.funcs[f as usize].name
+                )
+            }
+            K::Obj(tm, _) => format!("object {}", self.tmpls[*tm as usize].display),
+            K::Builtin(b) => format!("builtin {b:?}"),
+            K::BuiltinFn(_) => format!("builtin function {}", self.tok_name(t).trim_start_matches("builtin-fn:")),
+            K::ObjectProto => "Object.prototype".into(),
+            _ => self.tok_name(t),
+        }
+    }
+
+    /// Class M: a marker that reads as ⊤ is made (`what`: the rule), or a
+    /// token is marked escaped so that beside ⊤ it is that ⊤.
+    pub(crate) fn top_marker_created(&mut self, t: Tok, what: &str, at: &'static Location<'static>) {
+        let Some(s) = self.stop_top.as_mut() else {
+            return;
+        };
+        if s.done || s.class & 4 == 0 {
+            return;
+        }
+        s.seen += 1;
+        if s.seen <= s.skip {
+            return;
+        }
+        s.done = true;
+        let (seen, capture, rule, esc) = (s.seen, s.capture, s.rule, s.esc.last().copied());
+        let mut b = format!(
+            "TOP CREATED #{seen} class=M (marker that reads as ⊤)\n  rule:    {what}\n  solver:  {}:{}\n  value:   token {t}: {}\n",
+            at.file(),
+            at.line(),
+            self.tok_words(t)
+        );
+        // Where: a parameter marker's function; else the node the running
+        // rule (or the escape in progress) works on.
+        let mut placed = false;
+        if let Some(&(f, _)) = self.param_marker.get(&t) {
+            if let Some(&p) = self.stop_top.as_ref().unwrap().fn_pos.get(&(f as u32)) {
+                b.push_str(&format!("  where:   {} (first program position of the parameter's function)\n", self.pos_text(p)));
+                if let Some(l) = self.source_line(p) {
+                    b.push_str(&format!("  source:  {l}\n"));
+                }
+                placed = true;
+            }
+        }
+        let mut inputs: Vec<NodeId> = Vec::new();
+        if let Some((rn, _)) = rule {
+            inputs.push(rn);
+        }
+        if let Some((et, r, sink)) = esc {
+            b.push_str(&format!(
+                "  cause:   escape of {} into unknown code: {}\n",
+                self.tok_words(et),
+                self.reason_text(r)
+            ));
+            if sink != NO_NODE && !inputs.contains(&sink) {
+                inputs.push(sink);
+            }
+        }
+        if inputs.is_empty() && self.cur_src != NO_NODE && (self.cur_src as usize) < self.nodes.len() {
+            inputs.push(self.cur_src);
+        }
+        if !placed {
+            match inputs.first() {
+                Some(&i) => {
+                    b.push_str("  (where: the node the rule works on, the construct that made the solver mark it)\n");
+                    self.push_where(&mut b, i);
+                }
+                None => b.push_str("  where:   (no program position: no rule, escape or sender is active)\n"),
+            }
+        }
+        for i in inputs {
+            b.push_str(&format!("  input:   {}\n", self.input_words(i)));
+        }
+        if let Some((rn, c)) = rule {
+            b.push_str(&format!("  context: constraint {:?} on node {rn}\n", c));
+        }
+        self.finish_block(b, capture);
+    }
+
+    pub(crate) fn pos_text(&self, p: (u32, u32)) -> String {
         let Some(s) = self.stop_top.as_ref() else {
             return "?".into();
         };
