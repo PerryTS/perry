@@ -2038,11 +2038,26 @@ fn hostval_member(
     dst: NodeId,
 ) -> bool {
     use perry_hir::realm_manifest::{RealmKind as K, RealmOwnValue as V};
-    let o = match members::realm_chain_find(e, n) {
-        members::RealmFind::Absent if absent_ok => None,
+    let (o, holder) = match members::realm_chain_find(e, n) {
+        members::RealmFind::Absent if absent_ok => (None, None),
         members::RealmFind::Absent => return false,
-        members::RealmFind::Own(o, _) => Some(o),
+        members::RealmFind::Own(o, at) => (Some(o), Some(at)),
     };
+    // `__proto__` reached on the chain at `Object.prototype` is its
+    // accessor (ECMA-262 B.2.2.1.1), whose getter returns the receiver's
+    // [[Prototype]]: the prototype the realm declares for this object
+    // (`RealmEntry::proto`), `null` where it declares none.
+    if n == "__proto__"
+        && holder.is_some_and(|h| h.name == "Object.prototype")
+        && matches!(o.map(|o| &o.value), Some(V::Accessor { .. }))
+    {
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            opaque_member(m, dst);
+        } else {
+            realm_proto_value(m, e.proto, dst);
+        }
+        return true;
+    }
     // An accessor the object holds or inherits whose getter the realm
     // declares with its effects (`process.allowedNodeEnvironmentFlags
     // .size`: `Set.prototype.size.<get>`, `returns(prim(num))`): the
@@ -2095,6 +2110,26 @@ fn hostval_member(
         (Some(o), None) => m.add_prim(dst, realm_prim(o).expect("prim")),
     }
     true
+}
+
+/// The value of a realm object's [[Prototype]] named `proto` (a realm
+/// entry name: `Object.prototype`, `EventEmitter.prototype`): that
+/// builtin's prototype object as the model holds it (the tokens of
+/// `family_proto_value`), `null` for none.
+fn realm_proto_value(m: &mut Model, proto: Option<&str>, dst: NodeId) {
+    let Some(p) = proto else {
+        m.add_prim(dst, prim::NULL);
+        return;
+    };
+    let base = p.strip_suffix(".prototype").unwrap_or(p);
+    let tok = match base {
+        "Object" => m.tok(TokKind::ObjectProto),
+        _ => match ns_by_name(base).and_then(|ns| builtin_proto_tok(m, ns)) {
+            Some(t) => t,
+            None => native_proto(m, base),
+        },
+    };
+    m.add_tok(dst, tok);
 }
 
 /// HOSTVAL on the global object: an own member the `%Global%` declaration

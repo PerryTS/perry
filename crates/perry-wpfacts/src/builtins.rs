@@ -3149,6 +3149,10 @@ pub(crate) fn builtin_value_sets(m: &Model, t: Tok, a: Atom) -> bool {
 /// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
 /// that reads other members of its receiver), then an unknown method of the
 /// host (`this`). A write later in the solve replays it (`NativeMiss::Call`).
+/// A write of the member's own key whose stored values every record names
+/// calls those values (one that is not callable throws: ECMA-262 7.3.14
+/// Call, its arguments reach no one), beside the native where the write did
+/// not happen (`native_protocol::answer_stored`, as the replay does).
 fn host_call(
     m: &mut Model,
     h: BuiltinNs,
@@ -3159,6 +3163,13 @@ fn host_call(
 ) {
     let t = m.tok(TokKind::Builtin(h));
     let a = m.atom(gate);
+    if gate == n
+        && host_written(m, h, a)
+        && native_protocol::answer_stored(m, t, a, NativeMiss::Call(t, call))
+    {
+        native(m);
+        return;
+    }
     if host_written(m, h, a) {
         // Census: the call hangs off the write that opened the gate, as a
         // replay does.
