@@ -46,12 +46,12 @@ fn reads(cases: &[(&str, &str, bool)]) {
 fn escapes(body: &str) -> bool {
     let src = format!(
         r#"
-        (globalThis as any).hostTake = (_x: any) => {{}};
+        declare function external(x?: unknown): any;
         class Svc {{ marker = 3; }}
         function g(a: any) {{ return a.marker; }}
         {HEAD}
         const o: any = new Svc();
-        const leak = function () {{ (globalThis as any).hostTake(o); return 1; }};
+        const leak = function () {{ external(o); return 1; }};
         const w: any = {{ valueOf: leak, toString: leak }};
         {body}
         console.log(g(o));
@@ -86,7 +86,7 @@ fn dataview_get_set_results() {
             true,
         ),
         (
-            "(globalThis as any).hostTake(new DataView(new ArrayBuffer(8)).setUint8(0, 1));".into(),
+            "external(new DataView(new ArrayBuffer(8)).setUint8(0, 1));".into(),
             false,
         ),
     ]);
@@ -121,7 +121,7 @@ fn global_functions() {
         ("atob(s)", "length", true),
         ("btoa(s)", "length", true),
         ("pick(isFinite)(s)", "toFixed", false),
-        ("(globalThis as any).hostVal", "valueOf", false),
+        ("external()", "valueOf", false),
     ]);
     check(&[
         ("pick(parseInt)(w);".into(), true),
@@ -217,7 +217,7 @@ fn realm_objects_without_enumerable_own_props() {
             false,
         ));
         cases.push((format!("const x: any = {k}; const c: any = Object.assign({{}}, x); try {{ c.foo(o); }} catch (e) {{}}"), false));
-        cases.push((format!("const x: any = {k}; x.foo = (y: any) => (globalThis as any).hostTake(y); const c: any = {{ ...x }}; c.foo(o);"), true));
+        cases.push((format!("const x: any = {k}; x.foo = (y: any) => external(y); const c: any = {{ ...x }}; c.foo(o);"), true));
     }
     check(&cases);
 }

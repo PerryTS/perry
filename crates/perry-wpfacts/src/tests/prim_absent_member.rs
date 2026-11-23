@@ -24,6 +24,7 @@ const READS: [(&str, &str); 6] = [
 fn read(prim: &str, read: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         class R {{ y = 1; }}
         const o: any = {{ m(a: any) {{ return a.y; }} }};
         const r: any = new R();
@@ -92,7 +93,7 @@ fn a_value_stored_on_the_chain_is_read() {
         (MIXED, "w.repeat", "(Number.prototype as any).repeat"),
         ("5", "w.foo", "(Object.prototype as any).foo"),
     ] {
-        let pf = read(w, r, &format!("{k} = (globalThis as any).hostFn();"));
+        let pf = read(w, r, &format!("{k} = external();"));
         assert!(escape(&pf).is_some(), "{w} {r}\n{}", pf.dump_text());
     }
 }
