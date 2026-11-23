@@ -253,47 +253,28 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, b);
                 self.emit_memcall(func, "math_imul", 2);
             }
-            Expr::MathMin(args) if args.len() != 2 => {
-                // Variadic min — use bridge
-                if let Some(first) = args.first() {
-                    self.emit_expr(func, first);
-                    for arg in &args[1..] {
-                        self.emit_frame_begin(func, 2);
-                        func.instruction(&Instruction::LocalSet(self.temp_local));
-                        self.emit_slot_addr(func, 0);
-                        func.instruction(&Instruction::LocalGet(self.temp_local));
-                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
-                        self.emit_store_arg(func, 1, arg);
-                        self.emit_memcall(func, "math_min", 2);
-                    }
+            // Folding from the identity sends every operand through the bridge, so a lone
+            // argument still gets ToNumber.
+            Expr::MathMin(args) | Expr::MathMax(args) => {
+                let (identity, bridge) = if matches!(expr, Expr::MathMin(_)) {
+                    (f64::INFINITY, "math_min")
                 } else {
-                    func.instruction(&f64_const(f64::INFINITY));
-                    func.instruction(&Instruction::I64ReinterpretF64);
-                }
-            }
-            Expr::MathMax(args) if args.len() != 2 => {
-                if let Some(first) = args.first() {
-                    self.emit_expr(func, first);
-                    for arg in &args[1..] {
-                        self.emit_frame_begin(func, 2);
-                        func.instruction(&Instruction::LocalSet(self.temp_local));
-                        self.emit_slot_addr(func, 0);
-                        func.instruction(&Instruction::LocalGet(self.temp_local));
-                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
-                        self.emit_store_arg(func, 1, arg);
-                        self.emit_memcall(func, "math_max", 2);
-                    }
-                } else {
-                    func.instruction(&f64_const(f64::NEG_INFINITY));
-                    func.instruction(&Instruction::I64ReinterpretF64);
+                    (f64::NEG_INFINITY, "math_max")
+                };
+                func.instruction(&f64_const(identity));
+                func.instruction(&Instruction::I64ReinterpretF64);
+                for arg in args {
+                    self.emit_frame_begin(func, 2);
+                    func.instruction(&Instruction::LocalSet(self.temp_local));
+                    self.emit_slot_addr(func, 0);
+                    func.instruction(&Instruction::LocalGet(self.temp_local));
+                    func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                        offset: 0,
+                        align: 3,
+                        memory_index: 0,
+                    }));
+                    self.emit_store_arg(func, 1, arg);
+                    self.emit_memcall(func, bridge, 2);
                 }
             }
 
