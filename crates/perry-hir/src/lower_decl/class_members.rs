@@ -92,7 +92,7 @@ fn lower_constructor_in_scope(
     // Lower parameters with type extraction (using context for class type param resolution)
     let mut params = Vec::new();
     // Track TsParamProp params so we can synthesize `this.field = param` assignments
-    let mut param_prop_assignments: Vec<(LocalId, String)> = Vec::new();
+    let mut param_prop_assignments: Vec<(LocalId, String, u32)> = Vec::new();
     // Issue #572: track destructuring patterns on plain `Param` ctor args so
     // the body sees the destructured names (TsParamProp can't be a destructure).
     let mut destructuring_params: Vec<(LocalId, ast::Pat)> = Vec::new();
@@ -166,7 +166,7 @@ fn lower_constructor_in_scope(
                 ctx.shadow_native_instance_if_present(&param_name);
                 ctx.shadow_native_module_if_present(&param_name);
                 // Record this param for synthesizing `this.field = param` assignment
-                param_prop_assignments.push((param_id, param_name.clone()));
+                param_prop_assignments.push((param_id, param_name.clone(), ts_prop.span.lo.0));
                 params.push(Param { byte_offset: ts_prop.span.lo.0,
                     id: param_id,
                     name: param_name,
@@ -248,12 +248,12 @@ fn lower_constructor_in_scope(
     if !param_prop_assignments.is_empty() {
         let assignments: Vec<Stmt> = param_prop_assignments
             .iter()
-            .map(|(param_id, field_name)| {
+            .map(|(param_id, field_name, byte_offset)| {
                 Stmt::Expr(Expr::PropertySet {
                     object: Box::new(Expr::This),
                     property: field_name.clone(),
                     value: Box::new(Expr::LocalGet(*param_id)),
-                    byte_offset: 0,
+                    byte_offset: *byte_offset,
                     byte_end: 0,
                 })
             })

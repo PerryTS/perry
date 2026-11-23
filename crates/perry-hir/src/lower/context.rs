@@ -1017,7 +1017,7 @@ impl LoweringContext {
                 object: Box::new(Expr::This),
                 property: name.clone(),
                 value: Box::new(Expr::LocalGet(param_id)),
-                byte_offset: 0,
+                byte_offset,
                 byte_end: 0,
             }));
         }
