@@ -740,6 +740,15 @@ fn generate<'a>(
         });
     }
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
+    // Each function stands at its declaration (`this`, the result).
+    if let Some(s) = g.m.stop_top.as_mut() {
+        for (i, fi) in g.m.funcs.iter().enumerate() {
+            let sp = g.modules.get(fi.module as usize).and_then(|(_, m)| m.closure_source_text.get(&fi.func_id)).and_then(|x| x.source_span);
+            if let Some(sp) = sp {
+                s.fn_pos.insert(i as u32, (fi.module, sp.0));
+            }
+        }
+    }
     if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }

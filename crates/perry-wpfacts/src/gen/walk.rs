@@ -1726,7 +1726,23 @@ impl<'a> Gen<'a> {
             .get(&(s as *const Stmt as usize))
             .copied();
         let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
+        // A declaration's own operations stand at the declaration.
+        let kind0 = self.m.stop_top.as_mut().map(|st| std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::")));
+        let pos0 = match s {
+            Stmt::Let { id, .. } if self.m.stop_top.is_some() => self.modules[fx.module as usize]
+                .1
+                .local_source_spans
+                .get(id)
+                .map(|sp| std::mem::replace(&mut self.m.stop_top.as_mut().unwrap().gen_pos, (fx.module, sp.start))),
+            _ => None,
+        };
         self.stmt_inner(fx, s);
+        if let Some(p0) = pos0 {
+            self.m.stop_top.as_mut().unwrap().gen_pos = p0;
+        }
+        if let (Some(k0), Some(st)) = (kind0, self.m.stop_top.as_mut()) {
+            st.gen_kind = k0;
+        }
         self.m.proto_first_cur = prev_first;
         self.m.cur_fn = prev;
     }
