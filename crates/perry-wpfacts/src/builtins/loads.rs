@@ -1443,6 +1443,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     opaque_member(m, dst);
                 }
             }
+            // An accessor the realm declares on `Function.prototype`
+            // (`caller`, `arguments`: %ThrowTypeError%, ECMA-262 10.2.4): no
+            // program function owns the key (17.1: a strict function never
+            // gets one), so the read runs the declared getter on the
+            // function.
+            Some(n) if realm_accessor(m, Family::Function, None, n) => {
+                let Key::Named(a) = key else { unreachable!() };
+                family_member(m, Some(t), Family::Function, None, a, dst);
+                if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
+            }
             // An inherited key a store into ⊤ may have written onto
             // `Function.prototype` (or `Object.prototype`), unless the
             // chain is `Function.prototype` only (DEC 250: add-locked).

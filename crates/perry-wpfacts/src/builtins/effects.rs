@@ -866,6 +866,9 @@ impl Run {
         elems: &[RealmOperand],
         fields: &[RealmField],
     ) -> Tok {
+        // `own`: an object of the realm prototype itself (no hand model
+        // makes one), whose declared fields are its definite birth keys.
+        let mut own = false;
         let what = match proto {
             // An ordinary object, with or without own fields
             // (`navigator.locks`).
@@ -885,7 +888,10 @@ impl Run {
             // is the one `new URLSearchParams()` makes (constructors.rs),
             // with its modelled members (WHATWG URL 6.2).
             Cow::Borrowed("URLSearchParams.prototype") => "URLSearchParams",
-            Cow::Borrowed(p) => p,
+            Cow::Borrowed(p) => {
+                own = true;
+                p
+            }
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
         };
@@ -902,6 +908,25 @@ impl Run {
             let at = m.field(out, key);
             let v = self.held(m, &f.value, out);
             m.edge(v, at);
+        }
+        // The birth defines its fields as own data properties
+        // (CreateDataProperty, as a literal's), before any program code
+        // sees the object: definite birth keys of the template, kept only
+        // where every declared birth of the template defines them.
+        if let (true, Some(tm)) = (own, m.tmpl_of(out)) {
+            let keys: Vec<Atom> = fields.iter().map(|f| m.atom(&f.key)).collect();
+            let first = m.realm_born.insert(tm);
+            let tp = &mut m.tmpls[tm as usize];
+            if first {
+                tp.definite = keys.clone();
+            } else {
+                tp.definite.retain(|a| keys.contains(a));
+            }
+            for a in keys {
+                if !tp.birth_keys.contains(&a) {
+                    tp.birth_keys.push(a);
+                }
+            }
         }
         out
     }

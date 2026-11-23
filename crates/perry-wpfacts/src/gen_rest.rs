@@ -309,6 +309,21 @@ impl<'a> Gen<'a> {
                     let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
                     self.m.cons(callee, Cons::New { call });
                     ret
+                } else if let Some((recv, f)) = object
+                    .is_none()
+                    .then(|| self.native_global_method(module, method))
+                    .flatten()
+                {
+                    // The HIR's fold of `performance.mark(..args)` on the
+                    // unshadowed global: the call of the realm's own member
+                    // with the realm's `performance` as `this` (codegen calls
+                    // its runtime function directly). The call runs what the
+                    // member's declaration says.
+                    let callee = self.tok_node(f);
+                    let this = self.tok_node(recv);
+                    let (call, ret) = self.new_call(ThisArg::Node(this), a, vec![]);
+                    self.m.cons(callee, Cons::Call { call });
+                    ret
                 } else if let Some(t) = object
                     .is_none()
                     .then(|| self.namespace_member_callee(m0, method))

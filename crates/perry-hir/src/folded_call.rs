@@ -227,6 +227,37 @@ pub fn native_static_fold(module: &str, method: &str) -> Option<&'static str> {
     }
 }
 
+/// The members of the global `performance` object whose calls the HIR folds
+/// (expr_call/module_static.rs): `performance.mark(..args)` on the
+/// unshadowed global lowers to `NativeMethodCall { module: "perf_hooks",
+/// object: None, method: "mark" }`. `now` is not folded (programs replace it).
+pub const PERFORMANCE_FOLDED_METHODS: &[&str] = &[
+    "mark",
+    "measure",
+    "getEntries",
+    "getEntriesByName",
+    "getEntriesByType",
+    "clearMarks",
+    "clearMeasures",
+    "eventLoopUtilization",
+    "toJSON",
+    "clearResourceTimings",
+    "setResourceTimingBufferSize",
+    "markResourceTiming",
+    "timerify",
+];
+
+/// The realm global `G` when `NativeMethodCall { module, object: None,
+/// method }` is the HIR's fold of the method call `G.<method>(..args)` on the
+/// unshadowed global (`performance.mark(name)`). Codegen calls the method's
+/// runtime function directly with the realm's own `G` as receiver, whatever
+/// the program stored under the name, and wpfacts models the node as the
+/// call of the member the realm declares on `G`'s chain, `this` = `G`.
+pub fn native_global_method_fold(module: &str, method: &str) -> Option<&'static str> {
+    (module == "perf_hooks" && PERFORMANCE_FOLDED_METHODS.contains(&method))
+        .then_some("performance")
+}
+
 /// `recv.push(..args)` as the HIR folds it for a receiver that is no local:
 /// `NativeMethodCall { module: "array", method: "push_single" | "push" }`
 /// (`this.items.push(v)` in value position or in a constructor, `o.list.push(v)`).

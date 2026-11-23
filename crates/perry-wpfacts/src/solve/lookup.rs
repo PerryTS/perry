@@ -232,6 +232,8 @@ impl Model {
         if !self.virt_protos.contains_key(&t) {
             if let Some(tm) = self.tmpl_of(t) {
                 let tp = &self.tmpls[tm as usize];
+                // A realm birth's declared own field (`realm_born`) is made
+                // as a literal's is.
                 if matches!(
                     tp.kind,
                     crate::model::TmplKind::Lit { .. }
@@ -239,7 +241,8 @@ impl Model {
                             literal_shape: true,
                             ..
                         }
-                ) {
+                ) || self.realm_born.contains(&tm)
+                {
                     return !self.keys_unsure.contains(&tm)
                         && !self.inst_lose.contains(&tm)
                         && (tp.definite.contains(&a) || self.spread_sure(tm, a));
@@ -950,7 +953,8 @@ impl Model {
         let present = closed
             || match (key, self.tmpl_of(t)) {
                 (Key::Named(a), Some(tm)) => {
-                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                    let sure = (self.tmpls[tm as usize].kind.is_fact_unit()
+                        || self.realm_born.contains(&tm))
                         && !self.keys_unsure.contains(&tm)
                         && (self.tmpls[tm as usize].definite.contains(&a)
                             || self.spread_sure(tm, a)

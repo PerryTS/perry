@@ -2465,6 +2465,11 @@ pub struct Model {
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,
+    /// Built-in object templates of a realm prototype that a declared birth
+    /// makes (`effects::Run::fresh`, `fresh(PerformanceMark.prototype,
+    /// fields = {..})`): their `definite` keys are the own data fields every
+    /// declared birth of the template defines (the intersection).
+    pub realm_born: crate::pts::FxHashSet<TmplId>,
     /// DECISIONS 234: keys a `delete`, a `defineProperty` or an accessor
     /// through ⊤ or on a builtin prototype may have removed or redefined
     /// (`reshaped_any`: every key). A builtin prototype redefined under a

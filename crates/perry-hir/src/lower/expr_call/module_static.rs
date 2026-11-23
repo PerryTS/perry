@@ -515,22 +515,7 @@ pub(super) fn try_module_static_methods(
             {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let m = method_ident.sym.as_ref();
-                    if matches!(
-                        m,
-                        "mark"
-                            | "measure"
-                            | "getEntries"
-                            | "getEntriesByName"
-                            | "getEntriesByType"
-                            | "clearMarks"
-                            | "clearMeasures"
-                            | "eventLoopUtilization"
-                            | "toJSON"
-                            | "clearResourceTimings"
-                            | "setResourceTimingBufferSize"
-                            | "markResourceTiming"
-                            | "timerify"
-                    ) {
+                    if crate::folded_call::PERFORMANCE_FOLDED_METHODS.contains(&m) {
                         return Ok(Ok(Expr::NativeMethodCall {
                             module: "perf_hooks".to_string(),
                             class_name: None,
