@@ -100,7 +100,7 @@ fn match_loop(
         Expr::Compare {
             op: CompareOp::Lt,
             left,
-            right,
+            right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match right.as_ref() {
                 Expr::Integer(n) if (0..=i64::from(i32::MAX)).contains(n) => *n,
@@ -133,14 +133,14 @@ fn match_loop(
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == accumulator_id) => {
             match_length_read(right, counter_id)?
         }
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } if matches!(right.as_ref(), Expr::LocalGet(id) if *id == accumulator_id) => {
             match_length_read(left, counter_id)?
         }

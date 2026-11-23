@@ -1077,7 +1077,7 @@ fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
                 left,
-                right,
+                right, ..
             } => free(left, keys) && free(right, keys),
             _ => false,
         }

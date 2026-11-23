@@ -525,7 +525,7 @@ impl<'a> UseWalk<'a> {
                 matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                     && self.value_or_element_is_numeric(tracked, operand)
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 matches!(
                     op,
                     BinaryOp::Add

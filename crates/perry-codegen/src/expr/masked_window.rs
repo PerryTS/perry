@@ -270,7 +270,7 @@ pub(crate) fn masked_store_rhs_is_genuine_f64(ctx: &FnCtx<'_>, expr: &Expr) -> b
             }
             _ => false,
         },
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 perry_hir::BinaryOp::Add

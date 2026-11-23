@@ -476,7 +476,7 @@ fn guard_proof(cond: &Expr) -> Option<(u32, Type)> {
             left,
             ..
         } => guard_proof(left),
-        Expr::Compare { op, left, right } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
+        Expr::Compare { op, left, right, .. } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
             let (tested, lit) = match (left.as_ref(), right.as_ref()) {
                 (Expr::TypeOf(x), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(x)) => (x, s),
                 _ => return None,

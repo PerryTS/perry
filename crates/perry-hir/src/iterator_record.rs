@@ -140,7 +140,7 @@ impl IteratorRecordPlan {
             ty: Type::Any,
             mutable: true,
             init: Some(Expr::Conditional {
-                condition: Box::new(Expr::Compare {
+                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(use_iter)),
                     right: Box::new(Expr::Bool(true)),
@@ -187,7 +187,7 @@ impl IteratorRecordPlan {
             return init.iter().enumerate().rev().fold(
                 Expr::LocalGet(*last),
                 |otherwise, (i, id)| Expr::Conditional {
-                    condition: Box::new(Expr::Compare {
+                    condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(Expr::Integer(i as i64)),
@@ -243,7 +243,7 @@ impl IteratorRecordPlan {
     fn iterator_mode(&self) -> Expr {
         // A constructed predicate carries Boolean evidence without asking the
         // generic bare-binding truthiness path to trust a declaration.
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(self.use_iter)),
             right: Box::new(Expr::Bool(true)),
@@ -339,7 +339,7 @@ impl IteratorRecordPlan {
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(protocol),
             else_expr: Box::new(Expr::Conditional {
-                condition: Box::new(Expr::Compare {
+                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(self.index)),
                     right: Box::new(self.length()),
@@ -441,7 +441,7 @@ impl IteratorRecordPlan {
                     } = expr
                     {
                         if module == "__perry_runtime" && method == "arrayRecordClose" {
-                            args[1] = Expr::Binary {
+                            args[1] = Expr::Binary { byte_offset: 0 /*HPOS*/,
                                 op: BinaryOp::Add,
                                 left: Box::new(args[1].clone()),
                                 right: Box::new(Expr::Integer(1)),
@@ -502,7 +502,7 @@ impl IteratorRecordPlan {
         ];
         stepped_body.extend(body);
         finally.get_or_insert_with(Vec::new).push(Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::LocalGet(state)),
                 right: Box::new(Expr::Number(0.0)),
@@ -535,7 +535,7 @@ impl IteratorRecordPlan {
                         mutable: true,
                         init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
                     })),
-                    condition: Some(Expr::Compare {
+                    condition: Some(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(bound),

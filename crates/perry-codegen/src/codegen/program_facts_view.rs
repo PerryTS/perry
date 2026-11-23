@@ -164,7 +164,7 @@ impl FactsNumericExpr {
             Expr::Integer(n) => Self::Integer(*n),
             Expr::Number(n) => Self::Number(n.to_bits()),
             Expr::LocalGet(id) => Self::Param(*id),
-            Expr::Binary { op, left, right } => Self::Binary(
+            Expr::Binary { op, left, right, .. } => Self::Binary(
                 *op,
                 Box::new(Self::from_hir(left)?),
                 Box::new(Self::from_hir(right)?),
@@ -180,7 +180,7 @@ impl FactsNumericExpr {
             Self::Integer(n) => Expr::Integer(*n),
             Self::Number(n) => Expr::Number(f64::from_bits(*n)),
             Self::Param(id) => Expr::LocalGet(*id),
-            Self::Binary(op, l, r) => Expr::Binary {
+            Self::Binary(op, l, r) => Expr::Binary { byte_offset: 0 /*HPOS*/,
                 op: *op,
                 left: Box::new(l.to_hir()),
                 right: Box::new(r.to_hir()),

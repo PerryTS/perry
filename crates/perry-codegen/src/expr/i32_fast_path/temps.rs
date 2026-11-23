@@ -172,7 +172,7 @@ pub(crate) fn try_lower_compare(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<
     if !enabled() {
         return Ok(None);
     }
-    let Expr::Compare { op, left, right } = e else {
+    let Expr::Compare { op, left, right, .. } = e else {
         return Ok(None);
     };
     if !matches!(

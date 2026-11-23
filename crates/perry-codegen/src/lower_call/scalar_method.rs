@@ -57,7 +57,7 @@ fn collect_guarded_numeric_arg_locals(ctx: &FnCtx<'_>, arg: &Expr) -> Option<Vec
             Expr::Unary { op, operand } => {
                 matches!(op, UnaryOp::Pos | UnaryOp::Neg) && walk(ctx, operand, locals)
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 matches!(
                     op,
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -164,7 +164,7 @@ fn lower_guarded_numeric_arg_fast(
                 _ => bail!("unsupported guarded scalar method unary arg"),
             })
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let left = lower_guarded_numeric_arg_fast(ctx, left, raw_locals)?;
             let right = lower_guarded_numeric_arg_fast(ctx, right, raw_locals)?;
             Ok(match op {

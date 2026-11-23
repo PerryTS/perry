@@ -988,7 +988,7 @@ fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
 
 /// `cur != 0` — the accept test. `open` returns `0.0` when it declines.
 fn cursor_live(cur: u32) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: perry_hir::CompareOp::Ne,
         left: Box::new(Expr::LocalGet(cur)),
         right: Box::new(Expr::Number(0.0)),
@@ -1069,7 +1069,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
         // `cur != 0 ? (R == 1) : !R.done`
         *condition = Some(pick(
             cur,
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: perry_hir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(result_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -1508,7 +1508,7 @@ struct V2Emission {
 }
 
 fn is_undefined_cmp(id: u32) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Undefined),

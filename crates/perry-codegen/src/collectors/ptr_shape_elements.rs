@@ -789,7 +789,7 @@ impl<'a> ArrayWalk<'a> {
             && matches!(e, Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right,
+                right, ..
             } if matches!(right.as_ref(), Expr::Bool(true))
                 && matches!(left.as_ref(), Expr::LocalGet(m) if self.record_modes.contains(m)))
     }
@@ -1152,7 +1152,7 @@ impl<'a> ArrayWalk<'a> {
         let Some(Expr::Compare {
             op: perry_hir::CompareOp::Lt,
             left,
-            right,
+            right, ..
         }) = condition
         else {
             return None;

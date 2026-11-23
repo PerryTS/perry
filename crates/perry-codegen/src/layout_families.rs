@@ -583,7 +583,7 @@ fn param_default_fill<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<&'a Exp
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,

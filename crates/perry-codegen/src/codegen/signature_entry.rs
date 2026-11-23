@@ -94,7 +94,7 @@ pub(crate) fn is_default_prologue(s: &Stmt, id: u32) -> bool {
             Expr::Compare {
                 op: CompareOp::Eq,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         else_branch: None,

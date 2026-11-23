@@ -240,7 +240,7 @@ pub(crate) fn guard_for_in_body(
     body: Vec<Stmt>,
 ) -> Vec<Stmt> {
     let guard = Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
             right: Box::new(Expr::String("string".to_string())),
@@ -602,7 +602,7 @@ pub(crate) fn map_set_delete_safe_for_of(
             Box::new(extern_call(epoch_fn, vec![Expr::LocalGet(arr_id)])),
         ),
         Expr::LocalSet(idx_id, Box::new(Expr::LocalGet(nx_id))),
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Ge,
             left: Box::new(Expr::LocalGet(nx_id)),
             right: Box::new(Expr::Number(0.0)),

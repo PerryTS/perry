@@ -201,7 +201,7 @@ fn node<'a>(ctx: &FnCtx<'_>, e: &'a Expr, depth: u32) -> Result<Node<'a>, &'stat
     if depth >= 16 {
         return Err("depth");
     }
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary { op, left, right, .. } = e else {
         return Err("leaf");
     };
     if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {

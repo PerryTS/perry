@@ -350,7 +350,7 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         let coerced = Expr::TemplateStringCoerce(Box::new(lowered));
         result = Some(match result.take() {
             None => coerced,
-            Some(prev) => Expr::Binary {
+            Some(prev) => Expr::Binary { byte_offset: tpl.span.lo.0,
                 op: BinaryOp::Add,
                 left: Box::new(prev),
                 right: Box::new(coerced),
@@ -361,7 +361,7 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         if let Some(quasi) = tpl.quasis.get(i + 1) {
             let quasi_str: &str = quasi.raw.as_ref();
             if !quasi_str.is_empty() {
-                result = Some(Expr::Binary {
+                result = Some(Expr::Binary { byte_offset: tpl.span.lo.0,
                     op: BinaryOp::Add,
                     left: Box::new(result.take().expect("substitution just set result")),
                     right: Box::new(Expr::String(unescape_template(quasi_str))),

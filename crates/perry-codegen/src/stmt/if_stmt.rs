@@ -101,7 +101,7 @@ fn try_const_fold_condition(ctx: &FnCtx<'_>, condition: &perry_hir::Expr) -> Opt
         {
             Some(false)
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             // Try to extract a known constant from one side and a literal
             // from the other.
             let (const_val, literal_val) = match (left.as_ref(), right.as_ref()) {

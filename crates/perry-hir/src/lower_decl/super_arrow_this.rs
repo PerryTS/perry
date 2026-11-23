@@ -114,7 +114,7 @@ fn cell_read(cell: LocalId) -> Expr {
 /// read before `super()` returned (the cell is still unset).
 fn checked_cell_read(cell: LocalId) -> Expr {
     Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(cell_read(cell)),
             right: Box::new(Expr::Undefined),

@@ -927,7 +927,7 @@ impl Rewriter<'_> {
                 format!("{name}$present"),
                 Type::Any,
                 true,
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(p)),
                     right: Box::new(undefined()),
@@ -1084,7 +1084,7 @@ impl Rewriter<'_> {
         if rec.track {
             list.push(Expr::LocalSet(
                 rec.present,
-                Box::new(Expr::Compare {
+                Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: agg(),
                     right: Box::new(undefined()),
@@ -1111,7 +1111,7 @@ impl Rewriter<'_> {
             reads.push(Expr::LocalSet(rec.fields[i], Box::new(v)));
         }
         list.push(Expr::Conditional {
-            condition: Box::new(Expr::Compare {
+            condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: agg(),
                 right: Box::new(Expr::Bool(true)),
@@ -1449,7 +1449,7 @@ impl Rewriter<'_> {
         if rec.track {
             list.push(Expr::LocalSet(
                 rec.present,
-                Box::new(Expr::Compare {
+                Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: tmp(),
                     right: Box::new(undefined()),
@@ -1617,7 +1617,7 @@ impl Rewriter<'_> {
         let Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right,
+            right, ..
         } = condition
         else {
             return false;
@@ -1900,7 +1900,7 @@ impl Rewriter<'_> {
                     None => self.expr(object),
                 }
             }
-            Expr::Compare { op, left, right }
+            Expr::Compare { op, left, right, .. }
                 if matches!(
                     op,
                     CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe

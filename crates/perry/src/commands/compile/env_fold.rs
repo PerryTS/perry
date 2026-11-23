@@ -195,7 +195,7 @@ fn try_const(e: &Expr, env: &Env) -> Option<Const> {
                 },
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             let l = try_const(left, env)?;
             let r = try_const(right, env)?;
             eval_compare(*op, &l, &r)

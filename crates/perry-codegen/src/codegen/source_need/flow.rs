@@ -995,7 +995,7 @@ impl<'a> Build<'a> {
                 }
                 vec![]
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let strict = matches!(op, perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne);
                 for x in [left, right] {
                     let v = self.expr(cx, x);

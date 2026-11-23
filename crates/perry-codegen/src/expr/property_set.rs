@@ -542,7 +542,13 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
             // it, at the site's offset (a proven getter is called directly,
             // else the read is the ordinary one); then the setter, once.
             if *byte_offset != 0 {
-                if let Expr::Binary { op, left, right } = value.as_ref() {
+                if let Expr::Binary {
+                    op,
+                    left,
+                    right,
+                    byte_offset: op_offset,
+                } = value.as_ref()
+                {
                     if let Expr::PropertyGet {
                         object: read_object,
                         property: read_property,
@@ -555,6 +561,7 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
                                 (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
                         {
                             let value = Expr::Binary {
+                                byte_offset: *op_offset,
                                 op: *op,
                                 left: Box::new(Expr::PropertyGet {
                                     object: read_object.clone(),

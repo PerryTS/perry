@@ -13,7 +13,7 @@ fn number(expr: &Expr, local: &impl Fn(u32) -> bool) -> bool {
         Expr::Binary {
             op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
             left,
-            right,
+            right, ..
         } => number(left, local) && number(right, local),
         _ => false,
     }

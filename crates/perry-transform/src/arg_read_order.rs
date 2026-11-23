@@ -233,7 +233,7 @@ impl Scan {
             Expr::Compare {
                 op: CompareOp::Eq | CompareOp::Ne,
                 left,
-                right,
+                right, ..
             } => {
                 self.expr(left);
                 self.expr(right);

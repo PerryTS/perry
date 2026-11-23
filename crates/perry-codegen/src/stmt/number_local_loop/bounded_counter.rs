@@ -22,7 +22,7 @@ pub(super) fn match_plan(
     let Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right,
+        right, ..
     } = condition?
     else {
         return None;

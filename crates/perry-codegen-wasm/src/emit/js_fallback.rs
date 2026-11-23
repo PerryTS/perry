@@ -301,7 +301,7 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 match op {
@@ -313,7 +313,7 @@ impl WasmModuleEmitter {
                     _ => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
                 }
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 let js_op = match op {

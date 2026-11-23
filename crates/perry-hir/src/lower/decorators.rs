@@ -328,7 +328,7 @@ the decorator running for side effects only."
                 // class decorators); if it's not available, fall back to the
                 // original strict undefined-only check.
                 let ret_get = Expr::LocalGet(ret_id);
-                let ne_undef = Expr::Compare {
+                let ne_undef = Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Ne,
                     left: Box::new(ret_get.clone()),
                     right: Box::new(Expr::Undefined),
@@ -337,7 +337,7 @@ the decorator running for side effects only."
                     Some(target_expr) => Expr::Logical {
                         op: LogicalOp::And,
                         left: Box::new(ne_undef),
-                        right: Box::new(Expr::Compare {
+                        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                             op: CompareOp::Ne,
                             left: Box::new(ret_get),
                             right: Box::new(target_expr.clone()),

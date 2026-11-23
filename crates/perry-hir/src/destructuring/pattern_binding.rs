@@ -93,7 +93,7 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
 /// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
 /// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
 pub(super) fn is_strictly_undefined(value: Expr) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: CompareOp::Eq,
         left: Box::new(value),
         right: Box::new(Expr::Undefined),
@@ -140,7 +140,7 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -174,7 +174,7 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare {
+        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -349,7 +349,7 @@ pub(crate) fn lower_array_pattern_binding(
     // Every write to this private bit constructs a Boolean. Reify that
     // predicate at the completion boundary, rather than asking codegen to
     // infer a stable initializer type for a deliberately mutable local.
-    let completion_done = Expr::Compare {
+    let completion_done = Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(done_id)),
         right: Box::new(Expr::Bool(true)),

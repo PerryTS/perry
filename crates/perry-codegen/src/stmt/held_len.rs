@@ -30,7 +30,7 @@ pub(super) fn classify(
     let Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right,
+        right, ..
     } = cond
     else {
         return None;

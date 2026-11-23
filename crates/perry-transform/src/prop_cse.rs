@@ -210,7 +210,7 @@ fn guard_expr_is_analyzable(e: &Expr) -> bool {
         Expr::PropertyGet { object, .. } => matches!(object.as_ref(), Expr::LocalGet(_)),
         // STRICT compares only. `==`/`!=`/`<`/`<=`/`>`/`>=` all coerce, and
         // coercion calls `valueOf`/`toString`.
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             matches!(op, CompareOp::Eq | CompareOp::Ne)
                 && guard_expr_is_analyzable(left)
                 && guard_expr_is_analyzable(right)

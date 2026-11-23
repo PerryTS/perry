@@ -641,7 +641,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
                 }
             }
         },
-        Expr::Binary { op, left, right } => infer_binary_type(*op, left, right, env),
+        Expr::Binary { op, left, right, .. } => infer_binary_type(*op, left, right, env),
         Expr::Compare { .. }
         | Expr::InstanceOf { .. }
         | Expr::In { .. }

@@ -28,7 +28,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
     let Expr::Binary {
         op: BinaryOp::BitAnd,
         left,
-        right,
+        right, ..
     } = expr
     else {
         return None;
@@ -56,7 +56,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
     let Expr::Binary {
         op: BinaryOp::Div,
         left: div_left,
-        right: div_right,
+        right: div_right, ..
     } = inner_not.as_ref()
     else {
         return None;
@@ -71,7 +71,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
     let Expr::Binary {
         op: BinaryOp::Shl,
         left: shift_left,
-        right: shift_right,
+        right: shift_right, ..
     } = right.as_ref()
     else {
         return None;
@@ -82,7 +82,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
     let Expr::Binary {
         op: BinaryOp::Mod,
         left: mod_left,
-        right: mod_right,
+        right: mod_right, ..
     } = shift_right.as_ref()
     else {
         return None;

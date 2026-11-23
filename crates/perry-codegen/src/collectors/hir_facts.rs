@@ -2198,7 +2198,7 @@ fn expr_is_literal_u32(expr: &Expr) -> bool {
 fn expr_is_i32_shaped(expr: &Expr) -> bool {
     match expr {
         Expr::Integer(n) => i32::try_from(*n).is_ok(),
-        Expr::Binary { op, left, right }
+        Expr::Binary { op, left, right, .. }
             if matches!(
                 op,
                 perry_hir::BinaryOp::BitAnd

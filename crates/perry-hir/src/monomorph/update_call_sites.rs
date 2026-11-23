@@ -727,7 +727,7 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul

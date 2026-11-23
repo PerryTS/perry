@@ -62,7 +62,7 @@ fn str_parts(e: &Expr, out: &mut Vec<Part>) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             let mut l = Vec::new();
             let mut r = Vec::new();

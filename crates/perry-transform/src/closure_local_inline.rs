@@ -547,7 +547,7 @@ fn guarded_default_binding(stmt: &Stmt) -> Option<LocalId> {
     let Expr::Compare {
         op: CompareOp::Eq,
         left,
-        right,
+        right, ..
     } = condition
     else {
         return None;

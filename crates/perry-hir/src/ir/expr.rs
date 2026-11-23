@@ -131,6 +131,9 @@ pub enum Expr {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        /// Source byte offset (`span.lo.0`) of the binary expression (or of the
+        /// source construct a synthesized one desugars). Excluded from stable-hashing.
+        byte_offset: u32,
     },
     Unary {
         op: UnaryOp,
@@ -142,6 +145,9 @@ pub enum Expr {
         op: CompareOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        /// Source byte offset (`span.lo.0`) of the comparison (or of the source
+        /// construct a synthesized one desugars). Excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     // Logical

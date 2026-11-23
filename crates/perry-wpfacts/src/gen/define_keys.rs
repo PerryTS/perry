@@ -95,7 +95,7 @@ impl<'a> Gen<'a> {
                     seen.pop();
                     n
                 }
-                Expr::Binary { op, left, right } => {
+                Expr::Binary { op, left, right, .. } => {
                     let l = num(g, mi, left, seen)?;
                     let r = num(g, mi, right, seen)?;
                     match op {

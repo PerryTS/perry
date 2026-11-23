@@ -571,7 +571,7 @@ fn for_each_let_in_expr(e: &Expr, f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
 
 /// A step write: `(direction, magnitude)`.
 fn classify_step(id: u32, value: &Expr, st: &State) -> Option<(Dir, i64)> {
-    let Expr::Binary { op, left, right } = value else {
+    let Expr::Binary { op, left, right, .. } = value else {
         return None;
     };
     let dir = match op {
@@ -816,7 +816,7 @@ fn collect_conjunct_guards(e: &Expr, st: &State, out: &mut Vec<(u32, CompareOp, 
             collect_conjunct_guards(left, st, out);
             collect_conjunct_guards(right, st, out);
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             if let (Expr::LocalGet(id), Some(bound)) = (left.as_ref(), const_i32_value(right, st)) {
                 out.push((*id, *op, bound));
             } else if let (Some(bound), Expr::LocalGet(id)) =
@@ -1177,7 +1177,7 @@ fn accumulator_step_magnitude(
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = value
     else {
         return None;
@@ -1222,7 +1222,7 @@ fn step_magnitude_bound(
             u128::from(interval.lo.unsigned_abs()).max(u128::from(interval.hi.unsigned_abs())),
         );
     }
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary { op, left, right, .. } = e else {
         return None;
     };
     match op {

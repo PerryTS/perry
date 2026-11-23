@@ -140,7 +140,7 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
     match index {
         Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
         Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::BitAnd) => {
+        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::BitAnd) => {
             bitand_has_nonnegative_i32_mask(left, right)
         }
         Expr::LocalGet(id) => {

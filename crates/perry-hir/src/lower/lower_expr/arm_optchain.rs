@@ -280,7 +280,7 @@ pub(crate) fn lower_opt_chain_expr(
             }
             Ok(bind_bases(
                 Expr::Conditional {
-                    condition: Box::new(Expr::Compare {
+                    condition: Box::new(Expr::Compare { byte_offset: opt_chain.span.lo.0,
                         op: CompareOp::LooseEq,
                         left: Box::new(obj_expr),
                         right: Box::new(Expr::Null),
@@ -557,7 +557,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // `string.method` reads as undefined.
                         let guard_cond = match &opt_call_member_receiver {
                             Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
-                            None => Expr::Compare {
+                            None => Expr::Compare { byte_offset: opt_chain.span.lo.0,
                                 op: CompareOp::LooseEq,
                                 left: Box::new(fixed_callee),
                                 right: Box::new(Expr::Null),
@@ -577,7 +577,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // "Cannot read properties of <nullish> (reading 'method')".
                         match receiver_for_member_guard {
                             Some(recv) => Box::new(Expr::Conditional {
-                                condition: Box::new(Expr::Compare {
+                                condition: Box::new(Expr::Compare { byte_offset: opt_chain.span.lo.0,
                                     op: CompareOp::LooseEq,
                                     left: Box::new(recv),
                                     right: Box::new(Expr::Null),
@@ -603,7 +603,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // evaluation. The receiver appears twice (guard + call),
                         // so this is only reached when it is side-effect-free
                         // (`receiver_for_member_guard` is None otherwise).
-                        let guard_cond = Expr::Compare {
+                        let guard_cond = Expr::Compare { byte_offset: opt_chain.span.lo.0,
                             op: CompareOp::LooseEq,
                             left: Box::new(recv),
                             right: Box::new(Expr::Null),
@@ -685,7 +685,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // reads back as `undefined` (`type?.split?.(...)`).
                     let guard_cond = match &opt_call_member_receiver {
                         Some(recv) => opt_call_func_nullish_guard(recv, func_value),
-                        None => Expr::Compare {
+                        None => Expr::Compare { byte_offset: opt_chain.span.lo.0,
                             op: CompareOp::LooseEq,
                             left: Box::new(func_value),
                             right: Box::new(Expr::Null),
@@ -720,7 +720,7 @@ pub(crate) fn lower_opt_chain_expr(
                 let recv = opt_call_member_receiver.unwrap();
                 opt_call_func_nullish_guard(&recv, check_expr)
             } else {
-                Expr::Compare {
+                Expr::Compare { byte_offset: opt_chain.span.lo.0,
                     op: CompareOp::LooseEq,
                     left: Box::new(check_expr),
                     right: Box::new(Expr::Null),

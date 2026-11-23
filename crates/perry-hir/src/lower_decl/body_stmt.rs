@@ -2312,7 +2312,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 loop_body = body;
                 cond
             } else {
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
@@ -2393,7 +2393,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 name: format!("__n_{}", len_id),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary {
+                init: Some(Expr::Binary { byte_offset: for_in_stmt.span.lo.0,
                     op: crate::ir::BinaryOp::BitAnd,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
@@ -2429,7 +2429,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::LocalGet(len_id)),

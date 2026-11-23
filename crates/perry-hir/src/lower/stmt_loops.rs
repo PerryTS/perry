@@ -238,7 +238,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     ctx.locals.push((err_name.clone(), err_id, Type::Any));
 
     let close_on_throw = Stmt::If {
-        condition: Expr::Compare {
+        condition: Expr::Compare { byte_offset: loop_byte_offset,
             op: CompareOp::Ne,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(2.0)),
@@ -266,7 +266,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
             body: vec![close_on_throw, Stmt::Throw(Expr::LocalGet(err_id))],
         }),
         finally: Some(vec![Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: loop_byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -1837,7 +1837,7 @@ pub(super) fn lower_stmt_for_of_inner(
         loop_body = body;
         cond
     } else {
-        Expr::Compare {
+        Expr::Compare { byte_offset: for_of_stmt.span.lo.0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
@@ -1939,7 +1939,7 @@ pub(crate) fn lower_stmt_for_in(
         name: format!("__n_{}", len_id),
         ty: Type::Number,
         mutable: false,
-        init: Some(Expr::Binary {
+        init: Some(Expr::Binary { byte_offset: for_in_stmt.span.lo.0,
             op: crate::ir::BinaryOp::BitAnd,
             left: Box::new(Expr::PropertyGet {
                 byte_end: 0,
@@ -1980,7 +1980,7 @@ pub(crate) fn lower_stmt_for_in(
             mutable: true,
             init: Some(Expr::Integer(0)),
         })),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: for_in_stmt.span.lo.0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::LocalGet(len_id)),

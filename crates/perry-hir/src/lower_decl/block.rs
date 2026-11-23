@@ -1584,12 +1584,12 @@ fn lower_stmts_using_aware_inner(
                     result.push(Stmt::If {
                         condition: Expr::Logical {
                             op: LogicalOp::And,
-                            left: Box::new(Expr::Compare {
+                            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                                 op: CompareOp::Ne,
                                 left: Box::new(Expr::LocalGet(id)),
                                 right: Box::new(Expr::Null),
                             }),
-                            right: Box::new(Expr::Compare {
+                            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                                 op: CompareOp::Ne,
                                 left: Box::new(Expr::LocalGet(id)),
                                 right: Box::new(Expr::Undefined),
@@ -1641,12 +1641,12 @@ fn lower_stmts_using_aware_inner(
                 // if (id !== null && id !== undefined) [await] id.<method>()
                 let null_check = Expr::Logical {
                     op: LogicalOp::And,
-                    left: Box::new(Expr::Compare {
+                    left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Ne,
                         left: Box::new(Expr::LocalGet(id)),
                         right: Box::new(Expr::Null),
                     }),
-                    right: Box::new(Expr::Compare {
+                    right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Ne,
                         left: Box::new(Expr::LocalGet(id)),
                         right: Box::new(Expr::Undefined),

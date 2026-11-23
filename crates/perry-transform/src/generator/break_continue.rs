@@ -595,7 +595,7 @@ pub fn desugar_switch_to_ifs(
     let idx_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
 
-    let idx_is_unmatched = || Expr::Compare {
+    let idx_is_unmatched = || Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(idx_id)),
         right: Box::new(Expr::Number(unmatched)),
@@ -623,7 +623,7 @@ pub fn desugar_switch_to_ifs(
             then_branch: vec![
                 Stmt::Expr(Expr::LocalSet(t_id, Box::new(test.clone()))),
                 Stmt::If {
-                    condition: Expr::Compare {
+                    condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(d_id)),
                         right: Box::new(Expr::LocalGet(t_id)),
@@ -661,7 +661,7 @@ pub fn desugar_switch_to_ifs(
                     op: UnaryOp::Not,
                     operand: Box::new(Expr::LocalGet(done_id)),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                     op: CompareOp::Le,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::Number(i as f64)),
@@ -922,7 +922,7 @@ fn escape_set(carrier: LocalId, value: f64) -> Stmt {
 }
 
 fn escape_is(carrier: LocalId, op: CompareOp, value: f64) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op,
         left: Box::new(Expr::LocalGet(carrier)),
         right: Box::new(Expr::Number(value)),

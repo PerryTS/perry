@@ -53,7 +53,7 @@ fn index_is_definitely_numeric(e: &Expr) -> bool {
             op,
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot
         ),
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
@@ -277,7 +277,7 @@ fn pointer_locals(
                 )
                 .then_some(Type::Number),
             },
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 if matches!(op, BinaryOp::Add) {
                     if expr_is_known_non_pointer(
                         left,
@@ -461,7 +461,7 @@ fn pointer_locals(
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right,
+                right, ..
             } => {
                 expr_is_known_non_pointer_assuming_local(
                     left,
