@@ -911,6 +911,10 @@ impl WasmModuleEmitter {
                         user_func_idx,
                     );
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds.insert(
+                        user_func_idx,
+                        FnProtoKind::of_function(module, &member.function),
+                    );
                     self.record_rest_param(user_func_idx, 1, &member.function.params);
                     user_func_idx += 1;
                 }

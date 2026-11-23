@@ -73,8 +73,13 @@ console.log([Object.getPrototypeOf(c.g) === GenProto, Object.getPrototypeOf(c.a)
 const gp = Object.getPrototypeOf;
 const af = async () => {};
 console.log([gp(af) === AsyncProto, Reflect.apply(gp, null, [af]) === AsyncProto, gp(c.g) === GenProto, Reflect.apply(gp, null, [function* () {}]) === GenProto].join(","));
+const k = "cg";
+class D { *[k]() {} static async [k]() {} }
+console.log([Object.getPrototypeOf(new D().cg) === GenProto, Object.getPrototypeOf((D as any).cg) === AsyncProto].join(","));
+(GenProto as any).apply = null;
+console.log(typeof Reflect.apply(c.g, c, []));
 "#
         ),
-        "true,true,true,true,true,true\ntrue,true,true,true"
+        "true,true,true,true,true,true\ntrue,true,true,true\ntrue,true\nobject"
     );
 }
