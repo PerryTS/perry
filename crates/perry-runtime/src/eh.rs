@@ -46,7 +46,9 @@ pub(crate) const _URC_FATAL_PHASE1_ERROR: UnwindReasonCode = 3;
 type UnwindAction = c_int;
 const _UA_SEARCH_PHASE: UnwindAction = 1;
 
-#[repr(C)]
+// The Itanium ABI requires double-word alignment; LLVM libunwind stores
+// through the object with `movaps`.
+#[repr(C, align(16))]
 pub struct UnwindException {
     pub class: u64,
     pub cleanup: Option<extern "C" fn(UnwindReasonCode, *mut UnwindException)>,
@@ -497,5 +499,13 @@ mod wasi_test_unwinder_stubs {
     #[no_mangle]
     extern "C" fn _Unwind_SetIP(_ctx: *mut UnwindContext, _value: usize) {
         never_called()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unwind_exception_is_double_word_aligned() {
+        assert_eq!(std::mem::align_of::<super::UnwindException>(), 16);
     }
 }
