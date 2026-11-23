@@ -398,6 +398,7 @@ fn rewrite_async_closures_in_expr(
             enclosing_class,
             is_strict,
             is_async,
+            byte_offset,
             ..
         } = expr
         {
@@ -438,6 +439,7 @@ fn rewrite_async_closures_in_expr(
                     *is_strict,
                     next_local_id,
                     next_func_id,
+                    *byte_offset,
                 );
                 *body = new_body;
                 *is_async = false;

@@ -66,26 +66,29 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
         }
 
         // Pull the non-delegate yield operand into a preceding `await`.
-        let yield_value: Option<&mut Option<Box<Expr>>> = match &mut stmt {
+        let yield_value: Option<(&mut Option<Box<Expr>>, u32)> = match &mut stmt {
             Stmt::Expr(Expr::Yield {
                 value,
-                delegate: false, ..
-            }) => Some(value),
+                delegate: false,
+                byte_offset, ..
+            }) => Some((value, *byte_offset)),
             Stmt::Let {
                 init:
                     Some(Expr::Yield {
                         value,
-                        delegate: false, ..
+                        delegate: false,
+                byte_offset, ..
                     }),
                 ..
-            } => Some(value),
+            } => Some((value, *byte_offset)),
             Stmt::Return(Some(Expr::Yield {
                 value,
-                delegate: false, ..
-            }), _) => Some(value),
+                delegate: false,
+                byte_offset, ..
+            }), _) => Some((value, *byte_offset)),
             _ => None,
         };
-        if let Some(value) = yield_value {
+        if let Some((value, yield_offset)) = yield_value {
             let operand = value.take().map(|b| *b).unwrap_or(Expr::Undefined);
             let tmp = alloc_local(next_id);
             *value = Some(Box::new(Expr::LocalGet(tmp)));
@@ -94,7 +97,7 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
                 name: format!("__ayield_{}", tmp),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Await(Box::new(operand), 0 /*HPOS*/)),
+                init: Some(Expr::Await(Box::new(operand), yield_offset)),
             });
         }
         out.push(stmt);

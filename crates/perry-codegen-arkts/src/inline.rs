@@ -286,7 +286,7 @@ pub(crate) fn inline_calls_in_expr(
     if *budget == 0 {
         return;
     }
-    let (params, body, args, is_strict) = match expr {
+    let (params, body, args, is_strict, fn_offset) = match expr {
         Expr::Call { callee, args, .. } => match callee.as_ref() {
             Expr::FuncRef(id) => match function_map.get(id) {
                 Some(func) if func.params.len() == args.len() => (
@@ -294,6 +294,7 @@ pub(crate) fn inline_calls_in_expr(
                     func.body.clone(),
                     args.clone(),
                     func.is_strict,
+                    func.byte_offset,
                 ),
                 _ => return,
             },
@@ -303,9 +304,10 @@ pub(crate) fn inline_calls_in_expr(
                     body,
                     is_strict,
                     is_async: false,
+                    byte_offset,
                     ..
                 }) if params.len() == args.len() => {
-                    (params.clone(), body.clone(), args.clone(), *is_strict)
+                    (params.clone(), body.clone(), args.clone(), *is_strict, *byte_offset)
                 }
                 _ => return,
             },
@@ -322,7 +324,7 @@ pub(crate) fn inline_calls_in_expr(
     // Build a synthetic Function so `inline_one_call` can do its
     // standard remapping work. Re-uses the existing helper rather
     // than duplicating the local-id offset / param-substitution logic.
-    let synth_func = perry_hir::ir::Function { byte_offset: 0 /*HPOS*/,
+    let synth_func = perry_hir::ir::Function { byte_offset: fn_offset,
         id: 0,
         name: String::new(),
         type_params: Vec::new(),

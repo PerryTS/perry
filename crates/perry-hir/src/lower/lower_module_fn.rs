@@ -773,6 +773,7 @@ pub fn lower_module_full_with_platform_globals(
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
     module.init_is_strict = ctx.module_strict;
+    module.byte_offset = ast_module.span.lo.0;
     if should_enable_react_automatic_jsx(name, ast_module) {
         enable_react_automatic_jsx(&mut module, &mut ctx);
     }

@@ -66,6 +66,8 @@ pub struct DelegationRoute {
     /// emits as `suspend_state_lo + 1` (the non-empty pre-loop state always
     /// takes `suspend_state_lo`).
     pub resume_state: u32,
+    /// Source offset of the `yield*` expression this route delegates for.
+    pub byte_offset: u32,
 }
 
 impl DelegationRoute {
@@ -90,7 +92,7 @@ impl DelegationRoute {
 
     pub fn await_result(&self, call: Expr) -> Expr {
         if self.is_async {
-            Expr::Await(Box::new(call), 0 /*HPOS*/)
+            Expr::Await(Box::new(call), self.byte_offset)
         } else {
             call
         }
@@ -104,8 +106,8 @@ impl DelegationRoute {
 /// `passthrough` Yield exit and the marker never reaches codegen.
 const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 
-fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
-    Expr::Yield { byte_offset: 0 /*HPOS*/,
+fn passthrough_yield(result_id: LocalId, kind_id: LocalId, byte_offset: u32) -> Expr {
+    Expr::Yield { byte_offset,
         value: Some(Box::new(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
@@ -153,9 +155,9 @@ fn delegate_get_iterator(inner: Expr) -> Expr {
 /// iter-result, which must be awaited before `.value`/`.done` are read (`await`
 /// is a synchronous promise-drain in codegen). Sync generators read the
 /// iter-result directly.
-fn delegate_await(call: Expr) -> Expr {
+fn delegate_await(call: Expr, byte_offset: u32) -> Expr {
     if linearize_async_generator() {
-        Expr::Await(Box::new(call), 0 /*HPOS*/)
+        Expr::Await(Box::new(call), byte_offset)
     } else {
         call
     }
@@ -327,6 +329,7 @@ fn kind_is(kind_id: LocalId, kind: f64) -> Expr {
 #[allow(clippy::too_many_arguments)]
 fn emit_yield_star_loop(
     inner: &Expr,
+    byte_offset: u32,
     states: &mut Vec<State>,
     current: &mut Vec<Stmt>,
     state_num: &mut u32,
@@ -371,7 +374,7 @@ fn emit_yield_star_loop(
                 del_next_id,
                 del_iter_id,
                 Expr::Undefined,
-            ))),
+            ), byte_offset)),
         ))],
         states,
         current,
@@ -390,7 +393,7 @@ fn emit_yield_star_loop(
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
     let reyield = match del_kind_id {
-        None => Stmt::Expr(Expr::Yield { byte_offset: 0 /*HPOS*/,
+        None => Stmt::Expr(Expr::Yield { byte_offset,
             value: Some(Box::new(Expr::PropertyGet {
                 byte_end: 0,
                 byte_offset: 0,
@@ -399,7 +402,7 @@ fn emit_yield_star_loop(
             })),
             delegate: false,
         }),
-        Some(kind) => Stmt::Expr(passthrough_yield(del_result_id, kind)),
+        Some(kind) => Stmt::Expr(passthrough_yield(del_result_id, kind, byte_offset)),
     };
     let mut while_body = vec![
         // Spec step `received be AsyncGeneratorYield(? IteratorValue(innerResult))`.
@@ -417,7 +420,7 @@ fn emit_yield_star_loop(
                 del_next_id,
                 del_iter_id,
                 Expr::LocalGet(sent_id),
-            ))),
+            ), byte_offset)),
         )),
     ];
     while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
@@ -477,6 +480,7 @@ fn emit_yield_star_loop(
                 // so the `while` linearizer emits a non-empty pre-loop state at
                 // `deleg_lo` and the condition state at `deleg_lo + 1`.
                 resume_state: deleg_lo + 1,
+                byte_offset,
             })
         });
     }
@@ -654,7 +658,8 @@ pub fn linearize_body(
             // yield* delegation: iterate the inner iterator and yield each value
             Stmt::Expr(Expr::Yield {
                 value: Some(inner),
-                delegate: true, ..
+                delegate: true,
+                byte_offset: ys_off,
             }) => {
                 // Desugar `yield* inner` into a drive loop:
                 //   let __del_iter = GetIterator(inner);
@@ -667,6 +672,7 @@ pub fn linearize_body(
                 // (see `emit_yield_star_loop` for the shared implementation).
                 emit_yield_star_loop(
                     inner,
+                    *ys_off,
                     states,
                     current,
                     state_num,
@@ -839,10 +845,12 @@ pub fn linearize_body(
             // completion value becomes the generator's return value.
             Stmt::Return(Some(Expr::Yield {
                 value: Some(inner),
-                delegate: true, ..
+                delegate: true,
+                byte_offset: ys_off,
             }), roff) => {
                 let del_value_id = emit_yield_star_loop(
                     inner,
+                    *ys_off,
                     states,
                     current,
                     state_num,
@@ -1760,7 +1768,8 @@ pub fn linearize_body(
                 init:
                     Some(Expr::Yield {
                         value: Some(inner),
-                        delegate: true, ..
+                        delegate: true,
+                        byte_offset: ys_off,
                     }),
                 mutable,
                 ty,
@@ -1768,6 +1777,7 @@ pub fn linearize_body(
             } => {
                 let del_value_id = emit_yield_star_loop(
                     inner,
+                    *ys_off,
                     states,
                     current,
                     state_num,
