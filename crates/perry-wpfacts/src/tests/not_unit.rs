@@ -327,9 +327,9 @@ fn control_relink_to_an_array_reads_its_length() {
         .collect();
     assert!(!read.is_empty());
     assert!(read.iter().all(|s| matches!(
-            &s.verdict,
-            Verdict::No(r) if r.contains("primitive beside an object")
-        )));
+        &s.verdict,
+        Verdict::No(r) if r.contains("primitive beside an object")
+    )));
 }
 
 /// A call on the relinked object: the JSON call claim refuses (a call).

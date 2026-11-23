@@ -99,7 +99,11 @@ impl Model {
             if p == crate::topstop::NOPOS {
                 self.note_nopos(std::panic::Location::caller(), "edge");
             } else {
-                self.stop_top.as_mut().unwrap().edge_pos.insert((a as u64) << 32 | b as u64, p);
+                self.stop_top
+                    .as_mut()
+                    .unwrap()
+                    .edge_pos
+                    .insert((a as u64) << 32 | b as u64, p);
             }
         }
         if let Some(tp) = self.term_preds.as_mut() {

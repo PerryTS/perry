@@ -485,7 +485,9 @@ impl<'a> Gen<'a> {
         let holder = self.m.node_l("other-unit-receiver");
         self.m.other_units_store = Some(holder);
         self.m.add_tok(holder, TOP);
-        let src = self.m.top_src("value stored by another unit (other-unit receiver)");
+        let src = self
+            .m
+            .top_src("value stored by another unit (other-unit receiver)");
         self.m.cons(
             holder,
             Cons::Store {
