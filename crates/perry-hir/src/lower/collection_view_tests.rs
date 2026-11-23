@@ -270,6 +270,7 @@ fn method_map_destructuring_preserves_key_and_value_types() {
                     body,
                     catch,
                     finally,
+                    ..
                 } => binding_type(body, wanted)
                     .or_else(|| catch.as_ref().and_then(|c| binding_type(&c.body, wanted)))
                     .or_else(|| finally.as_deref().and_then(|s| binding_type(s, wanted))),

@@ -2,6 +2,16 @@ use super::*;
 use perry_hir::types::Type;
 use perry_hir::{Function, Param, TYPED_ARRAY_KIND_FLOAT64};
 
+// These cases hold no proven method site: the module scan and the statement
+// probe over an empty proven set.
+fn buffer_exposure(m: &Module) -> BufferExposure {
+    super::buffer_exposure(m, &BTreeSet::new())
+}
+
+fn stmt_may_expose(stmt: &Stmt, id: u32) -> bool {
+    super::stmt_may_expose(stmt, id, &BTreeSet::new())
+}
+
 fn let_stmt(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
         id,
@@ -79,6 +89,7 @@ fn func(id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -340,6 +351,7 @@ fn an_exposure_in_a_closure_or_another_function_is_remote() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

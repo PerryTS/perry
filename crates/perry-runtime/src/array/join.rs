@@ -762,8 +762,6 @@ fn join_values(
             result.append_static(if value.as_bool() { b"true" } else { b"false" });
         } else if value.is_number() {
             result.append_number(value.as_number());
-        } else if value.is_int32() {
-            result.append_number(value.as_int32() as f64);
         } else {
             crate::builtins::reject_symbol_to_string(f64::from_bits(element_bits));
             let string = arr_handle.with_const_ptr(|arr| element_to_string(arr, element_bits));

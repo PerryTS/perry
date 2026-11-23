@@ -9,47 +9,6 @@
 
 use super::*;
 
-fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
-    let hirs: Vec<(String, perry_hir::Module)> = mods
-        .iter()
-        .map(|(name, src)| {
-            let path = format!("{name}.ts");
-            let module = perry_parser::parse_typescript(src, &path).expect("parses");
-            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
-            for imp in &mut hir.imports {
-                if let Some(n) = imp.source.strip_prefix("./") {
-                    imp.resolved_path = Some(format!("{n}.ts"));
-                }
-            }
-            (path, hir)
-        })
-        .collect();
-    let list: Vec<(String, &perry_hir::Module)> =
-        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
-    // Re-export sources resolve as imports do.
-    let mut cfg = FactsConfig::default();
-    for (path, hir) in &hirs {
-        for e in &hir.exports {
-            let (perry_hir::Export::ReExport { source, .. }
-            | perry_hir::Export::ExportAll { source }
-            | perry_hir::Export::NamespaceReExport { source, .. }) = e
-            else {
-                continue;
-            };
-            if let Some(n) = source.strip_prefix("./") {
-                cfg.export_sources
-                    .entry(path.clone())
-                    .or_default()
-                    .insert(source.clone(), format!("{n}.ts"));
-            }
-        }
-    }
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// The verdicts of the reads (or, `call`, the calls) of `key` in the last
 /// module, whole program and per unit.
 fn verdicts(mods: &[(&str, &str)], key: &str, call: bool) -> (Vec<Verdict>, Vec<Verdict>) {
@@ -257,4 +216,45 @@ console.log(n);
 "#;
     let (w, u) = verdicts(&[("a", FRESH), ("b", b)], "kind", false);
     assert!(unproven(&u), "per unit: {u:?} (whole {w:?})");
+}
+
+fn modules(mods: &[(&str, &str)], per_unit: bool) -> ProgramFacts {
+    let hirs: Vec<(String, perry_hir::Module)> = mods
+        .iter()
+        .map(|(name, src)| {
+            let path = format!("{name}.ts");
+            let module = perry_parser::parse_typescript(src, &path).expect("parses");
+            let mut hir = perry_hir::lower_module(&module, name, &path).expect("lowers");
+            for imp in &mut hir.imports {
+                if let Some(n) = imp.source.strip_prefix("./") {
+                    imp.resolved_path = Some(format!("{n}.ts"));
+                }
+            }
+            (path, hir)
+        })
+        .collect();
+    let list: Vec<(String, &perry_hir::Module)> =
+        hirs.iter().map(|(p, h)| (p.clone(), h)).collect();
+    // Re-export sources resolve as imports do.
+    let mut cfg = FactsConfig::default();
+    for (path, hir) in &hirs {
+        for e in &hir.exports {
+            let (perry_hir::Export::ReExport { source, .. }
+            | perry_hir::Export::ExportAll { source }
+            | perry_hir::Export::NamespaceReExport { source, .. }) = e
+            else {
+                continue;
+            };
+            if let Some(n) = source.strip_prefix("./") {
+                cfg.export_sources
+                    .entry(path.clone())
+                    .or_default()
+                    .insert(source.clone(), format!("{n}.ts"));
+            }
+        }
+    }
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

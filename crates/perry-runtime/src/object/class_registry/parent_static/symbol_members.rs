@@ -62,7 +62,7 @@ pub(crate) unsafe fn install_symbol_method(
     let home = if is_class_object_value(owner.get_nanbox_f64()) {
         owner.get_nanbox_f64()
     } else {
-        crate::object::class_prototype_ref_value(class_id)
+        crate::object::class_method_home_word(class_id)
     };
     let method = scope.root_nanbox_f64(
         crate::object::native_module::class_method_declaration_value(
@@ -330,7 +330,13 @@ mod static_receiver_tests {
             );
             let set = |class_id: u32, v: f64| {
                 let c = crate::object::class_value::class_value(class_id);
-                crate::object::property_ops::put_value::js_put_value_set_dynamic(c, sym, v, 0);
+                crate::object::property_ops::put_value::js_put_value_set_dynamic(
+                    crate::object::shapes::ordinary_dir_addr(),
+                    c,
+                    sym,
+                    v,
+                    0,
+                );
                 c
             };
             // An own symbol property of the class function object (an

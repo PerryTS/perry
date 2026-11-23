@@ -80,6 +80,23 @@ struct Event {
     mergeable: bool,
 }
 impl Event {
+    /// Drops the values `keep` refuses: they are rebuilt, never changed in
+    /// shared storage. Returns how many are kept.
+    fn retain(&mut self, keep: &impl Fn(u32) -> bool) -> usize {
+        let v: Vec<u32> = match &self.values {
+            Values::Owned(v) => v.iter().copied().filter(|&t| keep(t)).collect(),
+            Values::Shared(s) => s
+                .chunks
+                .iter()
+                .flat_map(|c| c.iter().copied())
+                .filter(|&t| keep(t))
+                .collect(),
+        };
+        if v.len() != self.values.len() {
+            self.values = Values::Owned(v);
+        }
+        self.values.len()
+    }
     fn remap(&mut self, rank: &[u32]) {
         let old = self.boundary;
         self.boundary = rank[old as usize];
@@ -103,6 +120,10 @@ impl Batch {
     }
     pub(crate) fn len(&self) -> usize {
         self.0.len
+    }
+    /// The batch's tokens in order (provenance diagnostic, `provenance.rs`).
+    pub(crate) fn each_token(&self) -> impl Iterator<Item = u32> + '_ {
+        self.0.chunks.iter().flat_map(|c| c.iter().copied())
     }
     #[cfg(test)]
     pub(crate) fn tokens(&self) -> Tokens<'_> {

@@ -345,7 +345,7 @@ pub(crate) unsafe fn nm_dispatch_fs(ctx: &NmCtx, module_name: &str, method_name:
         ("fs", "openSync") => crate::fs::js_fs_open_sync(arg(0), arg(1)),
         ("fs", "openAsBlob") => crate::fs::js_fs_open_as_blob(arg(0), arg(1)),
         ("fs", "closeSync") => void_result(crate::fs::js_fs_close_sync(arg(0))),
-        ("fs", "readSync") if args_len == 3 => {
+        ("fs", "readSync") if args_len == 2 || args_len == 3 => {
             crate::fs::js_fs_read_sync_options(arg(0), arg(1), arg(2))
         }
         ("fs", "readSync") => crate::fs::js_fs_read_sync(arg(0), arg(1), arg(2), arg(3), arg(4)),

@@ -12,50 +12,130 @@ use crate::value::JSValue;
 /// POSIX credential accessors (#1408). On non-unix targets each returns 0.
 #[no_mangle]
 pub extern "C" fn js_process_getuid() -> f64 {
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getuid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
-        0.0
+        return crate::snap_census::input_call("ids.uid", &format!("{:?}", ()), || {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getuid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getuid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        }
     }
 }
 #[no_mangle]
 pub extern "C" fn js_process_geteuid() -> f64 {
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::geteuid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
-        0.0
+        return crate::snap_census::input_call("ids.euid", &format!("{:?}", ()), || {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::geteuid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::geteuid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        }
     }
 }
 #[no_mangle]
 pub extern "C" fn js_process_getgid() -> f64 {
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getgid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
-        0.0
+        return crate::snap_census::input_call("ids.gid", &format!("{:?}", ()), || {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getgid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getgid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        }
     }
 }
 #[no_mangle]
 pub extern "C" fn js_process_getegid() -> f64 {
-    crate::effect!(host_read, ids);
-    #[cfg(unix)]
-    unsafe {
-        libc::getegid() as f64
-    }
-    #[cfg(not(unix))]
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
     {
-        0.0
+        return crate::snap_census::input_call("ids.egid", &format!("{:?}", ()), || {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getegid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, ids);
+            #[cfg(unix)]
+            unsafe {
+                libc::getegid() as f64
+            }
+            #[cfg(not(unix))]
+            {
+                0.0
+            }
+        }
     }
 }
 
@@ -110,11 +190,7 @@ fn validate_credential_id(value: f64) -> Option<u32> {
         throw_type_error_with_code(&message, "ERR_INVALID_ARG_TYPE");
     }
 
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(n.is_finite() && n.fract() == 0.0) {
         let message = format!(
             "The value of \"id\" is out of range. It must be an integer. Received {}",

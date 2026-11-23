@@ -3,6 +3,34 @@
 use super::*;
 
 impl<'a> Gen<'a> {
+    /// The receiver of a generic in-place permutation (`reverse`,
+    /// `copyWithin` through `.call`): its arrays' lengths are ⊤ with the
+    /// length floor on (`solve::arr_len`).
+    fn permuted_len(&mut self, fx: &Fx, r: NodeId) {
+        self.len_index_site(fx, r, "permuted");
+        self.m.arr_permuted.insert(r);
+        if !self.m.arr_floor_off {
+            self.m.cons(
+                r,
+                Cons::LenIndex {
+                    lo: crate::model::Iv::TOP.lo,
+                    hi: crate::model::Iv::TOP.hi,
+                },
+            );
+        }
+    }
+
+    /// Where the storeless `Cons::LenIndex` of receiver `r` runs
+    /// (`Model::len_index_sites`). One site per node: a second function's
+    /// rule on a node the first owns is a capture, which ends the fact.
+    fn len_index_site(&mut self, fx: &Fx, r: NodeId, what: &str) {
+        if (self.m.held_lengths || self.m.named_lengths) && !self.m.len_index_sites.contains_key(&r)
+        {
+            let site = self.store_site(fx.module, fx.f, what.into(), None, false);
+            self.m.len_index_sites.insert(r, site);
+        }
+    }
+
     pub(super) fn expr_rest_collections(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         match e {
@@ -11,16 +39,52 @@ impl<'a> Gen<'a> {
                 let a = self.local(mi, *array_id);
                 let s = self.expr(fx, source);
                 let it = self.iterate(s);
+                self.list_push(a, None);
                 self.elem_store(fx, a, it, "push...");
                 self.prim_node(prim::NUM)
             }
             Expr::ArrayPop(id) => {
                 let a = self.local(mi, *id);
+                self.len_index_site(fx, a, "pop");
+                // `pop` sets `length` (ArraySetLength): the array's length
+                // moves (`solve::arr_len`).
+                self.m.cons(
+                    a,
+                    Cons::LenIndex {
+                        lo: crate::model::Iv::TOP.lo,
+                        hi: crate::model::Iv::TOP.hi,
+                    },
+                );
                 let out = self.elem_load(a);
                 self.m.add_prim(out, prim::UNDEF);
+                // The node is the call `a.pop()`: a receiver that holds its
+                // own `pop` (an own property, an own prototype, an object
+                // behind the Array annotation) runs that method, and its
+                // result is the node's value (codegen: the checked entry
+                // `js_array_m_pop0`).
+                if super::array_method_tiers() {
+                    let pop = self.m.atom("pop");
+                    self.folded_site(
+                        fx,
+                        "ArrayPop",
+                        &perry_hir::folded_call::Receiver::Local(*id),
+                        pop,
+                        a,
+                    );
+                    let ret = self.mcall(a, Key::Named(pop), vec![], vec![]);
+                    self.m.edge(ret, out);
+                }
                 out
             }
-            Expr::ArrayReverseValue { receiver } => self.expr(fx, receiver),
+            // `Array.prototype.reverse.call(r)`: with the length floor on, a
+            // permutation of an Array whose length may grow is ⊤ (Q1,
+            // `Model::arr_len_permuted`); this generic form makes it ⊤ for
+            // every array receiver, as `pop` does.
+            Expr::ArrayReverseValue { receiver } => {
+                let r = self.expr(fx, receiver);
+                self.permuted_len(fx, r);
+                r
+            }
             Expr::ArrayCopyWithinValue {
                 receiver,
                 target,
@@ -28,6 +92,7 @@ impl<'a> Gen<'a> {
                 end,
             } => {
                 let r = self.expr(fx, receiver);
+                self.permuted_len(fx, r);
                 let _ = self.prim_op(
                     fx,
                     &[target, start],
@@ -48,6 +113,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: why,
                         proto: Protocol::Any,
+                        region: self.m.thrown,
                     },
                 );
                 let el = self.load(r, Key::any());
@@ -69,22 +135,38 @@ impl<'a> Gen<'a> {
             }
 
             // ---------------------------------------------- maps and sets
-            Expr::MapNew => self.bobj(mi, "Map").1,
+            Expr::MapNew => {
+                let (t, n) = self.bobj(mi, "Map");
+                self.m.map_born(t);
+                n
+            }
             Expr::SetNew => self.bobj(mi, "Set").1,
             Expr::MapNewFromArray(x) => {
                 // Entries `[key, value]`: the map holds their contents.
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let ek = self.m.elem_key();
                 let inner = self.load(it, ek);
                 let (t, n) = self.bobj(mi, "Map");
                 let fa = self.m.field_any(t);
                 self.m.edge(inner, fa);
+                // AddEntriesFromIterable (24.1.1.2 step 4.f): each value is
+                // Get(entry, "1"), as the constructor call does
+                // (`builtins/constructors.rs`).
+                self.m.map_born(t);
+                let one = Key::Named(self.m.atom("1"));
+                let val = self.load(it, one);
+                let mv = self.m.map_vals(t);
+                self.m.edge(val, mv);
+                let zero = Key::Named(self.m.atom("0"));
+                let key = self.load(it, zero);
+                let mk = self.m.map_keys(t);
+                self.m.edge(key, mk);
                 n
             }
             Expr::SetNewFromArray(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let (t, n) = self.bobj(mi, "Set");
                 let fa = self.m.field_any(t);
                 self.m.edge(it, fa);
@@ -93,9 +175,17 @@ impl<'a> Gen<'a> {
             Expr::MapEntryKeyAt { map, idx }
             | Expr::MapEntryValueAt { map, idx }
             | Expr::SetValueAt { set: map, idx } => {
+                // The for-of index walk over a typed Map or Set (HIR
+                // `lower_decl/body_stmt.rs`): the runtime reads the
+                // collection's own entry list at a live index
+                // (`js_set_value_at`, `js_map_entry_key_at` / `_value_at`),
+                // `undefined` for a value that is no collection. No [[Get]]
+                // runs, so no prototype member is read: it is the element
+                // read of the contents, as `values()` (`SetValues`) is.
                 let m = self.expr(fx, map);
                 let _ = self.expr(fx, idx);
-                let out = self.load(m, Key::any());
+                let ek = self.m.elem_key();
+                let out = self.load(m, ek);
                 self.m.add_prim(out, prim::UNDEF);
                 out
             }
@@ -114,59 +204,69 @@ impl<'a> Gen<'a> {
             }
             Expr::ObjectFromEntries(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 // Each entry's key and value: its `"0"` and `"1"` (a
                 // [[Get]] under a number key), not every member of its chain.
-                let num = Key::Named(self.m.atom(crate::model::NUM_KEY));
-                let inner = self.load(it, num);
+                let inner = self.tmp("load");
                 let (t, n) = self.bobj(mi, "fromEntries");
-                let fa = self.m.field_any(t);
-                self.m.edge(inner, fa);
+                crate::builtins::object_statics::from_entries(&mut self.m, it, inner, t);
                 n
             }
             Expr::ObjectValues(x) => {
                 let v = self.expr(fx, x);
                 let el = self.own_values(v);
-                self.new_arr_from(mi, "values", &[el])
+                self.new_ordinary_arr_from(mi, "values", &[el])
             }
             Expr::ObjectEntries(x) => {
+                // Each entry is CreateArrayFromList(« key, value »)
+                // (ECMA-262 7.3.23 EnumerableOwnProperties step 4.a.ii.2.b):
+                // index 0 the key (`Cons::OwnKeys`, rule EK), index 1 the
+                // value, each its own slot (`Model::index_slot`). Keys and
+                // values are not paired: each key reads every value.
                 let v = self.expr(fx, x);
                 let el = self.own_values(v);
-                let s = self.prim_node(prim::STR);
-                let pair = self.new_arr_from(mi, "entry", &[el, s]);
-                self.new_arr_from(mi, "entries", &[pair])
+                let ks = self.own_keys(v);
+                let tm = self.new_arr_birth(mi, "entry", true, false);
+                self.m.ordinary_arrays.insert(tm);
+                let t = self.m.tok(TokKind::Obj(tm, NO_CTX));
+                let k0 = self.m.index_slot(t, 0);
+                self.m.edge(ks, k0);
+                let v1 = self.m.index_slot(t, 1);
+                self.m.edge(el, v1);
+                let pair = self.tok_node(t);
+                self.new_ordinary_arr_from(mi, "entries", &[pair])
             }
             e @ (Expr::ObjectGroupBy { items, key_fn } | Expr::MapGroupBy { items, key_fn }) => {
                 let v = self.expr(fx, items);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let f = self.expr(fx, key_fn);
                 let num = self.prim_node(prim::NUM);
                 let k = self.callback(f, vec![it, num]);
-                let why = self.m.reason("groupBy key");
-                self.m.cons(
-                    k,
-                    Cons::Implicit {
-                        reason: why,
-                        proto: Protocol::ToPrimitive,
-                    },
-                );
                 let group = self.new_arr_from(mi, "group", &[it]);
-                // `Object.groupBy` makes a null-prototype object, `Map.groupBy`
-                // a Map (`members::box_chain`).
+                // `Object.groupBy` makes a null-prototype object
+                // (`members::box_chain`); `Map.groupBy` a Map, whose keys and
+                // groups are its contents. Born from groups, not by `new
+                // Map()`, it is never closed (`solve/map_vals.rs`): `get`
+                // reads its contents.
                 let kind = if matches!(e, Expr::MapGroupBy { .. }) {
-                    "mapGroups"
+                    "Map"
                 } else {
                     "groups"
                 };
                 let (t, n) = self.bobj(mi, kind);
-                let fa = self.m.field_any(t);
-                self.m.edge(group, fa);
-                self.m.edge(k, fa);
+                crate::builtins::object_statics::group_by(&mut self.m, k, group, t);
+                if kind == "Map" {
+                    // A birth of the Map (`map_born`) whose contents no
+                    // modelled `set` wrote: open (`map_open`), its values
+                    // are the groups in its any-key field.
+                    self.m.map_born(t);
+                    self.m.map_open(t);
+                }
                 n
             }
             Expr::ArrayFrom(x, _) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 self.m.cons(v, Cons::FromArrayLike { dst: it });
                 self.new_arr_from(mi, "from", &[it])
             }
@@ -177,7 +277,7 @@ impl<'a> Gen<'a> {
             }
             Expr::ForAwaitToArray(x) => {
                 let v = self.expr(fx, x);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 let aw = self.awaited(it);
                 let arr = self.new_arr_from(mi, "fromAsync", &[aw]);
                 self.promise_of(mi, arr)
@@ -194,7 +294,7 @@ impl<'a> Gen<'a> {
                 this_arg,
             } => {
                 let v = self.expr(fx, iterable);
-                let it = self.iterate(v);
+                let it = self.iterate_closed(v);
                 self.m.cons(v, Cons::FromArrayLike { dst: it });
                 let f = self.expr(fx, map_fn);
                 let this = match this_arg {
@@ -207,10 +307,24 @@ impl<'a> Gen<'a> {
             }
             Expr::IteratorFrom(x) | Expr::GetIterator(x) | Expr::GetAsyncIterator(x) => {
                 let v = self.expr(fx, x);
+                // Rule RP2: the GetIterator of a guarded record's protocol
+                // arm never sees an Array the runtime takes the array arm for.
+                let v = match x.as_ref() {
+                    Expr::LocalGet(s)
+                        if matches!(e, Expr::GetIterator(_))
+                            && self.record_locals.contains(&(mi, *s)) =>
+                    {
+                        self.record_entry(v)
+                    }
+                    _ => v,
+                };
                 // The iterator yields what iterating `v` yields (holes
                 // included, `Model::hole` of `v`), and nothing else.
-                let it = self.iterate(v);
-                let out = self.new_dense_arr_from(mi, "iterator", &[it]);
+                let it = self.iterate_closed(v);
+                let (tm, out) = self.new_dense_arr_tmpl(mi, "iterator", &[it]);
+                if matches!(e, Expr::GetIterator(_)) {
+                    self.m.get_iterator_src.insert(tm, v);
+                }
                 self.m.edge(v, out);
                 out
             }

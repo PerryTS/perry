@@ -127,15 +127,12 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
         }
         None => {
             // A statically resolved parent has no per-evaluation heritage
-            // value to pin (native constructors use reserved class ids).
-            // The declared prototype already carries that parent edge in its
-            // shape; copy it rather than defaulting this evaluation to Object.
-            let template_proto = super::super::class_registry::class_decl_prototype_value(class_id);
-            if JSValue::from_bits(template_proto.to_bits()).is_pointer() {
-                Some(super::super::js_object_get_prototype_of(template_proto).to_bits())
-            } else {
-                super::super::class_registry::global_object_prototype_bits()
-            }
+            // value to pin (native constructors use reserved class ids). Its
+            // edge is the declaration's static parent link, read from the
+            // declaration facts, not from the template's declaration holder:
+            // building this evaluation's prototype never builds the
+            // template's (S7b).
+            super::super::class_registry::static_parent_prototype_bits(class_id)
         }
     };
     finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
@@ -261,6 +258,8 @@ pub(crate) unsafe fn finish_class_evaluation_prototype(
                 class_id,
                 &name,
                 class_value,
+                proto
+                    .with_mut_ptr::<ObjectHeader, _>(|p| crate::value::js_nanbox_pointer(p as i64)),
             )
         });
         proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
@@ -663,14 +662,15 @@ pub(super) unsafe fn instance_constructor_value(
             | CLASS_ID_BOXED_SYMBOL
     ) {
         let name = match class_id {
-            CLASS_ID_BOXED_NUMBER => b"Number".as_slice(),
-            CLASS_ID_BOXED_STRING => b"String".as_slice(),
-            CLASS_ID_BOXED_BOOLEAN => b"Boolean".as_slice(),
-            CLASS_ID_BOXED_BIGINT => b"BigInt".as_slice(),
-            CLASS_ID_BOXED_SYMBOL => b"Symbol".as_slice(),
+            CLASS_ID_BOXED_NUMBER => "Number",
+            CLASS_ID_BOXED_STRING => "String",
+            CLASS_ID_BOXED_BOOLEAN => "Boolean",
+            CLASS_ID_BOXED_BIGINT => "BigInt",
+            CLASS_ID_BOXED_SYMBOL => "Symbol",
             _ => unreachable!(),
         };
-        let v = js_get_global_this_builtin_value(name.as_ptr(), name.len());
+        // Declared phase-A globals, each a literal: the realm's core.
+        let v = crate::object::builtin_value_core(name);
         return Some(JSValue::from_bits(v.to_bits()));
     }
     // #11868: an anonymous shape is not a constructor identity. Let the

@@ -165,10 +165,7 @@ impl ObjectHeader {
 /// reach `GC_TYPE_OBJECT` receivers with ordinary layouts only.
 #[inline(always)]
 pub const fn carry_shadow(previous: u32, id: LayoutWord) -> LayoutWord {
-    if word_is_shadowed(previous)
-        && id.0 >= super::shapes::SHAPE_ID_BASE
-        && id.0 < crate::codegen_abi::LAYOUT_ORDINARY_END
-    {
+    if word_is_shadowed(previous) && crate::codegen_abi::is_ordinary_record_word(id.0) {
         LayoutWord(id.0 | crate::codegen_abi::LAYOUT_SHADOW_BIT)
     } else {
         id
@@ -762,6 +759,36 @@ unsafe fn alloc_layout_object_offering(
         super::header::meta_form_alloc_bytes(0) as u32,
         d.slot_count,
     )
+}
+
+/// An arguments object (kinds 13/14) on `desc`: the layout's three named
+/// slots and the elements after them, `physical_slots` in all, every slot the
+/// hole, in one allocation. Can collect.
+///
+/// # Safety
+/// `desc` is `runtime_layouts::ARGUMENTS` or `ARGUMENTS_STRICT`.
+pub(crate) unsafe fn alloc_arguments_layout(
+    desc: *const PerryLayoutDesc,
+    physical_slots: usize,
+) -> *mut ObjectHeader {
+    let Some(id) = layout_word_for_birth(desc) else {
+        eprintln!("Perry internal error: arguments layout is not registered");
+        std::process::abort();
+    };
+    alloc_layout_object_sized(&*desc, LayoutWord(id), physical_slots)
+}
+
+/// Does `obj` still carry the exact birth layout of `desc`, with no overflow
+/// (no key added, deleted or redefined since birth)?
+///
+/// # Safety
+/// `obj` is a live object.
+pub(crate) unsafe fn is_unchanged_birth_layout(
+    obj: *const ObjectHeader,
+    desc: *const PerryLayoutDesc,
+) -> bool {
+    layout_word_for_birth(desc).is_some_and(|id| (*obj).shape_word() == id)
+        && !super::overflow::has_overflow(obj)
 }
 
 /// Function births alone retain the ordinary inline floor. Keep their
@@ -1441,6 +1468,18 @@ fn family_for_word(word: u32) -> Option<*const PerryLayoutDesc> {
     literal_birth::family_at(record.family_desc_index_plus_one().checked_sub(1)?)
 }
 
+/// Image run: whether `word` is a runtime layout's (installed at its first birth).
+pub(crate) fn snap_image_runtime_layout_word(word: u32) -> bool {
+    registration::is_runtime_layout_word(word)
+}
+
+/// Image run: whether a record on a static row below the dynamic rows belongs there: the word
+/// is a runtime layout's (installed at its first birth) or a lazy image row whose descriptor
+/// carries the word.
+pub(crate) fn snap_image_static_row_names_word(word: u32) -> bool {
+    registration::is_runtime_layout_word(word) || lazy_image::row_names_word(word)
+}
+
 /// The class declaration owns the immutable pointer to its instance layout.
 /// No descriptor registry or learned class-to-layout mapping.
 pub(crate) fn family_of_class(class_id: u32) -> Option<(u32, *const PerryLayoutDesc)> {
@@ -1667,6 +1706,19 @@ pub(crate) unsafe fn route_family_add(
         }
     }
     let n = d.slot_count;
+    // An arguments layout's inline slots past its named ones are elements: the
+    // added key (any attributes) holds its value in its own overflow entry.
+    if d.kind == super::shapes::ShapeObjectKind::Arguments.code() as u8
+        || d.kind == super::shapes::ShapeObjectKind::ArgumentsStrict.code() as u8
+    {
+        let key = crate::JSValue::from_bits(*new.add(n as usize));
+        super::overflow::append_unfixed(
+            obj,
+            key.bits(),
+            super::key_attrs::keys_entry(keys.arr(), n),
+        );
+        return true;
+    }
     if super::key_attrs::keys_entry(keys.arr(), n) != 0 {
         return false;
     }
@@ -1805,8 +1857,10 @@ pub(crate) unsafe fn evaluation_layout_desc(family: u32) -> Option<&'static Perr
 #[inline(always)]
 pub(crate) fn word_in_layout_index(word: u32) -> bool {
     let image = super::class_image::agent_layout_image();
-    let base = crate::codegen_abi::LAYOUT_TAG | image.family_first;
-    word.wrapping_sub(base) < image.family_count
+    // Row bits = physical row - LAYOUT_ROW_BIAS (`family_first` >= the bias).
+    word.wrapping_sub(crate::codegen_abi::LAYOUT_TAG - crate::codegen_abi::LAYOUT_ROW_BIAS)
+        .wrapping_sub(image.family_first)
+        < image.family_count
 }
 
 /// A prototype transition moved an object from layout word `previous` to
@@ -1828,7 +1882,6 @@ pub(crate) fn note_family_relink(previous: LayoutWord, id: LayoutWord) {
 #[path = "layout_desc/diagnostics.rs"]
 mod diagnostics;
 pub(crate) use diagnostics::diag_note_install;
-pub(crate) use diagnostics::family_diag_init;
 pub(crate) use diagnostics::family_diag_on;
 pub(crate) use diagnostics::family_diag_pairs_on;
 pub(crate) use diagnostics::install_cause;
@@ -1837,12 +1890,14 @@ use diagnostics::note_other_key;
 pub(crate) use diagnostics::note_out_of_order_pair;
 pub(crate) use diagnostics::note_run;
 use diagnostics::FAMILY_DIAG;
+pub(crate) use diagnostics::{family_diag_init, family_diag_report_before_immediate_exit};
 
 #[path = "layout_desc/store.rs"]
 mod store;
 pub(crate) use store::desc_own_key;
 pub(crate) use store::desc_position_hashed;
 pub(crate) use store::family_create;
+pub(crate) use store::family_own_data_slot;
 pub(crate) use store::family_own_key;
 pub(crate) use store::family_own_key_hashed;
 pub(crate) use store::family_store;
@@ -1950,3 +2005,82 @@ mod layout_section_tests;
 #[cfg(all(feature = "wasm-image-selftest", target_family = "wasm"))]
 #[path = "layout_desc/wasm_program_image_checks.rs"]
 mod wasm_program_image_checks;
+
+/// Image capture: the byte offset of a prototype family's `serial` word.
+pub(crate) const SNAP_IMAGE_FAMILY_SERIAL_OFFSET: usize =
+    std::mem::offset_of!(PerryProtoFamily, serial);
+
+/// Image capture: the descriptor address of the lazy image row of `word`, or 0.
+pub(crate) fn snap_image_lazy_descriptor(word: u32) -> usize {
+    lazy_image::descriptor(word).map_or(0, |d| d as usize)
+}
+
+/// Image replay (R1): the first birth of the runtime layout at `desc` (or, `lazy`, of the lazy
+/// image row it describes), with the prototype-serial counter positioned at `fam_serial` (0: the
+/// birth draws none). Asserted: a runtime layout's shape id cell is 0 before the birth and `id`
+/// after it; the family serial is 0 before and `fam_serial` after. The word the birth returns.
+///
+/// # Safety
+/// `desc` is a live layout descriptor of this program.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) unsafe fn snap_image_replay_birth(
+    desc: *const PerryLayoutDesc,
+    lazy: bool,
+    id: u32,
+    fam_serial: u64,
+) -> Result<u32, String> {
+    use std::sync::atomic::{AtomicU32, AtomicU64, Ordering::Acquire};
+    let cell = AtomicU32::from_ptr(std::ptr::addr_of!((*desc).shape_id).cast_mut());
+    let layout = (*desc).layout_id;
+    if !lazy && cell.load(Acquire) != 0 {
+        return Err(format!(
+            "layout {layout:#x}: its shape id cell is not 0 before the birth"
+        ));
+    }
+    let fam = (*desc).proto;
+    let serial = (fam.addr() >= LAYOUT_PROTO_TAG_END)
+        .then(|| AtomicU64::from_ptr(std::ptr::addr_of!((*fam).serial).cast_mut()));
+    if fam_serial != 0 {
+        match &serial {
+            Some(s) if s.load(Acquire) == 0 => super::proto_validity::snap_image_set_prototype_serial_next(fam_serial),
+            Some(_) => return Err(format!("layout {layout:#x}: its family serial is drawn before the birth")),
+            None => return Err(format!("layout {layout:#x}: the record draws a family serial and the descriptor names no family")),
+        }
+    }
+    let word = if lazy {
+        registration::register_lazy_row(desc)
+    } else {
+        layout_word_for_birth(desc).unwrap_or(0)
+    };
+    if word == 0 {
+        return Err(format!("layout {layout:#x}: the birth does not install"));
+    }
+    let got = cell.load(Acquire);
+    if !lazy && got != id {
+        return Err(format!(
+            "layout {layout:#x}: its shape id cell holds {got} after the birth, the record {id}"
+        ));
+    }
+    if fam_serial != 0 {
+        let drew = serial.map_or(0, |s| s.load(Acquire));
+        if drew != fam_serial {
+            return Err(format!(
+                "layout {layout:#x}: the birth drew family serial {drew}, the record {fam_serial}"
+            ));
+        }
+    }
+    Ok(word)
+}
+
+/// A runtime layout with a prototype family whose id cell and family serial are both 0 (a copy
+/// of URL_COMPONENTS), so that its first birth draws both.
+#[cfg(test)]
+pub(crate) unsafe fn snap_image_test_family_layout() -> *const PerryLayoutDesc {
+    let orig = super::runtime_layouts::URL_COMPONENTS::desc();
+    let mut fam = std::ptr::read((*orig).proto);
+    fam.serial = 0;
+    let mut d = std::ptr::read(orig);
+    d.shape_id = 0;
+    d.proto = Box::leak(Box::new(fam));
+    Box::leak(Box::new(d))
+}

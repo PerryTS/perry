@@ -28,7 +28,23 @@ pub(crate) fn array_length_from_number_or_throw(number: f64) -> u32 {
 
 pub(crate) fn array_length_from_property_value_or_throw(value: f64) -> u32 {
     let number = crate::builtins::js_number_coerce(value);
-    array_length_from_number_or_throw(number)
+    if (value.to_bits() & 0x7FFF_0000_0000_0000) < 0x7FF9_0000_0000_0000 {
+        return array_length_from_number_or_throw(number);
+    }
+    // 10.4.2.4 ArraySetLength steps 3-5: newLen = ToUint32( Desc.[[Value]] ) and
+    // numberLen = ToNumber( Desc.[[Value]] ) convert the value TWICE (an object's
+    // valueOf runs twice); a RangeError unless newLen == numberLen. The Number
+    // fast path above converts nothing and adds no call.
+    let again = crate::builtins::js_number_coerce(value);
+    let new_len = if number.is_finite() {
+        number.trunc().rem_euclid(4_294_967_296.0)
+    } else {
+        0.0
+    };
+    if new_len != again {
+        throw_invalid_array_length()
+    }
+    new_len as u32
 }
 
 /// RULE 3 (single-path object model, `object/shape_rule3.rs`): an
@@ -98,13 +114,13 @@ unsafe fn initialize_fresh_array_layout(arr: *mut ArrayHeader, raw_f64: bool, al
 
 /// Publish the birth layout word of a fresh array.
 #[inline(always)]
-unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
+pub(super) unsafe fn install_birth_layout(arr: *mut ArrayHeader, layout: u16) {
     use crate::gc::{
         GC_ARRAY_ELEMENT_SHAPE, GC_ARRAY_RAW_F64_HOLES, GC_ARRAY_RAW_F64_LAYOUT,
         GC_LAYOUT_ALL_POINTERS, GC_LAYOUT_STATE_MASK,
     };
     let header = (arr as *mut u8).sub(crate::gc::GC_HEADER_SIZE) as *mut crate::gc::GcHeader;
-    debug_assert_eq!((*header).obj_type, crate::gc::GC_TYPE_ARRAY);
+    debug_assert!(crate::gc_type_is_array!((*header).obj_type));
     debug_assert_eq!(
         (*header)._reserved
             & (GC_LAYOUT_STATE_MASK
@@ -186,6 +202,69 @@ pub(crate) fn js_array_alloc_named_props_reserved(
         });
         super::named_props::publish_named(array, named);
         array
+    }
+}
+
+/// A fresh array whose element layout is born tag-scanned
+/// (`GC_LAYOUT_UNKNOWN`, the zero layout state of a fresh header): the caller
+/// writes value words of any kind into `[0, n)` with nothing allocating in
+/// between, then publishes `length = n`. No layout rebuild, no raw-f64 flag
+/// to revoke. Slack holds the hole.
+pub(crate) fn js_array_alloc_tag_scanned(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
+    let ptr = arena_alloc_gc(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
+        fill_fresh_capacity_with_holes(ptr);
+    }
+    ptr
+}
+
+/// [`js_array_alloc_tag_scanned`] through the birth that cannot collect
+/// (`arena_alloc_gc_no_collect`): null on a refusal, and nothing has collected
+/// then either. The capacity is NOT filled: the caller writes its prefix and
+/// fills the rest with [`fill_capacity_with_holes_from`] before anything can
+/// allocate or collect.
+#[inline(always)]
+pub(crate) fn js_array_try_alloc_tag_scanned_unfilled(capacity: u32) -> *mut ArrayHeader {
+    let actual_capacity = array_capacity_or_throw(capacity.max(MIN_ARRAY_CAPACITY));
+    let ptr = crate::arena::arena_alloc_gc_no_collect(
+        array_byte_size(actual_capacity as usize),
+        8,
+        crate::gc::GC_TYPE_ARRAY,
+    ) as *mut ArrayHeader;
+    if ptr.is_null() {
+        return ptr;
+    }
+    unsafe {
+        (*ptr).length = 0;
+        (*ptr).capacity = actual_capacity;
+        (*ptr).named = std::ptr::null_mut();
+        (*ptr).ek_prefix = 0;
+        (*ptr).ek_kind = 0;
+    }
+    ptr
+}
+
+/// Fills elements `from..capacity` of a just-born array with the hole.
+///
+/// # Safety
+/// `ptr` is a fresh array nothing else references yet.
+#[inline(always)]
+pub(crate) unsafe fn fill_capacity_with_holes_from(ptr: *mut ArrayHeader, from: u32) {
+    let elements = crate::array::array_elements_ptr(ptr as *const ArrayHeader) as *mut u64;
+    for i in from as usize..(*ptr).capacity as usize {
+        // GC_STORE_AUDIT(INIT): a just-allocated array nothing references yet,
+        // written with a non-pointer sentinel: no old value, no edge, no barrier.
+        std::ptr::write(elements.add(i), crate::value::TAG_HOLE);
     }
 }
 
@@ -360,6 +439,8 @@ fn alloc_key_list(
         (*ptr).ek_kind = 0;
         let header = crate::gc::header_from_trusted_user_ptr(ptr.cast()).cast_mut();
         if canonical {
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(header);
             (*header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
         if with_attrs {
@@ -471,11 +552,16 @@ pub extern "C" fn js_array_constructor_single(value: f64) -> *mut ArrayHeader {
         // dense, but represent a large fresh holey array exactly like a later
         // sparse length extension: a small backing store plus the full logical
         // length. Indexed reads already treat `index >= capacity` as a hole.
-        const MAX_FRESH_DENSE_ARRAY_LENGTH: u32 = 1_000_000;
-        let arr = if length > MAX_FRESH_DENSE_ARRAY_LENGTH {
+        // wpfacts admits a proven element read only up to the same bound.
+        let arr = if length > perry_abi::MAX_FRESH_DENSE_ARRAY_LENGTH {
             let arr = js_array_alloc(0);
             unsafe {
                 (*arr).length = length;
+                // The empty birth carries the dense raw-f64 claim (vacuously
+                // true at length 0). With a length over the 16-slot store it
+                // is false: its readers (the message serializer's bulk copy,
+                // the guarded numeric element read) take `length` raw slots.
+                clear_array_numeric_layout(arr);
             }
             arr
         } else {
@@ -612,6 +698,11 @@ unsafe fn js_array_from_arraylike_with_missing(
     }
     let length_key = crate::string::js_string_from_bytes(b"length".as_ptr(), 6);
     let length_val = crate::object::js_object_get_field_by_name_f64(obj, length_key);
+    // 7.1.20 ToLength( 7.1.4 ToNumber( length ) ): an object `length` runs its
+    // `@@toPrimitive` / `valueOf` / `toString` (the receiver stays rooted).
+    let (length_val, obj) =
+        super::splice_slice::index_operand_across(obj as *const ArrayHeader, length_val);
+    let obj = obj as *const crate::object::ObjectHeader;
     let length_bits = length_val.to_bits();
     // ToLength coercion: NaN / undefined / non-finite / negative → 0.
     let len = if length_val.is_nan()
@@ -884,7 +975,6 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
     if values.is_null() || n == 0 {
         return arr;
     }
-    let parent = arr as u64;
     let elems = unsafe { crate::array::array_elements_ptr(arr as *const ArrayHeader) as *mut f64 };
     // The birth row of EK §3.1: P = the leading run of non-hole values.
     let mut run = n;
@@ -899,16 +989,41 @@ pub extern "C" fn js_array_from_values(values: *const f64, n: u32) -> *mut Array
         // stored element. No-op for SSO / non-string. (This outline path doesn't
         // funnel through `note_array_slot`.)
         crate::string::js_string_addref_if_heap_string(v);
-        // GC_STORE_AUDIT(BARRIERED): element store immediately followed by the
-        // slot layout note + write barrier below, identical to the inline
-        // array-literal element store via emit_jsvalue_slot_store_on_block.
+        // GC_STORE_AUDIT(BARRIERED): newborn element stores, published below
+        // by `publish_newborn_elements` (one layout decision and the newborn
+        // barrier) before anything can allocate.
         unsafe { core::ptr::write(slot, v) };
-        let vbits = v.to_bits();
-        crate::gc::js_gc_note_slot_layout(parent, i as u32, vbits);
-        crate::gc::js_write_barrier_slot(parent, slot as u64, vbits);
     }
-    unsafe { super::ek_set_prefix(arr, (*arr).ek_prefix, run) };
+    unsafe {
+        publish_newborn_elements(arr, n as usize);
+        super::ek_set_prefix(arr, (*arr).ek_prefix, run)
+    };
     arr
+}
+
+/// The layout and barrier of elements `0..n` of `arr`, a newborn from
+/// [`js_array_alloc_literal`] (`length == n`, pointer-free birth layout, no
+/// element-shape proof) whose slots were all written with nothing allocated
+/// since its birth: the state the per-slot `js_gc_note_slot_layout` +
+/// `js_write_barrier_slot` sequence reaches, decided once. A pointer-bearing
+/// element weakens the payload to the tag scan (and clears the numeric
+/// sub-flags, as its first slot note would); the newborn barrier then
+/// remembers or shades what the parent's generation and an incremental cycle
+/// require (the closure births' rule). An all-scalar payload stays
+/// pointer-free, which every slot note would have left it.
+///
+/// # Safety
+/// As stated: `arr` is that newborn and no collection ran since its birth.
+pub(crate) unsafe fn publish_newborn_elements(arr: *mut ArrayHeader, n: usize) {
+    let elems = crate::array::array_elements_ptr(arr as *const ArrayHeader) as *const u64;
+    if !(0..n).any(|i| crate::gc::layout_pointer_bearing_bits(*elems.add(i))) {
+        return;
+    }
+    crate::array::clear_array_numeric_layout_ptr(arr as usize);
+    crate::gc::layout_mark_unknown(arr as *mut u8);
+    if crate::gc::newborn_parent_needs_barrier(arr as usize) {
+        crate::gc::runtime_write_barrier_newborn_slots(arr as usize, elems, n);
+    }
 }
 
 /// Descriptor tag bytes for [`js_value_from_const_descriptor`]. MUST match the

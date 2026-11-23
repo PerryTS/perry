@@ -57,7 +57,8 @@ fn top_packages() -> &'static BTreeSet<&'static str> {
 }
 
 pub fn check(pkg: &ScannedPackage) -> Vec<Finding> {
-    let name = pkg.name.as_str();
+    let name = pkg.declared_name();
+    let installed_name = &pkg.name;
     if name.starts_with('@') {
         return Vec::new();
     }
@@ -84,7 +85,7 @@ pub fn check(pkg: &ScannedPackage) -> Vec<Finding> {
     let message = match severity {
         Severity::P0 => format!(
             "name resembles popular package \"{target}\"\n\
-             If this is the package you intended, re-run with --allow-risky {name}.\n\
+             If this is the package you intended, re-run with --allow-risky {installed_name}.\n\
              Otherwise verify the spelling against https://www.npmjs.com/package/{name}"
         ),
         Severity::P1 => format!(

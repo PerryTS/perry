@@ -168,8 +168,7 @@ unsafe fn try_data_lookup_key(
         // Non-object cells, unstamped receivers and dictionary/exotic shapes
         // cannot supply this proof. Decline from the owner word before paying
         // for the agent directory; no registry determines this classification.
-        let ordinary_id = shape_id.wrapping_sub(shapes::SHAPE_ID_BASE)
-            < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG;
+        let ordinary_id = crate::codegen_abi::is_ordinary_record_word(shape_id);
         if !ordinary_id {
             // The data walk needs an ordinary-band descriptor. Unstamped
             // cells have none; dictionary and function namespaces never
@@ -214,10 +213,45 @@ unsafe fn try_data_lookup_key(
                 }
                 own_absent = true;
             }
-            let lookup = if shadowed {
+            let plain = if shadowed {
                 None
             } else {
                 shape.plain_lookup(key_bits, key)
+            };
+            // A family object without overflow: its layout names every own
+            // key, a late key included (its slot holds the hole while the key
+            // is absent), so the descriptor index answers what the positional
+            // list leaves open (a key past its position bound).
+            let family = if shadowed || plain.is_some() {
+                None
+            } else {
+                super::layout_desc::family_own_data_slot(object, key)
+            };
+            if let Some(Some(slot)) = family {
+                let live = shape.live_inline_slot_count;
+                let header = &*crate::gc::header_from_trusted_user_ptr(object.cast());
+                // A1_UNPROVEN: record-first: class not yet known (kind-A/B question for S0f).
+                let meta = crate::meta_read!(crate::meta_obj_runtime_born!(object as *mut _));
+                if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
+                    || header._reserved & crate::gc::OBJ_FLAG_TYPED_ARRAY_PROTO != 0
+                    || (!meta.is_null() && (*meta).elements != 0)
+                {
+                    return None;
+                }
+                let value = super::field_get_set::object_field_at_with_live(object, slot, live);
+                if value.bits() != crate::value::TAG_HOLE {
+                    if value.is_undefined()
+                        && super::native_this_alias::object_alias(object).is_some()
+                    {
+                        return None;
+                    }
+                    return Some(Some(value));
+                }
+            }
+            let lookup = match family {
+                // The hole: no own key of that name; the walk continues.
+                Some(_) => Some(None),
+                None => plain,
             };
             own_absent |= lookup == Some(None);
             if let Some(Some((slot, live))) = lookup {

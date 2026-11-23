@@ -10,6 +10,8 @@ use super::*;
 /// or it is `RuntimeBornOnly`, which debug builds check at the funnel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MetaReason {
+    /// An `arguments` object's birth word and exotic state.
+    Arguments,
     Spill,
     SpillReserve,
     Overflow,
@@ -33,6 +35,8 @@ pub(crate) enum MetaReason {
     WasmWrapper,
     RuntimeHandle,
     ArraySubclassElements,
+    /// A plain object's index store (`array::plain_elements`).
+    PlainElements,
     ArrayIteratorBrand,
     ClosureProps,
     CellExpando,
@@ -97,9 +101,11 @@ impl MetaReason {
             MetaReason::WasmWrapper => Fact(P1),
             MetaReason::RuntimeHandle => RuntimeBornOnly,
             MetaReason::ArraySubclassElements => Fact(P4),
+            MetaReason::PlainElements => Fact(P3),
             MetaReason::ArrayIteratorBrand => RuntimeBornOnly,
             MetaReason::ClosureProps => RuntimeBornOnly,
             MetaReason::CellExpando => RuntimeBornOnly,
+            MetaReason::Arguments => RuntimeBornOnly,
         }
     }
 }
@@ -157,6 +163,7 @@ pub(crate) unsafe fn object_meta_ensure_for_cell(
     (*meta).overflow = 0;
     (*meta).arguments = 0;
     (*meta).instance_birth = 0;
+    (*meta).arguments_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): header-slot store followed by an object-slot
     // barrier, exactly as `object_meta_ensure` does for an `ObjectHeader`.
     // The reloaded cell is live; consume its current generation proof.
@@ -216,6 +223,7 @@ pub(crate) unsafe fn object_meta_ensure(obj: MetaObj, reason: MetaReason) -> *mu
     (*meta).overflow = 0;
     (*meta).arguments = 0;
     (*meta).instance_birth = 0;
+    (*meta).arguments_birth = 0;
     // GC_STORE_AUDIT(BARRIERED): meta-record edge is a header-slot store
     // followed by an object-slot barrier, mirroring `set_object_keys_array`.
     // Reloaded after the allocation: promotion, if any, is reflected in the

@@ -18,6 +18,7 @@
 mod assemble;
 pub(crate) use assemble::assemble_text;
 mod coff;
+mod cold_paths;
 #[cfg(test)]
 mod dead_statepoint_tests;
 mod equivalent_shape_bodies;
@@ -29,6 +30,7 @@ mod native_homes;
 mod optimize_emit;
 #[cfg(test)]
 mod parse_ir_text_tests;
+pub(crate) mod stack_checks;
 mod verify_facts_copies;
 use optimize_emit::optimize_and_emit;
 

@@ -131,12 +131,23 @@ fn read_after_store_target_bindings_is_guarded() {
 
 // ---- twins: the read stays ordinary ----
 
-/// `o.hasOwnProperty` of a dictionary written under computed keys may be
-/// the dictionary's own value: the test is not the builtin's.
+/// `o.hasOwnProperty` of a dictionary written under a key no constant
+/// names may be the dictionary's own value: the test is not the builtin's.
 #[test]
 fn has_own_property_member_of_a_dictionary_stays() {
-    let pf = dict("total += dict.hasOwnProperty(k) ? dict[k].size() : 0;");
+    let pf = dict(
+        "dict[process.argv[2]] = new Sym(); \
+         total += dict.hasOwnProperty(k) ? dict[k].size() : 0;",
+    );
     assert!(unproven(&pf, "size"), "{:?}", calls(&pf, "size"));
+}
+
+/// Written under the constants `"a"` and `"b"` only (`Node::strs`), the
+/// dictionary owns no `hasOwnProperty`: the member is the builtin's.
+#[test]
+fn has_own_property_of_a_dictionary_of_constant_keys_is_the_builtin() {
+    let pf = dict("total += dict.hasOwnProperty(k) ? dict[k].size() : 0;");
+    assert!(proven(&pf, "size"), "{:?}", calls(&pf, "size"));
 }
 
 /// The read is not the first thing the branch runs (`values.push` is read

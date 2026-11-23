@@ -31,7 +31,7 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
@@ -358,7 +358,11 @@ fn kind_of(v: f64) -> u16 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG => K_NUM,
+        // A slot word of an I32 lane or an at-rest Array (`layout_slot`): the
+        // Number it stores. No JS value is in the `0x7FFE` band (P3 B4b).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => K_NUM,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -404,7 +408,7 @@ fn violate(fact: &str, c: &Claim, cid: u32, op: &str, detail: &str) -> ! {
 /// The class whose prototype `v` is: a `C.prototype` reference immediate or
 /// the declared prototype object itself.
 fn proto_class_id(v: f64) -> Option<u32> {
-    if let Some(cid) = crate::object::class_prototype_ref_id(v) {
+    if let Some(cid) = crate::object::class_method_home_id(v) {
         return Some(cid);
     }
     let bits = v.to_bits();
@@ -742,11 +746,23 @@ mod tests {
     #[test]
     fn value_kinds_match_the_compiler_mask() {
         assert_eq!(kind_of(1.5), K_NUM);
-        assert_eq!(kind_of(f64::from_bits(INT32_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 1)), K_UNDEF);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 2)), K_NULL);
         assert_eq!(kind_of(f64::from_bits(TAG_MARKER | 4)), K_BOOL);
         assert_eq!(kind_of(f64::from_bits(STRING_TAG | 0x1000)), K_STR);
         assert_eq!(kind_of(f64::from_bits(BIGINT_TAG | 0x1000)), K_BIGINT);
+    }
+    /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+    /// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+    /// Number, and a top-16-only test reads both as one.
+    const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+    const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_k_num() {
+        assert_eq!(kind_of(f64::from_bits(INTERNAL_WORD_TAG | 3)), K_NUM);
+        assert_eq!(kind_of(f64::from_bits(PROTO_REF_5)), K_OBJ);
+        assert_eq!(kind_of(f64::from_bits(HIGH_BITS)), K_OBJ);
     }
 }

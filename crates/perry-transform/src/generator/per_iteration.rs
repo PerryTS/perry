@@ -371,6 +371,7 @@ fn each_child_stmt_list<F: FnMut(&[Stmt])>(stmt: &Stmt, f: &mut F) {
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -738,6 +739,7 @@ fn each_child_stmt_list_mut<F: FnMut(&mut Vec<Stmt>)>(stmt: &mut Stmt, f: &mut F
             body,
             catch,
             finally,
+            ..
         } => {
             f(body);
             if let Some(c) = catch {
@@ -1529,6 +1531,7 @@ mod tests {
             mutable_captures: vec![x],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_strict: false,
@@ -1561,6 +1564,7 @@ mod tests {
                 body: rest,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::Undefined)]),
+                forof_completion: None,
             });
         } else {
             loop_body.extend(rest);

@@ -2,9 +2,41 @@
 use super::*;
 
 impl Model {
+    /// The native member `t` a named member-call site binds on its own
+    /// receiver under the key it names (`Model::named_calls`): the site
+    /// states that route itself. A borrowed, protocol or derived call has
+    /// another call id or key and is no such binding.
+    fn named_own_member(&self, call: CallId, t: Tok, this_tok: Option<Tok>) -> bool {
+        let (Some(&(key, recv)), Some(r)) = (self.named_calls.get(&call), this_tok) else {
+            return false;
+        };
+        let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
+            return false;
+        };
+        identity
+            .rsplit_once('.')
+            .is_some_and(|(_, k)| k == self.atoms[key as usize])
+            && self.nodes[recv as usize].pts.contains_tok(r)
+    }
+
     /// Bind `call` to callee token `t`. `this_tok` overrides the call's this.
     pub fn call_tok(&mut self, call: CallId, t: Tok, this_tok: Option<Tok>) {
+        // MATHB1B: the generic-arm call of a namespace pair does not bind
+        // the original member: the pair's intrinsic arm is that call
+        // (`Gen::namespace_pair`).
+        if let Some((ns, key)) = self.ns_pair_of(call) {
+            if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+                if identity.rsplit_once('.').is_some_and(|(n, k)| {
+                    crate::builtins::ns_by_name(n) == Some(ns) && k == self.atoms[key as usize]
+                }) {
+                    return;
+                }
+            }
+        }
         self.diagnostic_callee(call, t);
+        if !self.named_own_member(call, t, this_tok) {
+            crate::family_reach::callee(self, t);
+        }
         // A bare marker is another unit's value (DECISIONS 119): its call
         // is its contract's escape, and the call itself is one of an
         // unknown function (the reader cannot follow what it is given).
@@ -49,6 +81,17 @@ impl Model {
             });
             return self.call_tok(call, TOP, this_tok);
         }
+        // A builtin reads its arguments by position: with a spread, it
+        // reads the positional view of the argument list (`with_native`
+        // gives the same view to the models it runs).
+        let call = if matches!(
+            self.toks[t as usize],
+            TokKind::BuiltinFn(_) | TokKind::Builtin(_)
+        ) {
+            self.builtin_args_view(call)
+        } else {
+            call
+        };
         let prev = self.cur_native_call.replace(call);
         let native = self.native_call(call, t, this_tok);
         self.cur_native_call = prev;
@@ -59,6 +102,7 @@ impl Model {
             if let Some(d) = self.diagnostic.as_mut() {
                 let n = d.cause_node;
                 d.unknown_calls.entry(call).or_insert((n, t == TOP));
+                d.unknown_callee.entry(call).or_insert(t);
             }
             // An unknown callee sees only its own receiver token: that one
             // escapes; arguments and result are per call.
@@ -68,7 +112,7 @@ impl Model {
                     let f = self.node_fn[ret as usize];
                     let why = format!(
                         "receiver of a call of an unknown function value ({} callee in {}, call {call}{}, receiver {})",
-                        if t == TOP { "⊤" } else { "builtin-fn" },
+                        self.callee_name(t),
                         self.funcs.get(f as usize).map_or("(no function)", |f| f.name.as_str()),
                         if self.protocol_calls.contains(&call) { ", protocol" } else { "" },
                         self.tok_name(x)
@@ -81,6 +125,9 @@ impl Model {
                 } else {
                     self.reason("receiver of a call of an unknown function value")
                 };
+                if self.keysnap.is_some() {
+                    self.keysnap_note(call, t, x);
+                }
                 self.escape(x, r);
             }
             if !self.bind_done.insert((call, t, u32::MAX - 2)) {
@@ -95,13 +142,23 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
+            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
+            // a direct one takes today's path too.
+            TokKind::Proxy(p) => {
+                self.proxy_degrade(p, "call");
+                self.call_tok(call, TOP, this_tok);
+            }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
                     self.this_into(call, t, this_tok);
                 }
             }
-            TokKind::Bound(_) => self.call_bound(call, t),
+            TokKind::Bound(_) => {
+                // −0 tolerance: a bound function's arguments are observed.
+                self.zs_call_args(call);
+                self.call_bound(call, t)
+            }
             TokKind::ClassObj(_) => {
                 // Calling a class without `new` throws; nothing flows.
             }
@@ -119,15 +176,40 @@ impl Model {
             TokKind::Obj(_, _)
             | TokKind::Proto(_)
             | TokKind::ObjectProto
-            | TokKind::NativeProto(_)
+            | TokKind::NativeProto(..)
             | TokKind::ModNs(_) => {
                 // Not callable (TypeError) — unless it is a builtin object
                 // that is a function (Proxy over a function etc., ⊤ anyway).
                 // A parameter marker stands for the caller's values: one may
                 // be a function.
                 self.mark_escape_why(t, &|_| "call: of a non-callable".into());
+                // Array.prototype.toString (23.1.3.36 step 3): `join` is
+                // called only if IsCallable; otherwise the result is the
+                // String of Object.prototype.toString (20.1.3.6), no throw.
+                if self.tostring_join_calls.contains(&call) && !self.is_marker(t) {
+                    let ret = self.calls[call as usize].ret;
+                    self.add_prim(ret, prim::STR);
+                }
             }
         }
+    }
+
+    /// ECMA-262 7.3.14 Call step 2 / 7.2.4 IsConstructor: token `t` is an
+    /// ordinary object without [[Call]] and so without [[Construct]] (an
+    /// object literal, an array, a plain instance, a class prototype object,
+    /// a builtin prototype, a module namespace): calling it, or a builtin
+    /// step that requires it to be a constructor, only throws a TypeError.
+    /// A parameter marker stands for the caller's values (one may be a
+    /// function), so it is none.
+    pub(crate) fn no_call_tok(&self, t: Tok) -> bool {
+        matches!(
+            self.toks[t as usize],
+            TokKind::Obj(_, _)
+                | TokKind::Proto(_)
+                | TokKind::ObjectProto
+                | TokKind::NativeProto(..)
+                | TokKind::ModNs(_)
+        ) && !self.is_marker(t)
     }
 
     /// The own parameters marker `t` stands for (DECISIONS 140): its
@@ -227,6 +309,46 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
+        if !self.realm_held && self.prov.is_some() {
+            self.why_hold(
+                if t == TOP {
+                    "callee-top"
+                } else {
+                    "callee-builtin"
+                },
+                call,
+                Some(t),
+            );
+        }
+        if crate::unksrc::on() {
+            let kind = if t == TOP {
+                "callee-top"
+            } else {
+                "callee-builtin"
+            };
+            let why = format!("{:?}", self.toks[t as usize]);
+            let f = crate::unksrc::call_fn(self, call);
+            crate::unksrc::note(kind, &why, call, f);
+            if !self.realm_held {
+                crate::unksrc::held(kind, &why, call, f);
+            }
+        }
+        // Unknown code runs, handed values or not: it holds the realm.
+        if !self.realm_held {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            if self.keysnap.is_some() {
+                self.keysnap_at(
+                    true,
+                    "unknown callee (unknown_callee_args)",
+                    Some(call),
+                    r,
+                    Some(t),
+                );
+            }
+            self.hold_realm(r);
+        }
+        // −0 tolerance: unknown code receives the arguments.
+        self.zs_call_args(call);
         if t == TOP {
             self.top_calls += 1;
         }
@@ -237,6 +359,11 @@ impl Model {
         } else if t == TOP {
             self.reason("passed to a call of an unknown function value")
         } else {
+            crate::builtins::anyfall(
+                "opaque callee",
+                &self.tok_name(t),
+                &format!("call {call} this {:?}", self.calls[call as usize].this),
+            );
             self.reason("passed to an opaque builtin function value")
         };
         let na = self.calls[call as usize].args.len();
@@ -278,11 +405,29 @@ impl Model {
     /// Arguments and result of `call` into function token `t`: once per
     /// (call, function); only `this` differs between receivers.
     pub(crate) fn bind_args(&mut self, call: CallId, t: Tok) {
+        let pc = self.prov_call;
+        if self.prov.is_some() {
+            self.prov_call = call + 1;
+        }
+        self.bind_args_bound(call, t);
+        self.prov_call = pc;
+    }
+
+    pub(crate) fn bind_args_bound(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         let TokKind::Func(f, _) = self.toks[t as usize] else {
             return;
         };
         self.activate(f, "call");
+        if let Some(pat) = crate::model::why_act() {
+            if self.funcs[f as usize].name.contains(pat.as_str()) {
+                let c = &self.calls[call as usize];
+                eprintln!(
+                    "perry: wpfacts: call {call} (result n{}, region n{}) binds {}",
+                    c.ret, c.region, self.funcs[f as usize].name
+                );
+            }
+        }
         if self.diagnostic.is_some() {
             let kind = if self.ctor_calls.contains(&call) {
                 "new"
@@ -335,7 +480,8 @@ impl Model {
                 let p = self.funcs[f].params[i];
                 self.edge(caps[i].unwrap_or(a), p);
             } else if let Some(rest) = rest {
-                let fa = self.field_any_node_of_node(rest);
+                let exact = self.calls[c].spread.is_empty();
+                let fa = self.rest_elem_node(rest, exact.then_some((i - nparams) as u32));
                 self.edge(a, fa);
             }
             if let Some(args_all) = args_all {
@@ -378,12 +524,56 @@ impl Model {
                 self.edge(elems, args_all);
             }
         }
+        // [[Construct]] (ECMA-262 10.2.2 steps 10-12): the `new` result is
+        // the body's object result (`ctor_ret_objects`) or the this-object
+        // (`ctor_this_result`), never the [[Call]] result with its
+        // primitives. A class constructor is only ever constructed (its
+        // [[Call]] throws, 10.2.1 step 2).
+        if self.funcs[f].ctor_of.is_some() || self.construct_done.contains(&(call, t)) {
+            return;
+        }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
+        if self.ret_param_into(call, f as FnIdx) {
+            return;
+        }
         let params = self.funcs[f].params.clone();
         if !self.rel_into(call, FN_RUN | f as u32, &params) {
             self.edge(fret, cret);
         }
+    }
+
+    /// RULE RP (`gen/ret_param.rs`): `f` returns its unreassigned plain
+    /// parameter `i` at every completion, so this call's result is the
+    /// argument this call passes at `i` (`undefined` when it passes fewer),
+    /// ECMA-262 10.2.1.3, not the return node every call of `f` shares.
+    /// The binding is per callee: a call whose callee set holds other
+    /// functions takes each one's result from its own binding. Out: `new`
+    /// (10.2.2: the result is the object unless the value is one), a spread
+    /// argument (the position is unknown), a hidden capture parameter, and
+    /// a function whose parameters something outside the call protocol
+    /// writes (`foreign_params`; not `no_summary`, which the activation pass sets on every function: there the call still binds its own argument). Arguments reach the parameter by position
+    /// through the same `CallSite::args` (`bind_args_bound`).
+    pub(crate) fn ret_param_into(&mut self, call: CallId, f: FnIdx) -> bool {
+        let Some(i) = self.funcs[f as usize].ret_param.map(|i| i as usize) else {
+            return false;
+        };
+        let c = call as usize;
+        if self.funcs[f as usize].foreign_params
+            || self.ctor_calls.contains(&call)
+            || !self.calls[c].spread.is_empty()
+            || i >= self.funcs[f as usize].params.len()
+            || self.capture_param(f, i).is_some()
+        {
+            return false;
+        }
+        let cret = self.calls[c].ret;
+        self.rel(|| format!("retparam {call} {f} {i}"));
+        match self.calls[c].args.get(i).copied() {
+            Some(a) => self.edge(a, cret),
+            None => self.add_prim(cret, prim::UNDEF),
+        }
+        true
     }
 
     /// Calling a bound function: its target with the bound this; bound +
@@ -394,7 +584,7 @@ impl Model {
             return;
         };
         if self.bound_synth.contains(&call) {
-            self.into_merged(call, b, false);
+            self.into_merged(call, b, 0);
             return;
         }
         let c = self.calls[call as usize].clone();
@@ -405,17 +595,22 @@ impl Model {
         }
         let mut args: Vec<NodeId> = bargs.clone();
         args.extend(c.args.iter().copied());
-        let call2 = self.solver_call(
+        let Some(call2) = self.solver_call_keyed(
             call,
+            (crate::summary::MK_BOUND_CALL, b, 0),
+            None,
             CallSite {
+                first_arg_fixed: false,
                 this: ThisArg::Node(bthis),
                 args,
                 spread: c.spread.clone(),
                 ret: c.ret,
                 site: c.site,
-                region: self.thrown,
+                region: self.calls[call as usize].region,
             },
-        );
+        ) else {
+            return;
+        };
         self.bound_synth.insert(call2);
         self.rel(|| format!("boundcall {call2} {call} {b}"));
         // Positions shift when the bound args are not a prefix of the
@@ -430,11 +625,13 @@ impl Model {
         self.cons(target, Cons::Call { call: call2 });
     }
 
-    /// Bound value `b`'s merged call (`new` or not): bound args first, then
-    /// every argument of every call routed here as a spread (the target
-    /// may itself hold bound values, so these calls must not nest).
-    fn bound_merged(&mut self, b: u32, new: bool) -> CallId {
-        if let Some(&c) = self.bound_merged.get(&(b, new)) {
+    /// Bound value `b`'s merged call, per use `k` (0: a call, 1: `new`
+    /// (`Cons::New`), 2: `new` of a program constructor (`Cons::NewProgram`)):
+    /// bound args first, then every argument of every call routed here as a
+    /// spread (the target may itself hold bound values, so these calls must
+    /// not nest).
+    fn bound_merged(&mut self, b: u32, k: u8) -> CallId {
+        if let Some(&c) = self.bound_merged.get(&(b, k)) {
             return c;
         }
         let (target, bthis, bargs) = self.bound[b as usize].clone();
@@ -445,7 +642,8 @@ impl Model {
         let ret = self.node_l("bound-ret");
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
-            this: if new {
+            first_arg_fixed: false,
+            this: if k != 0 {
                 ThisArg::Undef
             } else {
                 ThisArg::Node(bthis)
@@ -456,15 +654,15 @@ impl Model {
             site: 0,
             region: self.thrown,
         });
-        self.bound_merged.insert((b, new), call);
+        self.bound_merged.insert((b, k), call);
         self.bound_synth.insert(call);
-        self.rel(|| format!("boundmerged {call} {b} {}", new as u8));
+        self.rel(|| format!("boundmerged {call} {b} {k}"));
         self.cons(
             target,
-            if new {
-                Cons::New { call }
-            } else {
-                Cons::Call { call }
+            match k {
+                0 => Cons::Call { call },
+                1 => Cons::New { call },
+                _ => Cons::NewProgram { call },
             },
         );
         call
@@ -472,8 +670,8 @@ impl Model {
 
     /// A solver-made call `call` through bound value `b`: its arguments
     /// join the merged call's, its result is the merged call's.
-    fn into_merged(&mut self, call: CallId, b: u32, new: bool) {
-        let m = self.bound_merged(b, new);
+    fn into_merged(&mut self, call: CallId, b: u32, k: u8) {
+        let m = self.bound_merged(b, k);
         if m == call {
             return;
         }
@@ -490,7 +688,86 @@ impl Model {
         self.edge(ret, c.ret);
     }
 
-    pub(super) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
+    /// The argument list a builtin model reads for `call` (ECMA-262
+    /// 13.3.8.1 ArgumentListEvaluation, 20.2.3.1 Function.prototype.apply
+    /// with 7.3.19 CreateListFromArrayLike, 28.1.1 Reflect.apply): the
+    /// models read positions, and a spread puts its elements at positions
+    /// no one knows. Without a spread: `call` itself. With one: a call with
+    /// the same receiver, spreads, result and region whose every position
+    /// `i` holds each spread's elements (index keys and the any-index
+    /// field: an array of unknown length can put any element anywhere) and
+    /// every argument `args[j]` with `j <= i` (a spread before it shifts it
+    /// right); a first argument no spread precedes stays alone at 0. The
+    /// entries are the call's own positions, and one more when every own
+    /// position is fixed; the last entry then holds the spread elements and
+    /// every unfixed argument, which is what any later position holds, so
+    /// `CallSite::arg` answers every position from it. The user-function binding reads
+    /// a spread the same way (`bind_args`). One view per call; a view is
+    /// its own view.
+    pub(crate) fn builtin_args_view(&mut self, call: CallId) -> CallId {
+        // `PERRY_FACTS_REACH_SPREAD_ARGS=0` (`reach::spread_args`): the
+        // previous model, the call as it is.
+        if self.calls[call as usize].spread.is_empty() || !self.reach_spread_args {
+            return call;
+        }
+        if let Some(&v) = self.spread_view.get(&call) {
+            return v;
+        }
+        let c = self.calls[call as usize].clone();
+        let elems = self.node_l("spread-view-elems");
+        for &s in &c.spread {
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: elems });
+        }
+        let fixed = (c.first_arg_fixed && !c.args.is_empty()) as usize;
+        let n = c.args.len().max(fixed + 1);
+        let mut args = Vec::with_capacity(n);
+        for i in 0..n {
+            if i < fixed {
+                args.push(c.args[i]);
+                continue;
+            }
+            let p = self.node_l("spread-view-arg");
+            self.edge(elems, p);
+            let hi = (i + 1).min(c.args.len());
+            for j in fixed.min(hi)..hi {
+                self.edge(c.args[j], p);
+            }
+            args.push(p);
+        }
+        let v = self.solver_call_raw(
+            call,
+            CallSite {
+                // No spread leads the list: `args[0]` is still the call's
+                // own first argument, and the view says so.
+                first_arg_fixed: fixed == 1,
+                this: c.this.clone(),
+                args,
+                spread: c.spread.clone(),
+                ret: c.ret,
+                site: c.site,
+                region: c.region,
+            },
+        );
+        self.spread_view.insert(call, v);
+        self.spread_view.insert(v, v);
+        v
+    }
+
+    pub(crate) fn field_any_node_of_node(&mut self, arr_node: NodeId) -> NodeId {
+        self.rest_elem_node(arr_node, None)
+    }
+
+    /// The store relay of the rest array `arr_node` holds at index `at`
+    /// (ECMA-262 10.2.11, 8.6.3 BindingRestElement: CreateArrayFromList of
+    /// the remaining arguments in order): its index slot `at`
+    /// (`Model::index_slot`), when the call has no spread argument before
+    /// it; `None`: any element.
+    pub(crate) fn rest_elem_node(&mut self, arr_node: NodeId, at: Option<u32>) -> NodeId {
+        let ek = match at {
+            Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
+            None => self.elem_key(),
+        };
         // Elements of whatever array the node holds: a store relay. A rest
         // array is made from the arguments at indices 0..n: the store is an
         // element store (`elem_key`), which no named non-index key of the
@@ -498,13 +775,13 @@ impl Model {
         // `indexOf` or `@@iterator`.
         let relay = self.node_named("elems-into", || format!("elems-into({arr_node})"));
         let site = self.anon_store_site();
-        let ek = self.elem_key();
         self.cons(
             arr_node,
             Cons::Store {
                 key: ek,
                 src: relay,
                 site,
+                region: self.thrown,
             },
         );
         relay
@@ -515,6 +792,7 @@ impl Model {
         // writer, because rest arrays are Arr templates.
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: 0,
             func: 0,
             desc: "binding".into(),
@@ -525,6 +803,10 @@ impl Model {
             deep: false,
             key_value: None,
             in_loop: None,
+            define_attrs: None,
+            proto_named: false,
+            assign: false,
+            proto_of: None,
         });
         id
     }
@@ -541,8 +823,25 @@ impl Model {
         if !self.construct_done.insert((call, TOP)) {
             return;
         }
+        let a = name;
         let name = self.atoms[name as usize].clone();
-        self.with_b(|m| builtins::construct_named(m, &name, call));
+        if name == proxy::PROXY_NEW {
+            return self.proxy_new(call);
+        }
+        // `new K(...)` evaluates the global binding `K` (ECMA-262 13.3.5.1):
+        // what the program stored over it (`program_global_fn`) is
+        // constructed too. Perry lowers a literal builtin name to the
+        // intrinsic (below), node constructs the stored value: the union
+        // is true of both.
+        if builtins::global_any_names(self, &name) {
+            builtins::global_any_new(self, &name, call);
+        }
+        if builtins::program_global_fn(self, &name) {
+            let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let f = builtins::global_field(self, g, a);
+            self.cons(f, Cons::New { call });
+        }
+        self.with_native(call, |m, call| builtins::construct_named(m, &name, call));
     }
 
     /// The token `new` at `call` gives template `tm`: one per birth site. A
@@ -613,7 +912,7 @@ impl Model {
             TokKind::ClassObj(tm) => {
                 let ctx = self.birth_ctx(call);
                 let inst = self.site_tok(tm, ctx);
-                self.add_tok(c.ret, inst);
+                self.class_this_result(call, tm, inst, c.ret);
                 self.run_ctor_chain(call, tm, inst);
                 // Another unit's constructor up the chain returns an object:
                 // `new` yields that value, which this unit cannot name.
@@ -658,7 +957,7 @@ impl Model {
                 let tm = self.fn_inst_template(f);
                 let ctx = self.birth_ctx(call);
                 let inst = self.site_tok(tm, ctx);
-                self.add_tok(c.ret, inst);
+                self.ctor_this_result(call, t, false, inst, c.ret);
                 self.call_tok(call, t, Some(inst));
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
@@ -667,11 +966,52 @@ impl Model {
             // (TypeError): nothing flows.
             TokKind::BuiltinFn(Native::Member { .. })
                 if !builtins::native_constructible(self, t) => {}
+            // A realm constructor whose declaration says what `new` does
+            // (declared at the body its dispatch arm calls): the declaration
+            // runs, as for a global constructor by name. Any value of it
+            // (`const S = inspector.Session; new S()`) is that constructor.
+            TokKind::BuiltinFn(Native::Member { identity, .. })
+                if !self.unit_mode && builtins::declared_construct(identity).is_some() =>
+            {
+                let e = builtins::declared_construct(identity).expect("guarded");
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_construct(m, e, call));
+            }
             TokKind::Top | TokKind::BuiltinFn(_) => {
                 if t == TOP {
                     self.top_calls += 1;
                 }
+                if !self.realm_held && self.prov.is_some() {
+                    self.why_hold(
+                        if t == TOP { "new-top" } else { "new-builtin" },
+                        call,
+                        Some(t),
+                    );
+                }
+                if crate::unksrc::on() {
+                    let kind = if t == TOP { "new-top" } else { "new-builtin" };
+                    let why = format!("{:?}", self.toks[t as usize]);
+                    let f = crate::unksrc::call_fn(self, call);
+                    crate::unksrc::note(kind, &why, call, f);
+                    if !self.realm_held {
+                        crate::unksrc::held(kind, &why, call, f);
+                    }
+                }
+                if !self.realm_held {
+                    let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+                    if self.keysnap.is_some() {
+                        self.keysnap_at(
+                            true,
+                            "new of an unknown constructor (construct)",
+                            Some(call),
+                            r,
+                            Some(t),
+                        );
+                    }
+                    self.hold_realm(r);
+                }
                 let r = self.reason("passed to `new` of an unknown constructor");
+                self.zs_call_args(call);
                 for &a in c.args.iter().chain(c.spread.iter()) {
                     self.sink_node(a, r);
                 }
@@ -684,29 +1024,37 @@ impl Model {
                 }
             }
             TokKind::Bound(b) => {
+                self.zs_call_args(call);
                 if self.bound_synth.contains(&call) {
-                    self.into_merged(call, b, true);
+                    self.into_merged(call, b, 1);
                     return;
                 }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                let call2 = self.solver_call(
+                let Some(call2) = self.solver_call_keyed(
                     call,
+                    (crate::summary::MK_BOUND_NEW, b, 0),
+                    None,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args,
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
-                        region: self.thrown,
+                        region: self.calls[call as usize].region,
                     },
-                );
+                ) else {
+                    return;
+                };
                 self.bound_synth.insert(call2);
                 self.rel(|| format!("boundnew {call2} {call} {b}"));
                 self.cons(target, Cons::New { call: call2 });
             }
-            TokKind::Builtin(ns) => self.with_b(|m| builtins::new_builtin_ns(m, ns, call)),
+            TokKind::Builtin(ns) => {
+                self.with_native(call, |m, call| builtins::new_builtin_ns(m, ns, call))
+            }
             _ => {}
         }
     }
@@ -722,21 +1070,34 @@ impl Model {
                 if !self.construct_done.insert((call, t)) {
                     return;
                 }
+                // A call this construct made through a bound value: the
+                // target may hold bound values again, so it joins `b`'s one
+                // merged construct instead of nesting (as `Cons::New` does).
+                if self.bound_synth.contains(&call) {
+                    self.into_merged(call, b, 2);
+                    return;
+                }
                 let (target, _bthis, bargs) = self.bound[b as usize].clone();
                 let c = self.calls[call as usize].clone();
                 let mut args = bargs;
                 args.extend(c.args.iter().copied());
-                let call2 = self.solver_call(
+                let Some(call2) = self.solver_call_keyed(
                     call,
+                    (crate::summary::MK_BOUND_NEW_PROGRAM, b, 0),
+                    None,
                     CallSite {
+                        first_arg_fixed: false,
                         this: ThisArg::Undef,
                         args,
                         spread: c.spread.clone(),
                         ret: c.ret,
                         site: c.site,
-                        region: self.thrown,
+                        region: self.calls[call as usize].region,
                     },
-                );
+                ) else {
+                    return;
+                };
+                self.bound_synth.insert(call2);
                 self.cons(target, Cons::NewProgram { call: call2 });
             }
             _ => {}
@@ -777,7 +1138,7 @@ impl Model {
             },
         );
         let like = self.node_l("from-array-like");
-        let own = self.field(t, wk);
+        let own = self.field_r(t, wk);
         let any = self.field_any(t);
         for test in [inherited, own, any] {
             self.cons(
@@ -804,6 +1165,7 @@ impl Model {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: self.thrown,
             },
         );
         let ek = self.elem_key();
@@ -848,9 +1210,9 @@ impl Model {
                 self.cons(receiver, Cons::SuperCtor { class: tm, call });
                 self.add_tok(receiver, inst);
             }
-            (None, None, Some(_)) => {
-                self.with_b(|m| builtins::native_parent_ctor(m, tm, call, inst))
-            }
+            (None, None, Some(_)) => self.with_native(call, |m, call| {
+                builtins::native_parent_ctor(m, tm, call, inst)
+            }),
             (None, None, None) if parent_value => {
                 // The same, the parent being the value of `extends` (§17.2).
                 let receiver = self.node_l("implicit-super-this");
@@ -892,15 +1254,87 @@ impl Model {
         }
     }
 
+    /// The `new` result's `this` part for class `tm` (ECMA-262 10.2.2):
+    /// through its own constructor's result (`ctor_this_result`), a derived
+    /// one when the class has heritage. Without an own constructor the
+    /// implicit one completes normally: `this` always.
+    pub(crate) fn class_this_result(&mut self, call: CallId, tm: TmplId, inst: Tok, dst: NodeId) {
+        let t = &self.tmpls[tm as usize];
+        let derived = t.parent.is_some() || t.parent_value.is_some() || t.native_parent.is_some();
+        match t.ctor {
+            Some(ctor) => {
+                let ftok = self.funcs[ctor as usize].token;
+                self.ctor_this_result(call, ftok, derived, inst, dst);
+            }
+            None => self.add_tok(dst, inst),
+        }
+    }
+
+    /// The `this`-object `inst` of `new F(...)` is its result only on a
+    /// path where F's body result is no Object (ECMA-262 10.2.2
+    /// [[Construct]] steps 10-12): for a base constructor any primitive
+    /// (`guard::NOT_OBJECT`), for a derived one `undefined` (`guard::UNDEF`;
+    /// any other primitive throws a TypeError). F's return node holds every
+    /// `return` value and the `undefined` of `return;` and of a body that
+    /// may complete (`gen::walk`), so a body whose every path returns an
+    /// object never lets `inst` reach the result. A summarized or unwalked
+    /// body keeps `inst` (superset).
+    pub(crate) fn ctor_this_result(
+        &mut self,
+        call: CallId,
+        ftok: Tok,
+        derived: bool,
+        inst: Tok,
+        dst: NodeId,
+    ) {
+        let mut r = if self.sum.ready {
+            self.ret_for(call, ftok)
+        } else {
+            NO_NODE
+        };
+        // A summarized body: its runs bound at this call return into a
+        // body-result node (`Model::call_result_dst`), which gives the
+        // `new` result its objects; the guard reads it as F's ret.
+        let f = self.tok_fn(ftok);
+        if r == NO_NODE && self.sum.ready && inst != TOP && self.summarized(f) {
+            r = match self.ctor_body.get(&(call, f)) {
+                Some(&b) => b,
+                None => {
+                    let b = self.node_named("ctor-body", || format!("ctor-body({call},{f})"));
+                    self.ctor_body.insert((call, f), b);
+                    self.ret_objects(b, dst);
+                    b
+                }
+            };
+        }
+        if r == NO_NODE || inst == TOP {
+            self.add_tok(dst, inst);
+            return;
+        }
+        let this = self.node_named("ctor-this", || format!("ctor-this({ftok})"));
+        self.add_tok(this, inst);
+        let test = if derived {
+            guard::UNDEF
+        } else {
+            guard::NOT_OBJECT
+        };
+        self.cons(
+            r,
+            Cons::Guard {
+                test,
+                from: this,
+                dst,
+            },
+        );
+    }
+
     /// Objects a constructor returns replace `this` as the `new` result.
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
-        // Object tokens only (a primitive return is ignored by `new`).
+        // Object tokens only (ECMA-262 10.2.2 step 10: a primitive result,
+        // `undefined` of a completing body included, is not the `new`
+        // result; `ctor_this_result` gives the this-object there).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        self.edge(ret, filt);
-        // `filt` keeps prims; dst gets them too, which is a harmless
-        // over-approximation for kinds only when the ctor returns
-        // primitives — but it would pollute `new` results, so relay
-        // tokens only through a Load-free copy: we accept the prims.
+        self.cons(ret, Cons::Objects { dst: filt });
         self.edge(filt, dst);
     }
 
@@ -918,6 +1352,8 @@ impl Model {
             definite,
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: Some(f),
             native_parent: None,
@@ -945,6 +1381,16 @@ impl Model {
 
     /// `recv.key(args)` on token `t`.
     pub(super) fn method_on(&mut self, t: Tok, key: Key, call: CallId) {
+        // A name-keyed fold's dispatch (`Gen::name_fold_call`): the helper
+        // serves a receiver of its own kind itself, with no lookup.
+        if let Some(&brand) = self.name_fold_calls.get(&call) {
+            if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+                if matches!(self.tmpls[tm as usize].kind, TmplKind::BObj { what, .. } if what == brand)
+                {
+                    return;
+                }
+            }
+        }
         // An array is never the iterator the iteration protocol steps or
         // closes: the step of the iterated value itself (`v.next()`,
         // `Gen::iterate`) is made only on a value `js_get_iterator` returns
@@ -1084,11 +1530,33 @@ impl Model {
                 }
             }
         }
+        // The formatter's `[util.inspect.custom]` hook on a realm object
+        // (`format_jsvalue`, perry-runtime builtins/formatting.rs): an own
+        // entry under the `Symbol.for("nodejs.util.inspect.custom")` key, or
+        // the `__perry_inspect_custom__` method of the object's class. No
+        // realm object carries either, and the runtime declares no member
+        // under that name: the hook is what the program stored on the
+        // object under a key that may name it (a String key never does,
+        // `key_shape`), the ordinary read's values. With none, nothing runs:
+        // the runtime prints the object.
+        if let Key::Named(a) = key {
+            if self.protocol_calls.contains(&call)
+                && self.atoms[a as usize] == crate::model::INSPECT_CUSTOM_METHOD
+                && matches!(self.toks[t as usize], TokKind::Builtin(_))
+            {
+                let callee = self.node_l("builtin-inspect-hook");
+                self.load_from(t, t, key, callee);
+                self.bind_via(callee, call, t);
+                return;
+            }
+        }
         // A missing intrinsic member calls exactly the ordinary read's
         // values, including program fields, getters and reopened chains.
-        // No callable value means a TypeError, with no argument escape.
+        // No callable value means a TypeError, with no argument escape. The
+        // global object under a key the program owns is such a member too
+        // (`global_user_method`).
         if let Key::Named(a) = key {
-            if builtins::undeclared(self, t, a) {
+            if builtins::undeclared(self, t, a) || builtins::global_user_method(self, t, a) {
                 let callee = self.node_l("builtin-member-read");
                 self.load_from(t, t, key, callee);
                 self.bind_via(callee, call, t);
@@ -1098,7 +1566,7 @@ impl Model {
         // Own function-valued fields, then the prototype chain.
         let own = match (key, virt) {
             (Key::Named(_), Some(v)) => v,
-            (Key::Named(a), None) => self.field(t, a),
+            (Key::Named(a), None) => self.field_r(t, a),
             (Key::Any(_), _) => self.key_fields(t, key),
         };
         self.bind_via(own, call, t);
@@ -1123,6 +1591,18 @@ impl Model {
         // as for a read: the call binds the program prototypes' methods (a
         // superset), not the builtin members, which it takes once the key
         // no longer shadows them (`flush_shadowed`).
+        // ECMA-262 10.1.8.1 OrdinaryGet: a sure own data property is the
+        // callee; the lookup ends at the object (`surely_own_data`).
+        if let Key::Named(a) = key {
+            if self.surely_own_data(t, a) {
+                if virt.is_some() {
+                    let f = self.field_r(t, a);
+                    self.bind_via(f, call, t);
+                }
+                self.note_own_stopped(t, t, a, ChainAct::Call(call));
+                return;
+            }
+        }
         match self.shadow_key(t, key) {
             Some(a) => {
                 let cv = self.cv_of(t, key, false);

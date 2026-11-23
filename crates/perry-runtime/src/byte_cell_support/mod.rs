@@ -489,7 +489,7 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
     // Plain double — positive, negative, ±Inf, and all NaN patterns that
     // are NOT NaN-box tags. Tagged values occupy top16 in
     // 0x7FF9..=0x7FFF (SHORT_STRING_TAG=0x7FF9, BIGINT_TAG=0x7FFA,
-    // 0x7FFC=undefined/null/bool, POINTER_TAG=0x7FFD, INT32_TAG=0x7FFE,
+    // 0x7FFC=undefined/null/bool, POINTER_TAG=0x7FFD, INTERNAL_WORD_TAG=0x7FFE,
     // STRING_TAG=0x7FFF). Negative doubles (top16≥0x8000) and the canonical
     // NaN (top16 0x7FF8) return as-is. An inline SSO string must reach the
     // string arm below, not be stored as its raw NaN bits (#11519).
@@ -507,11 +507,6 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
     if top16 == 0x7FFD && unsafe { crate::symbol::js_is_symbol(v) } != 0 {
         crate::collection_iter::throw_type_error("Cannot convert a Symbol value to a number");
     }
-    // INT32 tag
-    if top16 == 0x7FFE {
-        let n = (bits & 0xFFFF_FFFF) as i32;
-        return n as f64;
-    }
     // TRUE/FALSE
     if bits == 0x7FFC_0000_0000_0004 {
         return 1.0;
@@ -526,14 +521,11 @@ pub(crate) fn jsvalue_to_f64(v: f64) -> f64 {
         return f64::NAN; // undefined -> NaN
     }
     // Strings (heap or inline SSO, #11519): try to parse, else NaN.
+    // Strings (heap or inline SSO, #11519): the shared StringToNumber, so
+    // `"0x10"` is 16, `"inf"` is NaN and `"  "` is 0 as in every other
+    // ToNumber (Rust's float parser disagrees on all three).
     if top16 == 0x7FFF || top16 == 0x7FF9 {
-        return crate::string::with_string_value_bytes(v, |bytes| {
-            std::str::from_utf8(bytes)
-                .ok()
-                .and_then(|s| s.trim().parse::<f64>().ok())
-                .unwrap_or(f64::NAN)
-        })
-        .unwrap_or(f64::NAN);
+        return crate::builtins::js_number_coerce(v);
     }
     // POINTER_TAG object (Symbols already threw above; BigInt handled above):
     // a non-bigint view performs `ToNumber(value)`, which for an object runs

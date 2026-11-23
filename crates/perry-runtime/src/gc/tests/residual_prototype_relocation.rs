@@ -193,15 +193,10 @@ fn test_lazy_array_explicit_prototype_survives_a_copying_minor() {
 
 #[test]
 fn an_owned_prototype_moves_with_its_array() {
-    prototype_edge(false);
+    prototype_edge();
 }
 
-#[test]
-#[ignore = "negative control: erase the relocated owner's prototype slot"]
-fn negative_control_objtables_object_prototypes() {
-    prototype_edge(true);
-}
-fn prototype_edge(erase: bool) {
+fn prototype_edge() {
     let _serialized = crate::array::test_serialize();
     let _feedback = crate::typed_feedback::typed_feedback_test_lock();
     let _latch = ArrayPrototypeLatchRestore::capture();
@@ -216,12 +211,6 @@ fn prototype_edge(erase: bool) {
     assert_copied_minor_trace(&trace, true, CopiedMinorFallbackReason::None, false);
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(moved, owner);
-    if erase {
-        unsafe {
-            let bag = crate::object::descriptor_state::descriptor_holder(moved);
-            (*(*bag).meta).prototype = 0;
-        }
-    }
     let bits = crate::object::prototype_chain::object_static_prototype(moved)
         .expect("owner retains prototype");
     assert_ne!((bits & POINTER_MASK) as usize, proto);

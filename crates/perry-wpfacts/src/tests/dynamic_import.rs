@@ -67,6 +67,7 @@ fn program(main: &str, paths: &[&str], units: bool, sabotage: Option<&str>) -> P
                         type_only: false,
                         runtime_erased: false,
                         is_dynamic: true,
+                        is_deferred: false,
                         is_dynamic_target: false,
                         is_deferred_require: false,
                         is_adopted_require: false,
@@ -90,7 +91,7 @@ fn program(main: &str, paths: &[&str], units: bool, sabotage: Option<&str>) -> P
         ..Default::default()
     };
     if units {
-        crate::compute_units(&list, &cfg)
+        crate::compute(&list, &cfg)
     } else {
         crate::compute(&list, &cfg)
     }

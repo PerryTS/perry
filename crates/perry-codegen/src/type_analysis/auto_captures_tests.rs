@@ -28,6 +28,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -98,10 +99,7 @@ fn a_preallocated_binding_is_the_bodys_own_and_not_captured() {
     let step = closure(
         31,
         Vec::new(),
-        vec![
-            let_(2, Expr::LocalGet(1)),
-            Stmt::Return(Some(add(2, 1))),
-        ],
+        vec![let_(2, Expr::LocalGet(1)), Stmt::Return(Some(add(2, 1)))],
         vec![1, 2],
     );
     let body = vec![

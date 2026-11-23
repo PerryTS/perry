@@ -34928,7 +34928,10 @@ async function cleanProfileTarget(profileDir, packages, checkTimestamp = false) 
     }
     let keepProfile = new Set(["build", ".fingerprint", "deps"]);
     await rmExcept(profileDir, keepProfile);
-    const keepPkg = new Set(packages.flatMap((p) => [p.name, ...p.targets.map((t) => t.replace(/-/g, "_"))]));
+    // Perry patch: -Zbuild-std units are absent from `cargo metadata`; keep the
+    // crates the perry-rust-cache action lists, or every restore rebuilds std.
+    const keepStd = (process.env.PERRY_RUST_CACHE_KEEP || "").split(/\s+/).filter(Boolean);
+    const keepPkg = new Set([...packages.flatMap((p) => [p.name, ...p.targets.map((t) => t.replace(/-/g, "_"))]), ...keepStd, ...keepStd.map((n) => n.replace(/-/g, "_"))]);
     await rmExcept(path__default.join(profileDir, "build"), keepPkg, checkTimestamp);
     await rmExcept(path__default.join(profileDir, ".fingerprint"), keepPkg, checkTimestamp);
     const keepDeps = new Set(packages.flatMap((p) => {
@@ -34939,6 +34942,11 @@ async function cleanProfileTarget(profileDir, packages, checkTimestamp = false) 
         }
         return names;
     }));
+    for (const n of keepStd) {
+        const name = n.replace(/-/g, "_");
+        keepDeps.add(name);
+        keepDeps.add(`lib${name}`);
+    }
     await rmExcept(path__default.join(profileDir, "deps"), keepDeps, checkTimestamp);
 }
 /**

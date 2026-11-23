@@ -702,7 +702,8 @@ JS_ALLOC_RE = re.compile(
 ALLOC_RE = re.compile(
     "^(" + "|".join("js_" + a for a in
                      JS_ALLOC_RE.pattern[len("^js_("):-len(")$")].split("|"))
-    + r"|perry_birth_class|perry_birth_empty_array|perry_birth_empty_array_16)$"
+    + r"|perry_birth_class|perry_birth_empty_array|perry_birth_empty_array_16"
+    + r"|perry_birth_empty_array_n)$"
 )
 
 
@@ -1724,6 +1725,7 @@ POLL_CAPABLE_RUNTIME = {
     # Non-null fast calls carry a call-site gc-leaf-function attribute; the
     # symbol itself must never be classified as noncollecting.
     "perry_birth_class", "perry_birth_empty_array", "perry_birth_empty_array_16",
+    "perry_birth_empty_array_n",
     "js_inline_arena_slow_alloc",
     "js_call_function",
     # Calling a JS closure. The four names this replaces
@@ -1937,6 +1939,19 @@ POLL_CAPABLE_RUNTIME = {
     # corpus is that one, which the same PR fixes in
     # `lower_call/new/instance.rs::construction_runs_user_code`.
     "js_private_brand_add",
+    # Fifth wave, one hop each, the audit's own premise:
+    #   js_object_assign_fresh -> js_object_assign_one  (object/assign.rs: the
+    #       spread / Object.assign birth copies through the listed per-source
+    #       copy, which runs the source's getters)
+    #   js_array_flat_depth    -> js_number_coerce  (array/flat_clone.rs:
+    #       ToIntegerOrInfinity(depth) runs a user valueOf, and
+    #       ArraySpeciesCreate may run a user constructor)
+    #   js_array_flat          -> js_array_flat_depth  (a pure delegate)
+    #   js_array_to_spliced    -> js_number_coerce  (array/immutable.rs:
+    #       ToIntegerOrInfinity(start / skipCount) runs a user valueOf)
+    "js_object_assign_fresh",
+    "js_array_flat", "js_array_flat_depth",
+    "js_array_to_spliced",
 }
 
 
@@ -3303,7 +3318,7 @@ def _collecting_insn(ins):
     # The fast birth call shares a symbol with the collecting slow call.
     # Codegen proves the fast arm leaf at the call site, never on the symbol.
     if ins.callee in {"perry_birth_class", "perry_birth_empty_array",
-                      "perry_birth_empty_array_16"}:
+                      "perry_birth_empty_array_16", "perry_birth_empty_array_n"}:
         if '"gc-leaf-function"' in ins.text:
             return False
     return is_collecting(ins.callee)
@@ -6838,7 +6853,7 @@ def self_test():
     # Prove a late store and a missing bind fail, while the rooted/reloaded
     # twin clears. Also prove only the non-leaf call is a collection window.
     for birth in ("perry_birth_class", "perry_birth_empty_array",
-                  "perry_birth_empty_array_16"):
+                  "perry_birth_empty_array_16", "perry_birth_empty_array_n"):
         fixture = f"""define i64 @birth_control(i1 %fits, ptr %raw) {{
 entry.0:
   %home = alloca i64

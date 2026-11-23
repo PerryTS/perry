@@ -122,6 +122,12 @@ pub(super) fn try_lower_u32_bitset_test(
     let Some((mask_id, index_id)) = match_u32_bitset_test(expr) else {
         return Ok(None);
     };
+    // I32 at rest: the read's slow path reads the word undecoded.
+    if let Expr::Binary { left, .. } = expr {
+        if super::rest_elems::read_floor(ctx, left).is_some() {
+            return Ok(None);
+        }
+    }
     let Some(index_slot) = ctx.i32_counter_slots.get(&index_id).cloned() else {
         return Ok(None);
     };

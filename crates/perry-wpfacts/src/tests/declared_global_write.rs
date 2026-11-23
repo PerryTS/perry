@@ -27,7 +27,9 @@ fn verdicts(pf: &ProgramFacts, src: &str) -> String {
 }
 
 fn proven(pf: &ProgramFacts, src: &str) -> bool {
-    at(pf, src).iter().all(|s| !matches!(s.verdict, Verdict::No(_)))
+    at(pf, src)
+        .iter()
+        .all(|s| !matches!(s.verdict, Verdict::No(_)))
 }
 
 /// `p` is given to `JSON.stringify`, read as `read`; `before` runs first.
@@ -78,7 +80,10 @@ fn an_unwritten_declared_global_is_the_realms() {
 /// Control: a store under another declared name leaves `JSON` the realm's.
 #[test]
 fn a_store_under_another_name_leaves_the_global() {
-    let src = program("(globalThis as any).Reflect = {}; const J: any = JSON;", "J");
+    let src = program(
+        "(globalThis as any).Reflect = {}; const J: any = JSON;",
+        "J",
+    );
     let pf = facts(&src);
     assert!(proven(&pf, &src), "{}", verdicts(&pf, &src));
 }

@@ -966,12 +966,8 @@ unsafe extern "C" fn call_wasm_import(
         .iter()
         .zip(bits.iter())
         .map(|(kind, bits)| match *kind {
-            WASM_VAL_KIND_I32 => (*bits as u32 as i32) as f64,
-            WASM_VAL_KIND_I64 => wasm_i64_to_js(*bits),
-            WASM_VAL_KIND_F32 => f32::from_bits(*bits as u32) as f64,
-            WASM_VAL_KIND_F64 => f64::from_bits(*bits),
             WASM_VAL_KIND_EXTERNREF => f64::from_bits(*bits),
-            _ => f64::from_bits(TAG_UNDEFINED),
+            kind => decode_wasm_value(kind, *bits),
         })
         .collect();
     let result = match crate::exception::catch_thrown(|| {
@@ -1007,12 +1003,8 @@ unsafe extern "C" fn call_wasm_import(
     };
     for (kind, bits) in result_kinds.iter().zip(result_bits.iter_mut()) {
         *bits = match *kind {
-            WASM_VAL_KIND_I32 => result as i32 as u32 as u64,
-            WASM_VAL_KIND_I64 => js_to_wasm_i64_bits(result).unwrap_or(result as i64 as u64),
-            WASM_VAL_KIND_F32 => (result as f32).to_bits() as u64,
-            WASM_VAL_KIND_F64 => result.to_bits(),
             WASM_VAL_KIND_EXTERNREF => result.to_bits(),
-            _ => 0,
+            kind => js_to_wasm_numeric_bits(kind, result).unwrap_or(0),
         };
     }
     1
@@ -1192,12 +1184,8 @@ extern "C" fn js_wasm_global_set(
     if unsafe { perry_wasm_host_global_get(handle, &mut kind, &mut previous) } == 0 {
         return nanbox_undefined();
     }
-    let bits = match kind {
-        WASM_VAL_KIND_I32 => value as i32 as u32 as u64,
-        WASM_VAL_KIND_I64 => js_to_wasm_i64_bits(value).unwrap_or(value as i64 as u64),
-        WASM_VAL_KIND_F32 => (value as f32).to_bits() as u64,
-        WASM_VAL_KIND_F64 => value.to_bits(),
-        _ => return nanbox_undefined(),
+    let Some(bits) = js_to_wasm_numeric_bits(kind, value) else {
+        return nanbox_undefined();
     };
     let _ = unsafe { perry_wasm_host_global_set(handle, kind, bits) };
     nanbox_undefined()
@@ -1217,11 +1205,11 @@ fn make_global_object(external: *mut c_void, receiver: f64) -> f64 {
         .root_raw_mut_ptr(born_value.as_pointer::<crate::object::ObjectHeader>()
             as *mut crate::object::ObjectHeader);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(js_wasm_global_get, 0; with_declared(0)),
+        crate::fn_info!(js_wasm_global_get, 0; with_name("get value"), with_declared(0)),
         0,
     ));
     let setter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(js_wasm_global_set, 1; with_declared(1)),
+        crate::fn_info!(js_wasm_global_set, 1; with_name("set value"), with_declared(1)),
         0,
     ));
     let object_ptr = object.get_raw_mut_ptr::<crate::object::ObjectHeader>();
@@ -1354,12 +1342,11 @@ pub extern "C" fn js_webassembly_global_new(descriptor: f64, initial: f64, recei
         ));
     };
     let mutable = crate::value::js_is_truthy(descriptor_field(object, b"mutable")) != 0;
-    let bits = match kind {
-        WASM_VAL_KIND_I32 => initial as i32 as u32 as u64,
-        WASM_VAL_KIND_I64 => js_to_wasm_i64_bits(initial).unwrap_or(initial as i64 as u64),
-        WASM_VAL_KIND_F32 => (initial as f32).to_bits() as u64,
-        WASM_VAL_KIND_F64 => initial.to_bits(),
-        _ => 0,
+    // An absent initial value is the type's default, 0, not ToNumber(undefined).
+    let bits = if JSValue::from_bits(initial.to_bits()).is_undefined() {
+        0
+    } else {
+        js_to_wasm_numeric_bits(kind, initial).unwrap_or(0)
     };
     let external = unsafe { perry_wasm_host_global_new(kind, mutable as i32, bits) };
     if external.is_null() {

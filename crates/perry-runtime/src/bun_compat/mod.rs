@@ -255,10 +255,6 @@ fn hash_seed(seed: f64) -> u64 {
         }
         return 0;
     }
-    let js = JSValue::from_bits(seed.to_bits());
-    if js.is_int32() {
-        return js.as_int32() as i64 as u64;
-    }
     if seed.is_finite() {
         return seed as i64 as u64;
     }

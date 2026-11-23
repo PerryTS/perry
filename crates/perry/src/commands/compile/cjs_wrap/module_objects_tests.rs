@@ -110,7 +110,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let cache_reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| wrapped(s) && s.key.starts_with(&root))
+        .filter(|s| wrapped(s) && s.key.starts_with(&root) && !s.access.is_store())
         .collect();
     // a.js requires b and c, c.js requires b: three static edges, each
     // reading the live entry and, after a reload, the new one.
@@ -135,7 +135,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
     let exports_reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| wrapped(s) && s.key == "exports" && !s.is_call)
+        .filter(|s| wrapped(s) && s.key == "exports" && !s.is_call && !s.access.is_store())
         .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
         .collect();
     assert!(exports_reads.len() >= 6, "{dump}");
@@ -147,7 +147,7 @@ fn the_wrappers_own_reads_are_proven_one_load_sites() {
         let reads: Vec<_> = pf
             .sites
             .iter()
-            .filter(|s| s.module == support && s.key == key && !s.is_call)
+            .filter(|s| s.module == support && s.key == key && !s.is_call && !s.access.is_store())
             .collect();
         assert!(!reads.is_empty(), "no `{key}` read in link\n{dump}");
         for s in reads {
@@ -180,7 +180,7 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
     let extra: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.module != support && s.key == "extra" && !s.is_call)
+        .filter(|s| s.module != support && s.key == "extra" && !s.is_call && !s.access.is_store())
         .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
         .collect();
     assert!(!extra.is_empty(), "{dump}");
@@ -194,7 +194,10 @@ fn a_key_one_record_adds_is_not_read_at_a_shared_slot() {
     assert!(
         pf.sites
             .iter()
-            .filter(|s| s.module != support && s.key == "exports" && !s.is_call)
+            .filter(|s| s.module != support
+                && s.key == "exports"
+                && !s.is_call
+                && !s.access.is_store())
             .filter(|s| s.receivers.iter().any(|r| r.contains("__AnonShape_")))
             .all(|s| proven(&s.verdict)),
         "{dump}"
@@ -223,7 +226,7 @@ fn the_born_exports_object_has_the_module_s_export_contract() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -246,7 +249,7 @@ fn the_exports_contract_does_not_follow_a_replacement() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "a" && !s.is_call)
+        .filter(|s| s.key == "a" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -272,7 +275,7 @@ fn a_declared_export_redefined_as_an_accessor_is_not_a_slot() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "v" && !s.is_call)
+        .filter(|s| s.key == "v" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -320,19 +323,31 @@ fn regenerate_wpfacts_cjs_fixtures() {
     // `t6`'s entry requires by a computed specifier: a program that is not
     // closed, its wrappers keep the open arms.
     // `t7`'s `b.js` requires `module` (Node's `Module._cache`): not closed.
-    let sets: [(&str, &[&str], bool); 6] = [
-        ("t1", &["b.js", "a.js", "m.js"], false),
-        ("t2", &["r.js", "m.js"], false),
+    // `t8`'s entry is ESM (`cjs_t8/m.js`, not wrapped): its `createRequire`
+    // makes the program not closed, and no wrapped module is the entry.
+    // `spec`'s `a.js` requires `process`: not closed, so every static edge
+    // keeps its arm that reloads the target by path (R-SPEC).
+    let sets: [(&str, &[&str], bool, bool); 8] = [
+        ("t1", &["b.js", "a.js", "m.js"], false, true),
+        ("t2", &["r.js", "m.js"], false, true),
         (
             "t3",
             &["benchmark.js", "richards.js", "sa_Richards.js"],
             false,
+            true,
         ),
-        ("t5", &["b.js", "r.js", "m.js"], false),
-        ("t6", &["benchmark.js", "som.js", "cd.js", "sa_CD.js"], true),
-        ("t7", &["a.js", "b.js", "m.js"], true),
+        ("t5", &["b.js", "r.js", "m.js"], false, true),
+        (
+            "t6",
+            &["benchmark.js", "som.js", "cd.js", "sa_CD.js"],
+            true,
+            true,
+        ),
+        ("t7", &["a.js", "b.js", "m.js"], true, true),
+        ("t8", &["l.js"], true, false),
+        ("spec", &["b.js", "a.js", "m.js"], true, true),
     ];
-    for (t, files, open) in sets {
+    for (t, files, open, cjs_entry) in sets {
         let dir = tempfile::tempdir().expect("tempdir");
         let root = dir.path().canonicalize().expect("canonical tempdir");
         let root_text = root.to_string_lossy().into_owned();
@@ -347,13 +362,14 @@ fn regenerate_wpfacts_cjs_fixtures() {
         let out = fixtures.join(format!("cjs_{t}"));
         for (i, f) in files.iter().enumerate() {
             let src = std::fs::read_to_string(root.join(f)).expect("source");
-            let entry = i + 1 == files.len();
+            let entry = cjs_entry && i + 1 == files.len();
             let (wrapped, _) =
                 wrap_commonjs_with_body_offset(&src, &root.join(f), None, entry, None);
             let text = resolve_open(&wrapped, open).replace(&root_text, &short);
             std::fs::write(out.join(f), text).expect("write fixture");
         }
-        let support = resolve_open(&support::source(&keys, true), open).replace(&root_text, &short);
+        let support =
+            resolve_open(&support::source(&keys, cjs_entry), open).replace(&root_text, &short);
         std::fs::write(out.join("perry_cjs.js"), support).expect("write support fixture");
     }
 }
@@ -423,7 +439,7 @@ fn cache_reads(dir: &tempfile::TempDir, pf: &ProgramFacts) -> Vec<(String, bool)
     let support = support_index(pf);
     pf.sites
         .iter()
-        .filter(|s| s.module != support && s.key.starts_with(&root))
+        .filter(|s| s.module != support && s.key.starts_with(&root) && !s.access.is_store())
         .map(|s| {
             let name = s.key.rsplit('/').next().unwrap_or_default().to_string();
             (name, proven(&s.verdict))
@@ -466,7 +482,7 @@ fn a_cache_deletion_ends_the_factory_order() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()
@@ -489,7 +505,7 @@ fn an_export_added_in_a_loop_keeps_no_order() {
     let reads: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "name" && !s.is_call)
+        .filter(|s| s.key == "name" && !s.is_call && !s.access.is_store())
         .filter(|s| {
             s.receivers
                 .iter()

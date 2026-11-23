@@ -117,7 +117,11 @@ const ERASED_MAIN: &str = "import * as R from './r';\n\
 
 #[test]
 fn export_of_a_type_only_import_puts_no_top_into_the_namespace() {
-    let pf = whole(&[("e", ERASED_SRC), ("r", ERASED_BARREL), ("main", ERASED_MAIN)]);
+    let pf = whole(&[
+        ("e", ERASED_SRC),
+        ("r", ERASED_BARREL),
+        ("main", ERASED_MAIN),
+    ]);
     let dump = pf.dump_text();
     assert!(proven(&pf, "v"), "c.v unproven:\n{dump}");
     assert!(proven(&pf, "w"), "c.w unproven:\n{dump}");
@@ -135,7 +139,10 @@ fn lowered(name: &str, src: &str) -> perry_hir::Module {
 fn a_type_only_import_export_is_erased_and_a_value_import_is_not() {
     let r = lowered("r", ERASED_BARREL);
     for n in ["I", "H", "J"] {
-        assert!(r.is_type_only_export_binding(n), "{n} kept as a runtime export");
+        assert!(
+            r.is_type_only_export_binding(n),
+            "{n} kept as a runtime export"
+        );
     }
     assert!(!r.is_type_only_export_binding("C"), "value import C erased");
     let merged = lowered(

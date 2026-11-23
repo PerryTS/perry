@@ -402,6 +402,7 @@ pub(crate) fn emit_module_globals(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_init_lets(body, out);
                     if let Some(c) = catch {
@@ -473,7 +474,8 @@ pub(crate) fn emit_module_globals(
             {
                 module_global_proven_types.insert(*id, proven);
             }
-            if outlined_entry_globals.contains(id)
+            if hir.async_init_function.is_some()
+                || outlined_entry_globals.contains(id)
                 || (referenced_from_fn.contains(id)
                     && !hir.classic_for_lexical_bindings.contains(id))
                 || exported_var_names.contains(name)
@@ -830,6 +832,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         assert!(module_shadows_shared_array_buffer_intrinsic(
             &function_module,

@@ -53,6 +53,7 @@ js_string_addref_if_heap_string	Leaf	no
 js_string_compare	Leaf	no
 js_string_register_property_atoms	Leaf	no
 js_throw	ThrowOnly	yes
+js_throw_local	Leaf	no
 js_timer_has_pending	Leaf	no
 js_trace_events_flush_output	Leaf	no
 js_typed_feedback_maybe_dump_trace	Leaf	no

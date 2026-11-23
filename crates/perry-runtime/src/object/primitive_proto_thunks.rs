@@ -52,13 +52,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(#[realm(Number.prototype.toString)] export crate::object::primitive_proto_thunks::number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.toString, effects = { coerce(arg(0), ToPrimitive); returns(prim(str)) })] export crate::object::primitive_proto_thunks::number_proto_to_string_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN)),
                 1,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(#[realm(Number.prototype.valueOf)] export crate::object::primitive_proto_thunks::number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Number.prototype.valueOf, effects = { returns(prim(num)) })] export crate::object::primitive_proto_thunks::number_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -66,13 +66,13 @@ pub(super) fn install_primitive_proto_methods(
             ipm(
                 proto_obj,
                 "toString",
-                crate::fn_info!(#[realm(Boolean.prototype.toString)] export crate::object::primitive_proto_thunks::boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Boolean.prototype.toString, effects = { returns(prim(str)) })] export crate::object::primitive_proto_thunks::boolean_proto_to_string_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
             ipm(
                 proto_obj,
                 "valueOf",
-                crate::fn_info!(#[realm(Boolean.prototype.valueOf)] export crate::object::primitive_proto_thunks::boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(Boolean.prototype.valueOf, effects = { returns(prim(bool)) })] export crate::object::primitive_proto_thunks::boolean_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
         }
@@ -238,9 +238,6 @@ fn number_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> f64 {
         return payload;
     }
     let jv = crate::value::JSValue::from_bits(receiver.to_bits());
-    if jv.is_int32() {
-        return jv.as_int32() as f64;
-    }
     if jv.is_number() {
         return receiver;
     }

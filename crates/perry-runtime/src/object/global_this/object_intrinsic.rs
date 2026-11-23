@@ -63,7 +63,10 @@ pub(crate) fn ensure_object_intrinsics() -> ObjectPair {
     // %Object% and %Object.prototype% are the realm's, whichever init first
     // reads them (SNAP census, design §2.10.20).
     let _realm = crate::snap_census::realm_build();
-    let built = build_object_intrinsics();
+    // The runtime's own definition, whichever operation reaches it first: as
+    // program writes, its installs of names the program uses (`__proto__`)
+    // would seal it shadowed and withdraw `Pristine` from every family.
+    let built = crate::object::own_override::as_builtin_definition(build_object_intrinsics);
     if let Some((ctor, proto)) = built {
         crate::object::OBJECT_INTRINSIC_PTR.store(ctor as i64, Ordering::Release);
         crate::object::OBJECT_INTRINSIC_PROTO_PTR.store(proto as i64, Ordering::Release);
@@ -126,6 +129,9 @@ pub(crate) fn ensure_object_prototype_shape() -> *mut ObjectHeader {
 /// `global`: this thread's own pair (see [`ensure_object_intrinsics`]) when
 /// `global` is the thread's realm global, a fresh pair for any other realm
 /// (a `vm` context or an eval realm), whose intrinsics are its own.
+// Inlined into the population (its one-pass copy and its phase copy), as it was
+// when the population was its only caller.
+#[inline(always)]
 pub(crate) fn object_intrinsics_for_realm(global: *mut ObjectHeader) -> ObjectPair {
     if is_thread_realm_global(global) {
         return ensure_object_intrinsics();
@@ -222,8 +228,7 @@ mod tests {
             // Every constructor own property, including prototype, fits the
             // initial bag. Prototype-chain reads must not gain a spill just
             // because length/name now carry their attributes in that bag.
-            let bag = unsafe { crate::closure::props::bag_of(ctor as usize) };
-            let layout = unsafe { super::super::shapes::object_shape_descriptor(bag) }
+            let layout = unsafe { crate::closure::props::shape_descriptor(ctor as usize) }
                 .expect("constructor own-property shape");
             assert!(layout.live_inline_slot_count >= layout.logical_key_count);
             // Complete before any realm global: statics, prototype methods.
@@ -237,7 +242,7 @@ mod tests {
             assert!(method.is_pointer(), "hasOwnProperty missing");
 
             crate::object::js_get_global_this();
-            let global_object = js_get_global_this_builtin_value(b"Object".as_ptr(), 6);
+            let global_object = crate::object::builtin_value_core("Object");
             let (ctor_now, proto_now) = ensure_object_intrinsics();
             assert_eq!(
                 global_object.to_bits(),

@@ -63,8 +63,15 @@ fn a_global_something_may_store_keeps_its_value() {
     for prefix in [
         format!("(globalThis as any)[\"DEV\" + \"TOOLS\".slice(0)] = {LEAK};"),
         format!("(globalThis as any).DEVTOOLS = {LEAK};"),
-        format!("new Function(\"globalThis.DEVTOOLS = {}\")();", LEAK.replace("(o: any)", "(o)").replace("(this: any)", "()").replace('"', "\\\"")),
-        format!("Object.defineProperty(globalThis, \"DEVTOOLS\", {{ get() {{ return {LEAK}; }} }});"),
+        format!(
+            "new Function(\"globalThis.DEVTOOLS = {}\")();",
+            LEAK.replace("(o: any)", "(o)")
+                .replace("(this: any)", "()")
+                .replace('"', "\\\"")
+        ),
+        format!(
+            "Object.defineProperty(globalThis, \"DEVTOOLS\", {{ get() {{ return {LEAK}; }} }});"
+        ),
         format!("(Object.prototype as any).DEVTOOLS = {LEAK};"),
         format!("Object.assign(globalThis, {{ DEVTOOLS: {LEAK} }});"),
     ] {
@@ -74,5 +81,8 @@ fn a_global_something_may_store_keeps_its_value() {
             Err(e) => failures.push(format!("{prefix}: {}", e.lines().next().unwrap())),
         }
     }
-    assert!(failures.is_empty(), "proven although a store may replace add: {failures:?}");
+    assert!(
+        failures.is_empty(),
+        "proven although a store may replace add: {failures:?}"
+    );
 }

@@ -36,6 +36,7 @@ pub fn collect_let_ids(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_let_ids(body, out);
                 if let Some(c) = catch {
@@ -183,6 +184,7 @@ fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 refs_stmts::<FREE>(body, out);
                 if let Some(c) = catch {
@@ -504,7 +506,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             }
         }
         Expr::ObjectSpread { parts } => {
-            for (_, e) in parts {
+            for e in parts.iter().flatten() {
                 walk(e, out);
             }
         }

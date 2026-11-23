@@ -19,6 +19,7 @@ fn function(id: u32, name: &str, value: Expr) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -56,6 +57,7 @@ fn getter_read_uses_live_receiver_instead_of_enclosing_class() {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };

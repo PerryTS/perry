@@ -46,6 +46,7 @@ fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -81,6 +82,7 @@ fn class(
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }

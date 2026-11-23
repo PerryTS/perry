@@ -65,9 +65,6 @@ pub(super) unsafe fn vt_get_own_field(
         if let Some(value) = super::field_get_set::native_module_own_field_by_key(obj, key) {
             return Some(value);
         }
-        if let Some(value) = performance_namespace_method(&module_name, property_name, nb_ptr) {
-            return Some(JSValue::from_bits(value.to_bits()));
-        }
         // #3687: node:cluster default-import EventEmitter methods on the
         // distinct `cluster.default` namespace (see original comment at the
         // pre-relocation site in field_get_set.rs history).

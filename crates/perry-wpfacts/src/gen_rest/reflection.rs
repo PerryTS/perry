@@ -3,10 +3,13 @@
 use super::*;
 
 impl<'a> Gen<'a> {
-    /// ToPropertyKey of a reflective key operand
-    /// (`Object.getOwnPropertyDescriptor`, `Reflect.getOwnPropertyDescriptor`,
-    /// `Reflect.deleteProperty`): an object key runs its `@@toPrimitive`,
-    /// `toString` or `valueOf` before the lookup.
+    /// ToPropertyKey (ECMA-262 7.1.19) of the key value `key`: the one place
+    /// an operation of the program's own syntax says it converts a key
+    /// (`o[k]` read, store, update, call, `delete o[k]`, `k in o`,
+    /// `super[k]`, computed class member and field names, the reflective
+    /// key operands). An object key runs its `@@toPrimitive`, else
+    /// OrdinaryToPrimitive( hint string ): `toString`, then `valueOf`
+    /// (7.1.1), with `this` = the key; `Protocol::ToPrimitive` names them.
     pub(crate) fn to_property_key(&mut self, key: NodeId) {
         let r = self.m.reason("ToPropertyKey");
         self.m.cons(
@@ -14,6 +17,7 @@ impl<'a> Gen<'a> {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: self.m.thrown,
             },
         );
     }
@@ -22,7 +26,98 @@ impl<'a> Gen<'a> {
         let mi = fx.module;
         match e {
             // --------------------------------------------- proxy / reflect
-            Expr::ProxyNew { target, handler } | Expr::ProxyRevocable { target, handler } => {
+            // PROXY2: `new Proxy( t, h )` makes a Proxy object (`solve/proxy.rs`),
+            // through a call each summary instance replays.
+            Expr::ProxyNew { target, handler } => {
+                let t = self.expr(fx, target);
+                let h = self.expr(fx, handler);
+                let (call, ret) = self.new_call(ThisArg::Undef, vec![t, h], vec![]);
+                let hn = self.m.node_l("new-proxy");
+                let mark = self.m.tok(TokKind::Builtin(BuiltinNs::Other));
+                self.m.add_tok(hn, mark);
+                let name = self.m.atom(crate::solve::proxy::PROXY_NEW);
+                self.m.cons(hn, Cons::NewNamed { name, call });
+                ret
+            }
+            // PROXY2: the HIR's forms for a local bound to `new Proxy`: the
+            // ordinary operations on the value (a Proxy token's go to
+            // `solve/proxy.rs`).
+            Expr::ProxyGet { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let dst = self.tmp("proxy.get");
+                match key.as_ref() {
+                    Expr::String(s) => {
+                        let k = Key::Named(self.m.atom(s));
+                        self.m.cons(o, Cons::Load { key: k, dst });
+                    }
+                    other => {
+                        let k = self.expr(fx, other);
+                        self.to_property_key(k);
+                        self.m.cons(
+                            o,
+                            Cons::Load {
+                                key: Key::any(),
+                                dst,
+                            },
+                        );
+                    }
+                }
+                self.raise_on(o);
+                dst
+            }
+            Expr::ProxySet { proxy, key, value } => {
+                let o = self.expr(fx, proxy);
+                let k = match key.as_ref() {
+                    Expr::String(s) => Key::Named(self.m.atom(s)),
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        Key::any()
+                    }
+                };
+                let v = self.expr(fx, value);
+                self.store(fx, o, k, v, "proxy.set".to_string(), None, false);
+                self.raise_on(o);
+                v
+            }
+            Expr::ProxyHas { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let (k, idx) = match key.as_ref() {
+                    Expr::String(s) => (Key::Named(self.m.atom(s)), NO_NODE),
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        (Key::any(), kn)
+                    }
+                };
+                self.m.cons(o, Cons::HasProp { key: k, idx });
+                self.raise_on(o);
+                self.prim_node(prim::BOOL)
+            }
+            Expr::ProxyDelete { proxy, key } => {
+                let o = self.expr(fx, proxy);
+                let r = self.m.reason("E7 delete");
+                match key.as_ref() {
+                    Expr::String(s) => {
+                        let k = self.m.atom(s);
+                        self.m.cons(o, Cons::DeleteKey { key: k, reason: r });
+                    }
+                    other => {
+                        let kn = self.expr(fx, other);
+                        self.to_property_key(kn);
+                        self.m.cons(
+                            o,
+                            Cons::Hard {
+                                kind: Hard::E7Delete,
+                                reason: r,
+                            },
+                        );
+                    }
+                }
+                self.raise_on(o);
+                self.prim_node(prim::BOOL)
+            }
+            Expr::ProxyRevocable { target, handler } => {
                 // E9: the target is reached only through traps; the proxy
                 // value itself is ⊤.
                 let t = self.expr(fx, target);
@@ -52,6 +147,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let rv = self.expr(fx, receiver);
@@ -61,6 +157,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: rr,
                         proto: Protocol::Any,
+                        region: self.m.thrown,
                     },
                 );
                 let key = match key.as_ref() {
@@ -79,12 +176,26 @@ impl<'a> Gen<'a> {
                                 idx: k,
                                 dst,
                                 shape: 0,
+                                enumerable: false,
+                                kept: false,
                             },
                         );
                         dst
                     }
                     _ => self.load(t, key),
                 };
+                // 28.1.5: target.[[Get]](key, receiver); an accessor found on
+                // target's chain runs with this = receiver (10.1.8.1 step 7):
+                // the lookup starts at target itself, each token of the
+                // receiver its `this` (the `super.x` form, `Cons::SuperFrom`).
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Load(out, self.region()),
+                    },
+                );
                 if self.m.is_proto_key(key) {
                     self.m.cons(rv, Cons::ProtoOf { dst: out });
                 }
@@ -104,6 +215,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let v = self.expr(fx, value);
@@ -114,6 +226,16 @@ impl<'a> Gen<'a> {
                 };
                 self.store(fx, t, key, v, "Reflect.set".into(), None, false);
                 self.store(fx, rv, key, v, "Reflect.set receiver".into(), None, false);
+                // 28.1.12: target.[[Set]](key, v, receiver); a setter found on
+                // target's chain runs with this = receiver (10.1.9.2 step 7).
+                self.m.cons(
+                    t,
+                    Cons::SuperFrom {
+                        recv: rv,
+                        key,
+                        act: ChainAct::Store(v, self.region()),
+                    },
+                );
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectDelete { target, key } => {
@@ -175,6 +297,7 @@ impl<'a> Gen<'a> {
                 paths,
                 arg,
                 options,
+                synchronous,
                 ..
             } => {
                 let a = self.expr(fx, arg);
@@ -184,10 +307,17 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
+                // EvaluateImportCall step 10: the runtime reads `options.with`
+                // and every enumerable own value of it (#13488), so a getter
+                // on either runs.
                 if let Some(o) = options {
-                    let _ = self.expr(fx, o);
+                    let o = self.expr(fx, o);
+                    let with = self.m.atom("with");
+                    let attributes = self.load(o, Key::Named(with));
+                    let _ = self.own_values(attributes);
                 }
                 // DECISIONS 226: `paths` holds each specifier as written; the
                 // module's dynamic import entry for it names the module, as
@@ -220,6 +350,19 @@ impl<'a> Gen<'a> {
                 // of any specifier): runtime-made values, never a compiled
                 // module outside `paths`.
                 self.m.add_tok(out, TOP);
+                // A synchronous CommonJS `require(expr)` (codegen
+                // `lower_dynamic_require`) returns the target value itself: no
+                // promise, and no `then` adoption (node's CJS loader never calls
+                // `then` on `module.exports`). The ⊤ fallback stays ⊤; what goes
+                // is a `then(resolve, reject)` call on it, which handed the
+                // program-wide rejecter to unknown code and so made every
+                // `catch` ⊤. A require that fails (MODULE_NOT_FOUND, the ambient
+                // require's own errors) throws a realm error at the site.
+                if *synchronous {
+                    let r = self.region();
+                    self.m.add_tok(r, self.runtime_error);
+                    return out;
+                }
                 self.promise_of(mi, out)
             }
 

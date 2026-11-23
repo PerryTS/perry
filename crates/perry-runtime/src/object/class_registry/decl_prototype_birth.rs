@@ -178,7 +178,7 @@ pub(super) fn decl_prototype_born_final(class_id: u32, parent_bits: u64) -> Opti
             let m = super::declarations::class_method_decl_at(class_id, s.at.method_index()?)?;
             // The entry is this member's own body: it is named `[desc]`.
             let f = crate::object::native_module::class_method_declaration_value_bytes(
-                class_prototype_ref_value(class_id),
+                class_method_home_word(class_id),
                 display.as_bytes(),
                 m.code as usize,
                 m.param_count,

@@ -50,7 +50,9 @@ fn x_reads(pf: &ProgramFacts) -> Vec<Verdict> {
 
 fn x_proven(pf: &ProgramFacts) -> bool {
     let v = x_reads(pf);
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 /// The driver's link decision for a program that reaches `eval` as a value
@@ -66,7 +68,12 @@ fn linked_cfg() -> FactsConfig {
 fn an_indirect_eval_call_runs_interpreted_code() {
     for form in forms() {
         let pf = facts_with(&program(&form), linked_cfg());
-        assert!(!x_proven(&pf), "{form}\n{:?}\n{}", x_reads(&pf), pf.dump_text());
+        assert!(
+            !x_proven(&pf),
+            "{form}\n{:?}\n{}",
+            x_reads(&pf),
+            pf.dump_text()
+        );
     }
 }
 
@@ -76,9 +83,17 @@ fn an_indirect_eval_call_runs_interpreted_code() {
 /// unknown code, with or without an interpreter.)
 #[test]
 fn without_an_interpreter_an_eval_call_runs_nothing() {
-    for form in forms().into_iter().filter(|f| !f.contains("globalThis.eval")) {
+    for form in forms()
+        .into_iter()
+        .filter(|f| !f.contains("globalThis.eval"))
+    {
         let pf = facts(&program(&form));
-        assert!(x_proven(&pf), "{form}\n{:?}\n{}", x_reads(&pf), pf.dump_text());
+        assert!(
+            x_proven(&pf),
+            "{form}\n{:?}\n{}",
+            x_reads(&pf),
+            pf.dump_text()
+        );
     }
 }
 
@@ -88,6 +103,11 @@ fn without_an_interpreter_an_eval_call_runs_nothing() {
 fn a_global_store_without_an_eval_call_stays_proven() {
     for form in ["", "const e: any = eval; console.log(typeof e);"] {
         let pf = facts_with(&program(form), linked_cfg());
-        assert!(x_proven(&pf), "{form}\n{:?}\n{}", x_reads(&pf), pf.dump_text());
+        assert!(
+            x_proven(&pf),
+            "{form}\n{:?}\n{}",
+            x_reads(&pf),
+            pf.dump_text()
+        );
     }
 }

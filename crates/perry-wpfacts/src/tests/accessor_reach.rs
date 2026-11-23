@@ -47,7 +47,10 @@ fn active(main: &str) -> (Vec<String>, usize) {
         .filter(|e| id_of(e).is_some_and(runs))
         .map(|e| e.to_string())
         .collect();
-    let getters = GETTERS.iter().filter(|g| id_of(g).is_some_and(runs)).count();
+    let getters = GETTERS
+        .iter()
+        .filter(|g| id_of(g).is_some_and(runs))
+        .count();
     (exports, getters)
 }
 

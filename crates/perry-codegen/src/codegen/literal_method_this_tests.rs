@@ -80,6 +80,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }),
         methods: Vec::new(),
         getters: Vec::new(),
@@ -93,6 +94,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -133,6 +135,7 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow,
         is_async: false,
@@ -306,6 +309,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
 
     let homes = crate::collectors::literal_method_home_classes(&hir);
@@ -367,6 +371,10 @@ fn cyclic_literal_bootstrap_precedes_dependencies_without_prewarming_user_classe
         emit_ir_only: true,
         is_entry_module: false,
         module_init_deps: vec!["consumer_ts".into()],
+        module_deferred_init_deps: vec!["consumer_ts".into()],
+        module_deferred_readiness: vec!["consumer_ts".into()],
+        program_has_tla: false,
+        module_graph_has_tla: false,
         ..Default::default()
     };
     let ir = String::from_utf8(compile_module(&hir, opts).unwrap()).unwrap();

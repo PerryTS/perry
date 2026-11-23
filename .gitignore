@@ -303,6 +303,8 @@ tests/fixtures/programs/joi_url_v8_global/node_modules/*
 tests/parity/node-suite/module/node_modules/*
 !tests/parity/node-suite/module/node_modules/parity-conditions/
 !tests/parity/node-suite/module/node_modules/parity-conditions/**
+!tests/parity/node-suite/module/node_modules/sync-require-cases/
+!tests/parity/node-suite/module/node_modules/sync-require-cases/**
 !tests/parity/node-suite/module/require/node_modules/
 tests/parity/node-suite/module/require/node_modules/*
 !tests/parity/node-suite/module/require/node_modules/parity-exports/

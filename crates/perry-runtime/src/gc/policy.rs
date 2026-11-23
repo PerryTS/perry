@@ -1806,6 +1806,9 @@ impl GcSuppressScope {
         let was_suppressed = gc_is_suppressed();
         if !was_suppressed {
             GC_FLAGS.with(|f| f.set(f.get() | GC_FLAG_SUPPRESSED));
+            #[cfg(test)]
+            window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY
+                .with(|c| c.set(super::progress::gc_total_collection_count()));
         }
         GcSuppressScope { was_suppressed }
     }
@@ -1820,6 +1823,14 @@ pub(crate) mod window_exit_probe {
     std::thread_local! {
         pub(crate) static COLLECTIONS_AT_WINDOW_EXIT: std::cell::Cell<Option<u64>> =
             const { std::cell::Cell::new(None) };
+        /// The collection count when the current outermost window opened.
+        pub(crate) static COLLECTIONS_AT_WINDOW_ENTRY: std::cell::Cell<u64> =
+            const { std::cell::Cell::new(0) };
+        /// Set when an outermost window closes with a count other than the
+        /// one it opened with: a collection ran INSIDE that window. A test
+        /// clears it, runs builds made of several windows, and reads it.
+        pub(crate) static WINDOW_SAW_COLLECTION: std::cell::Cell<bool> =
+            const { std::cell::Cell::new(false) };
     }
 }
 
@@ -1829,6 +1840,14 @@ impl Drop for GcSuppressScope {
             #[cfg(test)]
             window_exit_probe::COLLECTIONS_AT_WINDOW_EXIT
                 .with(|c| c.set(Some(super::progress::gc_total_collection_count())));
+            #[cfg(test)]
+            {
+                let now = super::progress::gc_total_collection_count();
+                if window_exit_probe::COLLECTIONS_AT_WINDOW_ENTRY.with(std::cell::Cell::get) != now
+                {
+                    window_exit_probe::WINDOW_SAW_COLLECTION.with(|c| c.set(true));
+                }
+            }
             let flags = GC_FLAGS.with(|f| {
                 let flags = f.get();
                 f.set(flags & !(GC_FLAG_SUPPRESSED | GC_FLAG_TRIGGER_OWED));
@@ -4013,7 +4032,10 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     if due == Some(BudgetedGcTrigger::YoungScavengeCap)
         && !scheduled
         && gen_gc_enabled()
-        && crate::arena::copying_from_space_in_use_bytes() < scavenge_nursery_cap_dueness_bytes()
+        && leaf_service_precedes_copying_cap(
+            scavenge_nursery_cap_dueness_bytes(),
+            crate::arena::copying_from_space_in_use_bytes(),
+        )
         && !crate::arena::young_large_containers_exist()
     {
         super::leaf_service::collect();
@@ -4398,6 +4420,7 @@ fn gc_start_budgeted_minor_fallback_cycle_with_snapshot(
     rebaseline: BudgetedGcRebaseline,
     progress_kind: GcProgressKind,
 ) -> BudgetedGcCycle {
+    crate::snap_funnel!(Gc);
     // Same direct-constructor path as gc_start_budgeted_full_cycle above.
     crate::arena::sync_inline_arena_state();
     super::roots::ensure_stack_maps_built();
@@ -4878,6 +4901,7 @@ pub(super) fn gc_idle_reclaim_try_start() -> bool {
 /// is active the stepper's pressure check runs exactly as it would at any host
 /// safepoint.
 pub(super) fn gc_idle_reclaim_step(budget_us: u64) -> GcStepReport {
+    crate::snap_funnel!(Gc);
     let start = Instant::now();
     let mut result = gc_budgeted_step_work_units_inner_with_progress(
         GC_NORMAL_INCREMENTAL_WORK_UNITS,
@@ -4976,6 +5000,7 @@ fn gc_budgeted_start_or_step(
     start_progress_kind: GcProgressKind,
     automatic: bool,
 ) -> GcStepReport {
+    crate::snap_funnel!(Gc);
     if let Some(due) = due {
         if start_progress_kind.is_budgeted()
             && (due == BudgetedGcTrigger::YoungScavengeCap
@@ -5147,6 +5172,7 @@ pub extern "C" fn js_gc_step_work_units(work_units: u64, out: *mut JsGcStepResul
 
 #[no_mangle]
 pub extern "C" fn js_gc_step_us(budget_us: u64, out: *mut JsGcStepResult) -> u32 {
+    crate::snap_funnel!(Gc);
     if budget_us == 0 {
         let result = gc_budgeted_status_result().with_debt();
         return write_gc_step_result(out, result);
@@ -5221,6 +5247,7 @@ extern "C" fn js_gc_collect_from(pc: usize, sp: usize, fp: usize) {
 }
 
 fn js_gc_collect_body() {
+    crate::snap_funnel!(Gc);
     if crate::snap_census::explicit_gc() {
         return;
     }
@@ -5546,6 +5573,32 @@ fn leaf_memory_due_at_cap(cap: usize, small_bytes: usize) -> (bool, usize) {
         crate::arena::copying_active_survivor_in_use_bytes(),
         leaf_bytes,
     )
+}
+
+/// Whether the young collection due at a safepoint is the leaf-only service
+/// (census the young small cells, retire unnamed young leaves) rather than
+/// the copying minor.
+///
+/// Only below the copying cap (`small_bytes < cap`), and only while the
+/// allocation window the service reopens is at least the Eden it censuses,
+/// `window - eden >= eden`. The census reads every young small cell, so its
+/// cost grows with Eden, and it frees leaves, not Eden: it only defers the
+/// copying minor by `window - eden`. With less than Eden's worth of window
+/// left, the census reads more cells than the allocation it defers, so the
+/// copying minor runs at the leaf arm's due point instead and retires the
+/// dead leaves itself. `small_bytes` is the from-space
+/// reading `leaf_window_due` takes; the survivor space is read only below the
+/// cap, where the young arm can have been due through its leaf arm (at or
+/// above it the copying cap is due and nothing else is read). The window is
+/// the copying minor's own budget.
+pub(super) fn leaf_service_precedes_copying_cap(cap: usize, small_bytes: usize) -> bool {
+    if small_bytes >= cap {
+        return false;
+    }
+    let survivor_bytes = crate::arena::copying_active_survivor_in_use_bytes();
+    let window = super::tenuring::eden_allocation_window_bytes(cap, survivor_bytes);
+    let eden = small_bytes.saturating_sub(survivor_bytes);
+    window.saturating_sub(eden) >= eden
 }
 
 /// The leaf arm of the young trigger: Eden plus the young leaves against

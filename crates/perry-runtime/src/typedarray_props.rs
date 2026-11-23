@@ -30,8 +30,12 @@ fn typed_array_owner_kind(owner: usize) -> Option<TypedArrayOwnerKind> {
     let obj_type = unsafe { crate::value::addr_class::try_read_gc_header(owner) }?.obj_type;
     if crate::gc::is_typed_array_type(obj_type) {
         lookup_typed_array_kind(owner).map(|_| TypedArrayOwnerKind::TypedArray)
-    } else if crate::gc::is_uint8array_buffer_type(obj_type) {
-        crate::buffer::is_uint8array_buffer(owner).then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
+    } else if crate::gc::is_uint8array_buffer_type(obj_type)
+        || obj_type & !0x20 == crate::gc::GC_TYPE_BUFFER
+    {
+        // A Node `Buffer` is a `Uint8Array`: an integer-indexed exotic object.
+        crate::buffer::is_byte_indexed_buffer(owner)
+            .then_some(TypedArrayOwnerKind::Uint8ArrayBuffer)
     } else {
         None
     }
@@ -88,11 +92,10 @@ pub(crate) unsafe fn species_result_store(owner: usize, index: usize, raw: f64) 
             crate::typedarray_hook_slots::species::store_coerced(ta, index, kind, raw);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            let n = crate::typedarray_hook_slots::species::to_number(raw);
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 owner as *mut crate::buffer::BufferHeader,
                 index as i32,
-                n as i32,
+                raw,
             );
         }
         None => {}
@@ -129,10 +132,10 @@ unsafe fn typed_array_owner_set(owner: usize, index: u32, value: f64) {
             js_typed_array_set(owner as *mut TypedArrayHeader, index as i32, value);
         }
         Some(TypedArrayOwnerKind::Uint8ArrayBuffer) => {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 owner as *mut crate::buffer::BufferHeader,
                 index as i32,
-                value as i32,
+                value,
             );
         }
         None => {}
@@ -277,6 +280,14 @@ pub(crate) fn typed_array_mark_no_extend(owner: usize) {
     unsafe {
         (*crate::buffer::store::header(owner))._reserved |= crate::gc::OBJ_FLAG_NO_EXTEND;
     }
+}
+
+/// An own data property as `Object.defineProperty` leaves it, for tests that
+/// need one whose name is an accessor of `%TypedArray%.prototype` (`length`):
+/// an assignment cannot create it.
+#[cfg(test)]
+pub(crate) fn test_define_own_data(owner: usize, name: &str, value: f64) {
+    upsert_typed_array_own_prop(owner, name.to_string(), value, true);
 }
 
 pub(crate) fn typed_array_owner_no_extend(owner: usize) -> bool {
@@ -514,6 +525,20 @@ pub(crate) unsafe fn typed_array_set_property_by_name(
                     }
                 }
             } else {
+                // `length`, `byteLength`, `byteOffset` and `buffer` are
+                // accessors of `%TypedArray%.prototype` with no setter:
+                // OrdinarySet finds the inherited accessor and rejects, so no
+                // own property of that name is created (`ta.length = 1` left
+                // an own `length` that every later `ta.length` read). Once a
+                // program has redefined one of them on a prototype, the
+                // ordinary path below decides again.
+                if matches!(name, "length" | "byteLength" | "byteOffset" | "buffer")
+                    && crate::typedarray_named::PERRY_TYPED_NAMED_PROPS_INVALIDATED
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        == 0
+                {
+                    return false;
+                }
                 // A brand-new own property on a non-extensible typed array
                 // cannot be created (OrdinaryDefineOwnProperty step: extensible
                 // is false → return false). An existing key can still be
@@ -578,7 +603,7 @@ pub(crate) fn typed_array_set_number_key(owner: usize, key: f64, value: f64) -> 
         return false;
     }
     // A boxed int32 key decodes to its Number; a ClassRef that shares
-    // INT32_TAG, a string, a symbol or an object is not a Number key.
+    // INTERNAL_WORD_TAG, a string, a symbol or an object is not a Number key.
     let Some(index) = crate::array::value_bits_to_number(key.to_bits()) else {
         return false;
     };
@@ -852,9 +877,6 @@ pub(crate) unsafe fn typed_array_index_get_dynamic(owner_bits: usize, key: f64) 
             key_ptr,
         );
     }
-    if jsval.is_int32() {
-        return typed_array_get_numeric_index_for(owner, kind, jsval.as_int32() as f64);
-    }
     if !jsval.is_number() {
         // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
         // first. `ta[undefined]` reads the ordinary property "undefined", and
@@ -918,9 +940,7 @@ pub extern "C" fn js_typed_array_index_set_dynamic(
             }
             return value;
         }
-        if jsval.is_int32() {
-            typed_array_set_numeric_index(owner, jsval.as_int32() as f64, value);
-        } else if !jsval.is_number() {
+        if !jsval.is_number() {
             // `undefined`, `null`, a boolean, an object or a BigInt: ToPropertyKey
             // first, then the string dispatch above. `ta[undefined] = v` creates
             // the ordinary property "undefined"; it used to be dropped. The key

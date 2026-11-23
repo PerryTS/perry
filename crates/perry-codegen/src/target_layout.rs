@@ -252,6 +252,27 @@ pub(crate) fn emit_gc_type_is_object(
     blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_OBJECT.to_string())
 }
 
+/// "Is an ordinary array head" on a loaded `obj_type` (or the header word
+/// masked to its low byte). Emits the compare against the array type the
+/// runtime's `gc_type_is_array!` names.
+pub(crate) fn emit_gc_type_is_array(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_eq(ty, value, &crate::runtime_abi::GC_TYPE_ARRAY.to_string())
+}
+
+/// The negation of [`emit_gc_type_is_array`] (the runtime's
+/// `gc_type_is_not_array!`).
+pub(crate) fn emit_gc_type_is_not_array(
+    blk: &mut crate::block::LlBlock,
+    ty: crate::types::LlvmType,
+    value: &str,
+) -> String {
+    blk.icmp_ne(ty, value, &crate::runtime_abi::GC_TYPE_ARRAY.to_string())
+}
+
 /// Kind B test on a loaded `obj_type`: "might this object carry the meta
 /// word" (the runtime's `object_has_meta_word!`); the object at the site has
 /// meta, or the no-branch is the answer for an object without it.
@@ -316,20 +337,20 @@ pub fn closure_header_size_bytes(target_triple: &str) -> u64 {
 }
 
 /// Byte offset of `ClosureHeader::info`, the function object's
-/// `JsFunctionInfo` pointer (8 on every target: the u32 capture count and u32
-/// ShapeId precede it).
-pub fn closure_info_offset_bytes(_target_triple: &str) -> u64 {
-    crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
-}
-
-/// Byte offset of `ClosureHeader::props`, the pointer after `info`: 16 on
-/// LP64, 12 on ILP32.
-pub fn closure_props_offset_bytes(target_triple: &str) -> u64 {
+/// `JsFunctionInfo` pointer, the pointer after `props`: 16 on LP64, 12 on
+/// ILP32.
+pub fn closure_info_offset_bytes(target_triple: &str) -> u64 {
     if target_is_ilp32(target_triple) {
         12
     } else {
-        crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
+        crate::runtime_abi::CLOSURE_INFO_OFFSET as u64
     }
+}
+
+/// Byte offset of `ClosureHeader::props`, the meta word (8 on every target:
+/// the u32 capture count and u32 ShapeId precede it, as in `ObjectHeader`).
+pub fn closure_props_offset_bytes(_target_triple: &str) -> u64 {
+    crate::runtime_abi::CLOSURE_PROPS_OFFSET as u64
 }
 
 /// Minimum number of inline field slots `perry-runtime` allocates for EVERY

@@ -45,7 +45,15 @@ fn one_array_used_by_fifty_calls_has_one_helper_node_of_each_kind() {
     let mut cfg = crate::FactsConfig::default();
     cfg.max_work.get_or_insert(50_000_000);
     let sorted = [("t.ts", &hir)];
-    let (mut g, _, _) = crate::generate(&sorted, &cfg, None, None, None, std::time::Instant::now());
+    let (mut g, _, _) = crate::generate(
+        &sorted,
+        &cfg,
+        None,
+        None,
+        None,
+        crate::Hold::Midway,
+        std::time::Instant::now(),
+    );
     g.m.solve();
     let m = &g.m;
     let count = |l: &str| m.labels.iter().filter(|&&x| x == l).count();
@@ -79,16 +87,34 @@ fn one_array_used_by_fifty_calls_has_one_helper_node_of_each_kind() {
     let fa = g.m.field_any(t);
     let h = g.m.hole(t);
     let m = &g.m;
+    // Beside ⊤ an escaped value is that ⊤ (`solve::escaped_beside_top`):
+    // whether a node still lists one depends on when it escaped, so both
+    // sides are read without them.
     let set = |n: usize| {
         let mut v = Vec::new();
         m.nodes[n].pts.sorted_into(&mut v);
         v
     };
+    let read = |v: Vec<u32>| -> Vec<u32> {
+        let top = v.contains(&crate::model::TOP);
+        v.into_iter()
+            .filter(|&t| {
+                !(top
+                    && crate::solve::escaped_beside_top(
+                        &m.esc_bits,
+                        &m.param_marker,
+                        &m.arg_bits,
+                        t,
+                    ))
+            })
+            .collect()
+    };
     let mut want = set(fa as usize);
     want.extend(set(h as usize));
     want.sort_unstable();
     want.dedup();
-    let got = set(it);
+    let want = read(want);
+    let got = read(set(it));
     assert!(
         !got.is_empty() || m.nodes[it].prim != 0,
         "what iterating xs yields is empty"

@@ -124,6 +124,12 @@ fn abort_signal_is_aborted(signal: *mut ObjectHeader) -> bool {
     crate::value::js_is_truthy(get_abort_slot(signal, SIGNAL_ABORTED)) != 0
 }
 
+/// The signal's `reason` slot: what `abort(reason)` stored (the AbortError
+/// default when none was given); `undefined` while it is not aborted.
+pub(crate) extern "C" fn abort_signal_reason(signal: *mut ObjectHeader) -> f64 {
+    get_abort_slot(signal, SIGNAL_REASON)
+}
+
 /// Return true if the given AbortSignal has already been aborted.
 #[no_mangle]
 pub extern "C" fn js_abort_signal_is_aborted(signal: *mut ObjectHeader) -> i32 {

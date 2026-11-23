@@ -246,6 +246,11 @@ pub(crate) fn parse_p256_verifying_key_pem(pem: &str) -> Option<p256::ecdsa::Ver
         })
 }
 
+pub(crate) use crate::webcrypto::pq::{
+    pq_decapsulate, pq_encapsulate, pq_private_key_from_pem, pq_public_key_from_pem, pq_public_pem,
+    pq_sign, pq_verify, PqAlgorithm,
+};
+
 pub(super) const ED25519_PRIVATE_PREFIX: &str = "PERRY-ED25519-PRIVATE:";
 pub(super) const ED25519_PUBLIC_PREFIX: &str = "PERRY-ED25519-PUBLIC:";
 pub(super) const X25519_PRIVATE_PREFIX: &str = "PERRY-X25519-PRIVATE:";
@@ -464,7 +469,7 @@ pub(super) fn classify_private_key_surrogate(pem: &str) -> Option<u8> {
     } else if parse_x25519_private_surrogate(pem).is_some() {
         Some(4)
     } else {
-        None
+        pq_private_key_from_pem(pem).map(|(algorithm, _)| algorithm.asym_type())
     }
 }
 
@@ -478,7 +483,7 @@ pub(super) fn classify_public_key_surrogate(pem: &str) -> Option<u8> {
     } else if parse_x25519_public_surrogate(pem).is_some() {
         Some(4)
     } else {
-        None
+        pq_public_key_from_pem(pem).map(|(algorithm, _)| algorithm.asym_type())
     }
 }
 
@@ -587,7 +592,7 @@ pub(super) fn nanbox_pointer(ptr: *mut ObjectHeader) -> f64 {
     f64::from_bits(JSValue::pointer(ptr as *const u8).bits())
 }
 
-pub(super) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
+pub(crate) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<*mut ObjectHeader> {
     let obj = js_object_alloc(0, 3);
     if obj.is_null() {
         return None;
@@ -598,7 +603,7 @@ pub(super) unsafe fn rsa_public_jwk_object(public_key: &RsaPublicKey) -> Option<
     Some(obj)
 }
 
-pub(super) unsafe fn rsa_private_jwk_object(
+pub(crate) unsafe fn rsa_private_jwk_object(
     private_key: &RsaPrivateKey,
 ) -> Option<*mut ObjectHeader> {
     let primes = private_key.primes();
@@ -633,7 +638,7 @@ pub(super) unsafe fn rsa_private_jwk_object(
     Some(obj)
 }
 
-pub(super) unsafe fn ec_p256_public_jwk_object(
+pub(crate) unsafe fn ec_p256_public_jwk_object(
     public_key: &P256PublicKey,
 ) -> Option<*mut ObjectHeader> {
     let point = public_key.to_sec1_point(false);
@@ -646,7 +651,6 @@ pub(super) unsafe fn ec_p256_public_jwk_object(
         return None;
     }
     set_object_string_field(obj, b"kty", "EC");
-    set_object_string_field(obj, b"crv", "P-256");
     set_object_string_field(
         obj,
         b"x",
@@ -657,10 +661,11 @@ pub(super) unsafe fn ec_p256_public_jwk_object(
         b"y",
         &perry_base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(&bytes[33..65]),
     );
+    set_object_string_field(obj, b"crv", "P-256");
     Some(obj)
 }
 
-pub(super) unsafe fn ec_p256_private_jwk_object(
+pub(crate) unsafe fn ec_p256_private_jwk_object(
     private_key: &P256SecretKey,
 ) -> Option<*mut ObjectHeader> {
     let public = private_key.public_key();
@@ -818,6 +823,10 @@ pub(super) unsafe fn crypto_key_input_to_public_pem(value_bits: u64) -> Option<S
     }
     if let Some(v) = parse_x25519_public_surrogate(&pem) {
         return Some(x25519_public_surrogate(&v));
+    }
+    // ML-KEM / ML-DSA: a private key yields its public key, as node does.
+    if let Some((_, public_der)) = pq_public_key_from_pem(&pem) {
+        return Some(pq_public_pem(&public_der));
     }
     parse_rsa_public_key_pem(&pem).and_then(|key| rsa_public_key_to_pem(&key))
 }

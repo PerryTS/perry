@@ -55,7 +55,7 @@ pub(crate) unsafe fn layout_transfer(old_user: *mut u8, new_user: *mut u8) {
     assert_relocation_copied_the_header(old_header, new_user);
 
     let reserved = (*old_header)._reserved;
-    let is_array = (*old_header).obj_type == GC_TYPE_ARRAY;
+    let is_array = crate::gc_type_is_array!((*old_header).obj_type);
     if is_array && reserved & GC_ARRAY_ELEMENT_SHAPE != 0 {
         crate::array::transfer_element_shape(old_user as usize, new_user as usize);
     }

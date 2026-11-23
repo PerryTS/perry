@@ -40,6 +40,7 @@ pub(crate) fn await_returned_operands(stmts: &mut [Stmt]) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 await_returned_operands(body);
                 if let Some(c) = catch {
@@ -72,6 +73,7 @@ mod tests {
                 body: vec![Stmt::Return(None)],
             }),
             finally: None,
+            forof_completion: None,
         }];
         await_returned_operands(&mut body);
         let Stmt::Try {

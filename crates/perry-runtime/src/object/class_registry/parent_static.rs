@@ -849,25 +849,30 @@ pub unsafe extern "C" fn js_register_class_computed_method(
         // on the holder's shape, without a string-keyed dispatch registration.
         let target = home.get_nanbox_f64();
         let addr = crate::value::js_nanbox_get_pointer(target) as usize;
-        let object = if crate::closure::is_closure_ptr(addr) {
-            crate::closure::props::bag_ensure(addr)
-        } else {
-            addr as *mut ObjectHeader
-        };
-        let object = scope.root_raw_mut_ptr(object);
-        let key_header = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
-            as *const crate::StringHeader;
-        object.with_mut_ptr::<ObjectHeader, _>(|object| {
-            crate::object::object_ops::define_property_force_store_value(
-                object,
-                key_header,
+        if crate::closure::is_closure_ptr(addr) {
+            crate::closure::props::fn_define_force_attrs(
+                addr,
+                key.get_nanbox_f64(),
                 function.get_nanbox_f64(),
+                &name,
+                5,
             );
-            crate::object::key_attrs::apply_edits(
-                object,
-                &[crate::object::key_attrs::AttrsEdit::Data(&name, 5)],
-            );
-        });
+        } else {
+            let object = scope.root_raw_mut_ptr(addr as *mut ObjectHeader);
+            let key_header = crate::value::js_get_string_pointer_unified(key.get_nanbox_f64())
+                as *const crate::StringHeader;
+            object.with_mut_ptr::<ObjectHeader, _>(|object| {
+                crate::object::object_ops::define_property_force_store_value(
+                    object,
+                    key_header,
+                    function.get_nanbox_f64(),
+                );
+                crate::object::key_attrs::apply_edits(
+                    object,
+                    &[crate::object::key_attrs::AttrsEdit::Data(&name, 5)],
+                );
+            });
+        }
         if crate::closure::is_closure_ptr(addr) {
             crate::closure::shape::refresh_closure_shape(addr);
         }

@@ -250,6 +250,7 @@ impl Scan {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(c) = catch {

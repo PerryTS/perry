@@ -1362,7 +1362,7 @@ fn js_put_value_set_number_key_on_a_typed_array_is_its_numeric_index() {
     let _serialized = crate::array::test_serialize();
     let ta = typed(UINT16, &[0.0; 4]);
     let t = boxed(ta);
-    let int32 = |n: i32| f64::from_bits(crate::value::JSValue::int32(n).bits());
+    let int32 = |n: i32| f64::from(n);
     crate::proxy::js_put_value_set(t, 3.0, 70000.0, t, 0);
     crate::proxy::js_put_value_set(t, int32(2), 7.0, t, 0);
     crate::proxy::js_put_value_set(t, 1.5, 9.0, t, 0); // canonical numeric, not an integer: nothing
@@ -1378,13 +1378,21 @@ fn typed_array_set_number_key_declines_what_is_not_its_to_answer() {
     let _serialized = crate::array::test_serialize();
     let ta = typed(UINT16, &[0.0; 2]);
     let owner = ta as usize;
-    assert!(crate::typedarray_props::typed_array_set_number_key(owner, 1.0, 3.0));
+    assert!(crate::typedarray_props::typed_array_set_number_key(
+        owner, 1.0, 3.0
+    ));
     // A string key is not a Number key.
     let s = crate::string::js_string_from_bytes(b"1".as_ptr(), 1);
     let skey = f64::from_bits(crate::value::STRING_TAG | s as u64);
-    assert!(!crate::typedarray_props::typed_array_set_number_key(owner, skey, 4.0));
+    assert!(!crate::typedarray_props::typed_array_set_number_key(
+        owner, skey, 4.0
+    ));
     // A plain array is not an integer-indexed exotic object.
     let arr = crate::array::js_array_alloc(2);
-    assert!(!crate::typedarray_props::typed_array_set_number_key(arr as usize, 0.0, 1.0));
+    assert!(!crate::typedarray_props::typed_array_set_number_key(
+        arr as usize,
+        0.0,
+        1.0
+    ));
     assert_eq!(read_back(ta, 2), vec![0.0, 3.0]);
 }

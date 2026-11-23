@@ -23,6 +23,15 @@ fn field_key(m: &Model, a: Atom) -> bool {
         || crate::solve::numeric_key(name))
 }
 
+/// The global object: `globalThis`, and the HIR global sentinel (`Other`,
+/// the receiver a bare global name is read off), which is the same object.
+pub fn global_object(m: &Model, t: Tok) -> bool {
+    matches!(
+        m.toks[t as usize],
+        TokKind::Builtin(BuiltinNs::GlobalThis | BuiltinNs::Other)
+    )
+}
+
 /// Native function-value tokens, including the Object.prototype method
 /// identities represented as namespaces.
 pub fn builtin_function(m: &Model, t: Tok) -> bool {
@@ -49,6 +58,162 @@ pub fn realm_reads_store(m: &Model, t: Tok, key: Key) -> bool {
             .any(|n| m.key_may_name_str(key, n))
 }
 
+/// A named-key store on a non-callable built-in namespace object writes its
+/// own property, not one the realm reads (`realm_reads_store` for the
+/// callable ones): `performance`, `Math`, `JSON`, `Reflect`, a builtin
+/// module namespace. The runtime implements these natively and
+/// never reads a property of the object back by name, beside the statics
+/// `members::realm_read_statics` declares. Not the global object
+/// (R-GLOBAL-NAME, `global_store_escapes`), not `process` (the runtime reads
+/// `process.exitCode` and its streams by name), not an undescribed object
+/// (`Other`), not `Object.prototype`, not a host object (`console`, the
+/// stdio streams: node's console calls a replaced `process.stdout.write`).
+/// A computed key may name any member.
+pub fn plain_namespace_own_store(m: &Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let TokKind::Builtin(ns) = m.toks[t as usize] else {
+        return false;
+    };
+    if m.unit_mode
+        || global_object(m, t)
+        || members::ns_chain(ns) == Family::Function
+        || members::is_host(ns)
+        || matches!(
+            ns,
+            BuiltinNs::GlobalThis
+                | BuiltinNs::Other
+                | BuiltinNs::Process
+                | BuiltinNs::ObjectProtoOwn(_)
+                | BuiltinNs::ObjectProtoMethod
+        )
+    {
+        return false;
+    }
+    let name = &m.atoms[a as usize];
+    !members::realm_read_statics(ns).iter().any(|n| n == name)
+}
+
+/// R-GLOBAL-NAME: may a store under `key` on the global object `t` write a
+/// global the runtime itself reads by name? The runtime reads a built-in
+/// constructor's global by name (`js_get_global_this_builtin_value`,
+/// `builtin_value_core`, `builtin_prototype_value`: instanceof, class
+/// metadata, the realm's own inheritance links, messaging), so a key the
+/// realm declares with a function value (or with no native value the model
+/// knows) keeps E20; so do the names `members::global_runtime_reads`
+/// declares, `process` and the host objects. A declared object the runtime
+/// cannot call (`performance`, `Math`) is the program's field
+/// (`declared_callable`). Any other named key (`globalThis`, an undeclared global such
+/// as `web3d`) is an own property of the global object that only program
+/// code reads, through its field. A computed key may name any global.
+/// A named key the realm declares as the global object's reference to
+/// itself (`globalThis`, `global`). The runtime reaches the global object
+/// through `js_get_global_this`, never by reading these names, but a bare
+/// `globalThis` / `global` read is the global object in the model
+/// (`ns_by_name`), so only the global object itself may be stored there
+/// without escaping (`tok_store`).
+pub fn global_self_key(m: &Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return false;
+    };
+    let name = &m.atoms[a as usize];
+    matches!(ns_by_name(name), Some(BuiltinNs::GlobalThis)) && m.native_property(t, name).is_some()
+}
+
+pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
+    let Key::Named(a) = key else {
+        return true;
+    };
+    let name = m.atoms[a as usize].clone();
+    if members::global_runtime_reads(&name) {
+        return true;
+    }
+    let Some(p) = m.native_property(t, &name) else {
+        return false;
+    };
+    // A key the realm declares as a getter-only accessor (`navigator`,
+    // perry-runtime global_this/populate.rs: `set: 0`): the runtime reaches
+    // its object through the getter it installed, never by reading the key.
+    // A [[Set]] runs no setter and writes nothing (ECMA-262 10.1.9.2), and a
+    // data define (20.1.2.4) replaces the accessor with the value it gives,
+    // which only program code reads, through the global's field
+    // (`declared_global_value`).
+    if p.native.is_none() && p.get.is_some() && p.set.is_none() {
+        return false;
+    }
+    // The declared value: its native identity, else the realm declaration
+    // the global is named after (`performance`, `Math`: a namespace row).
+    let identity = p.native.unwrap_or(name.as_str());
+    // `process` and the host objects (`console`) keep E20, as their own
+    // stores do (`plain_namespace_own_store`).
+    if ns_by_name(&name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns)) {
+        return true;
+    }
+    declared_callable(identity)
+}
+
+/// Owner decision 2026-11-19: a key the realm declares on the global
+/// object as a writable data property holding an object the runtime cannot
+/// call (`performance`, `Math`, `JSON`: a `Reference` own of `%Global%` to
+/// a non-callable declaration) is the program's field once the program
+/// stores it, the same field `global_store_escapes` keeps the stored value
+/// in and `declared_global_value` reads back. [[Set]] (ECMA-262 10.1.9.2
+/// step 2.c-2.d) replaces the value of a writable own data property; the
+/// realm's non-writable global data properties are its primitive constants
+/// (`NaN`, `Infinity`, `undefined`, 19.1), which hold no `Reference`.
+/// Callable values (constructors, functions), `global_runtime_reads`
+/// (`WebAssembly`), `process`, the host objects (`console`) and accessors
+/// (`navigator`, `crypto`) stay out: the runtime reads those by name or
+/// through a getter.
+pub fn declared_data_global(m: &Model, t: Tok, name: &str) -> bool {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    if members::global_runtime_reads(name)
+        || ns_by_name(name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns))
+    {
+        return false;
+    }
+    let Some(p) = m.native_property(t, name) else {
+        return false;
+    };
+    if p.get.is_some() || p.set.is_some() {
+        return false;
+    }
+    let reference = members::realm_entry("%Global%").and_then(|e| {
+        e.own
+            .iter()
+            .find(|o| members::realm_key_is(o, name))
+            .and_then(|o| match o.value {
+                RealmOwnValue::Reference(r) => Some(r),
+                _ => None,
+            })
+    });
+    reference.is_some_and(|r| !declared_callable(p.native.unwrap_or(r)))
+}
+
+/// Is the realm's declared value `identity` callable (a constructor, a
+/// function)? The runtime reads a callable global by name; a declared
+/// object it cannot call (`performance`, `Math`, `JSON`, `Reflect`, `Intl`,
+/// `Atomics`: a `Namespace` in the realm table) it reaches through its own
+/// cells, never by reading the global (the names it does read are
+/// `members::global_runtime_reads`). An identity the table does not list
+/// (no native value the model knows) keeps E20.
+fn declared_callable(identity: &str) -> bool {
+    use perry_hir::realm_manifest::RealmKind;
+    crate::native_effects::realm()
+        .iter()
+        .find(|e| e.name == identity)
+        .is_none_or(|e| {
+            !matches!(
+                e.kind,
+                RealmKind::Namespace
+                    | RealmKind::Exotic
+                    | RealmKind::Prototype
+                    | RealmKind::Constant
+            )
+        })
+}
+
 /// A described built-in object and its chain declare no such program key.
 pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
     if t == TOP || !field_key(m, a) {
@@ -60,7 +225,7 @@ pub fn undeclared(m: &Model, t: Tok, a: Atom) -> bool {
                 .is_some_and(|p| p.own_namespace)
                 && members::member(Family::Function, &m.atoms[a as usize]).is_none()
         }
-        TokKind::Builtin(BuiltinNs::GlobalThis) => false,
+        _ if global_object(m, t) => false,
         TokKind::Builtin(ns) => members::ns_member(ns, &m.atoms[a as usize]) == Some(None),
         _ => false,
     }
@@ -88,10 +253,10 @@ pub fn native_may_be(m: &Model, a: Tok, b: Tok) -> bool {
             ) => true,
             (
                 TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
-                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::BuiltinFn(Native::Member { identity, .. }),
             )
             | (
-                TokKind::BuiltinFn(Native::Member { identity }),
+                TokKind::BuiltinFn(Native::Member { identity, .. }),
                 TokKind::Builtin(BuiltinNs::ObjectProtoMethod),
             ) => identity.starts_with("Object.prototype."),
             _ => false,

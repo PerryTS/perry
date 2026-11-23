@@ -404,6 +404,32 @@ class Verdicts(Repo):
         self.assertEqual(self.run_cli()[0], 2)
 
 
+class WebMode(Repo):
+    def test_web_mode_runs_the_page_and_gates_its_own_snapshot(self):
+        write(self.root / "tests/fixtures/programs/test_pass.ts", "// node-out: hi\n// perry-out: hi\n")
+        write(self.root / "tests/fixtures/programs/test_mismatch.ts", "// node-out: hi\n// perry-out: ho\n")
+        shutil.rmtree(self.root / "rt")  # a web page links no native archive
+        code, data = self.run_cli("--mode", "web", "--update")
+        self.assertEqual(code, 0)
+        self.assertEqual(data["mode"], "web")
+        self.assertEqual(self.statuses(data), {"test_pass": "pass", "test_mismatch": "parity_fail"})
+        snapshots = self.root / "tests/parity/snapshots"
+        tests = json.loads((snapshots / "linux-web/test-files.json").read_text())["tests"]
+        self.assertEqual(list(tests), ["test_mismatch"])
+        self.assertFalse((snapshots / "linux-fast").exists())
+        self.assertEqual(self.run_cli("--mode", "web")[0], 0)
+
+    def test_accept_takes_a_web_report(self):
+        report = self.root / "web.json"
+        report.write_text(json.dumps({"platform": "linux", "mode": "web",
+                                      "results": [{"id": "test_a", "status": "parity_fail"}]}))
+        write(self.root / "tests/fixtures/programs/test_a.ts")
+        with mock.patch("sys.stdout"), mock.patch("sys.stderr"):
+            self.assertEqual(parity.main(["accept", str(report)], root=self.root), 0)
+        snap = self.root / "tests/parity/snapshots/linux-web/test-files.json"
+        self.assertEqual(json.loads(snap.read_text())["tests"]["test_a"]["status"], "parity_fail")
+
+
 class Snapshots(unittest.TestCase):
     def test_diff_kinds(self):
         entries = {"b": {"status": "parity_fail"}, "c": {"status": "parity_fail"}}

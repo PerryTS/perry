@@ -1,7 +1,8 @@
 //! Measurement prototype: OS backing beneath the existing per-agent block pool.
 //! Linux uses one reserved range and persistent in-band descriptors.
-//! Apple maps one tagged region per block; it and the other targets keep the
-//! process-wide registry. Other targets retain allocator backing.
+//! Apple maps one tagged region per block and Windows one VirtualAlloc
+//! reservation per block; they and the other targets keep the process-wide
+//! registry. Other targets retain allocator backing.
 //! Production in-band descriptors and byte-store ownership are in REGION-DESIGN.
 
 use super::HeapGeneration;
@@ -16,6 +17,9 @@ pub(crate) mod reservation;
 #[cfg(target_vendor = "apple")]
 #[path = "region/apple.rs"]
 mod apple;
+#[cfg(windows)]
+#[path = "region/windows.rs"]
+mod windows;
 #[cfg(target_os = "linux")]
 pub(crate) use reservation::contains;
 
@@ -27,8 +31,13 @@ pub(crate) use reservation::contains;
 struct BackingExtent {
     end: usize,
     // Physical allocation layout survives pooling and generation/class retags.
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     alignment: usize,
+    /// Windows: the pages are decommitted ([`release`]) and fault on any
+    /// access until [`reuse`] commits them again. Such an extent holds no
+    /// live object, so [`contains`] does not admit it.
+    #[cfg(windows)]
+    released: std::sync::atomic::AtomicBool,
 }
 
 #[cfg(not(target_os = "linux"))]
@@ -44,7 +53,11 @@ fn extent_len(len: usize) -> usize {
     {
         apple::extent(len).expect("invalid region extent")
     }
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    #[cfg(windows)]
+    {
+        windows::extent(len).expect("invalid region extent")
+    }
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     {
         len
     }
@@ -60,7 +73,17 @@ pub(crate) fn contains(addr: usize, len: usize) -> bool {
     regions
         .range(..=addr)
         .next_back()
-        .is_some_and(|(_, extent)| end <= extent.end)
+        .is_some_and(|(_, extent)| end <= extent.end && extent_accessible(extent))
+}
+
+#[cfg(windows)]
+fn extent_accessible(extent: &BackingExtent) -> bool {
+    !extent.released.load(std::sync::atomic::Ordering::Acquire)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+fn extent_accessible(_extent: &BackingExtent) -> bool {
+    true
 }
 
 #[cfg(target_os = "linux")]
@@ -186,10 +209,10 @@ unsafe fn map_extent(kind: Kind, len: usize) -> *mut u8 {
     }
     #[cfg(not(target_os = "linux"))]
     {
-        // Allocator backing (wasm, Windows) is page-aligned for every kind;
-        // callers ask for whole pages (block sizes and large extents), so the
-        // end is aligned too. See [`map`].
-        #[cfg(not(target_vendor = "apple"))]
+        // Allocator backing (wasm) is page-aligned for every kind; callers
+        // ask for whole pages (block sizes and large extents), so the end is
+        // aligned too. See [`map`].
+        #[cfg(not(any(target_vendor = "apple", windows)))]
         let alignment = {
             let _ = kind;
             super::GENERATION_PAGE_SIZE
@@ -199,6 +222,13 @@ unsafe fn map_extent(kind: Kind, len: usize) -> *mut u8 {
             let _ = kind;
             apple::ALIGN
         };
+        // A reservation starts on the allocation granularity (64 KiB), which
+        // covers every metadata page alignment.
+        #[cfg(windows)]
+        let alignment = {
+            let _ = kind;
+            super::GENERATION_PAGE_SIZE
+        };
         #[cfg(target_vendor = "apple")]
         let data = match apple::extent(len) {
             Some(extent) => {
@@ -207,7 +237,15 @@ unsafe fn map_extent(kind: Kind, len: usize) -> *mut u8 {
             }
             None => std::ptr::null_mut(),
         };
-        #[cfg(not(target_vendor = "apple"))]
+        #[cfg(windows)]
+        let data = match windows::extent(len) {
+            Some(extent) => {
+                crate::gc::purge_allocator_on_region_growth();
+                windows::map(extent)
+            }
+            None => std::ptr::null_mut(),
+        };
+        #[cfg(not(any(target_vendor = "apple", windows)))]
         let data = std::alloc::alloc(std::alloc::Layout::from_size_align(len, alignment).unwrap());
         if !data.is_null() {
             register(data, len, alignment);
@@ -217,7 +255,9 @@ unsafe fn map_extent(kind: Kind, len: usize) -> *mut u8 {
 }
 
 /// Release the pages of an empty owned region and return the bytes the
-/// kernel accepted. They must pass through [`reuse`] before the next write.
+/// kernel accepted. They must pass through [`reuse`] before the next write
+/// (Apple) or before the next access of any kind (Windows, where decommitted
+/// pages fault).
 #[cfg(target_vendor = "apple")]
 pub(super) unsafe fn release(data: *mut u8, len: usize) -> usize {
     if apple::release(data, len) {
@@ -227,26 +267,61 @@ pub(super) unsafe fn release(data: *mut u8, len: usize) -> usize {
     }
 }
 
+/// `data` starts a live region of `len` bytes that holds no live object.
+#[cfg(windows)]
+pub(super) unsafe fn release(data: *mut u8, len: usize) -> usize {
+    use std::sync::atomic::Ordering;
+    let regions = REGIONS.read().unwrap_or_else(|e| e.into_inner());
+    let extent = regions
+        .get(&(data as usize))
+        .expect("releasing an unowned arena backing");
+    let owned = extent.end - data as usize;
+    debug_assert_eq!(owned, extent_len(len));
+    // Mark first: `contains` stops admitting the range before its pages fault.
+    extent.released.store(true, Ordering::SeqCst);
+    if windows::release(data, owned) {
+        owned
+    } else {
+        // Still committed; the next `reuse` commits a committed range, a no-op.
+        0
+    }
+}
+
 /// Reactivate released pages before they are handed out again.
 #[inline]
 pub(super) unsafe fn reuse(data: *mut u8, len: usize) {
     #[cfg(target_vendor = "apple")]
     apple::reuse(data, len);
-    #[cfg(not(target_vendor = "apple"))]
+    #[cfg(windows)]
+    {
+        use std::sync::atomic::Ordering;
+        let _ = len;
+        let regions = REGIONS.read().unwrap_or_else(|e| e.into_inner());
+        let extent = regions
+            .get(&(data as usize))
+            .expect("reusing an unowned arena backing");
+        if extent.released.load(Ordering::SeqCst) {
+            windows::reuse(data, extent.end - data as usize);
+            extent.released.store(false, Ordering::SeqCst);
+        }
+    }
+    #[cfg(not(any(target_vendor = "apple", windows)))]
     let _ = (data, len);
 }
 
 #[cfg(not(target_os = "linux"))]
 fn register(data: *mut u8, len: usize, alignment: usize) {
-    #[cfg(target_vendor = "apple")]
+    #[cfg(any(target_vendor = "apple", windows))]
     let _ = alignment;
     let start = data as usize;
     REGIONS.write().unwrap_or_else(|e| e.into_inner()).insert(
         start,
         BackingExtent {
             end: start + extent_len(len),
-            #[cfg(not(target_vendor = "apple"))]
+            #[cfg(not(any(target_vendor = "apple", windows)))]
             alignment,
+            #[cfg(windows)]
+            released: std::sync::atomic::AtomicBool::new(false),
         },
     );
 }
@@ -266,7 +341,10 @@ pub(super) unsafe fn unmap(data: *mut u8, len: usize) {
     reservation::unmap(data, mapped_len(len).expect("invalid extent"));
     #[cfg(target_vendor = "apple")]
     apple::unmap(data, extent.end - data as usize);
-    #[cfg(not(any(target_os = "linux", target_vendor = "apple")))]
+    // Releasing the reservation frees committed and decommitted pages alike.
+    #[cfg(windows)]
+    windows::unmap(data);
+    #[cfg(not(any(target_os = "linux", target_vendor = "apple", windows)))]
     std::alloc::dealloc(
         data,
         std::alloc::Layout::from_size_align(extent.end - data as usize, extent.alignment).unwrap(),
@@ -279,7 +357,7 @@ pub(crate) unsafe fn new_test_block_backing(size: usize) -> *mut u8 {
     map(Kind::NurseryBlock, size)
 }
 
-#[cfg(all(test, target_vendor = "apple"))]
+#[cfg(all(test, any(target_vendor = "apple", windows)))]
 pub(crate) unsafe fn release_test_block_backing(data: *mut u8, size: usize) {
     unmap(data, size)
 }
@@ -504,6 +582,10 @@ mod tests {
         }
     }
 }
+
+#[cfg(all(test, windows))]
+#[path = "region/windows_tests.rs"]
+pub(super) mod windows_tests;
 
 #[cfg(all(test, not(any(target_os = "linux", target_vendor = "apple"))))]
 mod allocator_layout_tests {

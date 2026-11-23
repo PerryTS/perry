@@ -3,8 +3,7 @@ use crate::common::{get_handle, Handle};
 use perry_runtime::{
     closure::{
         js_closure_alloc, js_closure_call_array, js_closure_get_capture_f64,
-        js_closure_get_capture_ptr, js_closure_set_capture_f64, js_closure_set_capture_ptr,
-        ClosureHeader,
+        js_closure_set_capture_f64, ClosureHeader,
     },
     js_array_alloc, js_array_get, js_array_length, js_array_push, js_nanbox_get_pointer,
     js_string_from_bytes, ArrayHeader, JSValue, ObjectHeader, StringHeader,
@@ -213,7 +212,7 @@ unsafe extern "C" fn bun_sqlite_transaction_wrapper(
     rest_value: f64,
 ) -> f64 {
     let db_handle = js_closure_get_capture_f64(wrapper, 0) as Handle;
-    let callback = js_closure_get_capture_ptr(wrapper, 1) as *const ClosureHeader;
+    let callback = perry_runtime::closure::closure_capture_ref(wrapper, 1) as *const ClosureHeader;
     let rest = js_nanbox_get_pointer(rest_value) as *const ArrayHeader;
     let arg_count = js_array_length(rest);
     let args: Vec<f64> = (0..arg_count)
@@ -285,6 +284,6 @@ pub unsafe extern "C" fn js_bun_sqlite_database_transaction(
         2,
     );
     js_closure_set_capture_f64(wrapper, 0, db_handle as f64);
-    js_closure_set_capture_ptr(wrapper, 1, callback as i64);
+    perry_runtime::closure::closure_set_capture_ref(wrapper, 1, callback as i64);
     wrapper
 }

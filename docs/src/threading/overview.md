@@ -33,11 +33,30 @@ ports. Worker and channel message listeners receive the same canonical event
 values, with dispatch targets and phases restored after callbacks return or throw.
 Like Node 26, `initMessageEvent` returns a new event rather than mutating its receiver.
 
+## Worker listeners
+
+Worker `on`, `once`, `addListener`, `off` and `removeListener` require function
+listeners, including for unknown events and exited workers. The add/remove
+aliases use the same listener registry as `on`/`off`.
+
+MessagePort uses EventListener admission instead: nullish values and objects are
+accepted, while other primitives throw `TypeError` with `ERR_INVALID_ARG_TYPE`.
+This applies to its Node-style methods and Web-style add/remove methods.
+Adding a nullish listener schedules an `AddEventListenerArgumentTypeWarning`;
+removing one is a silent no-op.
+Perry does not dispatch MessagePort listener objects through `handleEvent`.
+
 ## Transferring MessagePorts
+
+Closing a port outside message dispatch discards its incoming queue. Closing it
+from its message callback lets the active dispatch drain that same FIFO before
+the `close` event. Peer messages posted during that drain are included, and
+`receiveMessageOnPort` can consume queued messages synchronously. The closing
+port cannot be transferred or send further messages.
 
 Include every `MessagePort` reachable from a message in its transfer list:
 
-```typescript
+```typescript,no-test
 const channel = new MessageChannel();
 worker.postMessage({ port: channel.port1 }, [channel.port1]);
 ```
@@ -421,6 +440,12 @@ Message cloning preserves an Error's own data `cause`, including non-enumerable
 and explicitly undefined values, within the existing clone graph. Shared causes,
 back-references and self-references keep their identity. The data cause is
 captured before reentrant stack accessors run. Cause accessors are
-ignored without invoking their getters. Uncaught Worker diagnostic accessor and
-circular-reference formatting have a separate policy; this does not add support
-for those diagnostic cases.
+ignored without invoking their getters.
+
+Uncaught Worker diagnostics use a separate prototype-first property snapshot.
+Cause getters run with the original Error receiver, successful undefined values
+remain own properties, and descriptor attributes survive delivery. A failing
+cause getter falls back to ordinary cloning without custom diagnostic code.
+Synchronous eval-entry exceptions observe stack decoration before this snapshot;
+errors from later callbacks do not repeat that execution phase. Diagnostic getters
+run before agent cleanup, while cooperative Worker termination remains active.

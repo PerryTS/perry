@@ -1,0 +1,1 @@
+An index argument the call site's whole-program interval proves a non-negative int32 is a canonical double (representation RFC §10, phase P3), so it reaches the `$idx_u31` clone's raw body through one `fptosi`, without the INT32-tag test. `PERRY_WP_REP_P3=0` keeps the INT32-aware conversion.

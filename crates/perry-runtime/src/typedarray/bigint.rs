@@ -10,9 +10,7 @@
 //!   - `coerce_for_kind` — pick `ToBigInt` vs `ToNumber` by destination kind
 //!     for the construction / `set()` paths.
 
-use super::{
-    store_at, throw_type_error, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64,
-};
+use super::{store_at, typed_array_alloc, TypedArrayHeader, KIND_BIGINT64, KIND_BIGUINT64};
 
 #[inline]
 pub(super) fn validate_copy_kinds(dst_kind: u8, src_kind: u8) {
@@ -66,28 +64,17 @@ pub(crate) fn coerce_for_kind(dst_kind: u8, raw: f64) -> f64 {
 /// value re-boxed as a NaN-boxed BigInt. Per the ECMAScript `ToBigInt`
 /// abstract operation, a Number (including a NaN-boxed int32), `undefined`,
 /// `null`, and Symbols are NOT convertible and throw a `TypeError`; only
-/// BigInt, Boolean, and String inputs coerce.
+/// BigInt, Boolean, String and object (via ToPrimitive) inputs coerce.
+///
+/// The typed-array arm is the group's own; every other value is converted by
+/// `bigint_coerce`, which the BigInt statics call without this group.
 pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
     use crate::value::JSValue;
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_bigint() {
-        return value;
-    }
-    if jsval.is_bool() {
-        let n = if jsval.as_bool() { 1 } else { 0 };
-        return crate::value::js_nanbox_bigint(crate::bigint_hooks::js_bigint_from_i64(n) as i64);
-    }
-    if jsval.is_any_string() {
-        // StringToBigInt (a malformed numeric string throws SyntaxError).
-        let bi = crate::bigint_hooks::js_bigint_from_f64(value);
-        return crate::value::js_nanbox_bigint(bi as i64);
-    }
-    // ToBigInt(object): `ToPrimitive(value, number)` (its `Symbol.toPrimitive` /
-    // `valueOf` / `toString`) then `ToBigInt` on the primitive result. A
-    // Symbol pointer is rejected (handled by the label path below); every other
-    // object — e.g. `bigIntView.fill({ valueOf() { return 7n } })` — must run its
-    // coercion hook rather than throwing "Cannot convert NaN to a BigInt".
-    if jsval.is_pointer() && unsafe { crate::symbol::js_is_symbol(value) } == 0 {
+    if jsval.is_pointer()
+        && !jsval.is_bigint()
+        && unsafe { crate::symbol::js_is_symbol(value) } == 0
+    {
         // A typed-array source with a *patched own* `valueOf`/`toString`
         // expando runs it first (test262 ctors-bigint/object-arg/
         // throws-setting-obj-* — the patch may throw, observably).
@@ -99,41 +86,8 @@ pub(crate) fn to_bigint_for_store(value: f64) -> f64 {
                 return to_bigint_for_store(p);
             }
         }
-        match unsafe { crate::value::to_primitive_number(value) } {
-            crate::value::OrdinaryToPrimitiveOutcome::Primitive(p)
-                if p.to_bits() != value.to_bits() =>
-            {
-                return to_bigint_for_store(p);
-            }
-            crate::value::OrdinaryToPrimitiveOutcome::TypeError => {
-                throw_type_error(b"Cannot convert object to primitive value");
-            }
-            // `Primitive` that didn't change (shouldn't happen for an object) and
-            // `DefaultString` (no usable `valueOf`/`toString`) fall through to the
-            // unconvertible-label `TypeError` below.
-            _ => {}
-        }
     }
-    let label = bigint_unconvertible_label(value);
-    throw_type_error(format!("Cannot convert {label} to a BigInt").as_bytes());
-}
-
-/// Human-readable label for a value that `ToBigInt` rejects, matching Node's
-/// `Cannot convert <x> to a BigInt` TypeError text.
-fn bigint_unconvertible_label(value: f64) -> String {
-    use crate::value::JSValue;
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_undefined() {
-        "undefined".to_string()
-    } else if jsval.is_null() {
-        "null".to_string()
-    } else if unsafe { crate::symbol::js_is_symbol(value) } != 0 {
-        "a Symbol value".to_string()
-    } else if jsval.is_int32() {
-        jsval.as_int32().to_string()
-    } else {
-        format!("{value}")
-    }
+    crate::bigint_coerce::to_bigint_not_typed_array(value)
 }
 
 pub(crate) use crate::byte_cell_support::{

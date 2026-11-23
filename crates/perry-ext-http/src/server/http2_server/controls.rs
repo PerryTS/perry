@@ -26,7 +26,7 @@ use crate::server::types::{jsvalue_to_body_bytes, TAG_UNDEFINED};
 
 pub(crate) fn numeric_value(value: f64) -> Option<f64> {
     let v = JsValue::from_bits(value.to_bits());
-    if v.is_int32() || v.is_number() {
+    if v.is_number() {
         Some(v.to_number())
     } else {
         None

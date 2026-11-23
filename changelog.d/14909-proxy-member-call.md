@@ -1,0 +1,1 @@
+Fix a SIGTRAP when a program called a method on a Proxy (`p.m(...)`, `p.call(...)`): the whole-program facts now model the call with `this` = the Proxy, as the runtime runs it, so dead-body removal keeps the handler's traps and the target's body.

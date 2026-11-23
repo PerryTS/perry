@@ -155,7 +155,7 @@ fn a_loop_shaped_like_the_walk_keeps_undefined() {
         r#"
         const ys = ["ab", "cd"];
         let n = 0;
-        try { for (let __forof_lit_k_0 = 0; __forof_lit_k_0 < ys.length; __forof_lit_k_0++) { const s = ys[__forof_lit_k_0]; __forof_lit_k_0 += 5; n += s.trim().length; } } catch (e) { n = -1; }
+        try { for (let __forof_lit_k_0 = 0; __forof_lit_k_0 < ys.length; __forof_lit_k_0++) { __forof_lit_k_0 += 5; const s = ys[__forof_lit_k_0]; n += s.trim().length; } } catch (e) { n = -1; }
         console.log(n);
         "#,
         r#"
@@ -173,6 +173,22 @@ fn a_loop_shaped_like_the_walk_keeps_undefined() {
             pf.dump_text()
         );
     }
+}
+
+/// PR-C1 (`Cons::ElemUndef`): a counter the body moves only after the read
+/// is still tested against the length before every read, so the read is an
+/// element: the key interval `[0, 1]` lies below the length 2.
+#[test]
+fn a_counter_moved_after_the_read_reads_an_element() {
+    let pf = facts(
+        r#"
+        const ys = ["ab", "cd"];
+        let n = 0;
+        try { for (let __forof_lit_k_0 = 0; __forof_lit_k_0 < ys.length; __forof_lit_k_0++) { const s = ys[__forof_lit_k_0]; __forof_lit_k_0 += 5; n += s.trim().length; } } catch (e) { n = -1; }
+        console.log(n);
+        "#,
+    );
+    assert!(native(&pf, "trim"), "{:?}", verdicts(&pf, "trim"));
 }
 
 /// Soundness: a destructuring past the yielded values reads `undefined`.

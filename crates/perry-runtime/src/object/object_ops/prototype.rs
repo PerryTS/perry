@@ -31,13 +31,39 @@ pub extern "C" fn js_get_global_this_builtin_value(name_ptr: *const u8, name_len
     // an ordinary data read instead of rematerializing a weak intern after
     // every collection. This shared lookup consults the live shape; stores,
     // deletions, accessors and prototype changes keep their ordinary semantics.
-    let global = js_get_global_this();
+    builtin_value_in(js_get_global_this(), name)
+}
+
+/// [`js_get_global_this_builtin_value`] for a caller that names a declared
+/// phase-A data global (`perry_abi::REALM_CORE_GLOBALS`) by a literal: the
+/// realm's core is enough for it, so a two-phase realm is not completed for
+/// the read. The entry is chosen at link time (`realm_core`); nothing looks
+/// at the name per call. Any other name (phase B's, the global itself, an
+/// accessor, a name the realm does not declare, a name that is not a
+/// literal) goes to [`js_get_global_this_builtin_value`], the full entry: an
+/// undeclared name's read can reach a getter on `Object.prototype`, which
+/// must never see an incomplete global as `this`.
+pub fn builtin_value_core(name: &'static str) -> f64 {
+    debug_assert!(
+        crate::codegen_abi::realm_core_global(name),
+        "{name} is not a declared phase-A global"
+    );
+    builtin_value_in(super::super::global_this::realm_core(), name)
+}
+
+/// `global[name]`, the body of both by-name readers.
+#[inline(always)]
+fn builtin_value_in(global: f64, name: &str) -> f64 {
     if let Some(value) = unsafe {
         super::super::native_get::try_data_get_bytes(
             crate::value::JSValue::from_bits(global.to_bits()),
             name.as_bytes(),
         )
     } {
+        // A by-name read gets the realm its name needs (the full entry, or
+        // the core for a declared phase-A name), so it cannot see a slot
+        // phase B has not bound.
+        debug_assert_ne!(value.bits(), crate::codegen_abi::REALM_UNBOUND_POISON);
         return f64::from_bits(value.bits());
     }
 
@@ -232,7 +258,20 @@ pub(crate) fn native_export_prototype_value(module: &str, export: &str) -> f64 {
 unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> Option<f64> {
     use crate::object::shapes as s;
     let record = s::shape_record_of_receiver((s::object_shape_stamp(obj)).0)?;
-    if !record.object_kind().is_ordinary_layout() || record.weak_collection_brand().is_some() {
+    link_of_record(obj, record, default_only)
+}
+
+/// [`shape_link_prototype`] from `obj`'s live record, already read.
+#[inline(always)]
+unsafe fn link_of_record(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+    default_only: bool,
+) -> Option<f64> {
+    use crate::object::shapes as s;
+    // An index store changes no link: `OrdinaryIndexed` reads its link as
+    // the ordinary layouts do.
+    if !record.object_kind().is_ordinary_family() || record.weak_collection_brand().is_some() {
         return None;
     }
     let pid = record.proto_id();
@@ -267,6 +306,25 @@ unsafe fn shape_link_prototype(obj: *const ObjectHeader, default_only: bool) -> 
     let proto = crate::array::object_prototype_addr_if_resolved();
     (proto != 0 && proto != obj as usize)
         .then(|| f64::from_bits(crate::value::js_nanbox_pointer(proto as i64).to_bits()))
+}
+
+/// DYNP E3: the [[Prototype]] link of an ordinary layout object as its shape
+/// states it, read from `obj`'s live record, already read by a caller that
+/// tests the same record (the for-in walk: one record per level). `None`: the
+/// shape does not state it (exotic kinds, a held record prototype, an unbuilt
+/// class holder, an unresolved realm default); the caller takes the generic
+/// walk.
+///
+/// # Safety
+/// `obj` is a live `GC_TYPE_OBJECT` cell; `record` is `obj`'s live record.
+pub(crate) unsafe fn structural_prototype_link_of(
+    obj: *const ObjectHeader,
+    record: crate::object::shapes::ShapeRecordRef,
+) -> Option<f64> {
+    if record.proto_id() == crate::object::shapes::PROTO_ID_RECORD_HELD {
+        return None;
+    }
+    link_of_record(obj, record, false)
 }
 
 /// [`shape_link_prototype`] of a CLASS identity `pid`: a recorded prototype
@@ -330,9 +388,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                 // Arrays, closures, handles, class and exotic identities
                 // decline without consulting their registries on this arm.
                 let id = unsafe { (*addr).shape_word() };
-                if id.wrapping_sub(crate::object::shapes::SHAPE_ID_BASE)
-                    < crate::codegen_abi::LAYOUT_ORDINARY_END - crate::codegen_abi::LAYOUT_TAG
-                {
+                if crate::codegen_abi::is_ordinary_record_word(id) {
                     if let Some(proto) = unsafe { shape_link_prototype(addr, false) } {
                         return proto;
                     }
@@ -370,12 +426,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
     // null (15.2.3.2-1*).
     {
         let jv = crate::value::JSValue::from_bits(obj_value.to_bits());
-        // An INT32-tagged value may be a class ref (same 0x7FFE tag as small
-        // integers) — those must keep flowing to the class resolution below.
-        let is_class_ref = super::super::class_ref_id(obj_value).is_some();
-        let wrapper = if is_class_ref {
-            None
-        } else if jv.is_number() {
+        let wrapper = if jv.is_number() {
             Some("Number")
         } else if jv.is_any_string() {
             Some("String")
@@ -534,6 +585,10 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         if !crate::buffer::is_node_buffer(addr) {
             return None;
         }
+        // A link recorded by `Object.setPrototypeOf`, `null` included, wins.
+        if let Some(proto_bits) = super::super::prototype_chain::object_static_prototype(addr) {
+            return Some(f64::from_bits(proto_bits));
+        }
         let proto = crate::object::builtin_prototype_value("Buffer");
         if proto.to_bits() != crate::value::TAG_UNDEFINED {
             Some(proto)
@@ -589,67 +644,6 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
         } else {
             crate::value::js_nanbox_pointer(parent as i64)
         };
-    }
-    if let Some(class_id) = crate::object::class_value::class_ref_word(bits) {
-        // An explicit `Object.setPrototypeOf(Ctor, obj)` wins over every
-        // derived answer below — it IS the constructor's [[Prototype]].
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            let static_proto = super::super::class_registry::class_static_prototype(class_id);
-            if !static_proto.is_null() {
-                return f64::from_bits(
-                    crate::value::js_nanbox_pointer(static_proto as i64).to_bits(),
-                );
-            }
-            if super::super::class_registry::class_static_prototype_is_nulled(class_id) {
-                return f64::from_bits(TAG_NULL);
-            }
-        }
-        if super::super::class_prototype_ref_id(obj_value).is_none() {
-            // A class whose heritage is a runtime function value has no Perry
-            // parent class id. Its constructor's [[Prototype]] is that exact
-            // function object (not Function.prototype), as observed by
-            // Object.getPrototypeOf(D) and static `super` lookup.
-            let dynamic_parent = super::super::js_get_dynamic_parent_value(class_id);
-            let parent_value = crate::value::JSValue::from_bits(dynamic_parent.to_bits());
-            if !parent_value.is_undefined() && !parent_value.is_null() {
-                return dynamic_parent;
-            }
-        }
-        if let Some(parent_id) = get_parent_class_id(class_id) {
-            // #8343 followup: `NATIVE_MODULE_CLASS_ID` (0xFFFFFFFE) is a
-            // sentinel, not a real class. A prior `Object.create(proto)` whose
-            // `proto` was a native-module namespace object registered it as a
-            // synthetic class's parent. Returning the raw sentinel as an
-            // INT32-tagged class ref (`-2`) trips `Object.create` with
-            // `TypeError: Object prototype may only be an Object or null: -2`.
-            // Treat it as a root: a native-module namespace's [[Prototype]] is
-            // %Object.prototype%, so the synthetic class whose proto was that
-            // namespace inherits Object.prototype too.
-            // A builtin parent id (`extends Error`) is not a compiled class
-            // and never gets a class function object: its constructor is the
-            // dynamic parent value above, and without one this is a root.
-            if parent_id != 0
-                && parent_id != super::super::native_module::NATIVE_MODULE_CLASS_ID
-                && crate::object::is_class_id_registered(parent_id)
-            {
-                return crate::object::class_value::class_value(parent_id);
-            }
-        }
-        // Root of the class hierarchy. In JS `Object.getPrototypeOf` of a base
-        // class *constructor* is `Function.prototype`, and of a base class's
-        // `.prototype` object is `Object.prototype` — NOT null. class-transformer
-        // walks `Object.getPrototypeOf(target.prototype.constructor)` and then
-        // dereferences `.prototype` on the result; the old `null` made that
-        // `null.prototype` throw, blocking class-transformer/class-validator on
-        // any flat (no-`extends`) DTO. (#420 followup)
-        if super::super::class_prototype_ref_id(obj_value).is_some() {
-            let proto = crate::object::builtin_prototype_value("Object");
-            if proto.to_bits() != crate::value::TAG_UNDEFINED {
-                return proto;
-            }
-            return f64::from_bits(TAG_NULL);
-        }
-        return function_prototype_or_null();
     }
     // Heap-pointer receiver — return the input value itself. For
     // class-id-tagged instances, `.constructor` then returns the class
@@ -745,7 +739,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                         return proto;
                     }
                 }
-                if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+                if crate::gc_type_is_array!((*gc).obj_type) {
                     if let Some(proto) =
                         super::super::array_get_prototype_of_addr(raw_addr as usize)
                     {
@@ -1007,7 +1001,7 @@ pub(crate) fn get_prototype_of_resolved(obj_value: f64) -> f64 {
                     return proto;
                 }
             }
-            if (*gc).obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!((*gc).obj_type) {
                 if let Some(proto) = super::super::array_get_prototype_of_addr(bits as usize) {
                     return proto;
                 }

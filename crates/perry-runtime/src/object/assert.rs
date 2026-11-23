@@ -527,7 +527,7 @@ fn throw_assertion(
 fn if_error_value_message(value: f64) -> Option<String> {
     match gc_type_of(value) {
         Some(
-            crate::gc_object_type_pat!() | crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_ERROR,
+            crate::gc_object_type_pat!() | crate::gc_array_type_pat!() | crate::gc::GC_TYPE_ERROR,
         ) => {}
         _ => return None,
     }
@@ -618,8 +618,7 @@ extern "C" fn assert_rejects_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     let err = make_assertion_error(
@@ -638,8 +637,7 @@ extern "C" fn assert_rejects_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let expected = crate::closure::js_closure_get_capture_f64(closure, 1);
     let message = crate::closure::js_closure_get_capture_f64(closure, 2);
     if expected_error_matches(reason, expected) {
@@ -662,8 +660,7 @@ extern "C" fn assert_does_not_reject_fulfilled(
     _this: crate::closure::JsThis,
     _value: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     crate::promise::js_promise_resolve(result, undefined_f64());
     undefined_f64()
 }
@@ -673,8 +670,7 @@ extern "C" fn assert_does_not_reject_rejected(
     _this: crate::closure::JsThis,
     reason: f64,
 ) -> f64 {
-    let result =
-        crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut crate::promise::Promise;
+    let result = crate::closure::closure_capture_ref(closure, 0) as *mut crate::promise::Promise;
     let message = crate::closure::js_closure_get_capture_f64(closure, 1);
     let expected = crate::closure::js_closure_get_capture_f64(closure, 2);
     // With a matcher present, a rejection that does NOT match propagates the
@@ -702,7 +698,7 @@ fn closure3(
     message: f64,
 ) -> *const crate::closure::ClosureHeader {
     let closure = crate::closure::js_closure_alloc(func, 3);
-    crate::closure::js_closure_set_capture_ptr(closure, 0, result as i64);
+    crate::closure::closure_set_capture_ref(closure, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(closure, 1, expected);
     crate::closure::js_closure_set_capture_f64(closure, 2, message);
     closure
@@ -835,7 +831,7 @@ fn partial_deep_equal_bool(actual: f64, expected: f64) -> bool {
         return false;
     }
     match expected_type {
-        crate::gc::GC_TYPE_ARRAY => partial_array_equal(
+        crate::gc_array_type_pat!() => partial_array_equal(
             actual_ptr as *const crate::array::ArrayHeader,
             expected_ptr as *const crate::array::ArrayHeader,
         ),
@@ -853,18 +849,14 @@ fn assert_same_value(actual: f64, expected: f64) -> bool {
     fn numeric_value(raw: f64) -> Option<f64> {
         let bits = raw.to_bits();
         let value = crate::value::JSValue::from_bits(bits);
-        if value.is_int32() {
-            Some(value.as_int32() as f64)
+        // Plain IEEE-754 values, including the canonical raw NaN bucket
+        // (0x7FF8) and all negative numbers, are numbers. Perry tagged
+        // values use 0x7FF9..=0x7FFF, so do not classify them as NaN just
+        // because f64::is_nan observes their NaN-box encoding.
+        if value.is_number() {
+            Some(raw)
         } else {
-            // Plain IEEE-754 values, including the canonical raw NaN bucket
-            // (0x7FF8) and all negative numbers, are numbers. Perry tagged
-            // values use 0x7FF9..=0x7FFF, so do not classify them as NaN just
-            // because f64::is_nan observes their NaN-box encoding.
-            if value.is_number() {
-                Some(raw)
-            } else {
-                None
-            }
+            None
         }
     }
 
@@ -1278,8 +1270,8 @@ pub extern "C" fn js_assert_does_not_reject(input: f64, expected: f64, message: 
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_fulfilled, 1), 1);
     let on_rejected =
         crate::closure::js_closure_alloc(crate::fn_info!(assert_does_not_reject_rejected, 1), 3);
-    crate::closure::js_closure_set_capture_ptr(on_fulfilled, 0, result as i64);
-    crate::closure::js_closure_set_capture_ptr(on_rejected, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_fulfilled, 0, result as i64);
+    crate::closure::closure_set_capture_ref(on_rejected, 0, result as i64);
     crate::closure::js_closure_set_capture_f64(on_rejected, 1, message);
     crate::closure::js_closure_set_capture_f64(on_rejected, 2, expected);
     crate::promise::js_promise_then(source.promise, on_fulfilled, on_rejected);

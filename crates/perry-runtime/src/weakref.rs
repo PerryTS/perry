@@ -182,18 +182,15 @@ pub(crate) fn is_valid_weak_target(value: f64) -> bool {
         return true;
     }
 
-    // A class reference (e.g. an imported `class Foo {}` passed as a value, or a
-    // class prototype) is NaN-boxed as an INT32-tagged (`0x7FFE`) class-ref ID,
-    // not a heap pointer. In JS such a value is a function/object and therefore
-    // "CanBeHeldWeakly" (ES2023) — a valid WeakMap/WeakSet/WeakRef key. NestJS
-    // relies on this: `InitializeOnPreviewAllowlist.add(InternalCoreModule)` does
+    // A class constructor (e.g. an imported `class Foo {}` passed as a value) is
+    // a function and therefore "CanBeHeldWeakly" (ES2023) — a valid
+    // WeakMap/WeakSet/WeakRef key. NestJS relies on this:
+    // `InitializeOnPreviewAllowlist.add(InternalCoreModule)` does
     // `weakmap.set(InternalCoreModule, true)`, and module-token factories key a
-    // WeakMap by the module class. Cross-module class imports arrive as class-ref
-    // values (not closure pointers), so without this branch they were rejected
-    // with "Invalid value used as weak map key" only inside a full module graph.
-    if crate::object::class_ref_id(value).is_some()
-        || crate::object::class_prototype_ref_id(value).is_some()
-    {
+    // WeakMap by the module class. Without this branch cross-module class
+    // imports were rejected with "Invalid value used as weak map key" only
+    // inside a full module graph.
+    if crate::object::class_ref_id(value).is_some() {
         return true;
     }
 
@@ -292,7 +289,7 @@ unsafe fn object_value_to_array(
     bits: u64,
     valid_ptrs: &crate::gc::ValidPointerSet,
 ) -> Option<*mut ArrayHeader> {
-    value_points_to_gc_type(bits, valid_ptrs, crate::gc::GC_TYPE_ARRAY)
+    value_points_to_gc_type(bits, valid_ptrs, crate::gc_array_type_pat!())
         .map(|ptr| ptr as *mut ArrayHeader)
 }
 
@@ -834,7 +831,7 @@ impl WeakLiveness for CopiedMinorLiveness<'_> {
         weak_target_should_clear_copied(target_bits, self.ptrs)
     }
     unsafe fn as_live_array(&self, bits: u64) -> Option<*mut ArrayHeader> {
-        classify_gc_type_child(bits, self.ptrs, crate::gc::GC_TYPE_ARRAY)
+        classify_gc_type_child(bits, self.ptrs, crate::gc_array_type_pat!())
             .map(|ptr| ptr as *mut ArrayHeader)
     }
     unsafe fn as_live_object_with_class(
@@ -1680,7 +1677,7 @@ mod tests {
         // exact value bits it was given.
         let wm = js_weakmap_new();
         let wm_val = f64::from_bits(JSValue::pointer(wm as *const u8).bits());
-        let v = f64::from_bits(JSValue::int32(42).bits());
+        let v = f64::from(42);
         js_weakmap_set(wm_val, fresh_sym, v);
         let got = js_weakmap_get(wm_val, fresh_sym);
         assert_eq!(

@@ -112,6 +112,8 @@ pub struct Import {
     /// but do NOT pin the target as eager — if no static edge reaches it
     /// the target is `Deferred`. `specifiers` is empty for these.
     pub is_dynamic: bool,
+    /// Static `import defer` binds a namespace without evaluating its module.
+    pub is_deferred: bool,
     /// Issue #1672: this source is the target of at least one dynamic
     /// `import()` site in the module, but the edge could NOT be a
     /// dedicated `is_dynamic` synthetic edge because a *static* import of
@@ -281,6 +283,13 @@ pub struct Class {
     /// inside a turbopack factory threw at module init). Codegen
     /// (`init_static_fields_*`) skips module-init static init for these.
     pub is_nested: bool,
+    /// R9BIRTH6: the `module.init` index the declaration evaluates at
+    /// (ECMA-262 15.7.14 ClassDefinitionEvaluation runs at the statement's
+    /// position; before it the binding is in its TDZ, 14.3.1), for a
+    /// top-level class declaration: the statements its evaluation emits
+    /// (parent registration, computed names, static elements) start there.
+    /// `None` for nested classes, class expressions and synthetic classes.
+    pub decl_stmt: Option<u32>,
     /// #6812 (w16): minimum inline slot count to allocate for instances,
     /// beyond `fields.len()`. Set only on per-site empty-literal anon-shape
     /// classes when the lowering can prove the builder's final width (e.g. a
@@ -641,6 +650,10 @@ pub struct Function {
     pub is_async: bool,
     pub is_generator: bool,
     pub is_strict: bool,
+    /// Every reference to this function is the callee of a `new` expression
+    /// (see `lower/pre_scan/construct_only.rs`): its sloppy `this` is always a
+    /// fresh object, never the global object. False when not proven.
+    pub construct_only: bool,
     pub is_exported: bool,
     /// Captured variables (for closures)
     pub captures: Vec<LocalId>,

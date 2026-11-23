@@ -359,6 +359,366 @@ fn emit_function_value_call(
     results.push((r, end));
 }
 
+/// Link name of `Function.prototype.call`'s body (runtime
+/// `global_this::js_function_prototype_call_body`).
+const CALL_BODY: &str = "js_function_prototype_call_body";
+
+/// Link name of the builtin no-op forwarding body (runtime
+/// `fetch_globals::global_this_builtin_noop_thunk`): its methods run in the
+/// intrinsic, so `f.call` on it is never entered directly.
+const NOOP_BODY: &str = "global_this_builtin_noop_thunk";
+
+/// Link name of the realm's `Object.prototype.hasOwnProperty` body (runtime
+/// `array_error::object_prototype_has_own_property_thunk`).
+const HAS_OWN_BODY: &str = "object_prototype_has_own_property_thunk";
+
+/// Link name of `hasOwnProperty`'s semantics with `this` and the key as
+/// arguments (runtime `has_own::js_object_prototype_has_own_property_call`).
+const HAS_OWN_CALL: &str = "js_object_prototype_has_own_property_call";
+
+/// `f.call(a0, a1, ..)` where the value read, V, is `Function.prototype.call`'s
+/// own body: the call is that body's semantics with the arguments in place.
+/// The target is the receiver `f`, `this` is `a0`, the arguments `a1..`; `f` is
+/// called through its own function-value call. Dispatch on the value: any
+/// other V, a target that is not a direct-call body, or an `a0` the callee could
+/// box (a primitive, a Symbol) continues at the ordinary call of V, which is
+/// that body run in full. wasm32 keeps the ordinary call (code there is a
+/// table index).
+fn emit_call_lane(
+    ctx: &mut FnCtx<'_>,
+    value_bits: &str,
+    recv_box: &str,
+    lowered_args: &[String],
+    merge_l: &str,
+    results: &mut Vec<(String, String)>,
+) {
+    use crate::expr::receiver_range::{emit_field_ptr, RECEIVER_BIAS, RECEIVER_SPAN};
+    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        return;
+    }
+    let bias = (RECEIVER_BIAS as i64).to_string();
+    let span = (RECEIVER_SPAN as i64).to_string();
+    let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
+    let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
+    let closure_kind = crate::runtime_abi::GC_TYPE_CLOSURE.to_string();
+    let object_kind = crate::runtime_abi::GC_TYPE_OBJECT.to_string();
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple) as i64;
+    let vkind_idx = ctx.new_block("msite.call_lane.kind");
+    let vcode_idx = ctx.new_block("msite.call_lane.code");
+    let null_idx = ctx.new_block("msite.call_lane.this_null");
+    let heap_idx = ctx.new_block("msite.call_lane.this_heap");
+    let tkind_idx = ctx.new_block("msite.call_lane.this_kind");
+    let tclos_idx = ctx.new_block("msite.call_lane.this_closure");
+    let target_idx = ctx.new_block("msite.call_lane.target");
+    let ord_idx = ctx.new_block("msite.call_lane.ordinary");
+    let vkind_l = ctx.block_label(vkind_idx);
+    let vcode_l = ctx.block_label(vcode_idx);
+    let null_l = ctx.block_label(null_idx);
+    let heap_l = ctx.block_label(heap_idx);
+    let tkind_l = ctx.block_label(tkind_idx);
+    let tclos_l = ctx.block_label(tclos_idx);
+    let target_l = ctx.block_label(target_idx);
+    let ord_l = ctx.block_label(ord_idx);
+    let u = {
+        let blk = ctx.block();
+        let u = blk.sub(I64, value_bits, &bias);
+        let heap = blk.icmp_ult(I64, &u, &span);
+        blk.cond_br(&heap, &vkind_l, &ord_l);
+        u
+    };
+    ctx.current_block = vkind_idx;
+    {
+        let blk = ctx.block();
+        let kp = emit_field_ptr(blk, &u, kind_offset);
+        let kind = blk.load(I16, &kp);
+        let kind = blk.and(I16, &kind, &kind_mask);
+        let is_closure = blk.icmp_eq(I16, &kind, &closure_kind);
+        blk.cond_br(&is_closure, &vcode_l, &ord_l);
+    }
+    ctx.current_block = vcode_idx;
+    ctx.pending_declares
+        .push((CALL_BODY.to_string(), DOUBLE, vec![PTR, I64, PTR, I64]));
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let this_box = lowered_args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| undefined.clone());
+    let this_bits = {
+        let blk = ctx.block();
+        let ip = emit_field_ptr(blk, &u, info_offset);
+        let info = blk.load(PTR, &ip);
+        let code = blk.load(I64, &info);
+        let call_body = blk.ptrtoint(&format!("@{CALL_BODY}"), I64);
+        let same = blk.icmp_eq(I64, &code, &call_body);
+        let this_bits = blk.bitcast_double_to_i64(&this_box);
+        let undef = blk.icmp_eq(
+            I64,
+            &this_bits,
+            &(crate::nanbox::TAG_UNDEFINED as i64).to_string(),
+        );
+        let lane = blk.and(I1, &same, &undef);
+        let not_undef_l = null_l.clone();
+        blk.cond_br(&lane, &target_l, &not_undef_l);
+        this_bits
+    };
+    // Not undefined: V must still be the body, and `a0` null or a heap object.
+    ctx.current_block = null_idx;
+    {
+        let blk = ctx.block();
+        let ip = emit_field_ptr(blk, &u, info_offset);
+        let info = blk.load(PTR, &ip);
+        let code = blk.load(I64, &info);
+        let call_body = blk.ptrtoint(&format!("@{CALL_BODY}"), I64);
+        let same = blk.icmp_eq(I64, &code, &call_body);
+        blk.cond_br(&same, &heap_l, &ord_l);
+    }
+    ctx.current_block = heap_idx;
+    let tu = {
+        let blk = ctx.block();
+        let null = blk.icmp_eq(
+            I64,
+            &this_bits,
+            &(crate::nanbox::TAG_NULL as i64).to_string(),
+        );
+        let tu = blk.sub(I64, &this_bits, &bias);
+        blk.cond_br(&null, &target_l, &tkind_l);
+        tu
+    };
+    ctx.current_block = tkind_idx;
+    {
+        let blk = ctx.block();
+        let heap = blk.icmp_ult(I64, &tu, &span);
+        let check_l = tclos_l.clone();
+        // Out of the heap range: a primitive, the ordinary call.
+        let kind_check_idx_l = check_l;
+        blk.cond_br(&heap, &kind_check_idx_l, &ord_l);
+    }
+    ctx.current_block = tclos_idx;
+    {
+        let blk = ctx.block();
+        let kp = emit_field_ptr(blk, &tu, kind_offset);
+        let kind = blk.load(I16, &kp);
+        let kind = blk.and(I16, &kind, &kind_mask);
+        let is_object = blk.icmp_eq(I16, &kind, &object_kind);
+        let is_closure = blk.icmp_eq(I16, &kind, &closure_kind);
+        let a = blk.icmp_eq(I1, &is_object, "0");
+        let b = blk.icmp_eq(I1, &is_closure, "0");
+        let neither = blk.and(I1, &a, &b);
+        blk.cond_br(&neither, &ord_l, &target_l);
+    }
+    // The target `f` enters directly only when its own record names a
+    // direct-call body, the body's own test (runtime
+    // `closure::has_direct_call_body`): a compiled body, or a builtin
+    // non-constructor body other than the no-op forwarder. A native
+    // constructor (`Readable.call(this, o)`, `EventEmitter.call(this)`), a
+    // bound or forwarding body runs the call body in full (`ordinary`).
+    ctx.current_block = target_idx;
+    let f_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let fkind_idx = ctx.new_block("msite.call_lane.target_kind");
+    let finfo_idx = ctx.new_block("msite.call_lane.target_info");
+    let fbody_idx = ctx.new_block("msite.call_lane.target_body");
+    let fcall_idx = ctx.new_block("msite.call_lane.target_call");
+    let fkind_l = ctx.block_label(fkind_idx);
+    let finfo_l = ctx.block_label(finfo_idx);
+    let fbody_l = ctx.block_label(fbody_idx);
+    let fcall_l = ctx.block_label(fcall_idx);
+    let fu = {
+        let blk = ctx.block();
+        let fu = blk.sub(I64, &f_bits, &bias);
+        let heap = blk.icmp_ult(I64, &fu, &span);
+        blk.cond_br(&heap, &fkind_l, &ord_l);
+        fu
+    };
+    ctx.current_block = fkind_idx;
+    {
+        let blk = ctx.block();
+        let kp = emit_field_ptr(blk, &fu, kind_offset);
+        let kind = blk.load(I16, &kp);
+        let kind = blk.and(I16, &kind, &kind_mask);
+        let is_closure = blk.icmp_eq(I16, &kind, &closure_kind);
+        blk.cond_br(&is_closure, &finfo_l, &ord_l);
+    }
+    ctx.current_block = finfo_idx;
+    let finfo = {
+        let blk = ctx.block();
+        let ip = emit_field_ptr(blk, &fu, info_offset);
+        let info = blk.load(PTR, &ip);
+        let info_i = blk.ptrtoint(&info, I64);
+        let none = blk.icmp_eq(I64, &info_i, "0");
+        blk.cond_br(&none, &ord_l, &fbody_l);
+        info
+    };
+    // The target's body is the realm's `Object.prototype.hasOwnProperty`
+    // (code identity, as V's is the call body's): the call is that body with
+    // `this = a0`, an object, a function or nullish here.
+    let fown_idx = ctx.new_block("msite.call_lane.target_has_own");
+    let fdirect_idx = ctx.new_block("msite.call_lane.target_direct");
+    let fown_l = ctx.block_label(fown_idx);
+    let fdirect_l = ctx.block_label(fdirect_idx);
+    ctx.current_block = fbody_idx;
+    ctx.pending_declares
+        .push((HAS_OWN_BODY.to_string(), DOUBLE, vec![PTR, I64, DOUBLE]));
+    ctx.pending_declares
+        .push((HAS_OWN_CALL.to_string(), DOUBLE, vec![DOUBLE, DOUBLE]));
+    {
+        let blk = ctx.block();
+        let code = blk.load(I64, &finfo);
+        let has_own = blk.ptrtoint(&format!("@{HAS_OWN_BODY}"), I64);
+        let is_has_own = blk.icmp_eq(I64, &code, &has_own);
+        blk.cond_br(&is_has_own, &fown_l, &fdirect_l);
+    }
+    ctx.current_block = fown_idx;
+    {
+        let key = lowered_args
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| undefined.clone());
+        let blk = ctx.block();
+        let r = blk.call(DOUBLE, HAS_OWN_CALL, &[(DOUBLE, &this_box), (DOUBLE, &key)]);
+        let end = blk.label.clone();
+        blk.br(merge_l);
+        results.push((r, end));
+    }
+    ctx.current_block = fdirect_idx;
+    ctx.pending_declares
+        .push((NOOP_BODY.to_string(), DOUBLE, vec![PTR, I64, DOUBLE]));
+    {
+        let compiled = crate::runtime_abi::FN_COMPILED_BODY.to_string();
+        let builtin_fn =
+            (crate::runtime_abi::FN_BUILTIN | crate::runtime_abi::FN_NON_CONSTRUCTOR).to_string();
+        let blk = ctx.block();
+        let fp = blk.gep(crate::types::I8, &finfo, &[(I64, "12")]);
+        let flags = blk.load(I32, &fp);
+        let c = blk.and(I32, &flags, &compiled);
+        let is_compiled = blk.icmp_ne(I32, &c, "0");
+        let b = blk.and(I32, &flags, &builtin_fn);
+        let is_builtin_fn = blk.icmp_eq(I32, &b, &builtin_fn);
+        let code = blk.load(I64, &finfo);
+        let noop = blk.ptrtoint(&format!("@{NOOP_BODY}"), I64);
+        let not_noop = blk.icmp_ne(I64, &code, &noop);
+        let builtin_ok = blk.and(I1, &is_builtin_fn, &not_noop);
+        let direct = blk.select(I1, &is_compiled, I1, "true", &builtin_ok);
+        blk.cond_br(&direct, &fcall_l, &ord_l);
+    }
+    ctx.current_block = fcall_idx;
+    let rest: Vec<String> = lowered_args.iter().skip(1).cloned().collect();
+    emit_function_value_call(
+        ctx,
+        &f_bits,
+        &this_box,
+        &rest,
+        &[],
+        &ord_l,
+        merge_l,
+        results,
+    );
+    ctx.current_block = ord_idx;
+}
+
+/// Link name of `Function.prototype.apply`'s body (runtime
+/// `array_error::function_prototype_apply_thunk`).
+const APPLY_BODY: &str = "function_prototype_apply_thunk";
+
+/// `apply`'s semantics on a receiver whose read answered the realm's own
+/// `apply` (runtime `builtin_method::js_function_apply_read`).
+const APPLY_READ: &str = "js_function_apply_read";
+
+/// `f.apply(a0, a1)` where the value read, V, is `Function.prototype.apply`'s
+/// own body: the call is that body's semantics with `f` as its receiver,
+/// `this` = `a0`, the list `a1` (absent ones undefined, extra ones ignored).
+/// V was read before the arguments ran, so an own `apply` they defined is not
+/// asked (ECMA-262 13.3.6.1). Any other V continues at the ordinary call of V.
+/// wasm32 keeps the ordinary call (code there is a table index).
+fn emit_apply_lane(
+    ctx: &mut FnCtx<'_>,
+    value_bits: &str,
+    recv_box: &str,
+    lowered_args: &[String],
+    merge_l: &str,
+    results: &mut Vec<(String, String)>,
+) {
+    use crate::expr::receiver_range::{emit_field_ptr, RECEIVER_BIAS, RECEIVER_SPAN};
+    if crate::target_layout::target_is_ilp32(ctx.target_triple) {
+        return;
+    }
+    let bias = (RECEIVER_BIAS as i64).to_string();
+    let span = (RECEIVER_SPAN as i64).to_string();
+    let kind_offset = -(crate::runtime_abi::GC_HEADER_SIZE as i64);
+    let kind_mask = (0xFFu16 | (u16::from(crate::runtime_abi::GC_FLAG_FORWARDED) << 8)).to_string();
+    let closure_kind = crate::runtime_abi::GC_TYPE_CLOSURE.to_string();
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple) as i64;
+    let kind_idx = ctx.new_block("msite.apply_lane.kind");
+    let info_idx = ctx.new_block("msite.apply_lane.info");
+    let code_idx = ctx.new_block("msite.apply_lane.code");
+    let hit_idx = ctx.new_block("msite.apply_lane.hit");
+    let ord_idx = ctx.new_block("msite.apply_lane.ordinary");
+    let kind_l = ctx.block_label(kind_idx);
+    let info_l = ctx.block_label(info_idx);
+    let code_l = ctx.block_label(code_idx);
+    let hit_l = ctx.block_label(hit_idx);
+    let ord_l = ctx.block_label(ord_idx);
+    let u = {
+        let blk = ctx.block();
+        let u = blk.sub(I64, value_bits, &bias);
+        let heap = blk.icmp_ult(I64, &u, &span);
+        blk.cond_br(&heap, &kind_l, &ord_l);
+        u
+    };
+    ctx.current_block = kind_idx;
+    {
+        let blk = ctx.block();
+        let kp = emit_field_ptr(blk, &u, kind_offset);
+        let kind = blk.load(I16, &kp);
+        let kind = blk.and(I16, &kind, &kind_mask);
+        let is_closure = blk.icmp_eq(I16, &kind, &closure_kind);
+        blk.cond_br(&is_closure, &info_l, &ord_l);
+    }
+    ctx.current_block = info_idx;
+    let info = {
+        let blk = ctx.block();
+        let ip = emit_field_ptr(blk, &u, info_offset);
+        let info = blk.load(PTR, &ip);
+        let info_i = blk.ptrtoint(&info, I64);
+        let none = blk.icmp_eq(I64, &info_i, "0");
+        blk.cond_br(&none, &ord_l, &code_l);
+        info
+    };
+    ctx.current_block = code_idx;
+    ctx.pending_declares.push((
+        APPLY_BODY.to_string(),
+        DOUBLE,
+        vec![PTR, I64, DOUBLE, DOUBLE],
+    ));
+    ctx.pending_declares
+        .push((APPLY_READ.to_string(), DOUBLE, vec![DOUBLE, DOUBLE, DOUBLE]));
+    {
+        let blk = ctx.block();
+        let code = blk.load(I64, &info);
+        let body = blk.ptrtoint(&format!("@{APPLY_BODY}"), I64);
+        let same = blk.icmp_eq(I64, &code, &body);
+        blk.cond_br(&same, &hit_l, &ord_l);
+    }
+    ctx.current_block = hit_idx;
+    let undefined = crate::nanbox::double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED));
+    let a0 = lowered_args
+        .first()
+        .cloned()
+        .unwrap_or_else(|| undefined.clone());
+    let a1 = lowered_args
+        .get(1)
+        .cloned()
+        .unwrap_or_else(|| undefined.clone());
+    let r = ctx.block().call(
+        DOUBLE,
+        APPLY_READ,
+        &[(DOUBLE, recv_box), (DOUBLE, &a0), (DOUBLE, &a1)],
+    );
+    let end = ctx.block().label.clone();
+    ctx.block().br(merge_l);
+    results.push((r, end));
+    ctx.current_block = ord_idx;
+}
+
 /// Emit the site. `recv_box` and `lowered_args` are already evaluated and
 /// re-read from their roots; `feedback_site` is the typed-feedback site id the
 /// slow call hands to the dispatcher; `method_id` the static dispatch id.
@@ -586,11 +946,10 @@ pub(crate) fn emit_method_site(
         ctx.current_block = family_call;
         let recv_bits = ctx.block().bitcast_double_to_i64(recv_box);
         let ptr = ctx.block().inttoptr(I64, &callee);
-        let ip = ctx.block().gep(
-            crate::types::I8,
-            &ptr,
-            &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
-        );
+        let closure_info = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
+        let ip = ctx
+            .block()
+            .gep(crate::types::I8, &ptr, &[(I64, &closure_info.to_string())]);
         let info = ctx.block().load(PTR, &ip);
         let code = ctx.block().load(PTR, &info);
         let r = crate::expr::body_call::emit_js_body_call(
@@ -915,6 +1274,25 @@ pub(crate) fn emit_method_site_call(
     let merge_l = ctx.block_label(merge_idx);
     let mut results: Vec<(String, String)> = Vec::new();
     let value_bits = ctx.block().bitcast_double_to_i64(value);
+    if lookup.property == "call" {
+        emit_call_lane(
+            ctx,
+            &value_bits,
+            recv_box,
+            lowered_args,
+            &merge_l,
+            &mut results,
+        );
+    } else if lookup.property == "apply" {
+        emit_apply_lane(
+            ctx,
+            &value_bits,
+            recv_box,
+            lowered_args,
+            &merge_l,
+            &mut results,
+        );
+    }
     emit_function_value_call(
         ctx,
         &value_bits,

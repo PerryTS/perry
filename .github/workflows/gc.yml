@@ -381,11 +381,10 @@ jobs:
         if: steps.relevance.outputs.run == 'true'
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Install clang
         if: steps.relevance.outputs.run == 'true'
         run: |
@@ -610,9 +609,10 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         with:
-          shared-key: gc-native-roots
+          key: gc-native-roots
+          save: "true"
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
           set -euo pipefail
@@ -1618,11 +1618,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Install clang
         if: steps.relevance.outputs.run == 'true'
         run: |
@@ -1744,11 +1743,10 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
-      - uses: ./.github/actions/perry/Swatinem/rust-cache
+      - uses: ./.github/actions/perry-rust-cache
         if: steps.relevance.outputs.run == 'true'
         with:
-          shared-key: "${{ runner.os }}-perry"
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          key: gap-suite-build
       - name: Install clang
         if: steps.relevance.outputs.run == 'true'
         run: |

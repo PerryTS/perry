@@ -38,9 +38,7 @@ fn throw_type_error(message: &str) -> ! {
 
 fn number_arg(value: f64) -> Option<f64> {
     let value = JSValue::from_bits(value.to_bits());
-    if value.is_int32() {
-        Some(value.as_int32() as f64)
-    } else if value.is_number() {
+    if value.is_number() {
         Some(value.as_number())
     } else {
         None
@@ -1106,9 +1104,6 @@ unsafe fn yaml_add_js_value(
             if value.as_bool() { "true" } else { "false" },
         );
     }
-    if value.is_int32() {
-        return yaml_add_scalar(document, YAML_INT_TAG, &value.as_int32().to_string());
-    }
     if value.is_number() {
         let number = value.as_number();
         let tag = if number.is_finite() && number.fract() == 0.0 {
@@ -1136,7 +1131,7 @@ unsafe fn yaml_add_js_value(
     };
     if !matches!(
         header.obj_type,
-        crate::gc::GC_TYPE_ARRAY | crate::gc_object_type_pat!()
+        crate::gc_array_type_pat!() | crate::gc_object_type_pat!()
     ) {
         return 0;
     }
@@ -1146,7 +1141,7 @@ unsafe fn yaml_add_js_value(
         }
     }
 
-    if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(header.obj_type) {
         let style = if flow {
             unsafe_libyaml::YAML_FLOW_SEQUENCE_STYLE
         } else {

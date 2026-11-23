@@ -50,12 +50,12 @@ const ARMS_CAP: usize = 4;
 
 /// Whether the target's ABI lets a call pass more arguments than a body
 /// declares (wasm's `call_indirect` checks the signature).
-fn native_abi(ctx: &FnCtx<'_>) -> bool {
+pub(crate) fn native_abi(ctx: &FnCtx<'_>) -> bool {
     !ctx.target_triple.contains("wasm")
 }
 
 /// The symbol of one body of this module.
-fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
+pub(crate) fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
     if b.closure {
         Some(crate::fn_info::closure_body_symbol(
             &ctx.strings.module_prefix(),
@@ -66,6 +66,40 @@ fn body_symbol(ctx: &FnCtx<'_>, b: &FactsBody) -> Option<String> {
             .get(&b.func_id)
             .map(|f| format!("__perry_wrap_{f}"))
     }
+}
+
+/// The bodies a call through the local `id` runs, when the facts prove the
+/// local holds only them (`ElisionFacts::local_bodies`). The lowering below
+/// and the LIFE census (`life_census_sides`) resolve a value call by it.
+pub(crate) fn value_call_bodies(
+    facts: &crate::codegen::ElisionFacts,
+    id: u32,
+) -> Option<&[FactsBody]> {
+    facts.local_bodies.get(&id).map(Vec::as_slice)
+}
+
+/// The bodies a call of field `property` runs on a receiver of `class_ids`:
+/// in every class the field holds only bodies (`FactsField::fns`), sorted
+/// and without repeats. `None` when some class's field holds anything else.
+/// The caller has proven the read of the field (`wpfacts_access`).
+pub(crate) fn field_call_bodies(
+    facts: &crate::codegen::ElisionFacts,
+    class_ids: &[u32],
+    property: &str,
+) -> Option<Vec<FactsBody>> {
+    let mut bodies: Vec<FactsBody> = Vec::new();
+    for &cid in class_ids {
+        match facts.field(cid, property) {
+            Some(f) if !f.fns.is_empty() => {
+                crate::facts_consumed::used();
+                bodies.extend(f.fns.iter().cloned())
+            }
+            _ => return None,
+        }
+    }
+    bodies.sort();
+    bodies.dedup();
+    Some(bodies)
 }
 
 /// `f(args)` where the local `f` holds only the bodies `local_bodies` names.
@@ -91,7 +125,7 @@ pub(crate) fn try_lower_proven_value_call(
     {
         return Ok(None);
     }
-    let Some(bodies) = ctx.wpfacts.local_bodies.get(id).cloned() else {
+    let Some(bodies) = value_call_bodies(&ctx.wpfacts, *id).map(<[FactsBody]>::to_vec) else {
         return Ok(None);
     };
     crate::facts_consumed::used();
@@ -161,18 +195,9 @@ pub(crate) fn try_lower_proven_field_call(
     if p.guarded() || p.nullable {
         return Ok(None);
     }
-    let mut bodies: Vec<FactsBody> = Vec::new();
-    for &cid in &p.class_ids {
-        match ctx.wpfacts.field(cid, property) {
-            Some(f) if !f.fns.is_empty() => {
-                crate::facts_consumed::used();
-                bodies.extend(f.fns.iter().cloned())
-            }
-            _ => return Ok(None),
-        }
-    }
-    bodies.sort();
-    bodies.dedup();
+    let Some(bodies) = field_call_bodies(&ctx.wpfacts, &p.class_ids, property) else {
+        return Ok(None);
+    };
     let Some(symbols) = bodies
         .iter()
         .map(|b| body_symbol(ctx, b))
@@ -303,7 +328,7 @@ pub(crate) fn try_lower_proven_static_call(
 /// The call of the proven bodies `bodies` (symbols `symbols`) through the
 /// function object `callee_box`, receiver `this_bits`, over lowered
 /// arguments `args` (`hir_args` their HIR).
-fn emit_proven_call(
+pub(crate) fn emit_proven_call(
     ctx: &mut FnCtx<'_>,
     bodies: &[FactsBody],
     symbols: &[String],

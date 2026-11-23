@@ -7,7 +7,7 @@ use crate::string::StringHeader;
 
 unsafe fn text(s: *const StringHeader) -> String {
     let len = (*s).byte_len as usize;
-    let data = (s as *const u8).add(std::mem::size_of::<StringHeader>());
+    let data = crate::string::string_data(s);
     String::from_utf8_lossy(std::slice::from_raw_parts(data, len)).into_owned()
 }
 
@@ -69,4 +69,35 @@ fn tty_invalid_fd_is_a_range_error_with_own_code() {
         "\"fd\" must be a positive integer: -1",
         "ERR_INVALID_FD",
     );
+}
+
+/// A list element names a buffer by its tag alone: a Number whose bits equal
+/// a live buffer's address is a Number (ERR_INVALID_ARG_TYPE, no header read
+/// at its bits), and so is an address-shaped denormal, also a negative one.
+#[test]
+fn buffer_concat_decodes_list_elements_by_their_tag() {
+    let part = super::js_buffer_alloc(3, 9);
+    for element in [
+        f64::from_bits(part as u64),
+        f64::from_bits(0x1000_0000),
+        -f64::from_bits(0x1000_0000),
+    ] {
+        let list = crate::array::js_array_alloc(1);
+        let list = crate::array::js_array_push_f64(list, element);
+        assert_error_object(
+            || {
+                super::js_buffer_concat(list);
+            },
+            ERROR_KIND_TYPE_ERROR,
+            &format!(
+                "The \"list[0]\" argument must be an instance of Buffer or Uint8Array. Received {}",
+                crate::fs::validate::describe_received(element)
+            ),
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    let list = crate::array::js_array_alloc(1);
+    let list = crate::array::js_array_push_f64(list, crate::value::js_nanbox_pointer(part as i64));
+    let joined = super::js_buffer_concat(list);
+    assert_eq!(unsafe { super::store::length(joined as usize) }, 3);
 }

@@ -24,7 +24,7 @@ impl<'a> ArrayParts<'a> {
         let header = cell
             .header
             .as_ref()
-            .filter(|h| h.gc_type == GC_TYPE_ARRAY)
+            .filter(|h| perry_abi::gc_type_is_array!(h.gc_type))
             .ok_or_else(|| format!("realm {} is not an array", cell.name))?;
         let length = cell
             .properties
@@ -207,7 +207,7 @@ mod tests {
                 if !cell
                     .header
                     .as_ref()
-                    .is_some_and(|h| h.gc_type == GC_TYPE_ARRAY)
+                    .is_some_and(|h| perry_abi::gc_type_is_array!(h.gc_type))
                     || plan.providers.contains_key(name)
                 {
                     module.add_raw_global(format!(
@@ -221,7 +221,7 @@ mod tests {
             for cell in plan.cells.values().filter(|c| {
                 c.header
                     .as_ref()
-                    .is_some_and(|h| h.gc_type == GC_TYPE_ARRAY)
+                    .is_some_and(|h| perry_abi::gc_type_is_array!(h.gc_type))
             }) {
                 let parts = ArrayParts::from_cell(cell).unwrap();
                 let word = perry_abi::LayoutWord::new(perry_abi::LayoutRow(5000), 0, 0)
@@ -278,7 +278,7 @@ mod tests {
             for cell in plan.cells.values().filter(|c| {
                 c.header
                     .as_ref()
-                    .is_some_and(|h| h.gc_type == GC_TYPE_ARRAY)
+                    .is_some_and(|h| perry_abi::gc_type_is_array!(h.gc_type))
             }) {
                 let parts = ArrayParts::from_cell(cell).unwrap();
                 let value = parsed

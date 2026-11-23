@@ -278,6 +278,9 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         {
             true
         }
+        // I32 at rest B2: a present at-rest slot is decoded to its int32
+        // Number (`rest_elems::number_read`).
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
         Expr::LocalGet(id) => {
             local_is_number(ctx, *id)
                 || ctx.integer_locals.contains(id)
@@ -800,6 +803,8 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         {
             true
         }
+        // I32 at rest B2: the decoded word of a present at-rest slot.
+        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
         // #10777: a `Ptr<Shape>`-proven receiver whose field is in the fact's
         // `numeric_fields` already lowers to a BARE `load double` —
         // `expr/property_get.rs` and `expr/property_get/helpers.rs` emit
@@ -892,7 +897,18 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             left,
             right,
         } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
-        Expr::Call { .. } => crate::expr::facts_number::closed_number_call(ctx, e),
+        // A Number-returning `String.prototype` method on a proven string
+        // lowers to a real double whose only NaN is the canonical quiet NaN
+        // (`string_method_returns_number`), so it holds without the facts:
+        // `u8[i] = s.charCodeAt(i)` needs no ToNumber call per store.
+        Expr::Call { callee, .. } => {
+            crate::expr::facts_number::closed_number_call(ctx, e)
+                || matches!(
+                    callee.as_ref(),
+                    Expr::PropertyGet { object, property, .. }
+                        if string_method_call_returns_number(ctx, object, property)
+                )
+        }
         Expr::Binary { .. } => {
             is_numeric_expr(ctx, e)
                 && is_provably_not_bigint(ctx, e)
@@ -1012,6 +1028,19 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 || ctx.unsigned_i32_locals.contains(id);
         }
         _ => {}
+    }
+    // CLS D2: a guard-free facts read whose kind mask holds only Number,
+    // Boolean, null and undefined (`facts_number::prim_read`) is not a BigInt.
+    // So `-` `*` `/` with such an operand is a Number or a throw, and its
+    // lowering (`facts_number::try_lower_arith`, or the guarded diamond whose
+    // cold helper returns a plain double for a Number) is a canonical double.
+    if crate::expr::facts_number::prim_read(ctx, e) {
+        return true;
+    }
+    // The same for an element read the facts prove a Number or `undefined`
+    // (`facts_number::element_read`, `facts_canonical::of`).
+    if crate::expr::facts_number::element_read(ctx, e) {
+        return true;
     }
     // Already-proven primitives: a real Number/Int32, a Boolean, or a String
     // are all definitionally non-BigInt.

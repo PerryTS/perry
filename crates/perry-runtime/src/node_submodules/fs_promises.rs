@@ -932,9 +932,6 @@ pub(crate) extern "C" fn thunk_readline_Interface(
 
 fn number_to_i32(value: f64) -> i32 {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        return js.as_int32();
-    }
     if js.is_number() && value.is_finite() {
         return value as i32;
     }

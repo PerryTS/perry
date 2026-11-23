@@ -49,6 +49,7 @@ fn consume_function() -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -94,6 +95,7 @@ fn outer_function(direct_literal: bool) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -119,6 +121,7 @@ fn callback_with(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Expr {
         mutable_captures: vec![COUNT],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -507,7 +510,7 @@ fn additive_property_callback_gets_a_cold_deopting_private_body() {
     assert!(
         info.contains(
             "ptr @perry_closure_versioned_loop_callback_ts__100$trusted_boxes$versioned_loop, i32 1, i16"
-        ) && info.contains("i64 1 }")
+        ) && info.contains("i64 1, i16 0 }")
             && info.contains("ptr @perry_closure_versioned_loop_callback_ts__100$call_entry, { ptr, i32 }"),
         "{info}"
     );
@@ -749,6 +752,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             mutable_captures: vec![COUNT, CALLBACK],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

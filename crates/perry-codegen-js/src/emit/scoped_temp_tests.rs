@@ -29,6 +29,7 @@ fn function(id: FuncId, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Func
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -287,6 +288,7 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });
@@ -360,6 +362,7 @@ fn closure_scoped_temps_are_activation_local() {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

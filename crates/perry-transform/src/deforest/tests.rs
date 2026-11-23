@@ -35,6 +35,7 @@ fn detects_simple_producer() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let info = analyze_producer(&func).expect("should detect producer");
     assert_eq!(info.out_local_id, 10);
@@ -194,6 +195,7 @@ fn rejects_producer_called_inside_closure() {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -225,6 +227,7 @@ fn rejects_producer_called_inside_closure() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let mut module = Module::new("m");
@@ -282,6 +285,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let mut module = Module::new("m");
@@ -353,6 +357,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -377,6 +382,7 @@ fn deforests_producer_called_from_class_method() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -489,6 +495,7 @@ fn producer_and_plain_caller() -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let mut module = Module::new("m");
     // #8104: one fuse site so the producer clears the profitability gate —
@@ -614,6 +621,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -638,6 +646,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -708,6 +717,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
 
     let class = perry_hir::Class {
@@ -732,6 +742,7 @@ fn still_deforests_when_method_has_no_super() {
         decorators: Vec::new(),
         is_exported: false,
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         aliases: Vec::new(),
@@ -986,6 +997,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -1019,5 +1031,6 @@ fn make_simple_producer() -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }

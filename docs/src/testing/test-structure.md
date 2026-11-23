@@ -106,7 +106,8 @@ takes subjects or paths, runs cases in parallel, and judges each one the same
 way: compiled, run, and compared with Node on stdout, stderr and exit status
 after one normalization profile. The compile mode is a flag: `--mode fast`
 against a prebuilt compiler, `--mode auto` with auto-optimize, which is what
-users ship.
+users ship, and `--mode web`, which compiles with `--target web` and runs the
+emitted page under Node through `scripts/parity_web_host.cjs`.
 
 Each subject carries one snapshot per platform and mode of its cases that do
 not pass. The snapshot is checked in both directions: a new failure is red,

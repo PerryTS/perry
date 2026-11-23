@@ -149,7 +149,7 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
         // A computed key on a builtin prototype may be `inner`.
         (
             body(
-                "declare const name: string; (Array.prototype as any)[name] = function () { return 1; };",
+                "const name: string = process.argv[2]; (Array.prototype as any)[name] = function () { return 1; };",
                 "",
             ),
             false,
@@ -160,13 +160,15 @@ fn a_key_written_onto_a_builtin_prototype_is_a_member_again() {
     }
 }
 
-/// Soundness: a store into ⊤ may write any builtin prototype under its key,
-/// whatever reached unknown code: unknown code reaches every intrinsic
-/// prototype without being handed one (`Object.getPrototypeOf` of a
-/// namespace is `Function.prototype`, of the global object or of any
-/// instance's prototype chain ends at `Object.prototype`, interpreted code
-/// reads the globals) and gives it back as ⊤. The runnable twins are the
-/// ABM2 fixtures F2-F9: compiled code writes what unknown code returned.
+/// A store into ⊤ writes a builtin object under its key once that object
+/// was handed to unknown code, or the global object was (every builtin is
+/// then in reach by name). A builtin object handed gives unknown code what
+/// its fields hold: `Object.prototype` (its `__proto__`, `constructor`'s
+/// chain) for each one here. A lookup past a handed object finds the key
+/// written. One reached along a program
+/// value's prototype chain (`new Map()`, `0`, a function) is not handed
+/// (`Model::escape_body`). (Was: any builtin prototype written whatever
+/// reached unknown code.)
 /// Only the key is precise: a store into ⊤ under another key leaves `inner`
 /// absent, a computed one may be `inner`.
 #[test]
@@ -186,8 +188,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     };
     let named = "t.inner = function () { return 1; };";
     let elsewhere = "t.unrelated = function () { return 1; };";
-    let computed =
-        "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
+    let computed = "const kk: string = process.argv[3]; t[kk] = function () { return 1; };";
     for hand in [
         "0",
         "Map",
@@ -196,6 +197,8 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
         "new B()",
         "function () {}",
         "Map.prototype",
+        "Object",
+        "String.prototype",
     ] {
         // A program object's lookup ends at `Object.prototype` too (ABM2
         // fixtures FE/FF: a miscompile on main, fixed by the static rule).
@@ -210,12 +213,33 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
             // DEC 250 Q2: a class instance's or a literal's chain past the
             // program is `Object.prototype`, which takes no new key.
             let fin = other == "new A()" || other == "{ q: 1 }";
+            // Handed (above): `Object.prototype` each; the `Object`
+            // namespace only as itself (DEC 250: `Function.prototype` on its
+            // chain takes no new key) or by name from the global object.
+            let builtin = [
+                "Map",
+                "globalThis",
+                "Map.prototype",
+                "Object",
+                "String.prototype",
+            ];
+            let written = match other {
+                "Object" => ["globalThis", "Object"].contains(&hand),
+                _ => builtin.contains(&hand),
+            };
             // Unknown code handed the global object may replace the global
             // `Object` or `Map` itself (`declared_global_write`): `inner` is
             // unknown under any store. (Was: proven, the realm's value
             // trusted.)
-            let held = hand == "globalThis" && (other == "Object" || other == "new Map()");
-            for (w, want) in [(named, fin), (computed, fin), (elsewhere, !held)] {
+            // So may unknown code handed the `Object` namespace itself
+            // (`builtin_fields_sink`: every key of it may be written).
+            let held = (hand == "globalThis" && (other == "Object" || other == "new Map()"))
+                || (hand, other) == ("Object", "Object");
+            for (w, want) in [
+                (named, fin || !written),
+                (computed, fin || !written),
+                (elsewhere, !held),
+            ] {
                 let src = body(hand, w, other);
                 let pf = facts(&src);
                 assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -352,9 +376,14 @@ fn a_key_written_onto_a_namespace_is_a_member() {
             false,
         ),
         (body(fw, ""), true),
-        (body(top, ""), false),
-        (body(&format!("unknown.take(Map); {top}"), ""), false),
-        (body("", top), false),
+        // A store into ⊤ writes `Object` only once `Object` (or the global
+        // object) was handed to unknown code, before or after.
+        (body(top, ""), true),
+        (body(&format!("unknown.take(Map); {top}"), ""), true),
+        (body("", top), true),
+        (body(&format!("unknown.take(Object); {top}"), ""), false),
+        (body(top, "unknown.take(Object);"), false),
+        (body(&format!("unknown.take(globalThis); {top}"), ""), false),
     ] {
         let pf = facts(&src);
         assert_eq!(proven(&pf, "m"), want, "{src}\n{}", pf.dump_text());
@@ -416,12 +445,12 @@ fn a_runtime_global_function_called_on_the_global_object_hands_nothing() {
 /// store under another key leaves the description alone.
 #[test]
 fn a_store_into_top_replaces_a_described_member_under_its_key() {
-    let body = |w: &str| {
+    let body = |hand: &str, w: &str| {
         format!(
             "{CLASSES}
             const unknown: any = (globalThis as any)[process.argv[2]];
             class Q {{ x = 5; b = 1; }}
-            const t: any = unknown.reach(Map);
+            const t: any = unknown.reach({hand});
             {w}
             const mp = new Map<number, any>(); mp.set(1, new B());
             const g = mp.get(1);
@@ -436,17 +465,62 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
             .filter(|s| s.key == "b")
             .all(|s| !s.top && matches!(s.verdict, Verdict::T0Mono | Verdict::T0Set))
     };
-    let pf = facts(&body("t.unrelated = function () { return new Q(); };"));
+    let pf = facts(&body(
+        "Map",
+        "t.unrelated = function () { return new Q(); };",
+    ));
     assert!(site_b(&pf), "{}", pf.dump_text());
-    for w in [
-        "t.get = function () { return new Q(); };",
-        "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };",
-    ] {
-        let pf = facts(&body(w));
+    let computed = "const kk: string = process.argv[3]; t[kk] = function () { return new Q(); };";
+    // (hand, write, dynamic code, open)
+    let cases = [
+        (
+            "Map",
+            "t.get = function () { return new Q(); };".to_string(),
+            false,
+            false,
+        ),
+        ("Map", computed.to_string(), false, false),
+        ("Map, globalThis", computed.to_string(), false, true),
+        // `Function('return this')()` folds to the global object (HIR,
+        // `bare_builtins`): compiled code holds it; unknown code holds it
+        // once it is handed over.
+        (
+            "Map",
+            format!("Function('return this')(); {computed}"),
+            false,
+            false,
+        ),
+        (
+            "Map",
+            format!("unknown.take(Function('return this')()); {computed}"),
+            false,
+            true,
+        ),
+    ]
+    .into_iter()
+    .chain(
+        // Control (DEC 150): interpreted code holds the global object, so
+        // a program with dynamic code has handed it to unknown code
+        // (`interpreted_code_runs` sets `global_in_top`).
+        ["eval(process.argv[4]);", "new Function(process.argv[4])();"]
+            .map(|d| ("Map", format!("{d} {computed}"), true, true)),
+    );
+    for (hand, w, dynamic, open) in cases {
+        let w = w.as_str();
+        // The driver links the interpreter for a program with dynamic code.
+        let pf = if dynamic {
+            facts_with(&body(hand, w), interp_cfg())
+        } else {
+            facts(&body(hand, w))
+        };
         // DEC 250: replacing `Map.prototype.get` is a TypeError, the read is
-        // final; a computed key may still replace the global `Map` binding
-        // (global writes stay open, DEC 250 12:4xZ ruling): `mp` holds ⊤.
-        assert_eq!(site_b(&pf), !w.contains("kk"), "{w}\n{}", pf.dump_text());
+        // final. A computed key may still replace the global `Map` binding
+        // (global writes stay open, DEC 250 12:4xZ ruling) once the store
+        // into ⊤ may write the global object: unknown code was handed it
+        // (`global_in_top`), as in `a_store_into_top_writes_the_intrinsics_under_its_key`.
+        // ⊤ is no builtin function that may be the global object (the HIR
+        // global sentinel is the global object, not a function).
+        assert_eq!(site_b(&pf), !open, "{hand} {w}\n{}", pf.dump_text());
     }
 }
 

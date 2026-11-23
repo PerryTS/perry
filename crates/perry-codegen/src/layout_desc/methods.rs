@@ -231,6 +231,7 @@ mod tests {
             init_count: own.len() as u32,
             discriminant: 0,
             variants: vec![],
+            born_with_keys: false,
         };
         let mut layouts = ProgramLayouts::default();
         let mut eligible = family.clone();

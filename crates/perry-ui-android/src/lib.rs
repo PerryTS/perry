@@ -1,3 +1,4 @@
+#![feature(linkage)]
 #![cfg(target_os = "android")]
 // The crate's pre-existing runtime symbol declarations use caller-specific
 // Rust representations for the same C ABI values. Normalizing that ABI is a
@@ -241,6 +242,11 @@ extern "C" {
 
 // js_stdlib_init_dispatch and js_stdlib_process_pending — now provided by perry-runtime
 
+#[cfg(not(test))]
+extern "C" {
+    fn perry_host_keeps_thread_after_main();
+}
+
 /// Called from the native thread to run the compiled TypeScript entry point.
 /// This wraps the compiler-generated `main()` function as a JNI method on PerryBridge,
 /// so the Activity doesn't need its own native method (which would require package-specific JNI names).
@@ -301,21 +307,21 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativeMain(
             b"PerryJNI\0".as_ptr(),
             b"nativeMain: calling main()\0".as_ptr(),
         );
+        // The UI thread outlives main(): keep its I/O agent (fetch, timers)
+        // alive instead of shutting it down in main()'s exit epilogue.
+        perry_host_keeps_thread_after_main();
         main();
         __android_log_print(
             3,
             b"PerryJNI\0".as_ptr(),
-            b"nativeMain: main() returned, parking thread\0".as_ptr(),
+            b"nativeMain: main() returned\0".as_ptr(),
         );
     }
 
-    // Park this thread forever — do NOT let it exit.
-    // Module-level arrays/objects are allocated on this thread's arena.
-    // If the thread exits, the arena's Drop frees all blocks, turning
-    // every module-level pointer into a dangling reference. The UI thread's
-    // pump ticks call into compiled functions (getLevelInfo etc.) that read
-    // these pointers — segfault if the arena was freed.
-    loop {
-        std::thread::park();
-    }
+    // main() runs on the Activity's UI thread (PerryActivity.startNative), the
+    // same thread every later callback, pump tick and GC step uses, so the
+    // runtime state main() set up (arena, shadow stack, agent pointer block)
+    // stays the state JS sees. Return to the Looper: the UI thread lives as
+    // long as the process, so the arena that holds module-level values is
+    // never torn down underneath them.
 }

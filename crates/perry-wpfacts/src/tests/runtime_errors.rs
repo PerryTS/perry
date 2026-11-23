@@ -14,7 +14,8 @@ fn recv(pf: &ProgramFacts, key: &str) -> (bool, Vec<String>) {
 }
 
 fn has(rs: &[String], name: &str) -> bool {
-    rs.iter().any(|r| r.ends_with(&format!(":{name}")) || r == name)
+    rs.iter()
+        .any(|r| r.ends_with(&format!(":{name}")) || r == name)
 }
 
 /// The fixture: no ⊤ in the program. The caught value of a failed
@@ -38,7 +39,10 @@ fn a_caught_runtime_error_is_the_runtime_error_object() {
     let dump = pf.dump_text();
     let (top, rs) = recv(&pf, "message");
     assert!(!top, "catch receiver is ⊤:\n{dump}");
-    assert!(has(&rs, "runtime:Error"), "no runtime error in {rs:?}:\n{dump}");
+    assert!(
+        has(&rs, "runtime:Error"),
+        "no runtime error in {rs:?}:\n{dump}"
+    );
     assert!(tmpl(&pf, "P").escape.is_none(), "P escaped:\n{dump}");
     assert!(
         matches!(site(&pf, "a").verdict, Verdict::T0Mono | Verdict::T0Set),
@@ -62,7 +66,11 @@ try { f(process.argv.length); } catch (e) { console.log((e as any).b); }
     ));
     let (top, rs) = recv(&pf, "b");
     assert!(!top, "catch receiver is ⊤: {rs:?}\n{}", pf.dump_text());
-    assert!(has(&rs, "Q") && has(&rs, "runtime:Error"), "{rs:?}\n{}", pf.dump_text());
+    assert!(
+        has(&rs, "Q") && has(&rs, "runtime:Error"),
+        "{rs:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// A program throw reaches the catch through the call that runs it (the bind
@@ -78,7 +86,11 @@ try { g(process.argv.length); } catch (e) { console.log((e as any).b); }
 "#,
     );
     let (top, rs) = recv(&pf, "b");
-    assert!(!top && has(&rs, "Q") && has(&rs, "runtime:Error"), "{rs:?}\n{}", pf.dump_text());
+    assert!(
+        !top && has(&rs, "Q") && has(&rs, "runtime:Error"),
+        "{rs:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// Named control: a try body that runs unknown code, directly or through a
@@ -219,7 +231,13 @@ try { mk(process.argv.length); } catch (e) { console.log((e as any).a); }
     );
     for s in pf.sites.iter().filter(|s| s.key == "a" || s.key == "bb") {
         let want = if s.key == "a" { "A" } else { "B" };
-        assert!(s.top || has(&s.receivers, want), "{} {:?}\n{}", s.key, s.receivers, pf.dump_text());
+        assert!(
+            s.top || has(&s.receivers, want),
+            "{} {:?}\n{}",
+            s.key,
+            s.receivers,
+            pf.dump_text()
+        );
     }
 }
 
@@ -239,7 +257,11 @@ const q = new Q();
 console.log(q.b);
 "#,
     ));
-    assert!(tmpl(&pf, "Q").escape.is_some(), "Q did not escape:\n{}", pf.dump_text());
+    assert!(
+        tmpl(&pf, "Q").escape.is_some(),
+        "Q did not escape:\n{}",
+        pf.dump_text()
+    );
 }
 
 /// A getter runs on a program load: what it throws reaches the catch
@@ -270,5 +292,9 @@ const q = new Q();
 console.log(q.b);
 "#,
     ));
-    assert!(tmpl(&pf, "Q").escape.is_some(), "Q did not escape:\n{}", pf.dump_text());
+    assert!(
+        tmpl(&pf, "Q").escape.is_some(),
+        "Q did not escape:\n{}",
+        pf.dump_text()
+    );
 }

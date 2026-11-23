@@ -22,7 +22,7 @@ fn graph(names: &[&str], edges: &[(usize, usize)]) -> Graph {
         .iter()
         .map(|n| (n.obj.clone(), n.names[0].clone()))
         .collect();
-    Graph::new(nodes, globals).unwrap()
+    Graph::new(nodes, globals, Vec::new()).unwrap()
 }
 
 #[test]
@@ -351,4 +351,19 @@ fn a_local_body_behind_only_a_program_call_edge_is_not_a_coverage_root() {
     let rules=crate::load_rules("js exact js_dispatcher -- indirect edge enters program code, including local function values\nthrow prefix perry_runtime::exception::throw_leaf:: -- test native transport leaves\n").unwrap();
     let result = classify(&g, &rules, None).unwrap();
     assert_eq!(result.table["runtime_entry"].throw_class, ThrowClass::None);
+}
+
+#[test]
+fn an_indirect_all_exemption_without_a_caller_is_reported_unused() {
+    let rules = crate::load_rules(
+        "indirect-all exact js_dispatcher -- fixture dispatcher calls only native leaves\n",
+    )
+    .unwrap();
+    let unused = |indirect_calls| {
+        let mut g = graph(&["js_dispatcher"], &[]);
+        g.nodes[0].indirect_calls = indirect_calls;
+        classify(&g, &rules, None).unwrap().stats.unused_exemptions
+    };
+    assert!(unused(1).is_empty());
+    assert_eq!(unused(0), [rules[0].description()]);
 }

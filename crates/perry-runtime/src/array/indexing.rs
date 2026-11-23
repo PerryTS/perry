@@ -20,6 +20,7 @@ pub(crate) use proto_chain::{
     array_custom_prototype, array_holes_are_absent, array_spec_get, array_spec_has_index,
 };
 use proto_chain::{array_object_proto_index_owner, ArrayCustomProto};
+pub(crate) use read_cold::perry_array_read_cold_shared;
 
 const MAX_DENSE_ARRAY_GROW_LENGTH: u32 = 1_000_000;
 
@@ -75,7 +76,9 @@ pub(crate) fn object_prototype_has_index_flag() -> bool {
 pub(crate) fn note_array_index_write(arr: usize) {
     if arr != 0 && arr == array_prototype_addr() && !ARRAY_PROTO_HAS_INDEX.load(Ordering::Relaxed) {
         // DEC 250 (i): the program never adds an index to %Array.prototype%.
-        crate::object::builtin_proto::refuse_index_add(crate::object::builtin_proto::BuiltinProto::Array);
+        crate::object::builtin_proto::refuse_index_add(
+            crate::object::builtin_proto::BuiltinProto::Array,
+        );
         ARRAY_PROTO_HAS_INDEX.store(true, Ordering::Relaxed);
         invalidate_array_index_fast_path();
     }
@@ -209,6 +212,10 @@ pub(crate) fn array_get_property_by_key(
                     return indexed;
                 }
             }
+        } else {
+            // No allocation at this word: `null[k]` / `undefined[k]` behind
+            // an Array annotation (masked 0x2 / 0x1) throws node's TypeError.
+            nullish_receiver_key_get(arr, key);
         }
     }
     let value =
@@ -449,6 +456,12 @@ pub extern "C" fn js_array_get_f64_unchecked(arr: *const ArrayHeader, index: u32
         if crate::array::subclass::array_object_receiver(arr).is_some() {
             return js_array_get_f64(arr, index);
         }
+        if let Some(value) = non_array_receiver_index_get(arr, index) {
+            return value;
+        }
+        // `null[i]` / `undefined[i]` behind an Array annotation arrives as the
+        // masked word 0x2 / 0x1: node's TypeError. Asked on this arm only.
+        nullish_receiver_index_get(arr, index);
         return f64::NAN;
     }
     let arr = cleaned;
@@ -527,7 +540,7 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
     // path below would otherwise re-derive three times.
     if let Some(header) = crate::value::addr_class::pointer_value_header(arr as u64) {
         let raw = ((arr as u64) & crate::value::POINTER_MASK) as *const ArrayHeader;
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && unsafe { (*raw).length <= (*raw).capacity }
         {
@@ -685,6 +698,13 @@ pub extern "C" fn js_array_get_f64(arr: *const ArrayHeader, index: u32) -> f64 {
         if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
             return crate::array::subclass::array_object_index_get(recv, index);
         }
+        // Any other object behind a `T[]` site: its ordinary [[Get]].
+        if let Some(value) = non_array_receiver_index_get(arr, index) {
+            return value;
+        }
+        // `null[i]` / `undefined[i]` behind an Array annotation arrives as the
+        // masked word 0x2 / 0x1: node's TypeError. Asked on this arm only.
+        nullish_receiver_index_get(arr, index);
         return f64::NAN;
     }
     let arr = cleaned;
@@ -797,10 +817,12 @@ pub(crate) fn array_prototype_has_index_flag() -> bool {
 /// Use when the codegen KNOWS the pointer is a plain Array (not Buffer).
 #[no_mangle]
 pub extern "C" fn js_array_set_f64_unchecked(arr: *mut ArrayHeader, index: u32, value: f64) {
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        non_array_receiver_index_set(arr, index, value, false);
         return;
     }
+    let arr = cleaned;
     // SAFETY: the clean above resolved this exact live head and no safepoint
     // has intervened.
     let flags = unsafe { array_object_flags_resolved(arr) };
@@ -893,10 +915,12 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
     // slot — demote it to shared so a later `s += x` doesn't mutate the stored
     // element in place. No-op for SSO / non-string.
     crate::string::js_string_addref_if_heap_string(value);
-    let arr = clean_arr_ptr_mut(arr);
-    if arr.is_null() {
+    let cleaned = clean_arr_ptr_mut(arr);
+    if cleaned.is_null() {
+        non_array_receiver_index_set(arr, index, value, false);
         return;
     }
+    let arr = cleaned;
     // #10694: a `GC_TYPE_ARRAY` header can never be a registered buffer or
     // typed array — every registration carries its own GC object type — so a
     // plain array must not pay the thread-local registry probes. The
@@ -908,10 +932,10 @@ pub extern "C" fn js_array_set_f64(arr: *mut ArrayHeader, index: u32, value: f64
     if super::header::receiver_may_be_registered_exotic(arr) {
         // Check if this is actually a buffer (Uint8Array) — write individual bytes
         if crate::buffer::is_registered_buffer(arr as usize) {
-            crate::buffer::js_buffer_set(
+            crate::buffer::js_buffer_set_value(
                 arr as *mut crate::buffer::BufferHeader,
                 index as i32,
-                value as i32,
+                value,
             );
             return;
         }
@@ -1080,7 +1104,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let mut raw = raw;
     let mut header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*header).obj_type) {
         return None;
     }
     if (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {
@@ -1099,7 +1123,7 @@ pub(crate) unsafe fn try_strict_dense_number_store(
             return None;
         }
         let target_header = (target - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-        if (*target_header).obj_type != crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_not_array!((*target_header).obj_type)
             || (*target_header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
         {
             return None;
@@ -1208,7 +1232,7 @@ pub(crate) unsafe fn try_strict_dense_pointer_overwrite(
     }
     let raw = super::honest_word::arena_object_of_word(arr as u64)?;
     let header = (raw - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-    if (*header).obj_type != crate::gc::GC_TYPE_ARRAY
+    if crate::gc_type_is_not_array!((*header).obj_type)
         || (*header).gc_flags & crate::gc::GC_FLAG_FORWARDED != 0
     {
         return None;
@@ -1321,6 +1345,10 @@ fn js_array_set_f64_extend_strict_impl(
         // the policy, so a sloppy assignment skips it and keeps
         // `js_array_set_f64_extend`'s silent contract.
         if strict {
+            // The throwing [[Set]] of an object that is no Array at all.
+            if clean.is_null() && non_array_receiver_index_set(arr, index, value, true) {
+                return arr;
+            }
             array_strict_index_write_guard(arr, index);
         }
         return js_array_set_f64_extend(arr, index, value);
@@ -1399,7 +1427,7 @@ pub(crate) fn try_strict_dense_index_set(
     if number.is_some() {
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(arr as usize) }
         {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
                 && header._reserved & crate::gc::OBJ_FLAG_FROZEN == 0
                 && !unsafe { array_has_element_descriptors_resolved(arr) }
@@ -1553,6 +1581,12 @@ pub extern "C" fn js_array_set_f64_extend(
         }
         if let Some(recv) = crate::array::subclass::array_object_receiver(arr) {
             crate::array::subclass::array_object_index_set(recv, index, value);
+            return arr;
+        }
+        // Any other object behind a `T[]` site: its ordinary [[Set]]. The
+        // caller writes the result back into its binding, so the receiver
+        // itself is returned, never a fresh empty Array in its place.
+        if non_array_receiver_index_set(arr, index, value, false) {
             return arr;
         }
         return js_array_alloc(0);

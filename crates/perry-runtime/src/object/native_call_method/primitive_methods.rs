@@ -72,21 +72,7 @@ unsafe fn class_receiver_arm(
 ) -> Option<f64> {
     let refreshed_args = || crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
     let _ = (root_scope, &refreshed_args);
-    if crate::object::class_prototype_ref_id(object).is_some() {
-        if let Some((func_ptr, param_count, has_synthetic_arguments, has_rest)) =
-            crate::object::class_registry::class_method_slot_target(class_id, method_name)
-        {
-            return Some(crate::object::class_registry::call_vtable_method(
-                func_ptr,
-                object.to_bits() as i64,
-                args_ptr,
-                args_len,
-                param_count,
-                has_synthetic_arguments,
-                has_rest,
-            ));
-        }
-    } else if class_id != 0
+    if class_id != 0
         && crate::object::class_registry::lookup_static_method_in_chain(class_id, method_name)
             .is_some()
     {

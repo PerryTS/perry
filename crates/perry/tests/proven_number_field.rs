@@ -81,7 +81,10 @@ fn fmul_of_plain_load(body: &str) -> bool {
         let Some(rest) = line.split_once("= fmul double ").map(|(_, r)| r) else {
             continue;
         };
-        for operand in rest.split(',').map(|o| o.trim().split_whitespace().next().unwrap_or("")) {
+        for operand in rest
+            .split(',')
+            .map(|o| o.trim().split_whitespace().next().unwrap_or(""))
+        {
             if !operand.starts_with('%') {
                 continue;
             }

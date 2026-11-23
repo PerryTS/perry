@@ -83,6 +83,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(check_stmt)
                     && catch.as_ref().is_none_or(|c| c.body.iter().all(check_stmt))
@@ -270,6 +271,11 @@ fn collect_function_graph(
     if visited.contains(&id) {
         return true;
     }
+    // Active and completed nodes share the discovery budget. Checking before
+    // descent bounds both graph work and recursion depth, even for long chains.
+    if visiting.len() + visited.len() >= MAX_CROSS_MODULE_FUNCTION_GRAPH {
+        return false;
+    }
     if !visiting.insert(id) {
         return false;
     }
@@ -293,15 +299,12 @@ fn collect_function_graph(
         // #10554: a dependency pulled in only because the body reads it as a
         // VALUE (`Expr::FuncRef`) -- not merely calls it -- must not be
         // bundled as a private clone when it is ALSO independently exported.
-        // `dependency != id` lets a function's own export status not block
-        // its (already-permitted) self-recursion.
+        // A self-reference reaches the cycle check rather than being refused
+        // merely because the root is exported.
         if dependency != id && exported_ids.contains(&dependency) {
             return false;
         }
         if !collect_function_graph(dependency, functions, visiting, visited, out, exported_ids) {
-            return false;
-        }
-        if visited.len() > MAX_CROSS_MODULE_FUNCTION_GRAPH {
             return false;
         }
     }
@@ -473,6 +476,7 @@ fn recursive_stmt_count(stmts: &[Stmt]) -> usize {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().map(count).sum::<usize>()
                     + catch
@@ -548,6 +552,7 @@ fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, visit);
                 if let Some(catch) = catch {
@@ -702,6 +707,7 @@ pub(crate) fn localize_cross_module_functions(
                 type_only: false,
                 runtime_erased: false,
                 is_dynamic: false,
+                is_deferred: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -1003,6 +1009,7 @@ fn walk_stmts_mut(stmts: &mut [Stmt], visit: &mut impl FnMut(&mut Expr)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts_mut(body, visit);
                 if let Some(catch) = catch {
@@ -1235,6 +1242,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 body.iter().all(|s| check_stmt(s, extern_names))
                     && catch
@@ -1380,3 +1388,7 @@ pub fn body_references_class_in_set(stmts: &[Stmt], set: &HashSet<String>) -> bo
     });
     referenced
 }
+
+#[cfg(test)]
+#[path = "cross_module_tests.rs"]
+mod graph_budget_tests;

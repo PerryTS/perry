@@ -279,7 +279,7 @@ pub(crate) fn link_parent(value: f64, parent: f64) -> f64 {
         _ => {}
     }
     if module == "repl" && name == "Recoverable" {
-        let parent = crate::object::js_get_global_this_builtin_value(b"SyntaxError".as_ptr(), 11);
+        let parent = crate::object::builtin_value_core("SyntaxError");
         return link_parent(ctor.get_nanbox_f64(), parent);
     }
     if let Some(parent_value) = native_parent(module, name) {
@@ -950,12 +950,7 @@ extern "C" fn default_max_listeners_set(
     value: f64,
 ) -> f64 {
     let js = JSValue::from_bits(value.to_bits());
-    let value = if js.is_int32() {
-        js.as_int32() as f64
-    } else {
-        value
-    };
-    if (!js.is_number() && !js.is_int32()) || value.is_nan() || value < 0.0 {
+    if !js.is_number() || value.is_nan() || value < 0.0 {
         crate::fs::validate::throw_range_error_with_code(
             "The value of defaultMaxListeners is out of range. It must be a non-negative number.",
         );
@@ -1103,7 +1098,7 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
     // laziness avoids eagerly materializing EventEmitter.prototype just to
     // link a child which the program may never request.
     let async_get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:events.EventEmitter.EventEmitterAsyncResource.<get>", spec = {name = "lazyEventEmitterAsyncResource"}, emit = metadata(realm_event_resource_get_name))] export crate::object::native_module::constructor_shapes::event_async_resource_get, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:events.EventEmitter.EventEmitterAsyncResource.<get>", spec = {name = "lazyEventEmitterAsyncResource"}, emit = metadata(realm_event_resource_get_name))] export crate::object::native_module::constructor_shapes::event_async_resource_get, 0; with_name("get EventEmitterAsyncResource"), with_declared(0)),
         0,
     ));
     async_get.with_mut_ptr(|p| {
@@ -1135,12 +1130,12 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         (
             "defaultMaxListeners",
             10.0,
-            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<set>", provider = closure, capture = [ref("node:events.EventEmitter.defaultMaxListeners.<get>")])] export crate::object::native_module::constructor_shapes::default_max_listeners_set, 1; with_name("set defaultMaxListeners"), with_declared(1)),
         ),
         (
             "captureRejections",
             f64::from_bits(crate::value::TAG_FALSE),
-            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_declared(1)),
+            crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<set>", provider = closure, capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_set, 1; with_name("set captureRejections"), with_declared(1)),
         ),
     ] {
         // node's `kCapture`: the key `EventEmitter.prototype`'s layout lists
@@ -1156,9 +1151,9 @@ pub(crate) fn install_event_emitter_statics(value: f64) -> f64 {
         };
         let get = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
             if name == "captureRejections" {
-                crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<get>", capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.captureRejections.<get>", capture = [ref("node:events.EventEmitter"), symbol(NP_SYMBOL_K_CAPTURE)])] export crate::object::native_module::constructor_shapes::capture_rejections_get, 0; with_name("get captureRejections"), with_declared(0))
             } else {
-                crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<get>", capture = [number_property])] export crate::object::native_module::constructor_shapes::default_max_listeners_get, 0; with_declared(0))
+                crate::fn_info!(#[realm("node:events.EventEmitter.defaultMaxListeners.<get>", capture = [number_property])] export crate::object::native_module::constructor_shapes::default_max_listeners_get, 0; with_name("get defaultMaxListeners"), with_declared(0))
             },
             if capture_key.is_some() { 2 } else { 1 },
         ));

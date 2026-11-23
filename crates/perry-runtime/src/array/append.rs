@@ -83,7 +83,7 @@ unsafe fn admitted_append(receiver: f64, index: f64) -> Option<*mut ArrayHeader>
     }
     let raw = (bits & crate::value::POINTER_MASK) as usize;
     let header = crate::value::addr_class::try_read_gc_header(raw)?;
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return None;
     }
     let arr = if header.gc_flags & crate::gc::GC_FLAG_FORWARDED != 0 {

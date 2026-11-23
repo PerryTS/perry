@@ -19,7 +19,15 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
             .as_ref()
             .map_or("None".into(), |m| format!("Some({m:?})"));
         let effects = crate::realm::emit::effects("crate::realm_manifest::", &d.effects);
-        writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap()).unwrap();
+        let own = format!(
+            "&[{}]",
+            d.properties
+                .iter()
+                .map(|p| p.emit_own("crate::realm_manifest::"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        );
+        writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects}, own: {own}, proto: {:?} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap(),d.prototype).unwrap();
     }
     rust.push_str("];\n");
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;

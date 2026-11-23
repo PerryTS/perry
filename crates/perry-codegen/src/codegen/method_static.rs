@@ -78,7 +78,9 @@ pub(in crate::codegen) fn compile_static_method(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let m = crate::scope_env::compact_root_slots(
-            crate::collectors::collect_pointer_typed_locals(&f.params, &f.body, &flat_const_ids),
+            cross_module
+                .closure_writes
+                .pointer_locals(&f.params, &f.body, &flat_const_ids),
             &cross_module.scope_map,
         );
         lf.enable_shadow_frame(m.len() as u32 + 1);
@@ -197,6 +199,7 @@ pub(in crate::codegen) fn compile_static_method(
     let flat_const_ids: std::collections::HashSet<u32> =
         cross_module.flat_const_arrays.keys().copied().collect();
     // `--opt-report` (#6952) attribution scope; no-op when off.
+    let _life_scope = crate::collectors::life_census::compiling(Some(f.id));
     let _opt_report_scope = crate::opt_report::enter_region(
         &format!("{}.{} (static)", class.name, f.name),
         crate::opt_report::RegionKind::Method,
@@ -216,6 +219,7 @@ pub(in crate::codegen) fn compile_static_method(
         &cross_module.module_dispatch,
         // #9363: a method body reads the same module-scope views.
         &cross_module.module_global_proven_types,
+        crate::codegen::facts_int32_locals::none(),
     );
     crate::codegen::helpers::drop_number_local_root_slots(
         &mut shadow_slot_map,
@@ -247,10 +251,15 @@ pub(in crate::codegen) fn compile_static_method(
     };
 
     let mut ctx = FnCtx {
+        for_in_facts: Default::default(),
+        for_in_snapshots: Default::default(),
+        for_in_keys_locals: Default::default(),
+        for_in_lens: Default::default(),
         numeric_order_functions: cross_module.numeric_order_functions,
         numeric_order_closures: cross_module.numeric_order_closures,
         numeric_order_ready: Default::default(),
         program_has_worker: cross_module.program_has_worker,
+        program_has_tla: cross_module.program_has_tla,
         program_has_thread_agents: cross_module.program_has_thread_agents,
         func: lf,
         module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -281,6 +290,7 @@ pub(in crate::codegen) fn compile_static_method(
         current_block: 0,
         discard_expr_value: false,
         discard_this_expr: false,
+        snap_lowering: Default::default(),
         literal_chunk_fill: false,
         truthy_call_result_requested: false,
         pending_truthy_call_result: None,
@@ -298,6 +308,8 @@ pub(in crate::codegen) fn compile_static_method(
         wpfacts_sites: 0,
         wpfacts_tested: Vec::new(),
         wpfacts_off: false,
+        rest_b1: None,
+        rest_counter: Vec::new(),
         inline_new_leaf: Vec::new(),
         ctor_receiver: None,
         ctor_receiver_selector: None,
@@ -309,6 +321,7 @@ pub(in crate::codegen) fn compile_static_method(
         inline_ctor_return: Vec::new(),
         recv_run: None,
         recv_run_store_member: false,
+        fn_ctor_run: None,
         new_target_stack: Vec::new(),
         // A static method's `this` is the class constructor (bound above to
         // the class-ref slot). `class_stack` carries the class name so
@@ -355,7 +368,7 @@ pub(in crate::codegen) fn compile_static_method(
         string_accumulator_locals: &cross_module.string_accumulator_locals,
         contents_stable_bindings: &cross_module.contents_stable_bindings,
         loop_pushed_arrays: &cross_module.loop_pushed_arrays,
-        pushed_array_birth: false,
+        pushed_array_birth: 0,
         string_length_read_of: None,
         closure_rest_params,
         local_closure_func_ids: HashMap::new(),
@@ -379,6 +392,7 @@ pub(in crate::codegen) fn compile_static_method(
         constructed_kind_locals: HashMap::new(),
         namespace_imports: &cross_module.namespace_imports,
         namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+        deferred_namespace_imports: &cross_module.deferred_namespace_imports,
         namespace_member_prefixes: &cross_module.namespace_member_prefixes,
         namespace_member_nested: &cross_module.namespace_member_nested,
         cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -414,6 +428,7 @@ pub(in crate::codegen) fn compile_static_method(
         not_bigint_locals: native_facts.not_bigint_locals(),
         number_by_construction_locals: native_facts.number_by_construction_locals(),
         facts_number_locals: crate::codegen::facts_number_locals::none(),
+        facts_int32_locals: crate::codegen::facts_int32_locals::none(),
         unsigned_i32_locals: native_facts.unsigned_i32_locals(),
         // Conservative: treat every slot as possibly-bound (param binds are
         // emitted before FnCtx exists here), so clears never get skipped.
@@ -426,6 +441,7 @@ pub(in crate::codegen) fn compile_static_method(
         shadow_slot_clears_after_stmt,
         arena_state_slot: None,
         arena_state_lazy: false,
+        agent_block: None,
         class_keys_slots: HashMap::new(),
         class_shape_slots: HashMap::new(),
         class_header_images: HashMap::new(),
@@ -439,6 +455,9 @@ pub(in crate::codegen) fn compile_static_method(
         record_packed_admissions: std::collections::HashMap::new(),
         numeric_accumulator_f64_slots: HashMap::new(),
         receiver_descriptors: Default::default(),
+        fn_base: Default::default(),
+        held_lens: Vec::new(),
+        loop_polls: Default::default(),
         poll_stride_counter_slot: None,
         deferred_integer_update_accumulators: HashSet::new(),
         local_slot_reps: HashMap::new(),
@@ -465,6 +484,9 @@ pub(in crate::codegen) fn compile_static_method(
         ),
         spec_i32_params: std::collections::HashSet::new(),
         spec_bool_params: std::collections::HashSet::new(),
+        sig_return: None,
+        sig_record_return: None,
+        typed_methods: &cross_module.typed_methods,
         typed_element_locals: std::collections::HashSet::new(),
         create_families: Default::default(),
         class_guard_window: None,
@@ -494,6 +516,7 @@ pub(in crate::codegen) fn compile_static_method(
         scalar_slot_shadow_slots: std::collections::HashMap::new(),
         scalar_ctor_target: Vec::new(),
         non_escaping_news: native_facts.non_escaping_news().clone(),
+        life_claims: native_facts.life_claims(),
         non_escaping_new_used_fields: native_facts.non_escaping_new_used_fields().clone(),
         non_escaping_arrays: native_facts.non_escaping_arrays().clone(),
         non_escaping_array_used_indices: native_facts.non_escaping_array_used_indices().clone(),
@@ -503,6 +526,10 @@ pub(in crate::codegen) fn compile_static_method(
         fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
         suffix_cursor_locals: native_facts.suffix_cursor_locals().clone(),
         suffix_cursors: std::collections::HashMap::new(),
+        utf16_cursors: crate::collectors::unrebound_params(&f.params, &f.body)
+            .into_iter()
+            .map(|id| (id, None))
+            .collect(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()
@@ -549,7 +576,6 @@ pub(in crate::codegen) fn compile_static_method(
         native_arena_owner_aliases: HashMap::new(),
         native_arena_ambiguous_owner_aliases: HashSet::new(),
         disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-        program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
         module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
         min_length_bounds: HashMap::new(),
         bounded_buffer_index_pairs: Vec::new(),
@@ -557,6 +583,8 @@ pub(in crate::codegen) fn compile_static_method(
         buffer_hazard_reasons: HashMap::new(),
         native_i32_aliases: HashMap::new(),
         int_range_aliases: HashMap::new(),
+        int32_shadow_plan: std::collections::HashSet::new(),
+        int32_shadows: std::collections::HashMap::new(),
         int_range_facts: Vec::new(),
         next_loop_proof_scope_id: 0,
         nonnegative_integer_locals: HashSet::new(),
@@ -576,6 +604,10 @@ pub(in crate::codegen) fn compile_static_method(
     // #10812: throw a catchable RangeError before the native stack runs out.
     crate::expr::numeric_order::parameters_ready(&mut ctx, &f.params);
     let stack_guard_site = crate::expr::stack_guard::emit_stack_guard(&mut ctx);
+    crate::expr::agent_ptr::begin_activation(&mut ctx);
+    if !f.is_async && !f.is_generator && !generator_owner {
+        ctx.method_home_local = crate::expr::super_method::elided_method_home(&ctx, &f.body);
+    }
     if f.is_async {
         stmt::lower_async_rejecting_stmts(&mut ctx, &f.body).with_context(|| {
             format!("lowering async body of static '{}::{}'", class.name, f.name)
@@ -597,6 +629,7 @@ pub(in crate::codegen) fn compile_static_method(
             ctx.block().ret(DOUBLE, &undef);
         }
     }
+    crate::expr::agent_ptr::finish_activation(&mut ctx);
     crate::expr::stack_guard::finish_stack_guard(&mut ctx, stack_guard_site);
     let artifacts = take_lowered_fn_artifacts(&mut ctx);
     drop(ctx);

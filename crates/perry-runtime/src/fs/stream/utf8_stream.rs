@@ -29,9 +29,7 @@ fn throw_utf8_invalid_arg_value(name: &str, value: impl std::fmt::Display, reaso
 
 fn js_number_value(value: f64) -> Option<f64> {
     let js = JSValue::from_bits(value.to_bits());
-    if js.is_int32() {
-        Some(js.as_int32() as f64)
-    } else if js.is_number() || value.is_finite() {
+    if js.is_number() || value.is_finite() {
         Some(value)
     } else {
         None

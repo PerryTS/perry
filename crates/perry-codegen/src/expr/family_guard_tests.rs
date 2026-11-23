@@ -90,6 +90,8 @@ fn tm1_facts(m: &Module) -> crate::codegen::ProgramFactsView {
         fns: Vec::new(),
         classes: Vec::new(),
         nullable: false,
+        rep: crate::codegen::FactsRep::Boxed,
+        rest: false,
     };
     let mut elision = ElisionFacts::default();
     elision.locals.insert(
@@ -103,6 +105,7 @@ fn tm1_facts(m: &Module) -> crate::codegen::ProgramFactsView {
     elision.classes.insert(
         class.id,
         FactsClass {
+            absent: Vec::new(),
             display: class.name.clone(),
             fixed_layout: true,
             fields: vec![field],
@@ -260,6 +263,7 @@ fn tower_facts(m: &Module) -> crate::codegen::ProgramFactsView {
     elision.classes.insert(
         class.id,
         FactsClass {
+            absent: Vec::new(),
             display: class.name.clone(),
             fixed_layout: true,
             fields: Vec::new(),

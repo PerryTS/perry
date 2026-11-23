@@ -14,6 +14,7 @@ pub(super) struct BindingOrigin {
     /// `Some(m)` when the binding is the module namespace of `m` rather than
     /// a plain value (`import * as X` / `export * as X`).
     pub(super) namespace_of: Option<String>,
+    pub(super) namespace_deferred: bool,
 }
 
 /// True when `module` actually defines `name`, as opposed to importing or
@@ -65,7 +66,10 @@ fn find_import_binding(
                     ));
                 }
                 ImportSpecifier::Namespace { local } if local == name => {
-                    return Some((import.source.clone(), ImportBindingKind::Namespace));
+                    return Some((
+                        import.source.clone(),
+                        ImportBindingKind::Namespace(import.is_deferred),
+                    ));
                 }
                 _ => {}
             }
@@ -76,7 +80,7 @@ fn find_import_binding(
 
 enum ImportBindingKind {
     Value(String),
-    Namespace,
+    Namespace(bool),
 }
 
 /// Resolve `(module_name, local)` to the module that actually defines the
@@ -135,6 +139,7 @@ where
             source_module: module_name.to_string(),
             source_local: local.to_string(),
             namespace_of: None,
+            namespace_deferred: false,
         });
     }
 
@@ -149,10 +154,11 @@ where
                 ImportBindingKind::Value(imported) => {
                     resolve_exported_binding(&source, &imported, true, lookup, seen)
                 }
-                ImportBindingKind::Namespace => Some(BindingOrigin {
+                ImportBindingKind::Namespace(deferred) => Some(BindingOrigin {
                     source_module: source.clone(),
                     source_local: String::new(),
                     namespace_of: Some(source),
+                    namespace_deferred: deferred,
                 }),
             };
         }
@@ -190,6 +196,7 @@ where
                     source_module: source.clone(),
                     source_local: String::new(),
                     namespace_of: Some(source.clone()),
+                    namespace_deferred: false,
                 });
             }
             _ => {}
@@ -215,6 +222,7 @@ where
             prior.source_module != candidate.source_module
                 || prior.source_local != candidate.source_local
                 || prior.namespace_of != candidate.namespace_of
+                || prior.namespace_deferred != candidate.namespace_deferred
         }) {
             return None;
         }

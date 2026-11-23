@@ -177,7 +177,7 @@ pub(crate) fn is_stream_record_word(word: u64) -> bool {
         // SAFETY: a pointer-tagged `native_state` word is a traced edge to a
         // live GC cell.
         && unsafe { gc_type_for_ptr((word & crate::value::POINTER_MASK) as usize) }
-            == Some(crate::gc::GC_TYPE_ARRAY)
+            == Some(crate::gc_array_type_pat!())
         && unsafe { (*((word & crate::value::POINTER_MASK) as *const ArrayHeader)).length as usize } == STREAM_RECORD_SLOT_COUNT
 }
 

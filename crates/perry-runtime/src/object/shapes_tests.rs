@@ -1547,10 +1547,12 @@ mod field_rep_identity_tests {
         assert_eq!(LayoutWord(explicit), legacy);
     }
 
+    /// I32 at rest (PR C): a `11` lane no ConstFn body names is an I32 lane
+    /// (`field_rep::i32_lane_slots`), no longer the refused NoPointer state.
     #[test]
-    fn an_unbound_special_lane_is_refused() {
-        let reserved = with_slot_rep(0, 2, crate::object::field_rep::REP_SPECIAL);
-        assert!(shape_descriptor_ensure_with_rep(
+    fn a_special_lane_without_a_body_is_an_i32_lane() {
+        let lane = with_slot_rep(0, 2, crate::object::field_rep::REP_SPECIAL);
+        let id = shape_descriptor_ensure_with_rep(
             std::ptr::null(),
             0,
             3,
@@ -1559,9 +1561,13 @@ mod field_rep_identity_tests {
             0,
             PROTO,
             crate::object::shapes::ReceiverFacts::NONE,
-            reserved,
+            lane,
             None,
         )
-        .is_err());
+        .expect("an I32 lane is a valid lane");
+        let record = shape_record_of_receiver(id.0).expect("record");
+        assert_eq!(record.i32_lanes(), 1 << 2);
+        assert!(record.lane_is_i32(2));
+        assert!(!record.lane_is_constfn(2));
     }
 }

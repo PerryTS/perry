@@ -38,6 +38,7 @@ pub(crate) mod own_keys;
 pub(crate) mod prototype;
 pub(crate) mod reflect;
 pub(crate) mod reflect_misc;
+pub(crate) mod to_primitive;
 pub use reflect_misc::{
     js_reflect_apply, js_reflect_construct, js_reflect_define_property,
     js_reflect_get_prototype_of, js_reflect_is_extensible, js_reflect_own_keys,
@@ -143,14 +144,8 @@ fn proxy_arg_is_object(value: f64) -> bool {
         }
         return true;
     }
-    // Module-level raw-I64 object/array pointers (top16 == 0).
-    if top == 0 && bits > 0x10000 {
-        return true;
-    }
-    // A `C.prototype` ref word is an object (an INT32 number is not).
-    if top == 0x7FFE {
-        return crate::object::class_prototype_ref_id(f64::from_bits(bits)).is_some();
-    }
+    // Every other value is a primitive. A word whose top 16 bits are clear
+    // is a Number (a denormal, or +0), not a raw object pointer.
     false
 }
 

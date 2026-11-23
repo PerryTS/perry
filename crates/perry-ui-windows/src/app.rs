@@ -263,6 +263,8 @@ fn service_runtime_deadlines() {
         js_interval_timer_tick();
     }
     perry_runtime::event_pump::perry_poll();
+    // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+    perry_runtime::event_pump::js_loop_turn_nonblocking();
     // Preserve the previous 2 ms incremental-GC maintenance budget, but run it
     // at a deadline/wake boundary instead of after a fixed UI timer message.
     unsafe {
@@ -722,7 +724,7 @@ pub fn app_run(app_handle: i64) {
 
         // PERRY_UI_TEST_MODE: schedule a one-shot exit timer so CI can verify
         // that the app launched without a human keeping it open.
-        if perry_ui_testkit::is_test_mode() {
+        if perry_ui::test_mode::is_test_mode() {
             APPS.with(|apps| {
                 let apps = apps.borrow();
                 let idx = (app_handle - 1) as usize;
@@ -731,7 +733,7 @@ pub fn app_run(app_handle: i64) {
                         let _ = SetTimer(
                             Some(apps[idx].hwnd),
                             TEST_EXIT_TIMER_ID,
-                            perry_ui_testkit::exit_delay_ms(),
+                            perry_ui::test_mode::exit_delay_ms(),
                             None,
                         );
                     }
@@ -1363,11 +1365,11 @@ pub fn handle_timer(hwnd: HWND, timer_id: usize) {
         unsafe {
             let _ = KillTimer(Some(hwnd), TEST_EXIT_TIMER_ID);
         }
-        if let Some(path) = perry_ui_testkit::screenshot_path() {
+        if let Some(path) = perry_ui::test_mode::screenshot_path() {
             let mut len: usize = 0;
             let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
             if !ptr.is_null() && len > 0 {
-                perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                 unsafe {
                     libc::free(ptr as *mut libc::c_void);
                 }

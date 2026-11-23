@@ -6,8 +6,14 @@ fn collection_with_own_prototype_is_not_pristine() {
     let _no_move = crate::gc::GcSuppressScope::new();
     let scope = crate::gc::RuntimeHandleScope::new();
     for (family, cell) in [
-        (crate::object::builtin_proto::BuiltinProto::Map, crate::map::js_map_alloc(0) as i64),
-        (crate::object::builtin_proto::BuiltinProto::Set, crate::set::js_set_alloc(0) as i64),
+        (
+            crate::object::builtin_proto::BuiltinProto::Map,
+            crate::map::js_map_alloc(0) as i64,
+        ),
+        (
+            crate::object::builtin_proto::BuiltinProto::Set,
+            crate::set::js_set_alloc(0) as i64,
+        ),
     ] {
         let receiver = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(cell));
         assert_eq!(
@@ -19,7 +25,10 @@ fn collection_with_own_prototype_is_not_pristine() {
         let proto = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
             crate::object::js_object_alloc(0, 0) as i64,
         ));
-        crate::object::js_object_set_prototype_of(receiver.get_nanbox_f64(), proto.get_nanbox_f64());
+        crate::object::js_object_set_prototype_of(
+            receiver.get_nanbox_f64(),
+            proto.get_nanbox_f64(),
+        );
         assert!(
             !crate::object::builtin_proto::receiver_pristine(receiver.get_nanbox_f64()),
             "family {} with its own [[Prototype]] must not prove Pristine",

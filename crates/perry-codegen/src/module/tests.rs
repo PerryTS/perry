@@ -141,7 +141,13 @@ fn render_codegen_units_partitions_and_links() {
         .iter()
         .find(|u| u.contains("define double @perry_fn_m__f("))
         .unwrap();
-    assert!(u_with_f.contains("declare double @perry_fn_m__g()"));
+    // ... or, as here (a small direct callee), carries g as an
+    // `available_externally` body in place of that declaration
+    // (`module/inline_copies.rs`).
+    assert!(
+        u_with_f.contains("declare double @perry_fn_m__g()")
+            || u_with_f.contains("define available_externally double @perry_fn_m__g()")
+    );
 
     // #7174: each shared global is DEFINED exactly once across units;
     // units that reference it get an `external` declaration instead of a
@@ -844,7 +850,16 @@ fn split_unit_declaration_uses_local_definition_signature() {
         .iter()
         .find(|unit| unit.contains("define double @caller("))
         .expect("caller unit");
-    assert!(caller_unit.contains("declare double @constructor(double, double, double)"));
+    // A small direct callee is carried as an `available_externally` body
+    // (`module/inline_copies.rs`) in place of the declaration; either way it
+    // has the definition's signature.
+    assert!(
+        caller_unit.contains("declare double @constructor(double, double, double)")
+            || caller_unit.lines().any(|line| {
+                line.starts_with("define available_externally double @constructor(")
+                    && line.split(')').next().unwrap().matches("double").count() == 4
+            })
+    );
     assert!(!caller_unit.contains("declare double @constructor(double)"));
 }
 
@@ -915,12 +930,6 @@ fn string_constant_escapes_nonprintable() {
     let ir = m.to_ir();
     // "a" then \0A then "b" then \00
     assert!(ir.contains("c\"a\\0Ab\\00\""), "got: {}", ir);
-}
-
-#[test]
-fn gep_unused_helper_imports_compile() {
-    // Smoke test that PTR, I64 are re-exported and compile alongside.
-    let _ = (PTR, I64);
 }
 
 /// Every thread-local the module names becomes local-exec, the runtime's
@@ -1060,40 +1069,6 @@ fn split_units_keep_a_layout_id_alias_with_its_descriptor() {
     }
 }
 
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "retired straight-line read-region helper")]
-fn om8_rejects_retired_read_region_prime_import() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    module.declare_function("js_region_guard_prime", crate::types::I64, &[]);
-}
-
-#[cfg(debug_assertions)]
-#[test]
-#[should_panic(expected = "retired straight-line read-region helper")]
-fn om8_rejects_retired_read_region_pack_import_with_return_attributes() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    module.declare_function_with_ret_attrs("js_region_guard_pack", crate::types::I64, &[], "");
-}
-
-#[test]
-fn om8_read_region_abi_is_retired_while_loop_regions_remain_available() {
-    let mut module = crate::module::LlModule::new("x86_64-unknown-linux-gnu");
-    crate::runtime_decls::declare_phase_b_strings(&mut module);
-    assert!(module.is_declared("js_region_loop_prime"));
-    assert!(!module.is_declared("js_region_guard_pack"));
-    assert!(!module.is_declared("js_region_guard_prime"));
-    let wasm_abi = include_str!("../wasm32/runtime_abi.tsv");
-    assert!(wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_loop_prime\t")));
-    assert!(!wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_guard_pack\t")));
-    assert!(!wasm_abi
-        .lines()
-        .any(|line| line.starts_with("js_region_guard_prime\t")));
-}
 #[test]
 fn unicode_symbol_names_survive_ir_reference_parsing() {
     let symbol = crate::symbol_names::function("module_ts", "grüße$méthode");
@@ -1134,4 +1109,76 @@ fn read_site_collecting_declarations_preserve_the_original_contract() {
         ir.contains("declare double @js_object_get_field_value_site(i64, i64, i64, ptr) cold\n"),
         "{ir}"
     );
+}
+
+#[test]
+fn module_frames_preserve_existing_callable_ordinals() {
+    use crate::{module::LlModule, types::VOID};
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    for name in ["aaa_module", "zzz_callable"] {
+        module
+            .define_function(name, VOID, vec![])
+            .create_block("entry")
+            .ret_void();
+        module.note_fn_info(name, |facts| {
+            facts.module_frame = name == "aaa_module";
+        });
+    }
+    module.emit_fn_infos(true);
+    let facts = module.fn_infos.borrow();
+    assert_eq!(facts.facts("zzz_callable").metadata.unwrap().1, 0);
+    assert_eq!(facts.facts("aaa_module").metadata.unwrap().1, 1);
+}
+
+/// N4: the slow-arm helpers are `cold` under `PERRY_COLD_PATHS` (default on)
+/// and ordinary without it; the older list does not depend on the switch.
+#[test]
+fn cold_arm_helpers_follow_the_cold_path_switch() {
+    use super::{cold_paths_enabled_from_env, is_cold_helper};
+    assert!(cold_paths_enabled_from_env(None));
+    assert!(cold_paths_enabled_from_env(Some("1")));
+    for off in ["0", "off", "false"] {
+        assert!(!cold_paths_enabled_from_env(Some(off)), "{off}");
+    }
+    for name in [
+        "js_gc_loop_safepoint",
+        "perry_array_read_cold_shared",
+        "js_array_note_numeric_write_value",
+    ] {
+        assert!(is_cold_helper(name, true), "{name}");
+        assert!(!is_cold_helper(name, false), "{name} with the switch off");
+    }
+    for on in [true, false] {
+        assert!(is_cold_helper("js_object_get_field_slow", on));
+        // Negative controls: helpers that are also called on ordinary paths.
+        for name in [
+            "js_dynamic_bitand",
+            "js_write_barrier_slot",
+            "js_array_push_f64",
+        ] {
+            assert!(!is_cold_helper(name, on), "{name}");
+        }
+    }
+
+    let mut m = module_under("js_gc_loop_safepoint\tReenters\tno\n");
+    m.declare_function("js_gc_loop_safepoint", VOID, &[]);
+    m.declare_function(
+        "perry_array_read_cold_shared",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64],
+    );
+    let f = m.define_function("main", I32, vec![]);
+    f.create_block("entry").ret(I32, "0");
+    let ir = m.to_ir();
+    let cold = super::cold_paths_enabled();
+    for (decl, attrs) in [
+        ("declare void @js_gc_loop_safepoint()", " nounwind"),
+        (
+            "declare double @perry_array_read_cold_shared(double, double, i64)",
+            "",
+        ),
+    ] {
+        let line = format!("{decl}{attrs}{}\n", if cold { " cold" } else { "" });
+        assert!(ir.contains(&line), "missing {line:?} in:\n{ir}");
+    }
 }

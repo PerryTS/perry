@@ -7,12 +7,18 @@ use crate::model::*;
 use perry_hir::Expr;
 
 impl<'a> Gen<'a> {
-    pub(crate) fn iter_res_node(&mut self, fx: &Fx) -> NodeId {
-        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&fx.f) {
+    /// A plain-async step's iter-result slot as written with `done`
+    /// (`IterResultSet(value, done)`). The step reads it back right after
+    /// its body leaves: under `if (IterResultGetDone)` the last write was a
+    /// `return` (done), after that arm an await's operand (not done), so
+    /// each read takes the writes of its own flag only.
+    pub(crate) fn iter_res_node(&mut self, fx: &Fx, done: bool) -> NodeId {
+        let key = (fx.f, done);
+        if let Some(&n) = self.mods[fx.module as usize].iterres.get(&key) {
             return n;
         }
         let n = self.tmp("iterres");
-        self.mods[fx.module as usize].iterres.insert(fx.f, n);
+        self.mods[fx.module as usize].iterres.insert(key, n);
         n
     }
 
@@ -20,18 +26,11 @@ impl<'a> Gen<'a> {
     /// [[Get]], getters run. The values of `value`, `get` and `set`, the keys
     /// a definition uses.
     pub(crate) fn descriptor_reads(&mut self, desc: NodeId) -> [NodeId; 3] {
-        let mut used = [desc; 3];
-        for name in DESCRIPTOR_KEYS {
-            let a = self.m.atom(name);
-            let v = self.load(desc, Key::Named(a));
-            match name {
-                "value" => used[0] = v,
-                "get" => used[1] = v,
-                "set" => used[2] = v,
-                _ => {}
-            }
-        }
-        used
+        crate::builtins::object_statics::descriptor_reads(&mut self.m, desc, |m| {
+            let n = m.node_l("load");
+            m.own(n);
+            n
+        })
     }
 
     /// `Object.defineProperty(o, key, desc)`: E5 on the target, the
@@ -51,11 +50,37 @@ impl<'a> Gen<'a> {
         r: u32,
         accessor: bool,
         own: [Option<NodeId>; 2],
+        kn: Option<NodeId>,
     ) {
         // The key `o` gains (`STAR_KEY`: a computed one), for the chain keys
         // a given prototype holds (`settle_native_given`).
         let dk = self.m.atom(key.as_deref().unwrap_or(crate::STAR_KEY));
         self.m.define_on.insert((o, dk, !accessor));
+        // GLOBK3: a computed key `kn` decides at the solve, by receiver and
+        // key (`Cons::DefineAnyKey`, `Model::define_computed_key`).
+        if let (None, Some(kn)) = (&key, kn) {
+            let [v, dget, dset] = self.descriptor_reads(desc);
+            let [get, set] = [(dget, own[0]), (dset, own[1])].map(|(r, own)| own.unwrap_or(r));
+            let site = match accessor {
+                true => u32::MAX,
+                false => self.store_site(fx.module, fx.f, "defineProperty".into(), None, false),
+            };
+            let c = Cons::DefineAnyKey {
+                o,
+                key: kn,
+                value: v,
+                get,
+                set,
+                site,
+                reason: r,
+                accessor,
+                desc: NO_NODE,
+            };
+            for n in [o, kn, set] {
+                self.m.cons(n, c);
+            }
+            return;
+        }
         match &key {
             Some(k) => {
                 let ka = self.m.atom(k);
@@ -135,7 +160,16 @@ impl<'a> Gen<'a> {
         let [v, dget, dset] = self.descriptor_reads(desc);
         if !accessor {
             let site = self.store_site(fx.module, fx.f, "defineProperty".into(), None, false);
-            self.m.cons(kn, Cons::StoreKeyed { o, src: v, site });
+            self.m.cons(
+                kn,
+                Cons::StoreKeyed {
+                    o,
+                    src: v,
+                    site,
+                    subj: NO_NODE,
+                    region: self.region(),
+                },
+            );
         }
         for ((read, setter), own) in [(dget, false), (dset, true)].into_iter().zip(own) {
             let f = own.unwrap_or(read);
@@ -151,43 +185,61 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn descriptor_of(&mut self, mi: u32, o: NodeId) -> NodeId {
-        let r = self
-            .m
-            .reason("getOwnPropertyDescriptor (accessors handed out)");
-        self.m.cons(
-            o,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::Any,
-            },
-        );
-        let vals = self.load(o, Key::any());
+        let vals = self.tmp("load");
         let (t, n) = self.bobj(mi, "descriptor");
-        let fa = self.m.field_any(t);
-        self.m.edge(vals, fa);
-        // get/set functions of the object: handed to user code without a
-        // receiver — ⊤-called.
-        self.m.add_tok(fa, TOP);
-        self.m.add_prim(fa, prim::ALL);
+        crate::builtins::object_statics::own_descriptor(&mut self.m, o, vals, t);
         n
     }
 
-    pub(crate) fn json_value(&mut self, mi: u32) -> NodeId {
+    /// `positions`: the parse's objects are position classes
+    /// (`solve::json_pos`); a reviver may put its results at any position,
+    /// so a reviver parse keeps one object token for the whole tree.
+    pub(crate) fn json_value(&mut self, mi: u32, positions: bool, reviver: bool) -> NodeId {
+        if self.m.arr_lazy_sabotage {
+            // Negative control (`arrlazy`): a plain Array of Numbers, where
+            // the runtime may return a lazy JSON array header.
+            let arr = self.new_arr_birth(mi, "json", false, true);
+            let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+            let afa = self.m.field_any(at);
+            self.m.add_prim(afa, prim::NUM);
+            return self.tok_node(at);
+        }
+        // JSON text holds strings, numbers, booleans and null and no other
+        // primitive (ECMA-262 25.5.1). A reviver's results replace values
+        // anywhere in the tree (25.5.1.1 InternalizeJSONProperty), which
+        // the reviver path's one store on the root does not place: any
+        // primitive then.
+        let vals = if reviver { prim::ALL } else { prim::JSON };
         let (t, n) = self.bobj(mi, "json");
-        let fa = self.m.field_any(t);
-        self.m.add_prim(fa, prim::ALL);
-        self.m.add_tok(fa, t);
         let arr = self.new_arr_template(mi, "json");
         let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
-        let afa = self.m.field_any(at);
-        self.m.add_prim(afa, prim::ALL);
-        self.m.add_tok(afa, t);
-        self.m.add_tok(afa, at);
-        self.m.add_tok(fa, at);
+        if positions {
+            self.m.json_root(t, at);
+            let out = self.tmp("json");
+            self.m.edge(n, out);
+            self.m.add_tok(out, at);
+            self.m.add_prim(out, vals);
+            return out;
+        }
+        // Without a reviver the result `t` / `at` is no value inside its own
+        // tree (`Model::json_inner`): every nested object or array is `io` /
+        // `ia`. A reviver runs with every object of the tree as its `this`
+        // and its results replace values anywhere (25.5.1.1
+        // InternalizeJSONProperty): one token for the whole tree.
+        let (io, ia) = match reviver {
+            true => (t, at),
+            false => self.m.json_inner(t, at),
+        };
+        for o in [t, at, io, ia] {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, vals);
+            self.m.add_tok(fa, io);
+            self.m.add_tok(fa, ia);
+        }
         let out = self.tmp("json");
         self.m.edge(n, out);
         self.m.add_tok(out, at);
-        self.m.add_prim(out, prim::ALL);
+        self.m.add_prim(out, vals);
         out
     }
 
@@ -218,14 +270,34 @@ impl<'a> Gen<'a> {
     ) -> NodeId {
         let arg = |i: usize| args.get(i).copied();
         match method {
-            "arrayRecordNeedsIterator" | "arrayRecordForBound" | "hasPathModule" | "isBuiltin" => {
+            // `arrayRecordCloseAbsent` (js_array_record_close_absent): a
+            // shape lookup of `return` on %ArrayIteratorPrototype%'s chain;
+            // an accessor answers false without being called, so no program
+            // code runs here; the close itself is `arrayRecordClose`'s model.
+            // Rule RP2: the record's source local (`s` of `arrayRecordNeedsIterator(s = s)`).
+            "arrayRecordNeedsIterator" => {
+                if let Some(Expr::LocalSet(s, v)) = source_args.first() {
+                    if matches!(v.as_ref(), Expr::LocalGet(x) if x == s) {
+                        self.record_locals.insert((fx.module, *s));
+                    }
+                }
                 self.prim_node(prim::BOOL)
             }
+            "arrayRecordCloseAbsent"
+            | "arrayRecordForBound"
+            | "hasPathModule"
+            | "isBuiltin"
+            | "typedArrayForOfAdmits" => self.prim_node(prim::BOOL),
             // What codegen lowers them to: the cursor itself, the payload's
             // length, and `mode ? 0 : update`.
-            "arrayRecordIndex" => match arg(0) {
-                Some(a) => a,
-                None => self.prim_node(prim::NUM),
+            // Rule RP1: a positional step reads its own index
+            // (`gen/record_steps.rs`).
+            "arrayRecordIndex" => match self.record_steps.get(&(source_args.as_ptr() as usize)) {
+                Some(&j) => self.num_literal(j as f64),
+                None => match arg(0) {
+                    Some(a) => a,
+                    None => self.prim_node(prim::NUM),
+                },
             },
             "arrayRecordLength" => self.prim_node(prim::NUM),
             "arrayRecordForUpdate" => {
@@ -277,6 +349,16 @@ impl<'a> Gen<'a> {
                 out
             }
             "arrayRecordPayload" | "arrayRecordForValue" => {
+                // Rule RP2: the payload of a guarded record of source `s`.
+                if let (Some(Expr::LocalGet(s)), Some(Expr::LocalSet(p, _))) =
+                    (source_args.first(), source_args.get(1))
+                {
+                    if method == "arrayRecordPayload"
+                        && self.record_locals.contains(&(fx.module, *s))
+                    {
+                        self.record_locals.insert((fx.module, *p));
+                    }
+                }
                 let out = self.tmp("glue-pass");
                 for a in &args {
                     self.m.edge(*a, out);
@@ -308,14 +390,27 @@ impl<'a> Gen<'a> {
                 let (Some(it), Some(next)) = (arg(0), arg(1)) else {
                     return self.prim_node(prim::BOOL);
                 };
-                let res =
-                    self.call_value(next, ThisArg::Node(it), vec![self.m.top_tok_node], vec![]);
+                // Rule RP2: the protocol arm of a guarded record steps its
+                // payload only when that is not an Array the runtime takes
+                // the array arm for.
+                let it = match source_args.first() {
+                    Some(Expr::LocalGet(p)) if self.record_locals.contains(&(fx.module, *p)) => {
+                        self.record_entry(it)
+                    }
+                    _ => it,
+                };
+                // IteratorStep is IteratorNext with no value: `Call(next,
+                // iterator, «»)` (ECMA-262 7.4.4, 7.4.7), as `js_iterator_step`
+                // does it (a generator resumes with `undefined`, any other
+                // `next` gets argc 0). Nothing unknown is passed.
+                let res = self.call_value(next, ThisArg::Node(it), vec![], vec![]);
+                self.step_done(res);
                 // The step output: the value of a result that is not done,
                 // or `undefined` the runtime publishes at done
                 // (`js_iterator_step`), which destructuring reads.
                 let va = self.m.atom("value");
                 let v = self.load(res, Key::Named(va));
-                let io = self.iter_out_node(fx);
+                let io = self.step_out_node(fx);
                 self.m.edge(v, io);
                 let all = self.iterate(it);
                 self.m.edge(all, io);
@@ -334,7 +429,7 @@ impl<'a> Gen<'a> {
                 }
                 self.prim_node(prim::BOOL)
             }
-            "iteratorStepOutput" => self.iter_out_node(fx),
+            "iteratorStepOutput" => self.step_out_node(fx),
             // The rest element of an array destructuring (`[a, ...rest] =
             // it`): what codegen lowers it to, `js_array_push_f64(rest,
             // value)`, the array itself as the result.
@@ -342,14 +437,26 @@ impl<'a> Gen<'a> {
                 let (Some(rest), Some(value)) = (arg(0), arg(1)) else {
                     return self.m.top_val("iteratorRestAppend without arguments");
                 };
-                self.store(
-                    fx,
+                // The append defines index `rest.length` (CreateDataProperty,
+                // ECMA-262 8.6.2 IteratorBindingInitialization step 4.d,
+                // 23.1.3.23 push): its key is a Number, a canonical numeric
+                // String, never `@@iterator` or `__proto__`. The site says so
+                // before its constraint exists (the solve is online), so the
+                // append is no write that may change which `@@iterator` an
+                // Array finds (`Model::array_iteration_writes`) and holds no
+                // guarded record's protocol arm open (`Cons::RecordEntry`).
+                let num = self.prim_node(prim::NUM);
+                let site =
+                    self.store_site(fx.module, fx.f, "rest element append".into(), None, false);
+                self.m.stores[site as usize].key_value = Some(num);
+                self.m.cons(
                     rest,
-                    Key::any(),
-                    value,
-                    "rest element append".into(),
-                    None,
-                    false,
+                    Cons::Store {
+                        key: Key::any(),
+                        src: value,
+                        site,
+                        region: self.region(),
+                    },
                 );
                 let out = self.tmp("rest-append");
                 self.m.edge(rest, out);
@@ -401,14 +508,17 @@ impl<'a> Gen<'a> {
                 // The target's init guard runs its body here when it has not
                 // run yet: what that body throws, this call throws.
                 if let Some(Expr::ExternFuncRef { name, .. }) = source_args.first() {
-                    let t = self.imports_of(fx.module as usize).into_iter().find_map(|i| {
-                        let binds = i.specifiers.iter().any(|sp| match sp {
-                            perry_hir::ImportSpecifier::Named { local, .. }
-                            | perry_hir::ImportSpecifier::Default { local }
-                            | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                    let t = self
+                        .imports_of(fx.module as usize)
+                        .into_iter()
+                        .find_map(|i| {
+                            let binds = i.specifiers.iter().any(|sp| match sp {
+                                perry_hir::ImportSpecifier::Named { local, .. }
+                                | perry_hir::ImportSpecifier::Default { local }
+                                | perry_hir::ImportSpecifier::Namespace { local } => local == name,
+                            });
+                            binds.then_some(i.resolved_path.as_ref()).flatten()
                         });
-                        binds.then_some(i.resolved_path.as_ref()).flatten()
-                    });
                     if let Some(t) = t.and_then(|p| self.path_index.get(p).copied()) {
                         let rt = self.module_raise(t);
                         let r = self.region();
@@ -581,6 +691,15 @@ impl<'a> Gen<'a> {
         let n = self.tmp("stepyield");
         self.mods[fx.module as usize].stepyield.insert(key, n);
         n
+    }
+
+    /// What the current `iteratorStep` writes (`Gen::step_out`); outside
+    /// a step, the function's output node (`iter_out_node`).
+    fn step_out_node(&mut self, fx: &Fx) -> NodeId {
+        match self.step_out {
+            Some(n) => n,
+            None => self.iter_out_node(fx),
+        }
     }
 
     pub(crate) fn iter_out_node(&mut self, fx: &Fx) -> NodeId {

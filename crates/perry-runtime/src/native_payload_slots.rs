@@ -181,7 +181,7 @@ pub(super) fn sync_callbacks(owner: f64, family: &NativePayloadFamily, key: &[u8
 unsafe fn is_callback_array(value: crate::JSValue) -> bool {
     value.is_pointer()
         && crate::value::addr_class::try_read_gc_header(value.as_pointer::<u8>() as usize)
-            .is_some_and(|h| h.obj_type == crate::gc::GC_TYPE_ARRAY)
+            .is_some_and(|h| crate::gc_type_is_array!(h.obj_type))
 }
 
 #[cold]

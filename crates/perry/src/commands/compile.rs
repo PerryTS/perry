@@ -147,7 +147,7 @@ pub(crate) use runtime_compat::{
 use size_report::emit_size_report;
 use strip_dedup::{
     dedup_native_lib_for_tier3, dedup_runtime_for_tier3, dedup_stdlib_for_tier3,
-    dedup_ui_lib_against_linked_libs, localize_stdlib_stub_symbols,
+    dedup_ui_lib_against_linked_libs, localize_bundled_jni_in_stdlib, localize_stdlib_stub_symbols,
     strip_bundled_runtime_from_well_known_lib, strip_bundled_shared_deps_from_well_known_lib,
     strip_duplicate_objects_from_lib_with_evidence, strip_duplicate_objects_from_well_known_lib,
     StdlibEvidence,
@@ -241,3 +241,5 @@ mod windows_link_tests;
 // `lock_integration_tests` module all moved to `compile/lock_scan.rs`.
 
 // (lock_integration_tests body removed — coverage lives in compile/lock_scan.rs)
+
+mod snap_image_emit;

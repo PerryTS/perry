@@ -104,8 +104,8 @@ unsafe fn alloc_iterator(arr_ptr: *mut ArrayHeader, kind: i32) -> f64 {
 
 /// `arr.values()` iterator — yields each element value.
 pub fn array_values_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_VALUES) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_VALUES) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
@@ -116,8 +116,8 @@ pub fn array_values_iter(arr_f64: f64) -> f64 {
 
 /// `arr.keys()` iterator — yields each index `0..length`.
 pub fn array_keys_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_KEYS) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_KEYS) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
@@ -128,8 +128,8 @@ pub fn array_keys_iter(arr_f64: f64) -> f64 {
 
 /// `arr.entries()` iterator — yields `[index, value]` pairs.
 pub fn array_entries_iter(arr_f64: f64) -> f64 {
-    if super::generic::is_generic_arraylike_receiver(arr_f64) {
-        return unsafe { alloc_iterator_backing(arr_f64, KIND_PROXY_ENTRIES) };
+    if let Some(receiver) = super::generic::generic_arraylike_receiver(arr_f64) {
+        return unsafe { alloc_iterator_backing(receiver, KIND_PROXY_ENTRIES) };
     }
     let arr_ptr = unbox_array_ptr(arr_f64);
     if arr_ptr.is_null() {
@@ -259,7 +259,7 @@ unsafe fn array_iter_obj_raw(arr: *const ArrayHeader, kind: i32) -> i64 {
 /// unconditionally. The registries remain the layout proof for everything else.
 #[inline]
 fn typed_array_iter_arr(arr: *const ArrayHeader) -> *const ArrayHeader {
-    if crate::array::array_receiver_gc_tag(arr).0 == crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_array!(crate::array::array_receiver_gc_tag(arr).0) {
         return arr;
     }
     let addr = arr as usize;

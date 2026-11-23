@@ -76,7 +76,7 @@ fn reflect_construct_same_or_default_new_target_keeps_the_target_class() {
 }
 
 #[test]
-fn reflect_construct_keeps_object_returns_beside_the_actual_allocation() {
+fn reflect_construct_yields_an_object_return_not_the_actual_allocation() {
     let pf = facts(
         r#"
         class Replacement { r = 9; }
@@ -86,7 +86,7 @@ fn reflect_construct_keeps_object_returns_beside_the_actual_allocation() {
         console.log(value.r);
     "#,
     );
-    receivers(&pf, "r", &["Other", "Replacement"]);
+    receivers(&pf, "r", &["Replacement"]);
     receivers(&pf, "body", &["Other"]);
 }
 

@@ -32,6 +32,13 @@ pub(crate) fn lower_let(
     // when the initializer emits no call. Invalidate its existing proof at
     // the binding, then use the same receiver-invariance proof as parameters.
     let immutable = !mutable && !ctx.reassigned_locals.contains(&id);
+    // DYNP E13: a for-in desugar's keys binding; its begin call then takes a
+    // bound slot, read by the desugar's `let __n = __keys.length`.
+    if let Some(perry_hir::Expr::ForInKeys(recv)) = init {
+        if let (perry_hir::Expr::LocalGet(recv), true) = (recv.as_ref(), immutable) {
+            ctx.for_in_keys_locals.insert(id, *recv);
+        }
+    }
     for state in ctx
         .receiver_descriptors
         .byte_receiver_binding(id, immutable)
@@ -74,14 +81,17 @@ pub(crate) fn lower_let(
     ctx.local_id_to_name.insert(id, name.to_string());
     if let Some(perry_hir::Expr::ClassMethodHome {
         class_name,
-        is_static: false,
+        is_static,
     }) = init
     {
         if ctx.method_home_local == Some((id, true)) {
             // Read only by proven `super.m()` sites: no home value is needed.
             return Ok(());
         }
-        if !mutable && !ctx.in_static_member && ctx.class_stack.last() == Some(class_name) {
+        if !mutable
+            && *is_static == ctx.in_static_member
+            && ctx.class_stack.last() == Some(class_name)
+        {
             ctx.method_home_local = Some((id, false));
         }
     }
@@ -775,7 +785,7 @@ pub(crate) fn lower_let(
     // load directly from the corresponding slot. See the
     // `collect_non_escaping_arrays` pass in collectors.rs for the
     // escape criteria.
-    if let Some(perry_hir::Expr::Array(elements, _)) = init {
+    if let Some(literal @ perry_hir::Expr::Array(elements, _)) = init {
         if ctx.non_escaping_arrays.contains_key(&id) {
             let n = elements.len();
             let mut slots: Vec<String> = Vec::with_capacity(n);
@@ -802,10 +812,17 @@ pub(crate) fn lower_let(
                 .unwrap_or_default();
             for (i, elem) in elements.iter().enumerate() {
                 let index_is_observed = used_indices.contains(&(i as u32));
-                if !index_is_observed && lower_unused_expr(ctx, elem)? {
+                // SNAP census: the element's parent is the literal.
+                let unused = !index_is_observed
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, elem)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, elem)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, elem)
+                })?;
                 ctx.block().store(DOUBLE, &v, &slots[i]);
                 // #6968: same rooting hole as the object-literal fields —
                 // the element alloca is the only reference to a heap value
@@ -867,7 +884,7 @@ pub(crate) fn lower_let(
     // unique field; PropertyGet/Set already resolve through
     // `ctx.scalar_replaced`, so no additional read path is needed.
     // See `collect_non_escaping_object_literals` in collectors.rs.
-    if let Some(perry_hir::Expr::Object(props)) = init {
+    if let Some(literal @ perry_hir::Expr::Object(props)) = init {
         if let Some(field_order) = ctx.non_escaping_object_literals.get(&id).cloned() {
             let existing = ctx.scalar_replaced.get(&id).cloned();
             let mut field_slots: std::collections::HashMap<String, String> =
@@ -887,10 +904,17 @@ pub(crate) fn lower_let(
                 .cloned()
                 .unwrap_or_default();
             for (key, value_expr) in props {
-                if !used_fields.contains(key) && lower_unused_expr(ctx, value_expr)? {
+                // SNAP census: the field value's parent is the literal.
+                let unused = !used_fields.contains(key)
+                    && crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                        lower_unused_expr(ctx, value_expr)
+                    })?;
+                if unused {
                     continue;
                 }
-                let v = lower_expr(ctx, value_expr)?;
+                let v = crate::expr::snap_env_site::operand_of(ctx, literal, |ctx| {
+                    lower_expr(ctx, value_expr)
+                })?;
                 if let Some(slot) = field_slots.get(key).cloned() {
                     ctx.block().store(DOUBLE, &v, &slot);
                     // #6968: the field alloca is this heap value's only
@@ -1085,18 +1109,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let slot = ctx
                     .i32_counter_slots
@@ -1157,25 +1185,27 @@ pub(crate) fn lower_let(
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
-    // And one PROFITABILITY term, which is not a safety term at all (#7128).
-    // Every rule above answers "may we?"; this one answers "should we?". A
-    // local written after its declaration, with no i32-consuming read anywhere
-    // and at least one double-consuming read inside a loop, pays a
-    // `sitofp`/`uitofp` per iteration and buys nothing back — measured at
-    // +14.87% instructions retired on `benchmarks/suite/15_mandelbrot.ts`,
-    // where the mixed representation additionally costs the loop its
-    // single-basic-block `fcmp`/`fccmp` exit. See `collectors/repsel_benefit.rs`.
-    let unprofitable = ctx
-        .native_facts
-        .unprofitable_canonical_i32_locals()
-        .contains(&id);
+    // "Should we?" is the whole-program facts' answer (representation RFC
+    // §10.3, P1; `codegen/facts_rep.rs`): a local they cover takes an i32
+    // slot exactly when they give it `I32`, which carries int demand (an
+    // index, a bitwise operand, `Math.imul` reached along copies). A counter
+    // that only feeds double arithmetic (#7128, `15_mandelbrot`) is `F64`
+    // there and stays out. A local the facts do not cover keeps the
+    // collectors' value proof.
+    let facts_rep = crate::codegen::facts_rep::local(ctx, id);
+    let no_int_demand = !matches!(facts_rep, None | Some(crate::codegen::FactsRep::I32));
     // Split into the VALUE-level proof and the CONTEXT gate so a context-level
     // exclusion can be reported (#7106). `canonical_i32` is the conjunction, so
     // selection behaviour is unchanged.
-    let canonical_i32_value_eligible = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
+    // A local the facts give `I32` is proven int32 (never -0) on every
+    // write by the whole-program interval: that proof is the value-level
+    // admission, and the per-function collectors' proofs are not needed.
+    let facts_i32 = matches!(facts_rep, Some(crate::codegen::FactsRep::I32));
+    let collectors_value_proof = (ctx.integer_locals.contains(&id) || is_unsigned_i32_local)
         && canonical_safe_local
-        && !unprofitable
-        && init_in_i32_range
+        && !no_int_demand
+        && init_in_i32_range;
+    let canonical_i32_value_eligible = (facts_i32 || collectors_value_proof)
         && !matches!(refined_ty, perry_hir::types::Type::BigInt)
         && !ctx.boxed_vars.contains(&id)
         && !ctx.module_globals.contains_key(&id)
@@ -1216,7 +1246,7 @@ pub(crate) fn lower_let(
                 closure_referenced: ctx.repsel_closure_ref_locals.contains(&id),
                 array_row_alias: ctx.array_row_aliases.contains_key(&id),
                 not_index_used_or_bounded: !canonical_safe_local,
-                no_i32_consuming_use: unprofitable,
+                no_i32_consuming_use: no_int_demand,
                 context: ctx.repsel_context_denial,
             },
         );
@@ -1241,18 +1271,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 // i32-native init: compute directly in i32, single store.
                 let v_i32 = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 ctx.block().store(I32, &v_i32, &i32_slot);
@@ -1432,18 +1466,22 @@ pub(crate) fn lower_let(
             let flat_ca = ctx.flat_const_arrays.clone();
             let ara = ctx.array_row_aliases.clone();
             let int_locals = ctx.integer_locals.clone();
-            if crate::expr::can_lower_expr_as_i32(
-                init_expr,
-                &i32_slots,
-                &flat_ca,
-                &ara,
-                &int_locals,
-                &ctx.const_number_locals,
-                ctx.clamp3_functions,
-                ctx.clamp_u8_functions,
-                ctx.integer_returning_functions,
-                ctx.i32_identity_functions,
-            ) {
+            // Check mode witnesses a proven int32 local's stores on the
+            // double path (`facts_int32_locals::checked`).
+            if !crate::codegen::facts_int32_locals::checked(ctx, id)
+                && crate::expr::can_lower_expr_as_i32(
+                    init_expr,
+                    &i32_slots,
+                    &flat_ca,
+                    &ara,
+                    &int_locals,
+                    &ctx.const_number_locals,
+                    ctx.clamp3_functions,
+                    ctx.clamp_u8_functions,
+                    ctx.integer_returning_functions,
+                    ctx.i32_identity_functions,
+                )
+            {
                 let i32_v = crate::expr::lower_expr_as_i32(ctx, init_expr)?;
                 let unsigned_i32 = ctx.unsigned_i32_locals.contains(&id);
                 let blk = ctx.block();
@@ -1470,6 +1508,10 @@ pub(crate) fn lower_let(
                     init_expr,
                     ExpectedNativeRep::U32,
                 )?)
+            } else if crate::codegen::facts_int32_locals::checked_init(ctx, id) {
+                // Check mode: a proven local's initializer is lowered as a
+                // value and witnessed below (`accept_let_value`).
+                None
             } else if matches!(
                 refined_ty,
                 perry_hir::types::Type::Number | perry_hir::types::Type::Int32
@@ -1590,7 +1632,10 @@ pub(crate) fn lower_let(
                     // for a local source. A declared numeric/object type can
                     // still hold a string at runtime, and the old type gate
                     // then left this alias invisible to self-append (#7846).
-                    if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                    if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                        && !const_array_walk::holds_no_string(ctx, id, &v)
+                        && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
+                    {
                         crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                     }
                     let v = crate::codegen::facts_number_locals::accept_let_value(
@@ -1616,7 +1661,10 @@ pub(crate) fn lower_let(
                 // and `test_edge_error_handling`'s `finallyReturn`
                 // started returning `start-try-finally` instead of
                 // `start-try`.
-                if matches!(init_expr, perry_hir::Expr::LocalGet(_)) {
+                if matches!(init_expr, perry_hir::Expr::LocalGet(_))
+                    && !const_array_walk::holds_no_string(ctx, id, &v)
+                    && !crate::expr::literal_strings::alias(ctx, id, init_expr, &v)
+                {
                     crate::expr::emit_string_addref_if_heap_string(ctx, &v);
                 }
                 let v =

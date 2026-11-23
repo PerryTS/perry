@@ -10,6 +10,9 @@
 use std::cell::{Cell, RefCell};
 use std::sync::{Mutex, OnceLock};
 mod coverage;
+pub(crate) mod life;
+pub(crate) mod life_measure;
+pub(crate) mod zero_sign;
 pub use coverage::take_manifest;
 pub(crate) use coverage::{consumed, Fact};
 #[cfg(feature = "llvm-inprocess")]
@@ -34,6 +37,11 @@ pub enum SiteVerdict {
     T0Mono,
     T0Set,
     E0,
+    Dead,
+    OwnDataOrAbsent,
+    NsExport,
+    IntrinsicCall,
+    Throws,
 }
 impl SiteVerdict {
     pub(crate) fn name(self) -> &'static str {
@@ -43,6 +51,11 @@ impl SiteVerdict {
             Self::T0Mono => "T0Mono",
             Self::T0Set => "T0Set",
             Self::E0 => "E0",
+            Self::Dead => "Dead",
+            Self::OwnDataOrAbsent => "OwnDataOrAbsent",
+            Self::NsExport => "NsExport",
+            Self::IntrinsicCall => "IntrinsicCall",
+            Self::Throws => "Throws",
         }
     }
     pub(crate) fn slice(self) -> u8 {
@@ -52,6 +65,11 @@ impl SiteVerdict {
             Self::T0Mono => 3,
             Self::T0Set => 4,
             Self::E0 => 5,
+            Self::Dead => 6,
+            Self::OwnDataOrAbsent => 9,
+            Self::NsExport => 8,
+            Self::IntrinsicCall => 7,
+            Self::Throws => 10,
         }
     }
 }
@@ -75,11 +93,104 @@ pub fn enabled() -> bool {
     *ON.get_or_init(|| std::env::var("PERRY_VERIFY_FACTS").as_deref() == Ok("1"))
 }
 
-/// Dead-body removal was asked for (`PERRY_FACTS_DCE=1`, off by default): a
-/// body the whole-program reach calls inactive is emitted as a trap.
+static INSTRUMENTED_VARIANT: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// The compile links the instrumented runtime variant (the answer of
+/// `optimized_libs::instrumented_variant_requested`, set once by the compile
+/// command before codegen). Off until set.
+pub fn set_instrumented_variant(on: bool) {
+    INSTRUMENTED_VARIANT.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// The lifetime claims are on: the facts witnesses are on AND the instrumented
+/// runtime variant is linked, the only one carrying the collector's life
+/// hooks. `PERRY_VERIFY_FACTS=1` alone emits no life claim and links the
+/// default archives. The one predicate of codegen and the compile command.
+pub fn life_claims_on() -> bool {
+    enabled() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The family claim is on: the runtime's witnesses of it (a byte cell is
+/// born, a family's global is read) exist only in the instrumented variant,
+/// so the predicate is the life claims'. `PERRY_VERIFY_FACTS=1` alone emits
+/// no family claim.
+pub fn family_claims_on() -> bool {
+    life_claims_on()
+}
+
+/// Check mode's family claim at a compiled read of global `name`: when
+/// `family_reach` says a family of that global is never created or observed,
+/// the read itself is the false proof (verdict `family`), born or not. A
+/// program whose text names the global has the family live, so this fires
+/// only for a wrong fact.
+pub(crate) fn family_global_read(ctx: &mut FnCtx<'_>, name: &str) {
+    if !family_claims_on() {
+        return;
+    }
+    use perry_runtime_manifest::families;
+    let claimed = families::entry_families(name).unwrap_or(0) & ctx.wpfacts.family_never;
+    if claimed == 0 || families::entry_root(name) != name {
+        return;
+    }
+    let family = families::RUNTIME_FAMILIES[claimed.trailing_zeros() as usize].id;
+    let site = raw_site(ctx, "family", Some(name), &[], family);
+    ctx.block().call_void(
+        "perry_verify_facts_family_observed",
+        &[(I64, &site.pointer), (I64, site.len.as_deref().unwrap())],
+    );
+}
+
+/// The lifetime measurement is on (LIFE I1, `PERRY_LIFE_MEASURE` set at
+/// compile time): an instrument knob, so the compile links the instrumented
+/// runtime variant, the only one carrying `perry_life_*`. Codegen emits the
+/// birth, activation and loop hooks (`life_measure`) only under it.
+pub fn life_measure_on() -> bool {
+    life_measure_requested() && INSTRUMENTED_VARIANT.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// `PERRY_LIFE_MEASURE` is set (non-empty) in the compile's environment.
+pub fn life_measure_requested() -> bool {
+    std::env::var_os("PERRY_LIFE_MEASURE").is_some_and(|v| !v.is_empty())
+}
+
+/// Dead-body removal is asked for (`PERRY_FACTS_DCE=1`, off by default): a
+/// body the whole-program reach calls inactive is emitted as a trap. It stays
+/// opt-in because a reach that misses a call into program code turns that
+/// body into a silent SIGTRAP (#15042).
 pub fn dce_enabled() -> bool {
+    #[cfg(test)]
+    if DCE_FOR_TESTS.with(Cell::get) {
+        return true;
+    }
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DCE").as_deref() == Ok("1"))
+    *ON.get_or_init(|| dce_switch(std::env::var("PERRY_FACTS_DCE").ok().as_deref()))
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Turns removal on for one test's compile: the first compile caches the
+    /// environment's switch, and a process-wide override would change the IR
+    /// of tests running beside it. `CallableState` carries it to workers.
+    pub(crate) static DCE_FOR_TESTS: Cell<bool> = const { Cell::new(false) };
+}
+
+/// The value of `PERRY_FACTS_DCE` decides removal: on only when it is `1`.
+pub fn dce_switch(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+#[cfg(test)]
+mod dce_switch_tests {
+    use super::dce_switch;
+
+    #[test]
+    fn removal_is_off_unless_the_switch_is_one() {
+        assert!(!dce_switch(None));
+        assert!(!dce_switch(Some("")));
+        assert!(!dce_switch(Some("0")));
+        assert!(dce_switch(Some("1")));
+    }
 }
 
 /// The facts-consumed lowerings carry their witnesses: this build, or a
@@ -88,6 +199,7 @@ pub(crate) fn witnesses() -> bool {
     enabled() || crate::codegen::helpers::check_contracts()
 }
 
+#[derive(Clone)]
 struct Module {
     name: String,
     line_starts: Vec<usize>,
@@ -382,6 +494,31 @@ fn raw_site_inner(
     }
 }
 
+/// The witness site of code lowered outside any body context (P2's boxed
+/// entry, DESIGN-p2 §5): the metadata `raw_site_inner` writes, with the
+/// emitting symbol as the copy and no source offset.
+pub(crate) fn raw_entry_site(prefix: &str, copy: &str, fact: Fact, what: &str) -> SiteArg {
+    let (name, ordinal) = MODULE.with(|m| {
+        let m = m.borrow();
+        let m = m.as_ref().expect("verification module initialized");
+        (m.name.clone(), m.ordinal)
+    });
+    let metadata = serde_json::json!({
+        "marker": "PERRY_FALSE_PROOF", "module": name, "byte_offset": null,
+        "key": what, "verdict": fact.name(), "proven_receivers": [],
+        "copy": {"body": copy, "site": null, "emission": ordinal},
+        "compile_sha": option_env!("PERRY_BUILD_GIT_SHA").unwrap_or("unknown"),
+        "expectation": what, "predicate": fact.name(),
+    });
+    let mut bytes = serde_json::to_vec(&metadata).expect("static verification metadata");
+    assert_eq!(bytes.pop(), Some(b'}'));
+    let (pointer, len) = raw_bytes(prefix, &bytes);
+    SiteArg {
+        pointer,
+        len: Some(len),
+    }
+}
+
 pub(crate) fn check(
     ctx: &mut FnCtx<'_>,
     result: LlvmType,
@@ -397,6 +534,7 @@ pub(crate) fn check(
             "perry_wpfacts_check_call" => "perry_verify_facts_call",
             "perry_wpfacts_check_call_miss" => "perry_verify_facts_call_miss",
             "perry_wpfacts_check_miss" => "perry_verify_facts_miss",
+            "perry_wpfacts_check_record_identity" => "perry_verify_facts_record_identity",
             _ => unreachable!("verification ABI"),
         }
     } else {
@@ -435,6 +573,76 @@ pub(crate) fn bodies(view: &crate::codegen::ProgramFactsView) {
     BODIES.with(|b| {
         *b.borrow_mut() = view.verification_bodies.clone().map(|map| (name, map));
     });
+}
+
+/// The module's body classifications as a parallel lowering worker must see
+/// them (`codegen::callable_workers`): without them a worker emits every
+/// inactive body in full, so dead-body removal would depend on whether the
+/// module's callables were lowered on one thread or several.
+///
+/// A contract build also names each witness site from the module's name
+/// and line starts (`here`), so the worker gets those too. A verification
+/// build lowers serially (its ordinals and records are per module), so the
+/// copy is read-only.
+#[derive(Clone)]
+pub(crate) struct CallableState(Option<Bodies>, Option<Module>, #[cfg(test)] bool);
+
+pub(crate) fn callable_state() -> CallableState {
+    let module = if witnesses() && !enabled() {
+        MODULE.with(|m| m.borrow().clone())
+    } else {
+        None
+    };
+    CallableState(
+        BODIES.with(|b| b.borrow().clone()),
+        module,
+        #[cfg(test)]
+        DCE_FOR_TESTS.with(Cell::get),
+    )
+}
+
+impl CallableState {
+    pub(crate) fn install(&self) {
+        BODIES.with(|b| *b.borrow_mut() = self.0.clone());
+        MODULE.with(|m| *m.borrow_mut() = self.1.clone());
+        #[cfg(test)]
+        DCE_FOR_TESTS.with(|d| d.set(self.2));
+    }
+}
+
+#[cfg(test)]
+mod callable_state_tests {
+    use super::*;
+
+    /// A worker names a site as the module thread does.
+    #[test]
+    fn worker_names_sites_like_the_module_thread() {
+        MODULE.with(|m| {
+            *m.borrow_mut() = Some(Module {
+                name: "m.ts".to_owned(),
+                line_starts: vec![0, 10, 25],
+                prefix_lines: 0,
+                raw: Vec::new(),
+                ordinal: 0,
+                site_ordinal: 0,
+                copy: String::new(),
+            })
+        });
+        SITE.with(|s| s.set(Some((13, "call"))));
+        let serial = here();
+        assert_eq!(serial, "m.ts:2:3 call");
+        let state = CallableState(None, MODULE.with(|m| m.borrow().clone()), false);
+        let worker = std::thread::spawn(move || {
+            state.install();
+            SITE.with(|s| s.set(Some((13, "call"))));
+            here()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(worker, serial);
+        MODULE.with(|m| *m.borrow_mut() = None);
+        SITE.with(|s| s.set(None));
+    }
 }
 
 /// The body is classified and no path reaches it. An absent map (give-up,
@@ -545,6 +753,14 @@ fn source_key(e: &Expr) -> String {
 
 pub(crate) fn number_checked(id: u32) {
     coverage::number(id);
+}
+
+pub(crate) fn int32_checked(id: u32) {
+    coverage::int32(id);
+}
+
+pub(crate) fn const_length_checked(id: u32) {
+    coverage::const_length(id);
 }
 
 pub(crate) fn covered(fact: Fact, operands: impl FnOnce() -> serde_json::Value) {

@@ -128,9 +128,8 @@ not a larger timeout. Keep
 `RUST_TEST_THREADS=1` for `perry-runtime`: its tests share process-global GC,
 arena, timer, and notification state. Keep `CARGO_BUILD_JOBS=1` for the
 runtime-linked test binaries until runner memory measurements support increasing
-it. The sccache-backed CI jobs set `CARGO_INCREMENTAL=0`, so sccache can reuse
-compiler outputs. Mr Boxington-backed release jobs use mbx's default cache
-policy instead; local `make build-dev` and `make build-prod` leave
+it. Mr Boxington-backed release jobs use mbx's default cache policy; local
+`make build-dev` and `make build-prod` leave
 `MBX_INCREMENTAL` unset so mbx can keep private incremental state for edited
 crates while sharing unchanged compilations.
 
@@ -181,11 +180,11 @@ Two specific costs dominated:
   one prebuilt release compiler at ~1.5 s each; that is the `fast` gap mode every
   tier uses. Auto-optimize runs in the full tier's `parity` job, because it is
   the only arm that sees auto-optimize-only link bugs.
-- Every job saved a fresh ~0.5–1.3 GB sccache tarball on every PR push (~200 GB/day
+- Every job saved a fresh sccache tarball (then ~0.5–1.3 GB) on every PR push (~200 GB/day
   into a 10 GB repo cache budget), evicting every useful entry within the hour —
-  and PR-scoped caches are not even readable by other PRs. sccache now saves only
-  from main-line runs; PRs restore the newest main-line blob. `cache-warm.yml` is
-  gone: the sweep is the cache-producing build on `main`.
+  and PR-scoped caches are not even readable by other PRs. No job saves an sccache
+  tarball now, and only main-line runs save caches; see [Build caches](#build-caches).
+  `cache-warm.yml` is gone: the sweep is the cache-producing build on `main`.
 
 A later release run exposed a separate serial bottleneck: its 246 `perry`
 integration-test binaries had not reached their midpoint when `cargo-test` hit
@@ -204,6 +203,54 @@ release-tag arms (see [CI gate scheduling](ci-gate-scheduling.md) and
 `run-extended-tests` label to a PR and they run on it, along with the `full` tier
 of `test.yml`. An unlabelled PR still gets a run of each — with every job skipped,
 which costs no runner slot.
+
+## Build caches
+
+The repository's Actions cache holds 10 GB on the organisation's Free plan, and a
+PR can restore only what `main` saved: PR-scoped entries are invisible to other
+PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
+`Swatinem/rust-cache` with one policy:
+
+- **One family per build.** `key` names the family (the job id by default).
+  rust-cache keeps the first save of a key, so a family has exactly one saving
+  job (`save: "true"`), chosen from the jobs a PR runs. Sweep and nightly jobs
+  that run the same build restore that family without saving it; the
+  release-profile `build-perry` jobs restore `gap-suite-build`. A restorer
+  needs the saver's `runs-on` and the same `CARGO*`/`RUST*`/`CC*` environment,
+  which rust-cache hashes into the key; the action exports
+  `CARGO_INCREMENTAL=0` first so that variable never splits a family.
+  A saver must run on `main`: `e2e-scoped` runs only on PRs, so it keeps no
+  cache. `test_actions_plan.py` fails on a second saver, on a restorer that
+  cannot hit, on matrix legs that share a runner and a family but build
+  differently, and on a direct `Swatinem/rust-cache` use in the core workflows.
+- **Saves survive a red main.** `cache-on-failure` is on: a job that fails its
+  tests has still compiled valid dependencies, and a red `main` would otherwise
+  never save anything. A job that fails before it builds saves a near-empty
+  entry that rust-cache never replaces, so the key also carries the ISO week
+  (`PERRY_CACHE_EPOCH`): such an entry lasts at most a week, and every family
+  starts cold once a week.
+- **The key follows the pinned toolchain only.** rust-cache hashes every
+  installed `rustc`, and the runner image's preinstalled stable changes with each
+  image rollout, so the action removes it before hashing.
+- **Restored dependencies stay fresh.** `.cargo/config.toml` builds std from
+  `rust-src`, which Cargo fingerprints by mtime, and every job installs the
+  toolchain anew. The action pins those mtimes to a fixed date, and the
+  vendored rust-cache keeps the build-std units it would otherwise drop for
+  being absent from `cargo metadata` (the "Perry patch" in its `cleanup.ts`).
+  Without both, std and every crate above it rebuild after a full cache hit.
+- **No sccache tarballs.** Those tarballs grew to ~4.7 GB each by the time
+  three jobs saved one on every main run, which evicted the whole budget. The GitHub cache
+  backend of sccache (one entry per compilation unit) was measured at ~0 % Rust
+  hits under throttling. rust-cache stores dependencies only; workspace crates
+  rebuild in every job.
+
+The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their own
+`release-*` keys. GitHub evicts least-recently-used entries first, and the PR
+families are restored by every PR run, so cold families are the ones that go.
+`gh api repos/PerryTS/perry/actions/cache/usage` and
+`gh api repos/PerryTS/perry/actions/caches` show the total and each family's
+size; if the families PRs restore stop fitting in 10 GB together, PR jobs go
+cold again.
 
 ## Budgets
 
@@ -308,7 +355,7 @@ The Actions sidebar has six repository workflows. GitHub also registers four ind
 | **CI** | Required core CI and auxiliary security/coverage checks; defaults to `suite=core` |
 | **Extended Tests** (`compiler-runtime.yml`) | Compiler/runtime, compatibility, integration, and performance; choose a category such as `suite=compatibility`, one suite such as `suite=simctl-tests`, or `suite=all` |
 | **GC** | Six collector suites; choose an individual suite or `suite=all` |
-| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment |
+| **Repository** (`maintenance.yml`) | Documentation and repository maintenance; defaults to offline `suite=validate`; select `suite=docs-check` for docs checks or `suite=docs` for deployment. Every 30 minutes `auto-label` adds `platform:`, `area:` and `type:` labels to new issues and PRs (`scripts/auto_label.py`) |
 | **Publish to npm / GitHub Release** | Compiler packages, platform archives, and GitHub releases |
 | **Publish to npm / @perryts/hono-server** | Independent adapter package publication |
 
@@ -327,15 +374,28 @@ After a consolidation lands, Repository automatically deletes completed runs who
 
 ### Required WASI command and component execution
 
-`wasi-execution` joins the core PR, sweep and full tiers. On Linux it builds
-Perry with `target-wasi` and a matching wasm32-wasip2 runtime, checks the IR
-ABI, then runs all six smoke cases, twenty acceptance cases and ten pinned-Node
-comparisons. It then builds matching native component tools and instrumented
-runtimes and runs both component harnesses: native hosting, Perry-authored
-guests, resource lifetimes, forced moving GC and direct Rust/Perry composition.
-The job has a 120-minute budget for the combined build and execution. Per-case
-logs, component phase verdicts, source revision and artifacts are retained. The required
+The `wasi_execution` plan entry joins the core PR, sweep and full tiers and
+starts five Linux jobs in parallel, so the gate waits for the longest of them
+rather than their sum:
+
+- `wasi-native` runs the `target-wasi` codegen and link-argument unit tests.
+- `wasi-component-units` runs the component-model unit tests
+  (`scripts/component_unit_tests.sh`).
+- `wasi-execution` builds Perry with `target-wasi` and a matching wasm32-wasip2
+  runtime, checks the IR ABI, then runs all six smoke cases, twenty acceptance
+  cases and ten pinned-Node comparisons.
+- `wasi-execution-p1` builds the same compiler and a wasm32-wasip1 runtime,
+  checks its imports, then runs the preview 1 smoke, acceptance and gap suites
+  and the preview 1 host suite.
+- `wasi-components` builds matching native component tools and instrumented
+  runtimes and runs both component harnesses: native hosting, Perry-authored
+  guests, resource lifetimes, forced moving GC and direct Rust/Perry
+  composition.
+
+Per-case logs, component phase verdicts, source revision and artifacts are
+retained (`wasi-required-<sha>`, `wasi-required-p1-<sha>` and
+`wasi-components-<sha>`). The required
 `pr-gate` rejects a skipped or missing planned WASI job as well as failures and
-cancellation. Docs-only PRs skip this build. The wider Windows/macOS matrix
+cancellation, for each of the five. Docs-only PRs skip this build. The wider Windows/macOS matrix
 remains in the extended suite. Native component execution is currently
 qualified on Linux.

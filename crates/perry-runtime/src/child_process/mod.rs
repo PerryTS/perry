@@ -103,7 +103,7 @@ pub(crate) use emitter::{
 #[cfg(not(unix))]
 pub(crate) use emitter::{
     cp_method_pipe, cp_method_read, cp_method_set_encoding, cp_method_stdin_end,
-    cp_method_stdin_write, cp_readable_end,
+    cp_method_stdin_write, cp_readable_end, cp_stdin_finish,
 };
 
 // builder.rs — heap object construction + shape ids.

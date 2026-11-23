@@ -371,7 +371,11 @@
       "additionalProperties": false,
       "required": ["kind"],
       "properties": {
-        "kind": { "const": "buffer+len" }
+        "kind": { "const": "buffer+len" },
+        "nullable": {
+          "type": "boolean",
+          "description": "When true, `null`/`undefined` (and an omitted argument) lower to `(NULL, 0)` instead of throwing a TypeError."
+        }
       }
     },
     "abiPodDescriptor": {

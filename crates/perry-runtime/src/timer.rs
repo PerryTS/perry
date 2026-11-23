@@ -32,6 +32,12 @@ mod async_lifecycle;
 mod mock;
 mod phases;
 mod store;
+#[cfg(perry_gc_instruments)]
+#[cfg_attr(
+    not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")),
+    allow(unused_imports)
+)]
+pub(crate) use store::snap_pending_timers;
 
 use crate::promise::{js_promise_new, Promise};
 use async_lifecycle::enqueue_destroy_ids;
@@ -1192,9 +1198,7 @@ fn arg_to_timer_id(arg: f64) -> Option<i64> {
         return Some(id);
     }
     let v = crate::value::JSValue::from_bits(arg.to_bits());
-    if v.is_int32() {
-        Some(v.as_int32() as i64)
-    } else if v.is_number() {
+    if v.is_number() {
         let n = v.as_number();
         n.is_finite().then_some(n as i64)
     } else if let Some(s) = crate::node_submodules::diagnostics::decode_string_value(arg) {

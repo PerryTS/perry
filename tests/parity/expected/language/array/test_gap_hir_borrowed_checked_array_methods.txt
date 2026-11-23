@@ -1,0 +1,31 @@
+DEC 250: Cannot replace built-in member Array.prototype.map: built-in objects are read-only in a compiled program (adding a new member is allowed)
+DEC 250: Cannot replace built-in member Array.prototype.map: built-in objects are read-only in a compiled program (adding a new member is allowed)
+map TypeError
+filter TypeError
+forEach TypeError
+find TypeError
+findIndex TypeError
+findLast TypeError
+findLastIndex TypeError
+some TypeError
+every TypeError
+reduce TypeError
+reduceRight TypeError
+indexOf -1
+lastIndexOf -1
+includes false
+slice [ 1 ]
+flat [ 1, 2 ]
+at 1
+join 102
+sort TypeError
+splice [ 1 ]
+concat [ 1, 2, 0, 1 ]
+pop 2
+shift 1
+push 4
+unshift 4
+fill [ 1, 0 ]
+copyWithin [ 2, 2 ]
+reverse [ 2, 1 ]
+flatMap TypeError

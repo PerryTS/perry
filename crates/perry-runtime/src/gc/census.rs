@@ -281,7 +281,10 @@ fn slot_kind(bits: u64) -> usize {
         POINTER_TAG => 0,
         STRING_TAG => 1,
         SHORT_STRING_TAG => 2,
-        INT32_TAG => 3,
+        // An I32 slot word (`layout_slot`).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => 3,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => 11,
         BIGINT_TAG => 9,
         JS_HANDLE_TAG => 10,
         TAG_MARKER => match bits {
@@ -460,7 +463,7 @@ impl Census {
             t @ crate::gc_object_type_pat!() => {
                 self.visit_object(user as *const crate::object::ObjectHeader, size, flags, t)
             }
-            GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 self.visit_array(user as *const crate::array::ArrayHeader, size, flags)
             }
             GC_TYPE_STRING => self.visit_string(user as *const crate::StringHeader, size, flags),
@@ -642,6 +645,16 @@ pub(super) fn side_tables() -> Vec<SideTableRow> {
         super::policy::external_side_live_bytes(),
     ));
     rows
+}
+
+#[cfg(test)]
+mod int32_exact_tests {
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_the_int32_kind() {
+        assert_eq!(super::slot_kind(0x7FFE_0000_0000_0005), 3);
+        assert_ne!(super::slot_kind(0x7FFE_0001_0000_0005), 3);
+        assert_ne!(super::slot_kind(0x7FFE_00FF_0000_0001), 3);
+    }
 }
 
 #[cfg(test)]

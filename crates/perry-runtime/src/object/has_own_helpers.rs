@@ -12,29 +12,74 @@
 /// slot (`closure_is_key_deleted`) is no longer own. Mirrors the value-read
 /// closure arm in `field_get_set.rs`.
 pub(crate) fn closure_own_key_present(ptr: usize, key: &str) -> bool {
-    if crate::closure::closure_is_key_deleted(ptr, key) {
-        return false;
+    use crate::object::runtime_layouts::atom_hash;
+    use crate::object::runtime_layouts::{BP_ATOM_LENGTH, BP_ATOM_NAME, BP_ATOM_PROTOTYPE};
+    let (atom, hash) = match key {
+        "length" => (BP_ATOM_LENGTH.string as usize, atom_hash(b"length")),
+        "name" => (BP_ATOM_NAME.string as usize, atom_hash(b"name")),
+        "prototype" => (BP_ATOM_PROTOTYPE.string as usize, atom_hash(b"prototype")),
+        // User props are real own dynamic props in the side table.
+        _ => {
+            return !crate::closure::closure_is_key_deleted(ptr, key)
+                && (super::get_accessor_descriptor(ptr, key).is_some()
+                    || crate::closure::closure_has_own_dynamic_prop(ptr, key));
+        }
+    };
+    if ptr != 0 && crate::closure::is_closure_ptr(ptr) {
+        // SAFETY: `ptr` is a live closure cell (checked above).
+        unsafe {
+            // A bag-less plain function answers from its family record: it
+            // has no delete, accessor or redefinition (each gives it a bag).
+            if let Some(present) = crate::object::layout_probe::bagless_family_has_own(
+                ptr as *const crate::closure::ClosureHeader,
+                atom as u64 | crate::value::STRING_TAG,
+                hash,
+            ) {
+                return present;
+            }
+            if crate::closure::props::state_is_deleted(ptr, key) {
+                return false;
+            }
+        }
     }
     if super::get_accessor_descriptor(ptr, key).is_some() {
         return true;
     }
-    match key {
-        // Always-present built-in function slots.
-        "name" | "length" => true,
-        // A constructor-capable function's `.prototype` is an own property
-        // from birth even though Perry materializes the object lazily —
-        // `f.hasOwnProperty('prototype')` must be true BEFORE any read of
-        // `f.prototype`. Predicate only: materializing here would lock the
-        // slot's attributes ahead of a later `defineProperty(fn,
-        // "prototype", …)`.
-        "prototype" => {
-            crate::closure::closure_has_own_dynamic_prop(ptr, key) || {
-                let val = crate::value::js_nanbox_pointer(ptr as i64);
-                super::class_registry::function_would_have_own_prototype(val)
-            }
-        }
-        // User props are real own dynamic props in the side table.
-        _ => crate::closure::closure_has_own_dynamic_prop(ptr, key),
+    // `name` and `length` are always-present built-in function slots. A
+    // constructor-capable function's `.prototype` is an own property from
+    // birth even though Perry materializes the object lazily: predicate
+    // only, materializing here would lock the slot's attributes ahead of a
+    // later `defineProperty(fn, "prototype", …)`.
+    hash != atom_hash(b"prototype")
+        || crate::closure::closure_has_own_dynamic_prop(ptr, key)
+        || super::class_registry::function_would_have_own_prototype(
+            crate::value::js_nanbox_pointer(ptr as i64),
+        )
+}
+
+/// A bag-less plain function's `length`, `name` or `prototype`: present iff
+/// its family record lists it (a bag-less function has no delete, accessor
+/// or redefinition: each of those gives it a bag). `None` for any other key
+/// or closure (the general check answers).
+pub(crate) fn family_key_present(ptr: usize, key: &str) -> Option<bool> {
+    use crate::object::runtime_layouts::atom_hash;
+    use crate::object::runtime_layouts::{BP_ATOM_LENGTH, BP_ATOM_NAME, BP_ATOM_PROTOTYPE};
+    let (atom, hash) = match key {
+        "length" => (BP_ATOM_LENGTH.string as usize, atom_hash(b"length")),
+        "name" => (BP_ATOM_NAME.string as usize, atom_hash(b"name")),
+        "prototype" => (BP_ATOM_PROTOTYPE.string as usize, atom_hash(b"prototype")),
+        _ => return None,
+    };
+    if ptr == 0 || !crate::closure::is_closure_ptr(ptr) {
+        return None;
+    }
+    // SAFETY: `ptr` is a live closure cell (checked above).
+    unsafe {
+        crate::object::layout_probe::bagless_family_has_own(
+            ptr as *const crate::closure::ClosureHeader,
+            atom as u64 | crate::value::STRING_TAG,
+            hash,
+        )
     }
 }
 

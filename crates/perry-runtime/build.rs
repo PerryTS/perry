@@ -595,12 +595,47 @@ mod realm_info_exports;
 #[path = "src/object/native_module/static_exports_build.rs"]
 mod static_exports_build;
 
+/// The family table for check mode's family claim
+/// (`wpfacts_check/family.rs`, instrumented variant only): the ids in table
+/// order (the claim is a bit per family).
+fn write_family_table(out: &Path) {
+    use perry_runtime_manifest::families::RUNTIME_FAMILIES;
+    let ids: Vec<&str> = RUNTIME_FAMILIES.iter().map(|f| f.id).collect();
+    let text = format!("const FAMILY_IDS: &[&str] = &{ids:?};\n");
+    std::fs::write(out.join("family_table.rs"), text).expect("emit family table");
+}
+
+/// The bit of the byte-cell family (typed arrays, Buffer, ArrayBuffer) in a
+/// family set (`family_never.rs`): its position in the one family table.
+fn write_family_bits(out: &Path) {
+    let bit = perry_runtime_manifest::families::family_bit("typedarray");
+    assert!(bit != 0, "the family table names typedarray");
+    let text = format!("pub(crate) const BYTE_CELLS: u64 = {bit:#x};\n");
+    std::fs::write(out.join("family_bits.rs"), text).expect("emit family bits");
+}
+
+/// The Worker's shape (`messaging/worker_metadata.rs`): its own keys, in
+/// the order perry-stdlib's `worker_object` sets them, and the metadata
+/// getters on `Worker.prototype`, both from the one declaration the compiler
+/// reads (`perry_runtime_manifest::worker_shape`).
+fn write_worker_shape(out: &Path) {
+    use perry_runtime_manifest::worker_shape::{WORKER_OWN_KEYS, WORKER_PROTOTYPE_ACCESSORS};
+    let text = format!(
+        "pub const WORKER_OWN_KEYS: &[&str] = &{WORKER_OWN_KEYS:?};\n\
+         const WORKER_PROTOTYPE_ACCESSORS: &[&str] = &{WORKER_PROTOTYPE_ACCESSORS:?};\n"
+    );
+    std::fs::write(out.join("worker_shape.rs"), text).expect("emit worker shape");
+}
+
 fn main() {
     static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
     let realm = perry_runtime_manifest::realm_source::generate(std::path::Path::new("src"), &out)
         .expect("emit runtime realm manifest");
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
+    write_family_table(&out);
+    write_family_bits(&out);
+    write_worker_shape(&out);
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");

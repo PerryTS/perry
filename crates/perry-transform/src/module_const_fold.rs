@@ -299,6 +299,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             for s in body {
                 walk_stmt_exprs(s, f);
@@ -505,6 +506,7 @@ fn nested_stmt_lists_shared(stmt: &Stmt) -> Vec<&Vec<Stmt>> {
             body,
             catch,
             finally,
+            ..
         } => {
             let mut v = vec![body];
             if let Some(c) = catch {
@@ -701,6 +703,7 @@ mod tests {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         }
     }
 
@@ -809,6 +812,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1009,6 +1013,7 @@ mod tests {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1074,6 +1079,7 @@ mod tests {
             mutable_captures: vec![5],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,

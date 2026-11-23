@@ -8,7 +8,7 @@
 //! order the literal stays a layout; otherwise it is the source-ordered
 //! definition sequence `Expr::ObjectSpread`.
 
-use super::Expr;
+use super::{Expr, ObjectPart};
 
 impl Expr {
     /// The object literal `{ k1: v1, k2: v2, … }` for properties in source
@@ -40,7 +40,7 @@ impl Expr {
             return Expr::ObjectSpread {
                 parts: props
                     .into_iter()
-                    .map(|(key, value)| (Some(key), value))
+                    .map(|(key, value)| ObjectPart::Define(key, value))
                     .collect(),
             };
         }
@@ -83,7 +83,7 @@ fn is_inert(value: &Expr) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::Expr;
+    use super::{Expr, ObjectPart};
 
     fn keys(e: &Expr) -> Vec<&str> {
         match e {
@@ -139,7 +139,13 @@ mod tests {
         let Expr::ObjectSpread { parts } = lit else {
             panic!("not source-ordered")
         };
-        let keys: Vec<_> = parts.iter().map(|(k, _)| k.as_deref()).collect();
+        let keys: Vec<_> = parts
+            .iter()
+            .map(|part| match part {
+                ObjectPart::Define(k, _) => Some(k.as_str()),
+                _ => None,
+            })
+            .collect();
         assert_eq!(keys, [Some("x"), Some("y"), Some("x")]);
     }
 }

@@ -8,7 +8,7 @@ use super::*;
 const PRELUDE: &str = r#"
     class D { y = 2; }
     const d = new D();
-    declare const k: string;
+    const k: string = process.argv[2];
 "#;
 
 const GC: &str = "if ((globalThis as any).gc) { (globalThis as any).gc(); }";

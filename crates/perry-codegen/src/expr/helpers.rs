@@ -446,6 +446,24 @@ pub(crate) fn unbox_to_i64(blk: &mut LlBlock, boxed: &str) -> String {
     blk.and(I64, &bits, POINTER_MASK_I64)
 }
 
+/// The object address a value names, decoded by its tag alone: the payload of
+/// a `POINTER_TAG` value, `0` for every other word. For an argument the runtime
+/// reads as an object pointer that may be any value (a callable argument:
+/// `new Promise(executor)`, `JSON.parse(text, reviver)`), where
+/// [`unbox_to_i64`]'s mask would turn a Number into an address (a denormal
+/// keeps its bits, a negative Number or `1.1` keeps its low 48 bits).
+pub(crate) fn unbox_pointer_or_null(blk: &mut LlBlock, boxed: &str) -> String {
+    let bits = blk.bitcast_double_to_i64(boxed);
+    let tag = blk.and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let is_pointer = blk.icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+    let payload = blk.and(I64, &bits, POINTER_MASK_I64);
+    blk.select(crate::types::I1, &is_pointer, I64, &payload, "0")
+}
+
 /// `unbox_to_i64` for an argument a native entry reads as a
 /// `*const StringHeader` (#11430): an SSO string is copied into a scratch
 /// header by `js_ffi_arg_ptr` instead of being masked into a garbage address.
@@ -648,3 +666,7 @@ pub(crate) fn is_global_this_builtin_name(name: &str) -> bool {
 pub(crate) fn unbox_str_handle(blk: &mut LlBlock, boxed: &str) -> String {
     blk.call(I64, "js_get_string_pointer_unified", &[(DOUBLE, boxed)])
 }
+
+#[cfg(test)]
+#[path = "callable_by_tag_tests.rs"]
+mod callable_by_tag_tests;

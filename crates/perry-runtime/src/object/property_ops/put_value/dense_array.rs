@@ -12,7 +12,7 @@ pub(super) fn try_set(target: f64, key: f64, value: f64, receiver: f64) -> bool 
     }
     // Only a Number key: objects, strings, Symbols and BigInts retain their
     // complete ToPropertyKey path. This decoder also rejects a ClassRef that
-    // shares INT32_TAG with a boxed integer.
+    // shares INTERNAL_WORD_TAG with a boxed integer.
     let Some(index) = crate::array::value_bits_to_number(key.to_bits()) else {
         return false;
     };
@@ -20,7 +20,7 @@ pub(super) fn try_set(target: f64, key: f64, value: f64, receiver: f64) -> bool 
     let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(addr) }) else {
         return false;
     };
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         // An integer-indexed exotic object (a typed array or a Uint8Array
         // buffer) answers every Number key itself, including -0, 1.5 and
         // NaN, which are dropped: its numeric [[Set]] precedes ToPropertyKey.
@@ -89,7 +89,7 @@ mod tests {
         assert!(!try_set(boxed, 0.0, 99.0, other));
         assert_eq!(js_array_get_f64(ptr, 0), 10.0);
         assert!(try_set(boxed, -0.0, 11.0, boxed));
-        let int_key = f64::from_bits(crate::value::INT32_TAG | 1);
+        let int_key = f64::from_bits(crate::value::INTERNAL_WORD_TAG | 1);
         assert!(try_set(boxed, int_key, 22.0, boxed));
         assert_eq!(js_array_get_f64(ptr, 0), 11.0);
         assert_eq!(js_array_get_f64(ptr, 1), 22.0);

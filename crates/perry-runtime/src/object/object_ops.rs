@@ -23,6 +23,7 @@ pub(crate) mod has_own;
 mod host_prototype;
 mod keys_array;
 mod prototype;
+pub(crate) use prototype::structural_prototype_link_of;
 
 // `#[no_mangle] pub extern "C"` FFI entry points keep their `pub` visibility so
 // the parent's `pub use object_ops::*` glob re-exports them crate-publicly.
@@ -40,7 +41,8 @@ pub(crate) use define_property::{
 pub use from_entries::js_object_from_entries;
 pub use has_own::{js_object_has_own, js_object_is, js_object_property_is_enumerable};
 pub use prototype::{
-    js_get_global_this_builtin_value, js_object_create, js_object_get_prototype_of,
+    builtin_value_core, js_get_global_this_builtin_value, js_object_create,
+    js_object_get_prototype_of,
 };
 
 // Internal `pub(crate)` helpers shared between siblings / the rest of the crate.
@@ -92,24 +94,9 @@ pub(crate) unsafe fn extract_obj_ptr(value: f64) -> *mut ObjectHeader {
         }
         ptr
     } else {
-        let bits = value.to_bits();
-        // Raw-I64-pointer fallback (module-level array/object vars store the
-        // untagged pointer directly). Every GC allocation is `align.max(8)`-
-        // aligned, so a real object pointer always has its low 3 bits clear.
-        // Requiring alignment here rejects non-object values whose raw bits
-        // merely *land* in the address range — e.g. a native-module namespace
-        // sentinel (`require('buffer')`) reaching a generic object op like
-        // `hasOwnProperty`. Without it, callers deref `[ptr-8]` for the
-        // GcHeader on a misaligned garbage address → SIGBUS (#3527).
-        if bits != 0
-            && bits <= 0x0000_FFFF_FFFF_FFFF
-            && crate::value::addr_class::is_above_handle_band(bits as usize)
-            && bits & 0x7 == 0
-        {
-            bits as *mut ObjectHeader
-        } else {
-            ptr::null_mut()
-        }
+        // Not a POINTER_TAG value: a primitive. A word whose top 16 bits are
+        // clear is a Number (a denormal, or +0), never a raw object pointer.
+        ptr::null_mut()
     }
 }
 

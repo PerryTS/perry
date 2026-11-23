@@ -283,6 +283,13 @@ const SYMBOL_ATTRIBUTE_DIRECTIVES: &[&str] = &[
     ".cold",
     // COFF
     ".weak_anti_dep",
+    // COFF symbol definitions (`MCAsmStreamer::beginCOFFSymbolDef` and friends):
+    // `.def sym; .scl 2; .type 32; .endef` describes a function symbol and emits
+    // no bytes. LLVM can print one for the next function inside the stack-map
+    // block, ahead of that function's section switch. (`.type` is listed above.)
+    ".def",
+    ".scl",
+    ".endef",
 ];
 
 fn is_zero_width_directive(directive: &str) -> bool {
@@ -1619,6 +1626,29 @@ fn cpu_selection_flags(codegen_args: &[String]) -> Vec<&String> {
         .collect()
 }
 
+/// CPU flags for the stack-map assembler: the codegen's own CPU selection, or,
+/// when it named none, the CPU the code generator defaulted to.
+///
+/// With no explicit CPU the code generator picks its per-triple default
+/// (`inprocess::default_cpu_for_triple`: `apple-m1` for every arm64 Apple
+/// triple), but clang's own default differs per OS: `apple-a7` for
+/// `arm64-apple-ios`. The assembler then rejects legitimately generated
+/// ARMv8.3 instructions (`instruction requires: rcpc`), failing every iOS
+/// device build that doesn't pass `--march`. Name the same CPU.
+fn assembler_cpu_flags(codegen_args: &[String], target: &str) -> Vec<String> {
+    let mut flags: Vec<String> = cpu_selection_flags(codegen_args)
+        .into_iter()
+        .cloned()
+        .collect();
+    if flags.is_empty() {
+        let is_aarch64 = target.starts_with("arm64") || target.starts_with("aarch64");
+        if is_aarch64 && target.contains("apple") {
+            flags.push("-mcpu=apple-m1".to_string());
+        }
+    }
+    flags
+}
+
 fn assemble(
     clang: &Path,
     target: &str,
@@ -1637,7 +1667,7 @@ fn assemble(
     // The two invocations describe the SAME machine and must agree. Forwarding
     // only the CPU-selection flags keeps that contract without dragging along
     // optimisation or output flags, which mean nothing to an assembler.
-    let cpu_flags = cpu_selection_flags(codegen_args);
+    let cpu_flags = assembler_cpu_flags(codegen_args, target);
     let output = Command::new(clang)
         .arg("-c")
         .arg(asm_path)

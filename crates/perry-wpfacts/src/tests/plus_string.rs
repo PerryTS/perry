@@ -7,19 +7,6 @@
 //! or an object on both sides keeps the result unknown.
 use super::*;
 
-fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
-    let path = "main.ts".to_string();
-    let module = perry_parser::parse_typescript(src, &path).expect("parses");
-    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
-    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
-    let mut cfg = FactsConfig::default();
-    cfg.max_work.get_or_insert(50_000_000);
-    match per_unit {
-        true => crate::compute_units(&list, &cfg),
-        false => crate::compute(&list, &cfg),
-    }
-}
-
 /// The verdict of the one `.length` site that follows `marker` in `src`.
 fn length_at(pf: &ProgramFacts, src: &str, marker: &str) -> Verdict {
     let at = src.find(marker).expect("marker") as u32;
@@ -131,4 +118,17 @@ fn object_plus_object_stays_unknown() {
         "f({ valueOf() { return 1; } }, { valueOf() { return 2; } })",
         "(a +",
     );
+}
+
+fn facts_of(src: &str, per_unit: bool) -> ProgramFacts {
+    let path = "main.ts".to_string();
+    let module = perry_parser::parse_typescript(src, &path).expect("parses");
+    let hir = perry_hir::lower_module(&module, "main", &path).expect("lowers");
+    let list: Vec<(String, &perry_hir::Module)> = vec![(path, &hir)];
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    match per_unit {
+        true => crate::compute(&list, &cfg),
+        false => crate::compute(&list, &cfg),
+    }
 }

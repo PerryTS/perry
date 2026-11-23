@@ -18,6 +18,7 @@ on:
     - scripts/actions_catalog.json
     - scripts/actions_plan.py
     - scripts/check_gate_freshness.py
+    - scripts/auto_label.py
     - scripts/check_npm_publish_freshness.py
     - scripts/gate_failure_watch.json
     - scripts/gate_failure_watch.py
@@ -78,6 +79,18 @@ jobs:
   # Maintenance suites
   route:
     name: maintenance / suite routing
+    # On workflow_run, gate-failure-watch__observe is the only consumer of the
+    # plan, so this is the one place that decides which upstream runs it sees;
+    # any other run starts no runner.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      github.event.workflow_run.event == 'schedule' ||
+      ((github.event.workflow_run.event == 'workflow_dispatch' ||
+        github.event.workflow_run.event == 'repository_dispatch') &&
+       github.event.workflow_run.head_branch == 'main') ||
+      (github.event.workflow_run.event == 'push' &&
+       (github.event.workflow_run.head_branch == 'main' ||
+        startsWith(github.event.workflow_run.head_branch, 'v')))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -168,6 +181,8 @@ jobs:
           python3 scripts/gc_gate_wiring_check.py --self-test
 
           python3 scripts/reap_stale_ci_runs.py --self-test
+
+          python3 scripts/auto_label.py --self-test
 
           '
   reject-nonmain-write:
@@ -362,20 +377,8 @@ jobs:
       - route
     name: gate-failure-watch / validate
   gate-failure-watch__observe:
-    if: >-
-      ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && (github.event_name == 'workflow_run' && (
-        github.event.workflow_run.event == 'schedule' ||
-        (
-          (github.event.workflow_run.event == 'workflow_dispatch' ||
-           github.event.workflow_run.event == 'repository_dispatch') &&
-          github.event.workflow_run.head_branch == 'main'
-        ) ||
-        (
-          github.event.workflow_run.event == 'push' &&
-          (github.event.workflow_run.head_branch == 'main' ||
-           startsWith(github.event.workflow_run.head_branch, 'v'))
-        )
-      )) }}
+    # route's job-level if decides which upstream runs are observed.
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['gate-failure-watch'] && github.event_name == 'workflow_run' }}
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -535,6 +538,75 @@ jobs:
     timeout-minutes: 2
     env:
       CHILD_JOB_IDS: '["soak-autofix__autofix"]'
+      JOB_RESULTS: ${{ toJSON(needs) }}
+    steps:
+      - name: Check suite jobs
+        shell: bash
+        run: |-
+          python3 - <<'PY'
+          import json, os, sys
+          ids = json.loads(os.environ['CHILD_JOB_IDS'])
+          results = json.loads(os.environ['JOB_RESULTS'])
+          bad = {job: results.get(job, {}).get('result', 'missing') for job in ids
+                 if results.get(job, {}).get('result') not in {'success', 'skipped'}}
+          if bad:
+              print('Suite job failures:', json.dumps(bad, sort_keys=True), file=sys.stderr)
+              raise SystemExit(1)
+          print(f'{len(ids)} suite jobs completed or were intentionally skipped')
+          PY
+  auto-label__label:
+    if: ${{ needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-label'] && (github.ref == 'refs/heads/main') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+      - name: Checkout repository (inline git)
+        shell: bash
+        env:
+          CHECKOUT_REF: ${{ github.sha }}
+          CHECKOUT_DEPTH: "1"
+          CHECKOUT_TOKEN: ${{ github.token }}
+          CHECKOUT_PERSIST_CREDENTIALS: "false"
+        run: |
+          set -euo pipefail
+          git init
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$CHECKOUT_TOKEN" | base64 | tr -d '\n')"
+          if [[ "$CHECKOUT_DEPTH" == "0" ]]; then
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --force --tags origin
+            git checkout --force --detach "$CHECKOUT_REF"
+          else
+            git -c http.https://github.com/.extraheader="$auth_header" fetch --no-tags --force --depth "$CHECKOUT_DEPTH" origin "$CHECKOUT_REF"
+            git checkout --force --detach FETCH_HEAD
+          fi
+          if [[ "$CHECKOUT_PERSIST_CREDENTIALS" == "true" ]]; then
+            git config http.https://github.com/.extraheader "$auth_header"
+          fi
+      - name: Self-test the labelling rules
+        run: python3 scripts/auto_label.py --self-test
+      # Issue and PR text is data here: the script reads it through the API and
+      # only adds labels, so no untrusted code or ref is ever checked out.
+      - name: Label new issues and pull requests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/auto_label.py --apply --repo "$GITHUB_REPOSITORY"
+    needs:
+      - route
+    name: auto-label / label
+  auto-label:
+    name: auto-label / suite result
+    needs:
+      - route
+      - auto-label__label
+    if: ${{ always() && (needs.route.result == 'success' && fromJSON(needs.route.outputs.plan)['auto-label']) }}
+    permissions: {}
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      CHILD_JOB_IDS: '["auto-label__label"]'
       JOB_RESULTS: ${{ toJSON(needs) }}
     steps:
       - name: Check suite jobs
@@ -711,6 +783,8 @@ jobs:
   # Documentation suites
   route-documentation:
     name: documentation / suite routing
+    # No documentation suite runs on workflow_run.
+    if: github.event_name != 'workflow_run'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -810,7 +884,7 @@ jobs:
       - name: Validate gettext catalogs
         run: |
           # Translation updates require review. Regenerating here rewrites
-          # obsolete entries and can drop existing translations (#10955).
+          # obsolete entries and can drop existing translations.
           for catalog in docs/po/*.po; do
             msgfmt --check --check-format --statistics --output-file=/dev/null "$catalog"
           done

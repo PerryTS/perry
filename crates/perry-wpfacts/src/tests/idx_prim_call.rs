@@ -14,7 +14,12 @@ fn hit_runs(src: &str) -> bool {
     };
     let pf = crate::compute(&[("t.ts".to_string(), &hir)], &cfg);
     assert!(pf.body_reach.complete, "activated");
-    let id = hir.functions.iter().find(|f| f.name == "hit").expect("hit").id;
+    let id = hir
+        .functions
+        .iter()
+        .find(|f| f.name == "hit")
+        .expect("hit")
+        .id;
     pf.body_reach.bodies.iter().any(|(_, i, _)| *i == id)
 }
 

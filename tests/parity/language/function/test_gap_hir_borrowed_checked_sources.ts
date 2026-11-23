@@ -1,3 +1,6 @@
+// DEC 250: Array.prototype.slice is locked in a compiled program, so its patch is refused (the namespace and constructor members before it stay patchable) and the restore stops there too.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 const max = Math.max;
 const parse = JSON.parse;
 const fromCharCode = String.fromCharCode;
@@ -11,7 +14,7 @@ const source = process.argv[2] ||
   "Array.prototype.slice = function () { return 805; };" +
   "Object.prototype.toString = function () { return 806; };" +
   "Object.prototype.hasOwnProperty = function () { return 807; };";
-new Function(source)();
+locked(() => new Function(source)());
 const a = Math.max.call(null, 2, 3);
 const b = JSON.parse.apply(null, ["{}"]);
 const c = String.fromCharCode.call(null, 65);
@@ -23,6 +26,6 @@ const restore = process.argv[3] ||
   "Math.max = max; JSON.parse = parse; String.fromCharCode = fromCharCode;" +
   "Promise.resolve = resolve; Array.prototype.slice = slice;" +
   "Object.prototype.toString = toString; Object.prototype.hasOwnProperty = hasOwnProperty;";
-new Function("max", "parse", "fromCharCode", "resolve", "slice", "toString", "hasOwnProperty", restore)
-  (max, parse, fromCharCode, resolve, slice, toString, hasOwnProperty);
+locked(() => new Function("max", "parse", "fromCharCode", "resolve", "slice", "toString", "hasOwnProperty", restore)
+  (max, parse, fromCharCode, resolve, slice, toString, hasOwnProperty));
 console.log(a, b, c, d, e, f, g);

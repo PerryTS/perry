@@ -49,6 +49,59 @@ linker keeps ordinary ELF alignment and does not pad the selected prefix.
 After PIE relocation, backing covers only complete aligned pages inside
 selected code; partial boundary pages retain their original file mapping.
 
+## The runtime's default order
+
+Without `--function-order`, a Linux build still orders the runtime: the
+compiler carries a list of the runtime functions that ordinary programs
+execute, the most widely used first, and the link places those at the front
+of the text. Only about a quarter of the linked runtime code ever runs, and
+unordered it is spread over nearly the whole text, so most of the binary ends
+up resident; with the order the pages a program touches are packed together.
+The program's own code and its instructions are unchanged, and nothing is
+added to the binary: only the layout differs.
+
+- `PERRY_HOT_TEXT_ORDER=off` keeps the unordered layout.
+- `--function-order` (a recording of your program) replaces the default order.
+- The list is `crates/perry/src/commands/compile/link/hot_text_order.txt`.
+  `scripts/hot_text_order.py build` makes it from recordings of a corpus of
+  programs, and `scripts/hot_text_order.py check` fails when it no longer
+  matches the runtime (a listed function was renamed, or a smoke program
+  executes too much code outside the ordered run).
+  When a new helper adds an isolated first-touch page, its key can be added
+  beside related helpers without re-recording the list. Compare warm peak
+  RSS and instructions with the unchanged order to verify the placement.
+- GNU ld and lld on Linux by default. On macOS / iOS / tvOS / watchOS /
+  visionOS the same list can be passed to ld64 (or ld64.lld) as an
+  `-order_file` of exact symbol names resolved from the runtime archives:
+  opt-in with `PERRY_HOT_TEXT_ORDER=on`, because its effect on Apple's 16 KiB
+  pages has not been measured yet. Windows, WebAssembly, Android and
+  HarmonyOS builds are unchanged.
+
+The same link script carries a default order for the runtime's read-only
+data: the `.rodata` and `.data.rel.ro` sections (tables, vtables, constant
+strings) that ordinary programs read are placed at the front of their output
+sections, so the data pages a program touches are packed as well.
+
+- `PERRY_HOT_DATA_ORDER=off` keeps the previous data layout (the text order
+  has its own switch).
+- The list is `crates/perry/src/commands/compile/link/hot_data_order.txt`, one
+  hash-free key per data section: its symbol, or for an unnamed constant a
+  digest of its bytes and relocations. `scripts/hot_data_order.py` records it
+  (valgrind's lackey, every load) and builds it, and its `check` command is
+  the gate, as for the text list.
+- Native glibc Linux executables only. With GNU ld the `.rodata` half needs
+  x86-64's default script (`-z separate-code`); it adds at most one page of
+  alignment padding in front of `.eh_frame_hdr`. Merged sections
+  (`.rodata.str1.1`, `.rodata.cst16`) are pooled by the linker and not
+  ordered.
+
+Linux links place the two-phase realm population in `.perry_tail`, after
+`perry_js_text`, independently of the hot-text order switch. Each tail function
+has its own input section so unused functions can be discarded. A program
+compiled with `PERRY_REALM_TWO_PHASE=0` links no tail section. See
+[realm population](../runtime/small-process-memory.md#realm-population) for the
+default and its compile-time override.
+
 ## Platforms
 
 | Platform | How the order is applied |

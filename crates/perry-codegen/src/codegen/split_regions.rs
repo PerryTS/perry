@@ -348,6 +348,7 @@ fn pin_reason(s: &Stmt, facts: &ModuleFacts) -> Option<&'static str> {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 any(body, loops, switches, labels)
                     || catch
@@ -1031,6 +1032,7 @@ fn try_extract(
             mutable_captures,
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1053,6 +1055,7 @@ fn try_extract(
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         Expr::FuncRef(func_id)
     };
@@ -1306,6 +1309,7 @@ fn split_list(
                 body,
                 catch,
                 finally,
+                ..
             } if weight > target => {
                 if sh.cost.body(body) > target {
                     split_list(body, ctx, sh, &dom, proofs);
@@ -1778,6 +1782,7 @@ fn split_closures_in(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 split_closures_in(body, names, facts, sh);
                 if let Some(c) = catch {

@@ -46,6 +46,7 @@ fn class_c() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -100,6 +101,7 @@ fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -224,6 +226,7 @@ fn return_inside_a_closure_body_is_not_exempt() {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1237,6 +1240,7 @@ fn boxed_producer_local_gets_no_fact() {
             mutable_captures: vec![1],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1281,6 +1285,7 @@ fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,
@@ -1469,6 +1474,7 @@ fn a_reassigned_callee_binding_is_not_resolved() {
             mutable_captures: vec![1],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1526,6 +1532,7 @@ fn a_catch_bound_callee_id_is_not_resolved() {
                 body: Vec::new(),
             }),
             finally: None,
+            forof_completion: None,
         }],
         "a catch binding on the same id",
     );

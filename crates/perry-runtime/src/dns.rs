@@ -178,9 +178,7 @@ fn js_string_to_rust(value: f64) -> Option<String> {
 
 fn numeric_value(value: f64) -> Option<f64> {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        Some(js_value.as_int32() as f64)
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         Some(js_value.as_number())
     } else {
         None
@@ -421,9 +419,6 @@ fn invalid_arg_value_received(value: f64) -> String {
     }
     if let Some(s) = js_string_to_rust(value) {
         return format!("'{s}'");
-    }
-    if js_value.is_int32() {
-        return js_value.as_int32().to_string();
     }
     if js_value.is_number() {
         return value.to_string();

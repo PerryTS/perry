@@ -32,6 +32,7 @@ pub(crate) use worker_async_dispose::install as install_worker_async_dispose;
 pub(crate) use worker_metadata::install_worker_metadata_getters;
 pub use worker_metadata::{
     register_worker_metadata_provider, worker_id, worker_object_with_id, WorkerMetadataField,
+    WORKER_OWN_KEYS,
 };
 
 type MessageChannelFactory = extern "C" fn() -> f64;
@@ -686,8 +687,9 @@ pub fn populate_messaging_prototype(builtin_name: &str, proto: *mut ObjectHeader
             set_field(proto, "onmessage", js_null());
             set_field(proto, "onmessageerror", js_null());
         }
-        _ => {}
+        _ => return,
     }
+    object::set_intrinsic_to_string_tag(proto, builtin_name);
 }
 
 fn message_port_object() -> *mut ObjectHeader {

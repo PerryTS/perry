@@ -85,11 +85,13 @@ pub(crate) fn closure(
     info: &str,
     header: &str,
     words: &[String],
+    own_slots: usize,
     slow: impl FnOnce(&mut FnCtx<'_>) -> String,
 ) -> String {
     let header_size = crate::target_layout::closure_header_size_bytes(ctx.target_triple);
     let props_offset = crate::target_layout::closure_props_offset_bytes(ctx.target_triple);
-    let size = 8 + header_size + words.len() as u64 * 8;
+    let info_offset = crate::target_layout::closure_info_offset_bytes(ctx.target_triple);
+    let size = 8 + header_size + (words.len() + own_slots) as u64 * 8;
     if !eligible(ctx.target_triple, size) {
         return slow(ctx);
     }
@@ -109,11 +111,7 @@ pub(crate) fn closure(
             blk.store(I64, &packed.to_string(), raw);
             let user = blk.gep(I8, raw, &[(I64, "8")]);
             blk.store(I64, header, &user);
-            let body = blk.gep(
-                I8,
-                &user,
-                &[(I64, &crate::runtime_abi::CLOSURE_INFO_OFFSET.to_string())],
-            );
+            let body = blk.gep(I8, &user, &[(I64, &info_offset.to_string())]);
             blk.store(PTR, info, &body);
             let props = blk.gep(I8, &user, &[(I64, &props_offset.to_string())]);
             // GC_STORE_AUDIT(INIT): fresh closure's null own-property edge.
@@ -126,6 +124,18 @@ pub(crate) fn closure(
                 );
                 // GC_STORE_AUDIT(INIT): complete capture range of an idle nursery birth.
                 blk.store(I64, word, &address);
+            }
+            // The body's own slots (`JsFunctionInfo::own_slots`) are born holes.
+            for own in 0..own_slots {
+                let address = blk.gep(
+                    I8,
+                    &user,
+                    &[(
+                        I64,
+                        &(header_size + (words.len() + own) as u64 * 8).to_string(),
+                    )],
+                );
+                blk.store(I64, crate::nanbox::TAG_HOLE_I64, &address);
             }
             blk.ptrtoint(&user, I64)
         },

@@ -328,6 +328,7 @@ fn stmt_has_closure(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body_has_closure(body)
                 || catch.as_ref().is_some_and(|c| body_has_closure(&c.body))
@@ -404,6 +405,7 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body_has_super(body)
                 || catch.as_ref().is_some_and(|c| body_has_super(&c.body))
@@ -514,6 +516,7 @@ fn flag_producer_calls_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             flag_producer_calls_in_super_body(body, candidates, out);
             if let Some(c) = catch {
@@ -589,6 +592,7 @@ pub fn stmt_contains_return(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(stmt_contains_return)
                 || catch

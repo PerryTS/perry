@@ -62,16 +62,31 @@ fn past_the_bound_the_settled_part_keeps_its_facts() {
     assert!(proven(&cheap(&full)), "{}", cheap(&full));
     for d in [2u64, 4, 8, 16] {
         let c = run(&src, full.stats.work / d);
-        eprintln!("bound {} work {} instances {} (full {}) widened {} aborted {} cheap {}",
-            full.stats.work / d, c.stats.work, c.stats.instances, full.stats.instances, c.stats.widened, c.stats.aborted,
-            proven(&cheap(&c)));
+        eprintln!(
+            "bound {} work {} instances {} (full {}) widened {} aborted {} cheap {}",
+            full.stats.work / d,
+            c.stats.work,
+            c.stats.instances,
+            full.stats.instances,
+            c.stats.widened,
+            c.stats.aborted,
+            proven(&cheap(&c))
+        );
     }
     let bound = full.stats.work / 4;
     let cut = run(&src, bound);
-    assert!(cut.stats.widened && !cut.stats.aborted, "work {}", cut.stats.work);
+    assert!(
+        cut.stats.widened && !cut.stats.aborted,
+        "work {}",
+        cut.stats.work
+    );
     assert_eq!(cheap(&cut), cheap(&full));
     // Past the bound no new calling context: fewer runs than the product.
-    assert!(cut.stats.instances < full.stats.instances, "{} runs", cut.stats.instances);
+    assert!(
+        cut.stats.instances < full.stats.instances,
+        "{} runs",
+        cut.stats.instances
+    );
 }
 
 /// At every bound a widened solve claims nothing the full solve does not:
@@ -81,7 +96,8 @@ fn past_the_bound_the_settled_part_keeps_its_facts() {
 fn widened_verdicts_are_a_subset_of_the_full_solve() {
     for src in [
         program(4),
-        program(4) + "class B { constructor(public v: number, public w: number) {} }\n\
+        program(4)
+            + "class B { constructor(public v: number, public w: number) {} }\n\
                       let a2: any = new A(2);\nexport const late = a2.v;\n\
                       for (const b of bs) { a2 = new B(3, 4); }\n",
     ] {
@@ -93,14 +109,21 @@ fn widened_verdicts_are_a_subset_of_the_full_solve() {
         while b < full.stats.work {
             let cut = run(&src, b);
             if cut.stats.aborted {
-                assert!(cut.sites.iter().all(|s| matches!(s.verdict, Verdict::No(_))));
+                assert!(cut
+                    .sites
+                    .iter()
+                    .all(|s| matches!(s.verdict, Verdict::No(_))));
             } else {
                 widened += cut.stats.widened as u32;
                 let cv = verdicts(&cut);
                 for (o, k, v) in &cv {
                     if proven(v) {
                         let f = fv.iter().find(|(fo, fk, _)| fo == o && fk == k);
-                        assert_eq!(f.map(|f| &f.2), Some(v), "bound {b}: site {k}@{o} claims {v}");
+                        assert_eq!(
+                            f.map(|f| &f.2),
+                            Some(v),
+                            "bound {b}: site {k}@{o} claims {v}"
+                        );
                     }
                 }
             }
@@ -116,8 +139,19 @@ fn widened_verdicts_are_a_subset_of_the_full_solve() {
 fn widened_solve_stops_at_its_own_bound_and_claims_nothing() {
     let src = program(6);
     let full = run(&src, 0);
-    assert!(full.stats.work > 1000, "fixture too cheap: work {}", full.stats.work);
+    assert!(
+        full.stats.work > 1000,
+        "fixture too cheap: work {}",
+        full.stats.work
+    );
     let stop = run(&src, 1);
-    assert!(stop.stats.widened && stop.stats.widened_stop && stop.stats.aborted, "work {}", stop.stats.work);
-    assert!(stop.sites.iter().all(|s| matches!(s.verdict, Verdict::No(_))));
+    assert!(
+        stop.stats.widened && stop.stats.widened_stop && stop.stats.aborted,
+        "work {}",
+        stop.stats.work
+    );
+    assert!(stop
+        .sites
+        .iter()
+        .all(|s| matches!(s.verdict, Verdict::No(_))));
 }

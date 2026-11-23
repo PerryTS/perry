@@ -60,6 +60,10 @@ mod assign;
 mod spread;
 pub use spread::js_object_spread_fresh;
 #[cfg(test)]
+mod pointer_shaped_number_tests;
+#[cfg(test)]
+mod raw_ptr_from_value_tests;
+#[cfg(test)]
 mod spread_tests;
 pub use alloc::{
     js_object_alloc, js_object_alloc_fast, js_object_alloc_fast_with_parent,
@@ -156,6 +160,9 @@ pub(crate) mod global_this;
 pub(crate) mod store_key;
 #[cfg(feature = "dyn-eval")]
 pub(crate) use global_this::install_dyn_eval;
+pub(crate) use global_this::{
+    birth_lazy_family, birth_unborn_family_of, unborn_declared_statics_of,
+};
 #[cfg(feature = "temporal")]
 pub(crate) use global_this::{
     install_temporal_namespace as global_this_install_temporal_namespace,
@@ -190,7 +197,9 @@ mod string_wrapper;
 pub use live_slots::{
     js_object_live_slot_count, object_live_slot_count, perry_object_header_abi_revision,
 };
-pub(crate) use live_slots::{object_inline_capacity, set_object_live_slot_count};
+pub(crate) use live_slots::{
+    object_inline_capacity, object_physical_capacity, set_object_live_slot_count,
+};
 pub(crate) use null_stub::null_stub_value;
 pub use null_stub::{js_unresolved_default_call, js_unresolved_namespace_stub};
 #[cfg(test)]
@@ -215,8 +224,11 @@ pub(crate) mod iterator_prototypes;
 pub(crate) mod map_set_subclass;
 pub mod method_call;
 pub mod method_site;
-mod slot_store;
+pub(crate) mod slot_store;
 pub(crate) use slot_store::{store_object_field_slot, store_object_field_slot_layout_deferred};
+pub(crate) mod deferred_namespace;
+#[cfg(test)]
+mod deferred_namespace_tests;
 mod namespace_create;
 pub(crate) mod native_call_method;
 pub(crate) mod native_get;
@@ -229,7 +241,7 @@ pub(crate) use native_module::class_ref_id;
 pub(crate) use native_module::install_native_module_vtable;
 pub(crate) use native_module::{class_instance_has_method, class_method_value_target};
 pub(crate) use native_module::{
-    class_method_entry_source_func_ptr, class_prototype_ref_id, SYMBOL_BOUND_METHOD_NAME,
+    class_method_entry_source_func_ptr, class_method_home_id, SYMBOL_BOUND_METHOD_NAME,
 };
 mod native_module_crypto_key_object;
 mod native_module_crypto_random;
@@ -237,15 +249,18 @@ mod native_module_dispatch;
 mod native_module_registry;
 pub(crate) use native_module_registry::install_readline_constructor_metadata;
 pub(crate) use native_module_registry::js_nm_enable_install_all;
+#[cfg(test)]
+pub(crate) use native_module_registry::js_nm_install_v8;
 pub(crate) use native_module_registry::nm_attach_lookup;
 pub(crate) use native_module_registry::nm_ctor_lookup;
+pub(crate) use native_module_registry::nm_register_v8_constructor_hooks;
 // Re-exported for submodule installers that delegate to a native module.
+#[cfg(test)]
+pub(crate) use native_module_registry::js_nm_install_events;
 pub(crate) use native_module_registry::{
-    js_install_global_value_surfaces, js_nm_install_module, js_nm_install_perf,
+    js_install_global_value_surfaces, js_nm_install_fs, js_nm_install_module, js_nm_install_perf,
     js_nm_install_process, js_nm_install_tls, js_nm_install_util,
 };
-#[cfg(test)]
-pub(crate) use native_module_registry::{js_nm_install_events, js_nm_install_fs};
 mod literal_constructor;
 mod native_module_stream;
 pub(crate) mod native_this_alias;
@@ -253,6 +268,8 @@ pub(crate) mod node_http_prototypes;
 mod object_literal_ops;
 pub(crate) mod object_ops;
 pub(crate) mod own_override;
+#[cfg(test)]
+mod own_override_array_site_tests;
 #[cfg(test)]
 mod own_override_builtin_install_tests;
 #[cfg(test)]
@@ -317,6 +334,7 @@ pub(crate) use spill::{
 mod string_proto_thunks;
 #[cfg(feature = "temporal")]
 mod temporal_proto;
+pub(crate) mod typed_array_chain;
 mod typed_array_define;
 pub(crate) mod typed_array_proto_thunks;
 mod util_types;
@@ -357,6 +375,7 @@ pub use field_get_set::*;
 pub use field_set_by_name::*;
 pub(crate) use global_this::is_async_generator_instance_value;
 pub use global_this::*;
+pub use global_this_tables::BuiltinConstructorIdentity;
 pub(crate) use global_this_tables::*;
 pub use groupby::*;
 pub use instanceof::*;
@@ -448,9 +467,12 @@ pub use this_binding::{
     js_static_this_arm_classref, js_static_this_arm_value, js_static_this_resolve,
     js_static_this_resolve_class, js_this_coerce_sloppy,
 };
-pub use to_string_tag::js_object_to_string;
+pub(crate) use to_string_tag::fetch_handle_constructor_value;
 pub(crate) use to_string_tag::typed_array_to_string_tag_name;
 pub(crate) use to_string_tag::web_builtin_to_string_tag;
+pub(crate) use to_string_tag::web_stream_interface_name;
+pub use to_string_tag::web_stream_prototype_value;
+pub use to_string_tag::{js_object_to_string, object_prototype_to_string};
 /// An atomic GC root whose backing slot belongs to the calling Perry agent.
 ///
 /// The public handle stays process-global and contains no heap address. Every
@@ -741,6 +763,7 @@ impl ObjectHotTables {
 /// faster than the hash overhead (memory access, cache footprint).
 const KEYS_INDEX_THRESHOLD: u32 = 32;
 
+pub(crate) mod key_owner;
 #[path = "keys_lookup.rs"]
 mod keys_lookup;
 mod object_keys;
@@ -874,6 +897,8 @@ fn shape_cache_insert(
         unsafe {
             let gc_header = (keys_array as *const u8).sub(crate::gc::GC_HEADER_SIZE)
                 as *mut crate::gc::GcHeader;
+            #[cfg(perry_gc_instruments)]
+            crate::arena::alloc_life::shape_shared(gc_header);
             (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
         }
     }
@@ -1164,7 +1189,6 @@ const TRANSITION_SLOT_IDX_MASK: u32 = 0x00FF_FFFF;
 fn transition_cache_slot(prev_shape_id: LayoutWord, key_id: u64, namespace: u32) -> usize {
     let hash = match namespace {
         0 => interned_key_slot_hash(interned_key_addr(key_id)),
-        spread::SPREAD_TRANSITION_NAMESPACE => key_id,
         // Packed keys have no alignment bits. Include the length so a
         // zero-padded shorter name is not forced to alias a longer one.
         _ => key_id ^ (u64::from(namespace) << 56),
@@ -1270,7 +1294,7 @@ fn transition_edge_places_key(
     unsafe {
         let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
             as *const crate::gc::GcHeader;
-        if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*gc_header).obj_type) {
             return false;
         }
         let keys = next_keys as *const ArrayHeader;
@@ -1434,9 +1458,11 @@ unsafe fn transition_cache_stamp_shape_shared(next_keys: usize) -> bool {
     }
     let gc_header = (next_keys as *const u8).wrapping_sub(crate::gc::GC_HEADER_SIZE)
         as *mut crate::gc::GcHeader;
-    if (*gc_header).obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!((*gc_header).obj_type) {
         return false;
     }
+    #[cfg(perry_gc_instruments)]
+    crate::arena::alloc_life::shape_shared(gc_header);
     (*gc_header).gc_flags |= crate::gc::GC_FLAG_SHAPE_SHARED;
     true
 }
@@ -1768,7 +1794,10 @@ pub(crate) unsafe fn object_keys_and_live_slots(
 
 pub(crate) mod meta_flags;
 pub(crate) use meta_flags::OBJECT_META_FLAG_NATIVE_ALIAS;
-pub(crate) use meta_flags::{OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE};
+pub(crate) use meta_flags::{
+    OBJECT_META_FLAG_EXOTIC_READ_RECEIVER, OBJECT_META_FLAG_IS_PROTOTYPE,
+    OBJECT_META_FLAG_PLAIN_ELEMENTS,
+};
 
 pub(crate) mod meta_record;
 pub use meta_record::ObjectMeta;

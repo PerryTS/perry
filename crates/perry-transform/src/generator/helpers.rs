@@ -61,7 +61,9 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
             else_branch,
             ..
         } => {
-            then_branch.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+            then_branch
+                .iter_mut()
+                .for_each(|s| walk_hoisting_scope_mut(s, f));
             if let Some(eb) = else_branch {
                 eb.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
             }
@@ -80,10 +82,13 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
             if let Some(c) = catch {
-                c.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+                c.body
+                    .iter_mut()
+                    .for_each(|s| walk_hoisting_scope_mut(s, f));
             }
             if let Some(fin) = finally {
                 fin.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
@@ -91,7 +96,9 @@ fn walk_hoisting_scope_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Stmt)) {
         }
         Stmt::Switch { cases, .. } => {
             for case in cases {
-                case.body.iter_mut().for_each(|s| walk_hoisting_scope_mut(s, f));
+                case.body
+                    .iter_mut()
+                    .for_each(|s| walk_hoisting_scope_mut(s, f));
             }
         }
         _ => {}
@@ -137,6 +144,7 @@ pub fn rewrite_hoisted_lets_in_stmt(
             body,
             catch,
             finally,
+            ..
         } => {
             rewrite_hoisted_lets_in_stmts(body, hoisted_ids);
             if let Some(c) = catch {
@@ -230,6 +238,7 @@ pub fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 wrap_returns_in_promise(body);
                 if let Some(c) = catch {

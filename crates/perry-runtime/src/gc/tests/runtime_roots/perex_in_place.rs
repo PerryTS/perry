@@ -159,13 +159,15 @@ fn perex_in_place_search_decided_in_one_quantum_roots_and_marks_nothing() {
         Ok(())
     });
     assert_eq!(found, Some(vec![2, 5, 2, 4, 4, 5]));
-    // Only the capture-slot safepoint polls; nothing pauses.
-    assert_eq!(polls, 1);
+    // The automaton answered: its answer holds no evaluator state across a
+    // safepoint, so it does not poll, roots nothing and leaves the string
+    // unique.
+    assert_eq!(polls, 0);
     assert_eq!(RuntimeHandleScope::active_len_for_tests(), handles);
     assert_eq!(
         refcount(&input),
-        0,
-        "the capture-slot poll keeps the subject binding across a safepoint"
+        1,
+        "an automaton answer takes no safepoint, so no binding is kept across one"
     );
     // A boolean test never polls: the string stays unique.
     let other = text(&scope, b"xxaab");

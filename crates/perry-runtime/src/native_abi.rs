@@ -4,7 +4,6 @@
 //! used by the rest of the runtime. Manifest lowering calls them before handing
 //! raw scalars, pointers, buffer spans, strings, or promises to native code.
 
-use crate::buffer::{is_registered_buffer, BufferHeader};
 use crate::object::ObjectHeader;
 use crate::promise::Promise;
 use crate::value::{JSValue, POINTER_MASK, TAG_FALSE, TAG_TRUE};
@@ -26,9 +25,7 @@ fn throw_range_error(message: &str) -> ! {
 
 fn strict_number(value: f64, message: &str) -> f64 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        js_value.as_int32() as f64
-    } else if js_value.is_number() {
+    if js_value.is_number() {
         js_value.as_number()
     } else {
         throw_type_error(message)
@@ -51,14 +48,39 @@ fn strict_safe_integer(value: f64, message: &str) -> f64 {
     number
 }
 
-fn strict_buffer_from_value(value: f64) -> *const BufferHeader {
-    // #10694: the probes below read the cell's header, so a raw (top16 == 0)
-    // word must be one the allocator owns; `object_ref_addr` vouches for it.
+/// The `(data, byte_length)` window of a `buffer+len` argument: any byte cell
+/// `bytes::span` reads, which is every `ArrayBufferView` (`Buffer`, every
+/// typed-array kind, `DataView`, their subarrays and views) plus
+/// `ArrayBuffer` / `SharedArrayBuffer`. The pointer is the view's first byte
+/// (`backing + byteOffset`, never a copy); the length counts BYTES
+/// (`length * BYTES_PER_ELEMENT`). A detached or out-of-bounds view is the
+/// empty window `(null, 0)`, as its JS `byteLength` is 0.
+fn strict_byte_span(value: f64) -> (*const u8, usize) {
+    // #10694: `span` reads the cell's header, so a raw (top16 == 0) word must
+    // be one the allocator owns; `object_ref_addr` vouches for it.
     let raw_ptr = crate::value::addr_class::object_ref_addr(value);
-    if raw_ptr != 0 && is_registered_buffer(raw_ptr) {
-        raw_ptr as *const BufferHeader
-    } else {
-        throw_type_error("Expected a Buffer or Uint8Array for native buffer span")
+    let span = (raw_ptr != 0).then(|| {
+        crate::buffer::bytes::no_gc(|_| {
+            crate::buffer::bytes::span(crate::value::js_nanbox_pointer(raw_ptr as i64), false)
+                .map(|span| (span.ptr as *const u8, span.len))
+        })
+    });
+    match span {
+        Some(Ok(window)) => window,
+        Some(Err(crate::buffer::bytes::NotBytes::Detached)) => (std::ptr::null(), 0),
+        // Thrown outside `no_gc`: unwinding must not leave its scope open.
+        _ => throw_type_error(
+            "Expected an ArrayBuffer, a typed array, a DataView or a Buffer for native buffer span",
+        ),
+    }
+}
+
+/// `buffer+len` with `"nullable": true`: `null` and `undefined` (including an
+/// omitted trailing argument) are the empty window `(null, 0)`.
+fn nullable_byte_span(value: f64) -> (*const u8, usize) {
+    match value.to_bits() {
+        crate::value::TAG_NULL | crate::value::TAG_UNDEFINED => (std::ptr::null(), 0),
+        _ => strict_byte_span(value),
     }
 }
 
@@ -75,7 +97,7 @@ pub extern "C" fn js_native_abi_check_f64(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_typed_f64_arg_guard(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    (js_value.is_number() || js_value.is_int32()) as i32
+    (js_value.is_number()) as i32
 }
 
 /// Convert an already-guarded JS number/int32 argument to the raw f64 ABI used
@@ -106,9 +128,6 @@ pub extern "C" fn js_typed_f64_arg_to_raw(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        return 1;
-    }
     if !js_value.is_number() {
         return 0;
     }
@@ -125,11 +144,7 @@ pub extern "C" fn js_typed_i32_arg_guard(value: f64) -> i32 {
 #[no_mangle]
 pub extern "C" fn js_typed_i32_arg_to_raw(value: f64) -> i32 {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        js_value.as_int32()
-    } else {
-        js_value.as_number() as i32
-    }
+    js_value.as_number() as i32
 }
 
 /// Guard for internal typed-i1 Perry function clones.
@@ -243,6 +258,15 @@ static KEEP_JS_NATIVE_CALL_METHOD_BY_ID: unsafe extern "C-unwind" fn(
     *const f64,
     usize,
 ) -> f64 = crate::object::js_native_call_method_by_id;
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_CALL_LATE_OWN_VALUE: unsafe extern "C-unwind" fn(
+    f64,
+    i64,
+    i64,
+    *const f64,
+    usize,
+) -> f64 = crate::object::js_call_late_own_value;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
 static KEEP_JS_NATIVE_CALL_METHOD_APPLY_BY_ID: unsafe extern "C-unwind" fn(f64, i64, i64) -> f64 =
@@ -408,24 +432,32 @@ pub extern "C" fn js_native_abi_check_ptr(value: f64) -> i64 {
 
 /// Validate and lower the data pointer half of a manifest `buffer+len` span.
 ///
-/// Resolves a registered view (`new Uint8Array(arrayBuffer)`, `slice`,
-/// `subarray`) to `backing_data + byteOffset` — the same storage JS reads and
-/// writes go through — so a native callee that writes `len` bytes touches the
-/// bytes the script observes, not the view's stale local copy (#6515).
+/// Resolves a view (`new Uint8Array(arrayBuffer)`, `new Float32Array(ab, 16)`,
+/// `slice`, `subarray`) to `backing_data + byteOffset` — the same storage JS
+/// reads and writes go through — so a native callee that writes `len` bytes
+/// touches the bytes the script observes, not the view's stale local copy
+/// (#6515).
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_buffer_data_ptr(value: f64) -> *const u8 {
-    let buffer = strict_buffer_from_value(value);
-    crate::buffer::bytes::no_gc(|_| {
-        crate::buffer::bytes::span(crate::value::js_nanbox_pointer(buffer as i64), false)
-            .map_or(std::ptr::null(), |span| span.ptr as *const u8)
-    })
+    strict_byte_span(value).0
 }
 
 /// Validate and lower the byte-length half of a manifest `buffer+len` span.
 #[no_mangle]
 pub extern "C" fn js_native_abi_check_buffer_byte_len(value: f64) -> usize {
-    let buffer = strict_buffer_from_value(value);
-    unsafe { crate::buffer::store::length(buffer as usize) }
+    strict_byte_span(value).1
+}
+
+/// Data pointer half of a nullable `buffer+len` span: NULL for null/undefined.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_nullable_buffer_data_ptr(value: f64) -> *const u8 {
+    nullable_byte_span(value).0
+}
+
+/// Byte-length half of a nullable `buffer+len` span: 0 for null/undefined.
+#[no_mangle]
+pub extern "C" fn js_native_abi_check_nullable_buffer_byte_len(value: f64) -> usize {
+    nullable_byte_span(value).1
 }
 
 /// Validate and unwrap a manifest `promise` parameter.
@@ -524,7 +556,7 @@ mod tests {
         assert_eq!(js_typed_f64_arg_guard(12.5), 1);
         assert_eq!(js_typed_f64_arg_to_raw(12.5), 12.5);
 
-        let int32 = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let int32 = f64::from(-7);
         assert_eq!(js_typed_f64_arg_guard(int32), 1);
         assert_eq!(js_typed_f64_arg_to_raw(int32), -7.0);
 
@@ -535,7 +567,7 @@ mod tests {
 
     #[test]
     fn typed_i32_arg_guard_is_non_throwing_and_int32_only() {
-        let tagged = f64::from_bits(crate::value::JSValue::int32(-7).bits());
+        let tagged = f64::from(-7);
         assert_eq!(js_typed_i32_arg_guard(tagged), 1);
         assert_eq!(js_typed_i32_arg_to_raw(tagged), -7);
 
@@ -574,10 +606,7 @@ mod tests {
         assert_eq!(js_typed_i1_arg_to_raw(f), 0);
 
         assert_eq!(js_typed_i1_arg_guard(1.0), 0);
-        assert_eq!(
-            js_typed_i1_arg_guard(f64::from_bits(JSValue::int32(1).bits())),
-            0
-        );
+        assert_eq!(js_typed_i1_arg_guard(f64::from(1)), 0);
         let s = crate::string::js_string_from_bytes(b"yes".as_ptr(), 3);
         let string = f64::from_bits(JSValue::string_ptr(s).bits());
         assert_eq!(js_typed_i1_arg_guard(string), 0);
@@ -595,10 +624,7 @@ mod tests {
         assert_ne!(js_typed_string_arg_to_raw(short), 0);
 
         assert_eq!(js_typed_string_arg_guard(42.0), 0);
-        assert_eq!(
-            js_typed_string_arg_guard(f64::from_bits(JSValue::int32(7).bits())),
-            0
-        );
+        assert_eq!(js_typed_string_arg_guard(f64::from(7)), 0);
         assert_eq!(js_typed_string_arg_guard(f64::from_bits(TAG_TRUE)), 0);
     }
 
@@ -732,6 +758,86 @@ mod tests {
             js_native_abi_check_buffer_data_ptr(boxed_ptr(view)),
             std::ptr::null()
         );
+    }
+
+    // `buffer+len` takes every byte-bearing value: the span is the view's own
+    // first byte and its BYTE length (elements x BYTES_PER_ELEMENT).
+    #[test]
+    fn buffer_span_accepts_every_typed_array_kind_by_byte_length() {
+        use crate::typedarray::*;
+        for (kind, size) in [
+            (KIND_INT8, 1),
+            (KIND_UINT8, 1),
+            (KIND_UINT8_CLAMPED, 1),
+            (KIND_INT16, 2),
+            (KIND_UINT16, 2),
+            (KIND_FLOAT16, 2),
+            (KIND_INT32, 4),
+            (KIND_UINT32, 4),
+            (KIND_FLOAT32, 4),
+            (KIND_FLOAT64, 8),
+            (KIND_BIGINT64, 8),
+            (KIND_BIGUINT64, 8),
+        ] {
+            let ta = js_typed_array_new_empty(kind as i32, 3);
+            let boxed = boxed_ptr(ta);
+            let expected = crate::buffer::bytes::no_gc(|_| {
+                crate::buffer::bytes::span(boxed, false).unwrap().ptr as *const u8
+            });
+            assert_eq!(
+                js_native_abi_check_buffer_data_ptr(boxed),
+                expected,
+                "kind {kind}"
+            );
+            assert_eq!(
+                js_native_abi_check_buffer_byte_len(boxed),
+                3 * size,
+                "kind {kind}"
+            );
+            assert_eq!(
+                js_native_abi_check_nullable_buffer_byte_len(boxed),
+                3 * size,
+                "kind {kind}"
+            );
+        }
+
+        // A DataView over an offset window of an ArrayBuffer.
+        let ab = crate::buffer::js_array_buffer_new(32);
+        let dv = crate::buffer::js_data_view_new(boxed_ptr(ab), 8.0, 12.0);
+        let base = js_native_abi_check_buffer_data_ptr(boxed_ptr(ab));
+        assert_eq!(js_native_abi_check_buffer_byte_len(boxed_ptr(ab)), 32);
+        assert_eq!(
+            js_native_abi_check_buffer_data_ptr(dv),
+            base.wrapping_add(8)
+        );
+        assert_eq!(js_native_abi_check_buffer_byte_len(dv), 12);
+    }
+
+    #[test]
+    fn buffer_span_nullability_is_the_descriptors_choice() {
+        let null = f64::from_bits(crate::value::TAG_NULL);
+        let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+        for absent in [null, undefined] {
+            assert_eq!(
+                js_native_abi_check_nullable_buffer_data_ptr(absent),
+                std::ptr::null()
+            );
+            assert_eq!(js_native_abi_check_nullable_buffer_byte_len(absent), 0);
+            assert!(catch_runtime_throw(|| {
+                js_native_abi_check_buffer_data_ptr(absent);
+            }));
+            assert!(catch_runtime_throw(|| {
+                js_native_abi_check_buffer_byte_len(absent);
+            }));
+        }
+        // Nullable admits null and undefined only, not other non-buffers.
+        let object = crate::object::js_object_alloc(0, 0);
+        assert!(catch_runtime_throw(|| {
+            js_native_abi_check_nullable_buffer_data_ptr(boxed_ptr(object));
+        }));
+        assert!(catch_runtime_throw(|| {
+            js_native_abi_check_nullable_buffer_byte_len(0.0);
+        }));
     }
 
     #[test]

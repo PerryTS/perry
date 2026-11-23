@@ -181,8 +181,11 @@ fn forbidden_node_import(name: &str) -> bool {
         || name.contains("Nan::")
 }
 
-/// Validate an approved addon binary and read its reach ([`imports::addon_reach`])
-/// and its Node-API imports ([`imports::node_api_imports`]).
+/// Validate an approved addon binary and read its reach and Node-API imports.
+///
+/// Perry C host functions are exported for every linked addon because dynamic
+/// dependencies can reference them without listing them in this binary's
+/// imports.
 fn validate_node_api_binary(
     path: &std::path::Path,
 ) -> Result<(

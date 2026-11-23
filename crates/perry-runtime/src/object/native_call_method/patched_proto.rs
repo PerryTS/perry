@@ -41,7 +41,7 @@ unsafe fn receiver_has_by_name_builtins(receiver: f64) -> bool {
     match crate::value::addr_class::try_read_gc_header(addr) {
         Some(header) => matches!(
             header.obj_type,
-            crate::gc::GC_TYPE_ARRAY
+            crate::gc_array_type_pat!()
                 | crate::gc::GC_TYPE_LAZY_ARRAY
                 | crate::gc::GC_TYPE_MAP
                 | crate::gc::GC_TYPE_SET

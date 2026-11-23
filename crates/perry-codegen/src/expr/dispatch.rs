@@ -26,10 +26,18 @@ pub(crate) fn lower_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // expression boundary refreshes them.
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
+    crate::verify_facts::zero_sign::witness(ctx, expr);
     // What the expression does to the receiver run in flight.
     let run = crate::expr::layout_read::run_transparency(expr);
     crate::expr::layout_read::run_enter(ctx, &run);
-    let value = lower_expr_inner(ctx, expr)?;
+    // SNAP census frame: `expr` is the current node for the extent of its
+    // own lowering, restored on every return (`expr/snap_env_site.rs`).
+    let snap_frame = super::snap_env_site::enter(ctx, expr);
+    let value = lower_expr_inner(ctx, expr);
+    ctx.snap_lowering = snap_frame;
+    let value = value?;
+    crate::verify_facts::life::birth_lowered(ctx, expr, &value);
+    crate::verify_facts::life_measure::birth(ctx, expr, &value);
     crate::expr::layout_read::run_exit(ctx, &run);
     if let Some(desc) = crate::layout_desc::array_families::birth_layout(expr) {
         Ok(ctx.block().call(
@@ -50,9 +58,6 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     // one. Handlers that care receive it as an argument, because they consult
     // it after lowering their operands — by which point the field is gone.
     let value_discarded = std::mem::take(&mut ctx.discard_this_expr);
-    // SNAP census (instrumented compiles only): an env read whose value this
-    // expression stores is a store site (`expr/snap_env_site.rs`).
-    super::snap_env_site::note_store_parent(ctx, expr);
     // #9856: under `--debug-symbols`, record this expression's source line
     // for the DWARF line table (`crate::debug_info`). No-op otherwise.
     crate::debug_info::mark_expr_location(ctx, expr);
@@ -65,11 +70,24 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     {
         return Ok(value);
     }
+    // I32 at rest (PR C): a site of a key some class stores in an I32 lane is
+    // decided before every other tier (`rest_fields`).
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     // #10943: HIR folds a builtin method call on a proven receiver into a
     // dedicated node that lowers straight to the native helper, below the
     // chain guard entirely. An own property still beats the builtin, so the
     // same diamond is applied here, at the one place every folded node
     // passes through.
+    // DESIGN-p4l4 VR-3b: a record result of a typed call is bound to its
+    // lanes (`record_sig`).
+    if let Some(value) = crate::codegen::record_sig::try_fold_bound_agg(ctx, expr) {
+        return Ok(value);
+    }
+    if let Some(value) = crate::codegen::record_sig::try_lower_agg_set(ctx, expr)? {
+        return Ok(value);
+    }
     if let Some(value) = super::folded_builtin_override::try_lower(ctx, expr)? {
         return Ok(value);
     }
@@ -139,6 +157,12 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // on the in-place append path instead of copying the whole
             // accumulator on the next `+=`.
             Expr::LocalGet(id) if property == "length" => {
+                // DYNP E13: a for-in keys local's length is the loop's bound,
+                // written by its begin call (E13-BOUND).
+                if let Some(len) = for_in_bound_slot(ctx, *id) {
+                    let n = ctx.block().load(crate::types::I64, &len);
+                    return Ok(ctx.block().sitofp(crate::types::I64, &n, DOUBLE));
+                }
                 let saved = ctx.string_length_read_of.replace(*id);
                 let result = super::property_get::lower(ctx, expr);
                 ctx.string_length_read_of = saved;
@@ -783,6 +807,66 @@ pub(crate) fn lower_math_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Str
     }
 }
 
+/// The operands of a Math call that reads several of its arguments: every
+/// argument EXPRESSION is evaluated first, left to right (ECMA-262 13.3.6.1
+/// ArgumentListEvaluation), then the call coerces them in order (21.3.2.x:
+/// `Math.atan2( { valueOf() { … } }, log( 2 ) )` runs `log` before the
+/// `valueOf`). Lowering each operand together with its coercion would run an
+/// earlier operand's `valueOf` before a later operand's expression. When
+/// nothing can collect, the emitted IR is the one the interleaved lowering gave.
+pub(crate) fn with_math_operands<'f>(
+    ctx: &mut FnCtx<'f>,
+    exprs: &[&Expr],
+    body: impl FnOnce(&mut FnCtx<'f>, Vec<String>) -> Result<String>,
+) -> Result<String> {
+    crate::rooting::with_operands_rooted(ctx, exprs, |ctx, vals| {
+        let mut coerced = Vec::with_capacity(vals.len());
+        for (e, v) in exprs.iter().zip(vals.iter()) {
+            coerced.push(if math_operand_is_proven_number(ctx, e) {
+                v.clone()
+            } else {
+                emit_math_to_number(ctx, v)
+            });
+        }
+        body(ctx, coerced)
+    })
+}
+
+/// c1: the operands of a Math call that lowers to an LLVM intrinsic and
+/// nothing else, once every operand is a proven Number
+/// (`expr::math_simple` / `logical_collections`: `llvm.fabs`, `llvm.floor`,
+/// `llvm.ceil`, `llvm.sqrt`, and `llvm.minimum` / `llvm.maximum` folds, which
+/// give JS's NaN and signed-zero results; `Math.max()` folds to its
+/// identity). `MathRound`, `MathTrunc`, `MathSign` call `js_math_*`, and the
+/// spread forms allocate: not listed. Whatever the lowering of the node is,
+/// this describes it; a `Math` member the program writes never becomes the
+/// node (`perry_hir::patched_builtins`, #10848; under dynamic code the node
+/// sits inside the `NamespacePatched` guard, #12643).
+pub(crate) fn math_intrinsic_operands(e: &Expr) -> Option<&[Expr]> {
+    if !inert_math_enabled() {
+        return None;
+    }
+    match e {
+        Expr::MathAbs(x) | Expr::MathFloor(x) | Expr::MathCeil(x) | Expr::MathSqrt(x) => {
+            Some(std::slice::from_ref(x.as_ref()))
+        }
+        Expr::MathMin(v) | Expr::MathMax(v) => Some(v.as_slice()),
+        _ => None,
+    }
+}
+
+/// `PERRY_INERT_MATH=0` turns c1 off (the Math-intrinsic and conditional arms
+/// of `expr_is_inert_primitive` and everything that reads it).
+pub(crate) fn inert_math_enabled() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_INERT_MATH").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
 /// The operand lowers to a plain double by construction.
 pub(crate) fn math_operand_is_proven_number(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     is_numeric_expr(ctx, expr)
@@ -810,4 +894,13 @@ pub(crate) fn emit_math_to_number(ctx: &mut FnCtx<'_>, raw: &str) -> String {
     ctx.current_block = merge_idx;
     ctx.block()
         .phi(DOUBLE, &[(raw, &entry_label), (&coerced, &slow_end)])
+}
+
+/// DYNP E13: the bound slot (I64, written by `js_for_in_begin`) behind a for-in
+/// keys local's `.length`, when `keys_id` is a for-in desugar's keys binding.
+pub(crate) fn for_in_bound_slot(ctx: &FnCtx<'_>, keys_id: u32) -> Option<String> {
+    ctx.for_in_keys_locals
+        .get(&keys_id)
+        .and_then(|recv| ctx.for_in_lens.get(recv))
+        .cloned()
 }

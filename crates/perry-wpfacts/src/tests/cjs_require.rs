@@ -21,14 +21,6 @@ fn hirs(mods: &[(&str, &str)]) -> Vec<(String, Module)> {
         .collect()
 }
 
-fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
-    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
-    match unit {
-        true => crate::compute_units(&list, &FactsConfig::default()),
-        false => crate::compute(&list, &FactsConfig::default()),
-    }
-}
-
 // The target's side of the wrapper: its record binding, assigned by the
 // factory before the body.
 fn target(class: &str, value: &str) -> String {
@@ -156,4 +148,50 @@ fn a_required_module_body_throw_reaches_the_catch() {
         s.receivers,
         pf.dump_text()
     );
+}
+
+/// The receivers of the `size` read on `require(<spec>).<key>`, where the
+/// program's `require` is `createRequire`'s.
+fn create_require_member(spec: &str, key: &str) -> Vec<String> {
+    let src = format!(
+        "import {{ createRequire }} from \"node:module\";\n\
+         const r = createRequire(import.meta.url);\n\
+         const v: any = r({spec}).{key};\n\
+         console.log(v.size);\n"
+    );
+    site(&facts(&src), "size").receivers.clone()
+}
+
+/// A specifier that is no literal may name any builtin module: the loader
+/// resolves builtins first, so `require(x)` is also every builtin module
+/// object, and its member read resolves per key. Main-red: the result was
+/// only ⊤, which holds no native function, and `createHook` (whose hooks run
+/// at every async boundary) was never reached. Control: `resolve` names no
+/// `createHook`.
+#[test]
+fn a_computed_require_is_any_builtin_module() {
+    let hook = create_require_member("process.argv[2]", "createHook");
+    assert!(hook.iter().any(|t| t.contains("createHook")), "{hook:?}");
+    let resolve = create_require_member("process.argv[2]", "resolve");
+    assert!(
+        !resolve.iter().any(|t| t.contains("createHook")),
+        "{resolve:?}"
+    );
+}
+
+/// A literal builtin specifier names its own module object only.
+#[test]
+fn a_literal_builtin_require_is_its_module() {
+    let hook = create_require_member("\"async_hooks\"", "createHook");
+    assert!(hook.iter().any(|t| t.contains("createHook")), "{hook:?}");
+    let fs = create_require_member("\"fs\"", "createHook");
+    assert!(!fs.iter().any(|t| t.contains("createHook")), "{fs:?}");
+}
+
+fn run(h: &[(String, Module)], unit: bool) -> ProgramFacts {
+    let list: Vec<(String, &Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
+    match unit {
+        true => crate::compute(&list, &FactsConfig::default()),
+        false => crate::compute(&list, &FactsConfig::default()),
+    }
 }

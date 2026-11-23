@@ -200,7 +200,7 @@ fn a_number_keeps_an_f64_lane_and_is_stored_as_its_canonical_double() {
         assert_ne!(typed, any);
         stamp_object_shape_id_with_carrier_note(obj, LayoutWord(typed));
 
-        crate::object::store_object_field_slot(obj, 1, crate::value::INT32_TAG | 7);
+        crate::object::store_object_field_slot(obj, 1, crate::value::INTERNAL_WORD_TAG | 7);
         assert_eq!(
             slot_bits(obj, 1),
             7.0f64.to_bits(),
@@ -227,8 +227,8 @@ fn a_number_keeps_an_f64_lane_and_is_stored_as_its_canonical_double() {
         assert_eq!(object_shape_stamp(obj), LayoutWord(typed));
 
         // An `Any` lane of the same shape is today's store, bit for bit.
-        crate::object::store_object_field_slot(obj, 0, crate::value::INT32_TAG | 7);
-        assert_eq!(slot_bits(obj, 0), crate::value::INT32_TAG | 7);
+        crate::object::store_object_field_slot(obj, 0, crate::value::INTERNAL_WORD_TAG | 7);
+        assert_eq!(slot_bits(obj, 0), crate::value::INTERNAL_WORD_TAG | 7);
     }
 }
 
@@ -374,7 +374,7 @@ fn a_cached_f64_edge_refuses_a_non_number() {
 fn numeric_key_adds_and_legacy_int32_slot_stores_use_doubles_on_both_paths() {
     let _lock = crate::gc::global_side_table_test_lock();
     unsafe {
-        let boxed = f64::from_bits(crate::value::INT32_TAG | 5);
+        let boxed = f64::from_bits(crate::value::INTERNAL_WORD_TAG | 5);
         for _ in 0..2 {
             let obj = crate::object::js_object_alloc(0, 4);
             add(obj, "p2b_i_a", 1.0);
@@ -692,7 +692,10 @@ fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
         }
         assert!(super::shapes::learn_object_constfn_lanes(obj, |_, _| true));
         let record = super::shapes::object_shape_record(obj).unwrap();
-        assert!(record.constfn_info(40).is_some(), "slot 40 earns a ConstFn lane");
+        assert!(
+            record.constfn_info(40).is_some(),
+            "slot 40 earns a ConstFn lane"
+        );
         assert!(record.constfn_info(32).is_some());
         assert!(record.constfn_info(3).is_some());
         assert!(record.constfn_info(41).is_none());
@@ -700,7 +703,10 @@ fn constfn_lane_past_word_zero_is_learned_verified_and_generalized() {
         // A store of another body into slot 40 drops that lane and no other.
         crate::object::js_object_set_field_by_name(obj, key("m40"), bits(b));
         let after = super::shapes::object_shape_record(obj).unwrap();
-        assert!(after.constfn_info(40).is_none(), "the stored-over lane is gone");
+        assert!(
+            after.constfn_info(40).is_none(),
+            "the stored-over lane is gone"
+        );
         assert!(after.constfn_info(39).is_some());
         assert!(after.constfn_info(32).is_some());
         assert!(after.constfn_info(3).is_some());

@@ -169,6 +169,7 @@ static KEEP_PROCESS_RUN_EXIT_SEQUENCE: extern "C" fn() = js_process_run_exit_seq
 fn terminate_without_atexit(exit_code: i32) -> ! {
     #[cfg(any(unix, windows))]
     crate::source_read_count::report_before_immediate_exit();
+    crate::object::layout_desc::family_diag_report_before_immediate_exit();
     // Use _exit() instead of std::process::exit() to avoid SIGILL during cleanup.
     // std::process::exit() runs atexit handlers and C++ destructors which can trigger
     // illegal instructions when exception handler state (jmp_buf), GC roots, or
@@ -221,11 +222,7 @@ fn validate_exit_code(code: f64) -> Option<i32> {
     // NaN-producing strings rejected as TypeError; everything that is not
     // already a number is a TypeError too.
     let n = if crate::fs::validate::is_numeric(jv) {
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else {
-            jv.as_number()
-        }
+        jv.as_number()
     } else if jv.is_any_string() {
         match coerce_exit_code_string(code) {
             Some(num) => num,
@@ -515,11 +512,7 @@ fn throw_cpu_prior_invalid_type(value: f64) -> ! {
 }
 
 fn numeric_value(jv: JSValue) -> f64 {
-    if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    }
+    jv.as_number()
 }
 
 fn format_node_number(value: f64) -> String {
@@ -967,11 +960,7 @@ pub extern "C" fn js_process_pending_exit_code() -> i32 {
     if jv.is_undefined() || jv.is_null() {
         return 0;
     }
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
+    jv.as_number() as i32
 }
 
 // The natural-exit epilogue emits a call to `js_process_pending_exit_code`
@@ -1179,9 +1168,10 @@ pub extern "C" fn js_removeenv(name_ptr: *const StringHeader) {
 
 /// `process.env` as a materialized JS object.
 ///
-/// Built lazily from the current agent's effective environment. The rooted
-/// cache preserves object identity; enumeration refreshes its field mirror
-/// to observe mutations made by agents sharing the native backing.
+/// Built empty and lazily: taking the object reads no variable. The rooted
+/// cache preserves object identity; every enumeration fills the field mirror
+/// from the current agent's effective environment (`refresh_process_env`),
+/// which also observes mutations made by agents sharing the native backing.
 ///
 /// Returns an f64 NaN-boxed POINTER_TAG value so the codegen can hand
 /// it straight to subsequent PropertyGet dispatch.
@@ -1476,10 +1466,17 @@ fn env_name_is_settable(name: &str) -> bool {
 
 /// Refresh only the current agent's cached mirror. Native strings are copied
 /// before any allocation; neither the backing lock nor a TLS borrow spans GC.
+#[inline]
 pub(crate) fn refresh_process_env(value: f64) -> f64 {
     if env_cache_mutation_active() || !is_process_env_object(value) {
         return value;
     }
+    refresh_process_env_object(value)
+}
+
+/// [`refresh_process_env`] of the `process.env` object itself.
+#[inline(never)]
+fn refresh_process_env_object(value: f64) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_nanbox_f64(value);
     let vars: Vec<_> = super::environment::current()
@@ -1487,6 +1484,10 @@ pub(crate) fn refresh_process_env(value: f64) -> f64 {
         .into_iter()
         .map(|(name, value)| (env_cache_name_for_set(&name), value))
         .collect();
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    if crate::snap_census::runner_on_for_inputs() {
+        crate::snap_census::record_input_value("env_block", &vars);
+    }
     let names: std::collections::HashSet<_> = vars.iter().map(|(name, _)| name.as_str()).collect();
     with_env_cache_mutation(|| {
         let keys = scope.root_raw_mut_ptr(crate::object::js_object_keys(
@@ -1575,13 +1576,16 @@ fn js_process_env_impl() -> f64 {
         return cached;
     }
     let census_mark = crate::snap_census::env_storage_begin();
-    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, crate::object::INLINE_SLOT_FLOOR as u32); realm { process.env, kind = exotic, members = { }; } };
+    let obj = crate::realm_decl! { birth crate::object::js_object_alloc(0, crate::object::INLINE_SLOT_FLOOR as u32); realm { process.env, kind = exotic, members = { }, values = string; } };
     crate::snap_census::env_storage_end(census_mark, obj as usize);
     let boxed = f64::from_bits(JSValue::pointer(obj as *const u8).bits());
     unsafe { crate::object::proto_validity::mark_exotic_read_receiver(obj as usize) };
     CACHED_ENV.with(|c| c.set(boxed));
     ANY_PROCESS_ENV_OBJECT.store(true, std::sync::atomic::Ordering::Release);
-    refresh_process_env(boxed)
+    // Node's `process.env` is an interceptor object: getting it reads no
+    // variable. Host data enters only through the observing funnels (by-name
+    // reads, and `refresh_process_env` at enumeration).
+    boxed
 }
 
 /// process.threadCpuUsage(prior?) -> object { user, system } in microseconds.

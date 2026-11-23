@@ -178,11 +178,48 @@ fn port_add_node_listener(
     add_node_listener(port_id_from_closure(closure), event, callback, once)
 }
 
+fn listener_bits(value: f64) -> Option<u64> {
+    let listener = JSValue::from_bits(value.to_bits());
+    let object =
+        listener.is_pointer() && unsafe { perry_runtime::symbol::js_is_symbol(value) == 0 };
+    if !listener.is_undefined() && !listener.is_null() && !object {
+        perry_runtime::validators::throw_invalid_arg_type(
+            "listener",
+            "an instance of EventListener",
+            value,
+        );
+    }
+    callback_bits_from_value(value)
+}
+
+fn added_listener_bits(value: f64) -> Option<u64> {
+    let callback = listener_bits(value);
+    let listener = JSValue::from_bits(value.to_bits());
+    if listener.is_null() || listener.is_undefined() {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let kind = if listener.is_null() {
+            "null"
+        } else {
+            "undefined"
+        };
+        let message = scope.root_nanbox_f64(string_value(&format!(
+            "addEventListener called with {kind} which has no effect."
+        )));
+        let name = scope.root_nanbox_f64(string_value("AddEventListenerArgumentTypeWarning"));
+        perry_runtime::process::js_process_emit_warning(
+            message.get_nanbox_f64(),
+            name.get_nanbox_f64(),
+            js_undefined(),
+        );
+    }
+    callback
+}
+
 pub(super) fn add_node_listener(port_id: u64, event: f64, callback: f64, once: bool) -> f64 {
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
+    let Some(cb_bits) = added_listener_bits(callback) else {
         return js_undefined();
     };
+    let event_name = string_value_to_string(event).unwrap_or_default();
     // A program that only uses MessageChannel never calls spawn_for_promise, so
     // the runtime pump would otherwise never be registered and `main` would
     // return before any queued `message` is delivered. Register it here (mirrors
@@ -240,10 +277,10 @@ extern "C" fn port_off(
     callback: f64,
 ) -> f64 {
     let port_id = port_id_from_closure(closure);
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
+    let Some(cb_bits) = listener_bits(callback) else {
         return js_undefined();
     };
+    let event_name = string_value_to_string(event).unwrap_or_default();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {
@@ -320,10 +357,10 @@ pub(super) fn add_event_listener(
     options: f64,
     global_event: bool,
 ) -> f64 {
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
+    let Some(cb_bits) = added_listener_bits(callback) else {
         return js_undefined();
     };
+    let event_name = string_value_to_string(event).unwrap_or_default();
     super::async_shim::ensure_pump_registered();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
@@ -379,10 +416,10 @@ extern "C" fn port_remove_event_listener(
 }
 
 pub(super) fn remove_event_listener(port_id: u64, event: f64, callback: f64) -> f64 {
-    let event_name = string_value_to_string(event).unwrap_or_default();
-    let Some(cb_bits) = callback_bits_from_value(callback) else {
+    let Some(cb_bits) = listener_bits(callback) else {
         return js_undefined();
     };
+    let event_name = string_value_to_string(event).unwrap_or_default();
     MESSAGE_PORTS.with(|ports| {
         if let Some(state) = ports.borrow_mut().get_mut(&port_id) {
             match event_name.as_str() {

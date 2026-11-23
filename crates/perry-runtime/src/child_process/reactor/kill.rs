@@ -185,11 +185,6 @@ pub(super) fn cp_parse_signal(signal: f64) -> i32 {
     // Numeric forms BEFORE the string lookup: the unified string accessor
     // coerces numbers to "9"-style strings, which are not signal names; an
     // int32 can also arrive NaN-boxed, which `is_finite()` alone misses.
-    let js = JSValue::from_bits(signal.to_bits());
-    if js.is_int32() {
-        let n = js.as_int32();
-        return if n == 0 { SIGTERM } else { n };
-    }
     if signal.is_finite() {
         let n = signal as i32;
         // 0 is the "no-arg" padding sentinel — treat as the default SIGTERM.

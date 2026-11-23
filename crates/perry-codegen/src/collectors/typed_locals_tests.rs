@@ -204,6 +204,7 @@ fn a_closure_capturing_before_the_write_disqualifies_the_local() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -275,6 +276,7 @@ fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -325,6 +327,24 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
 
 fn arr_any() -> HirType {
     HirType::Array(Box::new(HirType::Any))
+}
+
+#[test]
+fn cloned_iife_proofs_keep_their_own_depth_budget_across_hash_seeds() {
+    let shallow = iife(60, vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))]);
+    let mut deep = shallow.clone();
+    for _ in 0..5 {
+        deep = Expr::Sequence(vec![deep]);
+    }
+    let body = vec![let_(1, Some(shallow)), let_(2, Some(deep))];
+    for _ in 0..64 {
+        let result = run(&body, &[]);
+        assert_eq!(
+            result.arrays,
+            HashSet::from([1]),
+            "a depth-limited clone must neither poison nor borrow the shallow proof"
+        );
+    }
 }
 
 #[test]

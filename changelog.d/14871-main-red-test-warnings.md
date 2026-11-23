@@ -1,0 +1,1 @@
+The warnings job's all-targets check is clean again in test code: two fn-item-to-integer casts and a nested `unsafe` block in perry-runtime's tests, and uncalled helpers in perry-wpfacts' `an8`/`an11` tests.

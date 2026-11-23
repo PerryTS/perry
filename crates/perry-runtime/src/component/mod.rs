@@ -59,7 +59,7 @@ fn array_pointer(value: f64) -> Option<*mut crate::array::ArrayHeader> {
     let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(pointer)? };
     matches!(
         unsafe { header.as_ref().obj_type },
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_LAZY_ARRAY
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_LAZY_ARRAY
     )
     .then_some(pointer as *mut _)
 }

@@ -6,7 +6,7 @@ use crate::native_value::{
     BufferIndexUnit, ExpectedNativeRep, LoweredValue, MaterializationReason,
 };
 use crate::rooting;
-use crate::types::{DOUBLE, F32, I16, I32, I8, PTR};
+use crate::types::{DOUBLE, F32, I16, I32, I64, I8, PTR};
 
 use super::{
     attach_buffer_view_facts, bounds_for_buffer_access_width, buffer_alias_metadata_suffix,
@@ -177,6 +177,26 @@ pub(crate) struct BufferAccessEmission {
     pub len_i32: String,
     pub elem_ptr: String,
     pub alias_metadata: String,
+    /// Join block of a [`OutOfBoundsArm::Skip`] access; the caller closes the
+    /// in-bounds arm with [`finish_buffer_access`] after emitting the store.
+    pub skip_join: Option<usize>,
+}
+
+/// What a native buffer access does when its index fails the bounds check.
+///
+/// The check itself is unconditional (see [`emit_buffer_access_pointer`]). The
+/// arm only decides what the out-of-range path computes.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum OutOfBoundsArm {
+    /// A store: an integer-indexed typed-array `[[Set]]` outside `[0, length)`
+    /// is a no-op, so the out-of-range arm jumps straight to the join.
+    Skip,
+    /// A load whose native result has no `undefined`: the proof that admitted
+    /// the native read said the JS index is in range, so failing the check
+    /// means the proof is wrong. Abort through the runtime's named internal
+    /// error (`js_native_access_bounds_failed`) rather than read outside the
+    /// buffer or fabricate an element value.
+    Abort,
 }
 
 pub(crate) struct StoreResult {
@@ -214,6 +234,33 @@ fn lower_index_i32_value(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<LoweredVal
 
 fn lower_value_i32(ctx: &mut FnCtx<'_>, value: &Expr) -> Result<String> {
     Ok(lower_expr_native(ctx, value, crate::native_value::ExpectedNativeRep::I32)?.value)
+}
+
+/// `PERRY_BYTE_STORE_TONUMBER=0` (also `off` / `false`) is main's byte store:
+/// the value of `u8[i] = v` and `buf[i] = v` is the ToInt32 of its raw bits,
+/// so an object, a string, a Boolean or a BigInt is stored as `0` with no
+/// `valueOf` / `toString` / `Symbol.toPrimitive` call and no TypeError.
+pub(crate) fn byte_store_tonumber_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| {
+        !matches!(
+            std::env::var("PERRY_BYTE_STORE_TONUMBER").as_deref(),
+            Ok("0") | Ok("off") | Ok("false")
+        )
+    })
+}
+
+/// Does a byte store (`Uint8ArraySet`, `BufferIndexSet`) of `value` need the
+/// spec's ToNumber before its ToInt32? Not when the store already takes it as
+/// an exact int32 (`can_lower_integer_typed_array_store_value`) or the facts
+/// prove it a canonical Number (`expr_produces_canonical_raw_f64`, the P3
+/// claim): then the value's bits are the Number and the store is unchanged.
+/// Any other value can be an object whose conversion runs program code (and
+/// can detach or shrink the view), a string, a Boolean or a BigInt.
+pub(crate) fn byte_store_value_needs_tonumber(ctx: &FnCtx<'_>, value: &Expr) -> bool {
+    byte_store_tonumber_on()
+        && !can_lower_integer_typed_array_store_value(ctx, value)
+        && !crate::type_analysis::expr_produces_canonical_raw_f64(ctx, value)
 }
 
 /// Does a store of `value` into `view` take the native element store (no
@@ -373,6 +420,8 @@ pub(crate) fn lower_buffer_access_proof(
         return Ok(None);
     }
     let index = lower_index_i32_value(ctx, index_expr)?;
+    let index_window = crate::collectors::static_index_window(index_expr)
+        .filter(|&(lo, hi)| lo >= 0 && hi <= i64::from(i32::MAX));
     let access_mode = BufferAccessMode::UncheckedNative;
     let may_emit_inbounds =
         matches!(access_mode, BufferAccessMode::UncheckedNative) && bounds.allows_inbounds();
@@ -383,6 +432,7 @@ pub(crate) fn lower_buffer_access_proof(
         buffer_local_id,
         view: view.clone(),
         index,
+        index_window,
         access_mode,
         bounds,
         facts: access_facts_for_spec(spec, &view, None),
@@ -392,10 +442,29 @@ pub(crate) fn lower_buffer_access_proof(
     }))
 }
 
+/// Emit the bounds check and element pointer of a proven native buffer access.
+///
+/// The bounds proof that admitted this access (`lower_buffer_access_proof`) is
+/// a fact about the JS index value: loop-guard, counter-range and interval
+/// facts all reason in exact arithmetic. The address is computed from the
+/// lowered i32 index, a representation of that value. The two agree only while
+/// the representation is exact, so the proof decides which lowering to use and
+/// never removes the check on the i32 that becomes the address: the check is a
+/// real branch on every access, and the optimizer drops it where the IR itself
+/// proves it.
+///
+/// The check is unsigned, so a negative i32 fails it like any index at or past
+/// the length, and it is done in i64, so `index + width` cannot wrap. Two
+/// facts let it be loop-invariant where they hold, neither of them about the
+/// index's provenance: an index built only from literals and wrapping
+/// operators lies in its static window for any operand, so `window_hi` is
+/// tested in its place; and a fixed-length view of constant length is tested
+/// against that constant.
 pub(crate) fn emit_buffer_access_pointer(
     ctx: &mut FnCtx<'_>,
     proof: &BufferAccessProof,
     spec: BufferAccessSpec,
+    oob: OutOfBoundsArm,
 ) -> BufferAccessEmission {
     let blk = ctx.block();
     let data_ptr = blk.load(PTR, &proof.view.data_slot);
@@ -407,30 +476,75 @@ pub(crate) fn emit_buffer_access_pointer(
     } else {
         unreachable!("a byte view must carry its receiver length independently of its data pointer")
     };
-    if proof.may_emit_inbounds {
-        let bounds_width_units = spec.bounds_width_units();
-        let in_bounds = if bounds_width_units == 1 {
-            blk.icmp_ult(I32, &proof.index.value, &len_i32)
+    let bounds_width_units = spec.bounds_width_units();
+    let index_i64 = blk.zext(I32, &proof.index.value, I64);
+    if matches!(
+        proof.bounds,
+        crate::native_value::BoundsState::Proven {
+            proof: crate::native_value::BoundsProof::EntryGuard
+        }
+    ) {
+        // Checked once, at the entry of this loop copy, on the actual values.
+        let byte_index = if spec.element_width_bytes > 1 {
+            blk.mul(I64, &index_i64, &spec.element_width_bytes.to_string())
         } else {
-            let end_i32 = blk.add(I32, &proof.index.value, &bounds_width_units.to_string());
-            blk.icmp_ule(I32, &end_i32, &len_i32)
+            index_i64
         };
-        blk.emit_raw(format!("call void @llvm.assume(i1 {})", in_bounds));
+        let elem_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I64, &byte_index)]);
+        let alias_metadata = if proof.may_emit_noalias {
+            buffer_alias_metadata_suffix(proof.view.scope_idx.expect("scope for noalias proof"))
+        } else {
+            String::new()
+        };
+        return BufferAccessEmission {
+            data_ptr,
+            len_i32,
+            elem_ptr,
+            alias_metadata,
+            skip_join: None,
+        };
     }
+    let len_i64 = match (&proof.view.length_source, proof.view.length_fixed) {
+        (Some(crate::native_value::LengthSource::Constant(len)), true) => len.to_string(),
+        _ => blk.zext(I32, &len_i32, I64),
+    };
+    let checked_end = match proof.index_window {
+        Some((_, hi)) => (hi + i64::from(bounds_width_units)).to_string(),
+        None => blk.add(I64, &index_i64, &bounds_width_units.to_string()),
+    };
+    let in_bounds = blk.icmp_ule(I64, &checked_end, &len_i64);
+    let in_idx = ctx.new_block("bufacc.inbounds");
+    let oob_idx = ctx.new_block("bufacc.oob");
+    let in_label = ctx.block_label(in_idx);
+    let oob_label = ctx.block_label(oob_idx);
+    ctx.block().cond_br(&in_bounds, &in_label, &oob_label);
+    ctx.current_block = oob_idx;
+    let skip_join = match oob {
+        OutOfBoundsArm::Skip => {
+            let join_idx = ctx.new_block("bufacc.join");
+            let join_label = ctx.block_label(join_idx);
+            ctx.block().br(&join_label);
+            Some(join_idx)
+        }
+        OutOfBoundsArm::Abort => {
+            ctx.block().call_void(
+                "js_native_access_bounds_failed",
+                &[(I32, &proof.index.value), (I32, &len_i32)],
+            );
+            ctx.block().unreachable();
+            None
+        }
+    };
+    ctx.current_block = in_idx;
+    let blk = ctx.block();
+    // In bounds, `index < length <= i32::MAX`, so the zero-extended index is
+    // the element index and the byte offset fits i64 for every element width.
     let byte_index = if spec.element_width_bytes > 1 {
-        blk.mul(
-            I32,
-            &proof.index.value,
-            &spec.element_width_bytes.to_string(),
-        )
+        blk.mul(I64, &index_i64, &spec.element_width_bytes.to_string())
     } else {
-        proof.index.value.clone()
+        index_i64
     };
-    let elem_ptr = if proof.may_emit_inbounds {
-        blk.gep_inbounds(I8, &data_ptr, &[(I32, &byte_index)])
-    } else {
-        blk.gep(I8, &data_ptr, &[(I32, &byte_index)])
-    };
+    let elem_ptr = blk.gep_inbounds(I8, &data_ptr, &[(I64, &byte_index)]);
     let alias_metadata = if proof.may_emit_noalias {
         buffer_alias_metadata_suffix(proof.view.scope_idx.expect("scope for noalias proof"))
     } else {
@@ -441,6 +555,17 @@ pub(crate) fn emit_buffer_access_pointer(
         len_i32,
         elem_ptr,
         alias_metadata,
+        skip_join,
+    }
+}
+
+/// Close the in-bounds arm of an [`OutOfBoundsArm::Skip`] access: branch to
+/// the join the out-of-range arm already targets and continue there.
+pub(crate) fn finish_buffer_access(ctx: &mut FnCtx<'_>, emission: &BufferAccessEmission) {
+    if let Some(join_idx) = emission.skip_join {
+        let join_label = ctx.block_label(join_idx);
+        ctx.block().br(&join_label);
+        ctx.current_block = join_idx;
     }
 }
 
@@ -489,7 +614,7 @@ pub(crate) fn lower_buffer_load(
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec);
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Abort);
     let byte_val = ctx.block().fresh_reg();
     ctx.block().emit_raw(format!(
         "{} = load i8, ptr {}{}",
@@ -559,6 +684,12 @@ pub(crate) fn lower_buffer_store(
     if value_crosses_cached_view {
         return Ok(None);
     }
+    // The inline store takes the value as a native int32: a value that needs
+    // ToNumber (which runs program code that can detach or shrink the view)
+    // takes the checked store, which converts before its bounds test.
+    if byte_store_value_needs_tonumber(ctx, value_expr) {
+        return Ok(None);
+    }
     let Some(proof) = lower_buffer_access_proof(ctx, buffer_expr, index_expr, spec)? else {
         return Ok(None);
     };
@@ -567,13 +698,25 @@ pub(crate) fn lower_buffer_store(
     // pointer. The precheck above excludes movable/external views when the RHS
     // collects; for inline-owned storage, lower the RHS before
     // `emit_buffer_access_pointer` loads the non-movable pointer.
-    let val_i32 = lower_value_i32(ctx, value_expr)?;
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec);
+    //
+    // A Number that is not an exact int32 is stored as its ToInt32, but the
+    // assignment evaluates to the Number itself: `(u8[i] = s.charCodeAt(9))`
+    // is NaN, not the stored 0.
+    let (val_i32, raw_value) = if !byte_store_tonumber_on()
+        || can_lower_integer_typed_array_store_value(ctx, value_expr)
+    {
+        (lower_value_i32(ctx, value_expr)?, None)
+    } else {
+        let v = lower_expr(ctx, value_expr)?;
+        (ctx.toint32_wrap(&v), Some(v))
+    };
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Skip);
     let byte_val = ctx.block().trunc(I32, &val_i32, I8);
     ctx.block().emit_raw(format!(
         "store i8 {}, ptr {}{}",
         byte_val, emission.elem_ptr, emission.alias_metadata
     ));
+    finish_buffer_access(ctx, &emission);
     record_buffer_view(ctx, &proof, &emission, spec);
     let stored = LoweredValue::u8(byte_val);
     let facts = access_facts_for_spec(spec, &proof.view, Some(&emission.len_i32));
@@ -593,7 +736,10 @@ pub(crate) fn lower_buffer_store(
         vec![format!("source_i32={}", val_i32)],
     );
     attach_buffer_view_facts(ctx, &proof.view);
-    let result = LoweredValue::i32(val_i32.clone());
+    let result = match raw_value {
+        Some(v) => LoweredValue::f64(v),
+        None => LoweredValue::i32(val_i32.clone()),
+    };
     Ok(Some(StoreResult { result }))
 }
 
@@ -669,7 +815,7 @@ pub(crate) fn lower_typed_array_load(
     let Some(proof) = lower_buffer_access_proof(ctx, array_expr, index_expr, spec)? else {
         return Ok(None);
     };
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec);
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Abort);
     let result = {
         let blk = ctx.block();
         macro_rules! load_raw {
@@ -826,7 +972,7 @@ pub(crate) fn lower_typed_array_store(
     } else {
         lower_expr_native(ctx, value_expr, expected)?
     };
-    let emission = emit_buffer_access_pointer(ctx, &proof, spec);
+    let emission = emit_buffer_access_pointer(ctx, &proof, spec, OutOfBoundsArm::Skip);
     let stored = match proof.view.elem {
         BufferElem::I8 | BufferElem::U8 => {
             let byte = ctx.block().trunc(I32, &result.value, I8);
@@ -873,8 +1019,9 @@ pub(crate) fn lower_typed_array_store(
             ));
             LoweredValue::f64(result.value.clone())
         }
-        BufferElem::U8Clamped => return Ok(None),
+        BufferElem::U8Clamped => unreachable!("U8Clamped declined before the access was emitted"),
     };
+    finish_buffer_access(ctx, &emission);
     record_buffer_view(ctx, &proof, &emission, spec);
     let facts = access_facts_for_spec(spec, &proof.view, Some(&emission.len_i32));
     ctx.record_lowered_value_with_access_mode_and_conversion(

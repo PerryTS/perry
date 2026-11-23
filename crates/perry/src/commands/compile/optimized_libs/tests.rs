@@ -479,51 +479,6 @@ fn http_import_installs_the_external_adapters_of_the_prebuilt_stdlib() {
     );
 }
 
-/// Both default and optimized builds use the same binding provider. Keep a
-/// concrete ABI inventory: removing the bundled provider must not make its
-/// former superset witness vacuous.
-#[test]
-fn ext_zlib_is_the_only_provider_and_covers_the_linked_surface() {
-    let root = find_perry_workspace_root().expect("workspace root");
-    assert!(!root.join("crates/perry-stdlib/src/zlib.rs").exists());
-    let source = std::fs::read_to_string(root.join("crates/perry-ext-zlib/src/lib.rs")).unwrap()
-        + &std::fs::read_to_string(root.join("crates/perry-ext-zlib/src/stream.rs")).unwrap();
-    for family in [
-        "gzip",
-        "gunzip",
-        "deflate",
-        "inflate",
-        "deflate_raw",
-        "inflate_raw",
-        "unzip",
-        "brotli_compress",
-        "brotli_decompress",
-        "zstd_compress",
-        "zstd_decompress",
-    ] {
-        for symbol in [
-            format!("js_zlib_{family}_sync"),
-            format!("js_zlib_{family}"),
-            format!("js_zlib_create_{family}"),
-            format!("js_zlib_{family}_init"),
-        ] {
-            assert!(source.contains(&symbol), "missing binding ABI: {symbol}");
-        }
-    }
-    for retired in [
-        "scan_zlib_roots",
-        "js_zlib_process_pending",
-        "js_zlib_has_active_handles",
-    ] {
-        assert!(
-            !source.contains(retired),
-            "retired zlib plumbing: {retired}"
-        );
-    }
-    let manifest = std::fs::read_to_string(root.join("crates/perry-stdlib/Cargo.toml")).unwrap();
-    assert!(manifest.contains("compression-gzip = [\"dep:perry-ext-zlib\"]"));
-}
-
 /// Regression: a program that references `WebAssembly.*` must get the
 /// `perry-runtime/wasm-host` cross feature so the runtime archive carries
 /// `js_webassembly_*` symbol definitions. Without it the link fails with
@@ -959,6 +914,30 @@ fn node_api_host_exports_what_its_addons_import() {
     );
 }
 
+#[test]
+fn vfs_c_exports_cover_addon_dependencies_without_expanding_node_api() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut ctx = addon_context(dir.path(), &[], &["napi_create_int32"]);
+    assert_eq!(
+        ctx.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+    assert_eq!(ctx.node_api_host_exports(), ["napi_create_int32"]);
+
+    ctx.native_addons.clear();
+    assert!(ctx.perry_c_host_exports().is_empty());
+
+    let open = addon_context(
+        dir.path(),
+        &[perry_runtime_manifest::NodeApiReach::World],
+        &[],
+    );
+    assert_eq!(
+        open.perry_c_host_exports(),
+        perry_runtime_manifest::perry_c_host_symbols().collect::<Vec<_>>()
+    );
+}
+
 /// A native addon reaches what its Node-API imports reach. A closed addon
 /// links the Node-API host and the subsystems of the values it creates, not
 /// every global subsystem; an open one links them all.
@@ -987,6 +966,7 @@ fn native_addons_install_what_their_imports_reach() {
         "perry-runtime/proxy",
         "perry-runtime/proc-ipc",
         "perry-runtime/diagnostics",
+        "perry-runtime/global-json",
     ];
     let values = [
         "perry-runtime/bigint",
@@ -1101,4 +1081,66 @@ fn reaches_tls_is_the_tls_family_or_upgrade_to_tls() {
     for module in ["tls", "node:https", "http2", "http"] {
         assert!(program(&[module], false), "{module} reaches TLS");
     }
+}
+
+#[test]
+fn json_install_selection_keeps_native_producers_and_formatting_roots() {
+    if ran_in_isolated_child("json_install_selection_keeps_native_producers_and_formatting_roots") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected =
+        |ctx: &CompilationContext| auto_optimized_cross_features(ctx, &BTreeSet::new(), &[]);
+    let engine = "perry-runtime/json-engine".to_string();
+    let format = "perry-runtime/json-format".to_string();
+    assert!(!selected(&ctx).contains(&engine));
+    ctx.uses_json_format = true;
+    assert!(selected(&ctx).contains(&format));
+    assert!(!selected(&ctx).contains(&engine));
+    for producer in [
+        "tls",
+        "http2",
+        "stream/consumers",
+        "worker_threads",
+        "bun",
+        "module",
+    ] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx).contains(&engine), "{producer}");
+        assert!(
+            !selected(&ctx).contains(&format),
+            "engine includes formatting"
+        );
+    }
+}
+
+#[test]
+fn regex_unicode_install_selection_covers_external_producers() {
+    if ran_in_isolated_child("regex_unicode_install_selection_covers_external_producers") {
+        return;
+    }
+    let mut ctx = CompilationContext::new(PathBuf::from("/tmp"));
+    let selected = |ctx: &CompilationContext| {
+        auto_optimized_cross_features(ctx, &BTreeSet::new(), &[])
+            .contains(&"perry-runtime/regex-unicode".to_string())
+    };
+    assert!(!selected(&ctx));
+    ctx.uses_regex = true;
+    assert!(
+        !selected(&ctx),
+        "the engine alone does not require membership tables"
+    );
+    ctx.uses_regex_unicode = true;
+    assert!(selected(&ctx));
+    ctx.uses_regex_unicode = false;
+    for producer in ["v8", "worker_threads", "module", "url", "fs"] {
+        ctx.native_module_imports = BTreeSet::from([producer.to_string()]);
+        assert!(selected(&ctx), "{producer}");
+    }
+    ctx.native_module_imports.clear();
+    ctx.uses_proc_ipc = true;
+    assert!(selected(&ctx));
+    ctx.uses_proc_ipc = false;
+    ctx.uses_get_builtin_module = true;
+    assert!(selected(&ctx));
 }

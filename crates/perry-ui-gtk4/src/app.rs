@@ -335,6 +335,13 @@ pub fn app_run(_app_handle: i64) {
                 js_frame_pump_default();
                 js_run_ext_pump();
                 js_run_stdlib_pump();
+                // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+                {
+                    extern "C" {
+                        fn js_loop_turn_nonblocking();
+                    }
+                    js_loop_turn_nonblocking();
+                }
                 js_promise_run_microtasks();
                 // #6183 (2026-07-09 GC audit): spend a bounded idle budget
                 // on any active budgeted GC cycle at the pump boundary — the
@@ -359,16 +366,17 @@ pub fn app_run(_app_handle: i64) {
 
         // If PERRY_UI_TEST_MODE is set, schedule an automatic exit so doc-example
         // programs can be verified in CI without a human.
-        if perry_ui_testkit::is_test_mode() {
-            let delay = std::time::Duration::from_millis(perry_ui_testkit::exit_delay_ms() as u64);
+        if perry_ui::test_mode::is_test_mode() {
+            let delay =
+                std::time::Duration::from_millis(perry_ui::test_mode::exit_delay_ms() as u64);
             let app_clone = app.clone();
             glib::timeout_add_local_once(delay, move || {
-                if let Some(path) = perry_ui_testkit::screenshot_path() {
+                if let Some(path) = perry_ui::test_mode::screenshot_path() {
                     let mut len: usize = 0;
                     let ptr =
                         crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                     if !ptr.is_null() && len > 0 {
-                        perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                        perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                         unsafe {
                             libc::free(ptr as *mut libc::c_void);
                         }

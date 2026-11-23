@@ -374,13 +374,14 @@ pub struct ClosureHeader {
     /// The function object's ShapeId (`closure::shape`): a
     /// `ShapeObjectKind::Function` / `FunctionDictionary` id in the exotic band.
     pub shape_id: LayoutWord,
+    /// The function object's own-property bag (`closure::props`, D1): null
+    /// until the first own property, then a traced, rewritten raw-pointer
+    /// child edge (`gc::layout`'s `ClosureCaptures` arm). It sits at +8, the
+    /// offset of `ObjectHeader`'s meta word.
+    pub props: *mut crate::object::ObjectHeader,
     /// The body's static [`JsFunctionInfo`](crate::closure::JsFunctionInfo):
     /// its code address and every fact a caller needs about the body.
     pub info: *const crate::closure::JsFunctionInfo,
-    /// The function object's own-property bag (`closure::props`, D1): null
-    /// until the first own property, then a traced, rewritten raw-pointer
-    /// child edge (`gc::layout`'s `ClosureCaptures` arm).
-    pub props: *mut crate::object::ObjectHeader,
 }
 
 impl ClosureHeader {
@@ -538,7 +539,7 @@ pub(crate) unsafe fn closure_alloc_bound_function(
     (*closure).shape_id = shape_id;
     (*closure).info = &super::BOUND_FUNCTION_INFO;
     // GC_STORE_AUDIT(INIT): fresh closure, null own-property edge.
-    (*closure).props = std::ptr::null_mut();
+    super::props::clear_store(closure);
     let slots = closure_capture_slots_mut(closure);
     // GC_STORE_AUDIT(BARRIERED): initialized managed captures, newborn barrier.
     slots.write(target);
@@ -586,7 +587,8 @@ pub extern "C" fn js_closure_alloc_init(
     // Resolved BEFORE the storage exists: minting a base shape touches only
     // the shape table, never the GC heap.
     let shape_id = super::shape::birth_shape_for_body(info);
-    let raw = match closure_alloc_storage_no_collect(actual_count) {
+    let own = info_own_slots(info);
+    let raw = match closure_alloc_storage_no_collect(actual_count + own) {
         Some(raw) => raw,
         None => {
             return closure_alloc_init_collecting(
@@ -604,7 +606,7 @@ pub extern "C" fn js_closure_alloc_init(
         (*ptr).shape_id = shape_id;
         (*ptr).info = info;
         // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
-        (*ptr).props = std::ptr::null_mut();
+        super::props::clear_store(ptr);
         let slots = closure_capture_slots_mut(ptr);
         // A handful of captures is the common case; a counted store loop
         // beats the `memcpy` PLT call the runtime-length copy compiles to
@@ -619,6 +621,7 @@ pub extern "C" fn js_closure_alloc_init(
         } else {
             std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
         }
+        hole_own_slots(slots.add(actual_count), own);
         let any_pointer =
             crate::gc::layout_init_from_slots(ptr as *mut u8, slots as *const u64, actual_count);
         // Pointer-free births (numbers, booleans, SSO strings) have nothing
@@ -661,9 +664,13 @@ pub extern "C" fn js_closure_alloc_small(
     assert!(count <= 3);
     debug_assert!(
         shape_id >= crate::codegen_abi::FUNCTION_LAYOUT_WORD
-            && shape_id < crate::codegen_abi::FUNCTION_LAYOUT_WORD + 4
+            && (shape_id < crate::codegen_abi::FUNCTION_LAYOUT_WORD + 4
+                || shape_id
+                    == crate::codegen_abi::FUNCTION_LAYOUT_WORD
+                        + crate::codegen_abi::NON_CONSTRUCTOR_FAMILY_INDEX)
     );
-    let Some(raw) = closure_alloc_storage_no_collect(count) else {
+    let own = info_own_slots(info);
+    let Some(raw) = closure_alloc_storage_no_collect(count + own) else {
         let words = [capture0, capture1, capture2];
         return closure_alloc_init_collecting(
             info,
@@ -687,7 +694,7 @@ pub extern "C" fn js_closure_alloc_small(
         }
         (*closure).info = info;
         // GC_STORE_AUDIT(INIT): fresh closure, null own-property edge.
-        (*closure).props = std::ptr::null_mut();
+        super::props::clear_store(closure);
         let slots = closure_capture_slots_mut(closure);
         // GC_STORE_AUDIT(BARRIERED): fresh UNKNOWN slots, completed before
         // publication and shaded by the newborn barrier below when required.
@@ -702,6 +709,7 @@ pub extern "C" fn js_closure_alloc_small(
         if count > 2 {
             slots.add(2).write(capture2);
         }
+        hole_own_slots(slots.add(count), own);
         if count != 0 && crate::gc::newborn_parent_needs_barrier(closure as usize) {
             crate::gc::runtime_write_barrier_newborn_slots(closure as usize, slots, count);
         }
@@ -747,7 +755,8 @@ pub extern "C" fn js_closure_alloc_fixed(
     if actual_count == 0 || captures_ptr.is_null() {
         return closure_alloc_empty(info, capture_count, LayoutWord(shape_id));
     }
-    match closure_alloc_storage_no_collect(actual_count) {
+    let own = info_own_slots(info);
+    match closure_alloc_storage_no_collect(actual_count + own) {
         Some(raw) => {
             note_closure_alloc();
             let closure = raw as *mut ClosureHeader;
@@ -762,7 +771,7 @@ pub extern "C" fn js_closure_alloc_fixed(
                 }
                 (*closure).info = info;
                 // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
-                (*closure).props = std::ptr::null_mut();
+                super::props::clear_store(closure);
                 // The nursery allocator already supplies UNKNOWN. Mixed raw
                 // boxes and tagged words use its tag-checked scan directly;
                 // making the payload pointer-free and then classifying every
@@ -784,6 +793,7 @@ pub extern "C" fn js_closure_alloc_fixed(
                 } else {
                     std::ptr::copy_nonoverlapping(captures_ptr, slots, actual_count);
                 }
+                hole_own_slots(slots.add(actual_count), own);
                 if crate::gc::newborn_parent_needs_barrier(closure as usize) {
                     crate::gc::runtime_write_barrier_newborn_slots(
                         closure as usize,
@@ -914,6 +924,7 @@ pub unsafe fn rebuild_closure_layout_and_barriers(closure: *mut ClosureHeader, s
     }
 }
 
+#[inline]
 pub(crate) unsafe fn gc_capture_slot_range(
     closure: *mut ClosureHeader,
 ) -> Option<crate::gc::HeapSlotRange> {
@@ -924,9 +935,11 @@ pub(crate) unsafe fn gc_capture_slot_range(
     if capture_count > 1_000_000 {
         return None;
     }
+    // The body's own slots follow the captures (`JsFunctionInfo::own_slots`).
+    let own_slots = closure_own_slot_count(closure);
     Some(crate::gc::HeapSlotRange::new(
         closure_capture_slots_mut(closure),
-        capture_count,
+        capture_count + own_slots,
     ))
 }
 
@@ -936,6 +949,55 @@ pub(crate) unsafe fn gc_capture_slot_range(
 /// preserved in the stored header; the allocation size uses only the count
 /// (`real_capture_count`).
 /// Returns pointer to ClosureHeader
+/// The own slots a body's function objects are born with
+/// (`JsFunctionInfo::own_slots`): every birth reserves them after the captures.
+#[inline(always)]
+fn info_own_slots(info: *const crate::closure::JsFunctionInfo) -> usize {
+    if info.is_null() {
+        0
+    } else {
+        unsafe { (*info).own_slots as usize }
+    }
+}
+
+/// An own slot is born a hole: its key is own, its value not made yet.
+#[inline(always)]
+unsafe fn hole_own_slots(slots: *mut u64, own: usize) {
+    for i in 0..own {
+        slots.add(i).write(crate::value::TAG_HOLE);
+    }
+}
+
+/// The own slots `closure` HAS: its info's count when its cell holds them
+/// after its captures. Every birth reserves them; a cell born without the
+/// room (an image cell) has none, and its own values live in its bag. The
+/// cell's size says which, so no birth and its info can disagree.
+///
+/// # Safety
+/// `closure` is a live closure cell.
+#[inline(always)]
+pub unsafe fn closure_own_slot_count(closure: *const ClosureHeader) -> usize {
+    let info = (*closure).info;
+    if info.is_null() {
+        return 0;
+    }
+    // Every birth (runtime funnel, codegen inline birth, realm image cell)
+    // reserves exactly `info.own_slots` after the captures.
+    let own = (*info).own_slots as usize;
+    debug_assert!(
+        own == 0 || {
+            let header =
+                (closure as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
+            (*header).size as usize
+                >= crate::gc::GC_HEADER_SIZE
+                    + std::mem::size_of::<ClosureHeader>()
+                    + (real_capture_count((*closure).capture_count) as usize + own) * 8
+        },
+        "a closure was born without room for its info's own slots"
+    );
+    own
+}
+
 #[no_mangle]
 pub extern "C" fn js_closure_alloc(
     info: *const crate::closure::JsFunctionInfo,
@@ -964,7 +1026,8 @@ fn closure_alloc_empty(
 ) -> *mut ClosureHeader {
     note_closure_alloc();
     let actual_count = ordinary_capture_count(capture_count);
-    let raw = closure_alloc_storage(actual_count);
+    let own = info_own_slots(info);
+    let raw = closure_alloc_storage(actual_count + own);
     let ptr = raw as *mut ClosureHeader;
 
     unsafe {
@@ -972,7 +1035,7 @@ fn closure_alloc_empty(
         (*ptr).shape_id = shape_id;
         (*ptr).info = info;
         // GC_STORE_AUDIT(INIT): fresh closure, null props edge.
-        (*ptr).props = std::ptr::null_mut();
+        super::props::clear_store(ptr);
         // #7154: a fresh closure's capture slots are raw recycled arena bytes.
         // They are invisible to the collector while the layout says
         // POINTER_FREE, but any code path (conservative scan, diagnostic
@@ -985,6 +1048,7 @@ fn closure_alloc_empty(
             // GC_STORE_AUDIT(INIT): fresh closure capture slot, pointer-free sentinel.
             std::ptr::write(slots.add(i), crate::value::TAG_UNDEFINED);
         }
+        hole_own_slots(slots.add(actual_count), own);
         crate::gc::layout_init_pointer_free(ptr as *mut u8);
     }
 
@@ -1430,6 +1494,47 @@ pub fn closure_set_capture_word(closure: *mut ClosureHeader, index: u32, word: i
     unsafe {
         // GC_STORE_AUDIT(POINTER_FREE): the word is not a heap reference; the collector never reads it as an edge.
         *closure_capture_slots_mut(closure).add(index as usize) = word as u64;
+    }
+}
+
+/// Store a heap reference (the address of a GC object: a promise, a closure,
+/// an array, an object, a cell) into a capture slot, as a `POINTER_TAG` value.
+/// A capture slot is a JS value slot: the collector reads it as value bits, so
+/// the edge carries its tag like every other value and is never a bare
+/// address. Null stays the zero word. Read it back with
+/// [`closure_capture_ref`].
+///
+/// Out of line, like the `extern "C"` setter it replaces at each call site:
+/// the tag is applied in one body instead of at every site.
+#[inline(never)]
+pub fn closure_set_capture_ref(closure: *mut ClosureHeader, index: u32, addr: i64) {
+    let addr = addr as u64 & crate::value::POINTER_MASK;
+    let bits = if addr == 0 {
+        0
+    } else {
+        crate::value::POINTER_TAG | addr
+    };
+    js_closure_set_capture_bits(closure, index, bits);
+}
+
+/// The address a capture slot written by [`closure_set_capture_ref`] holds:
+/// the payload of a pointer-, string- or bigint-tagged word, 0 for an empty
+/// slot or any other value. An untagged word is returned as it is: a slot
+/// whose writer still stores the bare address. Out of line for the same reason
+/// as the setter.
+#[inline(never)]
+pub fn closure_capture_ref(closure: *const ClosureHeader, index: u32) -> i64 {
+    let bits = js_closure_get_capture_bits(closure, index);
+    let tag = bits & crate::value::TAG_MASK;
+    if tag == crate::value::POINTER_TAG
+        || tag == crate::value::STRING_TAG
+        || tag == crate::value::BIGINT_TAG
+    {
+        (bits & crate::value::POINTER_MASK) as i64
+    } else if tag == 0 {
+        bits as i64
+    } else {
+        0
     }
 }
 

@@ -63,6 +63,14 @@ pub(crate) fn emit_bind_call(
             &shape,
             &(crate::runtime_abi::FUNCTION_LAYOUT_WORD as i32).to_string(),
         );
+        let base_nonctor = blk.icmp_eq(
+            I32,
+            &shape,
+            &((crate::runtime_abi::FUNCTION_LAYOUT_WORD
+                + crate::runtime_abi::NON_CONSTRUCTOR_FAMILY_INDEX) as i32)
+                .to_string(),
+        );
+        let base = blk.or(I1, &base, &base_nonctor);
         blk.and(I1, &is_closure, &base)
     };
     let ok = if ctx.wpfacts.fnproto_bind_unwritten {

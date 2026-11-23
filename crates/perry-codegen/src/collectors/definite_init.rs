@@ -303,6 +303,7 @@ fn for_each_stmt_expr<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|s| for_each_stmt_expr(s, f));
             if let Some(c) = catch {
@@ -362,6 +363,7 @@ fn for_each_stmt<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Stmt)) {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().for_each(|s| for_each_stmt(s, f));
             if let Some(c) = catch {
@@ -1165,8 +1167,7 @@ pub(crate) fn collect(hir: &Module) -> DefiniteInit {
                 } if !matches!(init, Expr::Undefined) => {
                     if m.params.contains(id)
                         || sole_declarator(stmts, *id) != Some(k)
-                        || (m.let_counts.get(id).copied()
-                            != Some(top_level_let_count(stmts, *id))
+                        || (m.let_counts.get(id).copied() != Some(top_level_let_count(stmts, *id))
                             && !sabotaged("second_write"))
                     {
                         continue;
@@ -1183,7 +1184,13 @@ pub(crate) fn collect(hir: &Module) -> DefiniteInit {
                     let mut seed_name: Option<&String> = None;
                     let mut seeds_only = true;
                     for (i, s2) in stmts.iter().enumerate() {
-                        if let Stmt::Let { id: lid, name, init, .. } = s2 {
+                        if let Stmt::Let {
+                            id: lid,
+                            name,
+                            init,
+                            ..
+                        } = s2
+                        {
                             if lid == id {
                                 if i < k && is_seed(init) {
                                     seed_name = Some(name);

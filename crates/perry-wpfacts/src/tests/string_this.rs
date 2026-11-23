@@ -128,3 +128,45 @@ fn a_to_string_that_keeps_this_leaves_the_receiver_proven() {
         verdicts(&pf, &src, "// SITE", "x")
     );
 }
+
+/// `p` is the replace value of a `String.prototype.replace` call whose
+/// receiver is unknown code's value (three.js `sanitizeNodeName` on a ⊤
+/// name); `p.x` is read after the call.
+fn top_receiver(call: &str) -> String {
+    format!(
+        "declare function external(x: any): any;\n\
+         class P {{ x: number; constructor() {{ this.x = 1; }} }}\n\
+         const p = new P();\n\
+         const name: any = external(0);\n\
+         const out: string = {call};\n\
+         console.log(out.length);\n\
+         console.log(p.x); // SITE\n"
+    )
+}
+
+/// Red on main: an unknown receiver made the named native an opaque
+/// builtin callee, whose arguments escape. ToString(this) of ⊤ is ⊤'s own
+/// code with nothing but ⊤; the replace value only goes to ToString.
+#[test]
+fn a_string_method_on_an_unknown_receiver_hands_its_arguments_to_no_one() {
+    let src = top_receiver("String.prototype.replace.call(name, \"*\", p as any)");
+    let pf = facts(&src);
+    assert!(
+        proven(&pf, &src, "// SITE", "x"),
+        "{}",
+        verdicts(&pf, &src, "// SITE", "x")
+    );
+}
+
+/// Control: the method read from the unknown value is unknown code, which
+/// may keep `p`.
+#[test]
+fn a_method_read_from_an_unknown_receiver_still_takes_its_arguments() {
+    let src = top_receiver("name.replace(\"*\", p as any)");
+    let pf = facts(&src);
+    assert!(
+        !proven(&pf, &src, "// SITE", "x"),
+        "{}",
+        verdicts(&pf, &src, "// SITE", "x")
+    );
+}

@@ -55,6 +55,7 @@ fn point_class() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -95,6 +96,7 @@ fn split_module() -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         })
         .collect();
     module.functions.push(Function {
@@ -161,6 +163,7 @@ fn split_module() -> Module {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     module
 }
@@ -296,16 +299,13 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
             let points = statepoints_of(&ir, target, &probe);
             // A fixed-name leaf owns no site storage: the receiver's shape
             // answers (accessors included) and a decline takes the memo-free
-            // collecting exit. The keyed site keeps its keyed memo.
+            // collecting exit. The keyed site owns none either.
             let fixed = if outlined {
                 ("perry_probe_get_value", "js_object_get_field_value")
             } else {
                 ("perry_probe_get", "js_object_get_field_value")
             };
-            for (fast, slow) in [
-                fixed,
-                ("perry_probe_get_keyed", "js_object_get_keyed_site_slow"),
-            ] {
+            for (fast, slow) in [fixed, ("perry_probe_get_keyed", "js_object_get_keyed_slow")] {
                 let calls: Vec<_> = body
                     .lines()
                     .filter(|line| line.contains("call ") && line.contains(&format!("@{fast}(")))

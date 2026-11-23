@@ -17,7 +17,10 @@
 use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 
-const OR_OWN_CALL: &str = "call i64 @js_array_push_f64_spec_or_own(";
+// The slow arms' entry with the default `PERRY_PUSH_METHOD_TIERS`: the own
+// exit of `js_array_push_f64_spec_or_own`, plus the real `Get` for a receiver
+// that is no Array.
+const OR_OWN_CALL: &str = "call i64 @js_array_push_f64_spec_or_method(";
 const BARE_SPEC_CALL: &str = "call i64 @js_array_push_f64_spec(";
 
 /// `let a: <ty> = []; a.push(<value>); return a;` as one function.
@@ -63,6 +66,7 @@ fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let opts = crate::CompileOptions {
         emit_ir_only: true,
@@ -120,7 +124,7 @@ fn the_inline_store_pays_nothing_for_the_own_exit() {
     );
     let inbounds = block(&ir, "apush.inbounds");
     assert!(
-        !inbounds.contains("js_array_push_f64_spec_or_own") && !inbounds.contains("apush.own"),
+        !inbounds.contains("js_array_push_f64_spec_or_") && !inbounds.contains("apush.own"),
         "the inline store must not test for an own `push` — its admission mask already \
          did:\n{inbounds}"
     );

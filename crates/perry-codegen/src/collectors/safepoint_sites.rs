@@ -164,6 +164,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             for st in body {
                 count_in_stmt(st, n, all);
@@ -230,6 +231,7 @@ mod tests {
             mutable_captures: vec![],
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,

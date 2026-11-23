@@ -82,6 +82,7 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                 body: leaf(),
                 catch: None,
                 finally: None,
+                forof_completion: None,
             },
             Stmt::Try {
                 body: vec![],
@@ -90,11 +91,13 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                     body: leaf(),
                 }),
                 finally: None,
+                forof_completion: None,
             },
             Stmt::Try {
                 body: vec![],
                 catch: None,
                 finally: Some(leaf()),
+                forof_completion: None,
             },
             Stmt::Switch {
                 discriminant: expr.clone(),
@@ -177,6 +180,7 @@ fn nested_closures_propagate_only_captured_bindings() {
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
+                construct_only: false,
             };
             let body = vec![Stmt::Labeled {
                 label: "outer".into(),

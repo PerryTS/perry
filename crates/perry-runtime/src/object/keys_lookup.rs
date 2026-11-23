@@ -66,7 +66,7 @@ pub(crate) unsafe fn keys_array_dense_slots(
         crate::array::clean_owned_arr_ptr(keys)
     } else {
         let header = crate::value::addr_class::honest_header(keys as usize);
-        if header.obj_type == crate::gc::GC_TYPE_ARRAY
+        if crate::gc_type_is_array!(header.obj_type)
             && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             && (*keys).length <= (*keys).capacity
         {

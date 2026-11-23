@@ -38,10 +38,7 @@ fn object_entries_holds_no_inherited_member() {
 
 #[test]
 fn object_values_as_a_value_call_holds_no_inherited_member() {
-    assert_eq!(
-        inner_escape("(0, Object.values)({ a: { k: 1 } })[0]"),
-        None
-    );
+    assert_eq!(inner_escape("(0, Object.values)({ a: { k: 1 } })[0]"), None);
 }
 
 /// Control: an own value that is `Object` itself is still a value, and the

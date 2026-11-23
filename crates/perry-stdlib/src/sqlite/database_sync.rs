@@ -331,9 +331,7 @@ unsafe fn store_config_bits(db: f64, cfg: &DbConfig) {
 
 fn number_of(value: f64) -> f64 {
     let js = value_from_f64(value);
-    if js.is_int32() {
-        js.as_int32() as f64
-    } else if js.is_number() {
+    if js.is_number() {
         js.as_number()
     } else {
         0.0

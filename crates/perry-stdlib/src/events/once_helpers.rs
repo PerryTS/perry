@@ -144,11 +144,10 @@ extern "C" fn events_once_event_target_listener(
     _this: perry_runtime::closure::JsThis,
     arg0: f64,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let promise = js_closure_get_capture_ptr(closure, 0) as *mut Promise;
-    let target = js_closure_get_capture_ptr(closure, 1) as *mut ObjectHeader;
-    let event_name_ptr = js_closure_get_capture_ptr(closure, 2) as *const StringHeader;
+    let promise = perry_runtime::closure::closure_capture_ref(closure, 0) as *mut Promise;
+    let target = perry_runtime::closure::closure_capture_ref(closure, 1) as *mut ObjectHeader;
+    let event_name_ptr =
+        perry_runtime::closure::closure_capture_ref(closure, 2) as *const StringHeader;
     unsafe {
         if !target.is_null() && !event_name_ptr.is_null() {
             perry_runtime::event_target_hook_slots::js_event_target_remove_event_listener(
@@ -174,8 +173,6 @@ pub unsafe extern "C" fn js_events_once(
     event_name_ptr: *const StringHeader,
     options: f64,
 ) -> *mut Promise {
-    use perry_runtime::closure::js_closure_set_capture_ptr;
-
     let scope = perry_runtime::gc::RuntimeHandleScope::new();
     let target_value = scope.root_nanbox_f64(target_value);
     let event_name_handle = scope.root_string_ptr(event_name_ptr);
@@ -221,13 +218,17 @@ pub unsafe extern "C" fn js_events_once(
         let listener = scope.root_raw_mut_ptr(listener);
         let target =
             object_ptr_from_value(target_value.get_nanbox_f64()).unwrap_or(std::ptr::null_mut());
-        js_closure_set_capture_ptr(
+        perry_runtime::closure::closure_set_capture_ref(
             listener.get_raw_mut_ptr(),
             0,
             promise.get_raw_mut_ptr::<Promise>() as i64,
         );
-        js_closure_set_capture_ptr(listener.get_raw_mut_ptr(), 1, target as i64);
-        js_closure_set_capture_ptr(
+        perry_runtime::closure::closure_set_capture_ref(
+            listener.get_raw_mut_ptr(),
+            1,
+            target as i64,
+        );
+        perry_runtime::closure::closure_set_capture_ref(
             listener.get_raw_mut_ptr(),
             2,
             event_name_handle.get_raw_const_ptr::<StringHeader>() as i64,

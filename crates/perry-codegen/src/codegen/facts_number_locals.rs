@@ -14,9 +14,8 @@
 //! build checks every consumed claim, at the parameter entry and at each
 //! store into a proven `let` (`accept_let_value`).
 //!
-//! A parameter the body never rebinds or mutates converts an INT32 box to its
-//! plain double at entry, as a split region's Number parameter does, and is
-//! then a Number by construction: the entry conversion is its only write. A
+//! A parameter the body never rebinds or mutates is a Number by construction:
+//! its argument, a plain double, is its only write. A
 //! `let` only answers `local_is_number` (`FnCtx::facts_number_locals`). It
 //! does not join `number_by_construction_locals`, whose members also promise
 //! that every write's operands are Numbers: `total += x.length` keeps
@@ -29,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 use perry_hir::{Param, Stmt};
 
-use crate::types::{DOUBLE, I1, I32, I64};
+use crate::types::DOUBLE;
 
 pub(crate) fn enabled() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -142,7 +141,10 @@ pub(crate) fn accept_let_value(
     source: &perry_hir::Expr,
     value: String,
 ) -> String {
-    if !ctx.facts_number_locals.contains(&id) {
+    if !ctx.facts_number_locals.contains(&id)
+        && !ctx.facts_int32_locals.contains(&id)
+        && !super::facts_int32_locals::checked(ctx, id)
+    {
         return value;
     }
     // The HIR's release of an initialized const (`IteratorRecordPlan::release`
@@ -154,6 +156,10 @@ pub(crate) fn accept_let_value(
     if matches!(source, perry_hir::Expr::Undefined) {
         return value;
     }
+    super::facts_int32_locals::witness(ctx, &value, id);
+    if !ctx.facts_number_locals.contains(&id) {
+        return value;
+    }
     note_consumed(id);
     emit_witness(ctx, &value, id);
     value
@@ -163,14 +169,4 @@ pub(crate) fn accept_let_value(
 pub(crate) fn none() -> &'static HashSet<u32> {
     static NONE: std::sync::OnceLock<HashSet<u32>> = std::sync::OnceLock::new();
     NONE.get_or_init(HashSet::new)
-}
-
-/// The plain double of a Number argument: an INT32 box converts, every other
-/// Number is its own bits.
-pub(crate) fn emit_entry_number(blk: &mut crate::block::LlBlock, arg: &str) -> String {
-    let is_int = super::typed_entry::emit_int32_box_test(blk, arg);
-    let bits = blk.bitcast_double_to_i64(arg);
-    let low = blk.trunc(I64, &bits, I32);
-    let as_f64 = blk.sitofp(I32, &low, DOUBLE);
-    blk.select(I1, &is_int, DOUBLE, &as_f64, arg)
 }

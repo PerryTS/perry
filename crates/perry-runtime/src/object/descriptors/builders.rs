@@ -55,10 +55,6 @@ pub(crate) unsafe fn symbol_own_property_descriptor(obj_value: f64, key_value: f
     if sym_key == 0 {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    if let Some(cid) = super::class_prototype_ref_id(obj_value) {
-        let proto = super::class_registry::class_decl_prototype_value(cid);
-        return symbol_own_property_descriptor(proto, key_value);
-    }
     let owner = super::class_ref_id(obj_value)
         .and_then(super::class_value::class_value_if_minted)
         .map(|ptr| ptr as usize)

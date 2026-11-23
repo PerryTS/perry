@@ -12,6 +12,8 @@ struct InfoKey {
     // The physical ABI facts, in the same order as FunctionInfoFacts. Public
     // name and length in a function's property bag are not its body's ABI.
     facts: [u64; 6],
+    // Two named records over one body are two exports.
+    name: Option<String>,
 }
 
 #[derive(Default)]
@@ -159,6 +161,7 @@ impl InfoExports {
             // This is metadata evaluation only; the null code address is
             // never published or called. Use the ABI's own builders, so flag
             // effects and defaults have the same authority as runtime birth.
+            let mut name = None;
             let mut info = unsafe {
                 JsFunctionInfo::from_code(std::ptr::null(), if native_args { 0 } else { n })
             };
@@ -198,6 +201,11 @@ impl InfoExports {
                     let first = || scalar(args[0]);
                     info = match method {
                         "plain" => info.plain(),
+                        // The name text is static data of the record, not an ABI fact.
+                        "with_name" => {
+                            name = Some(args[0].iter().map(|t| t.text).collect::<String>());
+                            info.with_name("")
+                        }
                         "with_declared" => info.with_declared(
                             u16::try_from(first()?).map_err(|_| "declared overflow")?,
                         ),
@@ -239,6 +247,7 @@ impl InfoExports {
                     u64::from(info.declared),
                     u64::from(info.plain_params().wrapping_add(1)),
                 ],
+                name,
             };
             let symbol = image_info_symbol(&ts, body_start, package)
                 .map_err(|e| format!("{path}: {body}: {e}"))?;
@@ -279,14 +288,17 @@ impl InfoExports {
                     .parse()
                     .map_err(|_| format!("invalid function info {field}: {n}"))?;
             }
-            let key = InfoKey { body, facts };
+            let name = match declaration.get("function_info").and_then(|i| i.get("name")) {
+                Some(Value::String(s)) => Some(s.clone()),
+                _ => None,
+            };
+            let key = InfoKey { body, facts, name };
             let by_symbol = || {
                 let bare = bare_body(declaration)?;
                 let suffix = format!("::{bare}");
-                let mut hits = self
-                    .0
-                    .iter()
-                    .filter(|(k, _)| k.facts == key.facts && k.body.ends_with(&suffix));
+                let mut hits = self.0.iter().filter(|(k, _)| {
+                    k.facts == key.facts && k.name == key.name && k.body.ends_with(&suffix)
+                });
                 let hit = hits.next()?;
                 hits.next().is_none().then_some(hit.1)
             };
@@ -295,6 +307,10 @@ impl InfoExports {
                     unreachable!()
                 };
                 declaration.insert("info_symbol".into(), Value::String(symbol.clone()));
+                // The name text only selects the export; the table schema has no such field.
+                if let Some(Value::Object(info)) = declaration.get_mut("function_info") {
+                    info.remove("name");
+                }
             } else {
                 missing.insert(format!("{} {:?}", key.body, key.facts));
             }

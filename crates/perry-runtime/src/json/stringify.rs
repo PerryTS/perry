@@ -73,7 +73,16 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
     {
         return false;
     }
+    // `process.env`: its own keys are the environment, not its field mirror,
+    // which only the object walk refreshes. An empty mirror is no empty object.
+    if crate::process::is_process_env_ptr(ptr as usize) {
+        return true;
+    }
     let obj = ptr as *const crate::ObjectHeader;
+    // A plain object's index keys live in its elements store, not its keys.
+    if !crate::array::plain_elements::store_of(obj).is_null() {
+        return true;
+    }
     let potential_keys_ptr = crate::object::object_keys(obj).arr() as u64;
     if crate::object::overflow::is_table(potential_keys_ptr as *const crate::ArrayHeader) {
         return true;
@@ -89,7 +98,7 @@ pub(crate) unsafe fn is_object_pointer(ptr: *const u8) -> bool {
         && (potential_keys_ptr & 0x7) == 0
         && crate::value::addr_class::try_read_tracked_gc_header_of_type(
             potential_keys_ptr as usize,
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         )
         .is_some();
 
@@ -138,6 +147,15 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     {
         return false;
     }
+    // `process.env`: its own keys are the environment, not its field mirror,
+    // which only the object walk refreshes. An empty mirror is no empty object.
+    if crate::process::is_process_env_ptr(ptr as usize) {
+        return false;
+    }
+    // A plain object's index keys live in its elements store, not its keys.
+    if !crate::array::plain_elements::store_of(ptr.cast()).is_null() {
+        return false;
+    }
     let table = crate::object::overflow::table(ptr.cast());
     if !table.is_null() {
         return (0..(*table).length)
@@ -153,7 +171,7 @@ pub(crate) unsafe fn object_has_no_own_keys(ptr: *const u8) -> bool {
     // keys array itself to be a tracked allocation before loading its length.
     if crate::value::addr_class::try_read_tracked_gc_header_of_type(
         keys as usize,
-        crate::gc::GC_TYPE_ARRAY,
+        crate::gc_array_type_pat!(),
     )
     .is_none()
     {
@@ -184,7 +202,7 @@ pub(super) unsafe fn tracked_keys(
     if keys.is_null()
         || crate::value::addr_class::try_read_tracked_gc_header_of_type(
             keys as usize,
-            crate::gc::GC_TYPE_ARRAY,
+            crate::gc_array_type_pat!(),
         )
         .is_none()
     {
@@ -406,7 +424,7 @@ pub(crate) unsafe fn arm_to_json_result_guard(result: f64) {
     }
     if let Some(res_ptr) = extract_pointer(result.to_bits()) {
         let ty = gc_obj_type(res_ptr);
-        if (crate::gc_type_is_object!(ty) || ty == crate::gc::GC_TYPE_ARRAY)
+        if (crate::gc_type_is_object!(ty) || crate::gc_type_is_array!(ty))
             && !crate::buffer::is_registered_buffer(res_ptr as usize)
         {
             SUPPRESS_NEXT_TO_JSON.with(|c| c.set(true));
@@ -634,7 +652,7 @@ pub(crate) unsafe fn stringify_value(value: f64, type_hint: u32, buf: &mut Strin
             return stringify_array(elements as *const u8, buf);
         }
         match gc_obj_type(ptr) {
-            crate::gc::GC_TYPE_ARRAY => stringify_array(ptr, buf),
+            crate::gc_array_type_pat!() => stringify_array(ptr, buf),
             // A function has no ordinary object/array/string/error/map/set
             // layout; without this arm it falls into the untagged-pointer
             // fallback below and its ClosureHeader bytes get misread as an
@@ -916,7 +934,7 @@ pub(crate) unsafe fn stringify_value_depth(
         }
         match gc_obj_type(ptr) {
             crate::gc_object_type_pat!() => stringify_object_inner(ptr, buf, depth),
-            crate::gc::GC_TYPE_ARRAY => stringify_array_depth(ptr, buf, depth),
+            crate::gc_array_type_pat!() => stringify_array_depth(ptr, buf, depth),
             // A function — see the matching branch in `stringify_value`.
             crate::gc::GC_TYPE_CLOSURE => buf.push_str("null"),
             crate::gc::GC_TYPE_STRING => {
@@ -1021,6 +1039,8 @@ pub(crate) unsafe fn stringify_array(ptr: *const u8, buf: &mut String) {
 /// Depth-aware variant of stringify_array for recursive calls.
 pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, depth: u32) {
     check_stringify_nesting_depth(depth as usize);
+    // I32 at rest: no at-rest Array reaches a generic reader (check mode).
+    crate::layout_slot::generic_reader(crate::array::clean_arr_ptr(ptr as *const _));
     // Issue #2021: an array that has grown past its initial inline capacity
     // (16) was reallocated to a new block, leaving a GC_FLAG_FORWARDED stub
     // at the old address. Callers (and element decoders) hand us whatever
@@ -1110,12 +1130,8 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
     let template = if len >= 2 {
         let first_bits = elem_at(0).to_bits();
         let tag = first_bits & 0xFFFF_0000_0000_0000;
-        let first_ptr = if tag == POINTER_TAG {
-            (first_bits & POINTER_MASK) as *const u8
-        } else {
-            first_bits as *const u8
-        };
-        if (tag == POINTER_TAG || is_raw_pointer(first_bits))
+        let first_ptr = (first_bits & POINTER_MASK) as *const u8;
+        if tag == POINTER_TAG
             // A small-handle-band id (Proxy id, fetch/zlib/stream handle) is not
             // an object; building a shape template from it would deref unmapped
             // memory (#4904/#1843). Fall through to per-element handling.
@@ -1213,15 +1229,11 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             // An element's `toJSON` key is its stringified index (#5909).
             set_to_json_key_index(i as usize);
             stringify_value_depth(elem, TYPE_UNKNOWN, buf, depth + 1);
-        } else if elem_tag == POINTER_TAG || is_raw_pointer(elem_bits) {
+        } else if elem_tag == POINTER_TAG {
             // An element's `toJSON` key is its stringified index (#5909) — set
             // before the object/array `toJSON` probes and the recursion below.
             set_to_json_key_index(i as usize);
-            let elem_ptr = if elem_tag == POINTER_TAG {
-                (elem_bits & POINTER_MASK) as *const u8
-            } else {
-                elem_bits as *const u8
-            };
+            let elem_ptr = (elem_bits & POINTER_MASK) as *const u8;
             // A small-handle-band element (revocable-Proxy id, fetch/zlib/stream
             // handle) is not a serializable heap value; the `gc_obj_type` /
             // `is_object_pointer` / ArrayHeader-length probes below would deref
@@ -1291,7 +1303,7 @@ pub(crate) unsafe fn stringify_array_depth(ptr: *const u8, buf: &mut String, dep
             }
             match gc_obj_type(elem_ptr) {
                 crate::gc_object_type_pat!() => stringify_object_inner(elem_ptr, buf, depth + 1),
-                crate::gc::GC_TYPE_ARRAY => stringify_array_depth(elem_ptr, buf, depth + 1),
+                crate::gc_array_type_pat!() => stringify_array_depth(elem_ptr, buf, depth + 1),
                 crate::gc::GC_TYPE_STRING => {
                     let str_ptr = elem_ptr as *const StringHeader;
                     if let Some(s) = str_from_header(str_ptr) {
@@ -1383,7 +1395,7 @@ pub(crate) unsafe fn estimate_json_size(value: f64, _type_hint: u32) -> usize {
         // A compiler hint is not permission to read a different layout. In
         // particular, an image string is a readable GC header, not an array.
         match header.as_ref().obj_type {
-            crate::gc::GC_TYPE_ARRAY => {
+            crate::gc_array_type_pat!() => {
                 let len = (*(ptr as *const crate::ArrayHeader)).length as usize;
                 return len.saturating_mul(300).max(256);
             }

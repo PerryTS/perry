@@ -4,18 +4,11 @@ use super::*;
 #[cfg(feature = "temporal")]
 #[test]
 fn temporal_expando_bag_moves_with_its_native_owner() {
-    check_objtables_temporal(false);
+    check_objtables_temporal();
 }
 
 #[cfg(feature = "temporal")]
-#[test]
-#[ignore = "negative control: intentionally erase the owner invariant"]
-fn negative_control_objtables_temporal() {
-    check_objtables_temporal(true);
-}
-
-#[cfg(feature = "temporal")]
-fn check_objtables_temporal(erase_invariant: bool) {
+fn check_objtables_temporal() {
     let _guard = CopyingNurseryTestGuard::new(1);
     let _scan = ConservativeScanDisabledGuard::new();
     let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
@@ -38,11 +31,6 @@ fn check_objtables_temporal(erase_invariant: bool) {
     let moved = (js_shadow_slot_get(0) & POINTER_MASK) as usize;
     assert_ne!(addr, moved, "the Temporal cell must move");
     assert!(crate::temporal::is_temporal_cell_addr(moved));
-    if erase_invariant {
-        unsafe {
-            (*(moved as *mut crate::temporal::TemporalCell)).meta = std::ptr::null_mut();
-        }
-    }
     let bag = unsafe { crate::object::cell_expando_get(moved).unwrap() };
     let key = crate::string::js_string_from_bytes(b"tag".as_ptr(), 3);
     let child = crate::object::js_object_get_field_by_name(bag, key);

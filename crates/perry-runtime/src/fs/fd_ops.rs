@@ -186,6 +186,9 @@ pub(crate) fn fs_open_path_str_result(path_str: &str, flags: &str) -> Result<i32
     Ok(register_opened_file(file, path_str, append_mode))
 }
 
+// The path; the flags are a number or a flag string read as it is (no
+// coercion); the fd is a number.
+crate::realm_decl! { "node:fs.openSync", effects = { path(arg(0)); stores(fresh); returns(prim(num)) } }
 /// `fs.openSync(path, flags)` — small fd registry for deterministic tests.
 #[no_mangle]
 pub extern "C" fn js_fs_open_sync(path_value: f64, flags_value: f64) -> f64 {
@@ -219,6 +222,15 @@ pub extern "C" fn js_fs_close_sync(fd_value: f64) -> i32 {
     })
 }
 
+// `readSync(fd, buffer, offset, length, position)` and the options form
+// `readSync(fd, buffer, { offset, length, position })`
+// (`js_fs_read_sync_options`, whose fields are [[Get]]): the numbers are
+// read as they are (`number_arg`, `position_arg`: a non-Number is absent, a
+// bigint position is read too; no ToNumber, so no `valueOf` runs); the fd is
+// a number (`validate_fd_open`). The bytes go into the buffer's backing
+// store (`bytes_mut`); a value that is no byte view gets nothing. The result
+// is the byte count.
+crate::realm_decl! { "node:fs.readSync", effects = { reads(field(arg(2), offset)); reads(field(arg(2), length)); reads(field(arg(2), position)); stores_bytes(arg(1)); returns(prim(num)) } }
 /// `fs.readSync(fd, buffer, offset, length, position)` — Buffer subset.
 #[no_mangle]
 pub extern "C" fn js_fs_read_sync(
@@ -229,6 +241,11 @@ pub extern "C" fn js_fs_read_sync(
     position_value: f64,
 ) -> f64 {
     crate::fs::validate::validate_fd_open(fd_value, "read");
+    let Some((offset_value, length_value, position_value)) =
+        validate_read_sync_args(buffer_value, offset_value, length_value, position_value)
+    else {
+        return 0.0;
+    };
     match read_sync_result(
         fd_value,
         buffer_value,
@@ -242,6 +259,92 @@ pub extern "C" fn js_fs_read_sync(
         // indistinguishable from a clean EOF.
         Err(err) => unsafe { crate::exception::throw_core(fs_error_no_path(&err, "read")) },
     }
+}
+
+/// Node's argument checks of `fs.readSync` after the fd, in its order: an
+/// absent offset is 0 and any other non-null offset is `validateInteger(offset,
+/// 'offset', 0)`; a `null` offset takes the options form (offset 0, the whole
+/// buffer, position null); the position (`null`/`undefined`, an integer from
+/// -1, or a bigint) is checked before the length; `length |= 0` and a zero length is 0 bytes read before anything
+/// else is checked; an empty buffer cannot be written; then
+/// `validateOffsetLengthRead` (`length >= 0`, `offset + length <=
+/// byteLength`). `None` is the early "0 bytes" answer. Only Buffer/Uint8Array
+/// buffers have their size checked here; an object offset is left to the
+/// options-form entry.
+fn validate_read_sync_args(
+    buffer_value: f64,
+    offset_value: f64,
+    length_value: f64,
+    position_value: f64,
+) -> Option<(f64, f64, f64)> {
+    use crate::validators::{
+        throw_invalid_arg_type, throw_invalid_arg_value, throw_out_of_range, validate_integer,
+        format_range_received, MAX_SAFE_INTEGER,
+    };
+    use crate::value::JSValue;
+    let offset_jv = JSValue::from_bits(offset_value.to_bits());
+    let mut offset_value = offset_value;
+    let mut length_value = length_value;
+    let mut position_value = position_value;
+    let buffer_checked = is_byte_buffer_value(buffer_value);
+    if offset_jv.is_null() {
+        if !buffer_checked {
+            return Some((offset_value, length_value, position_value));
+        }
+        offset_value = 0.0;
+        length_value = buffer_len_from_value(buffer_value) as f64;
+        position_value = f64::from_bits(crate::value::TAG_NULL);
+    } else if offset_jv.is_undefined() {
+        offset_value = 0.0;
+    } else if offset_jv.is_number() || offset_jv.is_any_string() || offset_jv.is_bool() {
+        validate_integer(offset_value, "offset", 0.0, MAX_SAFE_INTEGER);
+    } else {
+        return Some((offset_value, length_value, position_value));
+    }
+    let position_jv = JSValue::from_bits(position_value.to_bits());
+    if position_jv.is_undefined() {
+        position_value = f64::from_bits(crate::value::TAG_NULL);
+    } else if !position_jv.is_null() && !position_jv.is_bigint() {
+        if !position_jv.is_number() {
+            throw_invalid_arg_type("position", "of type bigint or integer", position_value);
+        }
+        validate_integer(position_value, "position", -1.0, MAX_SAFE_INTEGER);
+    }
+    // `length |= 0`: ToInt32 of a number; anything else Perry reads as 0.
+    let length = match number_arg(length_value) {
+        Some(n) if n.is_finite() => (n.trunc().rem_euclid(4_294_967_296.0) as u32) as i32 as f64,
+        _ => 0.0,
+    };
+    if length == 0.0 {
+        return None;
+    }
+    if !buffer_checked {
+        return Some((offset_value, length, position_value));
+    }
+    let byte_length = buffer_len_from_value(buffer_value) as f64;
+    if byte_length == 0.0 {
+        // `util.inspect` of an empty byte view: Node prints the Buffer and
+        // Uint8Array forms differently.
+        let inspected = if crate::buffer::is_uint8array_buffer(
+            (buffer_value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize,
+        ) {
+            "Uint8Array(0) []"
+        } else {
+            "<Buffer >"
+        };
+        throw_invalid_arg_value("buffer", "is empty and cannot be written", inspected);
+    }
+    if length < 0.0 {
+        throw_out_of_range("length", ">= 0", &format_range_received(length));
+    }
+    if offset_value + length > byte_length {
+        throw_out_of_range(
+            "length",
+            &format!("<= {}", format_range_received(byte_length - offset_value)),
+            &format_range_received(length),
+        );
+    }
+    Some((offset_value, length, position_value))
 }
 
 /// The `readSync` core, with the syscall error preserved so the throwing
@@ -321,6 +424,13 @@ pub extern "C" fn js_fs_read_sync_options(
     }
 }
 
+// Every arity's arm (`js_fs_write_buffer_sync`, `js_fs_write_sync_args`,
+// `js_fs_write_sync_options_dispatch`, this): the data is a string's or a
+// Buffer/TypedArray's bytes, read as they are (anything else writes no
+// bytes; no ToString); a third argument that is an object is the options,
+// whose `offset`, `length` and `position` are [[Get]]; numbers and a bigint
+// position are read as they are. The result is the byte count.
+crate::realm_decl! { "node:fs.writeSync", effects = { reads(field(arg(2), offset)); reads(field(arg(2), length)); reads(field(arg(2), position)); stores(fresh); returns(prim(num)) } }
 /// `fs.writeSync(fd, string)` — string subset.
 #[no_mangle]
 pub extern "C" fn js_fs_write_sync(fd_value: f64, data_value: f64) -> f64 {
@@ -491,9 +601,7 @@ fn position_arg(value: f64) -> Option<u64> {
 /// A number argument as an f64, whether it is a plain double or an int32.
 fn number_arg(value: f64) -> Option<f64> {
     let jv = crate::value::JSValue::from_bits(value.to_bits());
-    if jv.is_int32() {
-        Some(jv.as_int32() as f64)
-    } else if jv.is_number() {
+    if jv.is_number() {
         Some(value)
     } else {
         None
@@ -1048,8 +1156,7 @@ extern "C" fn dir_finish_read_promise_impl(
     _this: crate::closure::JsThis,
 ) -> f64 {
     let id = dir_id_of(closure);
-    let promise =
-        crate::closure::js_closure_get_capture_ptr(closure, 1) as *mut crate::promise::Promise;
+    let promise = crate::closure::closure_capture_ref(closure, 1) as *mut crate::promise::Promise;
     let value = crate::closure::js_closure_get_capture_f64(closure, 2);
     let is_error = crate::closure::js_closure_get_capture_f64(closure, 3) != 0.0;
     dir_clear_operation_pending(id);
@@ -1077,7 +1184,7 @@ fn dir_pending_read_promise(
         4,
     );
     crate::closure::closure_set_capture_word(closure, 0, id as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, promise as i64);
+    crate::closure::closure_set_capture_ref(closure, 1, promise as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
     crate::closure::js_closure_set_capture_f64(closure, 3, if is_error { 1.0 } else { 0.0 });
     crate::builtins::js_queue_microtask(closure as i64);
@@ -1090,7 +1197,7 @@ extern "C" fn dir_finish_read_callback_impl(
 ) -> f64 {
     const TAG_NULL: u64 = 0x7FFC_0000_0000_0002;
     let id = dir_id_of(closure);
-    let callback = crate::closure::js_closure_get_capture_ptr(closure, 1) as *const ClosureHeader;
+    let callback = crate::closure::closure_capture_ref(closure, 1) as *const ClosureHeader;
     let value = crate::closure::js_closure_get_capture_f64(closure, 2);
     let kind = crate::closure::js_closure_get_capture_f64(closure, 3) as i32;
     match kind {
@@ -1139,7 +1246,7 @@ fn dir_schedule_read_callback(
         4,
     );
     crate::closure::closure_set_capture_word(closure, 0, id as i64);
-    crate::closure::js_closure_set_capture_ptr(closure, 1, callback as i64);
+    crate::closure::closure_set_capture_ref(closure, 1, callback as i64);
     crate::closure::js_closure_set_capture_f64(closure, 2, value);
     crate::closure::js_closure_set_capture_f64(closure, 3, kind);
     crate::builtins::js_queue_microtask(closure as i64);

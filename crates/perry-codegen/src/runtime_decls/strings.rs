@@ -158,6 +158,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // ships on the macOS-14 GitHub runner via Xcode 15.x) errors with
     // `error: use of undefined value '@llvm.assume'`.
     module.declare_function("llvm.assume", VOID, &[I1]);
+    // The out-of-range arm of a proven native buffer read
+    // (`expr/buffer_access.rs::OutOfBoundsArm::Abort`).
+    module.declare_function("js_native_access_bounds_failed", VOID, &[I32, I32]);
     // `llvm.bswap.i{16,32,64}` — used by Buffer numeric BE-read/write
     // intrinsics (`lower_call.rs::lower_buffer_numeric_read/write` —
     // see the size-keyed lookup table at lower_call.rs:168). Same
@@ -361,7 +364,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_object_keys", I64, &[I64]);
     module.declare_function("js_object_keys_value", I64, &[DOUBLE]);
     module.declare_function("js_for_in_keys_value", I64, &[DOUBLE]);
-    module.declare_function("js_for_in_keys_stable_value", I64, &[DOUBLE]);
+    module.declare_function("js_for_in_begin", I64, &[DOUBLE, PTR, PTR]);
+    module.declare_function("js_for_in_loop_fact", I64, &[DOUBLE, I64]);
+    module.declare_function("js_for_in_key_live", DOUBLE, &[DOUBLE, DOUBLE, DOUBLE, I64]);
     module.declare_function("js_is_finite", DOUBLE, &[DOUBLE]);
     module.declare_function("js_is_undefined_or_bare_nan", I32, &[DOUBLE]);
     module.declare_function("js_math_min_array", DOUBLE, &[I64]);
@@ -758,6 +763,17 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     if crate::verify_facts::dce_enabled() {
         module.declare_function("llvm.trap", crate::types::VOID, &[]);
     }
+    if crate::verify_facts::life_measure_on() {
+        // LIFE I1: the lifetime measurement's hooks.
+        module.declare_function("perry_life_birth", crate::types::VOID, &[I64, I64, I64]);
+        module.declare_function("perry_life_catch", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_depth", I64, &[]);
+        module.declare_function("perry_life_enter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_iter", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_loop", crate::types::VOID, &[I64]);
+        module.declare_function("perry_life_return", crate::types::VOID, &[]);
+        module.declare_function("perry_life_turn", crate::types::VOID, &[]);
+    }
     if crate::verify_facts::enabled() {
         module.declare_function("perry_verify_facts_tick", crate::types::VOID, &[]);
         module.declare_function("perry_verify_facts_init", crate::types::VOID, &[]);
@@ -771,7 +787,45 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         module.declare_function("perry_verify_facts_call", PTR, &[DOUBLE, I64, I64, I64]);
         module.declare_function("perry_verify_facts_call_miss", I32, &[PTR, I64, I64]);
         module.declare_function("perry_verify_facts_miss", I32, &[DOUBLE, I64, I64]);
+        // Value records (DESIGN-p4l4 B7): the birth claim and the identity
+        // witness of a compiled comparison.
+        module.declare_function(
+            "perry_verify_facts_record_claim",
+            crate::types::VOID,
+            &[DOUBLE],
+        );
+        module.declare_function(
+            "perry_verify_facts_record_identity",
+            I32,
+            &[DOUBLE, DOUBLE, I64, I64],
+        );
+        // VR-4b: the receiver of a record-array intrinsic.
+        module.declare_function("perry_verify_facts_record_array", I32, &[DOUBLE, I64, I64]);
         module.declare_function("perry_verify_facts_entry", crate::types::VOID, &[I64, I64]);
+        // family_reach: the families the facts say are never created or
+        // observed, and a compiled read of a global of one of them.
+        module.declare_function(
+            "perry_verify_facts_families",
+            crate::types::VOID,
+            &[I64, I64, I64],
+        );
+        module.declare_function(
+            "perry_verify_facts_family_observed",
+            crate::types::VOID,
+            &[I64, I64],
+        );
+        // LIFE G1: the death points of the census's lifetime claims.
+        module.declare_function(
+            "perry_verify_facts_life_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64, I64],
+        );
+        module.declare_function("perry_verify_facts_life_arg", I64, &[I64]);
+        module.declare_function(
+            "perry_verify_facts_life_arg_dead",
+            crate::types::VOID,
+            &[I64, I64, I64, I64],
+        );
     }
     // #8655: guarded packed-array / dense Array-subclass read before the
     // fully generic dynamic dispatcher. Used by unknown-receiver loop reads,
@@ -965,6 +1019,8 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     // SNAP census site hook (`expr/snap_env_site.rs`): instrumented compiles only.
     if crate::expr::snap_env_site::census_compile() {
         module.declare_function("js_snap_env_site", VOID, &[I32]);
+        module.declare_function("js_snap_argv_site", VOID, &[I32, I64]);
+        module.declare_function("js_snap_compare_literal", VOID, &[I32, DOUBLE, DOUBLE, I32]);
         module.declare_function("js_snap_require_edge", VOID, &[I32]);
     }
     // #1344: process.env.X = v / delete process.env.X.
@@ -1008,7 +1064,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_v8_gc_profiler_report", DOUBLE, &[]);
     // node:v8 Serializer/Deserializer classes (#3680) + lifecycle/diagnostic (#3679).
     module.declare_function("js_v8_serializer_new", DOUBLE, &[DOUBLE]);
-    module.declare_function("js_v8_deserializer_new", DOUBLE, &[DOUBLE]);
+    module.declare_function("js_v8_deserializer_new", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_v8_noop_undefined", DOUBLE, &[]);
     module.declare_function("js_v8_is_building_snapshot", DOUBLE, &[]);
     module.declare_function("js_v8_namespace", DOUBLE, &[PTR, I64]);
@@ -1171,6 +1227,11 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_bool_box_set", VOID, &[I64, I32]);
     module.declare_function(
         "js_arguments_call_spread",
+        DOUBLE,
+        &[DOUBLE, DOUBLE, I64, DOUBLE, DOUBLE],
+    );
+    module.declare_function(
+        "js_arguments_bundle_call_spread",
         DOUBLE,
         &[DOUBLE, DOUBLE, I64, DOUBLE, DOUBLE],
     );
@@ -1430,6 +1491,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_array_splice", I64, &[I64, I32, I32, PTR, I32, PTR]);
     module.declare_function("js_array_splice_delete_count", I32, &[DOUBLE]);
     module.declare_function("js_parse_int", DOUBLE, &[I64, DOUBLE]);
+    module.declare_function("js_parse_int_value", DOUBLE, &[DOUBLE, DOUBLE]);
     module.declare_function("js_parse_float", DOUBLE, &[I64]);
     module.declare_function("js_array_reduce", DOUBLE, &[I64, I64, I32, DOUBLE]);
     module.declare_function("js_array_reduce_right", DOUBLE, &[I64, I64, I32, DOUBLE]);
@@ -1785,6 +1847,9 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
         DOUBLE,
         &[DOUBLE, DOUBLE],
     );
+    // #13488: a resolved `import()` site validates its options first; `0`
+    // or the rejected promise the call evaluates to.
+    module.declare_function("js_module_dynamic_import_check_options", I64, &[DOUBLE]);
     module.declare_function(
         "js_module_dynamic_import_deferred",
         DOUBLE,
@@ -1896,7 +1961,6 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("llvm.log.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log2.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.log10.f64", DOUBLE, &[DOUBLE]);
-    module.declare_function("llvm.exp.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.sin.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("llvm.cos.f64", DOUBLE, &[DOUBLE]);
     module.declare_function("js_path_basename", I64, &[I64]);

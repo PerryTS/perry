@@ -1,0 +1,1 @@
+Tests: the `perry-codegen-wasm` unit tests compile again on `main`. The fetchWithAuth test from #14718 called a helper that only existed on that PR's branch; it now uses `run_web_source_with_dom`. No product change.

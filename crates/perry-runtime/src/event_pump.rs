@@ -267,6 +267,15 @@ pub fn js_loop_turn_bounded(budget_ms: u64) {
     loop_hooks::turn_bounded(budget_ms);
 }
 
+/// One non-blocking turn of this thread's loop, for native UI hosts whose
+/// run-loop pump otherwise never turns it (fetch / node:http only progress
+/// on a turn).
+#[cfg(not(target_arch = "wasm32"))]
+#[no_mangle]
+pub extern "C" fn js_loop_turn_nonblocking() {
+    js_loop_turn_bounded(0);
+}
+
 /// Test-only: install an unrouted net-profile loop on this thread.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn install_net_loop_for_test() -> bool {
@@ -290,6 +299,19 @@ pub(crate) fn reset_net_loop_for_test() {
 /// `turnloop_proc::close_and_settle`.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn settle_loop_once() {
+    loop_hooks::settle();
+}
+
+/// One non-blocking turn of this agent's loop plus dispatch, for a host that
+/// owns the run loop itself (perry/ui on macOS and iOS: `NSApp` / `UIApplication`
+/// never return to the generated event loop, so `js_wait_for_event` — the only
+/// other place the loop is turned — never runs). Without this, fetch, node:net
+/// and node:http submit their work and no completion is ever collected: the
+/// request is not even written to the socket. A no-op when this thread owns no
+/// loop, so a UI program that does no native I/O pays one thread-local read.
+#[no_mangle]
+pub extern "C" fn js_loop_settle_once() {
+    #[cfg(not(target_arch = "wasm32"))]
     loop_hooks::settle();
 }
 
@@ -902,6 +924,25 @@ fn condvar_park(budget: Duration) {
     // spurious wakeup fired) — that's the one path that yielded the
     // core, so it's the only one allowed to reset the streak.
     spin_streak_reset();
+}
+
+crate::perry_thread_local! {
+    static HOST_KEEPS_THREAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Called by a UI host before it runs `main()` on a thread that keeps running
+/// JavaScript afterwards (the Android UI thread: `main()` returns to the
+/// looper and every widget callback runs there). The generated exit epilogue
+/// then leaves the thread's event loop and per-thread allocations alone
+/// instead of tearing them down as if the process were exiting.
+#[no_mangle]
+pub extern "C" fn perry_host_keeps_thread_after_main() {
+    HOST_KEEPS_THREAD.with(|keep| keep.set(true));
+}
+
+/// Whether [`perry_host_keeps_thread_after_main`] was called on this thread.
+pub(crate) fn host_keeps_thread_after_main() -> bool {
+    HOST_KEEPS_THREAD.with(std::cell::Cell::get)
 }
 
 /// Exit like Node does when top-level module evaluation is still pending but

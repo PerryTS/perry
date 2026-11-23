@@ -211,6 +211,7 @@ fn stmt(s: &mut Stmt, open: bool) {
             body,
             catch,
             finally,
+            ..
         } => {
             stmts(body, open);
             if let Some(c) = catch {

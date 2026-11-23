@@ -102,7 +102,7 @@ pub(crate) fn owner_kind(addr: usize) -> &'static str {
             // here can lazily build Object.prototype, whose builtin installs
             // re-enter this census and recurse until the stack overflows.
             crate::gc_object_type_pat!() => "object",
-            crate::gc::GC_TYPE_ARRAY => "array",
+            crate::gc_array_type_pat!() => "array",
             crate::gc::GC_TYPE_CLOSURE => "closure",
             crate::gc::GC_TYPE_ERROR => "error",
             crate::gc::GC_TYPE_REGEXP => "regexp",

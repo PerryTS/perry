@@ -98,6 +98,20 @@ with the live set, and each has a cheaper exact form:
 <!-- gc-symbol: start_bitmap_membership_and_floors_match_an_independent_arena_walk in crates/perry-runtime/src/gc/tests/start_bitmap.rs -->
 <!-- gc-symbol: full_sweep_page_accounting_matches_the_planted_liveness in crates/perry-runtime/src/gc/tests/sweep_page_tally.rs -->
 
+**The post-minor coverage restore is bounded by the dirty pages.** After a
+minor clears the remembered set it re-derives it from the pre-clear dirty
+snapshot. An owner the dirty scan visited completely is skipped; any other old
+parent is walked, and of its in-body slots only those on a page the snapshot
+names: an old parent's in-body slot is described by its page, so one on a
+clean page owes nothing. A Map store, Set store or array that spans many pages
+therefore costs a minor its dirty pages, not its size. Slots outside the
+parent's body and malloc parents are owner qualified and keep the whole-owner
+walk. `PERRY_GC_RESTORE_DIRTY_PAGES=0` selects the whole-owner walk for every
+parent, and `=verify` runs both and aborts if the whole-owner walk finds an
+entry the bounded one did not restore (test and debug builds always do).
+<!-- gc-symbol: the_bounded_restore_rebuilds_the_pages_the_whole_owner_restore_rebuilds in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+<!-- gc-symbol: the_witness_reports_an_unbarriered_edge in crates/perry-runtime/src/gc/tests/restore_walk.rs -->
+
 **Promoted-cohort fulls.** Old-reclaim pacing credits every promotion to its
 growth baseline, so old-gen garbage that a minor promoted and that died after
 it is invisible to it. A document parse loop is that shape: each result's
@@ -173,12 +187,20 @@ normal old-generation sweep are unaffected either way.
 
 The copying minor's tenuring threshold is **adaptive, not fixed**: it is the
 largest number of survivals `S` whose projected survivor occupancy still fits
-the desired survivor size, clamped to a ceiling of 4
-<!-- gc-fact: GC_COPY_PROMOTION_SURVIVALS = 4 in crates/perry-runtime/src/gc/layout.rs -->,
+the desired survivor size, held between the occupancy floor of 2
+<!-- gc-fact: OCCUPANCY_MIN_SURVIVALS = 2 in crates/perry-runtime/src/gc/tenuring.rs -->
+and the occupancy ceiling of 3
+<!-- gc-fact: OCCUPANCY_MAX_SURVIVALS = 3 in crates/perry-runtime/src/gc/tenuring.rs -->,
 and it drops to 1 (promote on first copy) when a measured survival-rate lock
-shows the aging round is filtering nothing. The loop is always on and has no env
-knob; `crates/perry-runtime/src/gc/tenuring.rs` is its definition and states the
-feedback signal it uses.
+shows the aging round is filtering nothing. The ceiling bounds the occupancy
+rule only, not the lock: a small survivor influx no longer raises `S` to 4, which
+re-copied every survivor once more for no measured benefit.
+`PERRY_GC_TENURING_SURVIVALS_MAX=4` restores the previous climb to the header's
+limit of 4
+<!-- gc-fact: GC_COPY_PROMOTION_SURVIVALS = 4 in crates/perry-runtime/src/gc/layout.rs -->;
+`PERRY_GC_TENURING_SURVIVALS=<n>` pins `S` for every minor and overrides both.
+The loop is always on; `crates/perry-runtime/src/gc/tenuring.rs` is its
+definition and states the feedback signal it uses.
 
 While the first nursery-growth sample is awaiting its first survivor round,
 copying minors keep pointer-bearing parents young for one additional round.
@@ -421,7 +443,9 @@ These are the operational controls most useful outside collector development:
 | `PERRY_WRITE_BARRIERS=0` | compile/runtime barrier bisection; also forces full mark-sweep |
 | `PERRY_GC_SCAVENGE=0` | disable direct nursery scavenging for pacing comparison |
 | `PERRY_GC_PROMOTE_IN_PLACE=0` | revert whole-block promotion to object-by-object evacuation |
+| `PERRY_GC_RESTORE_DIRTY_PAGES=0` | walk whole owners in the post-minor coverage restore (`verify`: both walks, compared) |
 | `PERRY_GC_SCAVENGE_NURSERY_MB=N` | set the base nursery cap |
+| `PERRY_GC_TENURING_SURVIVALS_MAX=N` | ceiling of the adaptive tenuring threshold's occupancy rule (default 3, clamped to 2..4; `4` is the previous climb); the survival-rate lock is unaffected |
 | `PERRY_GC_HEAP_LIMIT=N` | override the process heap budget in MiB |
 | `PERRY_CONSERVATIVE_STACK_SCAN=full` | diagnostic full native-stack scan; disables copying |
 | `PERRY_GC_TRACE=1` | emit structured per-cycle trace records |

@@ -80,7 +80,10 @@ mod de {
         )
     }
     pub(super) fn validate_module_source(source: &str) -> bool {
-        perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_ok()
+        {
+            crate::snap_funnel!(Parse);
+            perry_parser::parse_typescript(source, "perry-vm-module.mjs").is_ok()
+        }
     }
 }
 

@@ -314,12 +314,15 @@ fn unknown_global_key_store_keeps_timer_value_unproven() {
 }
 
 #[test]
-fn global_exposure_keeps_timer_value_unproven() {
+fn global_exposure_keeps_the_timer_body_model() {
+    // The global object handed to unknown code: no key of it is written
+    // (R-GLOBAL and step 2, owner decision 2026-11-18): `setTimeout` is the
+    // realm's timer.
     verdict(
         &timer_source("external(globalThis);", "const t=setTimeout; t(cb,0);"),
         "// CALLBACK",
         "field",
-        false,
+        true,
     );
 }
 
@@ -388,6 +391,7 @@ fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<Stri
     let extra = m.node_l("extra");
     let ret = m.node_l("return");
     m.calls.push(CallSite {
+        first_arg_fixed: false,
         this: ThisArg::Undef,
         args: vec![cb, delay, extra],
         spread: vec![],
@@ -411,6 +415,7 @@ fn timer_callback_constraints(direct: bool) -> Vec<(Vec<u32>, Vec<u32>, Vec<Stri
     } else {
         let f = m.tok(TokKind::BuiltinFn(Native::Member {
             identity: "setTimeout",
+            holder: None,
         }));
         m.apply(recv, &Cons::Call { call: 0 }, &[f], 0);
     }
@@ -813,7 +818,10 @@ fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
             })
             .collect();
     for identity in identities {
-        m.tok(TokKind::BuiltinFn(Native::Member { identity }));
+        m.tok(TokKind::BuiltinFn(Native::Member {
+            identity,
+            holder: None,
+        }));
     }
     let f = m.tok(TokKind::BuiltinFn(Native::Any));
     let dst = m.node_l("bounded-native-read");
@@ -821,7 +829,7 @@ fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
     let key = m.atom(crate::model::ELEM);
     let before = m.work.get();
     m.max_work = before + 128;
-    m.builtin_field_use(f, Key::Named(key), ChainAct::Load(dst));
+    m.builtin_field_use(f, Key::Named(key), ChainAct::Load(dst, m.thrown));
     let charged = m.work.get() - before;
     assert!(
         charged >= 1000,

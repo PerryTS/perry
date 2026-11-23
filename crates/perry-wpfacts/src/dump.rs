@@ -92,6 +92,16 @@ fn fact_lines(t: &TemplateFacts) -> Vec<String> {
             crate::model::esc_key(&f.key),
             b(f.ta_stable)
         ));
+        // DESIGN-p4l1 §3.1: a field the facts give `Arr` gets a line;
+        // I32 at rest: a Number field's F64/I32 gets one too.
+        if f.rep != crate::bindings::Rep::Boxed {
+            v.push(format!(
+                "FACT FR rep {}.{} = {}",
+                t.display,
+                crate::model::esc_key(&f.key),
+                f.rep.name()
+            ));
+        }
     }
     v
 }
@@ -108,31 +118,137 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# stats modules={} templates={} fact_units={} nodes={} constraints={} tokens={} functions={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
         s.modules, s.templates, s.fact_units, s.nodes, s.constraints, s.tokens, s.functions, s.gen_ms, s.solve_ms, s.derive_ms, s.pops, s.work, s.aborted
     ));
-    if pf.rounds > 0 {
-        out.push_str(&format!(
-            "# rounds {} work_per_round={:?} broken={:?}\n",
-            pf.rounds, pf.round_work, pf.broken
-        ));
-    }
     for (mi, bindings) in pf.bindings.iter().enumerate() {
         for (id, b) in &bindings.locals {
             if let Some(o) = &b.indexed_owner {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
             }
+            // DESIGN-p4l1 §5.6: each binding the facts give `Arr`;
+            // DESIGN-p4l4: each one they give `Record`.
+            if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
+                out.push_str(&format!(
+                    "# arr_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            if matches!(b.rep, crate::bindings::Rep::Record(_)) {
+                out.push_str(&format!(
+                    "# record_rep module={mi} local={id} rep={}\n",
+                    b.rep.name()
+                ));
+            }
+            // Fact IM (`const_arrays`): a rooted `const` of immutable Arrays,
+            // and its constant contents.
+            if b.immutable_array {
+                out.push_str(&format!("# immutable_array module={mi} local={id}\n"));
+            }
+            if let Some(c) = &b.const_elems {
+                let v: Vec<String> = c
+                    .iter()
+                    .map(|b| format!("{}", f64::from_bits(*b)))
+                    .collect();
+                out.push_str(&format!(
+                    "# const_array module={mi} local={id} elems=[{}]\n",
+                    v.join(",")
+                ));
+            }
+        }
+    }
+    // DESIGN-p4l1 §5.6: each field read call (b1), its key's interval at
+    // the call, what the read reads from, and the in-floor verdict.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (offset, c) in &bindings.field_read_calls {
+            let key = bindings
+                .call_arg_ranges
+                .binary_search_by_key(offset, |(o, _)| *o)
+                .ok()
+                .and_then(|at| bindings.call_arg_ranges[at].1.get(c.index_arg as usize))
+                .copied()
+                .flatten()
+                .map_or("top".to_string(), |(lo, hi)| format!("[{lo},{hi}]"));
+            let rep = c
+                .array
+                .map_or("boxed".to_string(), |r| crate::bindings::Rep::Arr(r).name());
+            out.push_str(&format!(
+                "# field_read_call module={mi} call={offset} field={} key={key} rep={rep} in_floor={}\n",
+                c.field, c.in_floor as u8
+            ));
+        }
+    }
+    // Each call whose result the facts prove a Number (a canonical double
+    // for its consumers), by the call's source offset.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for offset in &bindings.number_calls {
+            out.push_str(&format!("# number_call module={mi} call={offset}\n"));
+        }
+    }
+    // N1: what decides each Number local's representation.
+    for l in &pf.rep_probe {
+        out.push_str(l);
+        out.push('\n');
+    }
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (func, s) in &bindings.signatures {
+            let params: Vec<String> = s
+                .params
+                .iter()
+                .zip(&s.ranges)
+                .map(|(r, iv)| match iv {
+                    Some((lo, hi)) => format!("{}[{lo},{hi}]", r.name()),
+                    None => r.name(),
+                })
+                .collect();
+            out.push_str(&format!(
+                "# signature module={mi} func={func} params=({}) ret={}\n",
+                params.join(","),
+                s.ret.name()
+            ));
+        }
+        for func in &bindings.record_demoted {
+            out.push_str(&format!(
+                "# record-signature module={mi} func={func} DEMOTED a source call is not a typed call of its module\n"
+            ));
+        }
+        // Value records VR-4b: what codegen lowers as a record array.
+        for (id, r) in &bindings.record_array_locals {
+            out.push_str(&format!("# record_array module={mi} local={id} of={r}\n"));
+        }
+        for (at, k, r) in &bindings.record_array_reads {
+            out.push_str(&format!(
+                "# record_array module={mi} read={at}.{k} of={r}\n"
+            ));
+        }
+        for (id, r) in &bindings.record_array_birth_locals {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-local={id} of={r}\n"
+            ));
+        }
+        for (at, r) in &bindings.record_array_birth_stores {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-store={at} of={r}\n"
+            ));
+        }
+        for (c, k, r) in &bindings.record_array_birth_fields {
+            out.push_str(&format!(
+                "# record_array module={mi} birth-field={c}.{k} of={r}\n"
+            ));
+        }
+    }
+    // N6: each module binding the facts give one Number.
+    for (mi, bindings) in pf.bindings.iter().enumerate() {
+        for (id, value) in &bindings.const_numbers {
+            out.push_str(&format!(
+                "# const_number module={mi} local={id} value={value}\n"
+            ));
         }
     }
     out.push_str(&format!(
         "# indexed_metadata_pristine {}\n",
         pf.indexed_metadata_pristine()
     ));
-    for (path, u) in &pf.units {
-        out.push_str(&format!(
-            "# unit {path} nodes={} constraints={} tokens={} pts_entries={} instances={} gen_ms={:.1} solve_ms={:.1} derive_ms={:.1} pops={} work={} aborted={}\n",
-            u.nodes, u.constraints, u.tokens, u.pts_entries, u.instances, u.gen_ms, u.solve_ms, u.derive_ms, u.pops, u.work, u.aborted
-        ));
-    }
-    for l in &pf.unit_io {
-        out.push_str(l);
+    // DESIGN-p4l4 §7: the value-record ledger (empty with the switch off).
+    for l in crate::records::ledger_lines(&pf.templates, &pf.record_arrays) {
+        out.push_str(&l);
         out.push('\n');
     }
     out.push_str(&format!(
@@ -142,7 +258,34 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
     if let Some(a) = &pf.activation {
         out.push_str(&format!("# activation {a}\n"));
     }
+    if let Some(n) = pf.escaped_inactive {
+        out.push_str(&format!("# escaped-inactive={n}\n"));
+    }
     out.push_str(&format!("# top_calls {}\n", s.top_calls));
+    out.push_str(&format!(
+        "# field_truthy rules {} removing {}\n",
+        s.field_truthy.0, s.field_truthy.1
+    ));
+    for r in &s.solve_counters {
+        out.push_str(r);
+        out.push('\n');
+    }
+    for r in &s.field_truthy_rows {
+        out.push_str(r);
+        out.push('\n');
+    }
+    for l in pf.family_reach.iter().flat_map(|f| f.dump_lines()) {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    if let Some(d) = &pf.native_dispatch {
+        let n = pf.dispatch_obligations().count();
+        out.push_str(&format!("{} obligations={n}\n", d.dump_line()));
+        for o in &pf.member_ops {
+            out.push_str(&o.dump_line());
+            out.push('\n');
+        }
+    }
     for (k, n, ms) in &s.profile {
         out.push_str(&format!("# profile {k} {n} {ms:.1}\n"));
     }
@@ -180,6 +323,20 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             out.push('\n');
         }
     }
+    // MATHB1: the intrinsic-callee verdicts (`I <module>@<start> .<key> …`).
+    for st in &pf.sites {
+        match &st.intrinsic_callee {
+            Some(crate::derive::IntrinsicCallee::Exact(n)) => out.push_str(&format!(
+                "I {}@{} .{} exact {n}\n",
+                st.module, st.byte_offset, st.key
+            )),
+            Some(crate::derive::IntrinsicCallee::No(why)) => out.push_str(&format!(
+                "I {}@{} .{} no {why}\n",
+                st.module, st.byte_offset, st.key
+            )),
+            None => {}
+        }
+    }
     for st in &pf.sites {
         let v = match &st.verdict {
             Verdict::OwnLength => "native:own-length".to_string(),
@@ -187,6 +344,17 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
             Verdict::T0Mono => "T0".to_string(),
             Verdict::T0Set => "T0set".to_string(),
             Verdict::E0 => "E0".to_string(),
+            Verdict::Dead => "dead".to_string(),
+            Verdict::OwnDataOrAbsent => "own-data-or-absent".to_string(),
+            Verdict::Throws => "throws".to_string(),
+            Verdict::PerKind => "per-kind".to_string(),
+            Verdict::NsExport => "ns-export".to_string(),
+            Verdict::AccessorGet => format!("accessor-get:{}", st.targets.join(",")),
+            Verdict::AccessorSet => format!("accessor-set:{}", st.targets.join(",")),
+            Verdict::AddsKey => "adds-key".to_string(),
+            Verdict::KnownObjectStore => "known-object-store".to_string(),
+            Verdict::ProxyTrap => "proxy-trap".to_string(),
+            Verdict::IntrinsicCall => "intrinsic-call".to_string(),
             Verdict::No(r) => format!("no:{r}"),
         };
         out.push_str(&format!(
@@ -366,7 +534,7 @@ pub fn contract_section(pf: &ProgramFacts, module: u32) -> Vec<u8> {
     // and a layout the census broke claims nothing (its readers hold TOP).
     let stable = pf.stable_classes();
     for t in &pf.templates {
-        if t.module != Some(module) || pf.broken.contains(&t.display) {
+        if t.module != Some(module) {
             continue;
         }
         let Some(cid) = t.class_id else {

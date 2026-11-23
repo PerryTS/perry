@@ -49,6 +49,7 @@ fn class_c() -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
         static_accessor_names: Vec::new(),
@@ -302,6 +303,7 @@ fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -692,6 +694,7 @@ fn array_captured_by_a_closure_denies_the_push() {
             mutable_captures: Vec::new(),
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: true,
             is_async: false,
@@ -1543,20 +1546,14 @@ fn an_array_pushed_into_another_array_is_disqualified() {
     assert!(!promote(&stmts, &classes).contains_key(&6));
 }
 
-/// **CodeRabbit 🟡 #6** (`is_empty` covered only `arrays`). The other three
-/// maps are kept consistent with `arrays` by construction today — `pushed` is
-/// `retain`ed against it, `element_reads` only inserts for a proven root, and
-/// an empty `arrays` returns `default()` — but that is an invariant no type
-/// enforces, and `is_empty()` gates every consumer. Assert it directly so a
-/// future edit that populates one map without the other is caught here rather
-/// than by a wrong answer.
+/// `is_empty()` gates every consumer and keys on `arrays` alone, so a denied
+/// region must answer no query from the other maps either.
 #[test]
-fn is_empty_covers_every_fact_map() {
+fn an_empty_region_answers_no_query() {
     let c = class_c();
     let cs = [c];
     let classes = classes_of(&cs);
-    // A region with an array that fails E3 (call-argument escape): every map
-    // must come back empty together.
+    // A region with an array that fails E3 (call-argument escape).
     let denied = vec![
         let_arr(1, "rows"),
         let_c(2, "row"),
@@ -1571,10 +1568,12 @@ fn is_empty_covers_every_fact_map() {
     ];
     let facts = elements(&denied, &classes);
     assert!(facts.is_empty());
-    assert!(
-        facts.debug_all_maps_empty(),
-        "is_empty must imply ALL maps empty"
-    );
+    assert!(!facts.push_is_contained(2, 1));
+    assert!(facts.member_group_root(2).is_none());
+    assert!(facts.proven_array_root(1).is_none());
+    assert!(facts.group_members().is_empty());
+    assert!(facts.proven_array_classes().is_empty());
+    assert_eq!(facts.callback_param_sites().count(), 0);
 
     // And the converse: a proven region is not `is_empty`.
     let proven = vec![
@@ -1584,7 +1583,7 @@ fn is_empty_covers_every_fact_map() {
     ];
     let facts = elements(&proven, &classes);
     assert!(!facts.is_empty());
-    assert!(!facts.debug_all_maps_empty());
+    assert!(facts.push_is_contained(2, 1));
 }
 
 // ── GC rooting obligations ─────────────────────────────────────────────────
@@ -1667,6 +1666,7 @@ fn the_module_barrier_still_denies_element_facts() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let facts = facts_for(&classes, vec![barrier]);
     assert!(facts.has_shape_barrier_sites(), "fixture must be a barrier");
@@ -1705,6 +1705,7 @@ fn an_inadmissible_element_class_denies_the_array() {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         },
     )];
     let cs = [c];

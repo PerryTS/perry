@@ -84,4 +84,145 @@ impl ShapeRecord {
             .created_birth_shape
             .store(birth.0, std::sync::atomic::Ordering::Relaxed);
     }
+
+    /// Image run: this record as one entry of the mint record: the facts the runtime's mint
+    /// takes and the state attached to the record.
+    pub(in crate::object) fn snap_image_mint(&self) -> crate::snap_image::format::MintRec {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut edges = Vec::new();
+        if self.has_boxed_extras() {
+            // SAFETY: a boxed extension is an owned, aligned `ShapeExtras`.
+            let x = unsafe { &*(self.extras as usize as *const super::ShapeExtras) };
+            edges.push(x.to_nopointer.load(Relaxed));
+            edges.push(x.to_any.load(Relaxed));
+            edges.extend(x.tail_to_any.iter().map(|w| w.load(Relaxed)));
+        }
+        crate::snap_image::format::MintRec {
+            id: self.shape_id.0,
+            word: self.layout_word.0,
+            keys: self.keys,
+            logical: self.logical_key_count,
+            live: self.live_inline_slot_count,
+            holes: self.hole_count,
+            generation: self.semantic_generation,
+            kind: ((self.flags_and_kind & super::RECORD_KIND_MASK) >> super::RECORD_KIND_SHIFT)
+                as u8,
+            summary: self.summary(),
+            integrity: self.integrity_flags(),
+            proto_id: self.proto_id,
+            proto_cell: self.proto_cell,
+            rep: self.rep,
+            brands: self.brands().to_vec(),
+            constfn: self
+                .constfn_infos()
+                .iter()
+                .map(|i| (i.slot, i.info))
+                .collect(),
+            handles: self.owned_handles().map(|w| w.0),
+            family_desc: self.family_desc_index_plus_one,
+            edges,
+            route: crate::object::shapes::snap_image_mint_route(
+                self.shape_id.0,
+                self.layout_word.0,
+            ),
+            node: self.keys_node(),
+            keys_ref: None,
+            proto_ref: None,
+            desc_off: None,
+            fam_serial: 0,
+        }
+    }
+
+    /// Image run: this record's shape state as bytes, for a begin-to-cut diff. The words
+    /// the collector and the lazy probes own (carrier epochs, the facts-indexed bit, the
+    /// keys word, the key probe and colour masks) and the address of a boxed extension
+    /// are left out; the extension contributes its contents.
+    pub(in crate::object) fn snap_image_state(&self) -> Vec<u8> {
+        use std::sync::atomic::Ordering::Relaxed;
+        let mut r = *self;
+        r.keys = 0;
+        r.probe = 0;
+        r.colour_mask = [0; 2];
+        r.colour_store_mask = [0; 2];
+        r.flags_and_kind &= !u32::from(
+            super::RECORD_FLAG_FACTS_INDEXED
+                | super::RECORD_FLAG_OLD_CARRIER
+                | super::RECORD_FLAG_OLD_CARRIER_SEEN
+                | super::RECORD_FLAG_CARRIED_SEEN,
+        );
+        let boxed = self.has_boxed_extras();
+        if boxed {
+            r.extras = 1 << 63;
+        }
+        // SAFETY: a plain-data record read as bytes.
+        let mut out = unsafe {
+            std::slice::from_raw_parts(
+                (&r as *const ShapeRecord).cast::<u8>(),
+                std::mem::size_of::<ShapeRecord>(),
+            )
+        }
+        .to_vec();
+        if boxed {
+            // SAFETY: a boxed extension is an owned, aligned `ShapeExtras`.
+            let x = unsafe { &*(self.extras as usize as *const super::ShapeExtras) };
+            let mut put = |v: u64| out.extend_from_slice(&v.to_le_bytes());
+            put(u64::from(x.to_nopointer.load(Relaxed)));
+            put(u64::from(x.to_any.load(Relaxed)));
+            put(u64::from(x.rollback_parent.load(Relaxed)));
+            put(u64::from(x.created_birth_shape.load(Relaxed)));
+            put(u64::from(x.field_define_target));
+            for t in x.integrity_targets {
+                put(u64::from(t));
+            }
+            put(u64::from(x.integrity_flags));
+            put(x.tail_to_any.len() as u64);
+            for w in x.tail_to_any.iter() {
+                put(u64::from(w.load(Relaxed)));
+            }
+            put(x.constfn_infos.len() as u64);
+            for i in x.constfn_infos.iter() {
+                put(u64::from(i.slot));
+                put(i.info);
+            }
+            put(x.brands.len() as u64);
+            for b in x.brands.iter() {
+                put(*b);
+            }
+        }
+        out
+    }
+}
+
+#[cfg(test)]
+mod snap_image_state_tests {
+    use super::super::*;
+
+    fn record() -> ShapeRecord {
+        ShapeRecord::new(0, 0, 0, 0, ShapeObjectKind::Ordinary, 0)
+    }
+
+    #[test]
+    fn snap_image_state_sees_a_change_inside_a_boxed_extension() {
+        let mut r = record();
+        r.extras = new_extras(&[], &[]);
+        let before = r.snap_image_state();
+        // SAFETY: the extension was allocated above; only its own field changes, so the
+        // record words stay equal and only the extension contents can tell the states apart.
+        unsafe { &mut *(r.extras as usize as *mut ShapeExtras) }.integrity_flags = 3;
+        assert_ne!(before, r.snap_image_state());
+        // SAFETY: the extension was allocated above and is freed once.
+        drop(unsafe { Box::from_raw(r.extras as usize as *mut ShapeExtras) });
+    }
+
+    #[test]
+    fn snap_image_state_ignores_the_collector_owned_bits() {
+        let mut r = record();
+        let before = r.snap_image_state();
+        r.set(RECORD_FLAG_CARRIED_SEEN, true);
+        r.set(RECORD_FLAG_OLD_CARRIER, true);
+        r.probe = 5;
+        assert_eq!(before, r.snap_image_state());
+        r.logical_key_count += 1;
+        assert_ne!(before, r.snap_image_state());
+    }
 }

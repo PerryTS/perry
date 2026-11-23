@@ -2,12 +2,20 @@
 //! carries (BFX1 S1 carrier). The table is generated once, by the build
 //! script of the leaf crate perry-realm-table, from the runtime's own `#[realm(..)]` declarations: the
 //! runtime's declaration is the single authority, the solver keeps no names.
-//! No solver rule reads the effects yet.
+//! The solver interprets them in `builtins/effects.rs` (`run_native`).
 use perry_hir::realm_manifest::RealmEntry;
 
 /// Every realm declaration, in manifest order.
 pub fn realm() -> &'static [RealmEntry] {
     perry_realm_table::REALM
+}
+
+/// Does the realm declare, at the definition of native `name`, that its
+/// algorithm never reads its `this` value (`this = ignored`)?
+pub fn this_ignored(name: &str) -> bool {
+    realm()
+        .iter()
+        .any(|e| e.name == name && e.facts.contains("\"this_ignored\":true"))
 }
 
 #[cfg(test)]

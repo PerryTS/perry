@@ -20,14 +20,6 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
             )
             .expect("Failed to create EditText");
 
-        // Set input type to password (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD = 0x81)
-        let _ = env.call_method(
-            &edit_text,
-            jni::jni_str!("setInputType"),
-            jni::jni_sig!("(I)V"),
-            &[JValue::Int(0x81)],
-        );
-
         // Set placeholder
         let jstr = env
             .new_string(placeholder)
@@ -45,6 +37,18 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
             jni::jni_str!("setSingleLine"),
             jni::jni_sig!("(Z)V"),
             &[JValue::Bool(true)],
+        );
+
+        // Password input type LAST: setSingleLine() above installs a
+        // single-line transformation that replaced the password mask (the
+        // field showed the password in clear text). setInputType with the
+        // password variation installs the mask and stays single-line.
+        // (TYPE_CLASS_TEXT | TYPE_TEXT_VARIATION_PASSWORD = 0x81)
+        let _ = env.call_method(
+            &edit_text,
+            jni::jni_str!("setInputType"),
+            jni::jni_sig!("(I)V"),
+            &[JValue::Int(0x81)],
         );
 
         // Register change callback via PerryBridge

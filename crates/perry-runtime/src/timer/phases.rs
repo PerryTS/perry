@@ -125,6 +125,12 @@ pub(crate) fn run_timers_phase() -> i32 {
 /// round trip has (`store::insert_pending`). The phase runs BEFORE the check
 /// phase, so an immediate queued by one of these callbacks runs in the same
 /// iteration — measured on Node 26.5.1, stable 5/5, delta exactly one turn.
+///
+/// Out of line: it is called from three timer-tick entries that are inlined
+/// into further settle helpers. Inlined, its body is copied into each of
+/// them, and whether LLVM does that depends on the visiting order inside the
+/// timer/callback call cycle, not on the code.
+#[inline(never)]
 pub(crate) fn run_poll_callbacks() -> i32 {
     if in_timer_callback_dispatch() {
         return 0;

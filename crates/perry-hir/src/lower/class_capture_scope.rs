@@ -90,6 +90,7 @@ fn collect_for_heads(stmts: &[Stmt], heads: &mut HashSet<LocalId>) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_for_heads(body, heads);
                 if let Some(catch) = catch {
@@ -226,6 +227,7 @@ impl Pruner {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 self.stmts(body);
                 if let Some(catch) = catch {

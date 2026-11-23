@@ -36,9 +36,8 @@ unsafe fn util_format_json_value_has_cycle(value: f64, stack: &mut Vec<usize>) -
         let ptr = jv.as_pointer::<u8>();
         return util_format_json_ptr_has_cycle(ptr, stack);
     }
-    if looks_like_raw_heap_pointer(value) {
-        return util_format_json_ptr_has_cycle(value.to_bits() as *const u8, stack);
-    }
+    // Not a POINTER_TAG value: a primitive. A word whose top 16 bits are
+    // clear is a Number (a denormal, or +0), not a raw pointer.
     false
 }
 
@@ -52,7 +51,7 @@ unsafe fn util_format_json_ptr_has_cycle(ptr: *const u8, stack: &mut Vec<usize>)
     }
     let gc_header = ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
     match (*gc_header).obj_type {
-        crate::gc::GC_TYPE_ARRAY => util_format_json_array_has_cycle(ptr, stack),
+        crate::gc_array_type_pat!() => util_format_json_array_has_cycle(ptr, stack),
         crate::gc_object_type_pat!() => util_format_json_object_has_cycle(ptr, stack),
         _ => false,
     }
@@ -70,14 +69,14 @@ unsafe fn util_format_json_array_has_cycle(ptr: *const u8, stack: &mut Vec<usize
         stack.pop();
         return false;
     }
-    let len = (*arr).length as usize;
-    let elements = crate::array::array_elements_ptr(arr) as *const f64;
-    let found = (0..len).any(|i| {
-        let value = *elements.add(i);
+    // Own elements only, and no slot past a sparse Array's store.
+    let mut found = false;
+    crate::array::array_for_each_own_element(arr, |_, value| {
         let bits = value.to_bits();
-        bits != crate::value::TAG_UNDEFINED
+        found = bits != crate::value::TAG_UNDEFINED
             && !crate::json::is_closure_value(bits)
-            && util_format_json_value_has_cycle(value, stack)
+            && util_format_json_value_has_cycle(value, stack);
+        !found
     });
 
     stack.pop();
@@ -164,7 +163,7 @@ unsafe fn util_format_s_inspects(val: f64) -> bool {
         return false;
     };
     match header.obj_type {
-        crate::gc::GC_TYPE_ARRAY | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => true,
+        crate::gc_array_type_pat!() | crate::gc::GC_TYPE_MAP | crate::gc::GC_TYPE_SET => true,
         crate::gc_object_type_pat!() => !object_has_a_user_to_string(val),
         _ => false,
     }
@@ -236,10 +235,8 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
         let bs = std::slice::from_raw_parts(data, len);
         std::str::from_utf8(bs).unwrap_or("").to_string()
     }
-    fn util_number_placeholder_coerce(val: f64, jv: &JSValue) -> f64 {
-        if jv.is_int32() {
-            jv.as_int32() as f64
-        } else if unsafe { crate::symbol::js_is_symbol(val) } != 0 {
+    fn util_number_placeholder_coerce(val: f64) -> f64 {
+        if unsafe { crate::symbol::js_is_symbol(val) } != 0 {
             f64::NAN
         } else {
             js_number_coerce(val)
@@ -339,7 +336,7 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = util_number_placeholder_coerce(val, &jv);
+                        let f = util_number_placeholder_coerce(val);
                         out.push_str(&format_util_number(f));
                     }
                 }
@@ -349,16 +346,14 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                     if jv.is_bigint() {
                         out.push_str(&format_bigint_literal(val));
                     } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
+                        let f = if jv.is_any_string()
                             && jsvalue_string_content(val)
                                 .map(|s| s.is_empty())
                                 .unwrap_or(false)
                         {
                             f64::NAN
                         } else {
-                            util_number_placeholder_coerce(val, &jv)
+                            util_number_placeholder_coerce(val)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");
@@ -392,16 +387,14 @@ pub extern "C" fn js_util_format(arr_ptr: *const crate::array::ArrayHeader) -> f
                             out.push_str(&format_finite_number_js(f));
                         }
                     } else {
-                        let f = if jv.is_int32() {
-                            jv.as_int32() as f64
-                        } else if jv.is_any_string()
+                        let f = if jv.is_any_string()
                             && jsvalue_string_content(val)
                                 .map(|s| s.is_empty())
                                 .unwrap_or(false)
                         {
                             f64::NAN
                         } else {
-                            util_number_placeholder_coerce(val, &jv)
+                            util_number_placeholder_coerce(val)
                         };
                         if f.is_nan() {
                             out.push_str("NaN");

@@ -81,6 +81,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     | "atob"
                     | "gc"
             ) && ctx.lookup_local(n).is_none()
+                && !crate::patched_builtins::global_function_patched(n)
             {
                 return Ok(Expr::String("function".to_string()));
             }
@@ -723,7 +724,7 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
     if crate::patched_builtins::namespace_member_patched(ns, member) {
         return None;
     }
-    if !crate::patched_builtins::namespace_call_guarded() {
+    if !crate::patched_builtins::namespace_call_guarded_by_scan() {
         return Some(Expr::String("function".to_string()));
     }
     let mut live = Expr::PropertyGet {

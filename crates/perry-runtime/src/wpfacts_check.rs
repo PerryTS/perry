@@ -23,7 +23,7 @@ const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
 const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
 const STRING_TAG: u64 = 0x7FFF_0000_0000_0000;
 const SHORT_STRING_TAG: u64 = 0x7FF9_0000_0000_0000;
-const INT32_TAG: u64 = 0x7FFE_0000_0000_0000;
+const INTERNAL_WORD_TAG: u64 = 0x7FFE_0000_0000_0000;
 const BIGINT_TAG: u64 = 0x7FFA_0000_0000_0000;
 const JS_HANDLE_TAG: u64 = 0x7FFB_0000_0000_0000;
 const TAG_MARKER: u64 = 0x7FFC_0000_0000_0000;
@@ -42,6 +42,10 @@ pub const WPF_STORE: u32 = 1;
 pub const WPF_NULLABLE: u32 = 2;
 /// The site reads the slot as a raw double (F64 lane, number-only kind).
 pub const WPF_RAW_F64: u32 = 4;
+/// The key may be absent (a reserved or declared key, `FieldProof::
+/// maybe_absent`): the site pairs the load with the hole compare, whose miss
+/// is the generic read, so a hole at the key's slot is part of the claim.
+pub const WPF_MAYBE_ABSENT: u32 = 8;
 
 /// Use the same numeric classification as runtime value dispatch.
 fn is_plain_f64(bits: u64) -> bool {
@@ -60,7 +64,11 @@ fn kind_of(bits: u64) -> u32 {
         }
         JS_HANDLE_TAG => K_OBJ,
         STRING_TAG | SHORT_STRING_TAG => K_STR,
-        INT32_TAG => K_NUM,
+        // A slot word of an I32 lane or an at-rest Array (`layout_slot`): the
+        // Number it stores. No JS value is in the `0x7FFE` band (P3 B4b).
+        INTERNAL_WORD_TAG if crate::layout_slot::is_i32_word(bits) => K_NUM,
+        // Any other internal word.
+        INTERNAL_WORD_TAG => K_OBJ,
         BIGINT_TAG => K_BIGINT,
         TAG_MARKER => match bits & 0xFF {
             2 => K_NULL,
@@ -160,12 +168,12 @@ macro_rules! field_failure {
 }
 
 macro_rules! check_field {
-    ($obj:expr, $value:expr, $key:expr, $cids01:expr, $cids23:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
+    ($obj:expr, $value:expr, $key:expr, $cids:expr, $ncids:expr, $slot:expr, $off:expr, $kind_mask:expr, $flags:expr, $site:expr $(,)?) => {{
         let obj = $obj;
         let value = $value;
         let key = $key;
-        let cids01 = $cids01;
-        let cids23 = $cids23;
+        let cids = $cids;
+        let ncids = $ncids;
         let slot = $slot;
         let off = $off;
         let kind_mask = $kind_mask;
@@ -222,19 +230,19 @@ macro_rules! check_field {
         (*(addr as *const ObjectHeader)).class_id
     };
     let word = unsafe { (*(addr as *const ObjectHeader)).parent_class_id };
-    let ids = [
-        cids01 as u64 as u32,
-        (cids01 as u64 >> 32) as u32,
-        cids23 as u64 as u32,
-        (cids23 as u64 >> 32) as u32,
-    ];
+    // The site's whole proven receiver set: a private `[ncids x i32]`
+    // constant the check build emits next to the site (never truncated).
+    let ids: &[u32] = if ncids <= 0 {
+        &[]
+    } else {
+        unsafe { std::slice::from_raw_parts(cids as usize as *const u32, ncids as usize) }
+    };
     // The receiver is a proven class by its class id, or by its layout word:
     // a literal family keeps its late keys and names class 0, so its objects
     // carry the family descriptor word of the proven class instead.
-    let admitted = ids.iter().any(|&c| {
-        c != u32::MAX
-            && (c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c))
-    });
+    let admitted = ids
+        .iter()
+        .any(|&c| c == cid || crate::object::layout_desc::word_is_class_family_layout(word, c));
     if !admitted {
         field_failure!(site, key, key_name,
             "F4 receiver set",
@@ -252,13 +260,40 @@ macro_rules! check_field {
             ),
         );
     }
-    let at = unsafe { keys.get(slot) }.bits();
+    // Slot k is the storage of the key whose position maps to k: family
+    // layouts (`layout_families::assign_slots`) permute slots against key
+    // positions, so the key at position k need not live in slot k.
+    let at = unsafe {
+        (0..keys.count())
+            .find(|&p| keys.storage_slot(p) == slot)
+            .map_or(crate::value::TAG_HOLE, |p| keys.get(p).bits())
+    };
     let key_matches = if site.is_legacy() {
         key_value_bytes(at).as_deref() == Some(key)
     } else {
         key_matches(at, key)
     };
-    if !key_matches {
+    // F3 is "slot k is the key's own storage word". Once an overflow orders
+    // the object (`object::overflow`), a key added out of the layout's order
+    // keeps its fixed slot through an appended entry that references it,
+    // while the layout's own entry at k stays a tombstone: the claim holds
+    // when the key's live entry references slot k. A possibly absent key
+    // (reserved or declared) read behind the hole compare may also find the
+    // hole at k, where the layout names it or no key (a tombstone).
+    let slot_ref = || unsafe {
+        let t = crate::object::overflow::table(addr as *const ObjectHeader);
+        !t.is_null()
+            && crate::object::overflow::find_bytes(t, key)
+                .and_then(|i| crate::object::overflow::fixed_slot_of(t, i))
+                == Some(slot)
+    };
+    // `ObjectKeys::get` reads a tombstone (`TAG_HOLE`) as `undefined`, which
+    // is never a key.
+    let no_key = at == crate::value::TAG_HOLE || at == crate::value::TAG_UNDEFINED;
+    let absent_hole = || {
+        flags & WPF_MAYBE_ABSENT != 0 && value.to_bits() == crate::value::TAG_HOLE && no_key
+    };
+    if !key_matches && !slot_ref() && !absent_hole() {
         field_failure!(site, key, key_name,
             "F3 slot",
             format!(
@@ -297,8 +332,8 @@ macro_rules! check_field {
     }};
 }
 
-/// One elided field access. `cids01`/`cids23` carry up to four class ids
-/// (low half first; `u32::MAX` = none); `slot` names the key, `off` is the
+/// One elided field access. `cids` points at the site's `ncids` proven
+/// receiver class ids (a private `[ncids x i32]` constant); `slot` names the key, `off` is the
 /// byte offset from the object the access used. Returns 0.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
@@ -306,8 +341,8 @@ pub extern "C" fn perry_wpfacts_check_field(
     obj: f64,
     value: f64,
     key: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -319,8 +354,8 @@ pub extern "C" fn perry_wpfacts_check_field(
         obj,
         value,
         &key,
-        cids01,
-        cids23,
+        cids,
+        ncids,
         slot,
         off,
         kind_mask,
@@ -431,12 +466,24 @@ mod tests {
             JS_HANDLE_TAG,
             TAG_MARKER,
             POINTER_TAG,
-            INT32_TAG,
+            INTERNAL_WORD_TAG,
             STRING_TAG,
         ] {
             assert!(!is_plain_f64(tag | 0x1234), "{tag:#018x}");
             assert!(!is_plain_f64(tag | POINTER_MASK), "{tag:#018x}");
         }
+    }
+    /// A `C.prototype` ref word (`CLASS_PROTOTYPE_REF_FLAG`, bit 32) for class
+    /// 5, and a `0x7FFE` word with high payload bits: neither is an int32
+    /// Number, and a top-16-only test reads both as one.
+    const PROTO_REF_5: u64 = 0x7FFE_0001_0000_0005;
+    const HIGH_BITS: u64 = 0x7FFE_00FF_0000_0001;
+
+    #[test]
+    fn a_non_number_0x7ffe_word_is_not_k_num() {
+        assert_eq!(kind_of(0x7FFE_0000_0000_0003), K_NUM);
+        assert_eq!(kind_of(PROTO_REF_5), K_OBJ);
+        assert_eq!(kind_of(HIGH_BITS), K_OBJ);
     }
 }
 
@@ -448,8 +495,8 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     value: f64,
     key: i64,
     key_len: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -458,7 +505,7 @@ pub unsafe extern "C" fn perry_verify_facts_field(
     site_len: i64,
 ) -> i32 {
     zzz_perry_verify_facts_field(
-        obj, value, key, key_len, cids01, cids23, slot, off, kind_mask, flags, site, site_len,
+        obj, value, key, key_len, cids, ncids, slot, off, kind_mask, flags, site, site_len,
     )
 }
 
@@ -470,8 +517,8 @@ pub unsafe extern "C" fn zzz_perry_verify_facts_field(
     value: f64,
     key: i64,
     key_len: i64,
-    cids01: i64,
-    cids23: i64,
+    cids: i64,
+    ncids: i64,
     slot: i32,
     off: i32,
     kind_mask: i32,
@@ -483,8 +530,8 @@ pub unsafe extern "C" fn zzz_perry_verify_facts_field(
         obj,
         value,
         std::slice::from_raw_parts(key as usize as *const u8, key_len as usize),
-        cids01,
-        cids23,
+        cids,
+        ncids,
         slot,
         off,
         kind_mask,
@@ -542,6 +589,7 @@ pub extern "C" fn perry_verify_facts_entry(site: i64, site_len: i64) {
 /// nor register process callbacks on the passing path.
 #[no_mangle]
 pub extern "C" fn perry_verify_facts_init() {
+    crate::layout_slot::set_verify();
     REPORT.call_once(|| {
         if std::env::var_os("PERRY_CONTRACTS_REPORT").is_some() {
             unsafe {
@@ -557,6 +605,21 @@ pub extern "C" fn perry_verify_facts_tick() {
     CHECKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
+// Lifetime claims: only in the instrumented variant, with the collector's life
+// hooks (`gc/diagnostic_hooks.rs`).
+#[cfg(perry_gc_instruments)]
+mod life;
+#[cfg(perry_gc_instruments)]
+mod life_measure;
+#[cfg(perry_gc_instruments)]
+mod life_regions;
+/// LIFE I3: the census's fresh-header event and the region measurement.
+#[cfg(perry_gc_instruments)]
+pub(crate) use life_regions::{
+    born as life_regions_born, evacuated as life_regions_evacuated, exit as life_regions_exit,
+    on as life_regions_on,
+};
+pub(crate) mod records;
 mod report;
 use report::Witness;
 
@@ -578,3 +641,8 @@ fn key_matches(bits: u64, expected: &[u8]) -> bool {
 
 #[cfg(test)]
 mod reporting_tests;
+
+// The family claim (`family_reach` never): only in the instrumented variant.
+// Declared last, so that no line of this file moves in the default build.
+#[cfg(perry_gc_instruments)]
+pub(crate) mod family;

@@ -302,6 +302,7 @@ pub(crate) fn collect_local_writes<'a>(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 for s in body {
                     walk_stmt(s, out);

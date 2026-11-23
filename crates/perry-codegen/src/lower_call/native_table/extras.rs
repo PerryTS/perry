@@ -129,8 +129,9 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         has_receiver: true,
         method: "on",
         class_filter: Some("Worker"),
+        // Listener diagnostics need the original tags, not only a pointer payload.
         runtime: "js_worker_threads_worker_on",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -139,7 +140,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         method: "once",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_once",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -148,7 +149,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         method: "off",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_off",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -157,7 +158,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         method: "addEventListener",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_add_event_listener",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {
@@ -166,7 +167,7 @@ pub(super) const EXTRAS_ROWS: &[NativeModSig] = &[
         method: "removeEventListener",
         class_filter: Some("Worker"),
         runtime: "js_worker_threads_worker_remove_event_listener",
-        args: &[NA_F64, NA_PTR],
+        args: &[NA_F64, NA_JSV],
         ret: NR_F64,
     },
     NativeModSig {

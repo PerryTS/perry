@@ -264,7 +264,7 @@ fn object_ptr(value: f64) -> Option<*mut ObjectHeader> {
 fn array_ptr(value: f64) -> Option<*mut ArrayHeader> {
     unsafe {
         let header = gc_header(value)?;
-        if (*header).obj_type != crate::gc::GC_TYPE_ARRAY {
+        if crate::gc_type_is_not_array!((*header).obj_type) {
             return None;
         }
         Some(JSValue::from_bits(value.to_bits()).as_pointer::<ArrayHeader>() as *mut ArrayHeader)
@@ -336,9 +336,6 @@ fn host_to_string(value: f64) -> String {
     let js = JSValue::from_bits(value.to_bits());
     if let Some(s) = value_to_string(value) {
         return s;
-    }
-    if js.is_int32() {
-        return js.as_int32().to_string();
     }
     if js.is_number() {
         let n = js.as_number();
@@ -1264,7 +1261,7 @@ fn validate_connect_options(options: f64, require_endpoint: bool) {
     let port = get_field(obj, "port");
     if object_has_own(obj, "port") {
         let port_js = JSValue::from_bits(port.to_bits());
-        if !port_js.is_number() && !port_js.is_int32() {
+        if !port_js.is_number() {
             crate::fs::validate::throw_type_error_with_code(
                 "Port should be >= 0 and < 65536",
                 "ERR_SOCKET_BAD_PORT",

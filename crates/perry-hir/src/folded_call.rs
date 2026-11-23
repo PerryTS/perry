@@ -26,6 +26,237 @@ pub struct FoldedCall<'a> {
     pub args: Vec<&'a Expr>,
 }
 
+/// The identity of a by-name method site, shared by the whole-program facts
+/// (which judge the site) and codegen (which asks for the verdict).
+///
+/// A call the HIR keeps as `Call { callee: PropertyGet }` is named by its
+/// callee read's offset ([`Site::Callee`]). A folded node carries no source
+/// offset of its own, so it is named by its receiver: the local it reads
+/// ([`Site::Local`]; a local's value set is one node, so every `a.m()` on
+/// the same local has the same verdict) or the receiver expression's offset
+/// ([`Site::Recv`]). The method name completes the key on both sides. The
+/// kinds never share a key (a member chain `x.m().m()` starts its callee
+/// read and its receiver at one offset), and the facts hold a verdict for a
+/// key only when every site recorded under it has that verdict.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Site {
+    /// The byte offset of the callee `PropertyGet` of an unfolded call.
+    Callee(u32),
+    /// The byte offset of a folded node's receiver expression.
+    Recv(u32),
+    /// The local a folded node's receiver reads.
+    Local(u32),
+}
+
+/// A method site's receiver holds only typed arrays the realm bore, at
+/// every copy of the site (wpfacts `method_sites`).
+pub const SITE_TYPED_ARRAY: u8 = 1;
+
+/// A method site's receiver holds only Array exotic objects and the member
+/// it names is the realm's `Array.prototype` built-in on each of them, at
+/// every copy of the site: the solver's `NativeMember` verdict over the
+/// Array family (wpfacts `method_sites`).
+pub const SITE_ARRAY_MEMBER: u8 = 2;
+
+/// Every value reaching the receiver is a `Map` the realm bore (`new Map`),
+/// at every copy of the site (wpfacts `method_sites`). Nothing about the
+/// member: an own or prototype `get` is the own-override guard's question.
+pub const SITE_MAP: u8 = 4;
+
+/// [`SITE_MAP`] for `Set` (`new Set`).
+pub const SITE_SET: u8 = 8;
+
+/// A named call whose receiver, member lookup and call form admit the direct Map entry.
+pub const SITE_DIRECT_MAP: u8 = 16;
+
+/// A named primitive String operation whose operand protocols have been discharged.
+pub const SITE_DIRECT_STRING: u8 = 32;
+
+/// The builtin lookup and indexed element accesses are both quiet.
+pub const SITE_DIRECT_ARRAY: u8 = 64;
+
+pub fn direct_array_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("fill" | "includes", 1) | ("pop", 0)))
+}
+
+pub fn direct_string_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { byte_offset, byte_end, property, .. }
+        if *byte_offset != 0 && byte_end > byte_offset && matches!((property.as_str(), arity),
+            ("charAt" | "charCodeAt" | "indexOf", 1) | ("trim" | "toUpperCase" | "toLowerCase", 0)))
+}
+
+pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
+    matches!(callee, Expr::PropertyGet { object, property, byte_offset, byte_end, .. }
+        if *byte_offset != 0 && byte_end > byte_offset
+            && matches!(object.as_ref(), Expr::PropertyGet { .. })
+            && matches!((property.as_str(), arity), ("clear", 0) | ("get", 1) | ("set", 2)))
+}
+
+/// The fill operand when this call can realize the published allocation length.
+pub fn fill_birth_value(call: &Expr, len: u32) -> Result<&Expr, &'static str> {
+    let Expr::Call { callee, args, .. } = call else {
+        return Err("shape");
+    };
+    let Expr::PropertyGet {
+        object, property, ..
+    } = callee.as_ref()
+    else {
+        return Err("shape");
+    };
+    let Expr::New {
+        class_name,
+        args: ctor,
+        ..
+    } = object.as_ref()
+    else {
+        return Err("shape");
+    };
+    let [value] = args.as_slice() else {
+        return Err("shape");
+    };
+    if class_name != "Array" || property != "fill" || ctor.len() != 1 {
+        return Err("shape");
+    }
+    let length_matches = match ctor.as_slice() {
+        [Expr::Integer(k)] => *k == i64::from(len),
+        [Expr::Number(n)] => *n == f64::from(len),
+        _ => false,
+    };
+    length_matches.then_some(value).ok_or("length")
+}
+
+/// The site of the unfolded call whose callee is `callee`, when it has a
+/// source offset.
+pub fn callee_site(callee: &Expr) -> Option<Site> {
+    match callee {
+        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => {
+            Some(Site::Callee(*byte_offset))
+        }
+        _ => None,
+    }
+}
+
+/// The site of a folded node whose receiver is `receiver`; `None` for a
+/// receiver with no identity (a synthesized expression, a nested fold): such
+/// a site has no verdict.
+pub fn receiver_site(receiver: &Receiver<'_>) -> Option<Site> {
+    match receiver {
+        Receiver::Local(id) => Some(Site::Local(*id)),
+        Receiver::Expr(Expr::LocalGet(id)) => Some(Site::Local(*id)),
+        Receiver::Expr(
+            Expr::PropertyGet { byte_offset, .. }
+            | Expr::IndexGet {
+                element_offset: byte_offset,
+                ..
+            }
+            | Expr::Call { byte_offset, .. },
+        ) if *byte_offset != 0 => Some(Site::Recv(*byte_offset)),
+        Receiver::Expr(_) => None,
+    }
+}
+
+/// The methods codegen lowers to a host fs stream operation when the HIR
+/// folds `recv.m(..)` into `NativeMethodCall { module: "fs", object: Some(recv) }`
+/// (`perry-codegen lower_call/native/native_fs_branch.rs` matches only these
+/// names). Any other method of such a node runs the runtime method dispatch
+/// on the receiver value (`js_native_call_method_nullsafe`): the node is the
+/// call `recv.m(..args)` ([`fs_receiver_dispatch`]).
+pub const FS_STREAM_METHODS: &[&str] = &[
+    "write",
+    "flush",
+    "flushSync",
+    "end",
+    "destroy",
+    "close",
+    "reopen",
+    "on",
+    "addListener",
+    "once",
+    "off",
+    "removeListener",
+    "removeAllListeners",
+    "listenerCount",
+    "emit",
+    "append",
+    "contentMode",
+    "fd",
+    "file",
+    "fsync",
+    "maxLength",
+    "minLength",
+    "mkdir",
+    "mode",
+    "periodicFlush",
+    "sync",
+    "writing",
+    "destroyed",
+];
+
+/// Is `NativeMethodCall { module, object: Some(recv), method }` lowered to
+/// the runtime method dispatch on `recv` (no fs stream arm takes it)?
+pub fn fs_receiver_dispatch(module: &str, method: &str) -> bool {
+    matches!(module, "fs" | "node:fs") && !FS_STREAM_METHODS.contains(&method)
+}
+
+/// Is `NativeMethodCall { module, object: None, method }` the HIR's fold of
+/// `new <module>.<method>(..args)`, `new` of the realm constructor
+/// `node:<module>.<method>`? Both lowering sites (`new inspector.Session()`
+/// over a module alias, `new Session()` over a named import) fold exactly
+/// when this holds, and wpfacts models such a node as that construct. Codegen
+/// calls the constructor's runtime function directly, whatever the program
+/// stored under the name.
+pub fn native_construct_fold(module: &str, method: &str) -> bool {
+    matches!(
+        (module, method),
+        ("inspector" | "inspector/promises", "Session")
+    )
+}
+
+/// The realm constructor `C` when `NativeMethodCall { module, object: None,
+/// method }` is the HIR's fold of the static call `C.<method>(..args)`:
+/// `URL.createObjectURL(blob)` lowers to `{ module: "url", method:
+/// "createObjectURL" }` (expr_call/module_static.rs). Codegen calls the
+/// static's runtime function directly, whatever the program stored under the
+/// name, and wpfacts models the node as a call of the static `C.<method>`.
+pub fn native_static_fold(module: &str, method: &str) -> Option<&'static str> {
+    match (module, method) {
+        ("url", "createObjectURL") => Some("URL"),
+        _ => None,
+    }
+}
+
+/// `recv.push(..args)` as the HIR folds it for a receiver that is no local:
+/// `NativeMethodCall { module: "array", method: "push_single" | "push" }`
+/// (`this.items.push(v)` in value position or in a constructor, `o.list.push(v)`).
+/// The fold rests on the receiver's declared type, so the node is the call
+/// `recv.push(..args)` like every row of [`folded_call`]: an Array that owns
+/// `push`, an Array with its own prototype, an Array subclass or an object
+/// behind the annotation runs the method the receiver holds. It is a function
+/// of its own (not a row of [`folded_call`]) because both readers keep an arm
+/// the table has no say in: a fill push of a push-filled birth (wpfacts
+/// `push_fills`) is an append to an Array nothing else has seen, and
+/// `PERRY_PUSH_METHOD_TIERS=0` keeps the unguarded append.
+pub fn native_array_push(expr: &Expr) -> Option<FoldedCall<'_>> {
+    match expr {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: Some(object),
+            args,
+            ..
+        } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
+            Some(FoldedCall {
+                receiver: Receiver::Expr(object),
+                method: "push",
+                args: args.iter().collect(),
+            })
+        }
+        _ => None,
+    }
+}
+
 /// The folded builtin-method nodes that are calls, and what each one is a
 /// call of: codegen guards each (`perry-codegen expr/folded_builtin_override.rs`,
 /// `Expr::ArrayPush` through its own slow arms) so an own or inherited user
@@ -540,7 +771,7 @@ pub fn folded_call(expr: &Expr) -> Option<FoldedCall<'_>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{folded_call, Receiver};
+    use super::{folded_call, native_array_push, Receiver};
     use crate::Expr;
 
     fn lit(n: f64) -> Expr {
@@ -622,6 +853,19 @@ mod tests {
             args: vec![lit(1.0)],
         };
         assert!(folded_call(&single).is_none());
+        // It is the call `recv.push(v)` all the same, for the readers that
+        // guard the native arm (`native_array_push`).
+        let call = native_array_push(&single).expect("a native push is a call of push");
+        assert_eq!((call.method, call.args.len()), ("push", 1));
+        assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
+        let spread = Expr::NativeMethodCall {
+            module: "array".to_string(),
+            class_name: None,
+            object: Some(Box::new(Expr::LocalGet(7))),
+            method: "push_spread".to_string(),
+            args: vec![Expr::LocalGet(8)],
+        };
+        assert!(native_array_push(&spread).is_none());
     }
 
     /// An optional argument is part of the call when present and absent when

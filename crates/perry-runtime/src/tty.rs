@@ -80,51 +80,132 @@ pub(crate) fn scan_tty_resize_callback_root_mut(visitor: &mut crate::gc::Runtime
 
 #[cfg(unix)]
 fn isatty_impl(fd: i32) -> bool {
-    crate::effect!(host_read, tty);
-    unsafe { libc::isatty(fd) != 0 }
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            unsafe { libc::isatty(fd) != 0 }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, tty);
+            unsafe { libc::isatty(fd) != 0 }
+        }
+    }
 }
 
 #[cfg(unix)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
-    crate::effect!(host_read, tty);
-    unsafe {
-        let mut ws: libc::winsize = std::mem::zeroed();
-        if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0 {
-            Some((ws.ws_col as i32, ws.ws_row as i32))
-        } else {
-            None
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            unsafe {
+                let mut ws: libc::winsize = std::mem::zeroed();
+                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0
+                {
+                    Some((ws.ws_col as i32, ws.ws_row as i32))
+                } else {
+                    None
+                }
+            }
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+        {
+            crate::effect!(host_read, tty);
+            unsafe {
+                let mut ws: libc::winsize = std::mem::zeroed();
+                if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0 && ws.ws_col > 0 && ws.ws_row > 0
+                {
+                    Some((ws.ws_col as i32, ws.ws_row as i32))
+                } else {
+                    None
+                }
+            }
         }
     }
 }
 
 #[cfg(windows)]
 fn isatty_impl(fd: i32) -> bool {
-    crate::effect!(host_read, tty);
-    // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
-    // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
-    // and the same criterion libuv uses to classify a handle as `UV_TTY`.
-    // Piped/redirected handles fail the probe → false, matching Node.
-    crate::win_console::is_console_fd(fd)
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+            // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+            // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+            // Piped/redirected handles fail the probe → false, matching Node.
+            crate::win_console::is_console_fd(fd)
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // A std handle counts as a TTY when `GetConsoleMode` succeeds on it —
+        // the same probe `std::io::IsTerminal` uses (see `builtins/console.rs`)
+        // and the same criterion libuv uses to classify a handle as `UV_TTY`.
+        // Piped/redirected handles fail the probe → false, matching Node.
+        crate::win_console::is_console_fd(fd)
+    }
 }
 
 #[cfg(windows)]
 fn winsize_impl(fd: i32) -> Option<(i32, i32)> {
-    crate::effect!(host_read, tty);
-    // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
-    // bottom-top+1) for the stdout/stderr console handle.
-    crate::win_console::window_size(fd)
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+            // bottom-top+1) for the stdout/stderr console handle.
+            crate::win_console::window_size(fd)
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        // GetConsoleScreenBufferInfo srWindow extents (right-left+1,
+        // bottom-top+1) for the stdout/stderr console handle.
+        crate::win_console::window_size(fd)
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
 fn isatty_impl(_fd: i32) -> bool {
-    crate::effect!(host_read, tty);
-    false
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.isatty", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            false
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        false
+    }
 }
 
 #[cfg(not(any(unix, windows)))]
 fn winsize_impl(_fd: i32) -> Option<(i32, i32)> {
-    crate::effect!(host_read, tty);
-    None
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    {
+        return crate::snap_census::input_call("tty.winsize", &format!("{:?}", (fd,)), || {
+            crate::effect!(host_read, tty);
+            None
+        });
+    }
+    #[cfg(not(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64")))]
+    {
+        crate::effect!(host_read, tty);
+        None
+    }
 }
 
 pub(crate) fn is_tty_fd(fd: i32) -> bool {
@@ -140,10 +221,6 @@ fn validate_fd_number(fd: f64) -> i32 {
 
 fn tty_isatty_fd_arg(value: f64) -> Option<i32> {
     let js_value = JSValue::from_bits(value.to_bits());
-    if js_value.is_int32() {
-        let fd = js_value.as_int32();
-        return (fd >= 0).then_some(fd);
-    }
     if !js_value.is_number() {
         return None;
     }
@@ -238,9 +315,6 @@ fn this_object(this: crate::closure::JsThis) -> Option<*mut ObjectHeader> {
 fn fd_from_object(obj: *mut ObjectHeader) -> Option<i32> {
     let fd = crate::object::js_object_get_field_by_name_f64(obj, named_key(b"fd"));
     let jsval = JSValue::from_bits(fd.to_bits());
-    if jsval.is_int32() {
-        return Some(jsval.as_int32());
-    }
     if jsval.is_number() && fd.is_finite() && fd.fract() == 0.0 {
         return Some(fd as i32);
     }
@@ -424,9 +498,6 @@ impl ColorEnv<'_> {
             if jsval.is_bool() {
                 return Some(jsval.as_bool().to_string());
             }
-            if jsval.is_int32() {
-                return Some(jsval.as_int32().to_string());
-            }
             if jsval.is_number() && value.is_finite() {
                 return Some(value.to_string());
             }
@@ -570,15 +641,31 @@ fn color_depth_for_env(env: ColorEnv<'_>) -> u8 {
     color_depth_from_lookup(|name| env.get(name))
 }
 
+/// Whether text styled for `process.stdout` gets its escapes: node's
+/// `shouldColorize(process.stdout)`. With `FORCE_COLOR` set it is
+/// `getColorDepth() > 2`, whatever stdout is; otherwise stdout must be a tty
+/// and `getColorDepth() > 2`. So `FORCE_COLOR=""` colours (depth 16), and
+/// `NO_COLOR`, `NODE_DISABLE_COLORS` and `TERM=dumb` give depth 2 unless
+/// `FORCE_COLOR` is set. One funnel: the SNAP guard computes the same bit at
+/// startup that the run computes here (DESIGN27 §3 member 6).
+pub(crate) fn stdout_style_bit() -> bool {
+    crate::snap_funnel!(StyleBit);
+    let env = ColorEnv::process();
+    let forced = env.get("FORCE_COLOR").is_some();
+    let depth = color_depth_for_env(env);
+    let tty = forced || is_tty_fd(1);
+    let bit = tty && depth > 2;
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::style_bit(bit, tty, depth);
+    bit
+}
+
 fn has_colors_for_depth(count: f64, depth: u8) -> bool {
     count <= 2_f64.powi(depth as i32)
 }
 
 fn count_value(count: f64) -> Result<f64, &'static str> {
     let jsval = JSValue::from_bits(count.to_bits());
-    if jsval.is_int32() {
-        return Ok(jsval.as_int32() as f64);
-    }
     if jsval.is_number() {
         return Ok(jsval.as_number());
     }
@@ -895,6 +982,9 @@ pub(crate) fn tty_listener_remove_all_value() -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::record_input_value("native_resource.tty_stream", &fd);
+
     validate_tty_read_fd(fd);
     ensure_tty_prototypes();
     let keys = b"isRaw\0isTTY\0";
@@ -912,6 +1002,9 @@ pub extern "C" fn js_tty_read_stream_new(fd: f64) -> f64 {
 
 #[no_mangle]
 pub extern "C" fn js_tty_write_stream_new(fd: f64) -> f64 {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::record_input_value("native_resource.tty_stream", &fd);
+
     validate_tty_write_fd(fd);
     ensure_tty_prototypes();
     let obj = crate::object::js_object_alloc_class_with_keys(
@@ -986,9 +1079,6 @@ fn write_all_fd(fd: i32, bytes: &[u8]) -> bool {
 
 fn numeric_arg(value: f64, default: i32) -> i32 {
     let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        return jsval.as_int32();
-    }
     if jsval.is_number() && value.is_finite() {
         return value as i32;
     }
@@ -1323,16 +1413,6 @@ mod tests {
     }
 
     #[test]
-    fn isatty_zero_for_pipe() {
-        // In test runner stdin is not a TTY (cargo test pipes stdin).
-        // Note: this is more of a smoke test; the real value is
-        // test-environment-dependent.
-        let _ = js_tty_isatty(0.0);
-        let _ = js_tty_isatty(1.0);
-        let _ = js_tty_isatty(2.0);
-    }
-
-    #[test]
     fn columns_undefined_when_not_tty() {
         // In test runner stdout is not a TTY → columns/rows return TAG_UNDEFINED.
         let cols = js_process_stdout_columns();
@@ -1401,14 +1481,8 @@ mod tests {
         assert_eq!(tty_isatty_fd_arg(f64::INFINITY), None);
         assert_eq!(tty_isatty_fd_arg(f64::NEG_INFINITY), None);
 
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(7).bits())),
-            Some(7)
-        );
-        assert_eq!(
-            tty_isatty_fd_arg(f64::from_bits(JSValue::int32(-1).bits())),
-            None
-        );
+        assert_eq!(tty_isatty_fd_arg(f64::from(7)), Some(7));
+        assert_eq!(tty_isatty_fd_arg(f64::from(-1)), None);
 
         assert_eq!(tty_isatty_fd_arg(TAG_TRUE_F64), None);
         assert_eq!(tty_isatty_fd_arg(TAG_FALSE_F64), None);

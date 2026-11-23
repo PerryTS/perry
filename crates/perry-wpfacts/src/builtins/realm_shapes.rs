@@ -13,6 +13,21 @@ pub(crate) struct Property {
     /// The realm declares the key's value a host array of strings
     /// (`value = dynamic, elements = string`): the declaration's name.
     pub strings: Option<&'static str>,
+    /// The realm declares the key's value a host object whose own values
+    /// are strings (`kind = exotic, values = string`: `process.env`): the
+    /// declaration's name.
+    pub record: Option<&'static str>,
+    /// The realm declares the key's value another node module object
+    /// (`node:inspector` `default`: `node:inspector.default`): its name.
+    pub object: Option<&'static str>,
+    /// The realm declares the key's value of one primitive type (`prim`
+    /// row: `runtime(process.execPath, string)`).
+    pub prim: Option<u16>,
+    /// The realm declares the key an accessor (`accessor` row): its getter
+    /// and setter. A getter and no setter: a [[Set]] of the key runs no
+    /// setter and writes nothing (`builtins::getter_only`).
+    pub get: Option<&'static str>,
+    pub set: Option<&'static str>,
 }
 
 #[derive(Clone, Copy)]
@@ -53,28 +68,50 @@ pub(crate) struct Declarations {
     named: usize,
 }
 
+/// The namespace model a canonical call of `owner.key` runs under. A global
+/// host object (`Intl`, `performance`, `Atomics`) has no namespace model
+/// (`ns_method_inner`): a function it holds is called as its declaration
+/// says (`declared_static`, `declared_proto_method`), else as an unknown
+/// function, as before it was a token.
+fn call_namespace(owner: &'static str, key: &'static str) -> Option<(BuiltinNs, &'static str)> {
+    (!owner.ends_with(".prototype"))
+        .then(|| ns_by_name(owner))
+        .flatten()
+        .filter(|ns| !matches!(ns, BuiltinNs::Module(n) if !n.starts_with("node:")))
+        .map(|ns| {
+            (
+                if ns == BuiltinNs::GlobalThis {
+                    BuiltinNs::Other
+                } else {
+                    ns
+                },
+                key,
+            )
+        })
+}
+
 fn coordinates(owner: &'static str, key: &'static str) -> Coordinates {
     Coordinates {
         prototype: super::prototype_model(owner, key),
-        namespace: (!owner.ends_with(".prototype"))
-            .then(|| ns_by_name(owner))
-            .flatten()
-            .map(|ns| {
-                (
-                    if ns == BuiltinNs::GlobalThis {
-                        BuiltinNs::Other
-                    } else {
-                        ns
-                    },
-                    key,
-                )
-            }),
+        namespace: call_namespace(owner, key),
         constructible: false,
     }
 }
 
 impl Default for Declarations {
     fn default() -> Self {
+        Self::build(true)
+    }
+}
+
+impl Declarations {
+    /// The table's shapes. `held`: with the `held` rows, the own keys of a
+    /// function a host object that is no node module holds
+    /// (`Temporal.Duration`: `prototype`, `from`); without them the table
+    /// is the one before those rows existed (`reach::held_keys`). The rows
+    /// add keys to shapes the `native` rows name, never a shape: a token's
+    /// shape index is the same in both.
+    pub(crate) fn build(held: bool) -> Self {
         let mut holders: BTreeMap<&'static str, BTreeMap<&'static str, Property>> = BTreeMap::new();
         let mut namespaces: BTreeMap<BuiltinNs, (&'static str, BTreeMap<&'static str, Property>)> =
             BTreeMap::new();
@@ -89,7 +126,11 @@ impl Default for Declarations {
             let (Some(kind), Some(owner), Some(key)) = (row.next(), row.next(), row.next()) else {
                 continue;
             };
+            if kind == "held" && !held {
+                continue;
+            }
             let value = row.next();
+            let accessor = (kind == "accessor").then(|| (value.filter(|&g| g != "-"), row.next()));
             let property = holders
                 .entry(owner)
                 .or_default()
@@ -121,8 +162,12 @@ impl Default for Declarations {
                     }
                 }
                 "getter-this" => property.getter_this = true,
-                "ns" => property.own_namespace = true,
+                "ns" | "held" => property.own_namespace = true,
                 "strings" => property.strings = value,
+                "record" => property.record = value,
+                "object" => property.object = value,
+                "prim" => property.prim = value.map(prim_kind),
+                "accessor" => (property.get, property.set) = accessor.unwrap(),
                 _ => {}
             }
             if let Some(ns) = ns_by_name(owner) {
@@ -138,11 +183,23 @@ impl Default for Declarations {
                 if kind == "getter-this" {
                     p.getter_this = true;
                 }
-                if kind == "ns" {
+                if kind == "ns" || kind == "held" {
                     p.own_namespace = true;
                 }
                 if kind == "strings" {
                     p.strings = value;
+                }
+                if kind == "record" {
+                    p.record = value;
+                }
+                if kind == "object" {
+                    p.object = value;
+                }
+                if kind == "prim" {
+                    p.prim = value.map(prim_kind);
+                }
+                if let Some((get, set)) = accessor {
+                    (p.get, p.set) = (get, set);
                 }
             }
         }
@@ -209,12 +266,18 @@ impl Default for Declarations {
         }
         // The node module objects last: the linear namespace and family
         // searches (charged per step) of every other object never walk them.
-        shapes[named..].sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
+        shapes[named..]
+            .sort_by_key(|s| (matches!(s.namespace, Some(BuiltinNs::Module(_))), s.name));
         Self { shapes, named }
     }
 }
 
 impl Declarations {
+    #[cfg(test)]
+    pub(crate) fn names(&self) -> Vec<&'static str> {
+        self.shapes.iter().map(|s| s.name).collect()
+    }
+
     pub fn shape(&self, i: usize) -> &Shape {
         &self.shapes[i]
     }
@@ -279,7 +342,7 @@ impl Declarations {
                     self.namespace(*ns, m)
                 }
             }
-            TokKind::BuiltinFn(Native::Member { identity }) => self.named(identity, m),
+            TokKind::BuiltinFn(Native::Member { identity, .. }) => self.named(identity, m),
             _ => None,
         }
     }
@@ -354,20 +417,12 @@ mod tests {
                         "{}",
                         shape.name
                     );
-                    let ns = (!owner.ends_with(".prototype"))
-                        .then(|| ns_by_name(owner))
-                        .flatten()
-                        .map(|ns| {
-                            (
-                                if ns == BuiltinNs::GlobalThis {
-                                    BuiltinNs::Other
-                                } else {
-                                    ns
-                                },
-                                key,
-                            )
-                        });
-                    assert_eq!(native.namespace, ns, "{}", shape.name);
+                    assert_eq!(
+                        native.namespace,
+                        call_namespace(owner, key),
+                        "{}",
+                        shape.name
+                    );
                 }
             } else {
                 assert!(
@@ -405,5 +460,15 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+/// A `prim` row's type name as the solver's primitive kind set.
+fn prim_kind(name: &str) -> u16 {
+    match name {
+        "string" => prim::STR,
+        "number" => prim::NUM,
+        "boolean" => prim::BOOL,
+        _ => panic!("bad prim row type {name:?}"),
     }
 }

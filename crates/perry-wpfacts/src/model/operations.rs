@@ -36,6 +36,68 @@ impl Model {
         true
     }
 
+    /// `tmpl_may_be_array` with each `extends` value read as the solve has
+    /// it now: a value that holds only program classes is an Array exotic
+    /// object's parent only if one of those classes may be (a class a
+    /// mixin function returns is not); any other token (`Array`, another
+    /// builtin, ⊤) may be. A primitive parent other than null throws at
+    /// class definition (no instance); null is no Array. The answer only
+    /// grows with the solve, so a write it holds back now is asked again
+    /// when the solve is done (`array_member_unsure`).
+    pub fn tmpl_may_be_array_now(&self, tm: TmplId) -> bool {
+        let mut stack = vec![tm];
+        let mut seen = crate::pts::FxHashSet::default();
+        while let Some(mut tm) = stack.pop() {
+            while seen.insert(tm) {
+                let tpl = &self.tmpls[tm as usize];
+                match &tpl.kind {
+                    TmplKind::Arr { .. } => return true,
+                    TmplKind::Class { .. } => {}
+                    _ => break,
+                }
+                if let Some((pv, _)) = tpl.parent_value {
+                    for t in self.nodes[pv as usize].pts.to_sorted() {
+                        match self.toks[t as usize] {
+                            TokKind::ClassObj(p) => stack.push(p),
+                            _ => return true,
+                        }
+                    }
+                    break;
+                }
+                if let Some((_, n)) = &tpl.native_parent {
+                    if n == "Array" {
+                        return true;
+                    }
+                    break;
+                }
+                match tpl.parent {
+                    Some(p) => tm = p,
+                    None => break,
+                }
+            }
+        }
+        false
+    }
+
+    /// `tok_on_array_chain` by `tmpl_may_be_array_now`.
+    fn tok_on_array_chain_now(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Top => true,
+            TokKind::Obj(tm, _) | TokKind::Proto(tm) => self.tmpl_may_be_array_now(tm),
+            _ => false,
+        }
+    }
+
+    /// Can the key of computed store `s` name `@@iterator` or `__proto__`
+    /// (a string, a symbol or an object; a number names an element)?
+    fn keyed_store_may_name_member(&self, s: SiteId) -> bool {
+        let Some(k) = self.stores[s as usize].key_value else {
+            return true;
+        };
+        let n = &self.nodes[k as usize];
+        n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0
+    }
+
     /// Record a write under `key` (`None`: a definition or prototype change
     /// whose key the model does not keep) onto `t` that may change which
     /// `@@iterator` an array finds ([`Model::array_member_write`]). The
@@ -49,6 +111,32 @@ impl Model {
         what: &str,
     ) {
         if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
+            return;
+        }
+        // On a class whose `extends` value holds no Array parent yet: asked
+        // again when the solve is done (`array_member_unsure`).
+        if !self.tok_on_array_chain_now(t) {
+            let site = match key {
+                Some(Key::Any(_)) => site,
+                _ => None,
+            };
+            let hit = match key {
+                None | Some(Key::Any(_)) => true,
+                Some(Key::Named(a)) => matches!(
+                    self.atoms[a as usize].as_str(),
+                    crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
+                ),
+            };
+            if hit
+                && !self
+                    .array_member_unsure
+                    .iter()
+                    .any(|&(x, s, _)| x == t && s == site)
+            {
+                let on = self.tok_name(t);
+                let r = self.reason(&format!("{what} on {on}"));
+                self.array_member_unsure.push((t, site, r));
+            }
             return;
         }
         let hits = match key {
@@ -90,7 +178,8 @@ impl Model {
         let mut close: Option<u32> = None;
         // The first reason by id, so the answer does not depend on hashing.
         let first = |slot: &mut Option<u32>, r: u32| *slot = Some(slot.map_or(r, |s| s.min(r)));
-        for (&(t, k), &r) in &self.native_writes {
+        for (&(t, k), w) in &self.native_writes {
+            let r = w.reason;
             if t != TOP && Some(t) != objproto {
                 continue;
             }
@@ -105,17 +194,19 @@ impl Model {
                 first(&mut member, r);
             }
         }
-        let keyed = self.array_keyed_stores.iter().find_map(|&(s, r)| {
-            let Some(k) = self.stores[s as usize].key_value else {
-                return Some(r);
-            };
-            let n = &self.nodes[k as usize];
-            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
-                .then_some(r)
+        let keyed = self
+            .array_keyed_stores
+            .iter()
+            .find_map(|&(s, r)| self.keyed_store_may_name_member(s).then_some(r));
+        let unsure = self.array_member_unsure.iter().find_map(|&(t, s, r)| {
+            (self.tok_on_array_chain_now(t)
+                && s.is_none_or(|s| self.keyed_store_may_name_member(s)))
+            .then_some(r)
         });
         let mut member = member
             .or(self.array_member_write)
             .or(keyed)
+            .or(unsure)
             .map(|r| self.reasons[r as usize].clone());
         if member.is_none() {
             let wk = self.atom_index.get(crate::builtins::WK_ITERATOR).copied();
@@ -127,7 +218,7 @@ impl Model {
                             || wk.is_some_and(|a| {
                                 tpl.proto_members.contains(&a) || tpl.accessor_keys.contains(&a)
                             }))
-                        && self.tmpl_may_be_array(tm)
+                        && self.tmpl_may_be_array_now(tm)
                 })
                 .map(|tm| {
                     format!(
@@ -180,6 +271,15 @@ impl Model {
 
     pub fn is_elem_key(&self, k: Key) -> bool {
         matches!(k, Key::Named(a) if self.atoms[a as usize] == ELEM)
+    }
+
+    /// The key of a Number-or-BigInt computed store (`DIGITS`).
+    pub fn digits_key(&mut self) -> Key {
+        Key::Named(self.atom(DIGITS))
+    }
+
+    pub fn is_digits_key(&self, k: Key) -> bool {
+        matches!(k, Key::Named(a) if self.atoms[a as usize] == DIGITS)
     }
 
     /// The iteration key: what iterating a value yields WITHOUT its
@@ -352,6 +452,16 @@ impl Model {
         }
     }
 
+    /// An unknown callee as an explain reason names it: `⊤`, or the
+    /// built-in function with its native identity.
+    pub fn callee_name(&self, t: Tok) -> String {
+        match &self.toks[t as usize] {
+            TokKind::Top => "⊤".into(),
+            TokKind::BuiltinFn(n) => format!("builtin-fn:{n:?}"),
+            _ => self.tok_name(t),
+        }
+    }
+
     pub fn tok_name(&self, t: Tok) -> String {
         match &self.toks[t as usize] {
             TokKind::Top => "TOP".into(),
@@ -362,12 +472,14 @@ impl Model {
             TokKind::Proto(tm) => format!("proto:{}", self.tmpls[*tm as usize].display),
             TokKind::ObjectProto => "Object.prototype".into(),
             TokKind::Builtin(b) => format!("builtin:{b:?}"),
-            TokKind::BuiltinFn(crate::model::Native::Member { identity }) => {
-                format!("builtin-fn:{identity}")
-            }
+            TokKind::BuiltinFn(crate::model::Native::Member { identity, holder }) => match holder {
+                None => format!("builtin-fn:{identity}"),
+                Some(h) => format!("builtin-fn:{identity}@{h}"),
+            },
             TokKind::BuiltinFn(_) => "builtin-fn".into(),
             TokKind::ModNs(m) => format!("ns:{m}"),
-            TokKind::NativeProto(n) => format!("native:{n}"),
+            TokKind::NativeProto(n, ..) => format!("native:{n}"),
+            TokKind::Proxy(p) => format!("proxy:{p}"),
         }
     }
 
@@ -380,7 +492,7 @@ impl Model {
                 TokKind::ObjectProto
                 | TokKind::Builtin(_)
                 | TokKind::BuiltinFn(_)
-                | TokKind::NativeProto(_) => {
+                | TokKind::NativeProto(..) => {
                     if self.field_any.contains_key(&t) {
                         Some(None)
                     } else {
@@ -404,6 +516,7 @@ impl Model {
     pub fn anon_post_site(&mut self, desc: &str) -> SiteId {
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: u32::MAX,
             func: u32::MAX,
             desc: desc.to_string(),
@@ -413,7 +526,11 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            assign: false,
+            proto_of: None,
             in_loop: None,
+            define_attrs: None,
         });
         id
     }
@@ -421,6 +538,7 @@ impl Model {
     pub fn anon_birth_site(&mut self, desc: &str) -> SiteId {
         let id = self.stores.len() as SiteId;
         self.stores.push(StoreSite {
+            proto_first: None,
             module: u32::MAX,
             func: u32::MAX,
             desc: desc.to_string(),
@@ -430,7 +548,11 @@ impl Model {
             rooted: false,
             deep: false,
             key_value: None,
+            proto_named: false,
+            assign: false,
+            proto_of: None,
             in_loop: None,
+            define_attrs: None,
         });
         id
     }
@@ -462,7 +584,8 @@ impl Model {
                 TokKind::Builtin(b) => format!("builtin {b:?}"),
                 TokKind::BuiltinFn(_) => "builtinfn -".into(),
                 TokKind::ModNs(m) => format!("modns {m}"),
-                TokKind::NativeProto(n) => format!("nativeproto {n}"),
+                TokKind::NativeProto(n, ..) => format!("nativeproto {n}"),
+                TokKind::Proxy(p) => format!("proxy {p}"),
             };
             out.push(format!("M tok {i} {d}"));
         }
@@ -586,6 +709,23 @@ impl Model {
         i.checked_sub(first).map(|k| fi.captures[k])
     }
 
+    /// Diagnostics (`hold_ledger`): the reason id `top_origin` ends at.
+    pub(crate) fn top_origin_id(&self, start: NodeId) -> Option<(NodeId, u32)> {
+        let mut n = start;
+        let mut seen: crate::pts::FxHashSet<NodeId> = Default::default();
+        while seen.insert(n) {
+            let &(src, why) = self.top_pred.get(&n)?;
+            if why != u32::MAX {
+                return Some((n, why));
+            }
+            if src == NO_NODE {
+                return None;
+            }
+            n = src;
+        }
+        None
+    }
+
     /// Diagnostics: follow the first-arrival chain of ⊤ back to its origin.
     pub fn top_origin(&self, start: NodeId) -> String {
         let mut n = start;
@@ -610,6 +750,24 @@ impl Model {
             n = src;
             hops += 1;
         }
+    }
+
+    /// Explain only: the node labels `top_origin` walks from `start` to the
+    /// rule that put TOP there (at most `max` hops), joined by " <- ".
+    pub fn top_path(&self, start: NodeId, max: usize) -> String {
+        let mut n = start;
+        let mut out = vec![self.labels[n as usize].to_string()];
+        let mut seen: crate::pts::FxHashSet<NodeId> = Default::default();
+        while out.len() <= max && seen.insert(n) {
+            match self.top_pred.get(&n) {
+                Some(&(src, why)) if why == u32::MAX && src != NO_NODE => {
+                    n = src;
+                    out.push(self.labels[n as usize].to_string());
+                }
+                _ => break,
+            }
+        }
+        out.join(" <- ")
     }
 
     /// DECISIONS 225: a function's identity across the two analyses of a
@@ -655,6 +813,12 @@ impl Model {
         let a = self.act.as_mut().unwrap();
         if a.on.insert(k) {
             a.queue.push(f);
+            if let Some(pat) = why_act() {
+                let name = &self.funcs[f as usize].name;
+                if name.contains(pat.as_str()) {
+                    eprintln!("perry: wpfacts: activate {name} via {path}");
+                }
+            }
         }
     }
 
@@ -1715,10 +1879,12 @@ impl Model {
     }
 
     /// Per key of `process` the realm declares as a host array of strings
-    /// (`value = dynamic, elements = string`): the property's node, holding
-    /// the array the runtime makes once, its elements strings.
+    /// (`value = dynamic, elements = string`) or as a host object whose own
+    /// values are strings (`kind = exotic, values = string`: `env`): the
+    /// property's node, holding the one object the runtime makes, its
+    /// elements / own values strings.
     pub(crate) fn process_string_arrays(&mut self) -> Vec<(Atom, NodeId, Tok)> {
-        let declared: Vec<(&'static str, &'static str)> = self
+        let declared: Vec<(&'static str, &'static str, bool)> = self
             .declarations
             .namespace(BuiltinNs::Process, self)
             .map(|s| {
@@ -1726,14 +1892,21 @@ impl Model {
                     .shape(s)
                     .properties
                     .iter()
-                    .filter_map(|p| Some((p.key, p.strings?)))
+                    .filter_map(|p| match (p.strings, p.record) {
+                        (Some(d), _) => Some((p.key, d, false)),
+                        (None, Some(d)) => Some((p.key, d, true)),
+                        (None, None) => None,
+                    })
                     .collect()
             })
             .unwrap_or_default();
         declared
             .into_iter()
-            .map(|(key, display)| {
-                let t = self.host_string_array(display);
+            .map(|(key, display, record)| {
+                let t = match record {
+                    true => self.host_string_record(display),
+                    false => self.host_string_array(display),
+                };
                 let n = self.node_l(display);
                 self.add_tok(n, t);
                 (self.atom(key), n, t)
@@ -1742,18 +1915,34 @@ impl Model {
     }
 
     fn host_string_array(&mut self, display: &str) -> Tok {
+        self.host_strings(display, "arraybox")
+    }
+
+    /// The one host object of a `values = string` declaration
+    /// (`process.env`: perry-runtime process/env_misc.rs
+    /// `js_process_env_impl`, one per agent): an ordinary object
+    /// (`js_object_alloc`: [[Prototype]] %Object.prototype%) whose own
+    /// values are strings; a [[Set]] on it stores ToString(v)
+    /// (`Model::store_into`, `process_env_set_field` -> `js_setenv`).
+    fn host_string_record(&mut self, display: &str) -> Tok {
+        self.host_strings(display, "stringrecord")
+    }
+
+    fn host_strings(&mut self, display: &str, what: &'static str) -> Tok {
         let tm = self.tmpls.len() as TmplId;
         self.tmpls.push(Template {
             kind: TmplKind::BObj {
                 module: u32::MAX,
                 site: u32::MAX - 1,
-                what: "arraybox",
+                what,
             },
             display: display.into(),
             birth_keys: Vec::new(),
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1795,6 +1984,8 @@ impl Model {
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1835,6 +2026,8 @@ impl Model {
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1876,6 +2069,8 @@ impl Model {
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -1913,4 +2108,16 @@ impl Model {
         self.add_tok(rany, r);
         t
     }
+}
+
+/// `PERRY_FACTS_WHY_ACT=<fn-substring>` (diagnostic, off by default): print
+/// the activation path of each matching function when it first activates.
+pub(crate) fn why_act() -> Option<&'static String> {
+    static W: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    W.get_or_init(|| {
+        std::env::var("PERRY_FACTS_WHY_ACT")
+            .ok()
+            .filter(|v| !v.is_empty())
+    })
+    .as_ref()
 }

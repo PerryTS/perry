@@ -1241,9 +1241,7 @@ pub(crate) unsafe fn ptr_value(view_arg: f64, offset_arg: f64) -> f64 {
         );
     };
     let offset_jv = JSValue::from_bits(offset_arg.to_bits());
-    let offset = if offset_jv.is_int32() {
-        offset_jv.as_int32() as i64
-    } else if offset_jv.is_number() {
+    let offset = if offset_jv.is_number() {
         offset_jv.as_number() as i64
     } else {
         0
@@ -1273,8 +1271,6 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
     // slice past the buffer's own bytes.
     let (base, managed_end): (usize, Option<usize>) = if jv.is_undefined() || jv.is_null() {
         (0, None)
-    } else if jv.is_int32() {
-        (jv.as_int32() as i64 as usize, None)
     } else if jv.is_number() {
         (jv.as_number() as i64 as usize, None)
     } else if jv.is_bigint() {
@@ -1297,9 +1293,7 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
         return super::string_value("");
     }
     let offset_jv = JSValue::from_bits(offset_arg.to_bits());
-    let offset = if offset_jv.is_int32() {
-        offset_jv.as_int32() as i64
-    } else if offset_jv.is_number() {
+    let offset = if offset_jv.is_number() {
         offset_jv.as_number() as i64
     } else {
         0
@@ -1313,9 +1307,7 @@ pub(crate) unsafe fn cstring_value(ptr_arg: f64, offset_arg: f64, length_arg: f6
         }
     }
     let length_jv = JSValue::from_bits(length_arg.to_bits());
-    let explicit_len = if length_jv.is_int32() {
-        Some(length_jv.as_int32() as i64)
-    } else if length_jv.is_number() {
+    let explicit_len = if length_jv.is_number() {
         Some(length_jv.as_number() as i64)
     } else {
         None

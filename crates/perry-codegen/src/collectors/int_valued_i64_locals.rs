@@ -213,6 +213,7 @@ impl Walk {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.seed_stmts(body);
                     if let Some(c) = catch {
@@ -306,6 +307,7 @@ impl Walk {
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     self.judge_stmts(body);
                     if let Some(c) = catch {
@@ -464,6 +466,7 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                         body,
                         catch,
                         finally,
+                        ..
                     } => {
                         self.stmts(body);
                         if let Some(c) = catch {
@@ -655,6 +658,7 @@ mod tests {
                 mutable_captures: vec![],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,
@@ -681,6 +685,7 @@ mod tests {
                 mutable_captures: vec![1],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,

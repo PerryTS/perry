@@ -66,7 +66,10 @@ pub static CALLABLE_EXPORT_TABLE: &[(&str, &[&str])] = &[
             "triggerAsyncId",
         ],
     ),
-    ("buffer", &["atob", "btoa", "isAscii", "isUtf8"]),
+    (
+        "buffer",
+        &["atob", "btoa", "isAscii", "isUtf8", "resolveObjectURL"],
+    ),
     (
         "buffer.Buffer",
         &[

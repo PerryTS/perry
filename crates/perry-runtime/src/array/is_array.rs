@@ -4,7 +4,7 @@
 /// Returns a NaN-boxed TAG_TRUE/TAG_FALSE JS boolean per JS semantics.
 #[no_mangle]
 pub extern "C" fn js_array_is_array(value: f64) -> f64 {
-    use crate::gc::{GcHeader, GC_HEADER_SIZE, GC_TYPE_ARRAY};
+    use crate::gc::{GcHeader, GC_HEADER_SIZE};
     use crate::value::JSValue;
 
     const TAG_FALSE: u64 = 0x7FFC_0000_0000_0003;
@@ -25,18 +25,12 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     let bits = value.to_bits();
     let jsvalue = JSValue::from_bits(bits);
 
-    // Get the raw pointer, handling both NaN-boxed and raw bitcast pointers
     let raw_ptr: *const u8 = if jsvalue.is_pointer() {
         jsvalue.as_pointer::<u8>()
     } else {
-        // Check for raw bitcast pointer (no NaN-box tag, stored as f64 bits)
-        let raw = bits;
-        let upper = raw >> 48;
-        if upper == 0 && (raw & 0x0000_FFFF_FFFF_FFFF) > 0x10000 {
-            raw as *const u8
-        } else {
-            return false_val;
-        }
+        // Not a POINTER_TAG value. A word whose top 16 bits are clear is a
+        // Number (a denormal, or +0), not a raw pointer.
+        return false_val;
     };
 
     if raw_ptr.is_null() {
@@ -53,7 +47,7 @@ pub extern "C" fn js_array_is_array(value: f64) -> f64 {
     unsafe {
         let gc_header = raw_ptr.sub(GC_HEADER_SIZE) as *const GcHeader;
         let obj_type = (*gc_header).obj_type;
-        if obj_type == GC_TYPE_ARRAY || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
+        if crate::gc_type_is_array!(obj_type) || obj_type == crate::gc::GC_TYPE_LAZY_ARRAY {
             true_val
         } else if crate::object_has_meta_word!(obj_type) {
             // `class X extends Array` — the instance is a plain ObjectHeader, but

@@ -239,6 +239,7 @@ mod closure_capture_cells;
 mod closure_captures;
 mod closure_collect;
 mod constructor_contracts;
+mod deferred_namespace;
 #[cfg(test)]
 mod number_local_root_tests;
 mod shared_class_method_bodies;
@@ -257,9 +258,12 @@ mod emission_order_tests;
 mod entry;
 pub mod entry_outline;
 mod export_value_wrappers;
+pub(crate) mod facts_const_length;
+pub(crate) mod facts_int32_locals;
 pub(crate) mod facts_number_locals;
 #[cfg(test)]
 mod facts_number_locals_tests;
+pub(crate) mod facts_rep;
 pub(crate) mod fresh_class_templates;
 pub(crate) mod func_registry;
 mod function;
@@ -272,6 +276,7 @@ mod guarded_undefined_method_tests;
 mod hoisted_callback_method_tests;
 #[cfg(test)]
 mod imported_global_order_tests;
+pub(crate) mod index_entry;
 #[cfg(test)]
 mod index_method_clone_tests;
 mod indexed_method_artifacts;
@@ -279,6 +284,9 @@ mod integer_contract;
 #[cfg(test)]
 mod literal_method_this_tests;
 mod ordinary_method_artifacts;
+pub(crate) mod record_array;
+pub(crate) mod record_sig;
+pub(crate) mod signature_entry;
 pub mod split_regions;
 #[cfg(test)]
 mod split_regions_literal_tests;
@@ -307,8 +315,10 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    ElisionFacts, FactsBody, FactsClass, FactsField, FactsIndexedOwner, FactsNumericExpr,
-    FactsNumericFunction, FactsRecv, ProgramFactsView,
+    DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead,
+    FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr,
+    FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes,
+    FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -334,8 +344,8 @@ pub use static_shape_ids::{
     TypedMasks, STATIC_SEED_FORMAT,
 };
 pub(crate) use static_shape_ids::{
-    compatible_final_layout_words, compatible_final_layouts, slot_may_be_constfn,
-    static_layout_word_for_keys_global, static_region_slots,
+    compatible_final_layout_words, compatible_final_layouts, key_may_be_constfn_at,
+    slot_may_be_constfn, static_layout_word_for_keys_global, static_region_slots,
 };
 mod class_declarations;
 mod string_pool;
@@ -355,8 +365,8 @@ mod typed_abi;
 mod typed_abi_opt_report;
 mod typed_entry;
 pub(crate) use typed_entry::{
-    emit_int32_box_test, emit_ordered_number_test, emit_plain_number_bits_test,
-    emit_plain_number_test, typed_entry_arg_guard,
+    emit_ordered_number_test, emit_plain_number_bits_test, emit_plain_number_test,
+    typed_entry_arg_guard,
 };
 #[cfg(test)]
 mod unknown_func_tests;
@@ -376,12 +386,13 @@ pub use opts::{
 };
 pub(crate) use opts::{CrossModuleCtx, ImportedCtor};
 pub(crate) use param_guard::scalar_descriptor_rep;
-pub(crate) use spec_abi::{spec_abi_enabled, spec_function_name, SpecDispatch, SpecFnPlan};
+pub(crate) use spec_abi::{
+    spec_abi_enabled, spec_entry_name, spec_function_name, SpecDispatch, SpecFnPlan,
+};
 pub(crate) use typed_abi::{
-    emit_typed_arg_guard, emit_typed_arg_to_raw, emit_typed_f64_guard,
-    emit_typed_f64_to_raw_guarded, emit_typed_i1_guard, emit_typed_i32_plain_guard_and_raw,
-    emit_typed_string_guard, generic_closure_body_name, generic_function_body_name,
-    generic_method_body_name, nonnegative_index_fast_array_method_name,
+    emit_typed_arg_guard, emit_typed_arg_to_raw, emit_typed_f64_guard, emit_typed_i1_guard,
+    emit_typed_i32_plain_guard_and_raw, emit_typed_string_guard, generic_closure_body_name,
+    generic_function_body_name, generic_method_body_name, nonnegative_index_fast_array_method_name,
     nonnegative_index_fast_array_params, nonnegative_index_method_name,
     typed_arg_is_guard_candidate, typed_f64_closure_name, typed_f64_function_name,
     typed_f64_method_name, typed_f64_receiver_method_info, typed_f64_receiver_method_name,
@@ -554,6 +565,11 @@ fn lower_module(
     crate::layout_desc::create_families::clear();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
+    // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
+    // value (`value_records`); every lowering below sees the rewritten body.
+    let mut opts = opts;
+    let records_hir = crate::value_records::rewrite_module(hir, &mut opts.program_facts.elision);
+    let hir = records_hir.as_ref().unwrap_or(hir);
     // The driver supplies whole-program ownership in opts. Direct callers
     // without callback prefixes also need local launch detection for their
     // string-preparation callback. All decisions remain per compile.
@@ -583,7 +599,6 @@ fn lower_module(
     // runs it does not reach, when this module's codegen ends.
     let _region_diag = (!collect_births).then(|| crate::expr::region_guard::ModuleDiag::start(hir));
     crate::stmt::region_loop::begin_module(hir);
-    closed_targets::begin_module();
     let fp_flags = crate::block::FpFlags::new(opts.fast_math, opts.fp_contract_mode);
 
     // #5334 lever B: decide ONCE, up front, whether this module is large enough
@@ -909,6 +924,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -929,6 +945,7 @@ fn lower_module(
                 is_strict: true,
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
                 is_exported: false,
                 captures: Vec::new(),
                 decorators: Vec::new(),
@@ -999,6 +1016,7 @@ fn lower_module(
                     is_strict: true,
                     was_plain_async: false,
                     was_unrolled: false,
+                    construct_only: false,
                     is_exported: false,
                     captures: Vec::new(),
                     decorators: Vec::new(),
@@ -1100,6 +1118,7 @@ fn lower_module(
                         is_strict: true,
                         was_plain_async: false,
                         was_unrolled: false,
+                        construct_only: false,
                         is_exported: false,
                         captures: Vec::new(),
                         decorators: Vec::new(),
@@ -1111,6 +1130,7 @@ fn lower_module(
             is_exported: false,
             aliases: Vec::new(),
             is_nested: false,
+            decl_stmt: None,
         };
         imported_class_stubs.push(stub);
         imported_stub_prefixes.push(ic.source_prefix.clone());
@@ -2139,7 +2159,10 @@ fn lower_module(
     // proven-`this` admission consults them (§5.2 shape barriers, the
     // freeze family, and `prototype_is_stable`). Moved into `CrossModuleCtx`
     // below — computed exactly once per module either way.
-    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts(hir);
+    let mut module_dispatch_facts = crate::collectors::collect_module_dispatch_facts_with(
+        hir,
+        &opts.program_facts.elision.native_member_calls,
+    );
     let imported_return_shapes = opts
         .imported_classes
         .iter()
@@ -2627,10 +2650,54 @@ fn lower_module(
                 imported_stub_names.contains(class_name.as_str()),
                 class_name,
             );
+            // I32 at rest (PR C): a class born with its keys carries its I32
+            // lanes in its birth rep (`expr::rest_fields`); a class born
+            // keyless gets them after its field definitions.
+            let rep = match class_table.get(class_name) {
+                Some(class)
+                    if !imported_stub_names.contains(class_name.as_str())
+                        && crate::lower_call::new_alloc::keys_defined_at_birth(class) =>
+                {
+                    let lanes = crate::expr::rest_fields::class_lanes(
+                        &opts.program_facts.elision,
+                        &opts.program_layouts,
+                        &class_table,
+                        &class_ids,
+                        class_name,
+                    );
+                    crate::expr::rest_fields::with_lanes(rep, lanes)
+                }
+                _ => rep,
+            };
             let entry = reps.entry(keys_global.clone()).or_insert(rep);
             if *entry != rep {
                 *entry = 0;
             }
+        }
+        // I32 at rest (PR C): a class born with its keys keeps every lane the
+        // facts give it; other modules read those lanes from the facts.
+        for (class_name, keys_global) in &class_keys_globals_map {
+            let Some(class) = class_table.get(class_name) else {
+                continue;
+            };
+            if imported_stub_names.contains(class_name.as_str())
+                || !crate::lower_call::new_alloc::keys_defined_at_birth(class)
+            {
+                continue;
+            }
+            let lanes = crate::expr::rest_fields::class_lanes(
+                &opts.program_facts.elision,
+                &opts.program_layouts,
+                &class_table,
+                &class_ids,
+                class_name,
+            );
+            let rep = reps.get(keys_global).copied().unwrap_or(0);
+            assert_eq!(
+                crate::expr::rest_fields::lanes_of_rep(rep) & lanes,
+                lanes,
+                "I32 at rest: class {class_name} lost its I32 lanes in its birth rep"
+            );
         }
         reps
     };
@@ -2933,19 +3000,36 @@ fn lower_module(
             .into_iter()
             .filter(|id| !funcs_reading_dynamic_this.contains(id))
             .collect();
-    // Closure collection + derived per-closure dispatch maps. See
-    // `closure_collect::collect_module_closures`.
-    let closure_collect::ModuleClosures {
-        closures,
-        direct_call_closures,
-        closure_rest_params,
-        closure_synthetic_arguments,
-        closure_rest_and_arguments,
-        closure_arities,
-        closure_lengths,
-        closure_arrow_functions,
-    } = closure_collect::collect_module_closures(hir);
+    let collected = closure_collect::collect_module_closures(hir);
+    let closures = collected.closures;
+    if opts.program_has_tla {
+        llmod.declare_function(
+            "js_async_module_configure",
+            crate::types::VOID,
+            &[I64, I64, I64, I64, I64, I64],
+        );
+        llmod.declare_function(
+            "js_async_module_visit",
+            crate::types::VOID,
+            &[I64, I64, I64],
+        );
+        llmod.declare_function("js_async_module_import", DOUBLE, &[I64]);
+        llmod.declare_function("js_async_module_require", crate::types::VOID, &[I64]);
+        llmod.declare_function("js_async_module_entry", crate::types::VOID, &[I64]);
+        for prefix in opts.dynamic_import_path_to_prefix.values() {
+            if !prefix.starts_with("__node_submod__") && !prefix.starts_with("__native_mod__") {
+                llmod.declare_function(&format!("{prefix}__async_record"), I64, &[]);
+            }
+        }
+    }
+    // The births pre-pass (`module_birth_shapes`) runs this function up to
+    // the layout emission below and lowers no body: registering there wrote
+    // every module's parameter rows twice.
+    let _life_census = (!collect_births)
+        .then(|| crate::collectors::life_census::register(hir, &opts.program_facts.elision))
+        .flatten();
     let mut cross_module = CrossModuleCtx {
+        closure_writes: collected.closure_writes,
         numeric_order_functions: &hir.functions,
         numeric_order_closures: &closures,
         region_closures: hir
@@ -2967,6 +3051,7 @@ fn lower_module(
         namespace_imports: opts.namespace_imports.iter().cloned().collect(),
         namespace_self_import: opts.namespace_self_import,
         namespace_source_prefixes: opts.namespace_source_prefixes,
+        deferred_namespace_imports: opts.deferred_namespace_imports,
         namespace_member_nested: opts.namespace_member_nested.iter().cloned().collect(),
         cjs_interop_namespaces: opts.cjs_interop_namespaces.iter().cloned().collect(),
         namespace_member_prefixes: opts.namespace_member_prefixes,
@@ -3099,6 +3184,7 @@ fn lower_module(
         // Phase 2 spec-ABI plans are selected AFTER the i64-specialization
         // pass (mutual exclusion), below; start empty here.
         spec_abi_functions: std::collections::HashMap::new(),
+        typed_methods: std::collections::HashMap::new(),
         spec_return_proofs: std::collections::HashMap::new(),
         spec_ta_bindings: std::collections::HashMap::new(),
         typed_f64_functions,
@@ -3132,8 +3218,6 @@ fn lower_module(
         loop_pushed_arrays: Default::default(),
         definite_init: Default::default(),
         disable_buffer_fast_path,
-        program_shadows_buffer_read_method:
-            crate::lower_call::buffer_intrinsic::module_shadows_buffer_read_method(hir),
         flat_const_arrays: {
             // Issue #50: fold module-level `const X: number[][] = [[int, ...], ...]`
             // into a flat `[N x i32]` LLVM constant so `X[i][j]` / `krow[j]` can
@@ -3282,6 +3366,10 @@ fn lower_module(
         lazy_path_init_modules: opts.lazy_path_init_modules.clone(),
         deferred_module_prefixes: opts.deferred_module_prefixes.clone(),
         module_init_deps: opts.module_init_deps.clone(),
+        module_deferred_init_deps: opts.module_deferred_init_deps.clone(),
+        module_deferred_readiness: opts.module_deferred_readiness.clone(),
+        program_has_tla: opts.program_has_tla,
+        module_graph_has_tla: opts.module_graph_has_tla,
         is_dynamic_import_target: opts.is_dynamic_import_target,
         namespace_adopts_cjs_exports: opts.namespace_adopts_cjs_exports,
     };
@@ -3463,7 +3551,7 @@ fn lower_module(
     }
     // Step 5C: a method site whose static lane names one of these bodies
     // calls it directly, so it needs each body's exact parameter count.
-    static_constfn::set_module_body_arities(&module_prefix, &closure_arities);
+    static_constfn::set_module_body_arities(&module_prefix, &collected.closure_arities);
 
     // #8103: closure bodies are emitted before their enclosing regions. Prove
     // inline array-callback element shapes module-wide now, while both sides
@@ -3647,7 +3735,7 @@ fn lower_module(
         .collect();
     let trusted_box_closures = closure_collect::select_trusted_box_closures(
         &closures,
-        &direct_call_closures,
+        &collected.direct_call_closures,
         &module_boxed_vars,
         &module_globals,
         &trusted_box_exclusions,
@@ -3667,8 +3755,18 @@ fn lower_module(
     // Bounded: one entry per function (the dominant tuple),
     // `PERRY_SPECIALIZED_ABI_MAX` per module.
     if spec_abi::spec_abi_enabled() {
-        let spec_facts =
-            crate::collectors::collect_spec_abi_facts_with(hir, &cross_module.definite_init);
+        let no_int32 = std::collections::BTreeSet::new();
+        let proven_int32 = if facts_int32_locals::enabled() {
+            &cross_module.wpfacts.int32_inputs
+        } else {
+            &no_int32
+        };
+        let spec_facts = crate::collectors::collect_spec_abi_facts_with(
+            hir,
+            &cross_module.definite_init,
+            proven_int32,
+            &cross_module.wpfacts.native_member_calls,
+        );
         let spec_budget = spec_abi::spec_abi_max();
         let mut spec_emitted = 0usize;
         for f in &hir.functions {
@@ -3889,6 +3987,10 @@ fn lower_module(
                         reps,
                         dispatch,
                         guards,
+                        signature: None,
+                        sig_defaults: Vec::new(),
+                        sig_public: Default::default(),
+                        record: None,
                     }
                 }
                 None => {
@@ -3911,6 +4013,10 @@ fn lower_module(
                             reps,
                             dispatch: SpecDispatch::Guarded,
                             guards,
+                            signature: None,
+                            sig_defaults: Vec::new(),
+                            sig_public: Default::default(),
+                            record: None,
                         }
                     } else {
                         reject(
@@ -3941,6 +4047,16 @@ fn lower_module(
             &cross_module.spec_abi_functions,
             &cross_module.type_aliases,
         );
+        // P2 (DESIGN-p2 §3.2, T2/T3): every selector above ran exactly as on
+        // main; the typed set is decided once, here, before any body or site
+        // is lowered.
+        signature_entry::select(
+            hir,
+            &mut cross_module,
+            &func_synthetic_arguments,
+            &llmod.target_triple,
+        );
+        signature_entry::select_methods(hir, &mut cross_module, &class_ids);
 
         // The descriptor is immutable rodata, not a GC object. Emit in HIR
         // order (never HashMap order) so cache/object bytes stay deterministic.
@@ -3987,7 +4103,7 @@ fn lower_module(
                 .filter_map(|f| {
                     let plan = cross_module.spec_abi_functions.get(&f.id)?;
                     let public = func_names.get(&f.id)?;
-                    Some(spec_function_name(public, &plan.reps))
+                    Some(spec_entry_name(public, plan))
                 })
                 .collect();
             preserve_none.sort_unstable();
@@ -4048,6 +4164,14 @@ fn lower_module(
         let Some(plan) = cross_module.spec_abi_functions.get(&f.id).cloned() else {
             continue;
         };
+        // P2: `F$sig` compiles F without the literal defaults its callers
+        // apply (§4.1).
+        let sig_body = plan
+            .signature
+            .is_some()
+            .then(|| record_sig::sig_body(f, &plan.sig_defaults, plan.record.as_ref()))
+            .flatten();
+        let f = sig_body.as_ref().unwrap_or(f);
         compile_function(
             &mut llmod,
             f,
@@ -4064,10 +4188,11 @@ fn lower_module(
             &func_signatures,
             &func_synthetic_arguments,
             &module_boxed_vars,
-            &closure_rest_params,
+            &collected.closure_rest_params,
             &cross_module,
             None,
             Some(&plan),
+            None,
         )
         .with_context(|| format!("lowering specialized entry for function '{}'", f.name))?;
     }
@@ -4114,9 +4239,10 @@ fn lower_module(
                 &func_signatures,
                 &func_synthetic_arguments,
                 &module_boxed_vars,
-                &closure_rest_params,
+                &collected.closure_rest_params,
                 &cross_module,
                 typed_public_trampoline,
+                None,
                 None,
             )
             .with_context(|| format!("lowering function '{}'", f.name))?;
@@ -4133,6 +4259,53 @@ fn lower_module(
             }
         },
     )?;
+
+    // A native module phase must not be represented by an empty HIR function:
+    // the inliner would erase its call before the backend emits the real work.
+    if hir.async_init_function.is_some() {
+        let id = entry_outline::max_func_id(hir) + 1;
+        let finish = perry_hir::Function {
+            id,
+            name: "async module completion".into(),
+            type_params: Vec::new(),
+            params: Vec::new(),
+            return_type: perry_hir::types::Type::Any,
+            body: Vec::new(),
+            is_async: false,
+            is_generator: false,
+            is_strict: hir.init_is_strict,
+            is_exported: false,
+            captures: Vec::new(),
+            decorators: Vec::new(),
+            was_plain_async: false,
+            was_unrolled: false,
+            construct_only: false,
+        };
+        let mut finish_names = func_names.clone();
+        finish_names.insert(id, format!("{module_prefix}__async_finish"));
+        compile_function(
+            &mut llmod,
+            &finish,
+            &finish_names,
+            &mut strings,
+            &class_table,
+            &method_names,
+            &module_globals,
+            &module_global_types,
+            &opts.import_function_prefixes,
+            &enum_table,
+            &static_field_globals,
+            &class_ids,
+            &func_signatures,
+            &func_synthetic_arguments,
+            &module_boxed_vars,
+            &collected.closure_rest_params,
+            &cross_module,
+            None,
+            None,
+            Some(hir),
+        )?;
+    }
 
     // Closes #460: emit forwarding wrappers for `export { local as exported }`
     // renames where the exported name differs from the function's local HIR
@@ -4287,12 +4460,12 @@ fn lower_module(
             module_boxed_vars: &module_boxed_vars,
             module_local_types: &module_local_types,
             module_receiver_types: &module_receiver_types,
-            closure_rest_params: &closure_rest_params,
-            closure_synthetic_arguments: &closure_synthetic_arguments,
-            closure_rest_and_arguments: &closure_rest_and_arguments,
-            closure_arities: &closure_arities,
-            closure_lengths: &closure_lengths,
-            closure_arrow_functions: &closure_arrow_functions,
+            closure_rest_params: &collected.closure_rest_params,
+            closure_synthetic_arguments: &collected.closure_synthetic_arguments,
+            closure_rest_and_arguments: &collected.closure_rest_and_arguments,
+            closure_arities: &collected.closure_arities,
+            closure_lengths: &collected.closure_lengths,
+            closure_arrow_functions: &collected.closure_arrow_functions,
             trusted_box_closures: &trusted_box_closures,
             versioned_loop_callbacks: &versioned_loop_callbacks,
             closures: &closures,

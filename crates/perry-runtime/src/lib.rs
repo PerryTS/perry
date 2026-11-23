@@ -14,6 +14,7 @@
 // Native file reads initialize only the bytes written into final string storage.
 #![feature(read_buf, core_io_borrowed_buf)]
 #![feature(linkage)]
+#![feature(stmt_expr_attributes)]
 // Keep the cold class-cache publisher compact without outlining hot reads.
 #![feature(optimize_attribute)]
 // `agent_ptrs::PERRY_AGENT_PTRS`: a thread-local generated code names directly.
@@ -116,6 +117,7 @@ pub mod async_local_storage;
 pub mod atomics;
 pub mod atomics_futex;
 pub mod bigint;
+mod bigint_coerce;
 mod bigint_hooks;
 pub mod r#box;
 pub mod buffer;
@@ -124,6 +126,8 @@ pub(crate) mod dyn_eval_hooks;
 pub mod feature_hooks;
 /// The layout facts generated code bakes in (`perry-abi`).
 pub use perry_abi as codegen_abi;
+/// The array-type predicates, defined once in `perry_abi::array_type`.
+pub use perry_abi::{gc_array_type_pat, gc_type_is_array, gc_type_is_not_array};
 /// The object-type predicates, defined once in `perry_abi::object_type`.
 pub use perry_abi::{
     gc_object_type_pat, gc_type_is_not_object, gc_type_is_object, object_has_meta_word,
@@ -153,6 +157,7 @@ pub mod dgram;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dgram_reactor;
 // A WASI guest has no turnloop: its dgram sockets are polled by the pump.
+pub mod async_module;
 #[cfg(target_os = "wasi")]
 #[path = "wasi_net/dgram.rs"]
 pub mod dgram_reactor;
@@ -174,6 +179,7 @@ pub mod error;
 pub mod event_pump;
 pub mod event_target;
 pub mod exception;
+pub mod external_family;
 pub mod fast_hash;
 pub mod ffi;
 pub mod frame;
@@ -184,6 +190,7 @@ pub mod hot_diag;
 pub mod intl;
 pub mod iter_result;
 pub mod iterator_helpers;
+pub mod layout_slot;
 pub mod loop_interrupt;
 pub mod macos_bundle;
 pub mod map;
@@ -250,6 +257,7 @@ pub mod promise;
 pub mod pty;
 pub mod punycode;
 pub mod readline_helpers;
+pub mod record_array;
 pub mod regex;
 pub mod registry_latch;
 #[cfg(test)]
@@ -1459,4 +1467,7 @@ mod diagnostic_report_roots;
 mod dyn_eval_hook_roots;
 mod interp_proto_guard;
 
+mod family_never;
 pub mod snap_census;
+
+mod snap_image;

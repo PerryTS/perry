@@ -217,9 +217,7 @@ pub extern "C" fn js_this_coerce_sloppy(value: f64) -> f64 {
         return value;
     }
     let bits = value.to_bits();
-    if jv.is_int32()
-        || (jv.is_number() && ((bits >> 48) != 0 || bits <= crate::gc::GC_HEADER_SIZE as u64))
-    {
+    if jv.is_number() && ((bits >> 48) != 0 || bits <= crate::gc::GC_HEADER_SIZE as u64) {
         return crate::builtins::js_boxed_number_new(value);
     }
     value

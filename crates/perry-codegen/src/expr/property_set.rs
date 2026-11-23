@@ -161,6 +161,84 @@ fn with_class_store_operands<'f, R>(
     })
 }
 
+/// ACCBUILD2 P3 (13.15.2, 10.1.9.2 step 3): a named store the facts prove
+/// calls one setter is that setter's direct call with the receiver as
+/// `this`; the expression's value is the stored value, not the setter's
+/// return.
+pub(crate) fn try_lower_proven_setter(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    value: &Expr,
+    offset: u32,
+) -> Result<Option<String>> {
+    let Some((fn_name, nullable)) =
+        super::wpfacts_access::proven_accessor_fn(ctx, object, property, offset, true)
+    else {
+        return Ok(None);
+    };
+    let strict = ctx.is_strict_fn;
+    with_class_store_operands(ctx, object, value, |ctx, recv_box, val_double| {
+        // COVER3: the receiver can also be `undefined` / `null`: the one
+        // test sends it to the complete [[Set]], which throws the TypeError
+        // after the value was evaluated (13.15.2); the setter never runs.
+        if nullable {
+            emit_nullish_store_test(ctx, object, property, &recv_box, &val_double, strict);
+        }
+        super::store_census::bump(ctx, super::store_census::CFIELD_SETTER);
+        let _ = ctx.block().call(
+            DOUBLE,
+            &fn_name,
+            &[(DOUBLE, &recv_box), (DOUBLE, &val_double)],
+        );
+        Ok(val_double)
+    })
+    .map(Some)
+}
+
+/// CLS D3 / COVER3: the one receiver test of a proven store whose receiver
+/// is an object or `undefined` / `null`. The nullish edge is the complete
+/// [[Set]] (`js_put_value_set`), whose ToObject throws the TypeError
+/// (6.2.5.6 step 3.a) after the value was evaluated (13.15.2), so it never
+/// returns: the arm ends in `unreachable`. Leaves the current block on the
+/// object edge, where later accesses of the binding need no test.
+fn emit_nullish_store_test(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    recv_box: &str,
+    val_double: &str,
+    strict: bool,
+) {
+    let key_idx = ctx.strings.intern(property);
+    let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+    let obj_bits = ctx.block().bitcast_double_to_i64(recv_box);
+    let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
+    let hit_idx = ctx.new_block("wpf.set.obj");
+    let miss_idx = ctx.new_block("wpf.set.nullish");
+    let hit_label = ctx.block_label(hit_idx);
+    let miss_label = ctx.block_label(miss_idx);
+    ctx.block()
+        .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
+    ctx.current_block = miss_idx;
+    let blk = ctx.block();
+    let key_box = blk.load(DOUBLE, &key_handle_global);
+    let _ = blk.call(
+        DOUBLE,
+        "js_put_value_set",
+        &[
+            (DOUBLE, recv_box),
+            (DOUBLE, &key_box),
+            (DOUBLE, val_double),
+            (DOUBLE, recv_box),
+            (I32, if strict { "1" } else { "0" }),
+        ],
+    );
+    blk.unreachable();
+    ctx.current_block = hit_idx;
+    super::wpfacts_access::note_tested(ctx, object);
+}
+
 fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
@@ -272,10 +350,18 @@ fn lower_static_key_store(
             // value's lowering, which is arbitrary user code: a collection that
             // moved it, or a shape change it made, is already visible here.
             let obj_box = vals[0].clone();
-            let run = plan.take().and_then(|plan| {
-                let bits = ctx.block().bitcast_double_to_i64(&obj_box);
-                super::layout_read::family_run_arm(ctx, plan, &bits, property)
-            });
+            let run = match plan.take() {
+                Some(plan) => {
+                    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                    super::layout_read::family_run_arm(ctx, plan, &bits, property)
+                }
+                // An ordinary function constructor's store.
+                None if matches!(object, Expr::This) => {
+                    let bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                    crate::layout_desc::function_families::run_arm(ctx, &bits, property, value)
+                }
+                None => None,
+            };
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
@@ -433,6 +519,21 @@ pub(crate) fn emit_nullish_write_guard(
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    // I32 at rest (PR C): a store of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower_set(ctx, expr, assignment_strict)? {
+        return Ok(value);
+    }
+    if let Expr::PropertySet { object, value, .. } = expr {
+        // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+        super::record_witness::store_into_copy(ctx, object)?;
+        return super::write_barrier::with_static_child(ctx, object, value, |ctx| {
+            lower_store(ctx, expr, assignment_strict)
+        });
+    }
+    lower_store(ctx, expr, assignment_strict)
+}
+
+fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     let _fallback = crate::fallback_diag::enter_expr(ctx, expr);
     let _consumed = crate::facts_consumed::enter(expr, &ctx.func.name);
     match expr {
@@ -440,8 +541,50 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
             object,
             property,
             value,
+            byte_offset,
             ..
         } => {
+            // ACCBUILD2 P4: a compound `o.k op= v` (13.15.3) whose PutValue
+            // the facts prove calls one setter: the base is the HIR's temp,
+            // evaluated once; GetValue is the value's read of the same key on
+            // it, at the site's offset (a proven getter is called directly,
+            // else the read is the ordinary one); then the setter, once.
+            if *byte_offset != 0 {
+                if let Expr::Binary { op, left, right } = value.as_ref() {
+                    if let Expr::PropertyGet {
+                        object: read_object,
+                        property: read_property,
+                        byte_offset: 0,
+                        byte_end,
+                    } = left.as_ref()
+                    {
+                        if read_property == property
+                            && matches!((object.as_ref(), read_object.as_ref()),
+                                (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
+                        {
+                            let value = Expr::Binary {
+                                op: *op,
+                                left: Box::new(Expr::PropertyGet {
+                                    object: read_object.clone(),
+                                    property: read_property.clone(),
+                                    byte_offset: *byte_offset,
+                                    byte_end: *byte_end,
+                                }),
+                                right: right.clone(),
+                            };
+                            if let Some(v) = try_lower_proven_setter(
+                                ctx,
+                                object,
+                                property,
+                                &value,
+                                *byte_offset,
+                            )? {
+                                return Ok(v);
+                            }
+                        }
+                    }
+                }
+            }
             // A receiver the wpfacts lowering proves takes the elided read
             // and store below instead of the compound site.
             // #11791: an instance private field write is a shape compare and
@@ -556,6 +699,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                 // collector rewrites; the register is not.
                 return rooting::with_operands_rooted(ctx, &[object, value], |ctx, vals| {
                     let (arr_box, val_double) = (&vals[0], &vals[1]);
+                    // The arm was chosen from the receiver's ANNOTATION: a
+                    // String, `null` or an ordinary object may stand behind
+                    // it, and the runtime entry takes an address. Its own
+                    // admission (a heap pointer whose header says Array) sends
+                    // every other value to the complete strict `[[Set]]`.
+                    let done = crate::method_site::annotation_receiver_tests_enabled()
+                        .then(|| emit_length_set_admission(ctx, arr_box, val_double));
                     let blk = ctx.block();
                     let arr_bits = blk.bitcast_double_to_i64(arr_box);
                     let arr_handle = blk.and(I64, &arr_bits, POINTER_MASK_I64);
@@ -566,6 +716,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -
                         "js_array_set_length_strict",
                         &[(I64, &arr_handle), (DOUBLE, val_double)],
                     );
+                    if let Some(done_idx) = done {
+                        let done_label = ctx.block_label(done_idx);
+                        ctx.block().br(&done_label);
+                        ctx.current_block = done_idx;
+                    }
                     Ok(val_double.clone())
                 });
             }
@@ -1031,31 +1186,7 @@ fn emit_proven_class_field_store(
         // `[[Set]]`, which throws (after the value was evaluated, as the
         // specification orders it); a passing receiver stores into the slot.
         if wpf.is_some_and(|w| w.proof.nullable) {
-            let obj_bits = ctx.block().bitcast_double_to_i64(&recv_box);
-            let recv = super::receiver_range::emit_fused_receiver_test(ctx.block(), &obj_bits);
-            let hit_idx = ctx.new_block("wpf.set.obj");
-            let miss_idx = ctx.new_block("wpf.set.nullish");
-            let hit_label = ctx.block_label(hit_idx);
-            let miss_label = ctx.block_label(miss_idx);
-            ctx.block()
-                .cond_br(&recv.is_object_pointer, &hit_label, &miss_label);
-            ctx.current_block = miss_idx;
-            let blk = ctx.block();
-            let key_box = blk.load(DOUBLE, &key_handle_global);
-            let _ = blk.call(
-                DOUBLE,
-                "js_put_value_set",
-                &[
-                    (DOUBLE, &recv_box),
-                    (DOUBLE, &key_box),
-                    (DOUBLE, &val_double),
-                    (DOUBLE, &recv_box),
-                    (I32, if strict { "1" } else { "0" }),
-                ],
-            );
-            blk.unreachable();
-            ctx.current_block = hit_idx;
-            super::wpfacts_access::note_tested(ctx, object);
+            emit_nullish_store_test(ctx, object, property, &recv_box, &val_double, strict);
         }
         let site_id = emit_typed_feedback_register_site(
             ctx,
@@ -1219,9 +1350,18 @@ fn emit_proven_class_field_store(
             // records), and every atom is born `refcount = 0`, already shared:
             // the addref would find nothing to demote. The write barrier
             // stays: an atom minted earlier at runtime can be young.
+            // Nor would it for a value the facts prove is, as a String,
+            // only ever a literal's value (`literal_strings`): the field's
+            // every writer, or the local the value reads.
             let string_addref_needed = class_field_store_needs_string_addref(ctx, value)
                 && wpf.is_none_or(|w| w.proof.may_hold_string())
-                && !super::helpers::expr_is_pool_atom_literal(value);
+                && !super::helpers::expr_is_pool_atom_literal(value)
+                && !super::literal_strings::store(
+                    ctx,
+                    wpf.map(|w| (&w.proof, property)),
+                    value,
+                    &val_double,
+                );
             let field_addr = ctx.block().ptrtoint(&field_ptr, I64);
             // #7511: whatever these three flags could not
             // be proved away statically is decided by ONE
@@ -1310,3 +1450,68 @@ fn emit_proven_class_field_store(
 #[cfg(test)]
 #[path = "collecting_root_tests.rs"]
 mod collecting_root_tests;
+
+/// The admission of the annotated `arr.length = v` arm: continue in the
+/// current block when `arr_box` is a heap pointer whose header is an Array's
+/// (the runtime entry's precondition), else perform the complete strict
+/// `Set(arr, "length", v, true)` and join at the returned block, which the
+/// caller branches to after its own call.
+fn emit_length_set_admission(ctx: &mut FnCtx<'_>, arr_box: &str, val_double: &str) -> usize {
+    let hdr_idx = ctx.new_block("alenset.hdr");
+    let array_idx = ctx.new_block("alenset.array");
+    let generic_idx = ctx.new_block("alenset.generic");
+    let done_idx = ctx.new_block("alenset.done");
+    let (hdr_label, array_label, generic_label, done_label) = (
+        ctx.block_label(hdr_idx),
+        ctx.block_label(array_idx),
+        ctx.block_label(generic_idx),
+        ctx.block_label(done_idx),
+    );
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let biased = blk.sub(
+            I64,
+            &bits,
+            super::array_proto_guard::HEAP_POINTER_BAND_BASE_I64,
+        );
+        let heap = blk.icmp_ult(
+            I64,
+            &biased,
+            super::array_proto_guard::HEAP_POINTER_BAND_SPAN_I64,
+        );
+        blk.cond_br(&heap, &hdr_label, &generic_label);
+    }
+    ctx.current_block = hdr_idx;
+    {
+        let blk = ctx.block();
+        let bits = blk.bitcast_double_to_i64(arr_box);
+        let handle = blk.and(I64, &bits, POINTER_MASK_I64);
+        let kind_addr = blk.sub(I64, &handle, "8");
+        let kind_ptr = blk.inttoptr(I64, &kind_addr);
+        let kind = blk.load(crate::types::I8, &kind_ptr);
+        let array = crate::target_layout::emit_gc_type_is_array(blk, crate::types::I8, &kind);
+        blk.cond_br(&array, &array_label, &generic_label);
+    }
+    ctx.current_block = generic_idx;
+    {
+        let key_idx = ctx.strings.intern("length");
+        let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
+        let blk = ctx.block();
+        let key_box = blk.load(DOUBLE, &key_handle_global);
+        let _ = blk.call(
+            DOUBLE,
+            "js_put_value_set",
+            &[
+                (DOUBLE, arr_box),
+                (DOUBLE, &key_box),
+                (DOUBLE, val_double),
+                (DOUBLE, arr_box),
+                (crate::types::I32, "1"),
+            ],
+        );
+        blk.br(&done_label);
+    }
+    ctx.current_block = array_idx;
+    done_idx
+}

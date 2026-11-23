@@ -357,6 +357,19 @@ impl RootScanCycleState {
         }
     }
 
+    #[cfg(perry_gc_instruments)]
+    fn life_why_name(&self) -> &'static str {
+        match self.subphase {
+            RootScanSubphase::ConservativeStack => "conservative_stack",
+            RootScanSubphase::MutableSlots => "mutable_slots",
+            RootScanSubphase::MutableRegisteredScanners => "mutable_registered_scanners",
+            RootScanSubphase::LegacyRegisteredScanners => "legacy_registered_scanners",
+            RootScanSubphase::RememberedSet => "remembered_set",
+            RootScanSubphase::ImageCells => "image_cells",
+            RootScanSubphase::Done => "root_done",
+        }
+    }
+
     fn trace_phase_name(&self) -> &'static str {
         match self.subphase {
             RootScanSubphase::RememberedSet => "remembered_set_marking",
@@ -648,6 +661,7 @@ pub(super) struct GcCycleState {
 
 impl GcCycleState {
     pub(super) fn new_full(trigger: GcTriggerSnapshot) -> Self {
+        crate::snap_funnel!(Gc);
         super::allocation_pacing::begin_full();
         // Build the lazy stack-map index HERE, not only at the entry points.
         //
@@ -843,6 +857,7 @@ impl GcCycleState {
         &mut self,
         budget: GcWorkBudget,
     ) -> GcCycleStepResult {
+        crate::snap_funnel!(Gc);
         let _allocation_guard = super::allocation_pacing::CollectorStepGuard::enter();
         let phase_before = self.phase;
         if self.phase == GcCyclePhase::Complete {
@@ -1053,6 +1068,8 @@ impl GcCycleState {
                 .as_ref()
                 .expect("root scan state exists")
                 .trace_phase_name();
+            #[cfg(perry_gc_instruments)]
+            super::life_why::phase(self.root_scan.as_ref().map_or("", |r| r.life_why_name()));
             let phase_start = if DIAGNOSTICS {
                 trace_phase_start(&self.trace)
             } else {
@@ -1085,6 +1102,8 @@ impl GcCycleState {
     }
 
     fn step_mark_propagation<const DIAGNOSTICS: bool>(&mut self, budget: GcWorkBudget) {
+        #[cfg(perry_gc_instruments)]
+        super::life_why::phase("propagation");
         let valid_ptrs = self.valid_ptrs.as_ref().expect("valid pointer set built");
         let phase_start = if DIAGNOSTICS {
             trace_phase_start(&self.trace)
@@ -1107,6 +1126,8 @@ impl GcCycleState {
             // synchronous full cycle (block persistence has not run yet).
             if self.minor.is_none() && !self.progress_kind.is_budgeted() {
                 super::census::census_pass1_if_armed();
+                #[cfg(perry_gc_instruments)]
+                super::diagnostic_hooks::life_full_marked();
             }
         }
         if DIAGNOSTICS {

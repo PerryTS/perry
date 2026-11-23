@@ -16,7 +16,7 @@ pub(super) unsafe fn try_emit(arr: *const crate::ArrayHeader, buf: &mut String) 
         return false;
     };
     let header = header.as_ref();
-    if header.obj_type != crate::gc::GC_TYPE_ARRAY {
+    if crate::gc_type_is_not_array!(header.obj_type) {
         return false;
     }
     let flags = header._reserved;
@@ -105,13 +105,9 @@ unsafe fn is_primitive(bits: u64) -> bool {
         return false;
     }
     let tag = bits & crate::value::TAG_MASK;
-    // BigInt can run a user-installed toJSON. Untagged pointers need the
-    // same tracked-allocation disambiguation as the existing numeric path:
-    // positive subnormal doubles must not be mistaken for addresses.
-    tag != POINTER_TAG
-        && tag != crate::value::HANDLE_TAG
-        && tag != BIGINT_TAG
-        && !is_raw_pointer(bits)
+    // BigInt can run a user-installed toJSON. A word without a tag is a
+    // Number (a subnormal when its top bits are clear), never an address.
+    tag != POINTER_TAG && tag != crate::value::HANDLE_TAG && tag != BIGINT_TAG
 }
 
 #[cfg(test)]

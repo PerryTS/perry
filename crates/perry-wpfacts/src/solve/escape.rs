@@ -8,17 +8,49 @@ impl Model {
     /// effect is a change of a unit's contract check (DECISIONS 180).
     pub fn escape_changed(&mut self, t: Tok, reason: u32) -> bool {
         if self.is_escaped(t) {
+            // The ledger's root set: this root escapes `t` again.
+            if let Some(l) = self.ledger.as_mut() {
+                l.again(t, reason, std::panic::Location::caller());
+            }
             return false;
         }
         self.escape(t, reason);
         self.is_escaped(t)
     }
 
+    #[track_caller]
     pub fn escape(&mut self, t: Tok, reason: u32) {
+        if self.ledger.is_none() {
+            return self.escape_at(t, reason);
+        }
+        let again = self.is_escaped(t);
+        let Some(l) = self.ledger.as_mut() else {
+            return self.escape_at(t, reason);
+        };
+        if l.dropped(std::panic::Location::caller(), t, true) {
+            return;
+        }
+        let saved = l.enter_escape(t, reason, std::panic::Location::caller());
+        if again {
+            // The ledger's root set: another root escapes `t` again.
+            let r = l.cur;
+            l.again_root(t, r);
+        }
+        self.escape_at(t, reason);
+        if let Some(l) = self.ledger.as_mut() {
+            l.leave(saved);
+        }
+    }
+
+    fn escape_at(&mut self, t: Tok, reason: u32) {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;
-            self.raise_top(region, ret, "a native hands a value to unknown code, which may throw");
+            self.raise_top(
+                region,
+                ret,
+                "a native hands a value to unknown code, which may throw",
+            );
         }
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {
@@ -42,12 +74,67 @@ impl Model {
         if t == TOP {
             return;
         }
+        // A value reaches unknown code: that code gets the value and what it
+        // reaches. Whole program under the closed world (owner 2026-11-14: no
+        // eval, no `new Function`, no open native addon) and R-GLOBAL (owner
+        // 2026-11-18), it is the runtime's own code, which never names an
+        // intrinsic by an arbitrary name: the global names it reads
+        // (`global_runtime_reads`, the declared constructors) and the statics
+        // (`members::realm_read_statics`) sink what the program stores there at
+        // the store, and the protocol members it reads on a value are loads on
+        // that value and its chain. So the escape hands over the value, never
+        // the realm. Per unit, or beside an unseen module or interpreted code,
+        // other code may name the realm: it is held (`hold_realm`). A value
+        // the program stored onto a built-in object (E20) is a write into the
+        // realm the runtime reads by name: it is held then too.
+        // PREMISE (owner-approved 2026-11-19): unknown code handed a value
+        // never writes or replaces a member of an intrinsic it reaches along
+        // that value's chain (`Array.from.k = v` through
+        // `a.constructor.__proto__`).
+        let holds = !self.realm_held
+            && (self.unit_mode
+                || self.unseen_module_runs
+                || self.interp_runs
+                || self
+                    .reasons
+                    .get(reason as usize)
+                    .is_some_and(|r| r.starts_with("E20")));
+        if crate::unksrc::on() {
+            let why = format!(
+                "{} [tok {t} {:?}]",
+                self.reasons[reason as usize], self.toks[t as usize]
+            );
+            crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
+            if holds {
+                crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
+            }
+        }
+        if holds && self.prov.is_some() {
+            self.why_hold_r("escape", u32::MAX, Some(t), reason);
+        }
+        if self.keysnap.is_some() && holds {
+            self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
+            self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));
+        }
+        if holds {
+            let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
+            self.hold_realm(r);
+        }
         // Unknown code given the Function constructor may call it, and ⊤
         // may then be it (DECISIONS 235). Until then a ⊤ callee is not it:
         // the program is closed, and no native returns the constructor; the
         // token enters a value only as the global `Function`, a function's
         // `constructor` (a computed key that may be it included), or here.
-        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function)) {
+        // Whole program under the closed world (owner 2026-11-14: no eval or
+        // dynamic code), the unknown code that holds it is program code, whose
+        // calls of it are the program's own call sites (E14), or the runtime,
+        // which never calls it: holding it runs nothing. Per unit, another
+        // unit's code may call it; an unseen module is outside the closed
+        // world. (R-GLOBAL, owner 2026-11-18: only program stores write a
+        // global; interpreted code that runs writes any.)
+        if matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Function))
+            && (self.unit_mode || self.unseen_module_runs)
+        {
             crate::builtins::interpreted_code_runs(self);
         }
         // Another unit's function the census broke, forwarded where no
@@ -182,7 +269,7 @@ impl Model {
         }
         if matches!(
             self.toks[t as usize],
-            TokKind::ObjectProto | TokKind::NativeProto(_)
+            TokKind::ObjectProto | TokKind::NativeProto(..)
         ) && self.reasons[reason as usize].starts_with(crate::gen_expr::UNMODELED_OPERAND)
         {
             let what = format!("reaches unmodeled code ({})", self.reasons[reason as usize]);
@@ -191,19 +278,19 @@ impl Model {
                 self.note_shared(SharedWrite::Unmodeled(s));
             }
         }
-        if matches!(
-            self.toks[t as usize],
-            TokKind::Builtin(BuiltinNs::GlobalThis)
-        ) {
+        // The global object given to unknown code puts ⊤ in reach of the
+        // program's stores into ⊤ (`global_in_top`): each is recorded with
+        // its own key, a computed one under every key (`written_by`). It is
+        // no write of the global object under any key: whole program, the
+        // unknown code that holds it is program code, whose stores into ⊤
+        // those are, or the runtime's own operations, which write no global
+        // by an arbitrary name. Dynamic code records its own any-key write
+        // (`interpreted_code_runs`), as does an unseen module.
+        // Owner decision 2026-11-18 (R-GLOBAL, under the 2026-11-14 closed
+        // world: no eval or dynamic code): no built-in or native operation
+        // writes an arbitrary global name.
+        if builtins::global_object(self, t) {
             crate::builtins::note_global_in_top(self);
-            if !self.unit_mode {
-                crate::builtins::note_native_write(
-                    self,
-                    t,
-                    None,
-                    "global object given to unknown code",
-                );
-            }
             self.note_shared(SharedWrite::Unmodeled(Shared::Builtin(
                 BuiltinNs::GlobalThis,
             )));
@@ -224,8 +311,15 @@ impl Model {
         if !self.chain_escape {
             if let Some(s) = self
                 .shared_of(t)
-                .filter(|s| *s != Shared::Builtin(BuiltinNs::GlobalThis))
+                .filter(|_| !builtins::global_object(self, t))
             {
+                if self.explain && !self.shared_out.contains(&SharedWrite::Handed(s.clone())) {
+                    eprintln!(
+                        "perry: wpfacts explain: handed {} by {}",
+                        self.tok_name(t),
+                        self.reasons[reason as usize]
+                    );
+                }
                 self.note_shared(SharedWrite::Handed(s));
             }
         }
@@ -237,7 +331,7 @@ impl Model {
         if !builtins::builtin_function(self, t)
             && matches!(
                 self.toks[t as usize],
-                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(_)
+                TokKind::ObjectProto | TokKind::Builtin(_) | TokKind::NativeProto(..)
             )
         {
             // Handed to unknown code (not reached along a chain): the
@@ -247,10 +341,9 @@ impl Model {
             }
             // Unknown code given `process` (or the global object) may write
             // the arrays `process.argv` and `process.execArgv` hold.
-            if matches!(
-                self.toks[t as usize],
-                TokKind::Builtin(BuiltinNs::Process | BuiltinNs::GlobalThis)
-            ) {
+            if builtins::global_object(self, t)
+                || matches!(self.toks[t as usize], TokKind::Builtin(BuiltinNs::Process))
+            {
                 for i in 0..self.process_arrays.len() {
                     let a = self.process_arrays[i].2;
                     self.escape(a, reason);
@@ -310,7 +403,20 @@ impl Model {
                 ));
             }
         }
+        if let Some(l) = self.ledger.as_mut() {
+            l.mark_escaped(t, reason);
+        }
         self.escaped.insert(t, reason);
+        if self.objtag_watch.contains_key(&t) {
+            self.objtag_widen(t);
+        }
+        self.ta_len_open(t);
+        if self.is_rest_arr(t) {
+            self.rest_front_widen(t);
+        }
+        self.index_slots_merge(t);
+        self.arr_len_top(t);
+        self.map_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
@@ -318,7 +424,12 @@ impl Model {
         if self.esc_bits.len() <= w {
             self.esc_bits.resize(w + 1, 0);
         }
+        let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
+        if fresh {
+            self.late_esc.push(t);
+            self.enum_escaped(t);
+        }
     }
 
     /// Unknown code holding `t` runs every accessor on its chain: a setter
@@ -328,10 +439,10 @@ impl Model {
     /// may call them with any receiver and catch what they throw
     /// (`escape_fn_params`: their throw region feeds ESCRAISE).
     fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w, self.thrown));
         let r = self.node_l("escaped-load");
         self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r, self.thrown));
         let fns = self.esc_accessors;
         for setter in [false, true] {
             self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
@@ -352,6 +463,11 @@ impl Model {
 
     /// Unknown code calls `f`: unknown arguments, the result escapes.
     pub(crate) fn escape_fn_params(&mut self, ft: Tok, reason: u32) {
+        self.diagnostic_entry_begin(ft, reason);
+        self.escape_fn_params_run(ft, reason);
+        self.diagnostic_entry_end();
+    }
+    fn escape_fn_params_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
             self.sum
                 .deferred
@@ -367,6 +483,9 @@ impl Model {
         if self.unknown_caller(f, reason) {
             let raise = self.raise_of(f);
             let esc = self.esc_raise;
+            if let Some(d) = &mut self.diagnostic {
+                d.raise_by.entry(raise).or_insert(ft);
+            }
             self.edge(raise, esc);
         }
         if self.summarized(f) {
@@ -436,7 +555,120 @@ impl Model {
             return;
         }
         self.add_top(fi.args_all, why);
-        self.sink_node(fi.ret, reason);
+        // A constructor's `this` is the instance it makes, whoever calls:
+        // its result escapes as before. The activation pass (DECISIONS 225)
+        // is the coarser analysis whose escapes cover the final solve's:
+        // there no function has a summary, so the final solve's summarized
+        // escapes (`escape_summarized`) have no counterpart, and an escaped
+        // function's whole shared result escapes: what the final solve
+        // treats as escaped was walked.
+        if fi.ctor_of.is_some() || self.act.as_ref().is_some_and(|a| !a.fixed) {
+            self.sink_node(fi.ret, reason);
+        } else {
+            self.sink_own_return(f, reason);
+        }
+    }
+
+    /// Unknown code calls `f` (no summary instance): it gets its own call's
+    /// result (ECMA-262 10.2.1). A source of `f`'s shared return node that
+    /// is the caller's own `this` or argument (`callers_own`) hands that
+    /// caller back what it passed; what known calls passed went back to
+    /// them. Every other source (a field, a closure or module variable, a
+    /// birth, a callee's result) escapes. An edge into the return made later
+    /// is judged as it is made (`edge_impl`).
+    pub(crate) fn sink_own_return(&mut self, f: FnIdx, reason: u32) {
+        let ret = self.funcs[f as usize].ret;
+        if self.sunk_nodes.contains(&ret) || self.open_rets.contains_key(&ret) {
+            return;
+        }
+        self.index_term_preds();
+        self.open_rets.insert(ret, (f, reason));
+        let srcs = self.term_preds_of(ret);
+        for a in srcs {
+            if !self.callers_own(f, a) {
+                self.sink_node(a, reason);
+            }
+        }
+    }
+
+    /// `a` is the receiver of non-arrow `f` or one of its parameters, and
+    /// `f`'s body (or a function nested in it) never writes it: it holds
+    /// what each call passes and nothing else.
+    /// DECISIONS 225, checked at the end of the final solve: the escaped
+    /// functions whose body was not walked (unknown code may call them, so
+    /// each must be active). 0 when the activation pass covers the solve.
+    pub(crate) fn escaped_inactive(&self) -> usize {
+        if !self.act.as_ref().is_some_and(|a| a.fixed) {
+            return 0;
+        }
+        self.escaped
+            .keys()
+            .filter(|&&t| match self.toks[t as usize] {
+                TokKind::Func(f, _) => !self.body_active(f),
+                _ => false,
+            })
+            .count()
+    }
+
+    pub(crate) fn callers_own(&self, f: FnIdx, a: NodeId) -> bool {
+        let fi = &self.funcs[f as usize];
+        let term = (a == fi.this && !fi.lexical_this)
+            || fi
+                .params
+                .iter()
+                .enumerate()
+                .any(|(i, &p)| p == a && self.capture_param(f, i).is_none());
+        if !term {
+            return false;
+        }
+        let Some(tp) = self.term_preds.as_ref() else {
+            return false;
+        };
+        !tp.get(&a)
+            .is_some_and(|v| v.iter().any(|&x| self.body_owned(f, x)))
+    }
+
+    /// Node `x` belongs to `f`'s body or to a function nested in it.
+    fn body_owned(&self, f: FnIdx, x: NodeId) -> bool {
+        let mut g = self.node_fn[x as usize];
+        while g != NO_FN {
+            if g == f {
+                return true;
+            }
+            g = self.funcs[g as usize].parent;
+        }
+        false
+    }
+
+    fn term_preds_of(&self, n: NodeId) -> Vec<NodeId> {
+        self.term_preds
+            .as_ref()
+            .and_then(|tp| tp.get(&n).cloned())
+            .unwrap_or_default()
+    }
+
+    /// The copy predecessors of every function's return, `this` and
+    /// parameter nodes, once; `edge_impl` keeps it from then on.
+    fn index_term_preds(&mut self) {
+        if self.term_preds.is_some() {
+            return;
+        }
+        let mut tp: crate::pts::FxHashMap<NodeId, Vec<NodeId>> = Default::default();
+        for fi in &self.funcs {
+            for &n in [fi.ret, fi.this].iter().chain(fi.params.iter()) {
+                if n != NO_NODE {
+                    tp.entry(n).or_default();
+                }
+            }
+        }
+        for (a, node) in self.nodes.iter().enumerate() {
+            for b in node.succ.iter() {
+                if let Some(v) = tp.get_mut(b) {
+                    v.push(a as NodeId);
+                }
+            }
+        }
+        self.term_preds = Some(tp);
     }
 
     /// A class published to other units as a contract (design §11.2), not
@@ -494,6 +726,8 @@ impl Model {
             definite: Vec::new(),
             declared: Vec::new(),
             reserved: Vec::new(),
+            inert_definite: Vec::new(),
+            inert_reads: Vec::new(),
             parent: None,
             ctor: None,
             native_parent: None,
@@ -681,6 +915,7 @@ impl Model {
         }
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
@@ -689,6 +924,7 @@ impl Model {
             region: self.esc_raise,
         });
         self.contract_new.insert(call);
+        self.why_mint(call, None, u32::MAX);
         self.construct(call, cobj);
         // ... and read its fields: they leave key by key, described by the
         // class contract (`Gen::fields_leave`, DECISIONS 88).
@@ -741,6 +977,7 @@ impl Model {
         self.add_prim(args_n, prim::ALL);
         let call = self.calls.len() as CallId;
         self.calls.push(CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args: vec![args_n; np],
             spread: vec![],
@@ -748,6 +985,7 @@ impl Model {
             site: 0,
             region: self.esc_raise,
         });
+        self.why_mint(call, Some(t), reason);
         self.construct(call, t);
         self.sink_node(ret, reason);
     }
@@ -783,7 +1021,7 @@ impl Model {
         if !published {
             self.fn_props_top.insert(t);
             let all = self.all_fields(t);
-            self.add_top(all, |m| {
+            self.add_top_held(all, t, |m| {
                 format!(
                     "property of an escaped function: {}",
                     m.reasons[reason as usize]
@@ -792,7 +1030,7 @@ impl Model {
             self.add_prim(all, prim::ALL);
         }
         let w = self.node_l("escaped-store");
-        self.add_top(w, |m| {
+        self.add_top_held(w, t, |m| {
             format!(
                 "stored into an escaped function: {}",
                 m.reasons[reason as usize]
@@ -805,7 +1043,7 @@ impl Model {
     /// A named property `n` of function `t` whose properties left
     /// (`escape_props`): unknown code writes it and reads what it holds.
     pub(crate) fn escape_prop(&mut self, t: Tok, n: NodeId, reason: u32) {
-        self.add_top(n, |m| {
+        self.add_top_held(n, t, |m| {
             format!(
                 "property of an escaped function {t}: {}",
                 m.reasons[reason as usize]
@@ -959,7 +1197,7 @@ impl Model {
         // writes into each other's storage: the overlap is not transitive.
         if builtins::builtin_function(self, t) {
             let read = self.node_l("escaped-native-fields");
-            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read, self.thrown));
             if !self.unit_mode {
                 self.proto_value(t, read);
             }
@@ -968,6 +1206,32 @@ impl Model {
         // Unknown code reads every field and can write any key.
         let all = self.all_fields(t);
         self.cons(all, Cons::TopSink { reason });
+        // An internal slot is no property (`Model::field`): no key reads it,
+        // but the built-in operations unknown code may run on `t` do (the
+        // settled value of a promise reaches its reactions, 27.2.5.4
+        // PerformPromiseThen, 27.2.1.4 FulfillPromise): its values leave.
+        for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
+            if builtins::is_internal_key(&self.atoms[a as usize]) {
+                let n = self.fields[&(t, a)];
+                self.cons(n, Cons::TopSink { reason });
+            }
+        }
+        // A rejected promise's reason is its [[PromiseResult]] too (27.2.1.7
+        // RejectPromise), handed to the reactions unknown code registers;
+        // the model keeps every rejection reason in `thrown` (a reject
+        // function's parameter, an async body's throw): those leave.
+        if let TokKind::Obj(tm, _) = self.toks[t as usize] {
+            if matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::BObj {
+                    what: "Promise",
+                    ..
+                }
+            ) {
+                let thrown = self.thrown;
+                self.sink_node(thrown, reason);
+            }
+        }
         // A module namespace object is not writable: [[Set]] and
         // [[DefineOwnProperty]] fail, [[Delete]] of an export fails (ES
         // 10.4.6); its keys hold what its module's bindings hold.
@@ -975,7 +1239,7 @@ impl Model {
             return;
         }
         let any = self.any_key_node(t);
-        self.add_top(any, |m| {
+        self.add_top_held(any, t, |m| {
             format!(
                 "field of escaped {}: {}",
                 m.tok_kind_word(t),
@@ -983,6 +1247,15 @@ impl Model {
             )
         });
         self.add_prim(any, prim::ALL);
+        // Its buffer is what unknown code reads as `.buffer` (`VIEWED_BUFFER`).
+        if self.array_buffer_view(t) {
+            let a = self.atom(VIEWED_BUFFER);
+            let v = self.field(t, a);
+            self.add_top_held(v, t, |m| {
+                format!("buffer of an escaped view: {}", m.reasons[reason as usize])
+            });
+            self.cons(v, Cons::TopSink { reason });
+        }
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }
@@ -1000,7 +1273,7 @@ impl Model {
         // through the setters of its bindings object); and read any key:
         // every getter runs and its result reaches unknown code.
         let w = self.node_l("escaped-store");
-        self.add_top(w, |m| {
+        self.add_top_held(w, t, |m| {
             format!(
                 "stored into an escaped {}: {}",
                 m.tok_kind_word(t),
@@ -1036,6 +1309,7 @@ impl Model {
                 self.add_prim(args_n, prim::ALL);
                 let call = self.calls.len() as CallId;
                 self.calls.push(CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Undef,
                     args: vec![args_n; 8],
                     spread: vec![],
@@ -1043,6 +1317,7 @@ impl Model {
                     site: 0,
                     region: self.esc_raise,
                 });
+                self.why_mint(call, Some(t), reason);
                 self.construct(call, t);
                 let esc = self.escaped_classes;
                 self.add_tok(esc, t);
@@ -1069,6 +1344,8 @@ impl Model {
                     self.escape(c, reason);
                 }
             }
+            // PROXY2: unknown code may run any operation on a Proxy.
+            TokKind::Proxy(p) => self.proxy_degrade(p, "escape"),
             TokKind::Bound(b) => {
                 let (target, bthis, bargs) = self.bound[b as usize].clone();
                 for n in [target, bthis].into_iter().chain(bargs) {
@@ -1096,6 +1373,16 @@ impl Model {
     }
 
     pub fn mark_hard(&mut self, t: Tok, kind: Hard, reason: u32) {
+        self.mark_hard_as(t, kind, reason, true)
+    }
+
+    /// `mark_hard`; `seed` false for a definition of a NAMED key by a data
+    /// descriptor (rule D1, ECMA-262 20.1.2.4 -> 7.3.8 -> 10.1.6.3): it
+    /// creates or changes that key alone, to the descriptor's value (stored
+    /// by `define_by_data`), and installs no accessor, so no field of the
+    /// object is written by unknown code. The object is HARD all the same
+    /// (layout, escape and the runtime lock unchanged).
+    pub fn mark_hard_as(&mut self, t: Tok, kind: Hard, reason: u32, seed: bool) {
         // DEC 250: a delete that reaches the runtime's prototypes (the
         // collapsed `ObjectProto`) removes only a key the lock admits: the
         // runtime refuses (TypeError) to delete a member the image gives a
@@ -1105,6 +1392,8 @@ impl Model {
         // never sees (`members::locked_read`, the same decision). It removes
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
+        self.arr_len_top(t);
+        self.map_open(t);
         let lock_delete =
             kind == Hard::E7Delete && matches!(self.toks[t as usize], TokKind::ObjectProto);
         self.virt_revoke(t, None);
@@ -1170,7 +1459,20 @@ impl Model {
             // `setPrototypeOf` writes no own key: the runtime object's new
             // chain is noted by the prototype it is given (`ProtoFrom`,
             // `settle_native_given`). Another unit's gives one unknown here.
-            if kind != Hard::E6SetPrototypeOf || self.shared_replay {
+            // A delete stores no value (ECMA-262 13.5.1.2, OrdinaryDelete
+            // 10.1.10): under an unknown key it may make any own key of
+            // `t` absent, never present, as the named delete records
+            // (`Cons::DeleteKey`). A lookup the write may reach finds the
+            // key missing there: `undefined` beside what the chain holds.
+            if kind == Hard::E7Delete {
+                crate::builtins::note_native_data_write(
+                    self,
+                    t,
+                    None,
+                    &what,
+                    crate::builtins::WriteValue::Absent,
+                );
+            } else if kind != Hard::E6SetPrototypeOf || self.shared_replay {
                 crate::builtins::note_native_write(self, t, None, &what);
             }
         }
@@ -1214,7 +1516,36 @@ impl Model {
         if lock_delete {
             return;
         }
-        if self.hard.contains_key(&t) {
+        // Rule B1E: an exposed buffer (B1: a `.buffer` read, a view over a
+        // buffer another holder has) lets others write the view's BYTES
+        // only, read back through an integer index as Numbers (BigInts,
+        // 10.4.5.15 TypedArrayGetElement); no buffer write reaches a named
+        // key (10.4.5.2-5), so its named keys keep the program's stores.
+        let b1e = seed && kind == Hard::B1Exposed && self.typed_array_elements(t);
+        if b1e {
+            let e = self.field_any(t);
+            self.add_prim(e, prim::NUM | prim::BIGINT);
+        }
+        let seed = seed && !b1e;
+        if let Some(&(was, _)) = self.hard.get(&t) {
+            // R9BIRTH8: a B1 mark (bytes only, rule B1E) is the one kind a
+            // typed array's named keys survive (`derive::native_own_free`):
+            // a later mark of any other kind replaces it, so the entry
+            // names a kind that may reach a named key whenever one did.
+            if was == Hard::B1Exposed && kind != Hard::B1Exposed {
+                self.hard.insert(t, (kind, reason));
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, seed);
+                }
+            }
+            // HARD so far only through named data definitions: this mark is
+            // the first that may write any field (rule D1).
+            if seed && self.hard_unseeded.remove(&t) {
+                self.seed_hard_fields(t);
+                for s in self.wide_sites(t) {
+                    self.mark_hard_as(s, kind, reason, true);
+                }
+            }
             return;
         }
         if self.rel_phase != b'S' {
@@ -1225,19 +1556,28 @@ impl Model {
             self.with_s(|m| m.resume_stopped(t));
         }
         self.hard.insert(t, (kind, reason));
+        self.ta_len_open(t);
         if matches!(self.toks[t as usize], TokKind::ClassObj(_)) {
             self.flush_shadowed(Some(t));
         }
         self.rel(|| format!("hardmark {t} {}", kind.code()));
-        // Deleting / redefining can move values or install accessors: the
-        // object's fields are now written by unknown code as well.
-        let any = self.any_key_node(t);
-        self.add_prim(any, prim::ALL);
+        if seed {
+            self.seed_hard_fields(t);
+        } else {
+            self.hard_unseeded.insert(t);
+        }
         if let Some(tm) = self.tmpl_of(t) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }
         for s in self.wide_sites(t) {
-            self.mark_hard(s, kind, reason);
+            self.mark_hard_as(s, kind, reason, seed);
         }
+    }
+
+    /// Deleting / redefining can move values or install accessors: the
+    /// fields of HARD `t` are written by unknown code as well.
+    fn seed_hard_fields(&mut self, t: Tok) {
+        let any = self.any_key_node(t);
+        self.add_prim(any, prim::ALL);
     }
 }

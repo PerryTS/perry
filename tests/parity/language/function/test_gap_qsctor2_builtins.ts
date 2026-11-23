@@ -25,14 +25,11 @@ function check(name: string, args: any[]) {
     const holder = { C };
     const value: any = new holder.C(...args);
     // Coordinator: baseline default-prototype gaps are tracked separately.
-    if (name !== "URLSearchParams" && name !== "DisposableStack")
+    if (name !== "URLSearchParams")
         console.log(name, typeof value, Object.getPrototypeOf(value) === C.prototype);
     function Target() {}
     const reflected: any = Reflect.construct(C, args, Target);
-    // Baseline fetch HANDLE_TAG prototypes are outside this identity change.
-    if (name !== "Headers" && name !== "Request" && name !== "Response"
-        && name !== "Blob" && name !== "File")
-        console.log(name + " reflect", Object.getPrototypeOf(reflected) === Target.prototype);
+    console.log(name + " reflect", Object.getPrototypeOf(reflected) === Target.prototype);
     function Wrapper(this: any) { this.value = new C(...args); }
     const wrapped: any = new (Wrapper as any)();
     console.log(name + " wrapper", Object.getPrototypeOf(wrapped) === Wrapper.prototype,

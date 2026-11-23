@@ -86,6 +86,7 @@ fn hirs(main: &str) -> Vec<(String, perry_hir::Module)> {
                 type_only: false,
                 runtime_erased: false,
                 is_dynamic: true,
+                is_deferred: false,
                 is_dynamic_target: false,
                 is_deferred_require: false,
                 is_adopted_require: false,
@@ -169,9 +170,7 @@ fn oxmark_runs(src: &str) -> bool {
         .expect("oxmark")
         .id;
     assert!(pf.body_reach.complete, "activated");
-    pf.body_reach.bodies
-        .iter()
-        .any(|(_, id, _)| *id == ox)
+    pf.body_reach.bodies.iter().any(|(_, id, _)| *id == ox)
 }
 
 #[test]
@@ -230,6 +229,7 @@ fn program_of(mods: &[(&str, &str)]) -> Vec<(String, perry_hir::Module)> {
                     type_only: false,
                     runtime_erased: false,
                     is_dynamic: true,
+                    is_deferred: false,
                     is_dynamic_target: false,
                     is_deferred_require: false,
                     is_adopted_require: false,
@@ -288,6 +288,7 @@ fn a_root_runs_whatever_imports_it() {
         type_only: false,
         runtime_erased: false,
         is_dynamic: true,
+        is_deferred: false,
         is_dynamic_target: false,
         is_deferred_require: false,
         is_adopted_require: false,
@@ -353,6 +354,7 @@ fn program(mods: &[(&str, &str, &[&str])]) -> Vec<(String, perry_hir::Module)> {
                     type_only: false,
                     runtime_erased: false,
                     is_dynamic: true,
+                    is_deferred: false,
                     is_dynamic_target: false,
                     is_deferred_require: false,
                     is_adopted_require: false,

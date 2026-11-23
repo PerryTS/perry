@@ -7,6 +7,7 @@
 //! - i18n string localization
 
 mod aggregate_scalar;
+mod arg_read_order;
 mod async_generator_return;
 pub mod async_to_generator;
 mod class_field_push;
@@ -14,6 +15,8 @@ pub mod closure;
 mod closure_local_inline;
 mod crypto_hash_chain;
 pub mod deforest;
+pub mod effects;
+mod field_forward;
 mod field_push_local_bind;
 pub mod finally_inline;
 pub mod generator;
@@ -26,6 +29,7 @@ pub mod module_const_fold;
 pub mod prop_cse;
 mod prototype_birth;
 mod regex_projection;
+mod scoped_copies;
 mod source_spans;
 pub mod state_desugar;
 mod suspending_iife;
@@ -33,9 +37,11 @@ pub mod unroll;
 
 // Re-export main transformation functions
 pub use async_to_generator::transform_async_to_generator;
+mod async_module;
+pub use async_module::lower_async_module_body;
 pub use closure::convert_closures;
 pub use finally_inline::inline_finally_into_returns;
-pub use generator::transform_generators;
+pub use generator::{transform_generators, transform_generators_without_private_frames};
 pub use i18n::{apply_i18n, I18nDiagnostic, I18nStringTable};
 pub use inline::{
     gather_cross_module_anon_classes, gather_cross_module_functions, gather_cross_module_methods,
@@ -69,6 +75,12 @@ pub fn post_inline_cleanups(module: &mut perry_hir::Module) {
     // Let the shape-specific passes consume their bindings first, then remove
     // plain copies before codegen attaches string-sharing and root barriers.
     local_copies::run(module);
+    // The same fold where control flow is involved: an inlined call in a loop
+    // leaves a copy of each argument behind.
+    scoped_copies::run(module);
+    // On the folded names: a value stored into a field of a local object is
+    // what later reads of that field give back.
+    field_forward::run(module);
     prototype_birth::run(module);
     // #11516: after the copy cleanup (an alias it folds is one less escape)
     // and before the async/generator transforms (which box locals and split

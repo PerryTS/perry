@@ -20,7 +20,9 @@ pub(in crate::array) unsafe fn install_array_growth_forwarding_with(
         return false;
     };
     let header = header.as_ptr();
-    if (*header).obj_type != gc::GC_TYPE_ARRAY || (*header).gc_flags & gc::GC_FLAG_ARENA == 0 {
+    if crate::gc_type_is_not_array!((*header).obj_type)
+        || (*header).gc_flags & gc::GC_FLAG_ARENA == 0
+    {
         return false;
     }
     gc::set_forwarding_address(header, new_user_addr);
@@ -146,4 +148,55 @@ impl Drop for GrowInPlaceTestGuard {
     fn drop(&mut self) {
         IN_PLACE_IN_TESTS.with(|c| c.set(self.0));
     }
+}
+
+/// After a growth: the store of a formerly sparse Array (`length > capacity`
+/// before) now covers indices whose elements still live in its named layout.
+/// A read below `capacity` is a slot read and never consults that layout, so
+/// every such element moves into its slot here; otherwise it would read as a
+/// hole from now on. An index with an accessor or with attributes stays where
+/// it is: the descriptor path answers for it before any slot is read.
+///
+/// Returns the live head (the removals from the named layout are rooted).
+///
+/// # Safety
+/// `arr` is a live, forwarding-resolved plain Array head whose slots
+/// `[0, capacity)` are initialized.
+#[cold]
+#[inline(never)]
+pub(super) unsafe fn adopt_sparse_indices(arr: *mut ArrayHeader) -> *mut ArrayHeader {
+    let covered = (*arr).capacity.min((*arr).length);
+    let mut adopted: Vec<u32> = crate::array::named_props::array_named_property_names(arr, false)
+        .into_iter()
+        .filter_map(|name| crate::object::canonical_array_index(&name))
+        .filter(|&index| index < covered)
+        .collect();
+    if adopted.is_empty() {
+        return arr;
+    }
+    adopted.sort_unstable();
+    adopted.dedup();
+    let descriptors = crate::array::array_has_element_descriptors(arr);
+    let scope = gc::RuntimeHandleScope::new();
+    let head = scope.root_raw_mut_ptr(arr);
+    for index in adopted {
+        let key = index.to_string();
+        let arr = head.get_raw_mut_ptr::<ArrayHeader>();
+        if descriptors
+            && (crate::object::get_accessor_descriptor(arr as usize, &key).is_some()
+                || crate::object::get_property_attrs(arr as usize, &key).is_some())
+        {
+            continue;
+        }
+        let Some(value) = crate::array::named_props::array_named_property_get_by_name(arr, &key)
+        else {
+            continue;
+        };
+        crate::array::note_array_slot(arr, index as usize, value.to_bits());
+        crate::array::named_props::array_named_property_delete_by_name(
+            head.get_raw_mut_ptr::<ArrayHeader>(),
+            &key,
+        );
+    }
+    head.get_raw_mut_ptr::<ArrayHeader>()
 }

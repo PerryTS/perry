@@ -24,10 +24,8 @@ extern "C" fn events_abort_listener_dispose(
     closure: *const ClosureHeader,
     _this: perry_runtime::closure::JsThis,
 ) -> f64 {
-    use perry_runtime::closure::js_closure_get_capture_ptr;
-
-    let signal_ptr = js_closure_get_capture_ptr(closure, 0);
-    let callback_ptr = js_closure_get_capture_ptr(closure, 1);
+    let signal_ptr = perry_runtime::closure::closure_capture_ref(closure, 0);
+    let callback_ptr = perry_runtime::closure::closure_capture_ref(closure, 1);
     if signal_ptr != 0 && callback_ptr != 0 {
         let event_name = b"abort";
         let event_str = js_string_from_bytes(event_name.as_ptr(), event_name.len() as u32);
@@ -47,7 +45,7 @@ extern "C" fn events_abort_listener_dispose(
 /// and return a disposable-shaped object whose `Symbol.dispose` unregisters it.
 #[no_mangle]
 pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64) -> i64 {
-    use perry_runtime::closure::{js_closure_alloc, js_closure_set_capture_ptr};
+    use perry_runtime::closure::js_closure_alloc;
 
     let signal = validate_abort_signal_arg(signal, "signal");
     let signal_ptr = object_ptr_from_value(signal).unwrap_or_else(|| {
@@ -71,8 +69,8 @@ pub unsafe extern "C" fn js_events_add_abort_listener(signal: f64, listener: f64
 
     let dispose_closure =
         js_closure_alloc(perry_runtime::fn_info!(events_abort_listener_dispose, 0), 2);
-    js_closure_set_capture_ptr(dispose_closure, 0, signal_ptr as i64);
-    js_closure_set_capture_ptr(dispose_closure, 1, callback_ptr);
+    perry_runtime::closure::closure_set_capture_ref(dispose_closure, 0, signal_ptr as i64);
+    perry_runtime::closure::closure_set_capture_ref(dispose_closure, 1, callback_ptr);
     let dispose_val = js_nanbox_pointer(dispose_closure as i64);
 
     let disposable = js_object_alloc(0, 0);

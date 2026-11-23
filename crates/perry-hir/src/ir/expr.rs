@@ -322,11 +322,10 @@ pub enum Expr {
         value: Box<Expr>,
     },
 
-    // Object literal with spread: { ...src, key: val, ...src2, key2: val2 }
-    // Each part is (None, expr) for a spread source, or (Some(key), expr) for a static prop.
+    // Object literal built in source order: { ...src, key: val, [k]: v, ...src2 }
     // Parts are ordered to reflect JavaScript evaluation order (later props override earlier spreads).
     ObjectSpread {
-        parts: Vec<(Option<String>, Expr)>,
+        parts: Vec<ObjectPart>,
     },
 
     // `Object.assign(target, ...sources)` — distinct from ObjectSpread because
@@ -2453,6 +2452,9 @@ pub enum Expr {
         is_generator: bool,
         /// Whether this closure body is strict mode code.
         is_strict: bool,
+        /// Every reference to this function is the callee of a `new`
+        /// expression, so its sloppy `this` is never the global object.
+        construct_only: bool,
     },
 
     // RegExp operations
@@ -2969,6 +2971,8 @@ pub enum Expr {
         /// compile-time path resolution (`collect_modules`) is identical for
         /// both — only the dispatch shape differs. `false` for ESM `import()`.
         synchronous: bool,
+        /// `import.defer()` resolves a deferred namespace, without evaluation.
+        deferred: bool,
     },
     /// Compile-time-resolved `new Worker(filename, options?)` from
     /// `node:worker_threads`. The filename expression follows the same
@@ -3055,5 +3059,63 @@ impl Expr {
             byte_offset: 0,
             byte_end: 0,
         }
+    }
+}
+
+/// One part of an [`Expr::ObjectSpread`], in source order.
+#[derive(Debug, Clone)]
+pub enum ObjectPart {
+    /// `...src`: CopyDataProperties from `src`.
+    Spread(Expr),
+    /// `key: value` with a static (non-`__proto__`) key: CreateDataProperty.
+    Define(String, Expr),
+    /// `[key]: value`: `key` is evaluated, converted by ToPropertyKey once,
+    /// then `value` is evaluated and defined (CreateDataProperty). `value`
+    /// is never an anonymous function definition (those need
+    /// NamedEvaluation and keep the literal builder).
+    Computed { key: Box<Expr>, value: Expr },
+}
+
+impl ObjectPart {
+    /// The value-producing expression of this part (the source of a spread).
+    pub fn value(&self) -> &Expr {
+        match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => e,
+            ObjectPart::Computed { value, .. } => value,
+        }
+    }
+
+    /// True for a part that defines a key (static or computed).
+    pub fn defines_key(&self) -> bool {
+        !matches!(self, ObjectPart::Spread(_))
+    }
+}
+
+type PartExprs<'a, T> = std::iter::Chain<std::option::IntoIter<T>, std::iter::Once<T>>;
+
+/// Every sub-expression of a part in evaluation order: a computed key, then
+/// the value. Walkers iterate `parts.iter().flatten()` so no part's key is
+/// skipped.
+impl<'a> IntoIterator for &'a ObjectPart {
+    type Item = &'a Expr;
+    type IntoIter = PartExprs<'a, &'a Expr>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (key, value) = match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => (None, e),
+            ObjectPart::Computed { key, value } => (Some(&**key), value),
+        };
+        key.into_iter().chain(std::iter::once(value))
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ObjectPart {
+    type Item = &'a mut Expr;
+    type IntoIter = PartExprs<'a, &'a mut Expr>;
+    fn into_iter(self) -> Self::IntoIter {
+        let (key, value) = match self {
+            ObjectPart::Spread(e) | ObjectPart::Define(_, e) => (None, e),
+            ObjectPart::Computed { key, value } => (Some(&mut **key), value),
+        };
+        key.into_iter().chain(std::iter::once(value))
     }
 }

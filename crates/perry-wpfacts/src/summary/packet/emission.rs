@@ -165,11 +165,15 @@ impl Model {
                 }
                 TmplKind::ObjCreate { module, .. } => (*module, BirthKind::ObjectCreate),
                 TmplKind::Arr {
-                    module, hole_free, ..
+                    module,
+                    hole_free,
+                    plain,
+                    ..
                 } => (
                     *module,
                     BirthKind::Array {
                         hole_free: *hole_free,
+                        plain: *plain,
                     },
                 ),
                 TmplKind::Args { module, .. } => (*module, BirthKind::Arguments),
@@ -405,7 +409,9 @@ impl Model {
     }
 
     pub(super) fn packet_shape(&self, shape: KeyShapeId) -> Option<&[Vec<String>]> {
-        (shape != 0).then(|| self.key_shapes[shape as usize].globs.as_slice())
+        // A free form (rule EXCL-KEY) has no glob spelling: any key.
+        (shape != 0 && self.key_shapes[shape as usize].free.is_empty())
+            .then(|| self.key_shapes[shape as usize].globs.as_slice())
     }
 
     pub(super) fn packet_key(&self, key: Key) -> String {

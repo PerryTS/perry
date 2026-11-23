@@ -45,30 +45,6 @@ fn nanbox_str(s: &str) -> f64 {
     unsafe { js_nanbox_string(p as i64) }
 }
 
-fn host_of_url(s: &str) -> String {
-    let after_scheme = match s.find("://") {
-        Some(i) => &s[i + 3..],
-        None => return String::new(),
-    };
-    let host_end = after_scheme
-        .find(|c| c == '/' || c == '?' || c == '#')
-        .unwrap_or(after_scheme.len());
-    let host_with_port = &after_scheme[..host_end];
-    match host_with_port.find(':') {
-        Some(i) => host_with_port[..i].to_string(),
-        None => host_with_port.to_string(),
-    }
-}
-
-fn host_in_allowlist(host: &str, allowlist: &[String]) -> bool {
-    if allowlist.is_empty() {
-        return true;
-    }
-    allowlist
-        .iter()
-        .any(|d| host == d || host.ends_with(&format!(".{}", d)))
-}
-
 pub fn create(url_ptr: *const u8, width: f64, height: f64, ephemeral_hint: f64) -> i64 {
     crate::app::ensure_gtk_init();
     let url = unsafe { str_from_header(url_ptr) }.to_string();
@@ -151,12 +127,9 @@ fn install_signal_handlers(handle: i64, webview: &webkit6::WebView) {
                 .unwrap_or((0.0, Vec::new()))
         });
 
-        if !allowed.is_empty() {
-            let host = host_of_url(&url);
-            if !host_in_allowlist(&host, &allowed) {
-                decision.ignore();
-                return true;
-            }
+        if !perry_ui::webview_navigation::navigation_allowed(&url, &allowed) {
+            decision.ignore();
+            return true;
         }
 
         if on_should != 0.0 {

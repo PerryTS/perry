@@ -7,6 +7,9 @@ pub const LAYOUT_KIND_SHIFT: u32 = 26;
 pub const LAYOUT_KIND_MASK: u32 = 0x0c00_0000;
 pub const LAYOUT_ROW_MASK: u32 = 0x03ff_ffff;
 pub const LAYOUT_ROW_LIMIT: u32 = 1 << 26;
+/// A word's row bits are its physical row minus this, modulo the row limit
+/// (see [`FUNCTION_LAYOUT_WORD`]).
+pub const LAYOUT_ROW_BIAS: u32 = 10;
 pub const LAYOUT_ORDINARY_END: u32 = 0x9000_0000;
 pub const LAYOUT_SHADOWED_BASE: u32 = 0xc000_0000;
 pub const LAYOUT_SHADOWED_END: u32 = 0xd000_0000;
@@ -52,12 +55,22 @@ impl LayoutWord {
             None
         } else {
             Some(Self(
-                LAYOUT_TAG | band << LAYOUT_BAND_SHIFT | kind << LAYOUT_KIND_SHIFT | row.0,
+                LAYOUT_TAG
+                    | band << LAYOUT_BAND_SHIFT
+                    | kind << LAYOUT_KIND_SHIFT
+                    | (row.0.wrapping_sub(LAYOUT_ROW_BIAS) & LAYOUT_ROW_MASK),
             ))
         }
     }
     pub const fn row(self) -> LayoutRow {
-        LayoutRow(self.0 & LAYOUT_ROW_MASK)
+        LayoutRow(self.0.wrapping_add(LAYOUT_ROW_BIAS) & LAYOUT_ROW_MASK)
+    }
+    /// The row bits: the flat directory index (physical row minus
+    /// [`LAYOUT_ROW_BIAS`]) of every word but the function family words,
+    /// whose row bits are the top nine.
+    #[inline(always)]
+    pub const fn row_bits(self) -> u32 {
+        self.0 & LAYOUT_ROW_MASK
     }
     /// This word with the shadow bit set.
     #[inline(always)]
@@ -72,6 +85,19 @@ impl LayoutWord {
     }
     pub const fn kind(self) -> u32 {
         (self.0 & LAYOUT_KIND_MASK) >> LAYOUT_KIND_SHIFT
+    }
+    /// The index of this word's record in the flat directory (published from
+    /// physical row [`LAYOUT_ROW_BIAS`], so the index is the row bits): `None`
+    /// for other bands (the family words) and rows at or above the bound.
+    /// Numerical admission only.
+    #[inline(always)]
+    pub const fn flat_index(self, flat_ids: usize) -> Option<usize> {
+        let rel = (self.0 & LAYOUT_PROBE_INDEX_MASK).wrapping_sub(LAYOUT_TAG);
+        if (rel as u64) < flat_ids as u64 {
+            Some(rel as usize)
+        } else {
+            None
+        }
     }
     /// Numerical admission only. A live carrier is still required before reading.
     pub const fn ordinary_row(self, published_rows: usize) -> Option<LayoutRow> {
@@ -298,17 +324,143 @@ pub mod ffi {
     }
 }
 
-pub const FUNCTION_LAYOUT_WORD: u32 = 0xa400_0000;
-pub const ASYNC_FUNCTION_LAYOUT_WORD: u32 = 0xa400_0001;
-pub const FUNCTION_DICTIONARY_LAYOUT_WORD: u32 = 0xa000_0004;
-pub const WEAKMAP_BIRTH_LAYOUT_WORD: u32 = 0x8000_0009;
-pub const WEAKSET_BIRTH_LAYOUT_WORD: u32 = 0x8000_000a;
+/// The intrinsic function family records (closure header words) sit at
+/// physical rows `0..FUNCTION_FAMILY_ROWS` of the row space, and a word's row
+/// bits are its physical row minus [`LAYOUT_ROW_BIAS`] modulo the row limit
+/// ([`LayoutWord::new`], [`LayoutWord::row`]). So every minted record's row
+/// bits are below `LAYOUT_ROW_LIMIT - FUNCTION_FAMILY_ROWS` (the row space
+/// never exceeds the limit), and the family words (dictionary band, kind 3,
+/// the top row bits) are the last ten words below the exotic band:
+/// `0x9fff_fff6..0xa000_0000`. Each reader keeps one compare:
+/// unshadowed ordinary (or the zero stand-in) `< LAYOUT_ORDINARY_END`;
+/// ordinary or dictionary record `id - TAG < LAYOUT_RECORD_SPAN`;
+/// exotic or function family `id - FUNCTION_LAYOUT_WORD < EXOTIC_END - it`.
+/// Their kind bits carry no prototype fact: a closure's prototype is never
+/// answered from its word (every kind reader admits only ordinary words).
+pub const FUNCTION_LAYOUT_WORD: u32 = 0x9fff_fff6;
+pub const ASYNC_FUNCTION_LAYOUT_WORD: u32 = FUNCTION_LAYOUT_WORD + 1;
+/// Catalog rows of the intrinsic function family records.
+pub const FUNCTION_FAMILY_ROWS: u32 = 10;
+/// The family row of plain bodies that cannot construct (arrows, methods,
+/// `FN_NON_CONSTRUCTOR` bodies, builtin non-constructors): `length` and
+/// `name`, no `prototype`. Rows 0 (constructing plain functions), 2 and 3
+/// (generators) list `prototype` as their third key.
+pub const NON_CONSTRUCTOR_FAMILY_INDEX: u32 = 9;
+/// End of the exotic band: the exotic and function family words are
+/// `FUNCTION_LAYOUT_WORD..LAYOUT_EXOTIC_END`.
+pub const LAYOUT_EXOTIC_END: u32 = 0xb000_0000;
+/// Ordinary and dictionary record words: `LAYOUT_TAG..FUNCTION_LAYOUT_WORD`.
+pub const LAYOUT_RECORD_SPAN: u32 = FUNCTION_LAYOUT_WORD - LAYOUT_TAG;
+const _: () = assert!(LAYOUT_ROW_BIAS == FUNCTION_FAMILY_ROWS);
+const _: () = assert!(
+    match LayoutWord::new(LayoutRow(0), LAYOUT_BAND_DICTIONARY, LAYOUT_KIND_MIXED) {
+        Some(w) => w.0 == FUNCTION_LAYOUT_WORD,
+        None => false,
+    }
+);
+const _: () = assert!(FUNCTION_LAYOUT_WORD + FUNCTION_FAMILY_ROWS == 0xa000_0000);
+/// Is `word` the word of a function family record (a closure header)?
+#[inline(always)]
+pub const fn is_function_family_word(word: u32) -> bool {
+    word.wrapping_sub(FUNCTION_LAYOUT_WORD) < FUNCTION_FAMILY_ROWS
+}
+/// Is `word` an exotic receiver word or a function family word? One range.
+#[inline(always)]
+pub const fn is_exotic_or_family_word(word: u32) -> bool {
+    word.wrapping_sub(FUNCTION_LAYOUT_WORD) < LAYOUT_EXOTIC_END - FUNCTION_LAYOUT_WORD
+}
+/// Is `word` an ordinary record of an object whose `+8` is its ObjectMeta
+/// (the ordinary band; the function family words are in the dictionary band).
+#[inline(always)]
+pub const fn is_ordinary_record_word(word: u32) -> bool {
+    word.wrapping_sub(LAYOUT_TAG) < LAYOUT_ORDINARY_END - LAYOUT_TAG
+}
+/// Below `UNSHADOWED_WORD_END`: no shadow bit, no dictionary, family or
+/// exotic word. A word below the tag (the zero startup stand-in) is admitted.
+#[inline(always)]
+pub const fn is_unshadowed_record_word(word: u32) -> bool {
+    word < LAYOUT_ORDINARY_END
+}
+/// The function dictionary family record (physical row 4) in the exotic band.
+pub const FUNCTION_DICTIONARY_LAYOUT_WORD: u32 = 0xa3ff_fffa;
+/// The word of a function whose own keys or declared members may differ from
+/// its family record (DESIGN_FR U3, option B): the family word one band up,
+/// exotic band, kind 3, the same top row bits, the last ten words of the
+/// exotic band (`0xafff_fff6..0xb000_0000`). No record is ever minted there
+/// (minted rows are below `LAYOUT_ROW_LIMIT - FUNCTION_FAMILY_ROWS`, the
+/// family identities are at `FUNCTION_SHAPE_BASE`), so the word names no
+/// layout: every exact compare declines and `layout_id_of_word` returns it
+/// unchanged, while [`is_exotic_or_family_word`] (the closure pre-check)
+/// still admits it. The family row stays readable from the row bits.
+pub const FUNCTION_DIFFERS_LAYOUT_WORD: u32 = FUNCTION_LAYOUT_WORD + (1 << LAYOUT_BAND_SHIFT);
+/// Is `word` a function word that may differ from its family?
+#[inline(always)]
+pub const fn is_function_differs_word(word: u32) -> bool {
+    word.wrapping_sub(FUNCTION_DIFFERS_LAYOUT_WORD) < FUNCTION_FAMILY_ROWS
+}
+/// The "may differ" word of the family word `family_word`.
+#[inline(always)]
+pub const fn function_differs_word(family_word: u32) -> u32 {
+    FUNCTION_DIFFERS_LAYOUT_WORD + family_word.wrapping_sub(FUNCTION_LAYOUT_WORD)
+}
+const _: () = assert!(FUNCTION_DIFFERS_LAYOUT_WORD == 0xafff_fff6);
+const _: () = assert!(FUNCTION_DIFFERS_LAYOUT_WORD + FUNCTION_FAMILY_ROWS == LAYOUT_EXOTIC_END);
+const _: () = assert!(
+    match LayoutWord::new(LayoutRow(0), LAYOUT_BAND_EXOTIC, LAYOUT_KIND_MIXED) {
+        Some(w) => w.0 == FUNCTION_DIFFERS_LAYOUT_WORD,
+        None => false,
+    }
+);
+const _: () = assert!(
+    is_exotic_or_family_word(FUNCTION_DIFFERS_LAYOUT_WORD)
+        && is_exotic_or_family_word(LAYOUT_EXOTIC_END - 1)
+        && !is_function_family_word(FUNCTION_DIFFERS_LAYOUT_WORD)
+        && !is_ordinary_record_word(FUNCTION_DIFFERS_LAYOUT_WORD)
+        && !is_unshadowed_record_word(FUNCTION_DIFFERS_LAYOUT_WORD)
+        && FUNCTION_DIFFERS_LAYOUT_WORD < LAYOUT_SHADOWED_BASE
+        && FUNCTION_DICTIONARY_LAYOUT_WORD < FUNCTION_DIFFERS_LAYOUT_WORD
+);
+/// The weak collection birth records: physical rows 10 and 11.
+pub const WEAKMAP_BIRTH_LAYOUT_WORD: u32 = 0x8000_0000;
+pub const WEAKSET_BIRTH_LAYOUT_WORD: u32 = 0x8000_0001;
+const _: () = assert!(
+    match LayoutWord::new(LayoutRow(4), LAYOUT_BAND_EXOTIC, LAYOUT_KIND_PLAIN) {
+        Some(w) => w.0 == FUNCTION_DICTIONARY_LAYOUT_WORD,
+        None => false,
+    }
+);
+const _: () = assert!(
+    match LayoutWord::new(LayoutRow(10), LAYOUT_BAND_ORDINARY, LAYOUT_KIND_PLAIN) {
+        Some(w) => w.0 == WEAKMAP_BIRTH_LAYOUT_WORD,
+        None => false,
+    }
+);
+/// The declared layout of an ordinary object whose `[[Prototype]]` is
+/// `Object.prototype` and whose layout names no key (`{}` and the keyless
+/// ordinary births), seeded at agent creation like the weak collections
+/// (`object::shapes::EMPTY_ORDINARY_BIRTH_LAYOUT`): the ordinary intern of
+/// those facts finds it, so it is one word in every image and agent.
+pub const EMPTY_ORDINARY_BIRTH_LAYOUT_WORD: u32 = match LayoutWord::new(
+    LayoutRow(EMPTY_ORDINARY_LAYOUT_ROW),
+    LAYOUT_BAND_ORDINARY,
+    LAYOUT_KIND_PLAIN,
+) {
+    Some(w) => w.0,
+    None => panic!("empty ordinary row outside the row space"),
+};
+/// [`EMPTY_ORDINARY_BIRTH_LAYOUT_WORD`] with its table installed (the shadow
+/// bit): every own named key of an object on this word is in its table.
+/// An exotic read mark, a native alias, a `[[Prototype]]` change or an
+/// integrity level moves the object to another record, so a layout word
+/// equal to it proves "ordinary, Object.prototype, keys in the table" in
+/// one compare (the probe's table arm).
+pub const EMPTY_ORDINARY_TABLE_WORD: u32 = EMPTY_ORDINARY_BIRTH_LAYOUT_WORD | LAYOUT_SHADOW_BIT;
 pub const fn intrinsic_function_layout_word(index: u32) -> u32 {
-    assert!(index < 9);
+    assert!(index < FUNCTION_FAMILY_ROWS);
     if index == 4 {
         FUNCTION_DICTIONARY_LAYOUT_WORD
     } else {
-        0xa400_0000 | index
+        FUNCTION_LAYOUT_WORD + index
     }
 }
 
@@ -319,6 +471,8 @@ pub const NATIVE_LAYOUT_RESERVED: &[&str] = &["CJS_MODULE_RECORD"];
 /// Union of native descriptor names across target/cfg variants, sorted.
 /// Rows 0..9 are intrinsic functions; rows 9 and 10 are weak collections.
 pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
+    "ARGUMENTS",
+    "ARGUMENTS_STRICT",
     "ARRAY_NAMED",
     "ARRAY_PROTOTYPE_NAMED",
     // Reserved: no runtime birth and no declaration (DESIGN §3.2 item 3).
@@ -438,7 +592,11 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "WRITABLE_STATE",
     "WRITABLE_STATE_PROTO",
 ];
-pub const NATIVE_LAYOUT_ROWS: u32 = 11 + NATIVE_LAYOUT_DESCRIPTORS.len() as u32;
+/// The row of [`EMPTY_ORDINARY_BIRTH_LAYOUT_WORD`]: the last native row, after
+/// the descriptors, so no descriptor row moves.
+pub const EMPTY_ORDINARY_LAYOUT_ROW: u32 =
+    FUNCTION_FAMILY_ROWS + 2 + NATIVE_LAYOUT_DESCRIPTORS.len() as u32;
+pub const NATIVE_LAYOUT_ROWS: u32 = EMPTY_ORDINARY_LAYOUT_ROW + 1;
 /// Const lookup used only by native declaration initializers / compiler planning.
 pub const fn native_layout_row(name: &str) -> LayoutRow {
     let mut i = 0;
@@ -451,7 +609,7 @@ pub const fn native_layout_row(name: &str) -> LayoutRow {
                 j += 1;
             }
             if j == a.len() {
-                return LayoutRow(11 + i as u32);
+                return LayoutRow(FUNCTION_FAMILY_ROWS + 2 + i as u32);
             }
         }
         i += 1;
@@ -542,17 +700,21 @@ mod tests {
                 assert_eq!(w.band(), band);
                 assert_eq!(w.kind(), kind);
                 assert_eq!(
-                    w.ordinary_row(18),
-                    if band == 0 { Some(LayoutRow(17)) } else { None }
+                    w.ordinary_row(9),
+                    if band == 0 { Some(LayoutRow(7)) } else { None }
                 );
+                assert_eq!(w.flat_index(9), if band == 0 { Some(7) } else { None });
             }
         }
         for (row, band, kind, expected) in [
-            (0, 0, 0, 0x80000000),
-            (1, 0, 2, 0x88000001),
-            (1, 0, 3, 0x8c000001),
-            (1, 1, 1, 0x94000001),
-            (0, 2, 1, 0xa4000000),
+            (10, 0, 0, 0x80000000),
+            (11, 0, 2, 0x88000001),
+            (11, 0, 3, 0x8c000001),
+            (11, 1, 1, 0x94000001),
+            (0, 1, 3, 0x9ffffff6),
+            (8, 1, 3, 0x9ffffffe),
+            (9, 1, 3, 0x9fffffff),
+            (LAYOUT_ROW_LIMIT - 1, 0, 3, 0x8ffffff5),
         ] {
             assert_eq!(
                 LayoutWord::new(LayoutRow(row), band, kind).unwrap().0,
@@ -566,16 +728,31 @@ mod tests {
             None
         );
         assert_eq!(LayoutWord::new(LayoutRow(LAYOUT_ROW_LIMIT), 0, 0), None);
+        for row in 0..FUNCTION_FAMILY_ROWS {
+            let w = LayoutWord(FUNCTION_LAYOUT_WORD + row);
+            assert_eq!(w.row(), LayoutRow(row));
+            assert!(is_function_family_word(w.0) && is_exotic_or_family_word(w.0));
+            assert!(!is_ordinary_record_word(w.0) && !is_unshadowed_record_word(w.0));
+            assert_eq!(w.flat_index(LAYOUT_ROW_LIMIT as usize), None);
+        }
+        let top = LayoutWord::new(LayoutRow(LAYOUT_ROW_LIMIT - 1), 1, 3)
+            .unwrap()
+            .0;
+        assert!(top < FUNCTION_LAYOUT_WORD && !is_exotic_or_family_word(top));
+        assert!(top.wrapping_sub(LAYOUT_TAG) < LAYOUT_RECORD_SPAN);
         assert_eq!(LayoutWord::new(LayoutRow(0), 3, 0), None);
         assert_eq!(LayoutWord::new(LayoutRow(0), 0, 4), None);
     }
     #[test]
     fn catalog_is_sorted_and_image_is_bounded() {
         assert!(NATIVE_LAYOUT_DESCRIPTORS.windows(2).all(|w| w[0] < w[1]));
-        assert_eq!(NATIVE_LAYOUT_ROWS, 127);
+        assert_eq!(NATIVE_LAYOUT_ROWS, 131);
         assert!(unsafe { PerryLayoutImageV1::RUNTIME.valid() });
         for (i, name) in NATIVE_LAYOUT_DESCRIPTORS.iter().enumerate() {
-            assert_eq!(native_layout_row(name).0, 11 + i as u32);
+            assert_eq!(
+                native_layout_row(name).0,
+                FUNCTION_FAMILY_ROWS + 2 + i as u32
+            );
         }
     }
 }

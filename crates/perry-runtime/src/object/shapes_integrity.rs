@@ -311,7 +311,8 @@ mod tests {
                 let array_bag = crate::array::array_property_bag_ensure(array);
                 let function =
                     crate::closure::js_closure_alloc(crate::fn_info!(holder_function, 0), 0);
-                let function_bag = crate::closure::props::bag_ensure(function as usize);
+                crate::closure::props::ensure_key_store(function as usize);
+                let function_bag = crate::closure::props::bag_of(function as usize);
                 for (owner, bag) in [
                     (array as usize, array_bag),
                     (function as usize, function_bag),

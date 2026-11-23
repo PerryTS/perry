@@ -1,6 +1,9 @@
 // A `size` read on a Map/Set is the ordinary [[Get]]: a subclass accessor,
 // a redefined Map.prototype.size, or a relinked prototype answers, not the
 // storage count. A plain Map/Set still answers its entry count.
+// DEC 250: Set.prototype.size is locked in a compiled program, so the redefinition is refused and size reads the builtin accessor.
+// tests/parity/expected holds Perry's output.
+function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: " + (e as Error).message); } }
 class CountingMap<K, V> extends Map<K, V> {
   get size(): number {
     return super.size + 100;
@@ -26,5 +29,5 @@ console.log("plain", plain.size, readSize(plain), readSize(new Set([1])));
 const relinked: any = new Map([[1, 2]]);
 Object.setPrototypeOf(relinked, { get size() { return "proto"; } });
 console.log("relinked", readSize(relinked));
-Object.defineProperty(Set.prototype, "size", { get() { return -1; }, configurable: true });
+locked(() => { Object.defineProperty(Set.prototype, "size", { get() { return -1; }, configurable: true }); });
 console.log("redefined set", readSize(new Set([1, 2])), readSize(plain));

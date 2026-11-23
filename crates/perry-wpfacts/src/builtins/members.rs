@@ -12,6 +12,9 @@
 
 use crate::model::*;
 use perry_abi::lock::LockHolder;
+use perry_hir::realm_manifest::{
+    RealmEffect, RealmEntry, RealmKind, RealmOperand, RealmOwn, RealmOwnValue, RealmSlotRoot,
+};
 
 /// A member of an intrinsic prototype.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -254,6 +257,8 @@ const ITERATOR: &[(&str, Mem)] = &[
     ("find", Mem::Fn),
     ("flatMap", Mem::Fn),
     ("forEach", Mem::Fn),
+    ("includes", Mem::Fn),
+    ("join", Mem::Fn),
     ("map", Mem::Fn),
     ("next", Mem::Fn),
     ("reduce", Mem::Fn),
@@ -321,8 +326,68 @@ pub(super) fn object_proto_methods() -> impl Iterator<Item = &'static str> {
         .map(|(key, _)| *key)
 }
 
+/// `Object.prototype` holds `name` as an intrinsic member.
+pub(crate) fn object_proto_has(name: &str) -> bool {
+    find(OBJECT, name).is_some()
+}
+
 pub(super) fn member(fam: Family, name: &str) -> Option<Mem> {
     own(fam, name).or_else(|| find(OBJECT, name))
+}
+
+/// The realm prototypes a value of family `fam` (kind `what`) may have
+/// when it is a primitive or a primitive wrapper (`loads::wrapper_member`):
+/// its kind's prototype; `Object(value)` (20.1.1.1) of a primitive of any
+/// kind is a wrapper of that kind (7.1.18 ToObject), and of `undefined` or
+/// `null` an ordinary object. `None`: any other value.
+pub(super) fn wrapper_protos(fam: Family, what: Option<&str>) -> Option<&'static [&'static str]> {
+    const PRIMS: [&str; 5] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+    ];
+    const ANY: [&str; 6] = [
+        "String.prototype",
+        "Number.prototype",
+        "Boolean.prototype",
+        "Symbol.prototype",
+        "BigInt.prototype",
+        "Object.prototype",
+    ];
+    Some(match (fam, what) {
+        (Family::Str, None) | (Family::Wrapper, Some("BoxedString")) => &PRIMS[0..1],
+        (Family::Num, None) | (Family::Wrapper, Some("BoxedNumber")) => &PRIMS[1..2],
+        (Family::Bool, None) | (Family::Wrapper, Some("BoxedBoolean")) => &PRIMS[2..3],
+        (Family::Sym, None) | (Family::Wrapper, Some("BoxedSymbol")) => &PRIMS[3..4],
+        (Family::BigInt, None) | (Family::Wrapper, Some("BoxedBigInt")) => &PRIMS[4..5],
+        (Family::Wrapper, Some("Object(prim)")) => &PRIMS,
+        (Family::Wrapper, Some("Object()")) => &ANY,
+        _ => return None,
+    })
+}
+
+/// `name` is a member of some described builtin family (`length`, `size`,
+/// `name`, `then`, ...): a key every program reads off builtins too (I32 at
+/// rest, PR C: such a key is never a field lane, `rest_fields`).
+pub(crate) fn builtin_member_name(name: &str) -> bool {
+    [
+        Family::Object,
+        Family::Function,
+        Family::Array,
+        Family::Str,
+        Family::Num,
+        Family::Bool,
+        Family::Sym,
+        Family::BigInt,
+        Family::Collection,
+        Family::Iterator,
+        Family::Promise,
+        Family::Error,
+    ]
+    .into_iter()
+    .any(|f| member(f, name).is_some())
 }
 
 /// The families of a primitive mask (`null`/`undefined` have none).
@@ -468,7 +533,6 @@ pub(super) const FN_PROTO_ONLY: &str = "Function.prototype chain";
 /// (`refuse_index_add`): a number key is final there, a named absent key
 /// is not (`Array.prototype` takes named adds).
 pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
-    use perry_abi::lock::{final_on, LockKey};
     use perry_abi::BuiltinProto as P;
     // The locked prototypes the lookup passes before `Object.prototype`
     // (which follows on every chain), each with whether `name` is one of its
@@ -526,40 +590,55 @@ pub(super) fn locked_read(fam: Family, what: Option<&str>, name: &str) -> bool {
             return false
         }
     };
-    let class = |image: bool| {
-        if name == "constructor" {
-            LockKey::Constructor
-        } else if image {
-            LockKey::Image
-        } else if name == crate::model::NUM_KEY {
-            LockKey::Index
-        } else {
-            LockKey::Absent
-        }
-    };
-    // The lock's one decision (`perry_abi::lock`, the runtime's too) on each
-    // prototype the lookup passes: an image member ends it, an absent key
-    // goes on to the next prototype.
+    // The lock's one decision on each prototype the lookup passes: a read
+    // there is final when no store the program can make there succeeds
+    // (`store_admitted`); an image member ends the lookup, an absent key goes
+    // on to the next prototype.
     for &(holder, image) in chain {
-        let key = class(image);
-        if !final_on(holder, key) {
+        if store_admitted(holder, name, image) {
             return false;
         }
-        if key == LockKey::Image {
+        if image && name != "constructor" {
             return true;
         }
     }
-    final_on(
+    !store_admitted(
         LockHolder::Proto(P::Object),
-        class(find(OBJECT, name).is_some()),
+        name,
+        find(OBJECT, name).is_some(),
     )
 }
 
+/// DEC 250, the solver's one question about a write onto a built-in
+/// prototype: can a store of key `name` onto locked holder `holder` succeed
+/// at run time (`image`: the realm image gives `holder` the key)? It asks
+/// the runtime's own decision (`perry_abi::lock::refuses`): replacing an
+/// image member is refused, adding a key is refused on the add-locked
+/// prototypes (an index on `Array.prototype` too), `constructor` is exempt.
+/// A refused store throws a TypeError and writes nothing, so a read the
+/// store would change is final ([`locked_read`]), and a store into ⊤ (which
+/// may be the holder) writes nothing there. Where the runtime admits the
+/// store the caller keeps the write.
+pub(crate) fn store_admitted(holder: LockHolder, name: &str, image: bool) -> bool {
+    use perry_abi::lock::{refuses, LockKey, LockMutation};
+    let (key, mutation) = if name == "constructor" {
+        (LockKey::Constructor, LockMutation::Replace)
+    } else if image {
+        (LockKey::Image, LockMutation::Replace)
+    } else if name == crate::model::NUM_KEY {
+        (LockKey::Index, LockMutation::Add)
+    } else {
+        (LockKey::Absent, LockMutation::Add)
+    };
+    !refuses(holder, key, mutation)
+}
+
 /// `derive`'s NativeMember lookup: the member `name` on the chain of every
-/// value of family `fam` (an exact Array or a primitive String).
+/// value of family `fam` (an exact Array, a primitive String or Number, a
+/// native Promise).
 pub(super) fn intrinsic_member(fam: Family, name: &str) -> Option<Mem> {
     match fam {
-        Family::Array | Family::Str => member(fam, name),
+        Family::Array | Family::Str | Family::Num | Family::Promise => member(fam, name),
         _ => None,
     }
 }
@@ -575,15 +654,27 @@ pub(crate) const ANY_ITERATOR: &str = "Iterator";
 pub(crate) const ARRAY_ITERATOR: &str = "ArrayIterator";
 pub(crate) const MAP_ITERATOR: &str = "MapIterator";
 pub(crate) const SET_ITERATOR: &str = "SetIterator";
+/// `%StringIteratorPrototype%` (22.1.5.1), what `String.prototype[@@iterator]`
+/// (22.1.3.36) gives its iterator.
+pub(crate) const STRING_ITERATOR: &str = "StringIterator";
 
-/// The intrinsic prototype of iterator kind `what` whose image members the
-/// runtime locks while it takes adds (`builtin_proto.rs`
-/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`): its realm-table name and
-/// its lock holder (`perry_abi::lock`), for `builtins::locked_chain_read`.
-pub(crate) fn iterator_prototype(what: &str) -> Option<(&'static str, LockHolder)> {
+/// The intrinsic prototype of builtin object kind `what` whose image members
+/// the runtime locks while it takes adds: `%MapIteratorPrototype%`,
+/// `%SetIteratorPrototype%`, `%StringIteratorPrototype%` (`builtin_proto.rs`
+/// `MAP_ITERATOR_FAMILY`, `SET_ITERATOR_FAMILY`, `STRING_ITERATOR_FAMILY`),
+/// `RegExp.prototype` and `Date.prototype` (`seal_realm` seals every
+/// `BuiltinProto`). Its realm-table name and its
+/// lock holder (`perry_abi::lock`), for `builtins::locked_chain_read` and
+/// `builtins::native_locked`: a read of an image member there is final, an
+/// absent key is not.
+pub(crate) fn image_locked_prototype(what: &str) -> Option<(&'static str, LockHolder)> {
+    use perry_abi::BuiltinProto as P;
     match what {
         MAP_ITERATOR => Some(("%MapIteratorPrototype%", LockHolder::MapIterator)),
         SET_ITERATOR => Some(("%SetIteratorPrototype%", LockHolder::SetIterator)),
+        STRING_ITERATOR => Some(("%StringIteratorPrototype%", LockHolder::StringIterator)),
+        "RegExp" => Some(("RegExp.prototype", LockHolder::Proto(P::RegExp))),
+        "Date" => Some(("Date.prototype", LockHolder::Proto(P::Date))),
         _ => None,
     }
 }
@@ -601,15 +692,18 @@ pub(super) fn collection_iterator(what: &str) -> &'static str {
 pub(super) fn bobj_family(what: &str) -> Family {
     match what {
         "Map" | "Set" | "WeakMap" | "WeakSet" => Family::Collection,
-        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR => Family::Iterator,
+        ANY_ITERATOR | ARRAY_ITERATOR | MAP_ITERATOR | SET_ITERATOR | STRING_ITERATOR => {
+            Family::Iterator
+        }
         "Promise" => Family::Promise,
         "Error" => Family::Error,
         "IterResult" | "settledRecord" | "CjsParent" | "require.cache" | "require.extensions" => {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" => Family::Box,
-        "Object()" | "Object(prim)" | "BoxedPrimitive" => Family::Wrapper,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
+        "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
+        | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
     }
 }
@@ -621,11 +715,13 @@ pub(super) fn bobj_family(what: &str) -> Family {
 /// own-keys results are arrays (`CreateArrayFromList`); a match's `groups`
 /// and an `Object.groupBy` result have a null prototype (`perex_results.rs`
 /// `null_groups`, `groupby.rs`). The result of an undescribed method
-/// (`primbox`) and a `Map.groupBy` Map (`mapGroups`, whose entries the model
-/// keeps as a container's) have no chain the model describes.
+/// (`primbox`) has no chain the model describes. (A `Map.groupBy` result is
+/// a Map, `Family::Collection`, not a box.)
 pub(crate) fn box_chain(what: &str) -> BoxChain {
     match what {
-        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" => BoxChain::Object,
+        "json" | "descriptor" | "descriptors" | "fromEntries" | "hostrecord" | "stringrecord" => {
+            BoxChain::Object
+        }
         "keys" | "arraybox" => BoxChain::Array,
         "groups" => BoxChain::Null,
         _ => BoxChain::Unknown,
@@ -642,7 +738,7 @@ pub(crate) enum BoxChain {
 }
 
 /// A canonical array index (`"0"`, `"17"`): an element, not a member.
-pub(super) fn is_index_name(name: &str) -> bool {
+pub(crate) fn is_index_name(name: &str) -> bool {
     !name.is_empty()
         && name.len() <= 10
         && name.bytes().all(|b| b.is_ascii_digit())
@@ -659,37 +755,261 @@ const SY: Mem = Mem::Prim(prim::SYMBOL);
 pub(super) enum NsProto {
     Function,
     Object,
-    Constructor(&'static NsStatics),
+    /// Another builtin constructor (`TypeError`'s is `Error`): its statics
+    /// are read through it, and it is the namespace's chain value
+    /// (`Model::proto_node`).
+    Constructor(BuiltinNs),
     /// An undescribed chain; the family only preserves generic call summaries.
     Unknown(Family),
 }
 
 #[derive(Clone, Copy)]
 pub(super) struct NsStatics {
-    pub(super) members: Option<&'static [(&'static str, Mem)]>,
+    pub(super) members: Option<Own>,
     pub(super) prototype: NsProto,
 }
 
-// Error tokens include native subclasses as well as Error itself. Their
-// possible parent constructor is the mutable Error namespace, whose own
-// [[Prototype]] is exactly Function.prototype.
-const ERROR_NAMESPACE: NsStatics = NsStatics {
-    members: Some(&[
-        ("prototype", Mem::Proto),
-        ("captureStackTrace", FN),
-        ("isError", FN),
-        ("prepareStackTrace", FN),
-        ("stackTraceLimit", N),
-    ]),
-    prototype: NsProto::Function,
-};
+/// A described namespace's own statics: listed here, or the realm's
+/// declaration of the constructor (`RealmEntry::own`), the one source of
+/// what the runtime defines on it.
+#[derive(Clone, Copy)]
+pub(super) enum Own {
+    Listed(&'static [(&'static str, Mem)]),
+    Realm(&'static [RealmOwn]),
+}
 
-// The concrete typed-array constructors inherit from %TypedArray%, whose
-// own members are undescribed here. That constructor is not a locked prototype.
-const TYPED_ARRAY_NAMESPACE: NsStatics = NsStatics {
-    members: None,
-    prototype: NsProto::Function,
-};
+impl Own {
+    fn find(self, name: &str) -> Option<Mem> {
+        match self {
+            Own::Listed(set) => find(set, name),
+            Own::Realm(own) => own
+                .iter()
+                .find(|p| realm_key_is(p, name))
+                .and_then(realm_mem),
+        }
+    }
+
+    /// Its keys, spelled as atoms are (`@@__perry_wk_species`).
+    fn keys(self) -> Vec<String> {
+        match self {
+            Own::Listed(set) => set.iter().map(|(key, _)| key.to_string()).collect(),
+            Own::Realm(own) => own
+                .iter()
+                .map(|p| match p.key.strip_prefix("@@") {
+                    Some(wk) if p.symbol => format!("{}{wk}", super::WK_PREFIX),
+                    _ => p.key.to_string(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Is the realm's own property `p` the key atoms spell `name`?
+pub(super) fn realm_key_is(p: &RealmOwn, name: &str) -> bool {
+    match name.strip_prefix(super::WK_PREFIX) {
+        Some(wk) => p.symbol && p.key.strip_prefix("@@") == Some(wk),
+        None => !p.symbol && p.key == name,
+    }
+}
+
+/// The realm constructor a realm constructor's declared [[Prototype]] names
+/// (`node:stream.Readable` -> `node:stream.Stream`); `None` for the default
+/// `Function.prototype` or a non-constructor.
+pub(crate) fn realm_parent_constructor(identity: &str) -> Option<&'static str> {
+    let entry = realm_entry(identity)?;
+    if entry.kind != RealmKind::Constructor {
+        return None;
+    }
+    let parent = realm_entry(entry.proto?)?;
+    (parent.kind == RealmKind::Constructor).then_some(parent.name)
+}
+
+/// What a method lookup of a named key finds on the [[Prototype]] chain of
+/// an object a realm declaration made (`fresh(P)`, builtin object kind `P`):
+/// the own property of the first declaration on `P`'s declared chain that
+/// has the key (with that declaration, its holder), or that no declaration
+/// on it does.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum RealmFind {
+    Own(&'static RealmOwn, &'static RealmEntry),
+    Absent,
+}
+
+/// The realm declaration `P` of a builtin object of kind `what` that a
+/// declaration's `fresh(P)` made (`effects::Run::fresh` keeps the name):
+/// a prototype declaration of a family this description does not model
+/// otherwise, every link of whose [[Prototype]] chain the realm declares.
+/// `None`: not such an object, or a link the realm does not declare (the
+/// lookup stays undescribed).
+pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
+    if bobj_family(what) != Family::Opaque {
+        return None;
+    }
+    let born = realm_entry(what).filter(|e| e.kind == RealmKind::Prototype)?;
+    let mut at = born;
+    // The realm's chains are short; a cycle is no chain.
+    for _ in 0..32 {
+        match at.proto {
+            None => return Some(born),
+            Some(p) => at = realm_entry(p)?,
+        }
+    }
+    None
+}
+
+/// `RegExp.prototype`'s realm declaration when a RegExp's member `name` is
+/// not one of its own (22.2.6): the member is then its declared chain's
+/// (`Object.prototype`'s) or absent, never a RegExp method.
+pub(super) fn regexp_inherited(
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    proto_inherited("RegExp.prototype", name)
+}
+
+/// `Date.prototype`'s realm declaration when a Date's member `name` is not
+/// one of its own (21.4.4), as `regexp_inherited`.
+pub(super) fn date_inherited(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    proto_inherited("Date.prototype", name)
+}
+
+/// The realm prototype `proto` when `name` is not one of its own members.
+fn proto_inherited(
+    proto: &str,
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let p = realm_entry(proto).filter(|e| e.kind == RealmKind::Prototype)?;
+    let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
+    (!own).then_some(p)
+}
+
+/// `Worker.prototype`'s realm declaration when a Worker's member `name` is
+/// neither one of the Worker's own keys nor `Worker.prototype`'s (the
+/// runtime's declaration, perry-runtime-manifest `worker_shape`): the
+/// runtime Worker (`worker_object_with_id`) has the worker_threads
+/// constructor's prototype as its [[Prototype]], whose declared chain is
+/// `EventEmitter.prototype`, then `Object.prototype`.
+pub(super) fn worker_inherited(name: &str) -> Option<&'static RealmEntry> {
+    use perry_runtime_manifest::worker_shape::{WORKER_OWN_KEYS, WORKER_PROTOTYPE_ACCESSORS};
+    let own = name.starts_with(super::WK_PREFIX)
+        || WORKER_OWN_KEYS.contains(&name)
+        || WORKER_PROTOTYPE_ACCESSORS.contains(&name);
+    if own {
+        return None;
+    }
+    realm_entry("node:worker_threads.Worker.prototype").filter(|e| e.kind == RealmKind::Prototype)
+}
+
+/// The lookup of `name` (spelled as atoms are) on the chain of `born`
+/// (`realm_born`): its realm-declared own properties, then those of its
+/// declared [[Prototype]]s, to `null`.
+pub(super) fn realm_chain_find(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> RealmFind {
+    let mut at = born;
+    loop {
+        if let Some(p) = at.own.iter().find(|p| realm_key_is(p, name)) {
+            return RealmFind::Own(p, at);
+        }
+        match at.proto.and_then(realm_entry) {
+            Some(next) => at = next,
+            None => return RealmFind::Absent,
+        }
+    }
+}
+
+/// The keys the realm declares on `start` and on every [[Prototype]] of its
+/// declared chain, spelled as atoms are (a well-known symbol key with
+/// `WK_PREFIX`), each once.
+pub(super) fn realm_chain_keys(start: &'static RealmEntry) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut at = Some(start);
+    while let Some(e) = at {
+        for p in e.own.iter() {
+            let n = match (p.symbol, p.key.strip_prefix("@@")) {
+                (true, Some(wk)) => format!("{}{wk}", super::WK_PREFIX),
+                (true, None) => continue,
+                (false, _) => p.key.to_string(),
+            };
+            if !out.contains(&n) {
+                out.push(n);
+            }
+        }
+        at = e.proto.and_then(realm_entry);
+    }
+    out
+}
+
+pub(crate) fn realm_entry(name: &str) -> Option<&'static RealmEntry> {
+    let realm = crate::native_effects::realm();
+    // The runtime's realm source sorts its declarations by name.
+    realm
+        .binary_search_by_key(&name, |e| e.name)
+        .ok()
+        .map(|i| &realm[i])
+}
+
+/// What the realm's own property `p` of a constructor reads as a member:
+/// a primitive of its kind, `prototype`, a native function, or
+/// `@@species`, a getter that returns its receiver (the constructor).
+/// `None`: a value this description has no member for.
+fn realm_mem(p: &RealmOwn) -> Option<Mem> {
+    Some(match p.value {
+        RealmOwnValue::Undefined => Mem::Prim(prim::UNDEF),
+        RealmOwnValue::Null => Mem::Prim(prim::NULL),
+        RealmOwnValue::Boolean => Mem::Prim(prim::BOOL),
+        RealmOwnValue::Number => Mem::Prim(prim::NUM),
+        RealmOwnValue::String => Mem::Prim(prim::STR),
+        RealmOwnValue::Symbol => Mem::Prim(prim::SYMBOL),
+        RealmOwnValue::Reference(_) if !p.symbol && p.key == "prototype" => Mem::Proto,
+        RealmOwnValue::Reference(r) => match realm_entry(r)?.kind {
+            RealmKind::Function | RealmKind::Method => Mem::Fn,
+            _ => return None,
+        },
+        RealmOwnValue::Accessor {
+            get: Some(get),
+            set: None,
+        } if p.symbol && p.key == "@@species" && returns_receiver(realm_entry(get)?) => Mem::Ctor,
+        _ => return None,
+    })
+}
+
+/// Does a function object the realm declares (a builtin function or
+/// constructor: `get [Symbol.species]` on Array, Map, ...; the host
+/// constructors' statics such as `EventEmitter.defaultMaxListeners`) own an
+/// accessor under the key atoms spell `name` (`None`: under any key)?
+pub(super) fn realm_fn_own_accessor(name: Option<&str>) -> bool {
+    crate::native_effects::realm()
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                RealmKind::Constructor | RealmKind::Function | RealmKind::Method
+            )
+        })
+        .flat_map(|e| e.own.iter())
+        .any(|p| {
+            matches!(p.value, RealmOwnValue::Accessor { .. })
+                && name.is_none_or(|n| realm_key_is(p, n))
+        })
+}
+
+fn returns_receiver(e: &RealmEntry) -> bool {
+    matches!(e.effects, [RealmEffect::Returns(RealmOperand::Slot(s))]
+        if s.root == RealmSlotRoot::This && s.steps.is_empty())
+}
+
+/// The statics of constructor `ns` exactly as the realm declares them, when
+/// the realm declares it and this description has a member for each;
+/// otherwise undescribed (every name may be a member).
+fn realm_statics(ns: BuiltinNs, prototype: NsProto) -> NsStatics {
+    let members = super::loads::proto_family(ns)
+        .and_then(|(_, _, name)| realm_entry(name))
+        .map(|e| e.own)
+        .filter(|own| own.iter().all(|p| realm_mem(p).is_some()))
+        .map(Own::Realm);
+    NsStatics { prototype, members }
+}
 
 /// The own properties and [[Prototype]] of a builtin namespace. Missing
 /// own descriptions remain opaque even when a structural parent is known.
@@ -830,24 +1150,42 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("@@__perry_wk_species", Mem::Ctor),
             ]),
         ),
-        // Error and its native subclasses; V8's `captureStackTrace` and
-        // `stackTraceLimit` (node), `prepareStackTrace` (absent until set:
-        // a program write is a store, `intrinsic_written`).
-        // `AggregateError` is an `Error` subclass: the same statics apply.
-        BuiltinNs::Error | BuiltinNs::AggregateError => (
-            NsProto::Constructor(&ERROR_NAMESPACE),
+        // Error: V8's `captureStackTrace`, `prepareStackTrace` and
+        // `stackTraceLimit` (node; the realm declares all three).
+        BuiltinNs::Error => (
+            NsProto::Function,
             Some(&[
                 ("prototype", Mem::Proto),
                 ("captureStackTrace", FN),
                 ("isError", FN),
+                ("prepareStackTrace", FN),
                 ("stackTraceLimit", N),
             ]),
         ),
-        // The model does not describe these namespaces' own members. They are
-        // constructor tokens only, for the `new`/call summaries; naming them
-        // here would claim a precision the model does not have.
-        BuiltinNs::Date | BuiltinNs::RegExp | BuiltinNs::ArrayBuffer => (NsProto::Function, None),
-        BuiltinNs::TypedArray => (NsProto::Constructor(&TYPED_ARRAY_NAMESPACE), None),
+        // ECMA-262 20.5.6.2, 20.5.7.2: a NativeError and `AggregateError`
+        // own `prototype`; the rest is `Error`'s, their [[Prototype]].
+        BuiltinNs::NativeError(_) | BuiltinNs::AggregateError => (
+            NsProto::Constructor(BuiltinNs::Error),
+            Some(&[("prototype", Mem::Proto)]),
+        ),
+        // Perry's RegExp owns exactly its realm declaration (`length`,
+        // `name`, `prototype`, `escape`, `@@species`): it has none of node's
+        // legacy accessors (`$1`, `lastMatch`, `input` ...).
+        BuiltinNs::RegExp => return realm_statics(ns, NsProto::Function),
+        // Their own statics are the realm's declaration of them (node:
+        // `length`, `name`, `prototype`, `Date.now`/`parse`/`UTC`,
+        // `ArrayBuffer.isView`, `%TypedArray%.from`/`of`, `@@species`, ...): a
+        // key on neither the constructor nor its chain is absent.
+        BuiltinNs::Date
+        | BuiltinNs::ArrayBuffer
+        | BuiltinNs::SharedArrayBuffer
+        | BuiltinNs::DataView
+        | BuiltinNs::TypedArray => return realm_statics(ns, NsProto::Function),
+        // ECMA-262 23.2.6: a concrete typed-array constructor's
+        // [[Prototype]] is `%TypedArray%`.
+        BuiltinNs::TypedArrayKind(_) => {
+            return realm_statics(ns, NsProto::Constructor(BuiltinNs::TypedArray))
+        }
         BuiltinNs::Symbol => (
             NsProto::Function,
             Some(&[
@@ -871,7 +1209,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("unscopables", SY),
             ]),
         ),
-        // Number and BigInt (one namespace kind).
         BuiltinNs::Number => (
             NsProto::Function,
             Some(&[
@@ -884,8 +1221,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("NEGATIVE_INFINITY", N),
                 ("NaN", N),
                 ("POSITIVE_INFINITY", N),
-                ("asIntN", FN),
-                ("asUintN", FN),
                 ("isFinite", FN),
                 ("isInteger", FN),
                 ("isNaN", FN),
@@ -893,6 +1228,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
                 ("parseFloat", FN),
                 ("parseInt", FN),
             ]),
+        ),
+        BuiltinNs::BigInt => (
+            NsProto::Function,
+            Some(&[("prototype", Mem::Proto), ("asIntN", FN), ("asUintN", FN)]),
         ),
         BuiltinNs::String => (
             NsProto::Function,
@@ -931,10 +1270,17 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
-        BuiltinNs::GlobalThis | BuiltinNs::Process | BuiltinNs::Module(_) => (NsProto::Object, None),
-        BuiltinNs::Require | BuiltinNs::Other => (NsProto::Unknown(Family::Function), None),
+        // `Other`, the HIR global sentinel (what a bare global name is read
+        // off), is the global object: an ordinary object, not callable.
+        BuiltinNs::GlobalThis | BuiltinNs::Other | BuiltinNs::Process | BuiltinNs::Module(_) => {
+            (NsProto::Object, None)
+        }
+        BuiltinNs::Require => (NsProto::Unknown(Family::Function), None),
     };
-    NsStatics { members, prototype }
+    NsStatics {
+        members: members.map(Own::Listed),
+        prototype,
+    }
 }
 
 /// The members of `console` the runtime gives every program (its methods).
@@ -1027,6 +1373,23 @@ pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
     }
 }
 
+/// The global object's own properties the runtime reads by name, beside
+/// its declared constructors (`undeclared::global_store_escapes`): the
+/// `Temporal` namespace its Temporal constructors are found through
+/// (`object/global_this/math_temporal.rs`, `js_object_get_field_by_name`
+/// of the global under "Temporal"), and a worker global's message
+/// handlers (`worker_threads/worker_surface.rs` `web_worker_global_handler`,
+/// read by `inbox.rs` and `channel_pump.rs`; `worker_pump.rs`'s
+/// `on<type>`). Every other key of the global object is read only by
+/// program code, through the global's fields (a declared global's load
+/// reads the field beside the realm's value, `declared_global_load`).
+pub(super) fn global_runtime_reads(name: &str) -> bool {
+    matches!(
+        name,
+        "Temporal" | "WebAssembly" | "onmessage" | "onmessageerror" | "onerror"
+    )
+}
+
 /// The member `name` of a builtin namespace object: its own statics, then
 /// its chain: `Function.prototype` for a constructor, `Object.prototype`
 /// for a namespace object (`Math`, `JSON`, `Reflect`). Outer `None`: the
@@ -1035,15 +1398,38 @@ pub(super) fn ns_member(ns: BuiltinNs, name: &str) -> Option<Option<Mem>> {
     described_member(ns_statics(ns), name)
 }
 
+/// Does the realm declare `name` on namespace `ns` (MATHB1)?
+pub(crate) fn ns_declares(ns: BuiltinNs, name: &str) -> bool {
+    matches!(ns_member(ns, name), Some(Some(_)))
+}
+
+/// Is `name` an own static function of namespace `ns` (listed on the
+/// namespace itself, not found on its chain)?
+pub(super) fn ns_own_fn(ns: BuiltinNs, name: &str) -> bool {
+    matches!(
+        ns_statics(ns).members.and_then(|own| own.find(name)),
+        Some(Mem::Fn)
+    )
+}
+
+/// Is `name` listed on namespace `ns` itself (an own static of any kind,
+/// not a member of its chain)?
+pub(super) fn ns_own_member(ns: BuiltinNs, name: &str) -> bool {
+    ns_statics(ns)
+        .members
+        .and_then(|own| own.find(name))
+        .is_some()
+}
+
 fn described_member(description: NsStatics, name: &str) -> Option<Option<Mem>> {
     let own = description.members?;
-    if let Some(mem) = find(own, name) {
+    if let Some(mem) = own.find(name) {
         return Some(Some(mem));
     }
     match description.prototype {
         NsProto::Function => Some(member(Family::Function, name)),
         NsProto::Object => Some(member(Family::Object, name)),
-        NsProto::Constructor(parent) => described_member(*parent, name),
+        NsProto::Constructor(parent) => described_member(ns_statics(parent), name),
         NsProto::Unknown(_) => None,
     }
 }
@@ -1056,7 +1442,7 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
         match prototype {
             NsProto::Function => return Family::Function,
             NsProto::Object => return Family::Object,
-            NsProto::Constructor(parent) => prototype = parent.prototype,
+            NsProto::Constructor(parent) => prototype = ns_statics(parent).prototype,
             NsProto::Unknown(family) => return family,
         }
     }
@@ -1066,6 +1452,57 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
 /// (`Object.prototype` included): the kinds of its data members, and
 /// whether its own prototype has a function member (`Object.prototype`'s
 /// methods, its `constructor` and `__proto__` are on every chain).
+/// The own member table of family `fam`'s intrinsic prototype, when the
+/// family is described member by member (`None`: Box, Wrapper, Opaque).
+fn own_table(fam: Family) -> Option<&'static [(&'static str, Mem)]> {
+    Some(match fam {
+        Family::Object => &[],
+        Family::Function => FUNCTION,
+        Family::Array => ARRAY,
+        Family::Str => STRING,
+        Family::Num => NUMBER,
+        Family::Bool => BOOLEAN,
+        Family::Sym => SYMBOL,
+        Family::BigInt => BIGINT,
+        Family::Collection => COLLECTION,
+        Family::Iterator => ITERATOR,
+        Family::Promise => PROMISE,
+        Family::Error => ERROR,
+        Family::Box | Family::Wrapper | Family::Opaque => return None,
+    })
+}
+
+/// Is family `fam` described member by member (`own_table`)? Box, Wrapper
+/// and Opaque are not: every name is a member of unknown kind.
+pub(super) fn described(fam: Family) -> bool {
+    own_table(fam).is_some()
+}
+
+/// The names on family `fam`'s intrinsic chain: its own prototype's, then
+/// the `Object.prototype` ones it does not shadow (`member`'s order).
+/// `None`: the family has no member table.
+pub(super) fn chain_names(fam: Family) -> Option<impl Iterator<Item = &'static str>> {
+    let own = own_table(fam)?;
+    let object = OBJECT.iter().filter(move |(n, _)| find(own, n).is_none());
+    Some(own.iter().chain(object).map(|(n, _)| *n))
+}
+
+/// The own statics of described namespace `ns` and of the constructors
+/// its chain passes (`NsProto::Constructor`), spelled as atoms are; `None`
+/// where the namespace or a constructor on its chain is undescribed.
+pub(super) fn ns_static_names(ns: BuiltinNs) -> Option<Vec<String>> {
+    let mut out = Vec::new();
+    let mut d = ns_statics(ns);
+    loop {
+        out.extend(d.members?.keys());
+        match d.prototype {
+            NsProto::Function | NsProto::Object => return Some(out),
+            NsProto::Constructor(parent) => d = ns_statics(parent),
+            NsProto::Unknown(_) => return None,
+        }
+    }
+}
+
 pub(super) fn any_member(fam: Family) -> (bool, u16) {
     let own: &[(&str, Mem)] = match fam {
         Family::Object => &[],
@@ -1093,16 +1530,16 @@ pub(super) fn any_member(fam: Family) -> (bool, u16) {
 /// The harness compares observed own keys against these same member tables.
 #[test]
 fn runtime_member_description() {
-    fn keys(d: NsStatics, out: &mut Vec<&'static str>) -> bool {
+    fn keys(d: NsStatics, out: &mut Vec<String>) -> bool {
         let Some(own) = d.members else { return false };
-        out.extend(own.iter().map(|(key, _)| *key));
+        out.extend(own.keys());
         match d.prototype {
             NsProto::Function => {
-                out.extend(FUNCTION.iter().map(|(key, _)| *key));
-                out.extend(OBJECT.iter().map(|(key, _)| *key));
+                out.extend(FUNCTION.iter().map(|(key, _)| key.to_string()));
+                out.extend(OBJECT.iter().map(|(key, _)| key.to_string()));
             }
-            NsProto::Object => out.extend(OBJECT.iter().map(|(key, _)| *key)),
-            NsProto::Constructor(parent) => return keys(*parent, out),
+            NsProto::Object => out.extend(OBJECT.iter().map(|(key, _)| key.to_string())),
+            NsProto::Constructor(parent) => return keys(ns_statics(parent), out),
             NsProto::Unknown(_) => return false,
         }
         true
@@ -1128,4 +1565,240 @@ fn runtime_member_description() {
         println!("DESCRIPTION\t{expr}\t{}", names.join("\t"));
     }
     assert!(rows > 10);
+}
+
+/// The constructors whose statics are the realm's declaration: the keys a
+/// named read finds as their own are exactly the keys the realm declares on
+/// them, and node's (v26.8.1, `Reflect.ownKeys`).
+#[test]
+fn realm_described_statics_are_the_realm_declaration() {
+    let realm = crate::native_effects::realm();
+    assert!(
+        realm.windows(2).all(|w| w[0].name < w[1].name),
+        "the realm table is sorted by name"
+    );
+    let node: &[(BuiltinNs, &[&str])] = &[
+        (
+            BuiltinNs::Date,
+            &["UTC", "length", "name", "now", "parse", "prototype"],
+        ),
+        (
+            BuiltinNs::ArrayBuffer,
+            &[
+                "@@__perry_wk_species",
+                "isView",
+                "length",
+                "name",
+                "prototype",
+            ],
+        ),
+        (
+            BuiltinNs::SharedArrayBuffer,
+            &["@@__perry_wk_species", "length", "name", "prototype"],
+        ),
+        (BuiltinNs::DataView, &["length", "name", "prototype"]),
+        (
+            BuiltinNs::TypedArray,
+            &[
+                "@@__perry_wk_species",
+                "from",
+                "length",
+                "name",
+                "of",
+                "prototype",
+            ],
+        ),
+        (
+            BuiltinNs::TypedArrayKind("Uint8Array"),
+            &[
+                "BYTES_PER_ELEMENT",
+                "fromBase64",
+                "fromHex",
+                "length",
+                "name",
+                "prototype",
+            ],
+        ),
+    ];
+    let mut all: Vec<BuiltinNs> = vec![
+        BuiltinNs::Date,
+        BuiltinNs::ArrayBuffer,
+        BuiltinNs::SharedArrayBuffer,
+        BuiltinNs::DataView,
+        BuiltinNs::TypedArray,
+    ];
+    all.extend(
+        super::TYPED_ARRAYS
+            .iter()
+            .map(|&n| BuiltinNs::TypedArrayKind(n)),
+    );
+    for ns in all {
+        let name = super::loads::proto_family(ns).unwrap().2;
+        let entry = realm_entry(name).unwrap_or_else(|| panic!("the realm declares {name}"));
+        let Some(own @ Own::Realm(_)) = ns_statics(ns).members else {
+            panic!("{name}: statics described by the realm");
+        };
+        let mut declared = own.keys();
+        declared.sort();
+        assert_eq!(declared.len(), entry.own.len(), "{name}");
+        // The read set: every declared key reads its own member, nothing
+        // else does.
+        let probes = [
+            "replace",
+            "@@__perry_wk_toPrimitive",
+            "@@__perry_wk_iterator",
+            "fromBase64",
+            "isView",
+            "now",
+            "from",
+            "BYTES_PER_ELEMENT",
+            "@@__perry_wk_species",
+            "caller",
+            "constructor",
+        ];
+        let mut read: Vec<String> = declared
+            .iter()
+            .map(String::as_str)
+            .chain(probes)
+            .filter(|k| own.find(k).is_some())
+            .map(str::to_string)
+            .collect();
+        read.sort();
+        read.dedup();
+        assert_eq!(read, declared, "{name}");
+        for k in &declared {
+            assert!(matches!(ns_member(ns, k), Some(Some(_))), "{name}.{k}");
+        }
+        if let Some((_, keys)) = node.iter().find(|(n, _)| *n == ns) {
+            assert_eq!(declared, keys.to_vec(), "{name}: node's own keys");
+        }
+        if let BuiltinNs::TypedArrayKind(n) = ns {
+            if n != "Uint8Array" {
+                assert_eq!(
+                    declared,
+                    ["BYTES_PER_ELEMENT", "length", "name", "prototype"],
+                    "{n}"
+                );
+            }
+        }
+        // Absent on the constructor and its chain: undefined.
+        assert_eq!(ns_member(ns, "replace"), Some(None), "{name}.replace");
+        assert_eq!(
+            ns_member(ns, "@@__perry_wk_toPrimitive"),
+            Some(None),
+            "{name}[@@toPrimitive]"
+        );
+        // The chain's: `Function.prototype.call`.
+        assert_eq!(ns_member(ns, "call"), Some(Some(Mem::Fn)), "{name}.call");
+    }
+    assert_eq!(
+        ns_member(BuiltinNs::TypedArrayKind("Int16Array"), "from"),
+        Some(Some(Mem::Fn))
+    );
+    assert_eq!(
+        ns_member(BuiltinNs::TypedArrayKind("Int16Array"), "BYTES_PER_ELEMENT"),
+        Some(Some(Mem::Prim(prim::NUM)))
+    );
+    assert_eq!(
+        ns_member(BuiltinNs::Date, "prototype"),
+        Some(Some(Mem::Proto))
+    );
+    assert_eq!(
+        ns_member(BuiltinNs::ArrayBuffer, "@@__perry_wk_species"),
+        Some(Some(Mem::Ctor))
+    );
+    // Perry's RegExp owns its realm declaration, no legacy accessors.
+    assert!(ns_statics(BuiltinNs::RegExp).members.is_some());
+    assert!(matches!(
+        ns_member(BuiltinNs::RegExp, "escape"),
+        Some(Some(_))
+    ));
+    assert_eq!(ns_member(BuiltinNs::RegExp, "$1"), Some(None));
+}
+
+#[test]
+fn a_realm_born_object_reads_exactly_its_declared_chain() {
+    // W2a: an object `fresh(P)` makes has `P` as its [[Prototype]]. The keys
+    // the lookup finds are the realm's own keys of `P` and of every
+    // declaration on its declared chain, to `null`; no other key is found.
+    let atom = |p: &RealmOwn| match p.key.strip_prefix("@@") {
+        Some(wk) if p.symbol => format!("{}{wk}", super::WK_PREFIX),
+        _ => p.key.to_string(),
+    };
+    for (what, chain) in [
+        (
+            "Response.prototype",
+            &["Response.prototype", "Object.prototype"][..],
+        ),
+        (
+            "TypeError.prototype",
+            &["TypeError.prototype", "Error.prototype", "Object.prototype"][..],
+        ),
+        (
+            "DOMException.prototype",
+            &[
+                "DOMException.prototype",
+                "Error.prototype",
+                "Object.prototype",
+            ][..],
+        ),
+        (
+            "AbortSignal.prototype",
+            &[
+                "AbortSignal.prototype",
+                "EventTarget.prototype",
+                "Object.prototype",
+            ][..],
+        ),
+    ] {
+        let born = realm_born(what).unwrap_or_else(|| panic!("{what} is realm-born"));
+        let mut declared = std::collections::BTreeSet::new();
+        let mut at = Some(born);
+        let mut walked = Vec::new();
+        while let Some(e) = at {
+            walked.push(e.name);
+            declared.extend(e.own.iter().map(atom));
+            at = e.proto.map(|p| realm_entry(p).expect("declared link"));
+        }
+        assert_eq!(walked, chain, "{what}");
+        for key in &declared {
+            assert!(
+                matches!(realm_chain_find(born, key), RealmFind::Own(..)),
+                "{what}.{key} is found"
+            );
+        }
+        for key in ["then", "zzNoSuchMember", "@@__perry_wk_iterator", "0"] {
+            assert!(!declared.contains(key), "{what}.{key} is not declared");
+            assert!(
+                matches!(realm_chain_find(born, key), RealmFind::Absent),
+                "{what}.{key} is absent"
+            );
+        }
+    }
+    // The first declaration on the chain that has the key decides:
+    // `Object.prototype.hasOwnProperty` under `Response.prototype`.
+    let found = |what: &str, key: &str| match realm_chain_find(realm_born(what).unwrap(), key) {
+        RealmFind::Own(p, _) => p.value,
+        RealmFind::Absent => panic!("{what}.{key} absent"),
+    };
+    assert_eq!(
+        found("Response.prototype", "hasOwnProperty"),
+        RealmOwnValue::Reference("Object.prototype.hasOwnProperty")
+    );
+    assert_eq!(
+        found("Response.prototype", "@@__perry_wk_toStringTag"),
+        RealmOwnValue::String
+    );
+    // A described family is not realm-born (its own description decides),
+    // nor is a kind no declaration names.
+    for what in [
+        "Promise",
+        "Error",
+        "Map",
+        "hostrecord",
+        "Response",
+        "builtin",
+    ] {
+        assert!(realm_born(what).is_none(), "{what}");
+    }
 }

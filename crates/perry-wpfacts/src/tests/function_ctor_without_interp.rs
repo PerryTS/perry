@@ -36,7 +36,9 @@ fn y_reads(pf: &ProgramFacts) -> Vec<Verdict> {
 
 fn y_proven(pf: &ProgramFacts) -> bool {
     let v = y_reads(pf);
-    !v.is_empty() && v.iter().all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
+    !v.is_empty()
+        && v.iter()
+            .all(|v| matches!(v, Verdict::T0Mono | Verdict::T0Set))
 }
 
 /// What the driver passes for a program with an interpreted source site

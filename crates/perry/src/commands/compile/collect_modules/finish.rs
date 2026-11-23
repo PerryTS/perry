@@ -316,6 +316,7 @@ pub(crate) fn collect_module_finish(
             collected: Some(ctx.native_modules.len() + ctx.js_modules.len()),
             ..Default::default()
         });
+        perry_transform::lower_async_module_body(&mut hir_module);
         transform_async_to_generator(&mut hir_module);
         // #8595: outline an oversized module-entry body into per-chunk
         // functions so no single function carries the whole init (which is
@@ -360,6 +361,11 @@ pub(crate) fn collect_module_finish(
         // GC cell per scope activation. Last, so it sees the preallocation
         // statements the async/generator transforms emitted.
         perry_codegen::scope_env::group_scope_boxes(&mut hir_module);
+    } else {
+        // The web target compiles to wasm, which has no `yield`: its generators
+        // become the same state machines, with `finally` bodies inlined first.
+        inline_finally_into_returns(&mut hir_module);
+        perry_transform::transform_generators_without_private_frames(&mut hir_module);
     }
 
     // Optional features are selected after the graph-wide CommonJS proof

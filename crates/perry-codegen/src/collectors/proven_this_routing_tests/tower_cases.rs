@@ -68,7 +68,10 @@ fn inherited_bodies_share_one_switch_arm() {
             .split("\ndefine ")
             .find(|f| f.contains("pconst.selected"))
             .expect("the function holding the selecting site");
-        let arms = site.lines().filter(|l| l.starts_with("pconst.case")).count();
+        let arms = site
+            .lines()
+            .filter(|l| l.starts_with("pconst.case"))
+            .count();
         let calls: usize = site
             .lines()
             .filter(|l| l.contains("switch i32") && l.contains("label %idispatch.case"))

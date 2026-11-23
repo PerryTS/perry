@@ -2,8 +2,11 @@
 pub mod frame;
 pub mod key_dispatch;
 pub mod keys;
+pub mod sound_level;
 pub mod state;
 pub mod styling_matrix;
+pub mod test_mode;
+pub mod webview_navigation;
 pub mod widget;
 
 use std::sync::Once;

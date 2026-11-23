@@ -61,7 +61,7 @@ unsafe fn member_to_json(value: f64) -> Option<f64> {
         return None;
     }
     match gc_obj_type(ptr) {
-        crate::gc::GC_TYPE_ARRAY => array_get_to_json(ptr as *const crate::ArrayHeader),
+        crate::gc_array_type_pat!() => array_get_to_json(ptr as *const crate::ArrayHeader),
         crate::gc_object_type_pat!() => {
             let resolved = object_get_to_json(ptr);
             if resolved.is_none() {
@@ -88,6 +88,9 @@ pub(super) fn refresh_environment_receiver(ptr: *const u8) -> *const u8 {
 }
 
 pub(crate) unsafe fn stringify_object_inner(ptr: *const u8, buf: &mut String, depth: u32) {
+    // I32 at rest (PR C): no object with an I32 lane reaches a generic
+    // reader (check mode).
+    crate::layout_slot::generic_object_reader(ptr as *const crate::object::ObjectHeader);
     // Taken unconditionally so a verdict for this object can never reach a
     // later walk (see `TO_JSON_RESOLVED_FOR`). An armed one-shot suppression
     // means this object IS a `toJSON` result, which also settles the question
@@ -204,6 +207,14 @@ unsafe fn stringify_object_walk(
         write_url_href_json(ptr as *mut crate::ObjectHeader, buf);
         return;
     }
+    // An elements-backed object keeps its indices outside its keys, so the
+    // slot walk below cannot see them: SerializeJSONObject over its
+    // EnumerableOwnProperties, the keys and [[Get]] that Object.values uses.
+    if crate::array::subclass_elements::own_elements(ptr as usize).is_some() {
+        *global_proof = false;
+        stringify_elements_backed_object(ptr, buf, depth, to_json_resolved);
+        return;
+    }
     // One shape-table probe answers both the keys and the live inline-slot
     // bound; the member loop below re-derives the keys only after a call that
     // can run user code or collect. Re-deriving them at every key access cost
@@ -309,6 +320,7 @@ unsafe fn stringify_object_walk(
         && num_fields >= 5
         && !has_overflow_fields
         && crate::object::key_attrs::object_summary(obj) == 0
+        && class_plain_record
         && !inherited_to_json_possible
         // A private field (#11791) is an own key no template may emit.
         && crate::object::key_attrs::object_summary(obj)
@@ -419,6 +431,7 @@ unsafe fn stringify_object_walk(
         || (actual_fields == 1
             && super::stringify_primitive_object::field_is_primitive(read_field_bits(0))))
         && !has_overflow_fields
+        && class_plain_record
         && !inherited_to_json_possible
         && !crate::object::object_has_descriptors(ptr as usize)
         // A private field (#11791) is an own key the raw walk would emit.
@@ -464,8 +477,6 @@ unsafe fn stringify_object_walk(
             let tag = bits & 0xFFFF_0000_0000_0000;
             let ptr_candidate = if tag == POINTER_TAG {
                 (bits & POINTER_MASK) as *const u8
-            } else if is_raw_pointer(bits) {
-                bits as *const u8
             } else {
                 std::ptr::null()
             };
@@ -512,7 +523,18 @@ unsafe fn stringify_object_walk(
     // slots were last derived. The probe can do both even when it finds no
     // `toJSON` (a getter-valued `toJSON`, the first `Object.prototype` lookup).
     let mut keys_stale = false;
-    if (has_closure_field || inherited_to_json_possible || has_own_accessors) && !to_json_resolved {
+    // With no inherited `toJSON` possible, only an own key can supply one:
+    // the own-key half of `to_json_definitely_absent` decides it without the
+    // inherited half the walk has already answered.
+    let to_json_possible = inherited_to_json_possible
+        || ((has_closure_field || has_own_accessors)
+            && super::stringify_tojson_probe::keys_array_may_carry_to_json(keys_view));
+    if !to_json_possible && (has_closure_field || has_own_accessors) && !to_json_resolved {
+        // What `object_get_to_json` does when it proves `toJSON` absent:
+        // consume a `toJSON` result's one-shot suppression, then answer none.
+        SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+    }
+    if to_json_possible && !to_json_resolved {
         *global_proof = false;
         if let Some(to_json_val) = object_get_to_json(ptr) {
             if depth > MAX_FAST_DEPTH {
@@ -548,6 +570,25 @@ unsafe fn stringify_object_walk(
             & crate::object::key_attrs::SUMMARY_KEY_BITS
             != 0
             || (crate::object::object_has_descriptors(ptr as usize));
+    // An ordinary object keeps every attribute in its keys' entries, and its
+    // shape summary is the OR of them: without a non-enumerable or accessor
+    // entry no own key can be skipped or read through a getter, so the
+    // by-bytes descriptor lookups below are not asked. The summary is re-read
+    // per key: user code (a getter, a member's `toJSON`) can reshape `obj`.
+    let attrs_in_keys = filter_non_enum
+        && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+            crate::object::key_attrs::attrs_live_in_keys(obj as usize)
+        });
+    let key_attr_summary = || -> u8 {
+        if attrs_in_keys {
+            obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
+                crate::object::key_attrs::object_summary(obj)
+            })
+        } else {
+            crate::object::key_attrs::SUMMARY_NON_ENUMERABLE
+                | crate::object::key_attrs::SUMMARY_ACCESSOR
+        }
+    };
     buf.push('{');
     let mut first = true;
     // `pos(j)` maps the j-th enumerated slot to its key/field index: spec
@@ -578,9 +619,14 @@ unsafe fn stringify_object_walk(
         {
             continue;
         }
+        let attr_summary = if filter_non_enum {
+            key_attr_summary()
+        } else {
+            0
+        };
         // Skip non-enumerable own keys (e.g. `Object.defineProperty(o, k,
         // { enumerable: false })`) before touching the value.
-        if filter_non_enum
+        if attr_summary & crate::object::key_attrs::SUMMARY_NON_ENUMERABLE != 0
             && obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 json_key_non_enumerable(obj, f64::from_bits(key_bits))
             })
@@ -594,7 +640,7 @@ unsafe fn stringify_object_walk(
         // (`Object.defineProperty(o, k, { get })`). Gated on the descriptor flag.
         // The getter is USER CODE: every pointer below is re-derived from the
         // rooted handle after it returns.
-        if filter_non_enum {
+        if attr_summary & crate::object::key_attrs::SUMMARY_ACCESSOR != 0 {
             *global_proof = false;
             let getter_value = obj_handle.with_const_ptr(|obj: *const crate::ObjectHeader| {
                 crate::object::json_object_getter_value(obj, f64::from_bits(key_bits))
@@ -647,7 +693,6 @@ unsafe fn stringify_object_walk(
         let mut member_probed = false;
         if (field_bits & 0xFFFF_0000_0000_0000) == POINTER_TAG
             || (field_bits & 0xFFFF_0000_0000_0000) == crate::value::HANDLE_TAG
-            || is_raw_pointer(field_bits)
         {
             // Everything from here to the member's dispatch can run user code.
             *global_proof = false;
@@ -711,10 +756,7 @@ unsafe fn stringify_object_walk(
             } else {
                 buf.push_str("null");
             }
-        } else if val_tag == POINTER_TAG
-            || val_tag == crate::value::HANDLE_TAG
-            || is_raw_pointer(field_bits)
-        {
+        } else if val_tag == POINTER_TAG || val_tag == crate::value::HANDLE_TAG {
             // Nested object/array (or the object/array `toJSON` returned). The
             // `toJSON` key was recorded above; `member_probed` armed the guard.
             stringify_value_depth(field_val, TYPE_UNKNOWN, buf, depth + 1);
@@ -744,4 +786,71 @@ unsafe fn stringify_object_walk(
     if depth > MAX_FAST_DEPTH {
         STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
     }
+}
+
+/// SerializeJSONObject for an elements-backed object: the own enumerable
+/// string keys in `Object.keys` order, each value read by [[Get]] (an
+/// element, a moved index's own key and a mapped cell answer alike).
+#[cold]
+#[inline(never)]
+#[optimize(size)]
+unsafe fn stringify_elements_backed_object(
+    ptr: *const u8,
+    buf: &mut String,
+    depth: u32,
+    to_json_resolved: bool,
+) {
+    if !to_json_resolved {
+        if let Some(to_json_val) = object_get_to_json(ptr) {
+            arm_to_json_result_guard(to_json_val);
+            stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);
+            SUPPRESS_NEXT_TO_JSON.with(|c| c.set(false));
+            return;
+        }
+    }
+    if STRINGIFY_STACK.with(|s| s.borrow().contains(&(ptr as usize))) {
+        let msg = "Converting circular structure to JSON";
+        let msg_ptr = js_string_from_bytes(msg.as_ptr(), msg.len() as u32);
+        crate::exception::throw_core(crate::error::CoreError::type_error(msg_ptr));
+    }
+    STRINGIFY_STACK.with(|s| s.borrow_mut().push(ptr as usize));
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_nanbox_u64(JSValue::pointer(ptr).bits());
+    let keys = crate::object::js_object_keys(ptr as *const crate::ObjectHeader);
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_length(k));
+    buf.push('{');
+    let mut first = true;
+    for i in 0..count {
+        let iter_scope = crate::gc::RuntimeHandleScope::new();
+        let key =
+            keys_h.with_mut_ptr(|k: *mut crate::ArrayHeader| crate::array::js_array_get(k, i));
+        let _key_h = iter_scope.root_nanbox_u64(key.bits());
+        let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
+        let Some(name) = crate::string::js_string_key_bytes(key, &mut sso).map(<[u8]>::to_vec)
+        else {
+            continue;
+        };
+        let value = crate::value::js_get_property(
+            obj_h.get_nanbox_f64(),
+            name.as_ptr() as i64,
+            name.len() as i64,
+        );
+        let bits = value.to_bits();
+        if bits == TAG_UNDEFINED || is_closure_value(bits) || is_symbol_value(bits) {
+            continue;
+        }
+        let _value_h = iter_scope.root_nanbox_f64(value);
+        if !first {
+            buf.push(',');
+        }
+        first = false;
+        let name = String::from_utf8_lossy(&name);
+        write_escaped_string(buf, &name);
+        buf.push(':');
+        set_to_json_key_str(&name);
+        stringify_value_depth(value, TYPE_UNKNOWN, buf, depth + 1);
+    }
+    buf.push('}');
+    STRINGIFY_STACK.with(|s| s.borrow_mut().pop());
 }

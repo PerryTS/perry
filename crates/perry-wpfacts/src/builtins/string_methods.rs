@@ -10,6 +10,92 @@ use super::*;
 
 const WK: &str = collections::WK_PREFIX;
 
+/// ECMA-402 9.2.1 CanonicalizeLocaleList(locales): a string is the one
+/// tag; an object is read as array-like: `length` (ToLength), then each
+/// element, ToString'd unless an `Intl.Locale` (no program code runs
+/// there). Getters run in the loads.
+pub(super) fn intl_locales(m: &mut Model, l: NodeId) {
+    let len = m.node_l("intl-locales-length");
+    let key = Key::Named(m.atom("length"));
+    m.cons(l, Cons::Load { key, dst: len });
+    to_prim(m, len, "locale list length");
+    let e = m.node_l("intl-locales-elem");
+    let key = m.elem_key();
+    m.cons(l, Cons::Load { key, dst: e });
+    to_prim(m, e, "locale list element");
+}
+
+/// ECMA-402 9.2.13 GetOption over CoerceOptionsToObject(options): each of
+/// `keys` is read (getters run in the loads) and ToString'd or
+/// ToBoolean'd; nothing else of the options is read.
+pub(super) fn intl_options(m: &mut Model, o: NodeId, keys: &[&str]) {
+    for k in keys {
+        let v = m.node_l("intl-option");
+        let key = Key::Named(m.atom(k));
+        m.cons(o, Cons::Load { key, dst: v });
+        to_prim(m, v, "Intl option");
+    }
+}
+
+/// ECMA-402 19.5.1 / 21.1.1 Number.prototype.toLocaleString and
+/// BigInt.prototype.toLocaleString(locales, options): InitializeNumberFormat
+/// runs CanonicalizeLocaleList on `locales` (`intl_locales`) and reads the
+/// NumberFormat option keys of CoerceOptionsToObject(`options`) by Get
+/// (`intl_options`); later arguments are not read.
+pub(super) fn number_locale_args(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    let ops = positions(m, &c);
+    if let Some(&l) = ops.first() {
+        intl_locales(m, l);
+    }
+    if let Some(&o) = ops.get(1) {
+        intl_options(m, o, NUMBER_FORMAT_OPTIONS);
+    }
+}
+
+/// ECMA-402 15.1.2 InitializeNumberFormat with SetNumberFormatDigitOptions
+/// and SetNumberFormatUnitOptions: the option keys read from the options
+/// object.
+const NUMBER_FORMAT_OPTIONS: &[&str] = &[
+    "localeMatcher",
+    "numberingSystem",
+    "style",
+    "currency",
+    "currencyDisplay",
+    "currencySign",
+    "unit",
+    "unitDisplay",
+    "notation",
+    "compactDisplay",
+    "signDisplay",
+    "useGrouping",
+    "minimumIntegerDigits",
+    "minimumFractionDigits",
+    "maximumFractionDigits",
+    "minimumSignificantDigits",
+    "maximumSignificantDigits",
+    "roundingIncrement",
+    "roundingMode",
+    "roundingPriority",
+    "trailingZeroDisplay",
+];
+
+/// Every operand of `call` is read by ToPrimitive: its arguments and the
+/// elements of each spread (CreateListFromArrayLike / the iteration of
+/// `...xs`), read through the element key.
+pub(super) fn coerce_operands(m: &mut Model, call: CallId, why: &str) {
+    let c = m.calls[call as usize].clone();
+    for &a in &c.args {
+        to_prim(m, a, why);
+    }
+    for &sp in &c.spread {
+        let e = m.node_l("coerced-spread-elem");
+        let key = m.elem_key();
+        m.cons(sp, Cons::Load { key, dst: e });
+        to_prim(m, e, why);
+    }
+}
+
 /// Operand `v` is read by ToPrimitive (ToString / ToNumber / ToPropertyKey).
 pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
     let r = m.reason(&format!("ToPrimitive of the {why}"));
@@ -18,6 +104,7 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
 }
@@ -36,6 +123,40 @@ pub(crate) fn read_prim(m: &mut Model, recv: NodeId, key: &str, why: &str) {
     to_prim(m, dst, why);
 }
 
+/// `String.raw(template, ...substitutions)` (ECMA-262 22.1.2.4): ToObject
+/// of the template, Get `raw` and ToObject of it, LengthOfArrayLike (Get
+/// `length`, ToLength: ToPrimitive, 7.1.20), Get of each index and ToString
+/// of it (7.1.17: ToPrimitive), ToString of each substitution. No other key
+/// is read, no read value is called or handed on; the result is a String.
+/// One rule for a call of the builtin and the lowered `Expr::StringRaw`.
+pub(crate) fn string_raw(m: &mut Model, template: NodeId, substitutions: NodeId) {
+    let ra = m.atom("raw");
+    let raw = m.node_l("String.raw-raw");
+    m.cons(
+        template,
+        Cons::Load {
+            key: Key::Named(ra),
+            dst: raw,
+        },
+    );
+    read_prim(m, raw, "length", "String.raw segments length ToLength");
+    let i = m.node_l("String.raw-index");
+    m.add_prim(i, prim::NUM);
+    let seg = m.node_l("String.raw-segment");
+    m.cons(
+        raw,
+        Cons::IdxLoad {
+            idx: i,
+            dst: seg,
+            shape: 0,
+            enumerable: false,
+            kept: false,
+        },
+    );
+    to_prim(m, seg, "String.raw segment ToString");
+    to_prim(m, substitutions, "String.raw substitution ToString");
+}
+
 /// `Get(recv, key)` whose value is only tested (IsRegExp reads `@@match`).
 pub(crate) fn read_only(m: &mut Model, recv: NodeId, key: &str) {
     let a = m.atom(key);
@@ -50,27 +171,33 @@ pub(crate) fn read_only(m: &mut Model, recv: NodeId, key: &str) {
 }
 
 /// A call the builtin makes while it runs: `recv[key](...args)`.
+#[track_caller]
 fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<NodeId>) -> NodeId {
     let a = m.atom(key);
     let ret = m.node_l("builtin-ret");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let _call = m.chain_call(
         by,
+        0,
+        recv,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Node(recv),
             args,
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
-    );
-    m.cons(
-        recv,
-        Cons::MCall {
-            key: Key::Named(a),
-            call,
+        move |m, tg, call| {
+            m.cons(
+                tg,
+                Cons::MCall {
+                    key: Key::Named(a),
+                    call,
+                },
+            )
         },
     );
     ret
@@ -80,7 +207,7 @@ fn sym_call(m: &mut Model, by: CallId, recv: NodeId, sym: &str, args: Vec<NodeId
     method_call(m, by, recv, &format!("{WK}{sym}"), args)
 }
 
-fn str_node(m: &mut Model) -> NodeId {
+pub(super) fn str_node(m: &mut Model) -> NodeId {
     let n = m.node_l("str");
     m.add_prim(n, prim::STR);
     n
@@ -108,38 +235,210 @@ fn replace_value(m: &mut Model, by: CallId, rv: NodeId) {
     to_prim(m, r, "replace callback result ToString");
 }
 
-/// What `RegExp.prototype[@@x]` does with the match record `exec` returned:
-/// reads `index`, `groups`, `length` and the captures, and the properties
-/// of the groups object, each ToString'd or ToNumber'd.
+/// What `RegExp.prototype[@@x]` does with the match record `exec` returned
+/// (22.2.6.11 / 22.2.6.8, GetSubstitution 22.1.3.19.1): it reads the
+/// record's `length`, its captures (index keys), `index` and `groups`, and
+/// the properties of the groups object under the template's group names,
+/// each ToString'd or ToNumber'd. No other key of the record and no
+/// property of a capture or of `index` is read.
 fn read_match(m: &mut Model, rec: NodeId) {
-    let v = m.node_l("match-field");
+    read_prim(m, rec, "length", "match record length ToLength");
+    read_prim(m, rec, "index", "match record index ToIntegerOrInfinity");
+    let cap = m.node_l("match-capture");
+    let i = m.node_l("match-capture-index");
+    m.add_prim(i, prim::NUM);
+    m.cons(
+        rec,
+        Cons::IdxLoad {
+            idx: i,
+            dst: cap,
+            shape: 0,
+            enumerable: false,
+            kept: false,
+        },
+    );
+    to_prim(m, cap, "match record capture ToString");
+    let ga = m.atom("groups");
+    let groups = m.node_l("match-groups");
     m.cons(
         rec,
         Cons::Load {
-            key: Key::any(),
-            dst: v,
+            key: Key::Named(ga),
+            dst: groups,
         },
     );
-    to_prim(m, v, "match record field");
     let g = m.node_l("match-group");
     m.cons(
-        v,
+        groups,
         Cons::Load {
             key: Key::any(),
             dst: g,
         },
     );
-    to_prim(m, g, "match record group");
+    to_prim(m, g, "match record group ToString");
 }
 
 /// A string method of a primitive receiver, by its algorithm. `false`: no
 /// rule (the method keeps the generic summary).
+/// The operand of each argument position a positional member reads (at
+/// most three: replace, split, localeCompare). Without a spread they are
+/// the arguments. With one, an argument may be shifted to a later position
+/// by the spreads before it, and a spread element (its element key: the
+/// iteration of `...xs`, CreateListFromArrayLike of `apply`) may land in
+/// any position: position `i` reads the arguments up to `i` and every
+/// spread element, and each position runs its own operand model.
+fn positions(m: &mut Model, c: &CallSite) -> Vec<NodeId> {
+    if c.spread.is_empty() {
+        return c.args.clone();
+    }
+    let elems: Vec<NodeId> = c
+        .spread
+        .iter()
+        .map(|&sp| {
+            let e = m.node_l("spread-operand");
+            let key = m.elem_key();
+            m.cons(sp, Cons::Load { key, dst: e });
+            e
+        })
+        .collect();
+    (0..3)
+        .map(|i| {
+            let n = m.node_l("positional-operand");
+            for &a in c.args.iter().take(i + 1).chain(&elems) {
+                m.edge(a, n);
+            }
+            n
+        })
+        .collect()
+}
+
 pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
     let c = m.calls[call as usize].clone();
-    if !c.spread.is_empty() {
-        return false;
+    // The members that read no operand, or only coerce every operand: the
+    // positions do not matter, so a spread call (`apply`, `f(...xs)`) is
+    // the same rule over the spread's elements.
+    match name {
+        // 22.1.3.28 / .30 / .10 / .31: no operand is read.
+        // 22.1.3.32 / .33 / .34 TrimString(this, where) reads no operand;
+        // B.2.2.15 / .16: `trimLeft` / `trimRight` are `trimStart` /
+        // `trimEnd`. B.2.2.3-.14 CreateHTML without an attribute (`big`,
+        // `blink`, ... `sup`) reads no operand either.
+        // Rule K7: the case maps keep the infix entries of a String-only
+        // receiver (`Cons::CaseMap`).
+        "toLowerCase" | "toUpperCase" if matches!(c.this, ThisArg::Node(_)) => {
+            if let ThisArg::Node(r) = c.this {
+                let upper = name == "toUpperCase";
+                m.cons(r, Cons::CaseMap { dst: c.ret, upper });
+            }
+            return true;
+        }
+        "toLowerCase" | "toUpperCase" | "toWellFormed" | "trim" | "trimStart" | "trimEnd"
+        | "trimLeft" | "trimRight" | "big" | "blink" | "bold" | "fixed" | "italics" | "small"
+        | "strike" | "sub" | "sup" => {
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
+        // B.2.2.2 CreateHTML with an attribute (`anchor` name, `fontcolor`
+        // color, `fontsize` size, `link` url): only the first argument is
+        // read, ToString'd.
+        "anchor" | "fontcolor" | "fontsize" | "link" => {
+            if let Some(&v) = positions(m, &c).first() {
+                to_prim(m, v, "CreateHTML attribute value ToString");
+            }
+            ret_prim(m, call, prim::STR);
+            return true;
+        }
+        "isWellFormed" => {
+            ret_prim(m, call, prim::BOOL);
+            return true;
+        }
+        // Rules KEY2a / KEY2b (22.1.3.9 / 22.1.3.12 with no position,
+        // 22.1.3.25): on a receiver node the solve folds the constants
+        // (`Cons::StrIndex`, `Cons::StrSubstring`); any Number / String
+        // when they are not constants.
+        "indexOf" | "lastIndexOf" | "substring"
+            if matches!(c.this, ThisArg::Node(_))
+                && c.spread.is_empty()
+                && (name == "substring" || c.args.len() == 1) =>
+        {
+            coerce_operands(m, call, "string method operand");
+            m.zs_absorbing = true;
+            let ThisArg::Node(recv) = c.this else {
+                unreachable!()
+            };
+            let a0 = c.args.first().copied().unwrap_or(NO_NODE);
+            let a1 = c.args.get(1).copied().unwrap_or(NO_NODE);
+            let k = match name {
+                "substring" => Cons::StrSubstring {
+                    dst: c.ret,
+                    recv,
+                    start: a0,
+                    end: a1,
+                },
+                _ => Cons::StrIndex {
+                    dst: c.ret,
+                    recv,
+                    search: a0,
+                    last: name == "lastIndexOf",
+                },
+            };
+            for x in [recv, a0, a1] {
+                if x != NO_NODE {
+                    m.cons(x, k);
+                }
+            }
+            return true;
+        }
+        // Every operand is ToString'd or ToIntegerOrInfinity'd.
+        "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
+        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "indexOf" | "lastIndexOf"
+        | "toFixed" | "toPrecision" | "toExponential" => {
+            coerce_operands(m, call, "string method operand");
+            // −0 tolerance (`Model::with_native`): ToString and
+            // ToIntegerOrInfinity give `-0` and `0` the same result.
+            m.zs_absorbing = true;
+            let r = match name {
+                "at" => prim::STR | prim::UNDEF,
+                "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
+                "codePointAt" => prim::NUM | prim::UNDEF,
+                _ => prim::STR,
+            };
+            // `charAt` and `at` read one code unit (or none: `""`,
+            // `undefined`); `"lit".indexOf(..)` is in `[-1, len]` (PR D,
+            // `Model::str_index_len`).
+            let one_unit = matches!(name, "charAt" | "at");
+            let index_len = m
+                .str_index_len
+                .get(&call)
+                .copied()
+                .filter(|_| matches!(name, "indexOf" | "lastIndexOf"));
+            let saved = (one_unit || index_len.is_some()).then(|| {
+                m.cur_range.replace(crate::model::Rg {
+                    num: index_len.map_or(crate::model::Iv::TOP, |l| crate::model::Iv::int(-1, l)),
+                    chr: crate::model::range::CHAR_ANY,
+                    frac: index_len.is_none(),
+                })
+            });
+            ret_prim(m, call, r);
+            if let Some(saved) = saved {
+                m.cur_range = saved;
+            }
+            return true;
+        }
+        // 22.1.3.36: no operand is read; a String Iterator over the code
+        // points (strings), whose [[Prototype]] is
+        // `%StringIteratorPrototype%` (CreateIteratorFromClosure).
+        n if n == collections::WK_ITERATOR => {
+            let cps = m.node_l("string-iterator-values");
+            m.add_prim(cps, prim::STR);
+            let it = collections::iter_over(m, call, members::STRING_ITERATOR, cps);
+            ret_tok(m, call, it);
+            return true;
+        }
+        _ => {}
     }
-    let arg0 = c.args.first().copied();
+    let ops = positions(m, &c);
+    let arg0 = ops.first().copied();
     let s = str_node(m);
     match name {
         // 22.1.3.19 / .20: GetMethod(searchValue, @@replace) called with
@@ -147,8 +446,8 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
         // replaceValue called with (match, position, string). replaceAll
         // first tests IsRegExp(searchValue) and reads its `flags`.
         "replace" | "replaceAll" => {
-            let (Some(p), Some(rv)) = (arg0, c.args.get(1).copied()) else {
-                for &a in &c.args {
+            let (Some(p), Some(rv)) = (arg0, ops.get(1).copied()) else {
+                for &a in &ops {
                     to_prim(m, a, "String.prototype.replace operand");
                 }
                 ret_prim(m, call, prim::STR);
@@ -162,16 +461,56 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
             replace_value(m, call, rv);
             let r = sym_call(m, call, p, "replace", vec![s, rv]);
             m.edge(r, c.ret);
-            ret_prim(m, call, prim::STR);
+            // Rule M6: a String result, one constant when the three
+            // operands are constants (`Cons::StrReplace`).
+            match c.this {
+                ThisArg::Node(recv) if name == "replace" => {
+                    let k = Cons::StrReplace {
+                        dst: c.ret,
+                        recv,
+                        search: p,
+                        repl: rv,
+                    };
+                    for x in [recv, p, rv] {
+                        m.cons(x, k);
+                    }
+                }
+                _ => ret_prim(m, call, prim::STR),
+            }
             return true;
         }
         // 22.1.3.23: GetMethod(separator, @@split) called with (O, limit);
         // else ToString(separator), ToUint32(limit).
         "split" => {
             if let Some(p) = arg0 {
-                to_prim(m, p, "split separator ToString");
-                let lim = c.args.get(1).copied().unwrap_or(s);
-                to_prim(m, lim, "split limit ToUint32");
+                let lim = ops.get(1).copied().unwrap_or(s);
+                // Steps 4-5 run only when GetMethod(separator, @@split)
+                // is undefined or null (a nullish separator skips step 2):
+                // the separator and limit are converted behind a nullish
+                // test of the same lookup the call below makes.
+                let wk = m.atom(&format!("{WK}split"));
+                let g = m.node_l("split @@split");
+                m.cons(
+                    p,
+                    Cons::Load {
+                        key: Key::Named(wk),
+                        dst: g,
+                    },
+                );
+                let conv = m.node_l("split separator");
+                let conv_lim = m.node_l("split limit");
+                for (test_on, from, dst) in [(g, p, conv), (g, lim, conv_lim), (p, lim, conv_lim)] {
+                    m.cons(
+                        test_on,
+                        Cons::Guard {
+                            test: crate::model::guard::NULLISH,
+                            from,
+                            dst,
+                        },
+                    );
+                }
+                to_prim(m, conv, "split separator ToString");
+                to_prim(m, conv_lim, "split limit ToUint32");
                 let r = sym_call(m, call, p, "split", vec![s, lim]);
                 m.edge(r, c.ret);
             }
@@ -203,64 +542,47 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 m.edge(r, c.ret);
             }
         }
-        // Every operand is ToString'd or ToIntegerOrInfinity'd.
-        "charAt" | "charCodeAt" | "codePointAt" | "at" | "slice" | "substring" | "substr"
-        | "padStart" | "padEnd" | "repeat" | "concat" | "normalize" | "trim" | "trimStart"
-        | "trimEnd" | "indexOf" | "lastIndexOf" | "toFixed" | "toPrecision" | "toExponential" => {
-            for &a in &c.args {
-                to_prim(m, a, "string method operand");
-            }
-            let r = match name {
-                "at" => prim::STR | prim::UNDEF,
-                "charCodeAt" | "indexOf" | "lastIndexOf" => prim::NUM,
-                "codePointAt" => prim::NUM | prim::UNDEF,
-                _ => prim::STR,
-            };
-            ret_prim(m, call, r);
-            return true;
-        }
-        // 22.1.3.28 / .30 / .10 / .31: no operand is read.
-        "toLowerCase" | "toUpperCase" | "toWellFormed" => {
-            ret_prim(m, call, prim::STR);
-            return true;
-        }
-        "isWellFormed" => {
-            ret_prim(m, call, prim::BOOL);
-            return true;
-        }
         // 22.1.3.7 / .24 / .8 step 2: IsRegExp(searchString) reads @@match;
         // then ToString.
         "includes" | "startsWith" | "endsWith" => {
             if let Some(p) = arg0 {
                 read_only(m, p, &format!("{WK}match"));
             }
-            for &a in &c.args {
+            // searchString and position; later arguments are not read.
+            for &a in ops.iter().take(2) {
                 to_prim(m, a, "string search operand");
             }
             ret_prim(m, call, prim::BOOL);
             return true;
         }
-        // 22.1.3.12: `that` is ToString'd; locales and options are read by
-        // Intl (any key): they keep the generic protocol.
+        // 22.1.3.12 / .26 / .27 with ECMA-402 19.1.2 / 19.1.3 / 19.1.4:
+        // `that` is ToString'd; `locales` is CanonicalizeLocaleList'd
+        // (`intl_locales`); localeCompare's `options` is read by
+        // InitializeCollator's GetOption calls (`intl_options`). Later
+        // arguments are not read.
         "localeCompare" | "toLocaleLowerCase" | "toLocaleUpperCase" => {
-            let skip = if name == "localeCompare" {
+            let compare = name == "localeCompare";
+            if compare {
                 if let Some(t) = arg0 {
                     to_prim(m, t, "localeCompare operand");
                 }
-                1
-            } else {
-                0
-            };
-            let r = m.reason(&format!(
-                "argument of a primitive method: {name} locales/options"
-            ));
-            for &a in c.args.iter().skip(skip) {
-                m.cons(
-                    a,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Any,
-                    },
+            }
+            if let Some(&l) = ops.get(compare as usize) {
+                intl_locales(m, l);
+            }
+            if let (true, Some(&o)) = (compare, ops.get(2)) {
+                intl_options(
+                    m,
+                    o,
+                    &[
+                        "usage",
+                        "localeMatcher",
+                        "collation",
+                        "numeric",
+                        "caseFirst",
+                        "sensitivity",
+                        "ignorePunctuation",
+                    ],
                 );
             }
             ret_prim(
@@ -293,17 +615,66 @@ pub(super) fn regexp_described(name: &str) -> bool {
     )
 }
 
+/// Rule RT (`regex_tail`): the record `rec` of `exec` on receiver `t`
+/// holds group k and the tail's groups in index slots (`index_slot`) the
+/// input's suffixes derive (`Cons::Captures`). A receiver of no analysable
+/// literal, a second tail at the same record or no input: every index may
+/// hold any capture (`index_slots_merge`).
+fn exec_captures(m: &mut Model, t: Tok, rec: Tok, input: Option<NodeId>) {
+    let pat = match m.toks[t as usize] {
+        TokKind::Obj(tm, _) => m.regexp_tail_of.get(&tm).copied(),
+        _ => None,
+    };
+    // Rule M7: an object of `new RegExp(P)`: P's tail once P is decided;
+    // while it is not, the record waits for it (`Model::regexp_pattern`)
+    // and a read of a constant index reads that index's slot
+    // (`exact_index_slot`).
+    if let (None, Some(s)) = (pat, input) {
+        if m.regexp_ctor_toks.contains(&t) {
+            match m.regexp_ctor_pat.get(&t).copied() {
+                None => {
+                    m.regexp_pending.entry(t).or_default().push((rec, s));
+                    m.regexp_pending_recs.insert(rec);
+                }
+                Some((_, p)) => m.exec_attach(t, rec, p, s),
+            }
+            return;
+        }
+    }
+    let (Some(pat), Some(s)) = (pat, input) else {
+        m.index_slots_merge(rec);
+        return;
+    };
+    m.exec_attach_tail(rec, pat, s);
+}
+
 /// `RegExp.prototype` methods (22.2.6). Each runs the object's `exec`
 /// through a property lookup (RegExpExec), so a replaced or overridden
 /// `exec` is called; the builtin `exec` reads `lastIndex` and ToString's
 /// its argument. `@@split` constructs its splitter through the species
 /// constructor and runs that splitter's `exec`; `@@matchAll` keeps the
 /// generic summary.
+/// What `RegExp.prototype[@@replace]` reads of the regex besides its
+/// match state (22.2.6.11 steps 5-8 `flags`, 22.2.7.1 RegExpExec `exec`;
+/// 22.2.6.4 the `flags` getter reads the flag accessors).
+pub(crate) const REGEXP_REPLACE_READS: [&str; 10] = [
+    "exec",
+    "flags",
+    "global",
+    "hasIndices",
+    "ignoreCase",
+    "multiline",
+    "dotAll",
+    "unicode",
+    "unicodeSets",
+    "sticky",
+];
+
 pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
     let c = m.calls[call as usize].clone();
     let recv = m.node_l("regexp");
     m.add_tok(recv, t);
-    if let Some(s) = c.args.first().copied() {
+    if let Some(s) = c.arg(0).copied() {
         to_prim(m, s, "RegExp argument ToString");
     }
     match name {
@@ -315,7 +686,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             return;
         }
         _ => {
-            if let Some(s) = c.args.first().copied() {
+            if let Some(s) = c.arg(0).copied() {
                 read_prim(m, recv, "flags", "RegExp flags ToString");
                 let r = method_call(m, call, recv, "exec", vec![s]);
                 read_match(m, r);
@@ -324,8 +695,27 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
                 }
             }
             if name == "@@__perry_wk_replace" {
-                if let Some(&rv) = c.args.get(1) {
+                if let Some(&rv) = c.arg(1) {
                     replace_value(m, call, rv);
+                    // Rule M9 (`Model::class_replace_strs`): every value the
+                    // result depends on runs it again.
+                    let k = Cons::ClassReplace {
+                        dst: c.ret,
+                        tok: t,
+                        repl: rv,
+                    };
+                    let mut on = vec![rv];
+                    if let Some(&(p, f)) = m.regexp_ctor_args.get(&t) {
+                        on.extend([p, f]);
+                    }
+                    for key in REGEXP_REPLACE_READS {
+                        let a = m.atom(key);
+                        on.push(m.field(t, a));
+                    }
+                    for x in on {
+                        m.cons(x, k);
+                    }
+                    return;
                 }
             }
         }
@@ -340,7 +730,9 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
         // the captures (String or undefined) with `index`, `input` and
         // `groups` (an object of String or undefined, or undefined).
         "exec" => {
-            let rec = site_tmpl(m, call, "Array");
+            // Born hole-free: steps 22 and 33 define every index 0 ..= the
+            // group count (`Model::exec_index_present`).
+            let rec = site_tmpl_born(m, call, "Array", true, false);
             let fa = m.field_any(rec);
             m.add_prim(fa, prim::STR | prim::UNDEF);
             for (key, p) in [
@@ -358,6 +750,7 @@ pub(super) fn regexp_method(m: &mut Model, t: Tok, name: &str, call: CallId) {
             let a = m.atom("groups");
             let f = m.field(rec, a);
             m.add_tok(f, g);
+            exec_captures(m, t, rec, c.arg(0).copied());
             ret_tok(m, call, rec);
             ret_prim(m, call, prim::NULL);
         }
@@ -410,10 +803,10 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
     );
     let fl = str_node(m);
     let splitter = construct(m, call, sc, vec![recv, fl]);
-    if let Some(&lim) = c.args.get(1) {
+    if let Some(&lim) = c.arg(1) {
         to_prim(m, lim, "@@split limit ToUint32");
     }
-    let Some(&s) = c.args.first() else {
+    let Some(&s) = c.arg(0) else {
         let a = site_tmpl(m, call, "Array");
         ret_tok(m, call, a);
         return;
@@ -429,6 +822,7 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             key: Key::Named(li),
             src: q,
             site,
+            region: m.thrown,
         },
     );
     let z = method_call(m, call, splitter, "exec", vec![s]);
@@ -443,6 +837,8 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             idx: i,
             dst: cap,
             shape: 0,
+            enumerable: false,
+            kept: false,
         },
     );
     let a = site_tmpl(m, call, "Array");
@@ -453,22 +849,26 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
 }
 
 /// `Construct(ctor, args)` the builtin makes while it runs.
+#[track_caller]
 fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> NodeId {
     let ret = m.node_l("builtin-new");
     m.nodes[ret as usize].frame = m.call_run(by);
     let call = m.calls.len() as CallId;
-    m.solver_call(
+    let _call = m.chain_call(
         by,
+        0,
+        ctor,
         CallSite {
+            first_arg_fixed: false,
             this: ThisArg::Undef,
             args,
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
+        move |m, tg, call| m.cons(tg, Cons::New { call }),
     );
-    m.cons(ctor, Cons::New { call });
     ret
 }
 

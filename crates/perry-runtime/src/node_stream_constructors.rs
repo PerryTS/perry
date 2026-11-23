@@ -9,9 +9,7 @@ use crate::value::JSValue;
 /// int32-boxed and double representations). Returns `None` for non-numbers.
 pub(super) fn jsvalue_as_f64(v: f64) -> Option<f64> {
     let jsval = JSValue::from_bits(v.to_bits());
-    if jsval.is_int32() {
-        Some(jsval.as_int32() as f64)
-    } else if jsval.is_number() {
+    if jsval.is_number() {
         Some(jsval.as_number())
     } else {
         None

@@ -109,15 +109,6 @@ impl<'a> Gen<'a> {
         }
     }
 
-    /// Another unit's layout a published value's field may hold as its
-    /// owner publishes it (a stand-in no census broke).
-    pub(crate) fn forwarded_layout(&self, tm: TmplId) -> bool {
-        self.stand_in_cc.get(&tm).is_some_and(|c| c.literal_shape)
-            && !self
-                .unit_in
-                .is_some_and(|u| u.broken(&self.m.tmpls[tm as usize].display))
-    }
-
     /// A literal layout of this unit a published value's field may hold
     /// as a nested contract (design §18.7): no census broke it, it is no
     /// stand-in or contract class. (A closed callee of another unit that
@@ -237,13 +228,7 @@ impl<'a> Gen<'a> {
                                 match self.m.toks[x as usize] {
                                     TokKind::Obj(xtm, _)
                                         if !reported
-                                            && matches!(
-                                                self.m.tmpls[xtm as usize].kind,
-                                                TmplKind::BObj {
-                                                    what: "TypedArray",
-                                                    ..
-                                                }
-                                            )
+                                            && self.m.tmpls[xtm as usize].kind.typed_storage()
                                             && !self.stand_in_tas.iter().any(|&(_, s)| s == x)
                                             && !self.m.is_escaped(x)
                                             && !self.m.hard.contains_key(&x) =>

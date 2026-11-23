@@ -25,7 +25,7 @@
 //! per-site state, no name classification, and no second copy of the fact.
 
 use crate::block::LlBlock;
-use crate::types::{I1, I32, I64};
+use crate::types::{I1, I64};
 
 pub(crate) use perry_abi::BuiltinProto;
 
@@ -33,26 +33,41 @@ pub(crate) use perry_abi::BuiltinProto;
 /// was modified, i.e. the direct builtin call is NOT proven: the shadow bit of
 /// the agent's intrinsic, two loads and a compare.
 pub(crate) fn emit_patched_test(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let proto = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family as usize);
-    let at = ctx.block().gep(crate::types::I8, &proto, &[(I64, "4")]);
-    let own = ctx.block().load(I32, &at);
-    let own = ctx.block().icmp_uge(I32, &own, &end);
+    let own = emit_shadow_bit(ctx, family);
     let patched = if family == BuiltinProto::Object {
         own
     } else {
-        let object =
-            crate::expr::agent_ptr::emit_intrinsic_proto(ctx, BuiltinProto::Object as usize);
-        let at = ctx.block().gep(crate::types::I8, &object, &[(I64, "4")]);
-        let parent = ctx.block().load(I32, &at);
-        let parent = ctx.block().icmp_uge(I32, &parent, &end);
+        let parent = emit_shadow_bit(ctx, BuiltinProto::Object);
         ctx.block().or(I1, &own, &parent)
     };
-    let blk = ctx.block();
-    // Unlikely, and said so: a guard's generic arm must not cost the
-    // function's hot loops their register assignment (the same reason
-    // `array_push_own`'s exit carries the hint).
-    blk.call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
+    emit_unlikely(ctx.block(), &patched)
+}
+
+/// `i1`: true when the agent's intrinsic prototype of `family` ITSELF was
+/// written, defined, deleted or relinked: its own shadow bit, one slot load,
+/// one word load and a compare. The runtime reads the same word
+/// (`object::builtin_proto::prototype_unwritten`). It is the exact fact for a
+/// member the realm declares OWN on that prototype (a Buffer reader on
+/// Buffer.prototype): `%Object.prototype%` lies behind it on the chain.
+pub(crate) fn emit_prototype_written(
+    ctx: &mut crate::expr::FnCtx<'_>,
+    family: BuiltinProto,
+) -> String {
+    let own = emit_shadow_bit(ctx, family);
+    emit_unlikely(ctx.block(), &own)
+}
+
+/// The shadow bit of the agent's intrinsic prototype of `family`.
+fn emit_shadow_bit(ctx: &mut crate::expr::FnCtx<'_>, family: BuiltinProto) -> String {
+    let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family as usize);
+    crate::proto_constants::emit_word_patched(ctx.block(), &word)
+}
+
+/// Unlikely, and said so: a guard's generic arm must not cost the function's
+/// hot loops their register assignment (the same reason `array_push_own`'s
+/// exit carries the hint).
+fn emit_unlikely(blk: &mut LlBlock, patched: &str) -> String {
+    blk.call(I1, "llvm.expect.i1", &[(I1, patched), (I1, "false")])
 }
 
 /// [`emit_patched_test`] over several families (a borrowed call also reads
@@ -81,11 +96,8 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
     let Some(family) = crate::runtime_abi::builtin_namespace_family(ns) else {
         return "true".to_string();
     };
-    let end = (crate::runtime_abi::LAYOUT_ORDINARY_END as i32).to_string();
-    let holder = crate::expr::agent_ptr::emit_intrinsic_proto(ctx, family);
-    let at = ctx.block().gep(crate::types::I8, &holder, &[(I64, "4")]);
-    let word = ctx.block().load(I32, &at);
-    let patched = ctx.block().icmp_uge(I32, &word, &end);
+    let word = crate::expr::agent_ptr::emit_intrinsic_shadow_word(ctx, family);
+    let patched = crate::proto_constants::emit_word_patched(ctx.block(), &word);
     ctx.block()
         .call(I1, "llvm.expect.i1", &[(I1, &patched), (I1, "false")])
 }
@@ -103,6 +115,8 @@ fn guarded_member(generic: &perry_hir::Expr) -> Option<&str> {
         _ => None,
     }
 }
+
+use perry_hir::namespace_pairs::pair_callee;
 
 /// A guarded call's generic arm `globalThis.<ns>.<member>(args…)` without
 /// spread: its family, member and arguments.
@@ -138,36 +152,57 @@ fn compact_generic<'e>(
 /// The generic arm as three out-of-line calls: read `globalThis[ns]` and its
 /// `member` where the callee is read, evaluate the arguments, call the value
 /// with the namespace as `this` (ECMA-262 `Call(GetValue(ref), base, args)`).
+///
+/// Every value one step produced and a later step consumes lives in the
+/// call's rooted group and is re-read after the steps that may collect: the
+/// namespace across the member read (an accessor may run) and every argument,
+/// the callee across every argument, and argument `i` across the arguments
+/// after it. A `double` held in a register is not a statepoint root, so a
+/// moving collection inside an argument would leave it naming from-space.
 fn emit_namespace_generic_call(
     ctx: &mut crate::expr::FnCtx<'_>,
     family: usize,
     member: &str,
     args: &[perry_hir::Expr],
 ) -> anyhow::Result<String> {
+    use crate::rooting::{operand_may_collect, with_rooted_group, Repr};
     use crate::types::{DOUBLE, PTR};
-    let ns = ctx.block().call(
-        DOUBLE,
-        "js_builtin_namespace_value",
-        &[(I64, &family.to_string())],
-    );
-    let idx = ctx.strings.intern(member);
-    let bytes = format!("@{}", ctx.strings.entry(idx).bytes_global);
-    let len = member.len().to_string();
-    let callee = ctx.block().call(
-        DOUBLE,
-        "js_builtin_namespace_member",
-        &[(DOUBLE, &ns), (PTR, &bytes), (I64, &len)],
-    );
-    let mut values = Vec::with_capacity(args.len());
-    for arg in args {
-        values.push(crate::expr::lower_expr(ctx, arg)?);
-    }
-    let (argv, argc) = crate::lower_call::emit_method_args_buffer(ctx, &values);
-    Ok(ctx.block().call(
-        DOUBLE,
-        "js_method_call_value",
-        &[(DOUBLE, &callee), (DOUBLE, &ns), (PTR, &argv), (I64, &argc)],
-    ))
+    let collects: Vec<bool> = args.iter().map(|a| operand_may_collect(ctx, a)).collect();
+    let later_collects = |i: usize| collects[i..].iter().any(|&c| c);
+    with_rooted_group(ctx, args.len() + 2, |ctx, group| {
+        let ns = ctx.block().call(
+            DOUBLE,
+            "js_builtin_namespace_value",
+            &[(I64, &family.to_string())],
+        );
+        let ns_root = group.adopt_emitted(ctx, Repr::Boxed, &ns, later_collects(0));
+        let ns_now = group.reread_emitted(ctx, ns_root);
+        let idx = ctx.strings.intern(member);
+        let bytes = format!("@{}", ctx.strings.entry(idx).bytes_global);
+        let len = member.len().to_string();
+        let callee = ctx.block().call(
+            DOUBLE,
+            "js_builtin_namespace_member",
+            &[(DOUBLE, &ns_now), (PTR, &bytes), (I64, &len)],
+        );
+        let f = group.adopt_emitted(ctx, Repr::Boxed, &callee, later_collects(0));
+        let mut ids = Vec::with_capacity(args.len());
+        for (i, arg) in args.iter().enumerate() {
+            ids.push(group.lower(ctx, arg, later_collects(i + 1))?);
+        }
+        let mut values = Vec::with_capacity(ids.len());
+        for id in ids {
+            values.push(group.reread(ctx, id)?);
+        }
+        let (argv, argc) = crate::lower_call::emit_method_args_buffer(ctx, &values);
+        let callee = group.reread_emitted(ctx, f);
+        let ns = group.reread_emitted(ctx, ns_root);
+        Ok(ctx.block().call(
+            DOUBLE,
+            "js_method_call_value",
+            &[(DOUBLE, &callee), (DOUBLE, &ns), (PTR, &argv), (I64, &argc)],
+        ))
+    })
 }
 
 thread_local! {
@@ -190,10 +225,27 @@ pub(crate) fn console_intrinsic_proven(
     if GUARDED_CALLEE.with(|g| g.get()) == callee as *const perry_hir::Expr as usize {
         return true;
     }
-    let perry_hir::Expr::PropertyGet { byte_offset, .. } = callee else {
-        return false;
-    };
-    *byte_offset != 0 && !ctx.wpfacts_off && ctx.wpfacts.native_member_calls.contains(byte_offset)
+    native_member_proven(ctx, callee)
+}
+
+/// Do the whole-program facts prove that the method call with callee
+/// `callee` (`PropertyGet`) reads its intrinsic member? The solver's
+/// NativeMember verdict (`ElisionFacts::native_member_calls`, keyed by the
+/// callee read's offset): no write may reach the member, so the call runs
+/// the builtin body and no other code.
+pub(crate) fn native_member_proven(ctx: &crate::expr::FnCtx<'_>, callee: &perry_hir::Expr) -> bool {
+    !ctx.wpfacts_off && native_member_site_proven(&ctx.wpfacts.native_member_calls, callee)
+}
+
+/// [`native_member_proven`] over a module's proven set, for the module
+/// collectors that run before any function context exists. An empty set
+/// proves nothing.
+pub(crate) fn native_member_site_proven(
+    native_member_calls: &std::collections::BTreeSet<u32>,
+    callee: &perry_hir::Expr,
+) -> bool {
+    matches!(callee, perry_hir::Expr::PropertyGet { byte_offset, .. }
+        if perry_hir::namespace_pairs::intrinsic_selected(*byte_offset, native_member_calls))
 }
 
 /// `console.<member>(args...)` as the real call: read `globalThis.console`
@@ -224,6 +276,26 @@ pub(crate) fn lower_namespace_guard(
     fast: &perry_hir::Expr,
 ) -> anyhow::Result<String> {
     use crate::types::{DOUBLE, PTR};
+    // MATHC1: a pair of the facts lowering is ONE arm, picked by the call
+    // site's verdict: the intrinsic when the generic call is proven to read
+    // the original builtin (ECMA-262 13.3.6.1 reads the member, so the
+    // intrinsic is that member's call), else the generic call. No test.
+    if ctx.wpfacts.namespace_pair_arms {
+        if let Some(callee) = pair_callee(ns, generic) {
+            if !ctx.wpfacts.interp_guard && native_member_proven(ctx, callee) {
+                return crate::expr::lower_expr(ctx, fast);
+            }
+            return match compact_generic(ns, generic) {
+                Some((_, member, args)) if ns == "console" => {
+                    lower_console_generic_call(ctx, member, args)
+                }
+                Some((family, member, args)) => {
+                    emit_namespace_generic_call(ctx, family, member, args)
+                }
+                None => crate::expr::lower_expr(ctx, generic),
+            };
+        }
+    }
     let patched = emit_namespace_patched(ctx, ns);
     let generic_idx = ctx.new_block("ns_guard.generic");
     let fast_idx = ctx.new_block("ns_guard.intrinsic");
@@ -439,6 +511,9 @@ pub(crate) const ARRAY_ENTRIES: &[(&str, usize, usize)] = &[
     ("values", 0, 0),
     ("slice", 1, 2),
     ("shift", 0, 0),
+    // `Expr::ArrayPop` and the inline pop's slow arm
+    // (`array_proto_guard::emit_array_pop_call`).
+    ("pop", 0, 0),
     // `arr.map(f)` whose result is discarded (`stmt/unused_expr.rs`).
     ("mapDiscard", 1, 1),
 ];
@@ -454,7 +529,8 @@ pub(crate) fn array_entry(method: &str, argc: usize) -> Option<String> {
 /// The builtin methods a method site on an unproven receiver calls directly
 /// (runtime `object/builtin_method.rs`): `(name, argc, families)`, where
 /// `families` is the set of builtin kinds whose intrinsic prototype holds
-/// `name` as that builtin (1 String, 2 Array, 4 Map, 8 Set, 16 Function).
+/// `name` as that builtin (1 String, 2 Array, 4 Map, 8 Set, 16 Function,
+/// 32 a Buffer or `Uint8Array` byte cell).
 /// `js_bm_<name><argc>(site, recv, key, method_id, args…)` proves the
 /// receiver's kind and `Pristine` of its family and calls the body; any other
 /// receiver takes the universal dispatcher with the same operands.
@@ -479,6 +555,9 @@ pub(crate) const BUILTIN_METHODS: &[(&str, usize, u8)] = &[
     ("concat", 0, 1),
     ("concat", 1, 1),
     ("concat", 2, 1),
+    ("copyWithin", 1, 32),
+    ("copyWithin", 2, 32),
+    ("copyWithin", 3, 32),
     ("delete", 1, 12),
     ("endsWith", 0, 1),
     ("endsWith", 1, 1),

@@ -1,6 +1,6 @@
 //! FVA: a call through a value is a call of the bodies the value is.
 //!
-//! End to end, whole program (`PERRY_FACTS_UNITS=0`) and per unit: a call
+//! End to end, whole program: a call
 //! whose callee set the facts prove makes no runtime dispatch, and every
 //! program prints node's output (pinned below).
 //!
@@ -46,7 +46,6 @@ fn compile_and_run(dir: &Path, source: &str, whole: bool) -> (String, String) {
         .current_dir(dir)
         .env("PERRY_NO_CACHE", "1")
         .env("PERRY_SAVE_LL", &ll_dir);
-    cmd.env("PERRY_FACTS_UNITS", if whole { "0" } else { "1" });
     let out = cmd
         .arg("compile")
         .arg(&src)
@@ -98,7 +97,7 @@ console.log("fields", s, run(p, 5), run(q, 5));
 #[test]
 fn a_member_call_through_a_proven_field_runs_its_bodies() {
     let d = tmp("fields");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, FIELDS, whole);
         assert_eq!(out, "fields 70 6 10\n", "whole={whole}");
         if whole {
@@ -154,7 +153,7 @@ console.log("fields5", s);
 #[test]
 fn a_member_call_through_a_field_of_five_bodies_is_one_indirect_call() {
     let d = tmp("fields5");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, FIELDS5, whole);
         assert_eq!(out, "fields5 106\n", "whole={whole}");
         if whole {
@@ -181,12 +180,9 @@ console.log("nullable", callN(a), callN(undefined), callN(b));
 #[test]
 fn virtual_dispatch_over_proven_classes_is_a_class_id_switch() {
     let d = tmp("tower");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, TOWER, whole);
         assert_eq!(out, "tower 70\nnullable 2 threw:0 2\n", "whole={whole}");
-        if !whole {
-            continue;
-        }
         let call = body(&ll, "call");
         let switch = call
             .lines()
@@ -220,7 +216,7 @@ console.log("values", s);
 #[test]
 fn a_call_through_a_local_holding_two_closures_is_one_indirect_call() {
     let d = tmp("values");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, VALUES, whole);
         assert_eq!(out, "values 13\n", "whole={whole}");
         if whole {
@@ -250,15 +246,12 @@ fn a_proven_static_is_called_without_its_guard() {
     // (`Body.sun`, `Pk.of` through a value) is its body's direct call; one
     // replaced after its definition (`C.k`) keeps the guarded call.
     let d = tmp("statics");
-    for whole in [true, false] {
+    for whole in [true] {
         let (ll, out) = compile_and_run(&d, STATICS, whole);
         assert_eq!(
             out, "statics 1,2 33 3\nreplaced 1\nreplaced 2\n",
             "whole={whole}"
         );
-        if !whole {
-            continue;
-        }
         let make = body(&ll, "make");
         assert!(!make.contains("js_class_static_call_guard("), "{make}");
         assert!(make.contains("@perry_static_main_ts__Body__"), "{make}");
@@ -287,7 +280,7 @@ fn a_getter_on_a_new_key_keeps_the_layout() {
     // the literal's layout (not E5), and a getter over an existing data key
     // (`m.tag`) stays E5. Output pinned to node in both modes.
     let d = tmp("accessors");
-    for whole in [true, false] {
+    for whole in [true] {
         let (_, out) = compile_and_run(&d, ACCESSORS, whole);
         assert_eq!(out, "accessors 10 tag,k\nredefined 7 3\n", "whole={whole}");
     }

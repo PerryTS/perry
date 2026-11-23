@@ -323,3 +323,121 @@ console.log(payload.n); // LOOKUP_N
         .unwrap();
     }
 }
+
+/// B.2.2.4/5 under an unknown key: a modeled receiver's chain answers
+/// `undefined`, its program accessors, or a realm accessor function
+/// (`Object.prototype.__proto__`'s): no value of the program beyond those.
+#[test]
+fn accessor_lookup_unknown_key_on_a_known_chain_returns_no_unknown_value() {
+    let mut failures = Vec::new();
+    for method in ["__lookupGetter__", "__lookupSetter__"] {
+        let src = format!(
+            r#"
+class Payload {{ n = 1; }}
+const payload = new Payload();
+const receiver = {{ get x() {{ return 1; }}, set x(v) {{}} }};
+const found: any = receiver.{method}(process.argv[0]);
+if (found) found.held = payload;
+console.log(payload.n); // LOOKUP_N
+"#
+        );
+        if let Err(e) = lookup_site(&src, true) {
+            failures.push(format!("{method}: {}", e.lines().next().unwrap()));
+        }
+    }
+    assert!(failures.is_empty(), "any-key lookups: {failures:?}");
+}
+
+/// The tssrc shape (debug.ts `assertionCache` / `Debug[key] = ..`): a
+/// computed read gives "some Object.prototype method", stored as a member
+/// of a namespace object, so its call may be `__lookupGetter__` with an
+/// unknown key on that object. Its result adds no unknown value. (Stored
+/// under a named key: a store under any key is the changed-holder rule.)
+#[test]
+fn accessor_lookup_method_summary_call_adds_no_unknown_value() {
+    let src = r#"
+class Payload { n = 1; }
+const payload = new Payload();
+const ns = { check(x: unknown) { return payload; } };
+const cache: Record<string, unknown> = {};
+if (process.argv.length > 9) (ns as any).check = cache[process.argv[1]];
+const r = ns.check(process.argv[0]);
+console.log(r.n); // LOOKUP_N
+"#;
+    let at = src.find("// LOOKUP_N").unwrap();
+    let line = src[..at].rfind('\n').map_or(0, |p| p + 1) as u32;
+    let pf = facts(src);
+    let sites: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| !s.is_call && s.key == "n" && (line..at as u32).contains(&s.byte_offset))
+        .collect();
+    assert!(!sites.is_empty(), "missing LOOKUP_N\n{}", pf.dump_text());
+    // The call's result holds the method's own result, the summary's
+    // values (the receiver, primitives) and a realm accessor function:
+    // no unknown value.
+    assert!(
+        sites.iter().all(|s| !s.top),
+        "LOOKUP_N receiver holds an unknown value\n{}",
+        pf.dump_text()
+    );
+}
+
+/// A plain store through ⊤ is [[Set]] (ECMA-262 10.1.9.2): it makes a data
+/// property on whatever ⊤ is and never installs an accessor, so the any-key
+/// lookup finds only the program accessors and the realm's own.
+#[test]
+fn accessor_lookup_unknown_key_after_a_store_through_unknown_is_proven() {
+    lookup_site(
+        r#"
+declare function unknown(): any;
+class Payload { n = 1; }
+const payload = new Payload();
+unknown()[process.argv[1]] = () => 0;
+const receiver = { get x() { return 1; } };
+const found: any = receiver.__lookupGetter__(process.argv[0]);
+if (found) found.held = payload;
+console.log(payload.n); // LOOKUP_N
+"#,
+        true,
+    )
+    .unwrap();
+}
+
+/// Control: under the key `"__proto__"` the found function is the realm's
+/// `__proto__` setter (20.1.3.8.2): called on the payload with `null` it
+/// replaces the payload's prototype (E6).
+#[test]
+fn accessor_lookup_proto_key_found_setter_called_on_the_payload_stays_unproven() {
+    lookup_site(
+        r#"
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = { get x() { return 1; } };
+const found: any = receiver.__lookupSetter__("__proto__");
+if (found) found.call(payload, null);
+console.log(payload.n); // LOOKUP_N
+"#,
+        false,
+    )
+    .unwrap();
+}
+
+/// An unknown string key never names `__proto__` (DECISIONS 217): the
+/// chain {receiver, Object.prototype} holds no setter under it (B.2.2.5),
+/// the query answers `undefined` and nothing is called.
+#[test]
+fn accessor_lookup_unknown_key_names_no_proto_setter() {
+    lookup_site(
+        r#"
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = { get x() { return 1; } };
+const found: any = receiver.__lookupSetter__(process.argv[0]);
+if (found) found.call(payload, null);
+console.log(payload.n); // LOOKUP_N
+"#,
+        true,
+    )
+    .unwrap();
+}

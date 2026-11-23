@@ -54,8 +54,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
     // Declared class fields commonly CREATE; retain their key-add-first
     // admission instead of scanning all preceding own keys at each birth.
     let record = if (*obj).class_id == 0
-        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE)
-            < (2 << crate::codegen_abi::LAYOUT_BAND_SHIFT)
+        && id.wrapping_sub(super::shapes::SHAPE_ID_BASE) < crate::codegen_abi::LAYOUT_RECORD_SPAN
     {
         // `obj`'s own header word: the receiver carries its row.
         super::shapes::shape_record_of_receiver(id)
@@ -63,7 +62,7 @@ pub(crate) unsafe fn define_own_data_from_shape(
         None
     };
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -98,7 +97,7 @@ unsafe fn define_other(
     }
     let obj = addr as *mut ObjectHeader;
     if let Some(record) = record {
-        if record.object_kind() == super::shapes::ShapeObjectKind::Ordinary
+        if record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
             && record.summary() == 0
             && record.proto_id() == super::shapes::PROTO_ID_DEFAULT
             && record.logical_key_count() != 0
@@ -407,7 +406,7 @@ unsafe fn definition_admitted(obj_bits: u64, key_value: f64) -> Option<Admitted>
     }
     let obj = addr as *const ObjectHeader;
     let record = super::shapes::object_shape_record(obj)?;
-    if record.object_kind() != super::shapes::ShapeObjectKind::Ordinary
+    if !record.kind_is(super::shapes::ShapeObjectKind::Ordinary)
         || (*obj).class_id == super::NATIVE_MODULE_CLASS_ID
     {
         return None;

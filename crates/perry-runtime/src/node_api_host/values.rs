@@ -33,9 +33,7 @@ fn write_handle(env: NapiEnv, bits: u64, result: *mut NapiValue) -> NapiStatus {
 #[inline]
 fn value_as_number(bits: u64) -> Option<f64> {
     let value = JSValue::from_bits(bits);
-    if value.is_int32() {
-        Some(value.as_int32() as f64)
-    } else if value.is_number() {
+    if value.is_number() {
         Some(value.as_number())
     } else {
         None
@@ -497,9 +495,6 @@ pub unsafe extern "C" fn napi_typeof(
     let js = JSValue::from_bits(bits);
     let value_type = if js.is_null() {
         NapiValueType::Null
-    } else if js.is_int32() {
-        // A number, as `napi_get_value_double` reads it (`value_as_number`).
-        NapiValueType::Number
     } else {
         // Everything classifies exactly as the `typeof` operator does, so
         // Perry's other callable representations (class function objects,

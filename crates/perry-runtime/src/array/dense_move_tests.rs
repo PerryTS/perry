@@ -72,14 +72,14 @@ fn dense_moves_preserve_the_existing_numeric_layout_without_a_rebuild() {
         Some(NumericArrayLayout::RawF64)
     );
 
-    let arr = js_array_unshift_f64(arr, f64::from_bits(crate::value::JSValue::int32(0).bits()));
+    let arr = js_array_unshift_f64(arr, f64::from(0));
     assert_eq!(
         unsafe { array_numeric_layout(arr) },
         Some(NumericArrayLayout::RawF64)
     );
     assert_eq!(js_array_get_f64(arr, 0), 0.0);
 
-    let item = [f64::from_bits(crate::value::JSValue::int32(9).bits())];
+    let item = [f64::from(9)];
     let mut out = arr;
     js_array_splice(arr, 2, 1, item.as_ptr(), 1, &mut out);
     assert_eq!(

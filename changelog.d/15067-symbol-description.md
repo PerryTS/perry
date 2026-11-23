@@ -1,0 +1,1 @@
+A symbol's `description` reads its description again: `Symbol('foo').description` and `Symbol.for('test262').description` return `"foo"` and `"test262"` instead of `undefined`. The symbol arm of the property-read miss path answers `description` from the symbol before it reads `Symbol.prototype`, which declares no `description` accessor (#15039).

@@ -15,15 +15,17 @@ fn reloc_mode_for(effective_target: &str, wasm_static_opt_in: bool) -> RelocMode
     }
 }
 
-/// Whether `effective_target`'s thread-locals are emulated: Android and
-/// OpenHarmony, where rustc builds the runtime archive with
-/// `tls-model = emulated` (its target specs), so the runtime's own
-/// thread-locals exist only as `__emutls_v.<name>` control variables. Emitted
-/// code that names one of them natively finds no TLS symbol to bind to, and
-/// the program's own thread-locals (module state of a program that starts a
-/// Worker) take the same model as the runtime it is linked with.
+/// Whether `effective_target`'s thread-locals are emulated: OpenHarmony,
+/// where rustc builds the runtime archive with `tls-model = emulated` (its
+/// target spec), so the runtime's own thread-locals exist only as
+/// `__emutls_v.<name>` control variables. Emitted code that names one of them
+/// natively finds no TLS symbol to bind to, and the program's own
+/// thread-locals (module state of a program that starts a Worker) take the
+/// same model as the runtime it is linked with. Android (API 29,
+/// `android_api_level!`) builds its runtime with native thread-locals
+/// (`.cargo/config.toml`: `tls-model=global-dynamic`), so it is not emulated.
 pub(crate) fn emulated_tls(effective_target: &str) -> bool {
-    effective_target.contains("android") || effective_target.contains("ohos")
+    effective_target.contains("ohos")
 }
 
 pub(super) fn optimize_and_emit(
@@ -128,6 +130,8 @@ pub(super) fn optimize_and_emit(
     module.set_triple(&triple);
     module.set_data_layout(&tm.get_target_data().get_data_layout());
     super::coff::coalesce_helpers(module, effective_target);
+    // Before the statepoint rewrite hides the callees (see `cold_paths`).
+    super::cold_paths::apply(module);
 
     // RS4GC must run BEFORE the optimization pipeline, and — critically — in
     // this process, against this LLVM.
@@ -173,14 +177,27 @@ pub(super) fn optimize_and_emit(
         // post-rewrite census bounds unrelated optimizer expansion without
         // changing the rooting mechanism.
         let rewrite_started = std::time::Instant::now();
-        module
-            .run_passes(STATEPOINT_REWRITE_PASSES, &tm, PassBuilderOptions::create())
-            .map_err(|e| {
-                anyhow!(
-                    "in-process rewrite-statepoints-for-gc failed:\n{}",
-                    e.to_string()
-                )
-            })?;
+        // With the switch off this is the one run it always was. On, the
+        // same passes run in two parts around the dominated stack checks
+        // (`stack_checks`): after the inlining that duplicates them, before
+        // the rewrite turns their overflow arms into statepoints.
+        let rewrite = |passes: &str| {
+            module
+                .run_passes(passes, &tm, PassBuilderOptions::create())
+                .map_err(|e| {
+                    anyhow!(
+                        "in-process rewrite-statepoints-for-gc failed:\n{}",
+                        e.to_string()
+                    )
+                })
+        };
+        if super::stack_checks::prologue_cost_enabled() {
+            rewrite(crate::linker::STATEPOINT_INLINE_PASS)?;
+            super::stack_checks::apply(module);
+            rewrite(crate::linker::STATEPOINT_REWRITE_AFTER_INLINE)?;
+        } else {
+            rewrite(STATEPOINT_REWRITE_PASSES)?;
+        }
         // Verify the rewritten module before it reaches the backend. RS4GC
         // has produced verifier-invalid IR in the wild (#8121: it wrapped an
         // inline-asm barrier into a gc.statepoint), and unlike the external
@@ -340,19 +357,15 @@ entry:
         String::from_utf8(asm).expect("utf-8 assembly")
     }
 
-    /// Android and OpenHarmony thread-locals take the model rustc builds
-    /// their runtime archives with (`tls-model = emulated`): every access goes
-    /// through `__emutls_get_address` on the `__emutls_v.<name>` control
-    /// variable the runtime defines, and no native TLS relocation is left
-    /// for a `-shared` link to reject. Linux keeps native TLS.
+    /// OpenHarmony thread-locals take the model rustc builds its runtime
+    /// archive with (`tls-model = emulated`): every access goes through
+    /// `__emutls_get_address` on the `__emutls_v.<name>` control variable the
+    /// runtime defines, and no native TLS relocation is left for a `-shared`
+    /// link to reject. Linux and Android (API 29, runtime built with
+    /// `tls-model=global-dynamic`) keep native TLS.
     #[test]
     fn emulated_tls_matches_the_runtime_archive_model() {
-        for triple in [
-            "aarch64-linux-android",
-            "x86_64-linux-android",
-            "aarch64-unknown-linux-ohos",
-            "x86_64-unknown-linux-ohos",
-        ] {
+        for triple in ["aarch64-unknown-linux-ohos", "x86_64-unknown-linux-ohos"] {
             assert!(emulated_tls(triple), "{triple}");
             let asm = tls_access_asm(triple);
             assert!(asm.contains("__emutls_get_address"), "{triple}:\n{asm}");
@@ -368,7 +381,12 @@ entry:
                 );
             }
         }
-        for triple in ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"] {
+        for triple in [
+            "x86_64-unknown-linux-gnu",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-unknown-linux-android29",
+            "x86_64-unknown-linux-android29",
+        ] {
             assert!(!emulated_tls(triple), "{triple}");
             let asm = tls_access_asm(triple);
             assert!(!asm.contains("__emutls"), "{triple}:\n{asm}");

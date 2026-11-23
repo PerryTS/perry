@@ -36,6 +36,7 @@ fn fixture(with_args: bool) -> Module {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     });
@@ -90,6 +91,7 @@ fn fixture(with_args: bool) -> Module {
             decorators: Vec::new(),
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
     }
     module.init.push(Stmt::Expr(Expr::New {

@@ -1338,3 +1338,28 @@ pub(super) fn key_of_init_addr(addr: usize) -> Option<String> {
             .map(|(k, _)| k.clone())
     })
 }
+
+impl PathModuleRegistry {
+    /// (key, init address, status 0 registered / 1 initializing / 2 initialized / 3 failed,
+    /// exports bits, factory bits), sorted by key.
+    pub(super) fn snap_image_entries(
+        &self,
+    ) -> Vec<(String, Option<usize>, u8, Option<u64>, Option<u64>)> {
+        let state = self.lock();
+        let mut v: Vec<_> = state
+            .entries
+            .iter()
+            .map(|(k, e)| {
+                let status = match e.status {
+                    PathModuleStatus::Registered => 0,
+                    PathModuleStatus::Initializing(_) => 1,
+                    PathModuleStatus::Initialized => 2,
+                    PathModuleStatus::Failed(_) => 3,
+                };
+                (k.clone(), e.init_addr, status, e.exports, e.factory)
+            })
+            .collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
+    }
+}

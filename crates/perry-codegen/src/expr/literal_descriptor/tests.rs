@@ -40,6 +40,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     };
     let class = Class {
         id: 101,
@@ -75,6 +76,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         is_exported: false,
         aliases: vec![],
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -321,6 +323,7 @@ fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
         mutable_captures: vec![],
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,

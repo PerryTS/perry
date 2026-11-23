@@ -225,8 +225,12 @@ pub(crate) enum BirthKind {
     },
     FunctionInstance(Identity),
     ObjectCreate,
+    /// An Array birth: both bits of its template (`TmplKind::Arr`) are
+    /// part of the birth, so a packet's birth names a plain or hole-free
+    /// template as such (REVIEW-p4l1 R2).
     Array {
         hole_free: bool,
+        plain: bool,
     },
     Arguments,
     Builtin(&'static str),

@@ -67,7 +67,6 @@ pub(super) fn ordinary_proxy_has_instance(constructor: f64, value: f64) -> bool 
     ));
     if !rhs_is_object_value(prototype.get_nanbox_f64())
         && class_ref_id(prototype.get_nanbox_f64()).is_none()
-        && class_prototype_ref_id(prototype.get_nanbox_f64()).is_none()
     {
         throw_type_error(b"Function has non-object prototype in instanceof check");
     }
@@ -112,8 +111,7 @@ mod tests {
             object.get_nanbox_f64()
         ));
 
-        let constructor =
-            scope.root_nanbox_f64(js_get_global_this_builtin_value(b"Object".as_ptr(), 6));
+        let constructor = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
         let callable = scope.root_nanbox_f64(crate::proxy_hooks::proxy_new(
             constructor.get_nanbox_f64(),
             handler.get_nanbox_f64(),

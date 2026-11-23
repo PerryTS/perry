@@ -20,9 +20,8 @@ import time
 def prepare_rust_host_manifest(path, root):
     """Retain the standalone fixture's source selection after copying it."""
     manifest = path.read_text()
-    for relative in ["crates/perry-wasi", "third_party/turnloop/turnloop",
-                     "third_party/turnloop/turnloop-http"]:
-        original = json.dumps("../../../../" + relative)
+    for relative in ["crates/perry-wasi"]:
+        original = json.dumps("../../../../../../" + relative)
         assert manifest.count(original) == 1, f"Rust host path changed: {relative}"
         manifest = manifest.replace(original, json.dumps(str(root / relative)))
     path.write_text(manifest)

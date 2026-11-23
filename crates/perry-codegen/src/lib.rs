@@ -4,6 +4,17 @@
 //! `clang -c` to build an object file linked against `libperry_runtime.a`.
 //! This is Perry's sole native code generation backend (since v0.5.0).
 
+/// The Android API level Perry compiles and links for (the NDK `<triple><api>`
+/// spelling, the versioned LLVM triple, the app templates' `minSdk`). 29
+/// (Android 10) is the first with native ELF thread-locals; below it LLVM and
+/// rustc lower every thread-local through `__emutls_get_address`.
+#[macro_export]
+macro_rules! android_api_level {
+    () => {
+        "29"
+    };
+}
+
 mod array_storage;
 pub mod block;
 pub(crate) mod boxed_vars;
@@ -12,6 +23,7 @@ mod call_entry;
 pub(crate) mod closure_births;
 pub mod codegen;
 pub(crate) mod collectors;
+pub use collectors::life_census::enabled as life_census_enabled;
 pub(crate) mod concat_site_cache;
 pub mod debug_info;
 #[cfg(feature = "llvm-inprocess")]
@@ -36,7 +48,9 @@ pub(crate) mod layout_desc;
 pub mod layout_families;
 pub mod layout_ordinals;
 pub use layout_ordinals::ProgramLayoutOrdinals;
+pub(crate) mod method_site;
 pub(crate) mod proto_constants;
+pub(crate) mod quiet;
 pub use layout_desc::array_families::assign_birth_layouts;
 pub use layout_families::ProgramLayouts;
 pub mod linker;
@@ -105,25 +119,30 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
+// DESIGN-p4l4 VR-3a: record bindings as their fields, before lowering.
+mod value_records;
 #[cfg(feature = "target-wasi")]
 pub mod wasi_toolchain;
 #[cfg(feature = "target-wasi")]
 mod wasm32;
 pub mod workers;
 
+/// ONCHANGE3: the driver names a proven method body only when codegen would call it directly.
+pub use codegen::helpers::body_has_fixed_generator_state;
 pub use codegen::{
     assign_static_shape_ids, compile_module, compile_module_owned, context_free_ctor_abi,
     context_free_ctor_param_count, decode_static_seed, encode_static_seed, module_birth_shapes,
     namespace_member_class_key, namespace_member_func_key, namespace_member_var_key,
-    resolve_target_triple, take_module_static_seeds,
-    target_os_of, user_function_symbol, AppMetadata, BirthProto, BirthShape, CompileOptions,
-    ConstFnBirth, ConstructorContracts, CtorAbi, DefinedClassShape, ElisionFacts,
-    ExportedObjectLiteralCapability, FactsBody, FactsClass, FactsField, FactsIndexedOwner,
-    FactsNumericExpr, FactsNumericFunction, FactsRecv, FpContractMode, ImportedClass,
-    ImportedObjectLiteral, ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry,
-    NamespaceEntryKind, ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
-    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT,
-    TARGET_NAMES,
+    resolve_target_triple, take_module_static_seeds, target_os_of, user_function_symbol,
+    AppMetadata, BirthProto, BirthShape, CompileOptions, ConstFnBirth, ConstructorContracts,
+    CtorAbi, DefinedClassShape, DirectAbi, ElisionFacts, ExportedObjectLiteralCapability,
+    FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead, FactsEnc, FactsField,
+    FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr, FactsNumericFunction, FactsRecRep,
+    FactsRecordBirth, FactsRecordFn, FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep,
+    FactsSignature, FpContractMode, ImportedClass, ImportedObjectLiteral,
+    ImportedObjectLiteralMethod, ModuleBirth, NamespaceEntry, NamespaceEntryKind,
+    ObjectLiteralMethodCandidate, ProgramClassShapeIds, ProgramFactsView,
+    ResolvedConstructorContracts, TypedMasks, STATIC_SEED_FORMAT, TARGET_NAMES,
 };
 // #10399: worker entries supplied by the driver before module codegen.
 pub use codegen::{set_worker_entries, worker_entries};

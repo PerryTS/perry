@@ -1988,3 +1988,73 @@ pub(super) extern "C" fn perry_ffi_mark_root(value: f64, ctx: *mut c_void) {
         }
     }
 }
+
+/// Every root the full trace reads, as the words the slots hold, for the
+/// image capture. Read-only: the visitors run in copy mode and only report.
+pub(crate) fn image_visit_roots(visit: &mut dyn FnMut(u64)) {
+    ensure_stack_maps_built();
+    visit_shadow_stack_root_slots(|slot| visit(unsafe { slot.read() }));
+    visit_global_root_slots(|slot| visit(unsafe { slot.read() }));
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for entry in scanners {
+        let mut mark = |value: f64| visit(value.to_bits());
+        let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+        (entry.scanner)(&mut visitor);
+    }
+    let mut mark = |value: f64| visit(value.to_bits());
+    let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+    visit_ffi_mutable_registered_roots(&mut visitor);
+    let legacy: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in legacy {
+        scanner(&mut |value: f64| visit(value.to_bits()));
+    }
+    let ffi: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in ffi {
+        let mut sink: &mut dyn FnMut(u64) = &mut *visit;
+        let ctx = &mut sink as *mut &mut dyn FnMut(u64) as *mut c_void;
+        extern "C" fn emit(value: f64, ctx: *mut c_void) {
+            let sink = unsafe { &mut *(ctx as *mut &mut dyn FnMut(u64)) };
+            sink(value.to_bits());
+        }
+        scanner(emit, ctx);
+    }
+}
+
+/// The censuss mark: every root the collectors full trace reads, by
+/// source, as the words the slots hold. Instrumented builds only.
+#[cfg(perry_gc_instruments)]
+pub(crate) fn census_visit_roots(visit: &mut dyn FnMut(&'static str, u64)) {
+    ensure_stack_maps_built();
+    visit_shadow_stack_root_slots(|slot| {
+        let source = match slot.kind {
+            MutableRootSlotKind::ShadowStack => "shadow_stack",
+            _ => "stack_map",
+        };
+        visit(source, unsafe { slot.read() });
+    });
+    visit_global_root_slots(|slot| visit("module_global", unsafe { slot.read() }));
+    let scanners: Vec<MutableRootScannerEntry> = MUTABLE_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for entry in scanners {
+        let name = entry.name;
+        let mut mark = |value: f64| visit(name, value.to_bits());
+        let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+        (entry.scanner)(&mut visitor);
+    }
+    let mut mark = |value: f64| visit("ffi_mutable_scanner", value.to_bits());
+    let mut visitor = RuntimeRootVisitor::for_copy(&mut mark);
+    visit_ffi_mutable_registered_roots(&mut visitor);
+    let legacy: Vec<fn(&mut dyn FnMut(f64))> = ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in legacy {
+        scanner(&mut |value: f64| visit("legacy_scanner", value.to_bits()));
+    }
+    let ffi: Vec<PerryFfiRootScanner> = FFI_ROOT_SCANNERS.with(|s| s.borrow().clone());
+    for scanner in ffi {
+        let mut sink: &mut dyn FnMut(&'static str, u64) = &mut *visit;
+        let ctx = &mut sink as *mut &mut dyn FnMut(&'static str, u64) as *mut c_void;
+        extern "C" fn emit(value: f64, ctx: *mut c_void) {
+            let sink = unsafe { &mut *(ctx as *mut &mut dyn FnMut(&'static str, u64)) };
+            sink("ffi_scanner", value.to_bits());
+        }
+        scanner(emit, ctx);
+    }
+}

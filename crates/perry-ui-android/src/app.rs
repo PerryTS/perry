@@ -149,6 +149,7 @@ fn attach_root_to_activity() {
 }
 
 extern "C" {
+    fn js_set_event_loop_host_driven(v: i32);
     fn js_callback_timer_tick() -> i32;
     fn js_interval_timer_tick() -> i32;
     fn js_promise_run_microtasks() -> i32;
@@ -217,6 +218,14 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     }
     unsafe {
         js_stdlib_process_pending();
+        crate::ws::js_ws_process_pending();
+        // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+        {
+            extern "C" {
+                fn js_loop_turn_nonblocking();
+            }
+            js_loop_turn_nonblocking();
+        }
         js_callback_timer_tick();
         js_interval_timer_tick();
         // Issue #1865: perry/ui `onFrame` display-link callbacks. Real
@@ -232,6 +241,9 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         // thread mid-interaction.
         js_gc_step_us(2_000, std::ptr::null_mut());
     }
+    // Render each canvas that received draw calls during this tick once —
+    // all canvas calls between two pump ticks form one frame.
+    crate::widgets::canvas::flush_dirty();
     // perry/media (#351) — drive state polling on the UI thread so the
     // PLAYERS thread_local stays consistent with where create_player
     // stored entries. Internally throttled to ~10 Hz.
@@ -260,6 +272,13 @@ pub fn app_run(_app_handle: i64) {
     // Forwards perry_arkts_show_toast → PerryBridge.showToast (UI-thread
     // Toast.makeText) and perry_arkts_set_text → TextView.setText via JNI.
     register_cross_platform_text_handlers();
+
+    // main() runs on the UI thread (PerryActivity.startNative), and the 8 ms
+    // pump below drives timers / promise jobs from the Looper. Like watchOS,
+    // tell the generated entry to return to the host instead of entering its
+    // own event loop: with a live timer that loop would never return and the
+    // UI thread would never get back to the Looper (blank, then ANR).
+    unsafe { js_set_event_loop_host_driven(1) };
 
     // Attach the root widget to the Activity
     attach_root_to_activity();

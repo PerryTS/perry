@@ -417,16 +417,22 @@ impl JsEmitter {
             Expr::ObjectSpread { parts } => {
                 self.output.push('{');
                 let mut first = true;
-                for (key_opt, val) in parts.iter() {
+                for part in parts.iter() {
                     if !first { self.output.push_str(", "); }
                     first = false;
-                    match key_opt {
-                        None => {
+                    match part {
+                        perry_hir::ObjectPart::Spread(val) => {
                             self.output.push_str("...(");
                             self.emit_expr(val);
                             self.output.push(')');
                         }
-                        Some(key) => {
+                        perry_hir::ObjectPart::Computed { key, value } => {
+                            self.output.push('[');
+                            self.emit_expr(key);
+                            self.output.push_str("]: ");
+                            self.emit_expr(value);
+                        }
+                        perry_hir::ObjectPart::Define(key, val) => {
                             if is_valid_identifier(key) {
                                 self.output.push_str(key);
                             } else {

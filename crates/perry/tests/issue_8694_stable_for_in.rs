@@ -1,5 +1,5 @@
-//! Semantic and observability ratchet for #8694's stable one-key `for...in`
-//! snapshot.  The executable exercises the allocation-free arm first, then
+//! Semantic ratchet for #8694's `for...in` snapshot (the one-key arm and its
+//! diagnostics are gone: DYNP E3 reads the structure).  The executable exercises the allocation-free arm first, then
 //! cases that must remain on the complete generic enumerator.  It is run again
 //! with forced evacuation so the returned shape-owned key array is proven to
 //! stay valid across moving collections.
@@ -13,34 +13,12 @@ fn perry_bin() -> PathBuf {
 
 fn run_fixture(binary: &std::path::Path, force_evacuation: bool) -> Output {
     let mut command = Command::new(binary);
-    command.env("PERRY_FOR_IN_DIAG", "1");
     if force_evacuation {
         command.env("PERRY_GC_FORCE_EVACUATE", "1");
     } else {
         command.env_remove("PERRY_GC_FORCE_EVACUATE");
     }
     command.output().expect("run compiled #8694 fixture")
-}
-
-fn diagnostic_counts(stderr: &str) -> (u64, u64) {
-    let mut stable = 0;
-    let mut fallback = 0;
-    for line in stderr
-        .lines()
-        .filter(|line| line.starts_with("FOR-IN-DIAG "))
-    {
-        for field in line.split_whitespace() {
-            let Some((name, value)) = field.split_once('=') else {
-                continue;
-            };
-            match name {
-                "stable_single" => stable = stable.max(value.parse().unwrap_or(0)),
-                "fallback" => fallback = fallback.max(value.parse().unwrap_or(0)),
-                _ => {}
-            }
-        }
-    }
-    (stable, fallback)
 }
 
 #[test]
@@ -193,11 +171,5 @@ exception: x\n";
             stderr
         );
         assert_eq!(String::from_utf8_lossy(&run.stdout), EXPECTED);
-        let (stable, fallback) = diagnostic_counts(&stderr);
-        assert!(
-            stable > 0 && fallback > 0,
-            "both the stable arm and generic fallback must be observable; got \
-             stable={stable}, fallback={fallback}\nstderr:\n{stderr}"
-        );
     }
 }

@@ -1328,6 +1328,17 @@ fn known_symbol_key(key: &Expr) -> bool {
     matches!(key, Expr::SymbolFor(inner) if matches!(inner.as_ref(), Expr::String(_)))
 }
 
+/// Whether the declaration of `class_name` names this known-symbol instance
+/// member (`class_declarations::declared_symbol_member`). A per-evaluation
+/// template's declaration names none, so its registration must name it.
+fn declares_symbol(ctx: &FnCtx<'_>, class_name: &str, key: &Expr) -> bool {
+    known_symbol_key(key)
+        && ctx
+            .class_ids
+            .get(class_name)
+            .is_none_or(|cid| !ctx.program_layouts.fresh_templates.contains(cid))
+}
+
 /// Re-reads a class expression evaluation's class object, NaN-boxed.
 pub(crate) type EvaluationOwner<'r> = &'r dyn Fn(&mut FnCtx<'_>) -> String;
 
@@ -1353,10 +1364,9 @@ pub(crate) fn lower_computed_member_registration(
             has_rest,
             definition_order,
         } => {
-            // A known-symbol instance member of a declaration is named by
-            // its declaration (`class_declarations::declared_symbol_member`):
-            // its key is a constant, so its definition evaluates nothing.
-            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+            // Named by its declaration: its key is a constant, so its
+            // definition evaluates nothing.
+            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, key_expr) {
                 return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
             }
             let key_v = lower_expr(ctx, key_expr)?;
@@ -1429,7 +1439,7 @@ pub(crate) fn lower_computed_member_registration(
             is_static,
             definition_order,
         } => {
-            if !*is_static && owner.is_none() && known_symbol_key(key_expr) {
+            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, key_expr) {
                 return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
             }
             let key_v = lower_expr(ctx, key_expr)?;

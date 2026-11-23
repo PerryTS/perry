@@ -19,6 +19,32 @@ impl Model {
         }
     }
 
+    /// The object `Reflect.construct(T, args, new_target)` makes has
+    /// `new_target.prototype` as its [[Prototype]]
+    /// (OrdinaryCreateFromConstructor, GetPrototypeFromConstructor), and the
+    /// model holds that object as ⊤ (a built-in `T`'s own allocation, a
+    /// function `new_target` that names no class layout). What the new
+    /// target's `prototype` holds is then on the chain of a ⊤ value: it
+    /// goes to ⊤ with it, so the members a call on that value finds there
+    /// can run.
+    fn new_target_unknown(&mut self, call: CallId, new_target: Tok) {
+        if !self.reach_new_target || new_target == TOP {
+            return;
+        }
+        let run = self.call_run(call);
+        let nt = self.node_l("reflect-new-target");
+        self.nodes[nt as usize].frame = run;
+        self.add_tok(nt, new_target);
+        let protos = self.node_l("reflect-new-target-prototype");
+        self.nodes[protos as usize].frame = run;
+        let key = Key::Named(self.atom("prototype"));
+        self.cons(nt, Cons::Load { key, dst: protos });
+        let r = self.reason(
+            "Reflect.construct: prototype of the new target of an object the model holds as unknown",
+        );
+        self.sink_node(protos, r);
+    }
+
     pub(crate) fn reflect_construct(&mut self, call: CallId, target: Tok, new_target: Tok) {
         if !self.sum.ready {
             self.sum
@@ -62,17 +88,22 @@ impl Model {
             }
             let (callee, _, mut args) = self.bound[b as usize].clone();
             args.extend(c.args.iter().copied());
-            let call2 = self.solver_call(
+            let Some(call2) = self.solver_call_keyed(
                 call,
+                (crate::summary::MK_BOUND_REFLECT, b, new_target),
+                None,
                 CallSite {
+                    first_arg_fixed: false,
                     this: ThisArg::Undef,
                     args,
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
-                    region: self.thrown,
+                    region: self.calls[call as usize].region,
                 },
-            );
+            ) else {
+                return;
+            };
             self.bound_synth.insert(call2);
             let nt = self.node_l("bound-construct-new-target");
             self.add_tok(nt, new_target);
@@ -98,6 +129,7 @@ impl Model {
                 self.reflect_construct(call, TOP, new_target);
                 return;
             }
+            self.new_target_unknown(call, new_target);
             self.construct(call, TOP);
             return;
         }
@@ -109,9 +141,16 @@ impl Model {
             // A function/proxy or unknown new target need not select a
             // registered class layout. Its result and the body's this stay
             // unknown; a provisional instance of target would be false.
-            _ => TOP,
+            _ => {
+                self.new_target_unknown(call, new_target);
+                TOP
+            }
         };
-        self.add_tok(c.ret, inst);
+        match self.toks[target as usize] {
+            TokKind::ClassObj(tm) => self.class_this_result(call, tm, inst, c.ret),
+            TokKind::Func(..) => self.ctor_this_result(call, target, false, inst, c.ret),
+            _ => self.add_tok(c.ret, inst),
+        }
         match self.toks[target as usize] {
             TokKind::ClassObj(tm) => {
                 self.run_ctor_chain(call, tm, inst);

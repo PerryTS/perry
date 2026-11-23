@@ -240,11 +240,7 @@ fn run_continues(ctx: &mut FnCtx<'_>, receiver: RunReceiver) -> Option<RecvRun> 
     if run.receiver != receiver || run.epoch != ctx.block().call_epoch() {
         return None;
     }
-    if run.block != ctx.current_block
-        && !ctx
-            .func
-            .proof_dominates_block_end(&run.ok, ctx.current_block)
-    {
+    if run.block != ctx.current_block && !ctx.proof_dominates_here(&run.ok) {
         return None;
     }
     Some(run)
@@ -743,7 +739,8 @@ pub(crate) struct LayoutStore {
 /// The store form of the 2c site for a coloured key: the receiver's layout
 /// holds `property` at its colour slot as a plain writable `Any`-lane data
 /// property of a store-admitted layout (the record's store mask), the object
-/// carries no metadata record (no prototype role, no exotic receiver), and
+/// carries no metadata record (no prototype role, no exotic receiver) or one
+/// that only holds an overflow table of plain writable data entries, and
 /// the slot is present; then the assignment is one store plus the write
 /// barrier's bookkeeping. On `Some`, the caller lowers its ordinary store
 /// site in the current block (the miss path) and passes its value to
@@ -874,7 +871,86 @@ pub(crate) fn begin_store(
             crate::expr::receiver_range::emit_field_ptr(blk, &biased, (header - 8) as i64);
         let meta = blk.load(I64, &meta_ptr);
         let plain = blk.icmp_eq(I64, &meta, "0");
-        blk.cond_br(&plain, &load_label, &miss_label);
+        // An object with a metadata record stays on the arm when the record
+        // only carries an overflow table of plain writable data entries: a
+        // table, no state flag (prototype role, exotic receiver, native
+        // alias, sealed intrinsic), and a table whose summary (the OR of
+        // every entry's attributes ever recorded: freeze, a non-writable or
+        // accessor redefinition and a private name all set it) blocks no
+        // store. The table owns the key's attributes; the fixed slot holds
+        // its value unless it is the hole (a deleted key, an accessor, a
+        // value the entry holds itself), which the load below tests.
+        // The table test comes first: most records carry no table (a
+        // spill, a prototype role), and their store leaves after one test.
+        let table_idx = ctx.new_block("l2s.table");
+        let summary_idx = ctx.new_block("l2s.summary");
+        let table_label = ctx.block_label(table_idx);
+        let summary_label = ctx.block_label(summary_idx);
+        ctx.block().cond_br(&plain, &load_label, &table_label);
+
+        // The record's word is loaded again here, off the hit path: the
+        // entry test above then has its load as its only use and stays one
+        // compare with memory (`cmpq $0, ..; jne`), as on a site with no
+        // table arm. Kept in a register for this path, the word cost every
+        // store to an object with no record one instruction more.
+        ctx.current_block = table_idx;
+        let blk = ctx.block();
+        let meta_again = blk.load_volatile(I64, &meta_ptr);
+        let meta_base = blk.inttoptr(I64, &meta_again);
+        let table_ptr = blk.gep(
+            I8,
+            &meta_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OBJECT_META_OVERFLOW_OFFSET.to_string(),
+            )],
+        );
+        let table = blk.load(I64, &table_ptr);
+        let has_table = blk.icmp_ne(I64, &table, "0");
+        // Each test is its own branch, so the site holds no materialized
+        // flags.
+        let held_idx = ctx.new_block("l2s.held");
+        let held_label = ctx.block_label(held_idx);
+        ctx.block().cond_br(&has_table, &held_label, &miss_label);
+
+        ctx.current_block = held_idx;
+        let blk = ctx.block();
+        let flags_ptr = blk.gep(
+            I8,
+            &meta_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OBJECT_META_FLAGS_OFFSET.to_string(),
+            )],
+        );
+        let flags = blk.load(I64, &flags_ptr);
+        let state = blk.and(
+            I64,
+            &flags,
+            &crate::runtime_abi::OBJECT_META_STATE_FLAGS.to_string(),
+        );
+        let no_state = blk.icmp_eq(I64, &state, "0");
+        ctx.block().cond_br(&no_state, &summary_label, &miss_label);
+
+        ctx.current_block = summary_idx;
+        let blk = ctx.block();
+        let table_base = blk.inttoptr(I64, &table);
+        let summary_ptr = blk.gep(
+            I8,
+            &table_base,
+            &[(
+                I64,
+                &crate::runtime_abi::OVERFLOW_TABLE_SUMMARY_OFFSET.to_string(),
+            )],
+        );
+        let summary = blk.load(I32, &summary_ptr);
+        let blocking = blk.and(
+            I32,
+            &summary,
+            &crate::runtime_abi::OVERFLOW_SUMMARY_BLOCKS_PLAIN_STORE.to_string(),
+        );
+        let open = blk.icmp_eq(I32, &blocking, "0");
+        blk.cond_br(&open, &load_label, &miss_label);
     }
 
     ctx.current_block = load_idx;
@@ -929,6 +1005,11 @@ pub(crate) struct RunArm {
     pub slot: u32,
     /// The stored key (its `PERRY_PROBE_VERIFY` slot witness).
     pub key: String,
+    /// The slot's byte offset when the run is an ordinary function
+    /// constructor's (`layout_desc::function_families::run_arm`): its check
+    /// proved the receiver at the constructor's own birth layout, so the store
+    /// tests no family word.
+    pub function_off: Option<u64>,
 }
 
 /// A constructor run in flight in the innermost constructor body
@@ -958,7 +1039,7 @@ pub(crate) enum RunValue {
     Runs,
 }
 
-fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
+pub(crate) fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
     fn free(e: &Expr, keys: &[&str]) -> bool {
         match e {
             Expr::Undefined
@@ -1180,17 +1261,23 @@ fn run_arm(
     this_bits: &str,
     property: &str,
 ) -> (Option<RunArm>, FamilyRun) {
+    // Lowering visits sibling arms sequentially, but a run established in
+    // one arm is not available in the other or beyond a bypassing join.
+    // Check after the RHS too: it may introduce control flow of its own.
+    // The bind watch is such a proof as well: `emit_bind_call` records it
+    // where ITS merge is, and the bind call can be one arm of a larger
+    // lowering (a method-dispatch tower over a program's own `bind` methods),
+    // whose other arms bypass it to reach this store.
+    let dominates = |ctx: &FnCtx<'_>, proof: &str| ctx.proof_dominates_here(proof);
     let watched = ctx
         .inline_ctor_return
         .last_mut()
         .and_then(|b| b.bind_watch.take())
-        .flatten();
-    // Lowering visits sibling arms sequentially, but a run established in
-    // one arm is not available in the other or beyond a bypassing join.
-    // Check after the RHS too: it may introduce control flow of its own.
-    let run_in = plan.run_in.filter(|r| {
-        plan.value != RunValue::Runs && ctx.func.proof_dominates_block_end(&r.ok, ctx.current_block)
-    });
+        .flatten()
+        .filter(|b| dominates(ctx, b));
+    let run_in = plan
+        .run_in
+        .filter(|r| plan.value != RunValue::Runs && dominates(ctx, &r.ok));
     let carried = match (plan.value, &run_in) {
         (RunValue::Free, Some(r)) => Some(r.clone()),
         (RunValue::Bind, Some(r)) => watched.map(|b| FamilyRun {
@@ -1302,6 +1389,7 @@ fn run_arm(
         ok: run.ok.clone(),
         slot: plan.slot,
         key: property.to_owned(),
+        function_off: None,
     });
     (out, run)
 }
@@ -1311,7 +1399,8 @@ fn run_arm(
 /// family descriptor from the live record and verifies the requested family.
 fn emit_family_word_test(blk: &mut crate::block::LlBlock, word: &str) -> String {
     let plan = crate::layout_ordinals::current_plan();
-    let base = crate::runtime_abi::LAYOUT_TAG | plan.family_first;
+    let base = (crate::runtime_abi::LAYOUT_TAG | plan.family_first)
+        .wrapping_sub(crate::runtime_abi::LAYOUT_ROW_BIAS);
     let rel = blk.sub(I32, word, &(base as i32).to_string());
     let in_static = blk.icmp_ult(I32, &rel, &plan.family_count.to_string());
     let kind = blk.and(
@@ -1361,8 +1450,7 @@ pub(crate) fn begin_family_init_store(
 ) -> Option<LayoutStore> {
     let arm = run?;
     debug_assert!(
-        ctx.func
-            .proof_dominates_block_end(&arm.ok, ctx.current_block),
+        ctx.proof_dominates_here(&arm.ok),
         "family-run proof {} must dominate its store gate",
         arm.ok,
     );
@@ -1390,24 +1478,34 @@ pub(crate) fn begin_family_init_store(
         .cond_br(&recv.is_object_pointer, &word_label, &miss_label);
 
     ctx.current_block = word_idx;
-    // The run's check proved the receiver a family object of the class (or
-    // a descendant), whose layouts all hold the key at `slot`; its word still
-    // carries no shadow bit (a store of the run that took the site below may
-    // have given it an overflow, which orders its keys from then on).
-    let blk = ctx.block();
-    let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
-    let word = blk.load(I32, &word_ptr);
-    let in_band = emit_family_word_test(blk, &word);
-    blk.cond_br(&in_band, &load_label, &miss_label);
+    let off = match arm.function_off {
+        // A function constructor's run: every store of it is a slot store
+        // while its check holds, so none leaves the birth layout.
+        Some(off) => {
+            ctx.block().br(&load_label);
+            off
+        }
+        None => {
+            // The run's check proved the receiver a family object of the
+            // class (or a descendant), whose layouts all hold the key at
+            // `slot`; its word still carries no shadow bit (a store of the
+            // run that took the site below may have given it an overflow,
+            // which orders its keys from then on).
+            let blk = ctx.block();
+            let word_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, 4);
+            let word = blk.load(I32, &word_ptr);
+            let in_band = emit_family_word_test(blk, &word);
+            blk.cond_br(&in_band, &load_label, &miss_label);
+            header + 8 * slot as u64
+        }
+    };
 
     ctx.current_block = load_idx;
-    super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
+    if arm.function_off.is_none() {
+        super::class_family_read::emit_slot_verify(ctx, receiver_bits, &arm.key, slot);
+    }
     let blk = ctx.block();
-    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(
-        blk,
-        &recv.biased,
-        (header + 8 * slot as u64) as i64,
-    );
+    let slot_ptr = crate::expr::receiver_range::emit_field_ptr(blk, &recv.biased, off as i64);
     blk.br(&hit_label);
 
     ctx.current_block = hit_idx;

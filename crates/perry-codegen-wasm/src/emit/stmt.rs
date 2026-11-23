@@ -1,13 +1,131 @@
-//! Statement emission extracted from emit/mod.rs (#1102 mechanical split).
-//!
-//! Pure move of `FuncEmitCtx::emit_stmt`, `FuncEmitCtx::expr_has_value`,
-//! and the free `has_return` helper. Methods stay on the same struct via
-//! a separate `impl<'a> FuncEmitCtx<'a>` block (idiomatic Rust).
+//! Statement emission: `FuncEmitCtx::emit_stmt` and the free `has_return` helper.
 
 use super::*;
 
 impl<'a> FuncEmitCtx<'a> {
+    fn emit_guarded_body(
+        &mut self,
+        func: &mut Function,
+        body: &[Stmt],
+        finally: Option<FinallyTarget>,
+        returning: bool,
+    ) {
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall_void(func, "try_start", 0);
+        func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+        self.block_depth += 1;
+        self.exception_handlers
+            .push((self.block_depth, self.frame_bytes(), finally));
+        for stmt in body {
+            self.emit_stmt(func, stmt, returning);
+        }
+        self.exception_handlers.pop();
+        self.block_depth -= 1;
+        func.instruction(&Instruction::End);
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall_void(func, "try_end", 0);
+    }
+
+    fn emit_exit_scopes(&mut self, func: &mut Function, target: u32) -> bool {
+        let handlers = self.exception_handlers.clone();
+        let mut routed = false;
+        while self
+            .exception_handlers
+            .last()
+            .is_some_and(|(depth, _, _)| *depth > target)
+        {
+            let (_, _, finally) = self.exception_handlers.pop().unwrap();
+            func.instruction(&Instruction::Call(self.rt().try_end));
+            if let Some(finally) = finally {
+                let kind = if target == 0 {
+                    1
+                } else {
+                    let jumps = &mut self.finalizer_jumps[finally.id];
+                    let index = jumps
+                        .iter()
+                        .position(|&depth| depth == target)
+                        .unwrap_or_else(|| {
+                            jumps.push(target);
+                            jumps.len() - 1
+                        });
+                    index as i32 + 2
+                };
+                func.instruction(&Instruction::I32Const(kind));
+                func.instruction(&Instruction::LocalSet(self.temp_local_i32));
+                func.instruction(&Instruction::Br(self.block_depth - finally.depth));
+                routed = true;
+                break;
+            }
+        }
+        self.exception_handlers = handlers;
+        routed
+    }
+
+    fn emit_return_completion(&mut self, func: &mut Function) {
+        if !self.emit_exit_scopes(func, 0) {
+            if self.returns_value {
+                func.instruction(&Instruction::LocalGet(self.temp_result_local));
+            }
+            func.instruction(&Instruction::Return);
+        }
+    }
+
+    fn emit_jump_completion(&mut self, func: &mut Function, target: u32) {
+        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+        func.instruction(&Instruction::LocalSet(self.temp_result_local));
+        if !self.emit_exit_scopes(func, target) {
+            func.instruction(&Instruction::Br(self.block_depth - target));
+        }
+    }
+
+    fn emit_finally_dispatch(&mut self, func: &mut Function, id: usize) {
+        func.instruction(&Instruction::LocalGet(self.temp_local_i32));
+        func.instruction(&Instruction::I32Const(1));
+        func.instruction(&Instruction::I32Eq);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        self.block_depth += 1;
+        self.emit_return_completion(func);
+        self.block_depth -= 1;
+        func.instruction(&Instruction::End);
+        for (index, target) in self.finalizer_jumps[id].clone().into_iter().enumerate() {
+            func.instruction(&Instruction::LocalGet(self.temp_local_i32));
+            func.instruction(&Instruction::I32Const(index as i32 + 2));
+            func.instruction(&Instruction::I32Eq);
+            func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+            self.block_depth += 1;
+            self.emit_jump_completion(func, target);
+            self.block_depth -= 1;
+            func.instruction(&Instruction::End);
+        }
+    }
+
+    fn emit_finally(&mut self, func: &mut Function, body: &[Stmt], returning: bool) {
+        // Keep both presence and payload on the operand stack: nullish throws are valid.
+        func.instruction(&Instruction::Call(self.rt().has_exception));
+        self.emit_frame_begin(func, 0);
+        self.emit_memcall(func, "get_exception", 0);
+        self.emit_guarded_body(func, body, None, returning);
+        func.instruction(&Instruction::LocalSet(self.temp_store_local));
+        func.instruction(&Instruction::Call(self.rt().has_exception));
+        func.instruction(&Instruction::I32Eqz);
+        func.instruction(&Instruction::I32And);
+        func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
+        self.block_depth += 1;
+        self.emit_frame_begin(func, 1);
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::LocalGet(self.temp_store_local));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_memcall_void(func, "throw_value", 1);
+        self.block_depth -= 1;
+        func.instruction(&Instruction::End);
+    }
+
     pub(super) fn emit_stmt(&mut self, func: &mut Function, stmt: &Stmt, in_returning_func: bool) {
+        self.returns_value = in_returning_func;
         match stmt {
             Stmt::Let { id, init, .. } => {
                 if let Some(init_expr) = init {
@@ -24,39 +142,31 @@ impl<'a> FuncEmitCtx<'a> {
                 {
                     func.instruction(&Instruction::GlobalSet(gidx));
                 } else if let Some(&idx) = self.local_map.get(id) {
-                    func.instruction(&Instruction::LocalSet(idx));
+                    if !self.is_boxed(id) {
+                        func.instruction(&Instruction::LocalSet(idx));
+                    } else if self.preallocated.contains(id) {
+                        self.emit_box_set(func, idx);
+                        func.instruction(&Instruction::Drop);
+                    } else {
+                        self.emit_box_call(func, "box_new");
+                        func.instruction(&Instruction::LocalSet(idx));
+                    }
                 } else {
                     func.instruction(&Instruction::Drop);
                 }
             }
             Stmt::Expr(expr) => {
                 self.emit_expr(func, expr);
-                // Drop the result (expression statement)
-                // Check if expr produces a value
-                if self.expr_has_value(expr) {
-                    func.instruction(&Instruction::Drop);
-                }
+                func.instruction(&Instruction::Drop);
             }
             Stmt::Return(expr) => {
-                if let Some(e) = expr {
-                    self.emit_expr(func, e);
-                    // Issue #1081: some Expr arms (notably `console.log/warn/error`
-                    // and other void-returning calls in `Expr::Call` -> PropertyGet)
-                    // intentionally do not push a result onto the operand stack.
-                    // When such an expression is the body of `return e` (e.g. the
-                    // expression-bodied arrow `v => console.log(v)`), the WASM
-                    // function signature still expects exactly one i64 result, so
-                    // the bare `return` would fail validation with
-                    // "expected 1 elements on the stack for return, found 0".
-                    // Push `undefined` in that case to mirror JS semantics
-                    // (a void call returns `undefined`).
-                    if in_returning_func && !self.expr_has_value(e) {
-                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    }
-                } else if in_returning_func {
+                if let Some(expr) = expr {
+                    self.emit_expr(func, expr);
+                } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
-                func.instruction(&Instruction::Return);
+                func.instruction(&Instruction::LocalSet(self.temp_result_local));
+                self.emit_return_completion(func);
             }
             Stmt::If {
                 condition,
@@ -191,6 +301,32 @@ impl<'a> FuncEmitCtx<'a> {
                 update,
                 body,
             } => {
+                // The cursor loop runs inside a `catch` and a `finally` that release its
+                // cursor; the flag lets the wrapped copy of this loop through on the way back.
+                if !std::mem::take(&mut self.cursor_loop_wrapped) {
+                    let release = |threw| {
+                        condition
+                            .as_ref()
+                            .and_then(|c| collection_cursor_release(c, threw))
+                    };
+                    if let (Some((step, on_throw)), Some((_, on_exit))) =
+                        (release(true), release(false))
+                    {
+                        self.cursor_loop_wrapped = true;
+                        // The step local is dead once the loop ends, so it holds the error.
+                        let wrapped = Stmt::Try {
+                            body: vec![stmt.clone()],
+                            catch: Some(perry_hir::CatchClause {
+                                param: Some((step, String::new())),
+                                body: vec![Stmt::Expr(on_throw), Stmt::Throw(Expr::LocalGet(step))],
+                            }),
+                            finally: Some(vec![Stmt::Expr(on_exit)]),
+                            forof_completion: None,
+                        };
+                        self.emit_stmt(func, &wrapped, in_returning_func);
+                        return;
+                    }
+                }
                 // <init>
                 // block $break
                 //   loop $loop_top
@@ -256,9 +392,7 @@ impl<'a> FuncEmitCtx<'a> {
 
                 if let Some(upd) = update {
                     self.emit_expr(func, upd);
-                    if self.expr_has_value(upd) {
-                        func.instruction(&Instruction::Drop);
-                    }
+                    func.instruction(&Instruction::Drop);
                 }
 
                 // Restart loop (block_depth == loop's depth, so rel=0).
@@ -277,16 +411,14 @@ impl<'a> FuncEmitCtx<'a> {
                 // (each pushes block_depth without a matching break_depth), which
                 // in the worst case turns `break` into `continue` and hangs.
                 if let Some(&target) = self.break_depth.last() {
-                    let rel = self.block_depth.saturating_sub(target);
-                    func.instruction(&Instruction::Br(rel));
+                    self.emit_jump_completion(func, target);
                 } else {
                     func.instruction(&Instruction::Br(1));
                 }
             }
             Stmt::Continue => {
                 if let Some(&target) = self.loop_depth.last() {
-                    let rel = self.block_depth.saturating_sub(target);
-                    func.instruction(&Instruction::Br(rel));
+                    self.emit_jump_completion(func, target);
                 } else {
                     func.instruction(&Instruction::Br(0));
                 }
@@ -296,83 +428,84 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(&(_, break_d, _)) =
                     self.label_stack.iter().rev().find(|(l, _, _)| l == label)
                 {
-                    let rel = self.block_depth - break_d;
-                    func.instruction(&Instruction::Br(rel));
+                    self.emit_jump_completion(func, break_d);
                 }
             }
             Stmt::LabeledContinue(label) => {
                 if let Some(&(_, _, continue_d)) =
                     self.label_stack.iter().rev().find(|(l, _, _)| l == label)
                 {
-                    let rel = self.block_depth - continue_d;
-                    func.instruction(&Instruction::Br(rel));
+                    self.emit_jump_completion(func, continue_d);
                 }
             }
             Stmt::Throw(expr) => {
-                // Set exception in bridge and return
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, expr);
                 self.emit_memcall_void(func, "throw_value", 1);
-                if in_returning_func {
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                    func.instruction(&Instruction::Return);
-                }
+                self.emit_exception_guard(func);
             }
             Stmt::Try {
                 body,
                 catch,
                 finally,
+                ..
             } => {
-                // Bridge-based exception handling:
-                // try_start(); <try body>; try_end();
-                // if has_exception(): <bind catch param>; <catch body>
-                // <finally body>
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall_void(func, "try_start", 0);
-
-                for s in body {
-                    self.emit_stmt(func, s, in_returning_func);
-                }
-
-                self.emit_frame_begin(func, 0);
-                self.emit_memcall_void(func, "try_end", 0);
-
-                // Check for exception and execute catch block
+                let target = finally.as_ref().map(|_| {
+                    func.instruction(&Instruction::Block(wasm_encoder::BlockType::Empty));
+                    self.block_depth += 1;
+                    let id = self.finalizer_jumps.len();
+                    self.finalizer_jumps.push(Vec::new());
+                    FinallyTarget {
+                        depth: self.block_depth,
+                        id,
+                    }
+                });
+                self.emit_guarded_body(func, body, target, in_returning_func);
                 if let Some(catch_clause) = catch {
-                    self.emit_frame_begin(func, 0);
-                    self.emit_memcall_i32(func, "has_exception", 0);
+                    func.instruction(&Instruction::Call(self.rt().has_exception));
                     func.instruction(&Instruction::If(wasm_encoder::BlockType::Empty));
                     self.block_depth += 1;
-
-                    // Bind catch parameter
+                    self.emit_frame_begin(func, 0);
+                    self.emit_memcall(func, "get_exception", 0);
                     if let Some((param_id, _)) = &catch_clause.param {
-                        self.emit_frame_begin(func, 0);
-                        self.emit_memcall(func, "get_exception", 0);
-                        if let Some(&local_idx) = self.local_map.get(param_id) {
-                            func.instruction(&Instruction::LocalSet(local_idx));
+                        let key = (self.emitter.current_mod_idx, *param_id);
+                        // A Set/Map cursor loop's step local holds its error; at module
+                        // level that local is a WASM global (`collection_cursor_release`).
+                        if self.emitter.module_let_globals.contains_key(&key) {
+                            self.emit_local_tee(func, param_id);
+                            func.instruction(&Instruction::Drop);
+                        } else if let Some(&idx) = self.local_map.get(param_id) {
+                            if self.is_boxed(param_id) {
+                                self.emit_box_call(func, "box_new");
+                            }
+                            func.instruction(&Instruction::LocalSet(idx));
                         } else {
                             func.instruction(&Instruction::Drop);
                         }
                     } else {
-                        // No param, just clear the exception
-                        self.emit_frame_begin(func, 0);
-                        self.emit_memcall(func, "get_exception", 0);
                         func.instruction(&Instruction::Drop);
                     }
-
-                    for s in &catch_clause.body {
-                        self.emit_stmt(func, s, in_returning_func);
-                    }
-
+                    self.emit_guarded_body(func, &catch_clause.body, target, in_returning_func);
                     self.block_depth -= 1;
                     func.instruction(&Instruction::End);
                 }
-
-                // Finally block (unconditional)
-                if let Some(finally_stmts) = finally {
-                    for s in finally_stmts {
-                        self.emit_stmt(func, s, in_returning_func);
-                    }
+                if let (Some(body), Some(target)) = (finally, target) {
+                    func.instruction(&Instruction::I32Const(0));
+                    func.instruction(&Instruction::LocalSet(self.temp_local_i32));
+                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                    func.instruction(&Instruction::LocalSet(self.temp_result_local));
+                    self.block_depth -= 1;
+                    func.instruction(&Instruction::End);
+                    // Nested cleanup may reuse scratch locals; save this completion on the stack.
+                    func.instruction(&Instruction::LocalGet(self.temp_local_i32));
+                    func.instruction(&Instruction::LocalGet(self.temp_result_local));
+                    self.emit_finally(func, body, in_returning_func);
+                    self.emit_exception_guard(func);
+                    func.instruction(&Instruction::LocalSet(self.temp_result_local));
+                    func.instruction(&Instruction::LocalSet(self.temp_local_i32));
+                    self.emit_finally_dispatch(func, target.id);
+                } else {
+                    self.emit_exception_guard(func);
                 }
             }
             Stmt::Switch {
@@ -422,45 +555,57 @@ impl<'a> FuncEmitCtx<'a> {
                 self.block_depth -= 1;
                 func.instruction(&Instruction::End);
             }
-            // Issue #569: Wasm backend has no equivalent of LLVM's
-            // alloca'd box slot — JS hoisting in the host runtime handles
-            // forward refs natively. Emit nothing.
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
-        }
-    }
-
-    /// Check if an expression produces a value on the stack
-    pub(super) fn expr_has_value(&self, expr: &Expr) -> bool {
-        match expr {
-            Expr::NativeMethodCall { module, method, .. } => {
-                let normalized = module.strip_prefix("node:").unwrap_or(module);
-                if normalized == "console" {
-                    return false;
-                }
-                // void-returning array methods via NativeMethodCall
-                if matches!(method.as_str(), "forEach") {
-                    return false;
-                }
-                true
-            }
-            // console.log/warn/error via Call + PropertyGet pattern
-            Expr::Call { callee, .. } => {
-                if let Expr::PropertyGet {
-                    object, property, ..
-                } = callee.as_ref()
-                {
-                    if let Expr::GlobalGet(_) = object.as_ref() {
-                        if matches!(property.as_str(), "log" | "warn" | "error") {
-                            return false;
-                        }
+            // A closure created before its captured binding's `Let` runs shares the cell
+            // made here, and the `Let` fills it. A TDZ cell starts as `undefined`: the
+            // wasm target does not throw on a read inside the dead zone.
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+                for id in ids {
+                    if let Some(&idx) = self.local_map.get(id).filter(|_| self.is_boxed(id)) {
+                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                        self.emit_box_call(func, "box_new");
+                        func.instruction(&Instruction::LocalSet(idx));
+                        self.preallocated.insert(*id);
                     }
                 }
-                true
             }
-            // ArrayForEach returns undefined but we emit it explicitly
-            _ => true,
+            Stmt::ReleaseBoxes(_) => {}
         }
     }
+}
+
+/// A Set/Map `for...of` cursor loop (`map_set_delete_safe_for_of` in perry-hir) owns a
+/// host cursor; this is the call that releases it, built from the loop's condition
+/// `nx = js_*_cursor_next(coll, idx, ep); ...`, with the step local `nx`. The emitters run
+/// it in a `catch` (`threw`) and a `finally` around the loop, so a `break`, `return` or
+/// `throw` closes the iterator and cannot leave the cursor behind.
+pub(super) fn collection_cursor_release(condition: &Expr, threw: bool) -> Option<(LocalId, Expr)> {
+    let Expr::Sequence(steps) = condition else {
+        return None;
+    };
+    let Some(Expr::LocalSet(step, next)) = steps.first() else {
+        return None;
+    };
+    let Expr::Call { callee, args, .. } = next.as_ref() else {
+        return None;
+    };
+    let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+        return None;
+    };
+    let [coll, _, ep] = args.as_slice() else {
+        return None;
+    };
+    let release = Expr::Call {
+        byte_end: 0,
+        callee: Box::new(Expr::ExternFuncRef {
+            name: "js_collection_cursor_release".to_string(),
+            param_types: Vec::new(),
+            return_type: perry_hir::types::Type::Number,
+        }),
+        args: vec![coll.clone(), ep.clone(), Expr::Bool(threw)],
+        type_args: Vec::new(),
+        byte_offset: 0,
+    };
+    matches!(name.as_str(), "js_set_cursor_next" | "js_map_cursor_next").then_some((*step, release))
 }
 
 /// Check if a statement or its children contain a return statement
@@ -486,12 +631,13 @@ pub(super) fn has_return(stmt: &Stmt) -> bool {
             body,
             catch,
             finally,
+            ..
         } => {
             body.iter().any(has_return)
                 || catch
                     .as_ref()
                     .is_some_and(|c| c.body.iter().any(has_return))
-                || finally.as_ref().is_some_and(|f| f.iter().any(has_return))
+                || finally.as_deref().is_some_and(|f| f.iter().any(has_return))
         }
         Stmt::Switch { cases, .. } => cases.iter().any(|c| c.body.iter().any(has_return)),
         _ => false,

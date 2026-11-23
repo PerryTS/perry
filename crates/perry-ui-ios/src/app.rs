@@ -83,9 +83,8 @@ define_class!(
         #[unsafe(method(application:didFinishLaunchingWithOptions:))]
         fn did_finish_launching(&self, _application: &AnyObject, _options: *const AnyObject) -> bool {
             // Window creation is handled by PerrySceneDelegate.
-            // Fire notification auth prompt once here so notificationSend() doesn't
-            // re-prompt on every call (per #94).
-            crate::notifications::request_authorization();
+            // Notification permission is requested on first use (see
+            // notifications::request_authorization), not at launch.
             // Drain pending BGTaskScheduler registrations from `registerTask`
             // calls during module init (#538). BGTaskScheduler enforces a
             // "register all handlers during launch" contract — if we miss
@@ -325,10 +324,10 @@ unsafe extern "C" fn scene_will_connect(
 /// hook perry-ui-macos installs; lets iOS doc-example programs be
 /// verified under `xcrun simctl` in CI without a human.
 unsafe fn install_test_mode_exit_timer() {
-    if !perry_ui_testkit::is_test_mode() {
+    if !perry_ui::test_mode::is_test_mode() {
         return;
     }
-    let delay_secs = perry_ui_testkit::exit_delay_ms() as f64 / 1000.0;
+    let delay_secs = perry_ui::test_mode::exit_delay_ms() as f64 / 1000.0;
     let target = PerryTestExitTarget::new();
     let sel = Sel::register(c"testExit:");
     let _: Retained<AnyObject> = msg_send![
@@ -705,11 +704,26 @@ define_class!(
                     // Issue #1865: perry/ui `onFrame` display-link callbacks.
                     js_frame_pump_default();
                     js_promise_run_microtasks();
+                    // Turn this agent's turnloop once (non-blocking). Since the
+                    // tokio removal, fetch / node:net / node:http complete on
+                    // NET_* completions that only a loop turn collects. A CLI
+                    // program turns it in `js_wait_for_event`; a UI app never
+                    // calls that, so without this no network I/O ever finishes
+                    // and `await fetch(...)` hangs forever.
+                    {
+                        extern "C" { fn js_loop_settle_once(); }
+                        js_loop_settle_once();
+                    }
                     // Drain deferred promise resolutions from perry-stdlib
                     // tokio workers (async fetch/network completions). Without
                     // this, `await fetch(...)` never resolves on iOS — the
                     // macOS pump has always called it; iOS omitted it.
                     js_run_stdlib_pump();
+                    // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+                    {
+                        extern "C" { fn js_loop_turn_nonblocking(); }
+                        js_loop_turn_nonblocking();
+                    }
                     // #6183 (2026-07-09 GC audit): spend a bounded idle
                     // budget on any active budgeted GC cycle at the pump
                     // boundary — the JS stack is fully unwound here, so this
@@ -933,11 +947,11 @@ define_class!(
     impl PerryTestExitTarget {
         #[unsafe(method(testExit:))]
         fn test_exit(&self, _sender: &AnyObject) {
-            if let Some(path) = perry_ui_testkit::screenshot_path() {
+            if let Some(path) = perry_ui::test_mode::screenshot_path() {
                 let mut len: usize = 0;
                 let ptr = crate::screenshot::perry_ui_screenshot_capture(&mut len as *mut usize);
                 if !ptr.is_null() && len > 0 {
-                    perry_ui_testkit::write_screenshot_bytes(&path, ptr, len);
+                    perry_ui::test_mode::write_screenshot_bytes(&path, ptr, len);
                     unsafe { libc::free(ptr as *mut libc::c_void); }
                 }
             }

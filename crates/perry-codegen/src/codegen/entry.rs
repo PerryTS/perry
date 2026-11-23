@@ -22,6 +22,8 @@ use super::opts::CrossModuleCtx;
 mod event_loop;
 use event_loop::emit_event_loop_liveness;
 
+mod async_module;
+mod module_frame;
 mod module_init;
 mod shims;
 use shims::{collect_entry_env_literals, emit_plugin_abi_shim};
@@ -153,11 +155,16 @@ pub(super) fn compile_module_entry(
     // executable. The variable name stays for diff hygiene with the
     // historical dylib-only branches downstream.
     let is_dylib = output_type == "dylib" || output_type == "staticlib";
+    let has_native_staticlib_anchor =
+        staticlib_asset_anchor_enabled(output_type, &llmod.target_triple);
 
     // A worker evaluates the program entry as a module on its own thread.
     // Share the ordinary initializer (including its per-thread guard and
     // dependency walk) with main instead of giving the entry a no-op stub.
-    let entry_in_init = is_entry && llmod.program_has_worker;
+    let entry_in_init = is_entry && (llmod.program_has_worker || cross_module.program_has_tla);
+    // Image run (`PERRY_SNAP_IMAGE_RUN` set while compiling): a plain program
+    // only; one with top-level await or a worker has no image.
+    let snap_image = crate::stubs::snap_image_run() && !entry_in_init;
     if !is_entry || entry_in_init {
         module_init::compile_module_init(
             llmod,
@@ -192,6 +199,15 @@ pub(super) fn compile_module_entry(
             llmod.declare_function(&format!("{}__init", prefix), VOID, &[]);
             llmod.declare_function(&format!("__perry_prepare_literals_{}", prefix), VOID, &[]);
         }
+        if is_entry && snap_image {
+            llmod.declare_function("js_snap_image_begin", VOID, &[PTR, PTR, PTR, PTR]);
+            llmod.declare_function("js_snap_image_cut", VOID, &[]);
+            if !std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+                for anchor in crate::stubs::SNAP_TLS_ANCHORS {
+                    llmod.add_external_tls_global(anchor, "i8", "localexec");
+                }
+            }
+        }
         if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
             llmod.declare_function("js_snap_entry_body", VOID, &[]);
             llmod.declare_function("js_snap_tls_program", VOID, &[PTR, PTR, PTR, PTR]);
@@ -199,7 +215,7 @@ pub(super) fn compile_module_entry(
                 llmod.add_external_tls_global(anchor, "i8", "localexec");
             }
             if entry_in_init {
-                llmod.declare_function("js_snap_entry_module", VOID, &[]);
+                llmod.declare_function("js_snap_entry_module", VOID, &[I32]);
             }
         }
         // Issue #753: emit a no-op `<entry_prefix>__init` stub so the
@@ -218,6 +234,35 @@ pub(super) fn compile_module_entry(
             stub.block_mut(0).unwrap().ret_void();
         }
 
+        // Two-phase realm (the default; `PERRY_REALM_TWO_PHASE=0` is off):
+        // the entry module defines the runtime's three link-time hooks (weak
+        // in the runtime), so the runtime's own readers of a phase-A
+        // intrinsic call the core entry and the full entry can complete a
+        // core-only realm, with no mode test on any call; a program compiled
+        // with the switch off defines none of them and does not link the
+        // two-phase path.
+        if crate::expr::property_get::globalget::realm_two_phase() {
+            for (hook, target) in [
+                ("perry_realm_core_entry", "js_get_global_core"),
+                ("perry_realm_complete", "js_realm_complete"),
+            ] {
+                let f = llmod.define_function(hook, DOUBLE, vec![]);
+                let _ = f.create_block("entry");
+                let blk = f.block_mut(0).unwrap();
+                let value = blk.call(DOUBLE, target, &[]);
+                blk.ret(DOUBLE, &value);
+            }
+            let f = llmod.define_function(
+                "perry_realm_family_phase",
+                VOID,
+                vec![(I32, "%identity".to_string())],
+            );
+            let _ = f.create_block("entry");
+            let blk = f.block_mut(0).unwrap();
+            blk.call_void("js_realm_family_phase", &[(I32, "%identity")]);
+            blk.ret_void();
+        }
+
         // For dylib output, emit `void perry_module_init()` instead of
         // `int main()`. The host process calls this once after dlopen to
         // initialize the GC, string pools, module globals (including GC
@@ -232,6 +277,12 @@ pub(super) fn compile_module_entry(
         // `runtime_decls`) because most builds don't link geisterhand.
         if cross_module.needs_geisterhand && !is_dylib {
             llmod.declare_function("perry_geisterhand_start", VOID, &[I32]);
+        }
+        // A static archive does not extract members that contain only
+        // constructors. Keep Perry's generated embedded-asset object in the
+        // final host link by making the module entry reference its anchor.
+        if has_native_staticlib_anchor {
+            llmod.declare_function("perry_embedded_assets_link_anchor", VOID, &[]);
         }
         // #1178 — bake `[ios] app_group` from perry.toml into a single
         // `perry_app_group_init(ptr, len)` call at the top of `main`,
@@ -419,7 +470,15 @@ pub(super) fn compile_module_entry(
                     // A program with worker entries always has thread-local
                     // init guards (`program_has_worker`), so the guarded
                     // wrapper runs once per thread.
-                    (cn, len, format!("{prefix}__init"))
+                    let init = if cross_module.program_has_tla {
+                        format!("{prefix}__async_entry")
+                    } else {
+                        format!("{prefix}__init")
+                    };
+                    if cross_module.program_has_tla {
+                        llmod.declare_function(&init, VOID, &[]);
+                    }
+                    (cn, len, init)
                 })
                 .collect()
         } else {
@@ -461,6 +520,19 @@ pub(super) fn compile_module_entry(
             }
             None => Vec::new(),
         };
+        let entry_name = if is_dylib {
+            "perry_module_init".to_string()
+        } else {
+            std::env::var("PERRY_ENTRY_SYMBOL").unwrap_or_else(|_| "main".to_string())
+        };
+        if !entry_in_init {
+            module_frame::record(
+                llmod,
+                hir,
+                &entry_name,
+                cross_module.app_metadata.module_source_path.as_deref(),
+            );
+        }
         let main = if is_dylib {
             llmod.define_function("perry_module_init", VOID, vec![])
         } else {
@@ -476,10 +548,33 @@ pub(super) fn compile_module_entry(
         };
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
+        if has_native_staticlib_anchor {
+            main.block_mut(0)
+                .unwrap()
+                .call_void("perry_embedded_assets_link_anchor", &[]);
+        }
         if crate::verify_facts::enabled() {
             main.block_mut(0)
                 .unwrap()
                 .call_void("perry_verify_facts_init", &[]);
+        }
+        // The family claim: the families the facts say are never created or
+        // observed, for the instrumented runtime's witnesses.
+        if crate::verify_facts::family_claims_on() && cross_module.wpfacts.family_never != 0 {
+            let site = crate::verify_facts::raw_entry_site(
+                "__perry_family",
+                "main",
+                crate::verify_facts::Fact::Family,
+                "family_reach",
+            );
+            main.block_mut(0).unwrap().call_void(
+                "perry_verify_facts_families",
+                &[
+                    (I64, &(cross_module.wpfacts.family_never as i64).to_string()),
+                    (I64, &site.pointer),
+                    (I64, site.len.as_deref().unwrap()),
+                ],
+            );
         }
         {
             let blk = main.block_mut(0).unwrap();
@@ -504,6 +599,16 @@ pub(super) fn compile_module_entry(
             // Apple pointer tags the emitted key lists cannot carry statically,
             // stored before the first birth can read a list.
             crate::codegen::realm_image::emit_tag_fixups(blk, &runtime_layout_fixups);
+            // Two-phase realm: tell the runtime before anything can touch a
+            // realm (an atomic store). Check mode poisons phase-B slots.
+            if crate::expr::property_get::globalget::realm_two_phase() {
+                let poison = if crate::verify_facts::enabled() {
+                    "1"
+                } else {
+                    "0"
+                };
+                blk.call_void("js_realm_two_phase", &[(I32, poison)]);
+            }
             blk.call_void("js_gc_init_with_layouts", &[(PTR, "@perry_layout_image")]);
             blk.call_void(
                 "perry_array_iteration_init",
@@ -721,6 +826,9 @@ pub(super) fn compile_module_entry(
             // factory without ever reaching that module's __init wrapper. All
             // eager literal pools must be ready before ANY eager body runs.
             // Deferred pools remain lazy and prepare in their own wrapper.
+            if !entry_in_init {
+                blk.store(I8, "1", &format!("@__perry_init_done_{module_prefix}"));
+            }
             for prefix in non_entry_module_prefixes {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -729,6 +837,18 @@ pub(super) fn compile_module_entry(
                     format!("ptrtoint (ptr @__perry_prepare_literals_{} to i64)", prefix);
                 blk.call_void("js_run_module_init_catching", &[(I64, &prepare_addr)]);
             }
+            // Image run: the baseline is taken after the runtime prelude and the
+            // eager literal pools (strings, function info, ordinary-object shape
+            // registrations), right before the first module body, so none of
+            // them is program state. Deferred pools prepare in their own wrapper
+            // and stay after the baseline.
+            if snap_image {
+                let a = crate::stubs::SNAP_TLS_ANCHORS.map(|n| format!("@{n}"));
+                blk.call_void(
+                    "js_snap_image_begin",
+                    &[(PTR, &a[0]), (PTR, &a[1]), (PTR, &a[2]), (PTR, &a[3])],
+                );
+            }
             for (index, prefix) in non_entry_module_prefixes.iter().enumerate() {
                 if cross_module.deferred_module_prefixes.contains(prefix) {
                     continue;
@@ -736,12 +856,22 @@ pub(super) fn compile_module_entry(
                 if let Some(const_name) = debug_init_chain.get(index) {
                     blk.call_void("puts", &[(PTR, &format!("@{}", const_name))]);
                 }
-                blk.call_void(&format!("{}__init", prefix), &[]);
+                if !cross_module.program_has_tla {
+                    blk.call_void(&format!("{}__init", prefix), &[]);
+                }
             }
             // SNAP census (`PERRY_SNAP_CENSUS` set while compiling, with
             // `PERRY_GC_INSTRUMENTS=1`): the entry's own body starts here.
-            if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
+            // A program with top-level await evaluates its entry as an async
+            // module record; the runtime opens the entry body at that
+            // record's body, not here, before any module body has run.
+            if !cross_module.program_has_tla
+                && std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty())
+            {
                 blk.call_void("js_snap_entry_body", &[]);
+            }
+            if snap_image {
+                blk.call_void("js_snap_image_cut", &[]);
             }
         }
         // Mark the boundary between init prelude and user code so
@@ -756,6 +886,7 @@ pub(super) fn compile_module_entry(
         let flat_const_ids: std::collections::HashSet<u32> =
             cross_module.flat_const_arrays.keys().copied().collect();
         let (mut main_shadow_slot_map, _) = enable_module_init_shadow_frame(
+            &cross_module.closure_writes,
             main,
             main_init,
             &flat_const_ids,
@@ -772,6 +903,7 @@ pub(super) fn compile_module_entry(
             .copied()
             .collect();
         // `--opt-report` (#6952) attribution scope; no-op when off.
+        let _life_scope = crate::collectors::life_census::compiling(None);
         let _opt_report_scope = crate::opt_report::enter_region(
             "module_init",
             crate::opt_report::RegionKind::ModuleInit,
@@ -794,6 +926,7 @@ pub(super) fn compile_module_entry(
             // too — passing an empty map kept top-level accumulator loops on
             // the rooted/guarded path while in-function ones were clean.
             &cross_module.module_global_proven_types,
+            crate::codegen::facts_int32_locals::none(),
         );
         // #9363: the same redundant-shadow-slot pruning `codegen/function.rs`
         // does, which module init never got. The shadow map is built above
@@ -846,10 +979,15 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            for_in_facts: Default::default(),
+            for_in_snapshots: Default::default(),
+            for_in_keys_locals: Default::default(),
+            for_in_lens: Default::default(),
             numeric_order_functions: cross_module.numeric_order_functions,
             numeric_order_closures: cross_module.numeric_order_closures,
             numeric_order_ready: Default::default(),
             program_has_worker: cross_module.program_has_worker,
+            program_has_tla: cross_module.program_has_tla,
             program_has_thread_agents: cross_module.program_has_thread_agents,
             func: main,
             module_slug: crate::expr::native_region_slug(strings.module_prefix()),
@@ -878,6 +1016,7 @@ pub(super) fn compile_module_entry(
             current_block: 0,
             discard_expr_value: false,
             discard_this_expr: false,
+            snap_lowering: Default::default(),
             literal_chunk_fill: false,
             truthy_call_result_requested: false,
             pending_truthy_call_result: None,
@@ -895,6 +1034,8 @@ pub(super) fn compile_module_entry(
             wpfacts_sites: 0,
             wpfacts_tested: Vec::new(),
             wpfacts_off: false,
+            rest_b1: None,
+            rest_counter: Vec::new(),
             inline_new_leaf: Vec::new(),
             ctor_receiver: None,
             ctor_receiver_selector: None,
@@ -906,6 +1047,7 @@ pub(super) fn compile_module_entry(
             inline_ctor_return: Vec::new(),
             recv_run: None,
             recv_run_store_member: false,
+            fn_ctor_run: None,
             new_target_stack: Vec::new(),
             class_stack: Vec::new(),
             in_static_member: false,
@@ -952,7 +1094,7 @@ pub(super) fn compile_module_entry(
             string_accumulator_locals: &cross_module.string_accumulator_locals,
             contents_stable_bindings: &cross_module.contents_stable_bindings,
             loop_pushed_arrays: &cross_module.loop_pushed_arrays,
-            pushed_array_birth: false,
+            pushed_array_birth: 0,
             string_length_read_of: None,
             closure_rest_params,
             local_closure_func_ids: HashMap::new(),
@@ -974,6 +1116,7 @@ pub(super) fn compile_module_entry(
             constructed_kind_locals: HashMap::new(),
             namespace_imports: &cross_module.namespace_imports,
             namespace_source_prefixes: &cross_module.namespace_source_prefixes,
+            deferred_namespace_imports: &cross_module.deferred_namespace_imports,
             namespace_member_prefixes: &cross_module.namespace_member_prefixes,
             namespace_member_nested: &cross_module.namespace_member_nested,
             cjs_interop_namespaces: &cross_module.cjs_interop_namespaces,
@@ -1009,6 +1152,7 @@ pub(super) fn compile_module_entry(
             not_bigint_locals: main_native_facts.not_bigint_locals(),
             number_by_construction_locals: main_native_facts.number_by_construction_locals(),
             facts_number_locals: crate::codegen::facts_number_locals::none(),
+            facts_int32_locals: crate::codegen::facts_int32_locals::none(),
             unsigned_i32_locals: main_native_facts.unsigned_i32_locals(),
             shadow_slots_bound: main_shadow_slot_map.values().copied().collect(),
             temp_roots: crate::rooting::TempRootPool::default(),
@@ -1019,6 +1163,7 @@ pub(super) fn compile_module_entry(
             shadow_slot_clears_after_stmt: main_shadow_slot_clears_after_stmt,
             arena_state_slot: None,
             arena_state_lazy: false,
+            agent_block: None,
             class_keys_slots: HashMap::new(),
             class_shape_slots: HashMap::new(),
             class_header_images: HashMap::new(),
@@ -1032,6 +1177,9 @@ pub(super) fn compile_module_entry(
             record_packed_admissions: std::collections::HashMap::new(),
             numeric_accumulator_f64_slots: HashMap::new(),
             receiver_descriptors: Default::default(),
+            fn_base: Default::default(),
+            held_lens: Vec::new(),
+            loop_polls: Default::default(),
             poll_stride_counter_slot: None,
             deferred_integer_update_accumulators: HashSet::new(),
             local_slot_reps: HashMap::new(),
@@ -1059,6 +1207,9 @@ pub(super) fn compile_module_entry(
             spec_ta_ready: std::collections::HashSet::new(),
             spec_i32_params: std::collections::HashSet::new(),
             spec_bool_params: std::collections::HashSet::new(),
+            sig_return: None,
+            sig_record_return: None,
+            typed_methods: &cross_module.typed_methods,
             typed_element_locals: std::collections::HashSet::new(),
             create_families: Default::default(),
             class_guard_window: None,
@@ -1088,6 +1239,7 @@ pub(super) fn compile_module_entry(
             scalar_slot_shadow_slots: std::collections::HashMap::new(),
             scalar_ctor_target: Vec::new(),
             non_escaping_news: main_native_facts.non_escaping_news().clone(),
+            life_claims: main_native_facts.life_claims(),
             non_escaping_new_used_fields: main_native_facts.non_escaping_new_used_fields().clone(),
             non_escaping_arrays: main_native_facts.non_escaping_arrays().clone(),
             non_escaping_array_used_indices: main_native_facts
@@ -1099,6 +1251,7 @@ pub(super) fn compile_module_entry(
             fusible_uppercase_locals: main_native_facts.fusible_uppercase_locals().clone(),
             suffix_cursor_locals: main_native_facts.suffix_cursor_locals().clone(),
             suffix_cursors: std::collections::HashMap::new(),
+            utf16_cursors: std::collections::HashMap::new(),
             non_escaping_object_literals: main_native_facts.non_escaping_object_literals().clone(),
             non_escaping_object_literal_used_fields: main_native_facts
                 .non_escaping_object_literal_used_fields()
@@ -1145,7 +1298,6 @@ pub(super) fn compile_module_entry(
             native_arena_owner_aliases: HashMap::new(),
             native_arena_ambiguous_owner_aliases: HashSet::new(),
             disable_buffer_fast_path: cross_module.disable_buffer_fast_path,
-            program_shadows_buffer_read_method: cross_module.program_shadows_buffer_read_method,
             module_has_shape_barrier_sites: cross_module.module_dispatch.has_shape_barrier_sites(),
             min_length_bounds: HashMap::new(),
             bounded_buffer_index_pairs: Vec::new(),
@@ -1153,6 +1305,8 @@ pub(super) fn compile_module_entry(
             buffer_hazard_reasons: HashMap::new(),
             native_i32_aliases: HashMap::new(),
             int_range_aliases: HashMap::new(),
+            int32_shadow_plan: std::collections::HashSet::new(),
+            int32_shadows: std::collections::HashMap::new(),
             int_range_facts: Vec::new(),
             next_loop_proof_scope_id: 0,
             nonnegative_integer_locals: HashSet::new(),
@@ -1166,10 +1320,27 @@ pub(super) fn compile_module_entry(
         if entry_in_init {
             // SNAP census: the entry module's evaluation is the entry body.
             if std::env::var_os("PERRY_SNAP_CENSUS").is_some_and(|v| !v.is_empty()) {
-                ctx.block().call_void("js_snap_entry_module", &[]);
+                let worker = if cross_module.program_has_worker {
+                    "1"
+                } else {
+                    "0"
+                };
+                ctx.block()
+                    .call_void("js_snap_entry_module", &[(I32, worker)]);
             }
-            ctx.block()
-                .call_void(&format!("{}__init", module_prefix), &[]);
+            if cross_module.program_has_tla {
+                if entry_evaluates_as_esm(hir, cross_module) {
+                    ctx.block().call_void("js_mark_entry_module_esm", &[]);
+                }
+                let record =
+                    ctx.block()
+                        .call(I64, &format!("{}__async_record", module_prefix), &[]);
+                ctx.block()
+                    .call_void("js_async_module_entry", &[(I64, &record)]);
+            } else {
+                ctx.block()
+                    .call_void(&format!("{}__init", module_prefix), &[]);
+            }
         } else {
             // Register every module-level global's ADDRESS as a GC root so
             // the mark phase can discover pointer-typed values (Maps, Arrays,
@@ -1265,8 +1436,10 @@ pub(super) fn compile_module_entry(
                     cross_module.namespace_adopts_cjs_exports,
                 );
             }
+            crate::expr::agent_ptr::begin_activation(&mut ctx);
             stmt::lower_top_level_stmts(&mut ctx, main_init)
                 .with_context(|| format!("lowering init statements of module '{}'", hir.name))?;
+            crate::expr::agent_ptr::finish_activation(&mut ctx);
             init_static_fields_late(&mut ctx, hir)?;
 
             // Issue #100: populate `@__perry_ns_<module_prefix>` from the
@@ -1299,6 +1472,10 @@ pub(super) fn compile_module_entry(
         }
 
         if !ctx.block().is_terminated() {
+            if !entry_in_init {
+                ctx.block()
+                    .store(I8, "2", &format!("@__perry_init_done_{module_prefix}"));
+            }
             if is_dylib {
                 // Dylib: no event loop — the host manages its own event
                 // loop and calls perry_fn_* entry points as needed. Just
@@ -1311,6 +1488,7 @@ pub(super) fn compile_module_entry(
                 // `beforeExit` to emit — only Node's exit sequence. Skipping
                 // the loop drops the microtask runner and the event-loop
                 // phases from the link.
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 ctx.block().call_void("js_process_run_exit_sequence", &[]);
                 ctx.block()
                     .call_void("js_process_run_finalization_exit", &[]);
@@ -1370,6 +1548,7 @@ pub(super) fn compile_module_entry(
                     let _ = ctx
                         .block()
                         .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                    crate::verify_facts::life_measure::turn(&mut ctx);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
                 ctx.block().br(&header_label);
@@ -1417,6 +1596,7 @@ pub(super) fn compile_module_entry(
                 let _ = ctx
                     .block()
                     .call(I32, "js_promise_run_microtasks_event_loop", &[]);
+                crate::verify_facts::life_measure::turn(&mut ctx);
                 let _ = ctx.block().call(I32, "js_event_loop_timers_phase", &[]);
                 if cross_module.needs_stdlib {
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);
@@ -1590,6 +1770,10 @@ pub(super) fn compile_module_entry(
         }
     }
     Ok(())
+}
+
+fn staticlib_asset_anchor_enabled(output_type: &str, target_triple: &str) -> bool {
+    output_type == "staticlib" && !target_triple.starts_with("wasm32")
 }
 
 #[cfg(test)]

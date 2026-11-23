@@ -150,6 +150,14 @@ service key no longer exists in the spec.
 | `volumes` | `boolean` | `false` | Also remove named volumes after containers + networks. |
 | `removeOrphans` | `boolean` | `false` | Remove **orphaned containers**: ones still carrying this stack's `perry.compose.project` label whose `perry.compose.service` key is no longer in the spec (service renamed/deleted between deploys). Strictly label-scoped — other projects' containers and anything not created by Perry are never touched. |
 
+`down()` discovers labelled container IDs from one snapshot after session
+rollback and reuses it for the orphan sweep. Containers appearing after that
+snapshot are not rediscovered during the same call; legacy name-based cleanup
+remains best-effort. Serialize deployment and teardown, or run teardown again
+from a fresh compose handle once the concurrent deployment has finished:
+`down()` consumes its handle, so a second call on the same handle rejects with
+`Invalid compose handle`. This is not an atomic reconciliation.
+
 ## Status / logs / exec
 
 ```typescript

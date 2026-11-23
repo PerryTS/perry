@@ -156,7 +156,7 @@ impl RuntimeHandleScope {
         }
     }
 
-    #[inline]
+    #[inline(always)]
     pub(super) fn push<'scope>(&'scope self, slot: RuntimeHandleSlot) -> RuntimeHandle<'scope> {
         runtime_handle_slot_write_barrier(slot);
         let index = self.stack.push(slot);
@@ -253,7 +253,7 @@ impl RuntimeHandleScope {
         handles.iter().map(RuntimeHandle::get_nanbox_u64).collect()
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn root_raw_mut_ptr<'scope, T>(&'scope self, ptr: *mut T) -> RuntimeHandle<'scope> {
         self.push(RuntimeHandleSlot::RawPointer(ptr as usize))
     }
@@ -433,7 +433,7 @@ fn raw_slot_tag(slot: RuntimeHandleSlot) -> u64 {
 const _: () = assert!(std::mem::size_of::<RuntimeHandleSlot>() == 16);
 
 impl<'scope> RuntimeHandle<'scope> {
-    #[inline]
+    #[inline(always)]
     pub(super) fn with_slot<R>(&self, f: impl FnOnce(RuntimeHandleSlot) -> R) -> R {
         let slot = match self.stack.get(self.index) {
             Some(slot) => slot,
@@ -460,7 +460,7 @@ impl<'scope> RuntimeHandle<'scope> {
     /// method scopes the raw value, but it cannot keep that value current if a
     /// collection moves the allocation while `f` is running. Use
     /// [`Self::across_mut`] when the caller needs a post-collection address.
-    #[inline]
+    #[inline(always)]
     pub fn with_mut_ptr<T, R>(&self, f: impl FnOnce(*mut T) -> R) -> R {
         f(self.get_raw_mut_ptr::<T>())
     }
@@ -599,7 +599,7 @@ impl<'scope> RuntimeHandle<'scope> {
         runtime_write_barrier_root_nanbox(bits);
     }
 
-    #[inline]
+    #[inline(always)]
     pub fn get_raw_mut_ptr<T>(&self) -> *mut T {
         self.with_slot(|slot| match slot {
             RuntimeHandleSlot::RawPointer(addr)

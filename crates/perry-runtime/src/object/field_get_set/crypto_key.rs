@@ -34,7 +34,7 @@ pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) ->
         })),
         b"usages" => Some(crypto_key_usages_value(usages)),
         b"constructor" => {
-            let ctor = super::super::js_get_global_this_builtin_value(b"CryptoKey".as_ptr(), 9);
+            let ctor = crate::object::builtin_value_core("CryptoKey");
             Some(JSValue::from_bits(ctor.to_bits()))
         }
         _ => None,
@@ -101,6 +101,9 @@ fn crypto_key_algorithm_name(algo: u8) -> &'static str {
         30 => "ML-KEM-512",
         31 => "ML-KEM-768",
         32 => "ML-KEM-1024",
+        33 => "ML-DSA-44",
+        34 => "ML-DSA-65",
+        35 => "ML-DSA-87",
         _ => "",
     }
 }

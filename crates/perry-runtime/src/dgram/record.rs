@@ -90,7 +90,7 @@ fn record_in_word(word: u64) -> Option<*mut ArrayHeader> {
     // SAFETY: a pointer-tagged `native_state` word is a traced edge to a live
     // GC cell; the type check precedes the array reads.
     unsafe {
-        (crate::dgram::gc_type_for_ptr(record as usize) == Some(crate::gc::GC_TYPE_ARRAY)
+        (crate::dgram::gc_type_for_ptr(record as usize) == Some(crate::gc_array_type_pat!())
             && (*record).length as usize == SLOT_COUNT
             && *crate::array::array_elements_ptr(record) == BRAND_BITS)
             .then_some(record)

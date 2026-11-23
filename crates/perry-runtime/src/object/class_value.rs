@@ -3,7 +3,7 @@
 //!
 //! A class constructor value is its class FUNCTION OBJECT, and nothing else:
 //! an INT32 word is always a number, also when it equals a registered class
-//! id (#11414: the INT32 immediate `INT32_TAG | class_id` that once named a
+//! id (#11414: the INT32 immediate `INTERNAL_WORD_TAG | class_id` that once named a
 //! class is gone; it was bit-identical to that number). The function object
 //! is a `GC_TYPE_CLOSURE` cell whose code pointer is
 //!   [`js_class_constructor_called`] (its [[Call]], which throws), whose
@@ -40,8 +40,8 @@ pub(crate) fn class_value_id_bits(bits: u64) -> Option<u32> {
 /// function is rejected before the ownership proof: once the address is a
 /// plausible, aligned heap address whose ShapeId word is in the exotic band
 /// (the same pre-checks `is_closure_ptr` makes before its first load), the
-/// code-pointer word at +8 — inside every exotic cell's header — must be this
-/// module's thunk. Only then is the cell proven.
+/// cell is a GC closure (header type) and its info word must be this module's
+/// thunk. Only then is the cell proven.
 #[inline]
 pub fn class_closure_id(ptr: usize) -> Option<u32> {
     if !crate::value::addr_class::is_plausible_heap_addr(ptr)
@@ -56,11 +56,17 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
     if !crate::object::shapes::is_exotic_layout_word(shape) {
         return None;
     }
-    // SAFETY: an exotic-band ShapeId word means a closure-or-exotic header,
-    // at least 16 bytes; +8 is the info word of a closure (compared, never
-    // dereferenced here).
-    let info =
-        unsafe { *((ptr as *const u8).add(8) as *const *const crate::closure::JsFunctionInfo) };
+    // SAFETY: the GC header precedes every heap cell; only a closure cell
+    // has an info word (at `ClosureHeader::info`).
+    if unsafe { (*((ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).obj_type }
+        != crate::gc::GC_TYPE_CLOSURE
+    {
+        return None;
+    }
+    let info = unsafe {
+        *((ptr as *const u8).add(std::mem::offset_of!(ClosureHeader, info))
+            as *const *const crate::closure::JsFunctionInfo)
+    };
     if !std::ptr::eq(info, &CLASS_CONSTRUCTOR_INFO) {
         return None;
     }
@@ -117,16 +123,11 @@ pub(crate) static CLASS_CONSTRUCTOR_INFO: crate::closure::JsFunctionInfo =
     );
 
 /// The class a class-REF word names: a class function object (the
-/// constructor) or a `C.prototype` reference word (`0x7FFE` with
-/// `CLASS_PROTOTYPE_REF_FLAG`, which is never an int32 number). `bits` is a
-/// NaN-boxed VALUE word. An INT32 number is neither (#11414).
+/// constructor). `bits` is a NaN-boxed VALUE word. An INT32 number is none
+/// (#11414), and neither is a method's home word.
 #[inline]
 pub(crate) fn class_ref_word(bits: u64) -> Option<u32> {
-    match bits >> 48 {
-        0x7FFE => super::class_prototype_ref_id(f64::from_bits(bits)),
-        0x7FFD => class_closure_id((bits & crate::value::POINTER_MASK) as usize),
-        _ => None,
-    }
+    class_value_id_bits(bits)
 }
 
 /// [`class_ref_word`] for a word that arrived through a POINTER-typed
@@ -389,7 +390,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         (*ptr).capture_count = CLASS_VALUE_CAPTURES as u32;
         (*ptr).shape_id = crate::closure::shape::function_class_shape();
         (*ptr).info = &CLASS_CONSTRUCTOR_INFO;
-        (*ptr).props = std::ptr::null_mut();
+        crate::closure::props::clear_store(ptr);
         let captures = crate::closure::closure_capture_slots_mut(ptr);
         // Captures 0 and 1 are INT32s (class id, evaluation state) and capture
         // 2, the prototype link, starts `undefined`. The arena birth leaves
@@ -397,7 +398,7 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
         // once `class_decl_prototype_link_store` installs a pointer there
         // through the slot barrier.
         // GC_STORE_AUDIT(INIT): fresh class function object; no pointer yet.
-        std::ptr::write(captures, crate::value::INT32_TAG | class_id as u64);
+        std::ptr::write(captures, crate::value::INTERNAL_WORD_TAG | class_id as u64);
         std::ptr::write(
             captures.add(crate::codegen_abi::CLASS_CONSTRUCTOR_PARENT_CAPTURE),
             crate::value::TAG_UNDEFINED,
@@ -406,10 +407,10 @@ fn class_value_mint(class_id: u32) -> *mut ClosureHeader {
             captures.add(CLASS_PROTOTYPE_LINK_CAPTURE),
             crate::value::TAG_UNDEFINED,
         );
-        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INT32_TAG encoding numeric zero; no pointer payload, before class function publication.
+        // GC_STORE_AUDIT(POINTER_FREE): CLASS_EVALUATION_STATE_SLOT receives INTERNAL_WORD_TAG encoding numeric zero; no pointer payload, before class function publication.
         std::ptr::write(
             crate::closure::closure_capture_slots_mut(ptr).add(CLASS_EVALUATION_STATE_SLOT),
-            crate::value::INT32_TAG,
+            crate::value::INTERNAL_WORD_TAG,
         );
         // Born old AND pinned: the address is the class's identity for the
         // agent's life (compiled code keeps it in registers and allocas, the
@@ -760,12 +761,7 @@ fn static_call_shape_code(class_id: u32) -> u32 {
         None => 0,
         // SAFETY: this agent's live class closure; a shape load.
         Some(c) => unsafe {
-            let bag = crate::closure::props::bag_of(c as usize);
-            if bag.is_null() {
-                u32::MAX - 1
-            } else {
-                super::shapes::object_shape_stamp(bag).0
-            }
+            crate::closure::props::store_stamp_word(c as usize).unwrap_or(u32::MAX - 1)
         },
     }
 }
@@ -814,6 +810,46 @@ pub unsafe extern "C" fn js_class_static_call_guard(
                 if owner != 0 && found == owner && one_link {
                     arm_static_call_memo(m, cid, owner);
                 }
+            }
+            1
+        }
+        _ => 0,
+    }
+}
+
+/// [`js_class_static_call_guard`] for `super.m(..)` in a static method of
+/// class `home_id`: the read starts at the home's `[[Prototype]]`, so the
+/// declared body `body` of class `owner_id` runs directly only while that
+/// parent's lookup of `name` reaches it. The memo is armed (home, owner) for
+/// a one-link chain: a relink of the home's parent transitions the home's
+/// shape (`constructor_parent_store`), and a write of the owner's `name` the
+/// owner's.
+///
+/// # Safety
+/// As [`js_class_static_call_guard`].
+#[no_mangle]
+pub unsafe extern "C" fn js_class_static_super_call_guard(
+    home_id: i32,
+    owner_id: i32,
+    name_ptr: *const u8,
+    name_len: i64,
+    body: i64,
+    memo: *mut u64,
+) -> i32 {
+    let home = home_id as u32;
+    let owner = owner_id as u32;
+    if name_ptr.is_null() || name_len <= 0 {
+        return 0;
+    }
+    let name = std::slice::from_raw_parts(name_ptr, name_len as usize);
+    let Some(parent) = static_parent_class_id(home).filter(|&p| p != 0 && p != home) else {
+        return 0;
+    };
+    match super::class_registry::lookup_static_method_owner_bytes(parent, name) {
+        Some((found, (func_ptr, ..))) if found == owner && func_ptr == body as usize => {
+            if found == parent && !memo.is_null() {
+                // SAFETY: the site's memo (see `# Safety`).
+                arm_static_call_memo(&mut *(memo as *mut StaticCallMemo), home, owner);
             }
             1
         }
@@ -943,7 +979,7 @@ fn install_declared_static_method_bytes(class_id: u32, name: &[u8]) {
     // (and no other agent's object) shares it (`js_class_static_call_guard`).
     // SAFETY: this agent's live class closure; the bag exists (just stored).
     unsafe {
-        super::shapes::transition_object_shape_semantics(crate::closure::props::bag_of(ptr));
+        crate::closure::props::store_transition_semantics(ptr);
     }
 }
 
@@ -1265,9 +1301,8 @@ pub(crate) unsafe fn constructor_parent_store(closure: *mut ClosureHeader, bits:
     crate::gc::runtime_write_barrier_slot(closure as usize, slot as usize, bits);
     // An inherited static call's existing proof includes this parent link.
     // Retire the bag shape when the link changes, just as for an own write.
-    let bag = crate::closure::props::bag_of(closure as usize);
-    if !bag.is_null() {
-        super::shapes::transition_object_shape_semantics(bag);
+    if crate::closure::props::has_store(closure as usize) {
+        crate::closure::props::store_transition_semantics(closure as usize);
     }
 }
 
@@ -1412,26 +1447,9 @@ pub(crate) fn class_static_own_accessor_bytes(
     if class_id == 0 || class_id >= 0x7FFF_FF00 {
         return None;
     }
-    use crate::object::key_attrs as ka;
     let ptr = class_value_ptr(class_id) as usize;
-    // SAFETY: this agent's live class closure; its bag (if any) is a live
-    // ordinary object whose attributes live with its keys. Nothing allocates.
-    unsafe {
-        let bag = crate::closure::props::bag_of(ptr);
-        if bag.is_null() {
-            return None;
-        }
-        let entry = ka::object_key_entry(bag, name);
-        if entry & ka::ENTRY_ACCESSOR == 0 {
-            return None;
-        }
-        let acc = crate::object::accessor_pair::own_accessor(bag as usize, name)?;
-        Some((
-            acc,
-            entry & ka::ENTRY_NON_ENUMERABLE == 0,
-            entry & ka::ENTRY_NON_CONFIGURABLE == 0,
-        ))
-    }
+    // SAFETY: this agent's live class closure. Nothing allocates.
+    unsafe { crate::closure::props::own_accessor(ptr, name) }
 }
 
 /// Does class `class_id` own an accessor property `name`?
@@ -1461,13 +1479,14 @@ pub(crate) fn class_static_define_accessor_bytes(
     let _no_collect = crate::gc::GcSuppressScope::new();
     let ptr = class_value_ptr(class_id) as usize;
     // SAFETY: this agent's live class closure; no collection in this scope.
-    let bag = unsafe { crate::closure::props::bag_ensure(ptr) };
-    crate::object::descriptor_state::set_builtin_accessor_pair_bytes(
-        bag as usize,
-        name,
-        acc,
-        crate::object::PropertyAttrs::new(false, enumerable, configurable),
-    );
+    unsafe {
+        crate::closure::props::set_builtin_accessor_pair(
+            ptr,
+            name,
+            acc,
+            crate::object::PropertyAttrs::new(false, enumerable, configurable),
+        )
+    };
 }
 
 /// Change the attributes of class `class_id`'s own accessor `name`.

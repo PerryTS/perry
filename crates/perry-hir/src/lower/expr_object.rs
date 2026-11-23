@@ -326,7 +326,7 @@ fn lower_method_prop(
     if needs_arguments_synth {
         let mapped = !method_strict && simple_parameters;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(&params, method.function.body.as_ref())
         } else {
             Vec::new()
         };
@@ -490,6 +490,7 @@ fn lower_method_prop(
             is_strict: method_strict,
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
             is_exported: false,
             captures: Vec::new(),
             decorators: Vec::new(),
@@ -516,6 +517,7 @@ fn lower_method_prop(
             mutable_captures,
             captures_this: false,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: method.function.is_async,
@@ -627,7 +629,13 @@ fn lower_accessor_prop(
     if !user_has_arguments_param && body.is_some_and(|b| body_uses_arguments(&b.stmts)) {
         let mapped = !accessor_strict;
         let mapped_parameter_ids = if mapped {
-            mapped_argument_parameter_ids(&params)
+            mapped_argument_parameter_ids(
+                &params,
+                body.map(|b| {
+                    let b: &ast::FunctionBody = b;
+                    b
+                }),
+            )
         } else {
             Vec::new()
         };
@@ -707,6 +715,7 @@ fn lower_accessor_prop(
         mutable_captures,
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,
@@ -1118,6 +1127,9 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // scope. Object-literal `super` in a method body captures this hidden
         // home object; the method call's dynamic `this` remains separate.
         let mut ops: Vec<SpreadOp> = Vec::new();
+        // Set when a computed key names its value (an anonymous function
+        // definition or a computed method): such a literal keeps the builder.
+        let mut computed_names_value = false;
         for prop in &obj.props {
             match prop {
                 ast::PropOrSpread::Spread(spread) => {
@@ -1141,6 +1153,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             }
                         }
                         KeyResolution::Dynamic(key_expr) => {
+                            // An anonymous function definition takes its name
+                            // from the evaluated key (NamedEvaluation), which
+                            // only the complete builder below performs.
+                            if crate::lower::expr_assign::rhs_accepts_assignment_name(&kv.value) {
+                                computed_names_value = true;
+                            }
                             let value = lower_expr(ctx, &kv.value)?;
                             ops.push(SpreadOp::Set {
                                 key: key_expr,
@@ -1203,11 +1221,14 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 value: value_expr,
                                 infer_name: false,
                             },
-                            MethodKeyKind::Computed(ke) => SpreadOp::Set {
-                                key: ke,
-                                value: value_expr,
-                                infer_name: true,
-                            },
+                            MethodKeyKind::Computed(ke) => {
+                                computed_names_value = true;
+                                SpreadOp::Set {
+                                    key: ke,
+                                    value: value_expr,
+                                    infer_name: true,
+                                }
+                            }
                         });
                     }
                     // Object-literal getters/setters (#2442): lower to a
@@ -1302,15 +1323,23 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         // Static data definitions and spreads already have a source-ordered
         // HIR builder. No hidden home object is needed, so allocating and
         // calling an IIFE merely to build the fresh literal is redundant.
-        // Check every op: computed definitions, accessors and prototype
-        // setters retain the complete builder above.
+        // Check every op: computed definitions that name their value,
+        // accessors and prototype setters retain the complete builder above.
+        // A computed data definition is a `Computed` part: its key is
+        // evaluated and converted (ToPropertyKey) before its value.
         let can_emit_spread_object = has_spread
+            && !computed_names_value
             && ops.iter().all(|op| match op {
                 SpreadOp::Set {
                     key: Expr::String(_),
                     value,
                     infer_name: false,
                 } => value_is_home_independent(value),
+                SpreadOp::Set {
+                    key,
+                    value,
+                    infer_name: true,
+                } => value_is_home_independent(key) && value_is_home_independent(value),
                 SpreadOp::Assign { src } => value_is_home_independent(src),
                 _ => false,
             });
@@ -1322,8 +1351,16 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         key: Expr::String(key),
                         value,
                         infer_name: false,
-                    } => (Some(key), value),
-                    SpreadOp::Assign { src } => (None, src),
+                    } => crate::ir::ObjectPart::Define(key, value),
+                    SpreadOp::Set {
+                        key,
+                        value,
+                        infer_name: true,
+                    } => crate::ir::ObjectPart::Computed {
+                        key: Box::new(key),
+                        value,
+                    },
+                    SpreadOp::Assign { src } => crate::ir::ObjectPart::Spread(src),
                     _ => unreachable!("spread builder admission checked every op"),
                 })
                 .collect();
@@ -1510,6 +1547,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             mutable_captures: Vec::new(),
             captures_this: body_uses_this,
             captures_new_target: false,
+            construct_only: false,
             enclosing_class: None,
             is_arrow: false,
             is_async: false,
@@ -1729,6 +1767,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         mutable_captures: Vec::new(),
         captures_this: body_uses_this,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: false,
         is_async: false,

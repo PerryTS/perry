@@ -82,9 +82,6 @@ fn raw_ptr_from_value(value: f64) -> usize {
     if jsval.is_pointer() || jsval.is_string() || jsval.is_bigint() {
         return (bits & POINTER_MASK) as usize;
     }
-    if bits != 0 && bits < 0x0001_0000_0000_0000 {
-        return bits as usize;
-    }
     0
 }
 
@@ -162,7 +159,7 @@ fn pending_promise_values(session: f64) -> Vec<f64> {
     let raw = raw_ptr_from_value(value);
     if !JSValue::from_bits(value.to_bits()).is_pointer()
         || !crate::value::addr_class::is_plausible_heap_addr(raw)
-        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc::GC_TYPE_ARRAY)
+        || unsafe { gc_type_for_ptr(raw) } != Some(crate::gc_array_type_pat!())
     {
         return Vec::new();
     }
@@ -1563,7 +1560,7 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
             for (method, func) in [
                 (
                     "connect",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connect", constructible = true)] export crate::node_inspector::session_connect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.connect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_connect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "connectToMainThread",
@@ -1571,11 +1568,11 @@ pub(crate) fn install_session_prototype(constructor: f64, promise_mode: bool) ->
                 ),
                 (
                     "disconnect",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.disconnect", constructible = true)] export crate::node_inspector::session_disconnect_thunk, 0; with_declared(0)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.disconnect", constructible = true, effects = { returns(prim(undefined)) })] export crate::node_inspector::session_disconnect_thunk, 0; with_declared(0)),
                 ),
                 (
                     "post",
-                    crate::fn_info!(#[realm("node:inspector.Session.prototype.post", constructible = true)] export crate::node_inspector::session_post_thunk, 3; with_declared(3)),
+                    crate::fn_info!(#[realm("node:inspector.Session.prototype.post", constructible = true, effects = { coerce(arg(1), Json); calls(arg(1), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); calls(arg(2), this = prim(undefined), args = [fresh(Error.prototype) | prim(null), json | prim(undefined)]); stores(fresh); returns(prim(undefined)) })] export crate::node_inspector::session_post_thunk, 3; with_declared(3)),
                 ),
             ] {
                 set_field(proto, method, fn_value(func, method));
@@ -1651,11 +1648,18 @@ pub extern "C" fn js_node_inspector_session_call_without_new() -> f64 {
     ))
 }
 
+// `new Session(...)` makes a session object whose [[Prototype]] is
+// `Session.prototype`: it ignores its arguments and keeps nothing of the
+// program's; what it stores goes into the session it creates
+// (`stores(fresh)`).
+crate::realm_decl! { "node:inspector.Session", effects = { stores(fresh); returns(fresh("node:inspector.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_session_new() -> f64 {
     session_new(false)
 }
 
+// The `node:inspector/promises` session, as `node:inspector.Session`.
+crate::realm_decl! { "node:inspector/promises.Session", effects = { stores(fresh); returns(fresh("node:inspector/promises.Session.prototype")) } }
 #[no_mangle]
 pub extern "C" fn js_node_inspector_promises_session_new() -> f64 {
     session_new(true)

@@ -170,9 +170,8 @@ fn an_aborted_solve_publishes_no_element_proofs() {
     let pad: String = (0..400)
         .map(|i| format!("const o{i} = {{ a: {i} }}; console.log(o{i}.a);\n"))
         .collect();
-    let src = &format!(
-        "{pad}const recv: any = [1, 2]; const key: any = 0; console.log(recv[key]);"
-    );
+    let src =
+        &format!("{pad}const recv: any = [1, 2]; const key: any = 0; console.log(recv[key]);");
     let src = src.as_str();
     assert!(!facts(src).elements.is_empty());
     let pf = facts_with(
@@ -182,7 +181,11 @@ fn an_aborted_solve_publishes_no_element_proofs() {
             ..Default::default()
         },
     );
-    assert!(pf.stats.aborted && pf.stats.widened_stop, "work {}", pf.stats.work);
+    assert!(
+        pf.stats.aborted && pf.stats.widened_stop,
+        "work {}",
+        pf.stats.work
+    );
     assert!(pf.elements.is_empty());
     assert!(pf
         .element(
@@ -249,7 +252,8 @@ fn builtin_alias_receivers_reuse_canonical_identity_and_shape() {
         matches!(
             value.kind,
             TokKind::BuiltinFn(crate::model::Native::Member {
-                identity: "parseInt"
+                identity: "parseInt",
+                ..
             })
         ),
         "{value:?}"

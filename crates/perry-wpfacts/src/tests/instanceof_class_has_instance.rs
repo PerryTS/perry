@@ -53,7 +53,11 @@ console.log("Odd", typeof Odd);"#,
 
 /// The verdict of the one `p.f()` call in `probe`.
 fn probe_call(pf: &crate::ProgramFacts) -> Verdict {
-    let calls: Vec<_> = pf.sites.iter().filter(|s| s.key == "f" && s.is_call).collect();
+    let calls: Vec<_> = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == "f" && s.is_call)
+        .collect();
     assert_eq!(calls.len(), 1, "{}", pf.dump_text());
     calls[0].verdict.clone()
 }
@@ -101,7 +105,11 @@ fn a_reading_has_instance_hook_keeps_the_call_proven() {
 #[test]
 fn an_unknown_right_hand_side_escapes_the_left_hand_side() {
     let pf = facts(&REPLACES_F.replace("RHS", "(globalThis as any)[process.argv[2]]"));
-    assert!(matches!(probe_call(&pf), Verdict::No(_)), "{}", pf.dump_text());
+    assert!(
+        matches!(probe_call(&pf), Verdict::No(_)),
+        "{}",
+        pf.dump_text()
+    );
 }
 
 /// A program assignment through an unknown key: no program class object is
@@ -125,9 +133,17 @@ for (const k of xs) {{ if (k instanceof Sub) c++; }}
 console.log(c, new Sub().n({{y: 2}}), new Base().m({{x: 3}}));"#
     ));
     for key in ["m", "n"] {
-        let s: Vec<_> = pf.sites.iter().filter(|s| s.key == key && s.is_call).collect();
+        let s: Vec<_> = pf
+            .sites
+            .iter()
+            .filter(|s| s.key == key && s.is_call)
+            .collect();
         assert_eq!(s.len(), 1, "{}", pf.dump_text());
-        assert!(!matches!(s[0].verdict, Verdict::No(_)), "{key}: {}", pf.dump_text());
+        assert!(
+            !matches!(s[0].verdict, Verdict::No(_)),
+            "{key}: {}",
+            pf.dump_text()
+        );
     }
 }
 

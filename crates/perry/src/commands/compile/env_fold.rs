@@ -139,6 +139,7 @@ fn recurse_stmt(stmt: &mut Stmt, env: &Env) {
             body,
             catch,
             finally,
+            ..
         } => {
             fold_stmts(body, env);
             if let Some(c) = catch {

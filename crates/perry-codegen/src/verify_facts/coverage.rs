@@ -28,11 +28,60 @@ pub(crate) enum Fact {
     MinimumExtent,
     Separation,
     NumberInput,
+    Int32Input,
+    ConstLength,
+    IndexArgument,
     IndexedMetadata,
     NumericBody,
     NumericResult,
     ProtoHolder,
     ProtoAdd,
+    ElementRead,
+    FieldReadCall,
+    CanonicalNumber,
+    ElementFloor,
+    ConstNumber,
+    Signature,
+    ArrayRep,
+    ConstArray,
+    RecordIdentity,
+    RecordMutation,
+    /// DESIGN-p4l4 VR-3b: a value record reached a boxed entry (B3).
+    RecordEntry,
+    /// `family_reach` says a runtime family is never created or observed.
+    Family,
+    /// DESIGN-p4l4 VR-4b: the receiver of a record-array intrinsic is a
+    /// record array (R6).
+    RecordArray,
+    FieldRep,
+    UnsignedBound,
+    ZeroSign,
+    BirthImage,
+    KeySign,
+    WideKey,
+    /// A call's result kinds (wpfacts `call_kinds`): a string operand.
+    CallKinds,
+    LiteralString,
+    /// A local or a field holds only Booleans (wpfacts `booleans`).
+    Boolean,
+    /// A loop holds a local Array's length across its calls (wpfacts
+    /// `held_lengths`).
+    HeldLength,
+    /// A loop without calls keeps a local Array's length beside stores
+    /// through other names (wpfacts `named_lengths`).
+    NamedLength,
+    /// A loop without calls keeps a local Array's length: its reads, stores
+    /// and operators run no program code (wpfacts `quiet_sites`).
+    QuietSites,
+    /// A by-name method call keeps its built-in lowering by what the facts
+    /// prove of its receiver's values (wpfacts `method_sites`).
+    MethodSite,
+    /// A loop's trip bound from its counter's interval
+    /// (`stmt::loops::bounded_poll`).
+    LoopTrip,
+    /// LIFE G1: no pointer to a claimed birth exists after its death point
+    /// (`verify_facts::life`).
+    Lifetime,
 }
 impl Fact {
     pub(super) fn name(self) -> &'static str {
@@ -60,11 +109,42 @@ impl Fact {
             Self::MinimumExtent => "indexed minimum extent",
             Self::Separation => "indexed separation",
             Self::NumberInput => "number input",
+            Self::Int32Input => "int32 input",
+            Self::ConstLength => "array constant length",
+            Self::IndexArgument => "index argument",
             Self::IndexedMetadata => "indexed metadata",
             Self::NumericBody => "numeric body",
             Self::NumericResult => "numeric result",
             Self::ProtoHolder => "prototype holder",
             Self::ProtoAdd => "prototype add",
+            Self::ElementRead => "proven element read",
+            Self::FieldReadCall => "field read call",
+            Self::CanonicalNumber => "canonical number",
+            Self::ElementFloor => "element floor",
+            Self::ConstNumber => "constant number",
+            Self::Signature => "signature",
+            Self::ArrayRep => "array rep",
+            Self::ConstArray => "constant array",
+            Self::RecordIdentity => "value record identity",
+            Self::RecordMutation => "value record mutation",
+            Self::RecordEntry => "value record boxed entry",
+            Self::Family => "family",
+            Self::RecordArray => "value record array",
+            Self::FieldRep => "field rep",
+            Self::UnsignedBound => "unsigned bound",
+            Self::ZeroSign => "zero sign",
+            Self::BirthImage => "birth image",
+            Self::KeySign => "key sign",
+            Self::WideKey => "wide key",
+            Self::CallKinds => "call kinds",
+            Self::LiteralString => "literal string",
+            Self::Boolean => "boolean",
+            Self::HeldLength => "held length",
+            Self::NamedLength => "named length",
+            Self::QuietSites => "quiet sites",
+            Self::MethodSite => "method site",
+            Self::LoopTrip => "loop trip bound",
+            Self::Lifetime => "lifetime",
         }
     }
 }
@@ -87,7 +167,10 @@ pub(crate) fn consumed(fact: Fact, operands: impl FnOnce() -> Value) {
 
 pub(crate) fn checked(fact: Fact, operands: Value) {
     let identity = record(fact.name(), operands, true);
-    if matches!(fact, Fact::Bodies | Fact::StaticGuard | Fact::NumberInput) {
+    if matches!(
+        fact,
+        Fact::Bodies | Fact::StaticGuard | Fact::NumberInput | Fact::Int32Input | Fact::ConstLength
+    ) {
         let mut inventory = RECORDS.lock().expect("verification coverage poisoned");
         unit_report_validation(inventory.claims.get_mut(&identity).unwrap());
     }
@@ -234,6 +317,14 @@ pub(crate) fn emitted(module: &str, emission: u64, copy: Value) {
 
 pub(crate) fn number(id: u32) {
     checked(Fact::NumberInput, json!({"local":id}));
+}
+
+pub(crate) fn int32(id: u32) {
+    checked(Fact::Int32Input, json!({"local":id}));
+}
+
+pub(crate) fn const_length(id: u32) {
+    checked(Fact::ConstLength, json!({"local":id}));
 }
 
 pub(crate) fn normal_call_miss(class: &str, key: &str) {

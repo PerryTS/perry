@@ -397,9 +397,13 @@ fn merge_effects(
         if entry.contains_key("effects") {
             return Err(format!("{at}: a second effects clause"));
         }
+        // A node module member (`node:fs.existsSync`) or a member of the
+        // process object (`process.cwd`): the dispatch arm is keyed by the
+        // bare module name.
         let (module, key) = name
             .strip_prefix("node:")
-            .and_then(|n| n.rsplit_once('.'))
+            .unwrap_or(name.as_str())
+            .rsplit_once('.')
             .ok_or_else(|| format!("{at}: not a node module member"))?;
         let text = arm(module, key)
             .ok_or_else(|| format!("{at}: no native_module_dispatch arm ({module:?}, {key:?})"))?;
@@ -1395,6 +1399,15 @@ mod tests {
     /// An effects-only block directly above the body a bound_method member
     /// runs puts its effects, and the body the call-graph check runs on, on
     /// the member's entry.
+    #[test]
+    fn a_birth_site_is_accepted_with_reach_edges_only() {
+        let d = &inline(r#"realm_decl! { "%ExampleBirth%", kind = birth_site; }"#).unwrap()[0];
+        assert_eq!(d.get("kind").and_then(Value::string), Some("birth_site"));
+        assert!(d.get("header").is_none(), "no cell");
+        assert!(d.get("properties").is_none());
+        assert!(inline(r#"realm_decl! { "%ExampleBirth%"; }"#).is_err());
+    }
+
     #[test]
     fn effects_only_block_declares_the_dispatch_callee() {
         let member = r#"realm_decl! { "node:example.has", provider = bound_method, receiver = "node:example"; }"#;

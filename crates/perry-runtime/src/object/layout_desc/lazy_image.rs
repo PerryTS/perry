@@ -13,7 +13,7 @@ fn span() -> Option<&'static crate::codegen_abi::PerryProgramTableV1> {
 
 /// The descriptor for a lazy static row of this agent's executable image.
 #[inline]
-fn descriptor(word: u32) -> Option<*const PerryLayoutDesc> {
+pub(super) fn descriptor(word: u32) -> Option<*const PerryLayoutDesc> {
     let span = span()?;
     let row = LayoutWord(word).row().0;
     let offset = row.checked_sub(span.lazy_first)?;
@@ -27,6 +27,11 @@ fn descriptor(word: u32) -> Option<*const PerryLayoutDesc> {
             .add(offset as usize)
     };
     (unsafe { (*desc).layout_id } == LayoutWord(word).unshadowed().0).then_some(desc)
+}
+
+/// Whether the lazy static row of `word` selects a descriptor that carries `word`.
+pub(super) fn row_names_word(word: u32) -> bool {
+    descriptor(word).is_some()
 }
 
 /// Whether `desc` is the descriptor value selected by its static row.

@@ -546,10 +546,8 @@ fn jsvalue_to_number(v: f64) -> f64 {
                 _ => f64::NAN,
             }
         }
-        0x7FFE => {
-            // INT32
-            ((bits & 0xFFFF_FFFF) as u32 as i32) as f64
-        }
+        // An internal word is no JS value.
+        0x7FFE => f64::NAN,
         0x7FFD => {
             // Pointer: a Date contributes its time value; any other object (and
             // arrays) coerce via OrdinaryToPrimitive(number) → ToNumber.

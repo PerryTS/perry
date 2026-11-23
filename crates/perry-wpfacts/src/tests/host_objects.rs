@@ -36,30 +36,73 @@ const USES: &str = r#"
 fn host_members_are_the_runtimes_natives() {
     let pf = facts(USES);
     for k in ["log", "write", "setEncoding"] {
-        assert!(native(&pf, k), "{k}: {:?}\n{}", calls(&pf, k), pf.dump_text());
+        assert!(
+            native(&pf, k),
+            "{k}: {:?}\n{}",
+            calls(&pf, k),
+            pf.dump_text()
+        );
     }
 }
 
 /// A key the runtime's layouts do not both hold is not described.
 #[test]
 fn an_undescribed_host_member_stays_open() {
-    let pf = facts("const o = process.stdout; o.cork(); const i = process.stdin; i.setRawMode(true);");
-    assert!(open(&pf, "cork"), "{:?}\n{}", calls(&pf, "cork"), pf.dump_text());
-    assert!(open(&pf, "setRawMode"), "{:?}\n{}", calls(&pf, "setRawMode"), pf.dump_text());
+    let pf =
+        facts("const o = process.stdout; o.cork(); const i = process.stdin; i.setRawMode(true);");
+    assert!(
+        open(&pf, "cork"),
+        "{:?}\n{}",
+        calls(&pf, "cork"),
+        pf.dump_text()
+    );
+    assert!(
+        open(&pf, "setRawMode"),
+        "{:?}\n{}",
+        calls(&pf, "setRawMode"),
+        pf.dump_text()
+    );
 }
 
 /// Soundness: each of these may give the member another value.
 #[test]
 fn a_written_host_member_stays_open() {
     for (what, key, extra) in [
-        ("a store of the member", "write", "process.stdout.write = function (s: any) { return true; } as any;"),
-        ("a store into console", "log", "console.log = function (...a: any[]) {};"),
-        ("a computed store", "write", "(process.stdout as any)[\"wr\" + String(Date.now() % 2)] = 1;"),
-        ("a store into ⊤", "write", "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.write = 3;"),
-        ("unknown code holding it", "write", "const g = new Function(\"o\", \"o.write = 1\"); g(process.stdout);"),
+        (
+            "a store of the member",
+            "write",
+            "process.stdout.write = function (s: any) { return true; } as any;",
+        ),
+        (
+            "a store into console",
+            "log",
+            "console.log = function (...a: any[]) {};",
+        ),
+        (
+            "a computed store",
+            "write",
+            "(process.stdout as any)[\"wr\" + String(Date.now() % 2)] = 1;",
+        ),
+        (
+            "a store into ⊤",
+            "write",
+            "import \"unseen-host\"; const t: any = (globalThis as any).someHost; t.write = 3;",
+        ),
+        (
+            "unknown code holding it",
+            "write",
+            "const g = new Function(\"o\", \"o.write = 1\"); g(process.stdout);",
+        ),
     ] {
-        let pf = facts(&format!("console.log(\"ok\"); process.stdout.write(\"x\"); {extra}"));
-        assert!(open(&pf, key), "{what}: {:?}\n{}", calls(&pf, key), pf.dump_text());
+        let pf = facts(&format!(
+            "console.log(\"ok\"); process.stdout.write(\"x\"); {extra}"
+        ));
+        assert!(
+            open(&pf, key),
+            "{what}: {:?}\n{}",
+            calls(&pf, key),
+            pf.dump_text()
+        );
     }
 }
 
@@ -109,7 +152,11 @@ fn a_host_stream_write_returns_a_boolean() {
     let src = format!("{WRITE_RESULT}console.log(a.v); // SITE\n");
     let pf = facts(&src);
     let v = site(&pf, &src, "v");
-    assert!(v.iter().all(|v| !matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| !matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
     assert!(native(&pf, "write"), "{:?}", calls(&pf, "write"));
 }
 
@@ -124,7 +171,11 @@ fn a_host_stream_write_keeps_its_chunk() {
         console.log(c.s); // SITE\n";
     let pf = facts(src);
     let v = site(&pf, src, "s");
-    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
 }
 
 /// Control: `write` reads other members of its receiver (`_write`,
@@ -152,10 +203,26 @@ fn a_host_stream_write_after_a_store_on_the_stream_stays_open() {
 fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
     for (store, call, opened) in [
         ("void w;", "console.log(\"x\");", false),
-        ("(process.stdout as any).write = w;", "console.info(\"x\");", true),
-        ("(process.stderr as any).write = w;", "console.error(\"x\");", true),
-        ("Object.getPrototypeOf(process.stdout).write = w;", "console.log(\"x\");", true),
-        ("Object.getPrototypeOf(process.stderr).write = w;", "console.warn(\"x\");", true),
+        (
+            "(process.stdout as any).write = w;",
+            "console.info(\"x\");",
+            true,
+        ),
+        (
+            "(process.stderr as any).write = w;",
+            "console.error(\"x\");",
+            true,
+        ),
+        (
+            "Object.getPrototypeOf(process.stdout).write = w;",
+            "console.log(\"x\");",
+            true,
+        ),
+        (
+            "Object.getPrototypeOf(process.stderr).write = w;",
+            "console.warn(\"x\");",
+            true,
+        ),
         (
             "Object.getPrototypeOf(Object.getPrototypeOf(process.stdout)).write = w;",
             "console.debug(\"x\");",
@@ -171,7 +238,11 @@ fn a_write_stored_on_a_stream_or_its_prototype_is_called_by_console() {
         let v = site(&pf, &src, "v");
         let open = v.iter().all(|v| matches!(v, Verdict::No(_)));
         let proven = v.iter().all(|v| !matches!(v, Verdict::No(_)));
-        assert!(if opened { open } else { proven }, "{store} {call}: {v:?}\n{}", pf.dump_text());
+        assert!(
+            if opened { open } else { proven },
+            "{store} {call}: {v:?}\n{}",
+            pf.dump_text()
+        );
     }
 }
 
@@ -183,5 +254,38 @@ fn a_host_stream_write_after_a_store_on_its_prototype_stays_open() {
     let src = format!("{extra}{WRITE_RESULT}console.log(a.v); // SITE\n");
     let pf = facts(&src);
     let v = site(&pf, &src, "v");
-    assert!(v.iter().all(|v| matches!(v, Verdict::No(_))), "{v:?}\n{}", pf.dump_text());
+    assert!(
+        v.iter().all(|v| matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+/// Interpreted code holds `console` and `process.stdout` (globals) and may
+/// replace their members: with the interpreter linked and reachable, no
+/// host member is the runtime's.
+#[test]
+fn interpreted_code_opens_a_host_member() {
+    for d in [
+        "new Function(process.argv[2])();",
+        "(0, eval)(process.argv[2]);",
+    ] {
+        let cfg = FactsConfig {
+            dynamic_code: Some("E14 test: dynamic code".into()),
+            interpreted_sources: true,
+            ..FactsConfig::default()
+        };
+        let pf = facts_with(
+            &format!("{d} console.log(\"ok\"); process.stdout.write(\"x\");"),
+            cfg,
+        );
+        for key in ["log", "write"] {
+            assert!(
+                open(&pf, key),
+                "{d} {key}: {:?}\n{}",
+                calls(&pf, key),
+                pf.dump_text()
+            );
+        }
+    }
 }

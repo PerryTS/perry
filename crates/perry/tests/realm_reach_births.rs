@@ -537,3 +537,24 @@ c.on("close", (code: number) => console.log("close", code));
         "STREAM_PROTOTYPE",
     );
 }
+
+/// The global `new Worker(url)` (Bun/browser spelling, no import) constructs
+/// node:worker_threads' Worker, whose constructor's [[Prototype]] is
+/// EventEmitter: R holds that constructor bag, so the program starts.
+#[test]
+fn a_global_worker_reaches_the_event_emitter_constructor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(dir.path().join("w.js"), "postMessage(1);\n").expect("write worker");
+    let (stdout, defined, _) = compile_and_run(
+        dir.path(),
+        r#"const w = new Worker(new URL("./w.js", import.meta.url), { type: "module" } as any);
+w.terminate();
+console.log("ok");
+"#,
+    );
+    assert_eq!(stdout, "ok\n");
+    assert!(
+        defined.contains("NATIVE_CTOR_EVENT_EMITTER"),
+        "NATIVE_CTOR_EVENT_EMITTER is not emitted: {defined:?}"
+    );
+}

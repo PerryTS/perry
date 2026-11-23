@@ -459,6 +459,51 @@ pub(crate) fn kind_and_width(blk: &mut crate::block::LlBlock, h: &str) -> (Strin
     (kind, blk.shl(I64, "1", &shift))
 }
 
+/// `(raw, is_typed)`: is `boxed` a typed-array cell of any kind (owner or
+/// view, brand 0..=11, not an evacuated stub)? The same plausibility tests as
+/// [`owner_guard`] before the header word is read.
+pub(crate) fn any_typed_array_guard(ctx: &mut FnCtx<'_>, boxed: &str) -> (String, String) {
+    let inspect = ctx.new_block("bytes.any.guard");
+    let done = ctx.new_block("bytes.any.admission");
+    let inspect_l = ctx.block_label(inspect);
+    let done_l = ctx.block_label(done);
+    let bits = ctx.block().bitcast_double_to_i64(boxed);
+    let raw = ctx.block().and(I64, &bits, crate::nanbox::POINTER_MASK_I64);
+    let tag = ctx.block().and(
+        I64,
+        &bits,
+        &crate::nanbox::i64_literal(crate::nanbox::TAG_MASK),
+    );
+    let tagged = ctx
+        .block()
+        .icmp_eq(I64, &tag, crate::nanbox::POINTER_TAG_I64);
+    let floor =
+        crate::target_layout::heap_addr_lower_bound_inclusive(ctx.target_triple).to_string();
+    let above = ctx.block().icmp_uge(I64, &raw, &floor);
+    let ceiling =
+        crate::target_layout::heap_addr_upper_bound_exclusive(ctx.target_triple).to_string();
+    let below = ctx.block().icmp_ult(I64, &raw, &ceiling);
+    let low = ctx.block().and(I64, &raw, "7");
+    let aligned = ctx.block().icmp_eq(I64, &low, "0");
+    let g = ctx.block().and(I1, &tagged, &above);
+    let g = ctx.block().and(I1, &g, &below);
+    let g = ctx.block().and(I1, &g, &aligned);
+    let before = ctx.block().label.clone();
+    ctx.block().cond_br(&g, &inspect_l, &done_l);
+    ctx.current_block = inspect;
+    let h = header_word(ctx.block(), &raw);
+    // Type byte without the view bit, and the FORWARDED flag: 0x40..=0x4b.
+    let masked = ctx.block().and(I64, &h, "32991"); // 0x80DF
+    let brand = ctx.block().sub(I64, &masked, "64");
+    let guard = ctx.block().icmp_ule(I64, &brand, "11");
+    ctx.block().br(&done_l);
+    ctx.current_block = done;
+    let guard = ctx
+        .block()
+        .phi(I1, &[("false", &before), (&guard, &inspect_l)]);
+    (raw, guard)
+}
+
 pub(crate) fn owner_guard(ctx: &mut FnCtx<'_>, boxed: &str, brand: u8) -> (String, String) {
     let inspect = ctx.new_block("bytes.inline.guard");
     let done = ctx.new_block("bytes.inline.admission");
@@ -708,6 +753,7 @@ mod tests {
                 decorators: vec![],
                 was_plain_async: false,
                 was_unrolled: false,
+                construct_only: false,
             });
             // A loop indexed read registers the proof before any call. A
             // numeric intrinsic alone deliberately keeps per-access resolution.
@@ -841,6 +887,7 @@ mod tests {
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
         add_indexed_loop_read(&mut module.functions[0]);
         let ir = String::from_utf8(

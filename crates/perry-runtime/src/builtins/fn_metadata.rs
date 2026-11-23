@@ -181,7 +181,26 @@ unsafe fn with_function_name_for_closure<R>(
         let bytes = std::slice::from_raw_parts(descriptor_pointer(base, delta), len);
         return Some(read(std::str::from_utf8_unchecked(bytes)));
     }
+    // A lazy builtin family's constructor is named by its construct identity
+    // (its info may be shared by several builtins): its `name` is read before
+    // its bag exists.
+    if let Some(identity) =
+        crate::object::BuiltinConstructorIdentity::from_header(closure.capture_count)
+    {
+        if identity.declaration().lazy {
+            return Some(read(identity.name()));
+        }
+    }
     with_registered_name(info, |name| (!name.is_empty()).then(|| read(name))).flatten()
+}
+
+/// The closure's `name` is the empty string (no name, or an empty one), by
+/// the precedence of [`function_name_for_closure`], without allocating.
+///
+/// # Safety
+/// `closure` is null or live; its info owns the ranges licensed by its flags.
+pub(crate) unsafe fn function_name_is_empty(closure: *const crate::closure::ClosureHeader) -> bool {
+    with_function_name_for_closure(closure, str::is_empty).unwrap_or(true)
 }
 
 /// Non-allocating presence with the same UTF-8 and override precedence as

@@ -19,7 +19,7 @@ use crate::object::descriptors::{OwnNamesSnapshot, OwnProperty};
 use super::{
     fs_thread_codec, unsupported_transfer_type_name, SerializedValue, VIEW_KIND_DATA_VIEW,
 };
-use super::{BIGINT_TAG, INT32_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
+use super::{BIGINT_TAG, INTERNAL_WORD_TAG, POINTER_MASK, POINTER_TAG, STRING_TAG, TAG_MASK};
 use super::{TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED};
 use crate::bigint::{self, BigIntHeader, BIGINT_LIMBS};
 use crate::closure::{real_capture_count, ClosureHeader};
@@ -457,7 +457,7 @@ impl Writer<'_> {
             _ => {}
         }
         let tag = bits & TAG_MASK;
-        if tag == INT32_TAG {
+        if tag == INTERNAL_WORD_TAG {
             return SerializedValue::Inline(bits);
         }
         if tag == STRING_TAG {
@@ -555,7 +555,7 @@ impl Writer<'_> {
             return self.pointer(POINTER_TAG | live as u64);
         }
         match header.obj_type {
-            gc::GC_TYPE_ARRAY => self.array(addr, addr),
+            crate::gc_array_type_pat!() => self.array(addr, addr),
             gc::GC_TYPE_LAZY_ARRAY => {
                 let lazy = addr as *const crate::json_tape::LazyArrayHeader;
                 if (*lazy).magic != crate::json_tape::LAZY_ARRAY_MAGIC {
@@ -670,7 +670,10 @@ impl Writer<'_> {
         let capacity = (*arr).capacity as usize;
         if self.mode == CloneMode::Message {
             let data_layout = self.data_array_layout(arr);
+            // A sparse Array (`length > capacity`) has no `length` slots to
+            // copy, whatever its layout word says.
             if data_layout
+                && len <= capacity
                 && crate::array::array_numeric_layout_resolved(arr)
                     == Some(crate::array::NumericArrayLayout::RawF64)
             {
@@ -872,6 +875,12 @@ impl Writer<'_> {
         if self.mode == CloneMode::Message {
             return self.message_object(obj);
         }
+        // An elements-backed object keeps its indices outside its keys: its
+        // own properties come from the own-names snapshot, the authority every
+        // other own-property reader uses.
+        if crate::array::subclass_elements::own_elements(obj as usize).is_some() {
+            return self.own_names_object(obj);
+        }
         let keys_view = crate::object::object_keys(obj);
         let mut names = Vec::new();
         let mut fields = Vec::new();
@@ -915,6 +924,57 @@ impl Writer<'_> {
             CloneMode::Thread => super::constfn_transfer::snapshot(obj, Some(&names), fields.len()),
             CloneMode::Message => None,
         };
+        SerializedValue::Object {
+            final_constfn,
+            class_id: 0,
+            parent_class_id: 0,
+            fields,
+            keys: Some(names),
+        }
+    }
+
+    /// A thread copy of an object whose own properties are not all in its
+    /// keys: every own enumerable string-keyed property in own-key order. As
+    /// on the slot path, an accessor is not run and crosses as `undefined`.
+    #[cold]
+    #[optimize(size)]
+    unsafe fn own_names_object(
+        &mut self,
+        obj: *const crate::object::ObjectHeader,
+    ) -> SerializedValue {
+        let owner = self
+            .scope
+            .root_nanbox_u64(JSValue::pointer(obj.cast()).bits());
+        let snapshot = OwnNamesSnapshot::collect(self.scope, &owner);
+        let mut names = Vec::with_capacity(snapshot.count() as usize);
+        let mut fields = Vec::with_capacity(snapshot.count() as usize);
+        let mut short = [0; crate::value::SHORT_STRING_MAX_LEN];
+        for i in 0..snapshot.count() {
+            let Some((_, property)) = snapshot.property(&owner, i) else {
+                continue;
+            };
+            let (value, flags) = property.value_and_flags();
+            if flags & crate::object::key_attrs::ENTRY_NON_ENUMERABLE != 0 {
+                continue;
+            }
+            let Some(name) = crate::string::js_string_key_bytes(
+                JSValue::from_bits(snapshot.key(i).to_bits()),
+                &mut short,
+            )
+            .map(<[u8]>::to_vec) else {
+                continue;
+            };
+            let bits = if flags & crate::object::key_attrs::ENTRY_ACCESSOR != 0 {
+                TAG_UNDEFINED
+            } else {
+                value
+            };
+            names.push(name);
+            fields.push(self.value(bits));
+        }
+        let obj = (owner.get_nanbox_u64() & crate::value::POINTER_MASK)
+            as *const crate::object::ObjectHeader;
+        let final_constfn = super::constfn_transfer::snapshot(obj, Some(&names), fields.len());
         SerializedValue::Object {
             final_constfn,
             class_id: 0,

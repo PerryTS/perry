@@ -14,9 +14,27 @@ pub(crate) use fixed::{compact_slots, fixed_class};
 pub(crate) fn calling_convention(name: &str) -> Option<&'static str> {
     matches!(
         name,
-        "perry_birth_class" | "perry_birth_empty_array" | shared::PUSHED
+        "perry_birth_class" | "perry_birth_empty_array" | shared::PUSHED | shared::SIZED
     )
     .then_some("preserve_mostcc")
+}
+
+/// The slots the `[]` of `let id = []` is born with beyond the plain empty
+/// birth, 0 for none: what the facts reserve for the list (`wpfacts
+/// list_caps`), else sixteen for a binding a later loop of its body pushes
+/// into (`collectors::loop_pushed_arrays`, all main knows with the facts
+/// off or silent).
+pub(crate) fn list_slots(ctx: &FnCtx<'_>, id: u32) -> u64 {
+    let facts = (!ctx.wpfacts_off && !ctx.wpfacts.interp_guard)
+        .then(|| ctx.wpfacts.list_capacities.get(&id).copied())
+        .flatten();
+    match facts {
+        Some(slots) => u64::from(slots),
+        None if ctx.loop_pushed_arrays.reserve.contains(&id) => {
+            crate::target_layout::INLINE_PUSHED_ARRAY_SLOTS
+        }
+        None => 0,
+    }
 }
 
 pub(super) const BIRTH_FLAGS_OFFSET: &str = "24";

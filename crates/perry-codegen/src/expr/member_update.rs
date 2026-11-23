@@ -46,6 +46,10 @@ use crate::types::{DOUBLE, I32, I64};
 use super::{emit_root_nanbox_store_on_block, lower_expr, FnCtx};
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
+    // I32 at rest (PR C): an update of a key some class keeps in an I32 lane.
+    if let Some(value) = super::rest_fields::try_lower(ctx, expr)? {
+        return Ok(value);
+    }
     match expr {
         // -------- obj.field++ / obj.field-- (PropertyUpdate) --------
         // Lowered as: load → fadd/fsub 1.0 → store. Same as the
@@ -274,6 +278,19 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             let private_site =
                 super::private_field_site::private_field_site(ctx, object, property, 1)
                     .filter(|site| site.is_static);
+            // Any other named receiver: evaluated once into a scoped temp,
+            // then the same `[[Get]]`/`[[Set]]` lowerings `o.f = o.f + 1`
+            // takes, rather than the by-name get and `js_put_value_set`.
+            if private_site.is_none() && !property.starts_with('#') {
+                let receiver = lower_expr(ctx, object)?;
+                return crate::rooting::with_scoped_values(
+                    ctx,
+                    &[(receiver.as_str(), None)],
+                    |ctx, reads| {
+                        update_by_get_and_set(ctx, &reads[0], property, *op, *prefix, *strict)
+                    },
+                );
+            }
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
             let field_read = Expr::PropertyGet {
@@ -293,7 +310,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let derive_handles = |ctx: &mut FnCtx<'_>, obj_box: &str| {
                     let blk = ctx.block();
                     let obj_bits = blk.bitcast_double_to_i64(obj_box);
-                    let obj_handle = blk.and(I64, &obj_bits, POINTER_MASK_I64);
+                    // Only a heap pointer is masked: the low 48 bits of any
+                    // other value (a Number above all) are no address.
+                    let obj_handle =
+                        super::index_get::classref_preserving_handle(blk, &obj_bits, false);
                     let key_box = blk.load(DOUBLE, &key_handle_global);
                     let key_bits = blk.bitcast_double_to_i64(&key_box);
                     let key_handle = blk.and(I64, &key_bits, POINTER_MASK_I64);
@@ -305,10 +325,22 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         super::private_field_site::lower_static_get_operands(ctx, site, &obj_box)?
                     } else {
                         let (obj_handle, key_handle) = derive_handles(ctx, &obj_box);
-                        ctx.block().call(
-                            DOUBLE,
-                            "js_object_get_field_by_name_f64",
-                            &[(I64, &obj_handle), (I64, &key_handle)],
+                        // The receiver is any value: a Number whose top 16
+                        // bits are clear must not reach the handle entry,
+                        // which reads it as a raw pointer.
+                        let obj_bits = ctx.block().bitcast_double_to_i64(&obj_box);
+                        super::index_get::named_get_on_unproven_receiver(
+                            ctx,
+                            &obj_bits,
+                            &key_handle,
+                            "0",
+                            |ctx| {
+                                ctx.block().call(
+                                    DOUBLE,
+                                    "js_object_get_field_by_name_f64",
+                                    &[(I64, &obj_handle), (I64, &key_handle)],
+                                )
+                            },
                         )
                     }
                 };
@@ -690,7 +722,24 @@ fn class_field_update(
     if super::private_field_site::private_field_site(ctx, object, property, 1).is_some() {
         return Ok(None);
     }
+    update_by_get_and_set(ctx, object, property, op, prefix, strict).map(Some)
+}
 
+/// `o.f++` / `--o.f` as `[[Get]]`, `ToNumeric`, step, `[[Set]]`, in that
+/// order and once each, through the ordinary `PropertyGet`/`PropertySet`
+/// lowerings of `receiver`, with the step inline for a plain double and the
+/// runtime `js_to_numeric`/`js_numeric_step` pair on a cold arm for anything
+/// else (an INT32 box, a string, a BigInt, an object with `valueOf`).
+/// `receiver` is read twice, so it must denote one value across a `valueOf`:
+/// `this`, a local nothing can rebind, or a scoped temp.
+fn update_by_get_and_set(
+    ctx: &mut FnCtx<'_>,
+    object: &Expr,
+    property: &str,
+    op: BinaryOp,
+    prefix: bool,
+    strict: bool,
+) -> Result<String> {
     let field_read = Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(object.clone()),
@@ -781,5 +830,5 @@ fn class_field_update(
         super::property_set::lower(ctx, &store, strict)?;
         lower_expr(ctx, reads.last().expect("one value at least"))
     })?;
-    Ok(Some(out))
+    Ok(out)
 }

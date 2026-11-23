@@ -1670,7 +1670,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).
                 let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
-                let r_handle = unbox_to_i64(blk, &vals[1]);
+                // By the tag alone: a Number reviver is no function.
+                let r_handle = crate::expr::unbox_pointer_or_null(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,
                     "js_json_parse_with_reviver",
@@ -1684,7 +1685,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 let blk = ctx.block();
                 // #11519: the text may be an inline SSO string (`"12"`).
                 let s_handle = crate::expr::unbox_ffi_str_arg(blk, &vals[0]);
-                let r_handle = unbox_to_i64(blk, &vals[1]);
+                // By the tag alone: a Number reviver is no function.
+                let r_handle = crate::expr::unbox_pointer_or_null(blk, &vals[1]);
                 let result_i64 = blk.call(
                     I64,
                     "js_json_parse_with_reviver",

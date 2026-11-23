@@ -32,12 +32,7 @@ fn buffer_dispatch_string_ptr(value: f64) -> *const crate::string::StringHeader 
 }
 
 fn buffer_dispatch_i32(value: f64) -> i32 {
-    let jsval = JSValue::from_bits(value.to_bits());
-    if jsval.is_int32() {
-        jsval.as_int32()
-    } else {
-        value as i32
-    }
+    value as i32
 }
 
 /// `buf.write(string, offset?, length?, encoding?)` argument handling,
@@ -112,24 +107,30 @@ fn throw_unknown_encoding(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
 }
 
-/// True when `value` is a `Buffer` or `Uint8Array` (the acceptance set of
-/// node's `Buffer.prototype.copy/compare/equals` target argument).
-fn is_buffer_or_uint8array(value: f64) -> bool {
-    let bits = value.to_bits() as i64;
-    if crate::buffer::js_buffer_is_buffer(bits) == 1 {
-        return true;
-    }
-    let raw = (value.to_bits() & 0x0000_FFFF_FFFF_FFFF) as usize;
-    raw >= 0x1000 && crate::typedarray_hook_slots::lookup_typed_array_kind(raw).is_some()
+/// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
+/// target, answered from the one view classification
+/// ([`super::view_brand::view_brand`]), and only for a view that carries the
+/// byte storage the copy and compare routines then read
+/// ([`super::view_brand::ViewBrand::has_storage`]). `copy` (`any_view`)
+/// takes every `ArrayBufferView` (node's `ArrayBuffer.isView`), subclass
+/// instances included; `compare`/`equals` take node's `isUint8Array` set: a
+/// `Buffer`, a `Uint8Array` or an instance of a subclass of either. An
+/// `ArrayBuffer`, key material, an object without view storage and every
+/// non-view are rejected by both.
+fn is_buffer_target(value: f64, any_view: bool) -> bool {
+    super::view_brand::view_brand(value).is_some_and(|brand| {
+        (any_view && brand.has_storage())
+            || brand.typed_array_kind() == Some(crate::typedarray_hook_slots::KIND_UINT8)
+    })
 }
 
-/// `Buffer.prototype.copy/compare/equals` reject a non-`Buffer`/`Uint8Array`
-/// target with `TypeError [ERR_INVALID_ARG_TYPE]` — and without this guard a
-/// number/boolean argument's bit pattern is masked into a bogus pointer and
-/// dereferenced (segfault). `name` is node's parameter name (`target` /
-/// `otherBuffer`).
-fn validate_buffer_target(value: f64, name: &str) {
-    if is_buffer_or_uint8array(value) {
+/// `Buffer.prototype.copy/compare/equals` reject a target outside
+/// [`is_buffer_target`]'s set with `TypeError [ERR_INVALID_ARG_TYPE]` — and
+/// without this guard a number/boolean argument's bit pattern is masked into a
+/// bogus pointer and dereferenced (segfault). `name` is node's parameter name
+/// (`target` / `otherBuffer`); `any_view` is set for `copy`.
+fn validate_buffer_target(value: f64, name: &str, any_view: bool) {
+    if is_buffer_target(value, any_view) {
         return;
     }
     crate::validators::throw_invalid_arg_type(name, "an instance of Buffer or Uint8Array", value);
@@ -169,19 +170,6 @@ macro_rules! buffer_method_names {
             }
         }
     };
-}
-
-/// ES2024 `ArrayBuffer.prototype` methods that exist ONLY on an ArrayBuffer —
-/// `typeof u8.resize` must stay `"undefined"`, so they are kept out of the
-/// shared [`buffer_method_name_static`] table that every Buffer-shaped receiver
-/// consults. Same `'static`-name contract as that table.
-pub fn array_buffer_only_method_name_static(name: &str) -> Option<&'static str> {
-    match name {
-        "resize" => Some("resize"),
-        "transfer" => Some("transfer"),
-        "transferToFixedLength" => Some("transferToFixedLength"),
-        _ => None,
-    }
 }
 
 buffer_method_names!(
@@ -354,12 +342,12 @@ fn fixed_slice_write_encoding(method_name: &str) -> Option<i32> {
     })
 }
 
-unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
-    let raw = bits.to_bits();
-    if (raw >> 48) as u16 == 0x7FFC {
+pub(super) unsafe fn buffer_secret_export_format(bits: f64) -> Option<String> {
+    let options = JSValue::from_bits(bits.to_bits());
+    if !options.is_pointer() {
         return None;
     }
-    let obj = (raw & 0x0000_FFFF_FFFF_FFFF) as *const ObjectHeader;
+    let obj = options.as_pointer::<ObjectHeader>();
     if (obj as usize) < 0x1000 {
         return None;
     }
@@ -469,7 +457,272 @@ unsafe fn secret_to_crypto_key(addr: usize, algorithm_bits: f64) -> f64 {
     f64::from_bits(JSValue::pointer(out as *mut u8).bits())
 }
 
+/// `toString(encoding, start, end)` on a Node Buffer: the one decode both
+/// the method call (`buf.toString(..)`, [`dispatch_buffer_method`]) and the
+/// `Buffer.prototype.toString` member
+/// (`callable_exports::buffer_prototype_to_string`) run. A range only when a
+/// `start` is passed; `end` defaults to the length.
+pub(crate) unsafe fn buffer_to_string_call(
+    buf_ptr: *mut crate::buffer::BufferHeader,
+    args: &[f64],
+) -> f64 {
+    let enc = if !args.is_empty() {
+        crate::buffer::js_encoding_tag_from_value(args[0])
+    } else {
+        0
+    };
+    let str_ptr = if args.len() >= 2 {
+        let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
+        let start = args[1] as i32;
+        let end = if args.len() >= 3 { args[2] as i32 } else { len };
+        crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
+    } else {
+        crate::buffer::js_buffer_to_string(buf_ptr, enc)
+    };
+    f64::from_bits(JSValue::string_ptr(str_ptr).bits())
+}
+
+/// `ArrayBuffer.prototype.slice` / `SharedArrayBuffer.prototype.slice` on a
+/// brand-checked receiver (the prototype thunks call this; an instance call
+/// reaches them through the prototype member). ToIntegerOrInfinity on
+/// `start` and `end` (an object argument's `valueOf` runs, left to right),
+/// then ArrayBufferSpeciesCreate, then the copy. A detached ArrayBuffer
+/// refuses with a TypeError before and after the species lookup.
+pub(crate) unsafe fn array_buffer_slice(addr: usize, args: &[f64]) -> f64 {
+    let shared = crate::buffer::is_shared_array_buffer(addr);
+    let index = |v: f64| -> i32 {
+        let n = crate::builtins::js_number_coerce(v);
+        if n.is_nan() {
+            return 0;
+        }
+        let t = n.trunc();
+        if t >= i32::MAX as f64 {
+            i32::MAX
+        } else if t <= i32::MIN as f64 {
+            i32::MIN
+        } else {
+            t as i32
+        }
+    };
+    let detached_error = || {
+        crate::collection_iter::throw_type_error(
+            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
+        )
+    };
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let buffer = scope.root_raw_mut_ptr(addr as *mut crate::buffer::BufferHeader);
+    let detached = || {
+        !shared
+            && buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+                crate::buffer::is_detached_buffer(buf as usize)
+            })
+    };
+    if detached() {
+        detached_error();
+    }
+    let len = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+        crate::buffer::store::length(buf as usize) as i32
+    });
+    let start = index(args.first().copied().unwrap_or(0.0));
+    let end = match args.get(1) {
+        Some(&v) if !JSValue::from_bits(v.to_bits()).is_undefined() => index(v),
+        _ => len,
+    };
+    // SpeciesConstructor is observed only after BOTH index coercions. It may
+    // run getters and collect, so the buffer is re-read from its handle.
+    buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+        super::global_this::validate_array_buffer_species_constructor(buf as usize)
+    });
+    if detached() {
+        detached_error();
+    }
+    let result = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
+        crate::buffer::buffer_slice_copy(buf, start, end)
+    });
+    f64::from_bits(JSValue::pointer(result as *mut u8).bits())
+}
+
+/// `[[Get]](buf, name)` for an own member `name` of `Buffer.prototype`, on
+/// the Buffer at `addr`, once the program has written that prototype: its own
+/// shadow bit (`prototype_unwritten(Buffer)`, which reads clear through the
+/// stand-in until `Buffer.prototype` is built). `None` while it is unwritten,
+/// for a receiver that is not a Buffer, for a name that is not such a member
+/// (an inherited `%TypedArray%` member is not this fact), and when the lookup
+/// still finds the builtin member, whose body is the name dispatch: the caller
+/// then runs exactly what it runs on an unwritten prototype. The receiver's
+/// own properties are the caller's, read before this.
+#[inline(always)]
+pub(crate) fn buffer_written_member(addr: usize, name: &str) -> Option<JSValue> {
+    if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        return None;
+    }
+    crate::typedarray_hook_slots::buffer_written_member(addr, name)
+}
+
+/// The name dispatch once the program has written `Buffer.prototype`, linked
+/// through the typed-array hook group (`dispatch_buffer_method` reaches it
+/// behind the shadow bit). A Buffer's own property and a non-Buffer receiver
+/// are [`dispatch_builtin_buffer_method`]'s, as is a name whose lookup still
+/// finds the builtin member; any other own member of `Buffer.prototype` is
+/// what `[[Get]](buf, name)` finds, called with the Buffer as `this`.
+///
+/// # Safety
+/// As [`dispatch_buffer_method`].
+pub(crate) unsafe fn dispatch_written_buffer_lookup(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    if !crate::buffer::buffer_has_own_prop(addr, method_name) {
+        if let Some(member) = buffer_written_member_lookup(addr, method_name) {
+            let buf_f64 = f64::from_bits(JSValue::pointer(addr as *mut u8).bits());
+            let args = if !args_ptr.is_null() && args_len > 0 {
+                std::slice::from_raw_parts(args_ptr, args_len)
+            } else {
+                &[]
+            };
+            return call_buffer_member(member, buf_f64, args);
+        }
+    }
+    dispatch_builtin_buffer_method(addr, method_name, args_ptr, args_len)
+}
+
+/// The lookup behind [`buffer_written_member`], linked through the typed-array
+/// hook group.
+pub(crate) fn buffer_written_member_lookup(addr: usize, name: &str) -> Option<JSValue> {
+    if !crate::buffer::is_node_buffer(addr)
+        || !crate::object::native_module::callable_exports::is_buffer_prototype_member(name)
+    {
+        return None;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(addr as *mut u8).bits()));
+    let key = scope.root_string_ptr(crate::string::js_string_from_bytes(
+        name.as_ptr(),
+        name.len() as u32,
+    ));
+    let raw = || crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+    let proto_bits = crate::object::prototype_chain::object_static_prototype(raw())
+        .unwrap_or_else(|| crate::object::builtin_prototype_value("Buffer").to_bits());
+    let value = key.with_const_ptr(|key: *const crate::StringHeader| {
+        crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+            raw(),
+            proto_bits,
+            key,
+        )
+        .unwrap_or_else(JSValue::undefined)
+    });
+    if crate::object::native_module::callable_exports::is_buffer_prototype_method_thunk(value) {
+        return None;
+    }
+    Some(value)
+}
+
+/// Call the member [`buffer_written_member`] found, with the Buffer as `this`.
+fn call_buffer_member(member: JSValue, buf_f64: f64, args: &[f64]) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let receiver = scope.root_nanbox_f64(buf_f64);
+    let member = scope.root_nanbox_f64(f64::from_bits(member.bits()));
+    if matches!(
+        member.get_nanbox_f64().to_bits(),
+        crate::value::TAG_UNDEFINED | crate::value::TAG_NULL
+    ) {
+        crate::closure::throw_not_callable();
+    }
+    match crate::collection_iter::call_with_this_capturing_throw(
+        member.get_nanbox_f64(),
+        receiver.get_nanbox_f64(),
+        args,
+    ) {
+        Ok(value) => value,
+        Err(error) => crate::exception::rethrow_caught(error),
+    }
+}
+
+/// The name dispatch of a method call on the Buffer (or view) at `addr`.
+/// BUFEQ: once the program has written `Buffer.prototype` (its own shadow bit,
+/// clear through the stand-in until it is built), a Buffer's own member of
+/// that prototype is what `[[Get]](buf, name)` finds: the dispatch is then the
+/// typed-array group's [`dispatch_written_buffer_lookup`]. One bit test
+/// selects it or the builtin dispatch, which stays its own body.
+///
+/// # Safety
+/// `addr` is a live Buffer or buffer view; `args_ptr` names `args_len` values
+/// (or is null).
+#[inline(never)]
 pub unsafe fn dispatch_buffer_method(
+    addr: usize,
+    method_name: &str,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    // One test selects the body; both run with this call's own arguments.
+    let dispatch: BufferDispatch = if crate::object::builtin_proto::prototype_unwritten(
+        crate::object::builtin_proto::BuiltinProto::Buffer,
+    ) {
+        dispatch_builtin_buffer_method
+    } else {
+        crate::typedarray_hook_slots::written_buffer_dispatch()
+    };
+    dispatch(addr, method_name, args_ptr, args_len)
+}
+
+/// The signature of [`dispatch_buffer_method`] and of the bodies it selects.
+pub(crate) type BufferDispatch = unsafe fn(usize, &str, *const f64, usize) -> f64;
+
+/// `%TypedArray%.prototype.copyWithin(target, start, end)` over a Buffer or
+/// `Uint8Array` byte cell, whose elements are single bytes: a memmove of the
+/// selected range. Returns the receiver. An undefined `end` is the length.
+///
+/// The index coercions can run user `valueOf`, so the range is clamped to the
+/// bytes the view spans after them, not to the length read before.
+pub(crate) unsafe fn byte_view_copy_within(view: f64, target: f64, start: f64, end: f64) -> f64 {
+    let addr = (view.to_bits() & crate::value::POINTER_MASK) as usize;
+    let len = crate::buffer::store::raw_length(addr) as i64;
+    let rel = |v: f64| -> i64 {
+        let n = crate::builtins::js_number_coerce(v);
+        if n.is_nan() {
+            return 0;
+        }
+        if !n.is_finite() {
+            return if n > 0.0 { len } else { 0 };
+        }
+        let idx = n.trunc() as i64;
+        if idx < 0 {
+            (len + idx).max(0)
+        } else {
+            idx.min(len)
+        }
+    };
+    let to = rel(target);
+    let from = rel(start);
+    let final_ = if JSValue::from_bits(end.to_bits()).is_undefined() {
+        len
+    } else {
+        rel(end)
+    };
+    let count = (final_ - from).min(len - to);
+    if count > 0 {
+        crate::buffer::bytes::no_gc(|scope| {
+            if let Ok(data) = crate::buffer::bytes::bytes_mut(view, scope) {
+                let span = data.len() as i64;
+                let count = count.min(span - from).min(span - to);
+                if count > 0 {
+                    data.copy_within(from as usize..(from + count) as usize, to as usize);
+                }
+            }
+        });
+    }
+    view
+}
+
+/// The builtin name dispatch: the receiver's own property, the `#BUFNS` view
+/// members, then the Buffer and typed-array method bodies by name.
+#[inline(never)]
+pub(crate) unsafe fn dispatch_builtin_buffer_method(
     addr: usize,
     method_name: &str,
     args_ptr: *const f64,
@@ -507,9 +760,48 @@ pub unsafe fn dispatch_buffer_method(
             Err(error) => crate::exception::rethrow_caught(error),
         };
     }
+    // #BUFNS: an ArrayBuffer / SharedArrayBuffer / DataView is an ordinary
+    // object. Every method call is the receiver's [[Get]] (own, then its
+    // [[Prototype]] chain) called with the view as `this`, as in node: the
+    // kind's own members are the prototype thunks, so a member the program
+    // replaced (`DataView.prototype.getInt8 = f`) is the one called. A Buffer
+    // method (`dv.subarray`) is not a member: "is not a function".
+    if crate::buffer::is_non_indexed_buffer_view(addr) {
+        if method_name.starts_with("__perry_") {
+            return f64::from_bits(crate::value::TAG_UNDEFINED);
+        }
+        let scope = crate::gc::RuntimeHandleScope::new();
+        let receiver = scope.root_nanbox_f64(buf_f64);
+        let key =
+            crate::string::js_string_from_bytes(method_name.as_ptr(), method_name.len() as u32);
+        let raw = crate::value::js_nanbox_get_pointer(receiver.get_nanbox_f64()) as usize;
+        let value = crate::object::view_get(raw as *const ObjectHeader, key);
+        let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
+        if value.get_nanbox_f64().to_bits() == crate::value::TAG_UNDEFINED
+            || value.get_nanbox_f64().to_bits() == crate::value::TAG_NULL
+        {
+            let kind = crate::object::view_kind_name(raw);
+            crate::error::js_throw_type_error_not_a_function(
+                kind.as_ptr(),
+                kind.len(),
+                method_name.as_ptr(),
+                method_name.len(),
+            )
+        }
+        return match crate::collection_iter::call_with_this_capturing_throw(
+            value.get_nanbox_f64(),
+            receiver.get_nanbox_f64(),
+            args,
+        ) {
+            Ok(value) => value,
+            Err(error) => crate::exception::rethrow_caught(error),
+        };
+    }
     let arg_i32 = |i: usize| -> i32 {
         if i < args.len() {
-            args[i] as i32
+            // 7.1.5 ToIntegerOrInfinity( ToNumber( arg ) ): an object operand
+            // runs its `valueOf` (the sibling Array `slice` conversion).
+            crate::array::array_slice_value_to_index(args[i])
         } else {
             0
         }
@@ -523,64 +815,12 @@ pub unsafe fn dispatch_buffer_method(
     };
     let i32_bool = |b: i32| f64::from_bits(JSValue::bool(b != 0).bits());
     let i32_num = |n: i32| n as f64;
-    // ToIntegerOrInfinity for an ArrayBuffer/SharedArrayBuffer slice index:
-    // full ToNumber (runs `valueOf`/`toString`, throws on a Symbol) then
-    // truncate toward zero, saturating into i32 so `js_buffer_slice` can apply
-    // the spec's relative-index clamp to [0, len].
-    let ab_slice_index = |v: f64| -> i32 {
-        let n = crate::builtins::js_number_coerce(v);
-        if n.is_nan() {
-            return 0;
-        }
-        let t = n.trunc();
-        if t >= i32::MAX as f64 {
-            i32::MAX
-        } else if t <= i32::MIN as f64 {
-            i32::MIN
-        } else {
-            t as i32
-        }
-    };
-
-    // DataView numeric accessors (#2878): getInt8/getUint16/setFloat64/… The
-    // receiver is a BufferHeader marked as a DataView. Endianness defaults to
-    // big-endian; the optional trailing `littleEndian` arg flips it. Routed
-    // here (before the Buffer method match) so DataView setters use ToIntN/
-    // ToUintN value-wrap semantics rather than the Buffer value-range throw.
-    if crate::buffer::is_data_view(addr) {
-        let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
-        if let Some(suffix) = method_name.strip_prefix("get") {
-            if let Some(kind) = crate::buffer::DataViewKind::from_method_suffix(suffix) {
-                let little = args.len() >= 2 && truthy(args[1]);
-                return crate::buffer::js_data_view_get(buf_f64, arg_or_zero(0), kind, little);
-            }
-        } else if let Some(suffix) = method_name.strip_prefix("set") {
-            if let Some(kind) = crate::buffer::DataViewKind::from_method_suffix(suffix) {
-                let little = args.len() >= 3 && truthy(args[2]);
-                return crate::buffer::js_data_view_set(
-                    buf_f64,
-                    arg_or_zero(0),
-                    arg_or_zero(1),
-                    kind,
-                    little,
-                );
-            }
-        }
-    }
 
     match method_name {
         "length" => crate::buffer::js_buffer_length(buf_ptr) as f64,
         "toString" if crate::buffer::is_secret_key(addr) => {
             let s = crate::string::js_string_from_bytes(b"[object KeyObject]".as_ptr(), 18);
             f64::from_bits(JSValue::string_ptr(s).bits())
-        }
-        // ArrayBuffer, SharedArrayBuffer, and DataView inherit
-        // Object.prototype.toString. They share BufferHeader storage and
-        // reach this dispatcher, but their `toString` ignores every argument;
-        // interpreting the first argument as a Buffer encoding leaks their
-        // backing bytes instead of returning the object brand.
-        "toString" if crate::buffer::is_non_indexed_buffer_view(addr) => {
-            crate::object::js_object_to_string(buf_f64)
         }
         // A plain `Uint8Array` inherits `%TypedArray%.prototype.toString`
         // (the element join, arguments ignored); only `Buffer.prototype`
@@ -591,22 +831,7 @@ pub unsafe fn dispatch_buffer_method(
         {
             super::typed_array_proto_thunks::uint8_array_to_string(addr)
         }
-        "toString" => {
-            let enc = if !args.is_empty() {
-                crate::buffer::js_encoding_tag_from_value(args[0])
-            } else {
-                0
-            };
-            let str_ptr = if args.len() >= 2 {
-                let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                let start = arg_i32(1);
-                let end = if args.len() >= 3 { arg_i32(2) } else { len };
-                crate::buffer::js_buffer_to_string_range(buf_ptr, enc, start, end)
-            } else {
-                crate::buffer::js_buffer_to_string(buf_ptr, enc)
-            };
-            f64::from_bits(JSValue::string_ptr(str_ptr).bits())
-        }
+        "toString" => buffer_to_string_call(buf_ptr, args),
         // TC39 Uint8Array base64/hex conversion APIs (#2901). Perry aliases
         // Uint8Array → Buffer, so these instance methods reach buffer dispatch.
         "toBase64" => {
@@ -630,97 +855,21 @@ pub unsafe fn dispatch_buffer_method(
         "inspect" => {
             crate::builtins::js_util_inspect(buf_f64, f64::from_bits(crate::value::TAG_UNDEFINED))
         }
-        // ES2024 `ArrayBuffer.prototype.transfer` / `transferToFixedLength`.
-        // Scoped to plain ArrayBuffers: SharedArrayBuffer and Uint8Array/Buffer
-        // receivers don't have these methods in Node, so they keep falling
-        // through to the catch-all like any other unknown method.
-        "transfer" | "transferToFixedLength"
-            if crate::buffer::is_array_buffer(addr)
-                && !crate::buffer::is_shared_array_buffer(addr)
-                && !crate::buffer::is_data_view(addr) =>
-        {
-            crate::buffer::array_buffer_transfer(addr, args, method_name == "transfer")
-        }
-        // ES2024 `ArrayBuffer.prototype.resize` (#10873). Same receiver scope
-        // as `transfer`; a fixed-length ArrayBuffer reaches the helper too and
-        // gets the spec's TypeError rather than "resize is not a function".
-        "resize"
-            if crate::buffer::is_array_buffer(addr)
-                && !crate::buffer::is_shared_array_buffer(addr)
-                && !crate::buffer::is_data_view(addr) =>
-        {
-            crate::buffer::array_buffer_resize(addr, args)
-        }
         "slice" | "subarray" => {
-            let source_is_array_buffer = crate::buffer::is_array_buffer(addr);
-            let source_is_shared_array_buffer = crate::buffer::is_shared_array_buffer(addr);
-            let source_is_any_array_buffer =
-                source_is_array_buffer || source_is_shared_array_buffer;
             let scope = crate::gc::RuntimeHandleScope::new();
             let buffer = scope.root_raw_mut_ptr(buf_ptr);
             let len = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
                 crate::buffer::store::length(buf as usize) as i32
             });
-            let (start, end) = if source_is_any_array_buffer {
-                // Instance-call lowering reaches this fused dispatch directly,
-                // bypassing the prototype thunk. The shared path therefore owns
-                // both index coercion and ArrayBufferSpeciesCreate ordering.
-                // A detached ArrayBuffer refuses slice with a TypeError
-                // (ES2024 DetachArrayBuffer; `transfer` is the only detach
-                // source in Perry).
-                if buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                    crate::buffer::is_detached_buffer(buf as usize)
-                }) && !source_is_shared_array_buffer
-                {
-                    crate::collection_iter::throw_type_error(
-                        "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
-                    );
-                }
-                // ArrayBuffer / SharedArrayBuffer.prototype.slice: ToIntegerOrInfinity
-                // on `start` (always) and `end` (defaults to len when undefined),
-                // running an object arg's `valueOf` in left-to-right order. Plain
-                // `arg_i32` would `as i32`-cast a boxed object to garbage and skip
-                // the coercion entirely (test262 slice/number-conversion,
-                // end-default-if-undefined). `js_buffer_slice` then clamps.
-                let s = ab_slice_index(arg_or_zero(0));
-                let e = if args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined() {
-                    len
-                } else {
-                    ab_slice_index(args[1])
-                };
-                // SpeciesConstructor is observed only after BOTH index
-                // coercions. It may run getters and collect, so the buffer is
-                // re-read from its handle again by the copy below.
-                if method_name == "slice" {
-                    buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                        super::global_this::validate_array_buffer_species_constructor(buf as usize)
-                    });
-                    // ArrayBuffer.prototype.slice checks detachment again
-                    // after the observable species lookup/creation sequence.
-                    if !source_is_shared_array_buffer
-                        && buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                            crate::buffer::is_detached_buffer(buf as usize)
-                        })
-                    {
-                        crate::collection_iter::throw_type_error(
-                            "Cannot perform ArrayBuffer.prototype.slice on a detached ArrayBuffer",
-                        );
-                    }
-                }
-                (s, e)
+            let start = arg_i32(0);
+            let end = if args.len() >= 2 && !JSValue::from_bits(args[1].to_bits()).is_undefined() {
+                arg_i32(1)
             } else {
-                let s = arg_i32(0);
-                let e = if args.len() >= 2 && !JSValue::from_bits(args[1].to_bits()).is_undefined()
-                {
-                    arg_i32(1)
-                } else {
-                    len
-                };
-                (s, e)
+                len
             };
             let source_is_uint8array = crate::buffer::is_uint8array_buffer(addr);
             let result = buffer.with_mut_ptr::<crate::buffer::BufferHeader, _>(|buf| {
-                if method_name == "slice" && (source_is_any_array_buffer || source_is_uint8array) {
+                if method_name == "slice" && source_is_uint8array {
                     crate::buffer::buffer_slice_copy(buf, start, end)
                 } else {
                     crate::buffer::js_buffer_slice(buf, start, end)
@@ -731,7 +880,6 @@ pub unsafe fn dispatch_buffer_method(
             // length-tracking; with an `end` it is fixed-length (the default
             // every view over a resizable buffer is registered with).
             if method_name == "subarray"
-                && !source_is_any_array_buffer
                 && (args.len() < 2 || JSValue::from_bits(args[1].to_bits()).is_undefined())
                 && crate::buffer::view::is_length_tracking(addr)
             {
@@ -748,36 +896,14 @@ pub unsafe fn dispatch_buffer_method(
         }
         // #2879: `Uint8Array.prototype.copyWithin` — Buffer/Uint8Array elements
         // are single bytes, so copy at byte granularity. Returns the receiver.
-        "copyWithin" => {
-            let len = crate::buffer::store::raw_length(buf_ptr as usize) as i64;
-            let rel = |v: f64| -> i64 {
-                let n = crate::value::JSValue::from_bits(v.to_bits()).to_number();
-                if n.is_nan() {
-                    return 0;
-                }
-                if !n.is_finite() {
-                    return if n > 0.0 { len } else { 0 };
-                }
-                let idx = n.trunc() as i64;
-                if idx < 0 {
-                    (len + idx).max(0)
-                } else {
-                    idx.min(len)
-                }
-            };
-            let to = rel(arg_or_zero(0));
-            let from = rel(arg_or_zero(1));
-            let final_ = if args.len() >= 3 { rel(args[2]) } else { len };
-            let count = (final_ - from).min(len - to);
-            if count > 0 {
-                crate::buffer::bytes::no_gc(|scope| {
-                    if let Ok(data) = crate::buffer::bytes::bytes_mut(buf_f64, scope) {
-                        data.copy_within(from as usize..(from + count) as usize, to as usize);
-                    }
-                });
-            }
-            buf_f64
-        }
+        "copyWithin" => byte_view_copy_within(
+            buf_f64,
+            arg_or_zero(0),
+            arg_or_zero(1),
+            args.get(2)
+                .copied()
+                .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
+        ),
         // Issue #1206: explicit iterator-protocol surface. Each helper
         // returns a Buffer-iterator object whose `.next()` is dispatched
         // through `dispatch_buffer_iterator_method` in `iter.rs`.
@@ -788,9 +914,9 @@ pub unsafe fn dispatch_buffer_method(
         // Node's Buffer.prototype.copy. Returns the number of bytes copied.
         "copy" => {
             if args.is_empty() {
-                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target");
+                validate_buffer_target(f64::from_bits(crate::value::TAG_UNDEFINED), "target", true);
             }
-            validate_buffer_target(args[0], "target");
+            validate_buffer_target(args[0], "target", true);
             let dst_bits = args[0].to_bits();
             let dst_addr = if (dst_bits >> 48) >= 0x7FF8 {
                 dst_bits & 0x0000_FFFF_FFFF_FFFF
@@ -874,8 +1000,6 @@ pub unsafe fn dispatch_buffer_method(
         }
         "fill" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
-            let end = if args.len() >= 3 { arg_i32(2) } else { len };
             let value = args
                 .first()
                 .copied()
@@ -902,6 +1026,10 @@ pub unsafe fn dispatch_buffer_method(
                     return f64::from_bits(JSValue::pointer(result as *mut u8).bits());
                 }
             }
+            // Buffer.prototype.fill converts here; a plain Uint8Array's typed-array
+            // fill above converts its own operands (once).
+            let start = if args.len() >= 2 { arg_i32(1) } else { 0 };
+            let end = if args.len() >= 3 { arg_i32(2) } else { len };
             let result = crate::buffer::js_buffer_fill_value_range(buf_ptr, value, start, end, enc);
             f64::from_bits(JSValue::pointer(result as *mut u8).bits())
         }
@@ -911,6 +1039,7 @@ pub unsafe fn dispatch_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "otherBuffer",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -927,6 +1056,7 @@ pub unsafe fn dispatch_buffer_method(
                     .copied()
                     .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
                 "target",
+                false,
             );
             let other_bits = args[0].to_bits();
             let other_addr = if (other_bits >> 48) >= 0x7FF8 {
@@ -1183,11 +1313,6 @@ pub unsafe fn dispatch_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if (key_bits >> 48) == 0x7FFE {
-                    // int32 key
-                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                    idx >= 0 && idx < buf_len
                 } else if !(0x7FF8..=0x7FFF).contains(&(key_bits >> 48)) {
                     // raw f64 numeric key (NaN-boxing tags occupy 0x7FF8..=0x7FFF)
                     let n = args[0];
@@ -1210,7 +1335,6 @@ pub unsafe fn dispatch_buffer_method(
             let key_is_own = if args.is_empty() {
                 false
             } else {
-                let key_bits = args[0].to_bits();
                 if let Some(own) = crate::string::with_string_value_bytes(args[0], |bytes| {
                     // A string key — heap or inline SSO (#11519). Only
                     // numeric-string indices that are in bounds count as own
@@ -1221,10 +1345,6 @@ pub unsafe fn dispatch_buffer_method(
                         .is_some_and(|idx| idx < crate::buffer::store::raw_length(buf_ptr as usize))
                 }) {
                     own
-                } else if (key_bits >> 48) == 0x7FFE {
-                    let idx = (key_bits & 0xFFFF_FFFF) as i32;
-                    let buf_len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-                    idx >= 0 && idx < buf_len
                 } else if !args[0].is_nan() {
                     let n = args[0];
                     if n.is_finite() && n.fract() == 0.0 && n >= 0.0 {
@@ -1326,3 +1446,11 @@ pub unsafe fn dispatch_buffer_method(
 #[cfg(test)]
 #[path = "buffer_dispatch_write_args_tests.rs"]
 mod write_args_tests;
+
+#[cfg(test)]
+#[path = "buffer_written_member_tests.rs"]
+mod written_member_tests;
+
+#[cfg(test)]
+#[path = "buffer_dispatch_target_tests.rs"]
+mod target_tests;

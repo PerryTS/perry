@@ -13,20 +13,48 @@ impl Model {
     }
 
     /// Copy edge a → b (pts(a) ⊆ pts(b)).
+    #[track_caller]
     pub fn edge(&mut self, a: NodeId, b: NodeId) {
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Edge(a, b)) {
             return;
         }
+        if self.clause.is_some() || !self.edge_reach.is_empty() {
+            self.note_edge_reach(a, b);
+        }
         self.edge_impl(a, b, true);
+    }
+
+    /// Rule M1: the reach mask of edge a -> b (`Model::edge_reach`): the
+    /// clause generation is in, joined with the edge's earlier ones; an
+    /// edge that exists already without a mask, or is made outside every
+    /// clause, is every run's.
+    fn note_edge_reach(&mut self, a: NodeId, b: NodeId) {
+        match self.clause {
+            Some((f, m)) if self.cur_fn == f => {
+                let had = self.nodes[a as usize].succ.contains(&b);
+                match self.edge_reach.get_mut(&(a, b)) {
+                    Some(e) => *e |= m,
+                    None if !had => {
+                        self.edge_reach.insert((a, b), m);
+                    }
+                    None => {}
+                }
+            }
+            _ => {
+                self.edge_reach.remove(&(a, b));
+            }
+        }
     }
 
     /// `edge` without a relation line: internal relays the checker derives
     /// from a logged rule (`bind_via`).
+    #[track_caller]
     pub(super) fn edge_quiet(&mut self, a: NodeId, b: NodeId) {
         self.edge_impl(a, b, false);
     }
 
+    #[track_caller]
     fn edge_impl(&mut self, a: NodeId, b: NodeId, log: bool) {
         if a == b {
             return;
@@ -65,6 +93,19 @@ impl Model {
             }
             node.succ.push(b);
         }
+        if let Some(tp) = self.term_preds.as_mut() {
+            if let Some(v) = tp.get_mut(&b) {
+                v.push(a);
+            }
+            if let Some(&(f, r)) = self.open_rets.get(&b) {
+                if !self.callers_own(f, a) {
+                    self.sink_node(a, r);
+                }
+            }
+        }
+        if self.prov.is_some() {
+            self.prov_edge(a, b, std::panic::Location::caller());
+        }
         if !self.cell_watch.is_empty() && self.cell_watch.remove(&a) {
             self.cell_woken.push(a);
         }
@@ -76,6 +117,7 @@ impl Model {
             return;
         }
         let prim = self.nodes[a as usize].prim;
+        let strs = self.nodes[a as usize].strs;
         let mut toks = self.bufs.pop().unwrap_or_default();
         toks.clear();
         if self.nodes[a as usize]
@@ -86,11 +128,16 @@ impl Model {
         }
         let covered = self.copy_coverage(a, b, Tokens::Slice(&toks)).0;
         self.bufs.push(toks);
+        // Registration is a value-copy delivery: `a`'s Numbers arrive with
+        // `a`'s interval.
+        let saved_range = self.cur_range.replace(self.rg(a));
         if covered {
-            self.add(b, &[], prim);
+            self.add_s(b, &[], prim, strs);
+            self.cur_range = saved_range;
             return;
         }
         if self.nodes[a as usize].pts.is_empty() && prim == 0 {
+            self.cur_range = saved_range;
             return;
         }
         let mut toks = self.bufs.pop().unwrap_or_default();
@@ -101,8 +148,12 @@ impl Model {
         let saved = (self.cur_src, self.cur_why);
         self.cur_src = a;
         self.cur_why = u32::MAX;
-        self.copy_to(a, b, Tokens::Slice(&toks), prim);
+        let pm = self.prov_mode;
+        self.prov_mode = crate::provenance::PM_COPY;
+        self.copy_to(a, b, Tokens::Slice(&toks), prim, strs);
+        self.prov_mode = pm;
         (self.cur_src, self.cur_why) = saved;
+        self.cur_range = saved_range;
         self.bufs.push(toks);
     }
 
@@ -114,8 +165,9 @@ impl Model {
         dst: NodeId,
         toks: Tokens<'_>,
         prim: u16,
+        strs: StrSet,
     ) -> u64 {
-        self.add_tokens(dst, toks, prim);
+        self.add_tokens_s(dst, toks, prim, strs);
         0
     }
     /// Points-to storage: (logical entries summed over nodes, entries
@@ -159,6 +211,7 @@ impl Model {
         successor: u32,
         delta: &Delta,
         prim: u16,
+        strs: StrSet,
     ) -> bool {
         let count = delta.delivery_len(successor);
         let source = &self.nodes[src as usize];
@@ -185,7 +238,7 @@ impl Model {
         }
         let batch = delta.batch_for(successor);
         let pts = self.nodes[src as usize].pts.clone();
-        self.adopt_delivery(src, dst, pts, &batch, prim);
+        self.adopt_delivery(src, dst, pts, &batch, prim, strs);
         true
     }
     fn adopt_delivery(
@@ -195,10 +248,30 @@ impl Model {
         pts: crate::pts::Pts,
         batch: &Batch,
         prim: u16,
+        strs: StrSet,
     ) {
         let top = (self.explain || self.diagnostic.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
             && !self.nodes[dst as usize].pts.contains_tok(TOP);
+        if self.relations.is_some() {
+            // `rel_generic_fn_arrival` for an adopted set (no `add_tokens_s`).
+            if let Some(&bf) = self.tok_index.get(&TokKind::BuiltinFn(Native::Any)) {
+                if pts.contains_tok(bf) && !self.nodes[dst as usize].pts.contains_tok(bf) {
+                    let line =
+                        format!("A addbf {dst} {bf} src={src} @solve/copy.rs:adopt_delivery");
+                    if let Some(r) = self.relations.as_mut() {
+                        r.push(line);
+                    }
+                }
+            }
+        }
+        if self.prov.is_some() {
+            let saved = self.cur_src;
+            self.cur_src = src;
+            let at = std::panic::Location::caller();
+            self.prov_arrivals(dst, &mut batch.each_token(), true, at);
+            self.cur_src = saved;
+        }
         let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
         self.sets.release(old);
@@ -215,6 +288,9 @@ impl Model {
             self.top_pred
                 .entry(dst)
                 .or_insert((self.cur_src, self.cur_why));
+            if let Some(l) = self.ledger.as_mut() {
+                l.top_seed(dst, self.cur_why, std::panic::Location::caller());
+            }
         }
         if before >> 20 != self.pts_entries >> 20 {
             if self
@@ -225,7 +301,7 @@ impl Model {
                 self.aborted = true;
             }
         }
-        self.add(dst, &[], prim);
+        self.add_s(dst, &[], prim, strs);
         let node = &mut self.nodes[dst as usize];
         if !node.in_wl {
             node.in_wl = true;

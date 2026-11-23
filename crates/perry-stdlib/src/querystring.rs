@@ -422,9 +422,7 @@ fn resolve_max_keys(options: f64) -> Option<usize> {
     if max_keys.is_undefined() || max_keys.is_null() {
         return Some(1000);
     }
-    let n = if max_keys.is_int32() {
-        max_keys.as_int32() as f64
-    } else if max_keys.is_number() {
+    let n = if max_keys.is_number() {
         max_keys.as_number()
     } else {
         return Some(1000);
@@ -488,7 +486,7 @@ unsafe fn push_parsed_pair(obj: *mut ObjectHeader, key: &str, value_f64: f64) {
             // `append_stringify_value` above.
             let gc_hdr = (addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                 as *const perry_runtime::gc::GcHeader;
-            if (*gc_hdr).obj_type == perry_runtime::gc::GC_TYPE_ARRAY {
+            if perry_runtime::gc_type_is_array!((*gc_hdr).obj_type) {
                 let arr = addr as *mut ArrayHeader;
                 js_array_push_f64(arr, value_f64);
                 return;
@@ -594,7 +592,7 @@ unsafe fn append_stringify_value(
             // back to "treat as object → toString" if not an array.
             let gc_hdr = (addr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                 as *const perry_runtime::gc::GcHeader;
-            let is_array = (*gc_hdr).obj_type == perry_runtime::gc::GC_TYPE_ARRAY;
+            let is_array = perry_runtime::gc_type_is_array!((*gc_hdr).obj_type);
             if is_array {
                 let arr = addr as *mut ArrayHeader;
                 let n = js_array_length(arr);
@@ -632,9 +630,6 @@ fn querystring_scalar_to_string(value_bits: u64) -> String {
     }
     if value.is_bool() {
         return value.as_bool().to_string();
-    }
-    if value.is_int32() {
-        return value.as_int32().to_string();
     }
     if value.is_bigint() {
         let ptr = value.as_bigint_ptr();

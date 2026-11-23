@@ -249,7 +249,7 @@ fn a_stale_dead_stack_copy_of_the_id_is_scrubbed_before_the_reader() {
 }
 
 /// Node keeps a Blob alive while an object URL names it. Before object URLs
-/// were roots, the blob's id was recycled and `resolveObjectURL` handed back
+/// were roots, the blob's id was recycled and `resolveObjectURL` copied
 /// whichever handle reused the number.
 #[test]
 fn object_url_keeps_its_blob_until_revoked() {
@@ -265,7 +265,17 @@ fn object_url_keeps_its_blob_until_revoked() {
         // Reuse any recycled ids.
         let reused: Vec<f64> = (0..64).map(|_| js_headers_new()).collect();
         let resolved = crate::fetch_blob::js_buffer_resolve_object_url(url.get_nanbox_f64());
-        assert_eq!(resolved.to_bits(), handle_to_f64(blob).to_bits());
+        // node: a new Blob of the registered bytes, never the registered one.
+        let copy = handle_id(resolved);
+        assert_ne!(copy, blob);
+        assert_eq!(
+            BLOB_REGISTRY
+                .lock()
+                .unwrap()
+                .get(&copy)
+                .map(|b| b.body.clone()),
+            Some(b"x".to_vec())
+        );
         assert!(BLOB_REGISTRY.lock().unwrap().contains_key(&blob));
         assert!(!reused.iter().any(|h| handle_id(*h) == blob));
 

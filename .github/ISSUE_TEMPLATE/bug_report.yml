@@ -1,0 +1,173 @@
+name: Bug report
+description: Something compiles, links, runs or prints differently from what you expected
+labels: ["type:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Please search the open issues first; a 👍 on an existing one helps more than a duplicate.
+        Anything exploitable goes by email instead (see the Security issue link).
+
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where does it go wrong?
+      options:
+        - "perry compile fails, hangs or crashes"
+        - "Linking fails"
+        - "The program prints or returns something different from Node"
+        - "The program crashes, hangs or aborts"
+        - "The program is much slower or uses much more memory than Node"
+        - "Installing or running the perry CLI itself"
+        - "Other"
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: One or two sentences on what you saw.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+      description: What should have happened instead? If Node behaves correctly, say so.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: |
+        The smallest TypeScript that triggers the bug. If it needs a package layout, link a tiny repo or gist.
+        If you can't minimize it, paste what you have and say so.
+      render: typescript
+    validations:
+      required: true
+
+  - type: textarea
+    id: command
+    attributes:
+      label: Command you ran
+      placeholder: perry compile main.ts -o app --target ios-simulator
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Perry version
+      description: Output of `perry --version`.
+      placeholder: perry 0.5.1665
+    validations:
+      required: true
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Did this work in an earlier Perry version?
+      options:
+        - "I don't know"
+        - "No, it never worked"
+        - "Yes, it is a regression (name the last good version below)"
+    validations:
+      required: true
+
+  - type: input
+    id: last-good
+    attributes:
+      label: Last version where it worked
+      placeholder: perry 0.5.1640
+
+  - type: dropdown
+    id: host-os
+    attributes:
+      label: Host OS (where you run perry)
+      options:
+        - macOS
+        - Linux
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: host-details
+    attributes:
+      label: Host OS version and CPU
+      placeholder: macOS 15.1 arm64 / Ubuntu 24.04 x86_64 (glibc) / Alpine 3.20 (musl) / Windows 11 arm64
+    validations:
+      required: true
+
+  - type: dropdown
+    id: target
+    attributes:
+      label: Target platform
+      description: The `--target` you compiled for. Pick every target where you see the bug.
+      multiple: true
+      options:
+        - "native (host OS)"
+        - "macos"
+        - "linux"
+        - "windows"
+        - "ios"
+        - "ios-simulator"
+        - "android"
+        - "web"
+        - "wasm"
+        - "tvos"
+        - "watchos"
+        - "visionos"
+        - "wearos"
+        - "harmonyos"
+        - "a widget target (ios-widget, android-widget, watchos-widget, wearos-tile)"
+        - "other (say which below)"
+    validations:
+      required: true
+
+  - type: input
+    id: device
+    attributes:
+      label: Device, simulator or browser
+      description: For mobile, watch, TV and web targets.
+      placeholder: iPhone 15 Pro (iOS 18.1) / Pixel 8 emulator (Android 15) / Chrome 131
+
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Perry?
+      options:
+        - npm
+        - Homebrew
+        - winget
+        - apt
+        - Prebuilt binary from a GitHub release
+        - Built from source
+    validations:
+      required: true
+
+  - type: input
+    id: node-version
+    attributes:
+      label: Node version you compared against
+      description: Output of `node --version`, when the bug is a difference from Node.
+      placeholder: v26.12.1
+
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostic output
+      description: Output of `perry doctor`, compiler errors, stack traces or console output.
+      render: text
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: Workarounds you tried, related issues, the npm package and version involved, screenshots.

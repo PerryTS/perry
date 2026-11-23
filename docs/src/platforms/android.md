@@ -22,6 +22,15 @@ from the Perry executable. Release installs do not need a Perry source checkout
 or `PERRY_WORKSPACE_ROOT` to obtain this template. The local build still requires
 the Android SDK, Gradle, and Java toolchain.
 
+## Threading
+
+The compiled program's `main()` runs on the Activity's UI thread, and so does
+every later entry into JavaScript: widget callbacks, timers and promise jobs
+(the 8 ms pump), deep links and notification taps. This is the same model as
+iOS and macOS. Keep top-level work short — a long-running `main()` delays the
+first frame and, past about five seconds, triggers an ANR. Move heavy work into
+`perry/thread` workers or split it across `setTimeout` ticks.
+
 ## UI Toolkit
 
 Perry maps UI widgets to Android views via JNI:

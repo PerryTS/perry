@@ -67,7 +67,7 @@ fn a_computed_key_store_reaches_the_named_keys() {
         r#"
         class A { a = 1; }
         class C { c = 1; q = 2; }
-        declare const k: string;
+        const k: string = process.argv[2];
         const xs: any[] = [new A()];
         xs[k] = new C();
         const v: any = xs.foo;

@@ -324,6 +324,7 @@ fn lower_constructor_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -379,6 +380,7 @@ pub fn collect_method_captures(
                     body,
                     catch,
                     finally,
+                    ..
                 } => {
                     collect_let_ids(body, out);
                     if let Some(c) = catch {
@@ -730,6 +732,7 @@ fn lower_class_method_in_scope(
         decorators,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     })
 }
 
@@ -863,6 +866,7 @@ fn lower_getter_method_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -1051,6 +1055,7 @@ fn lower_setter_method_in_scope(
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),

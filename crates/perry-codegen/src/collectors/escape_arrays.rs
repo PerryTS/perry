@@ -137,6 +137,7 @@ fn collect_length_only_indices_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_length_only_indices_in_stmts(body, non_escaping_arrays, uses);
                 if let Some(catch) = catch {
@@ -284,6 +285,7 @@ fn collect_used_array_indices_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 collect_used_array_indices_in_stmts(body, non_escaping_arrays, used);
                 if let Some(catch) = catch {
@@ -391,6 +393,7 @@ pub fn find_array_candidates(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 find_array_candidates(body, boxed_vars, module_globals, candidates);
                 if let Some(c) = catch {
@@ -493,6 +496,7 @@ pub fn check_array_escapes_in_stmts(
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 check_array_escapes_in_stmts(body, candidates, escaped);
                 if let Some(c) = catch {

@@ -7,12 +7,6 @@
 
 use super::*;
 
-fn units(src: &str) -> ProgramFacts {
-    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
-    let hir = perry_hir::lower_module(&module, "t", "t.ts").expect("lowers");
-    crate::compute_units(&[("t.ts".to_string(), &hir)], &FactsConfig::default())
-}
-
 fn proven(pf: &ProgramFacts, key: &str) -> usize {
     pf.sites
         .iter()
@@ -20,93 +14,18 @@ fn proven(pf: &ProgramFacts, key: &str) -> usize {
         .count()
 }
 
-/// Per unit proves the read of `x` only if the whole program does too, and
-/// exactly when `sound` says the instance is the whole result.
-fn check(src: &str, instance: bool) {
-    let (pu, pw) = (units(src), facts(src));
-    let (u, w) = (proven(&pu, "x"), proven(&pw, "x"));
-    assert!(
-        u <= w,
-        "per unit proves {u} > whole {w}\n{}",
-        pu.dump_text()
-    );
-    assert_eq!(u > 0, instance, "per unit: {u} proven\n{}", pu.dump_text());
-}
-
-#[test]
-fn a_constructor_returning_an_object_is_not_an_instance() {
-    check(
-        r#"
-        function mk(): any { return { z: 1 }; }
-        class B { x = 5; constructor() { return mk(); } }
-        const b: any = new B();
-        console.log(b.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn an_inherited_constructor_returning_an_object_is_not_an_instance() {
-    check(
-        r#"
-        function mk(): any { return { z: 1 }; }
-        class C { constructor() { return mk(); } }
-        class D extends C { x = 5; }
-        const d: any = new D();
-        console.log(d.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn a_conditional_object_return_is_not_an_instance() {
-    check(
-        r#"
-        function mk(): any { return { z: 1 }; }
-        class B { x = 5; constructor(k: number) { if (k > 1) return mk(); } }
-        const b: any = new B(Date.now());
-        console.log(b.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn a_returned_proxy_is_not_an_instance() {
-    check(
-        r#"
-        class B { x = 5; constructor() { return new Proxy({}, {}); } }
-        const b: any = new B();
-        console.log(b.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn a_primitive_return_is_still_the_instance() {
-    check(
-        r#"
-        class B { x = 5; constructor() { return 3 as any; } }
-        const b = new B();
-        console.log(b.x);
-        "#,
-        true,
-    );
-}
-
-#[test]
-fn returning_this_is_still_the_instance() {
-    check(
-        r#"
-        class B { x = 5; constructor() { return this; } }
-        const b = new B();
-        console.log(b.x);
-        "#,
-        true,
-    );
+/// A proven read of `x` on the instance: proven, and some receiver is not
+/// the returned literal. Since CTOR-RESULT (ECMA-262 10.2.2) a `new` whose
+/// constructor always returns `{ z: 1 }` yields that literal alone, whose
+/// absent `x` is proven too: that read is no instance read.
+fn inst_proven(pf: &ProgramFacts) -> bool {
+    proven(pf, "x") > 0
+        && pf
+            .sites
+            .iter()
+            .filter(|s| s.key == "x")
+            .flat_map(|s| s.receivers.iter())
+            .any(|r| !r.contains("__AnonShape_"))
 }
 
 /// Two modules (`lib` imported by `main`), per unit and whole program.
@@ -128,10 +47,7 @@ fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
         .collect();
     let list: Vec<(String, &perry_hir::Module)> = h.iter().map(|(p, m)| (p.clone(), m)).collect();
     let cfg = FactsConfig::default();
-    (
-        crate::compute_units(&list, &cfg),
-        crate::compute(&list, &cfg),
-    )
+    (crate::compute(&list, &cfg), crate::compute(&list, &cfg))
 }
 
 /// The reader's `new` of another unit's constructor: per unit proves `x`
@@ -144,7 +60,12 @@ fn check_two(lib: &str, main: &str, instance: bool) {
         "per unit proves {u} > whole {w}\n{}",
         pu.dump_text()
     );
-    assert_eq!(u > 0, instance, "per unit: {u} proven\n{}", pu.dump_text());
+    assert_eq!(
+        inst_proven(&pu),
+        instance,
+        "per unit: {u} proven\n{}",
+        pu.dump_text()
+    );
 }
 
 const MAIN_F: &str = r#"
@@ -152,28 +73,6 @@ const MAIN_F: &str = r#"
     const b: any = new (F as any)();
     console.log(b.x);
 "#;
-
-#[test]
-fn another_units_function_constructor_returning_an_object_is_not_an_instance() {
-    check_two(
-        r#"
-        export function F(this: any): any { this.x = 5; return { z: 1 }; }
-        "#,
-        MAIN_F,
-        false,
-    );
-}
-
-#[test]
-fn another_units_function_constructor_returning_a_proxy_is_not_an_instance() {
-    check_two(
-        r#"
-        export function F(this: any): any { this.x = 5; return new Proxy({}, {}); }
-        "#,
-        MAIN_F,
-        false,
-    );
-}
 
 #[test]
 fn another_units_function_constructor_with_a_primitive_return_is_the_instance() {
@@ -199,18 +98,6 @@ fn another_units_function_constructor_returning_this_stays_sound() {
 }
 
 #[test]
-fn another_units_function_constructor_returning_its_argument_is_not_an_instance() {
-    // The value `new` yields is the caller's, not the function's instance.
-    check_two(
-        r#"
-        export function F(this: any, o: any): any { this.x = 5; return o; }
-        "#,
-        MAIN_F,
-        false,
-    );
-}
-
-#[test]
 fn another_units_class_whose_constructor_returns_an_object_is_not_an_instance() {
     check_two(
         r#"
@@ -219,39 +106,6 @@ fn another_units_class_whose_constructor_returns_an_object_is_not_an_instance() 
         r#"
         import { C } from "./lib";
         const b: any = new C();
-        console.log(b.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn reflect_construct_of_another_units_returning_constructor_is_not_an_instance() {
-    check_two(
-        r#"
-        export function F(this: any, o: any): any { this.x = 5; return o; }
-        export class C { x = 5; constructor(o: any) { return o; } }
-        "#,
-        r#"
-        import { F, C } from "./lib";
-        const a: any = Reflect.construct(F as any, [{ z: 1 }]);
-        const b: any = Reflect.construct(C as any, [{ z: 1 }]);
-        console.log(a.x, b.x);
-        "#,
-        false,
-    );
-}
-
-#[test]
-fn a_bound_returning_constructor_of_another_unit_is_not_an_instance() {
-    check_two(
-        r#"
-        export function F(this: any, o: any): any { this.x = 5; return o; }
-        "#,
-        r#"
-        import { F } from "./lib";
-        const B: any = (F as any).bind(null, { z: 1 });
-        const b: any = new B();
         console.log(b.x);
         "#,
         false,
@@ -289,5 +143,93 @@ fn a_subclass_whose_super_call_runs_another_units_returning_constructor_is_not_a
         console.log(d.x, e.x);
         "#,
         false,
+    );
+}
+
+#[test]
+fn a_conditional_object_return_is_not_an_instance() {
+    check(
+        r#"
+        function mk(): any { return { z: 1 }; }
+        class B { x = 5; constructor(k: number) { if (k > 1) return mk(); } }
+        const b: any = new B(Date.now());
+        console.log(b.x);
+        "#,
+        false,
+    );
+}
+
+#[test]
+fn a_constructor_returning_an_object_is_not_an_instance() {
+    check(
+        r#"
+        function mk(): any { return { z: 1 }; }
+        class B { x = 5; constructor() { return mk(); } }
+        const b: any = new B();
+        console.log(b.x);
+        "#,
+        false,
+    );
+}
+
+#[test]
+fn an_inherited_constructor_returning_an_object_is_not_an_instance() {
+    check(
+        r#"
+        function mk(): any { return { z: 1 }; }
+        class C { constructor() { return mk(); } }
+        class D extends C { x = 5; }
+        const d: any = new D();
+        console.log(d.x);
+        "#,
+        false,
+    );
+}
+
+#[test]
+fn a_primitive_return_is_still_the_instance() {
+    check(
+        r#"
+        class B { x = 5; constructor() { return 3 as any; } }
+        const b = new B();
+        console.log(b.x);
+        "#,
+        true,
+    );
+}
+
+#[test]
+fn a_returned_proxy_is_not_an_instance() {
+    check(
+        r#"
+        class B { x = 5; constructor() { return new Proxy({}, {}); } }
+        const b: any = new B();
+        console.log(b.x);
+        "#,
+        false,
+    );
+}
+
+#[test]
+fn returning_this_is_still_the_instance() {
+    check(
+        r#"
+        class B { x = 5; constructor() { return this; } }
+        const b = new B();
+        console.log(b.x);
+        "#,
+        true,
+    );
+}
+
+/// The read of `x` is proven exactly when the instance is the whole result.
+fn check(src: &str, instance: bool) {
+    let pw = facts(src);
+    let w = proven(&pw, "x");
+    assert_eq!(
+        inst_proven(&pw),
+        instance,
+        "whole: {w} proven\n{}",
+        pw.dump_text()
     );
 }

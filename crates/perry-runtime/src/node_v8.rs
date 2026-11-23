@@ -77,7 +77,7 @@ static KEEP_V8_GC_PROFILER_REPORT: extern "C" fn() -> f64 = js_v8_gc_profiler_re
 static KEEP_V8_SERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_serializer_new;
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
-static KEEP_V8_DESERIALIZER_NEW: extern "C" fn(f64) -> f64 = js_v8_deserializer_new;
+static KEEP_V8_DESERIALIZER_NEW: extern "C" fn(f64, f64) -> f64 = js_v8_deserializer_new;
 // #3679: lifecycle / diagnostic-control surface.
 #[cfg(feature = "keepalive-anchors")]
 #[used(compiler)]
@@ -402,34 +402,47 @@ pub extern "C" fn js_v8_write_heap_snapshot(filename: f64, options: f64) -> f64 
 /// field[1] = registry `id`. NOT cached (every `new` must be a fresh instance).
 unsafe fn build_v8_instance(module: &str, id: usize) -> f64 {
     crate::object::install_native_module_vtable();
-    let obj = crate::object::js_object_alloc(crate::object::NATIVE_MODULE_CLASS_ID, 2);
+    // `new v8.Serializer()` lowers straight to its factory without reading the
+    // namespace, so arm the v8 attach hook before the constructor below is minted.
+    crate::object::nm_register_v8_constructor_hooks();
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let constructor = crate::object::bound_native_callable_export_value(
+        "v8",
+        module.strip_prefix("v8.").expect("v8 instance module"),
+    );
+    let constructor = scope.root_nanbox_f64(constructor);
+    let prototype =
+        crate::object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
+    let prototype = scope.root_nanbox_f64(prototype);
+    let obj = scope.root_raw_mut_ptr(crate::object::js_object_alloc(
+        crate::object::NATIVE_MODULE_CLASS_ID,
+        2,
+    ));
     let mname = js_string_from_bytes(module.as_ptr(), module.len() as u32);
-    crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(mname));
-    crate::object::js_object_set_field(obj, 1, JSValue::number(id as f64));
-    let mut keys = crate::array::js_array_alloc(2);
+    let mname = scope.root_string_ptr(mname);
+    obj.with_mut_ptr(|obj| {
+        mname.with_mut_ptr(|mname| {
+            crate::object::js_object_set_field(obj, 0, JSValue::string_ptr(mname))
+        })
+    });
+    obj.with_mut_ptr(|obj| crate::object::js_object_set_field(obj, 1, JSValue::number(id as f64)));
+    let keys = scope.root_raw_mut_ptr(crate::array::js_array_alloc(2));
     for k in [b"__module__".as_slice(), b"__v8_id__".as_slice()] {
         let kp = js_string_from_bytes(k.as_ptr(), k.len() as u32);
-        keys = crate::array::js_array_push(keys, JSValue::string_ptr(kp));
+        let kp = scope.root_string_ptr(kp);
+        let pushed = keys.with_mut_ptr(|keys| {
+            kp.with_mut_ptr(|kp| crate::array::js_array_push(keys, JSValue::string_ptr(kp)))
+        });
+        keys.set_raw_mut_ptr(pushed);
     }
-    crate::object::js_object_set_keys(obj, keys);
-    // The receiver's [[Prototype]] is its constructor's prototype: the methods
-    // `serde_prototypes::attach` installs there are then visible on the
-    // instance, and `Object.getPrototypeOf(s) === v8.Serializer.prototype`
-    // holds, which is what makes them reachable through ordinary lookup.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let instance = scope.root_nanbox_f64(f64::from_bits(JSValue::pointer(obj as *const u8).bits()));
-    let name = module.strip_prefix("v8.").unwrap_or(module);
-    let constructor = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "v8", name,
-    ));
-    let prototype = scope.root_nanbox_f64(crate::object::js_function_prototype_value_for_read(
-        constructor.get_nanbox_f64(),
-    ));
-    crate::object::js_object_set_prototype_of(
-        instance.get_nanbox_f64(),
-        prototype.get_nanbox_f64(),
-    );
-    instance.get_nanbox_f64()
+    obj.with_mut_ptr(|obj| keys.with_mut_ptr(|keys| crate::object::js_object_set_keys(obj, keys)));
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            obj as usize,
+            prototype.get_nanbox_u64(),
+        )
+    });
+    obj.with_const_ptr::<ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// Read the registry id out of a v8 instance object's field[1].
@@ -455,25 +468,17 @@ pub(crate) fn v8_instance_id_from_value(val: f64) -> usize {
 #[no_mangle]
 pub extern "C" fn js_v8_serializer_new(default_flag: f64) -> f64 {
     let id = crate::child_process::v8_class_serializer_new();
-    // `default_flag` is TAG_TRUE for the `DefaultSerializer` subclass.
-    let module = if default_flag.to_bits() == 0x7FFC_0000_0000_0004 {
+    let module = if default_flag.to_bits() == crate::value::TAG_TRUE {
         "v8.DefaultSerializer"
     } else {
         "v8.Serializer"
     };
-    let instance = unsafe { build_v8_instance(module, id) };
-    // Install the real prototype methods on the constructor this instance names
-    // (`writeHeader`, `writeValue`, …), so `s.writeHeader` and
-    // `v8.Serializer.prototype.writeHeader` are the same function.
-    let name = module.strip_prefix("v8.").expect("v8 instance module");
-    let constructor = crate::object::bound_native_callable_export_value("v8", name);
-    let _ = unsafe { serde_prototypes::attach(name, constructor) };
-    instance
+    unsafe { build_v8_instance(module, id) }
 }
 
 /// `new v8.Deserializer(buffer)` / `new v8.DefaultDeserializer(buffer)`.
 #[no_mangle]
-pub extern "C" fn js_v8_deserializer_new(buffer: f64) -> f64 {
+pub extern "C" fn js_v8_deserializer_new(buffer: f64, default_flag: f64) -> f64 {
     let bytes = unsafe { input_bytes(buffer) };
     let Some(bytes) = bytes else {
         crate::fs::validate::throw_type_error_with_code(
@@ -482,10 +487,12 @@ pub extern "C" fn js_v8_deserializer_new(buffer: f64) -> f64 {
         );
     };
     let id = crate::child_process::v8_class_deserializer_new(bytes);
-    let instance = unsafe { build_v8_instance("v8.Deserializer", id) };
-    let constructor = crate::object::bound_native_callable_export_value("v8", "Deserializer");
-    let _ = unsafe { serde_prototypes::attach("Deserializer", constructor) };
-    instance
+    let module = if default_flag.to_bits() == crate::value::TAG_TRUE {
+        "v8.DefaultDeserializer"
+    } else {
+        "v8.Deserializer"
+    };
+    unsafe { build_v8_instance(module, id) }
 }
 
 /// Wrap a byte vector into a Node `Buffer` value.
@@ -589,9 +596,6 @@ pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
 /// Coerce a NaN-boxed JS value to a u32 (int32-tagged fast path + double).
 fn as_u32(value: f64) -> u32 {
     let bits = value.to_bits();
-    if (bits >> 48) == 0x7FFE {
-        return (bits & 0xFFFF_FFFF) as u32;
-    }
     let jsv = JSValue::from_bits(bits);
     if jsv.is_number() {
         let n = jsv.as_number();
@@ -688,7 +692,7 @@ pub(crate) unsafe fn attach_v8_constructor(
     _closure_addr: usize,
 ) -> f64 {
     if name != "GCProfiler" {
-        return constructor;
+        return serde_prototypes::attach(name, constructor);
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor);
@@ -884,5 +888,27 @@ mod snapshot_thread_name_tests {
             std::process::id(),
             crate::agent::current_thread_native_id()
         )));
+    }
+}
+
+/// Dynamic aliases and Reflect.construct use the same factories as direct new.
+pub(crate) unsafe fn serde_constructor(
+    _module: &str,
+    name: &str,
+    args: *const f64,
+    len: usize,
+) -> Option<f64> {
+    let default = f64::from_bits(JSValue::bool(name.starts_with("Default")).bits());
+    match name {
+        "Serializer" | "DefaultSerializer" => Some(js_v8_serializer_new(default)),
+        "Deserializer" | "DefaultDeserializer" => {
+            let buffer = if args.is_null() || len == 0 {
+                undefined()
+            } else {
+                *args
+            };
+            Some(js_v8_deserializer_new(buffer, default))
+        }
+        _ => None,
     }
 }

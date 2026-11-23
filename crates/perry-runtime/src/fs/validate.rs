@@ -138,11 +138,7 @@ fn validate_path_like_value(_arg_name: &str, value: f64) -> bool {
 }
 
 fn numeric_to_i32(jv: JSValue) -> i32 {
-    if jv.is_int32() {
-        jv.as_int32()
-    } else {
-        jv.as_number() as i32
-    }
+    jv.as_number() as i32
 }
 
 /// Throw `TypeError [ERR_INVALID_ARG_TYPE]` for a bad path argument, matching
@@ -439,11 +435,7 @@ pub(crate) fn validate_fs_mode(value: f64) {
             "ERR_INVALID_ARG_TYPE",
         );
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !n.is_finite() {
         throw_range_error_with_code("mode is out of range");
     }

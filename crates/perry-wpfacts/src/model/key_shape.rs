@@ -18,10 +18,27 @@ use super::*;
 use perry_hir::{BinaryOp, Expr, Stmt};
 
 /// A union of globs, each glob's pieces `p0*p1*...*pn` (`""` where a
-/// substitution stands first or last); one piece is an exact name.
+/// substitution stands first or last); one piece is an exact name. Beside
+/// them the free forms (`free`, rule EXCL-KEY): `(E, s)` is every String
+/// `X + s` whose part `X` holds no ASCII character of the set `E` (bit c
+/// for c), the strings an exclusion entry (`solve::strs::EXCL_MARK`)
+/// stands for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct KeyShape {
     pub globs: Vec<Vec<String>>,
+    pub free: Vec<(u128, String)>,
+    /// Beside them the exclusion form (`except_shape`): when not empty,
+    /// every String key but these names (a Web Storage item's key: any
+    /// String but a member name of Storage.prototype, `realm_effect.rs`
+    /// `RealmSlotStep::StrKey`). It may spell a Number key.
+    pub except: Vec<String>,
+}
+
+/// Rule EXCL-KEY: is `name` some `X + s` with `X` free of `e`'s ASCII
+/// characters? Exact: the part before the suffix is the only freedom.
+fn free_admits(e: u128, s: &str, name: &str) -> bool {
+    name.strip_suffix(s)
+        .is_some_and(|x| x.chars().all(|c| !c.is_ascii() || e >> (c as u32) & 1 == 0))
 }
 
 enum Part {
@@ -79,6 +96,8 @@ impl KeyShape {
             return match name.as_ref() {
                 Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => Some(KeyShape {
                     globs: vec![vec![s.clone()]],
+                    free: Vec::new(),
+                    except: Vec::new(),
                 }),
                 _ => None,
             };
@@ -107,6 +126,8 @@ impl KeyShape {
         }
         lit.then_some(KeyShape {
             globs: vec![pieces],
+            free: Vec::new(),
+            except: Vec::new(),
         })
     }
 
@@ -133,17 +154,59 @@ impl KeyShape {
         });
         globs.sort();
         globs.dedup();
-        ok.then_some(KeyShape { globs })
+        ok.then_some(KeyShape {
+            globs,
+            free: Vec::new(),
+            except: Vec::new(),
+        })
     }
 
     /// Does a glob of the union match `name`?
     pub fn admits(&self, name: &str) -> bool {
         self.globs.iter().any(|g| glob_admits(g, name))
+            || self.free.iter().any(|(e, s)| free_admits(*e, s, name))
+            || (!self.except.is_empty() && !self.except.iter().any(|x| x == name))
+    }
+
+    /// May one string match both shapes? False only when every pair of
+    /// globs is apart: an exact name the other does not admit, or first
+    /// pieces (or last pieces) neither of which starts (ends) the other
+    /// (rule M3: incompatible known prefixes are never equal, 7.2.13).
+    pub fn meets(&self, o: &KeyShape) -> bool {
+        // A free form may meet anything (no pairwise test is kept for it).
+        !self.free.is_empty()
+            || !o.free.is_empty()
+            || (!self.except.is_empty() && (!o.except.is_empty() || !o.globs.is_empty()))
+            || (!o.except.is_empty() && !self.globs.is_empty())
+            || self
+                .globs
+                .iter()
+                .any(|g| o.globs.iter().any(|h| glob_meets(g, h)))
     }
 
     /// May a string of this shape be a Number key (`numeric_key`)?
-    fn may_be_numeric(&self) -> bool {
-        self.globs.iter().any(|g| glob_may_be_numeric(g))
+    pub(crate) fn may_be_numeric(&self) -> bool {
+        // A free form `X + s`: a Number key when `s` holds only characters
+        // a Number's text may hold (`X` may be the rest of that text).
+        !self.except.is_empty()
+            || self.globs.iter().any(|g| glob_may_be_numeric(g))
+            || self.free.iter().any(|(_, s)| {
+                s.chars()
+                    .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+            })
+    }
+}
+
+fn glob_meets(g: &[String], h: &[String]) -> bool {
+    match (g.len(), h.len()) {
+        (1, _) => glob_admits(h, &g[0]),
+        (_, 1) => glob_admits(g, &h[0]),
+        _ => {
+            let (gf, hf) = (&g[0], &h[0]);
+            let (gl, hl) = (&g[g.len() - 1], &h[h.len() - 1]);
+            (gf.starts_with(hf.as_str()) || hf.starts_with(gf.as_str()))
+                && (gl.ends_with(hl.as_str()) || hl.ends_with(gl.as_str()))
+        }
     }
 }
 
@@ -170,16 +233,68 @@ fn glob_admits(p: &[String], name: &str) -> bool {
     true
 }
 
-/// May a string of glob `p` be a Number key (`numeric_key`: Rust's f64
-/// syntax, any case of `inf`/`infinity`/`nan`)?
+/// May a string of glob `p` be a Number key? An exact name: `numeric_key`
+/// (Rust's f64 syntax, any case of `inf`/`infinity`/`nan`). A glob: a
+/// String key reads an element or a numeric key only when it is
+/// ToString of a Number (ECMA-262 6.1.6.1.20) or `-0`
+/// (CanonicalNumericIndexString, 7.1.21), so its first piece must begin
+/// such a string (`may_begin_number_string`), and every piece holds only
+/// characters such a string may hold.
 fn glob_may_be_numeric(p: &[String]) -> bool {
     if p.len() == 1 {
         return crate::solve::numeric_key(&p[0]);
     }
-    p.iter().all(|s| {
-        s.chars()
-            .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
-    })
+    may_begin_number_string(&p[0])
+        && p.iter().all(|s| {
+            s.chars()
+                .all(|c| c.is_ascii_digit() || ".+-eEiInNfFtTyYaA".contains(c))
+        })
+}
+
+/// Does some ToString of a Number (ECMA-262 6.1.6.1.20), or `-0`, begin
+/// with `p`? Those strings are `NaN`, and after an optional `-`:
+/// `Infinity`, `0`, `0.` digits, `[1-9]` digits, `[1-9]` digits `.`
+/// digits ending in `[1-9]`, or one digit, optionally `.` digits ending in
+/// `[1-9]`, then `e`, a sign and `[1-9]` digits. Digit counts are not
+/// bounded here (a superset in length only).
+fn may_begin_number_string(p: &str) -> bool {
+    #[derive(Clone, Copy)]
+    enum S {
+        Start,
+        Zero,
+        ZeroFrac,
+        /// Integer digits; `true`: exactly one.
+        Int(bool),
+        /// Fraction digits after one integer digit, and the last is no `0`.
+        Frac(bool, bool),
+        ExpSign,
+        ExpFirst,
+        ExpDigits,
+    }
+    if "NaN".starts_with(p) {
+        return true;
+    }
+    let r = p.strip_prefix('-').unwrap_or(p);
+    if "Infinity".starts_with(r) {
+        return true;
+    }
+    let mut s = S::Start;
+    for c in r.chars() {
+        s = match (s, c) {
+            (S::Start, '0') => S::Zero,
+            (S::Start, '1'..='9') => S::Int(true),
+            (S::Zero, '.') => S::ZeroFrac,
+            (S::ZeroFrac, '0'..='9') => S::ZeroFrac,
+            (S::Int(_), '0'..='9') => S::Int(false),
+            (S::Int(one), '.') => S::Frac(one, false),
+            (S::Int(true), 'e') | (S::Frac(true, true), 'e') => S::ExpSign,
+            (S::Frac(one, _), '0'..='9') => S::Frac(one, c != '0'),
+            (S::ExpSign, '+' | '-') => S::ExpFirst,
+            (S::ExpFirst, '1'..='9') | (S::ExpDigits, '0'..='9') => S::ExpDigits,
+            _ => return false,
+        };
+    }
+    true
 }
 
 impl Model {
@@ -194,8 +309,140 @@ impl Model {
             self.key_shape_census[2] += 1;
         }
         if self.key_shapes.is_empty() {
-            self.key_shapes.push(KeyShape { globs: Vec::new() });
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
         }
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// Every String key but `names` (`KeyShape::except`), interned as
+    /// `glob_shape` is: it may spell a Number key.
+    pub fn except_shape(&mut self, mut names: Vec<String>) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        names.sort();
+        names.dedup();
+        if names.is_empty() {
+            return 0;
+        }
+        let s = KeyShape {
+            globs: Vec::new(),
+            free: Vec::new(),
+            except: names,
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// The shape of glob `glob`, interned as `infix_shape` is: also when it
+    /// may spell a Number key (`key_may_name_str` then reads the elements
+    /// and numeric keys beside the names it admits).
+    pub fn glob_shape(&mut self, glob: Vec<String>) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        let s = KeyShape {
+            globs: vec![glob],
+            free: Vec::new(),
+            except: Vec::new(),
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// Rule EXCL-KEY: the shape of an exclusion entry `(e, s)`, interned
+    /// as `glob_shape` is: also when it may spell a Number key.
+    pub fn free_shape(&mut self, e: u128, s: &str) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        let k = KeyShape {
+            globs: Vec::new(),
+            free: vec![(e, s.to_string())],
+            except: Vec::new(),
+        };
+        if let Some(&id) = self.key_shape_ids.get(&k) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(k.clone());
+        self.key_shape_ids.insert(k, id);
+        id
+    }
+
+    /// The shape of a key that is any String (the glob `*`): it may spell
+    /// every name, a Number key among them, but no symbol.
+    pub fn any_string_shape(&mut self) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        let s = KeyShape {
+            globs: vec![vec![String::new(), String::new()]],
+            free: Vec::new(),
+            except: Vec::new(),
+        };
+        if let Some(&id) = self.key_shape_ids.get(&s) {
+            return id;
+        }
+        let id = self.key_shapes.len() as KeyShapeId;
+        self.key_shapes.push(s.clone());
+        self.key_shape_ids.insert(s, id);
+        id
+    }
+
+    /// Rule K7: the shape of a key that is a String containing `c` (the
+    /// glob `*c*`), interned as `any_string_shape` is: it may spell a
+    /// Number key, and with `c` no IdentifierPart it spells no built-in
+    /// member name.
+    pub fn infix_shape(&mut self, c: char) -> KeyShapeId {
+        if self.key_shapes.is_empty() {
+            self.key_shapes.push(KeyShape {
+                globs: Vec::new(),
+                free: Vec::new(),
+                except: Vec::new(),
+            });
+        }
+        let s = KeyShape {
+            globs: vec![vec![String::new(), c.to_string(), String::new()]],
+            free: Vec::new(),
+            except: Vec::new(),
+        };
         if let Some(&id) = self.key_shape_ids.get(&s) {
             return id;
         }
@@ -207,25 +454,98 @@ impl Model {
 
     /// May `key` name the member spelled `name`? The one question every
     /// lookup, builtin member and store asks of a computed key. A shaped key
-    /// is a String that is no Number key: never an element or numeric key.
-    /// The solver's other internal keys (`#...`, `\u{1}...`) stay possible.
+    /// is a String, or a well-known symbol spelled exactly (`KeyShape::of`):
+    /// a glob with a hole is a String and never names a symbol (HIR's
+    /// `@@__perry_wk_<name>`). Only the any-String shape may be a Number
+    /// key, an element or numeric key. The solver's other internal keys
+    /// (`#...`, `\u{1}...`) stay possible.
+    /// May `key` name `name` as one of its KNOWN strings: the named key, or
+    /// a shape with `name` as an exact string (a glob of one piece). A
+    /// wildcard (any key, a hole, a free form) knows no string.
+    pub fn key_names_known_str(&self, key: Key, name: &str) -> bool {
+        match key {
+            Key::Named(a) => self.atoms[a as usize] == name,
+            Key::Any(0) => false,
+            Key::Any(s) => self.key_shapes[s as usize]
+                .globs
+                .iter()
+                .any(|g| g.len() == 1 && g[0] == name),
+        }
+    }
+
     pub fn key_may_name_str(&self, key: Key, name: &str) -> bool {
         match key {
             Key::Named(a) => self.atoms[a as usize] == name,
+            // An internal slot (`effects::internal_atom`) is no property:
+            // no computed key names it (`Model::field`).
+            Key::Any(_) if crate::builtins::is_internal_key(name) => false,
             Key::Any(0) => true,
             Key::Any(s) => match name {
-                ELEM | NUM_KEY => false,
+                ELEM | NUM_KEY => self.key_shapes[s as usize].may_be_numeric(),
                 n if n.starts_with('#') || n.starts_with('\u{1}') => true,
+                n if n.starts_with(crate::builtins::WK_PREFIX) => self.key_shapes[s as usize]
+                    .globs
+                    .iter()
+                    .any(|g| g.len() == 1 && g[0] == n),
+                // The `[util.inspect.custom]` hook is a Symbol-keyed entry
+                // or a class method HIR names `INSPECT_CUSTOM_METHOD` (the
+                // class vtable slot perry-runtime formatting.rs reads); a
+                // String key never installs it.
+                crate::model::INSPECT_CUSTOM_METHOD => false,
                 n => self.key_shapes[s as usize].admits(n),
             },
         }
     }
 
+    /// DECISIONS 217 (owner 10-27 for `__proto__`, 11-05 for `prototype`):
+    /// a computed key of unknown string never reads a prototype link, the
+    /// `__proto__` accessor or a constructor's `prototype`. A computed read
+    /// skips the member under that name; the named forms (`o.__proto__`,
+    /// `C.prototype`, `C["prototype"]`, `Reflect.get(C, "prototype")`) read
+    /// it.
+    pub fn proto_link(name: &str) -> bool {
+        matches!(name, "__proto__" | "prototype")
+    }
+
+    /// May a string of shape `a` equal one of shape `b`? (0: any key.)
+    pub fn shapes_meet(&self, a: KeyShapeId, b: KeyShapeId) -> bool {
+        a == b
+            || a == 0
+            || b == 0
+            || self.key_shapes[a as usize].meets(&self.key_shapes[b as usize])
+    }
+
     pub fn key_may_name(&self, key: Key, a: Atom) -> bool {
         match key {
             Key::Named(b) => a == b,
-            Key::Any(0) => true,
             Key::Any(_) => self.key_may_name_str(key, &self.atoms[a as usize]),
         }
+    }
+
+    /// Store `site`'s key value is a Number on every path: its key node is
+    /// whole (not dropped), holds no object and no ⊤, and no primitive kind
+    /// but Number. ECMA-262 7.1.19 ToPropertyKey of a Number is its ToString
+    /// (7.1.12.1, 6.1.6.1.20): a canonical numeric string (`numeric_key`).
+    pub(crate) fn number_key_store(&self, site: SiteId) -> bool {
+        self.stores[site as usize].key_value.is_some_and(|n| {
+            let n = &self.nodes[n as usize];
+            !n.dropped && n.pts.is_empty() && n.prim != 0 && n.prim & !prim::NUM == 0
+        })
+    }
+
+    /// May post-birth computed store `site` (key `key`) on template `tm`
+    /// write the property named `a`? A Number-keyed store
+    /// (`number_key_store`) writes only a canonical numeric name; on an
+    /// ordinary object nothing else (10.1.9.2 OrdinarySet: property P only),
+    /// on an Array also `length` (10.4.2.1 ArrayDefineOwnProperty).
+    pub(crate) fn any_store_may_name(&self, tm: TmplId, site: SiteId, key: Key, a: Atom) -> bool {
+        if !self.key_may_name(key, a) {
+            return false;
+        }
+        if !self.number_key_store(site) {
+            return true;
+        }
+        let name = self.atoms[a as usize].as_str();
+        crate::solve::numeric_key(name) || (name == "length" && self.tmpl_may_be_array(tm))
     }
 }

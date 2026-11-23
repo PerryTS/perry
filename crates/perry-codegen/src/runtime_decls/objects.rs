@@ -384,6 +384,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_child_process", VOID, &[]);
     module.declare_function("js_nm_install_cluster", VOID, &[]);
     module.declare_function("js_nm_install_console", VOID, &[]);
+    module.declare_function("js_nm_install_constants", VOID, &[]);
     module.declare_function("js_nm_install_crypto", VOID, &[]);
     module.declare_function("js_nm_install_dgram", VOID, &[]);
     module.declare_function("js_nm_install_dns", VOID, &[]);
@@ -426,6 +427,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_nm_install_zlib", VOID, &[]);
     module.declare_function("js_nm_install_worker_threads", VOID, &[]);
     module.declare_function("js_nm_install_all", VOID, &[]);
+    module.declare_function("js_nm_install_all_constants", VOID, &[]);
     module.declare_function("js_nm_enable_install_all", VOID, &[]);
     module.declare_function("js_dns_install_exports", VOID, &[]);
     // The named read's entries behind the probe (`object/field_get_set/
@@ -457,11 +459,6 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         DOUBLE,
         &[I64, I64, I64, PTR],
     );
-    module.declare_function(
-        "js_object_get_keyed_site_slow",
-        DOUBLE,
-        &[DOUBLE, DOUBLE, I64, I32, PTR],
-    );
     // The store probe (`expr/put_value_store_ic.rs`): 1 when it stored.
     module.declare_function("perry_probe_set", I32, &[PTR, I64, I64, I64, DOUBLE]);
     // The static-key store site (`expr/put_value_store_ic.rs`): the store
@@ -476,6 +473,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
         I32,
         &[PTR, I64, I64, I32, I32, I32],
     );
+    // A function constructor's run of `this` stores
+    // (`layout_desc::function_families::run_arm`).
+    module.declare_function("perry_function_run_admits", I32, &[PTR, PTR, I64, I32]);
     // `PERRY_PROBE_VERIFY` compiles: a family slot access's witness
     // (object, key atom bits, compiled slot). A GC leaf.
     module.declare_function("perry_family_slot_verify", VOID, &[I64, I64, I32]);
@@ -483,6 +483,7 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_function_bind", DOUBLE, &[DOUBLE, PTR, I64]);
     module.declare_function("perry_probe_get_value", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_length", DOUBLE, &[PTR, I64, I64, I64]);
+    module.declare_function("perry_typed_array_proto_get", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_binding", DOUBLE, &[PTR, I64, I64, I64]);
     module.declare_function("perry_probe_get_keyed", DOUBLE, &[PTR, I64, I64]);
     // Object rest destructuring: copy all properties from src except excluded keys.
@@ -508,6 +509,9 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function("js_link_path_module_parent", VOID, &[DOUBLE]);
     module.declare_function("js_run_module_init_catching", VOID, &[I64]);
     module.declare_function("js_run_module_init_guarded", VOID, &[I64, I64]);
+    module.declare_function("js_create_deferred_namespace", DOUBLE, &[I64]);
+    module.declare_function("js_deferred_namespace_not_ready", DOUBLE, &[]);
+    module.declare_function("js_deferred_module_ready", I32, &[I64, I64, I32]);
     module.declare_function("js_require_path_module", DOUBLE, &[DOUBLE]);
     module.declare_function("js_has_path_module", DOUBLE, &[DOUBLE]);
     // #10360: `--platform bun` marker (see `__perry_runtime.setBunPlatform`).
@@ -664,16 +668,24 @@ pub fn declare_phase_b_objects(module: &mut LlModule) {
     module.declare_function(
         "js_put_value_set_dynamic",
         DOUBLE,
-        &[DOUBLE, DOUBLE, DOUBLE, I32],
+        &[PTR, DOUBLE, DOUBLE, DOUBLE, I32],
     );
     // The per-agent pointer block (`expr/agent_ptr.rs`), read inline on ELF
     // executables (where `use_local_exec_tls` turns this model into
     // local-exec); its slot-1 accessor, and the method-call site's miss entry
     // (`expr/method_site.rs`).
+    // Android's program is a dlopened shared object: bionic refuses
+    // initial-exec there, so the block is named in the general-dynamic model
+    // (`agent_ptr::agent_ptr_access`).
+    let agent_ptrs_model = if module.target_triple.contains("android") {
+        ""
+    } else {
+        "initialexec"
+    };
     module.add_external_tls_global(
         crate::expr::agent_ptr::AGENT_PTRS_SYMBOL,
         &format!("[{} x ptr]", crate::expr::agent_ptr::AGENT_PTR_SLOTS),
-        "initialexec",
+        agent_ptrs_model,
     );
     // Windows x86-64 reaches the same block through the TEB (`agent_ptr.rs`,
     // `WindowsTeb`): the image TLS index and the block offset in that image's

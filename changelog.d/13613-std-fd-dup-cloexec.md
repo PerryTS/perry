@@ -1,0 +1,1 @@
+Child processes spawned by Perry no longer inherit the runtime's duplicates of another child's stdin pipe or of a descriptor passed as a child's stdio, which could keep those pipes open after their owner closed them.

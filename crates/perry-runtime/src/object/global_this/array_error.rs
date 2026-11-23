@@ -28,12 +28,43 @@ unsafe fn native_args<'a>(args: *const f64, len: usize) -> &'a [f64] {
     }
 }
 
+/// `hasOwnProperty.call(o, k)`: the target VALUE is the realm's
+/// `Object.prototype.hasOwnProperty` (its info names that body), so the call is
+/// that body with `this = o`. Asked of the callee on every call; nothing is
+/// kept. An object or nullish `o` only: a primitive takes the intrinsic.
+#[inline(always)]
+pub(in crate::object) unsafe fn has_own_property_call(target: f64, args: &[f64]) -> Option<f64> {
+    let closure =
+        (target.to_bits() & crate::value::POINTER_MASK) as *const crate::closure::ClosureHeader;
+    let info = (*closure).info.as_ref()?;
+    if !std::ptr::eq(
+        info.code,
+        object_prototype_has_own_property_thunk as *const u8,
+    ) {
+        return None;
+    }
+    let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let this = args.first().copied().unwrap_or(undef);
+    let bits = this.to_bits();
+    if bits & !crate::value::POINTER_MASK != crate::value::POINTER_TAG
+        && bits != crate::value::TAG_UNDEFINED
+        && bits != crate::value::TAG_NULL
+    {
+        return None;
+    }
+    let key = args.get(1).copied().unwrap_or(undef);
+    Some(crate::object::object_ops::has_own::object_prototype_has_own_property(this, key))
+}
+
 /// `Function.prototype.call` as a value: takes its arguments in place
 /// (`FN_REST_NATIVE_ARGS`, no rest array) and runs the one `call` body
 /// (`run_function_intrinsic`) the method form runs, so both see the same
 /// class-constructor TypeError, static bound-method receiver and native
 /// construction aliases.
-pub(crate) unsafe extern "C" fn function_prototype_call_thunk(
+// Codegen names this body by its symbol to dispatch `f.call(..)` on the
+// value found (`emit_call_lane`).
+#[no_mangle]
+pub(crate) unsafe extern "C" fn js_function_prototype_call_body(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     args: *const f64,
@@ -41,10 +72,30 @@ pub(crate) unsafe extern "C" fn function_prototype_call_thunk(
 ) -> f64 {
     let target = f64::from_bits(this.bits());
     let args_ptr = if len == 0 { std::ptr::null() } else { args };
+    // This body IS `Function.prototype.call`: a call site that read this
+    // value calls it, so a closure target is entered here, whatever found it.
+    // The plain call first, as the method form runs it.
     if let Some(result) =
         crate::object::native_call_method::run_function_intrinsic(target, "call", args_ptr, len)
     {
         return result;
+    }
+    let tb = target.to_bits();
+    if tb & !crate::value::POINTER_MASK == crate::value::POINTER_TAG
+        && crate::closure::is_closure_ptr((tb & crate::value::POINTER_MASK) as usize)
+    {
+        let all = native_args(args, len);
+        if let Some(value) = has_own_property_call(target, all) {
+            return value;
+        }
+        if let Some(value) = crate::object::native_call_method::compiled_target_call(
+            false,
+            target,
+            all.as_ptr(),
+            all.len(),
+        ) {
+            return value;
+        }
     }
     // A callable the intrinsic does not model (a native function handle).
     let args = native_args(args, len);
@@ -285,13 +336,17 @@ pub(crate) extern "C" fn date_prototype_to_string_thunk(
     crate::value::js_nanbox_string(string as i64)
 }
 
+// Codegen names this body by its symbol: `hasOwnProperty.call(o, k)` that
+// found this body and `Function.prototype.call`'s enters
+// `js_object_prototype_has_own_property_call` (`emit_call_lane`).
+#[no_mangle]
 pub(crate) extern "C" fn object_prototype_has_own_property_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     key: f64,
 ) -> f64 {
     let this_value = f64::from_bits(this.bits());
-    super::super::object_ops::js_object_has_own(this_value, key)
+    super::super::object_ops::has_own::object_prototype_has_own_property(this_value, key)
 }
 
 pub(crate) extern "C" fn object_prototype_property_is_enumerable_thunk(
@@ -600,6 +655,9 @@ pub(crate) unsafe fn function_apply_proxy(target: f64, receiver: f64, args_array
     )
 }
 
+// Codegen names this body by its symbol to dispatch `f.apply(..)` on the
+// value found (`emit_apply_lane`).
+#[no_mangle]
 pub(crate) extern "C" fn function_prototype_apply_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
@@ -664,15 +722,13 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
             let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
             return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
         }
-        // A class reference (INT32-tagged registered class id) is a function
+        // A class constructor (a class function object) is a function
         // value; #9413 retains its source text at compile time, so answer with
         // that and keep the NativeFunction form only for classes with none.
-        if super::super::class_prototype_ref_id(this_val).is_none() {
-            if let Some(cid) = super::super::native_module::class_ref_id(this_val) {
-                let s = super::super::class_registry::class_ref_to_string(cid);
-                let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-                return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
-            }
+        if let Some(cid) = super::super::native_module::class_ref_id(this_val) {
+            let s = super::super::class_registry::class_ref_to_string(cid);
+            let str_ptr = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
+            return f64::from_bits(JSValue::string_ptr(str_ptr).bits());
         }
         // A per-evaluation class object (`ClassExprFresh`) is a function too.
         if let Some(source) = super::super::field_get_set::class_object_source_text(this_val) {
@@ -705,9 +761,18 @@ pub(crate) extern "C" fn function_prototype_to_string_thunk(
 /// read off the singleton's empty proto object as `undefined` and the
 /// chained `.call` access threw
 /// `Cannot read properties of undefined (reading 'call')` at module init.
-fn is_byte_family_receiver(addr: usize) -> bool {
-    unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }
-        .is_some_and(|header| crate::gc::is_byte_family_type(unsafe { header.as_ref() }.obj_type))
+fn slice_uses_generic_engine(this: crate::closure::JsThis, addr: usize) -> bool {
+    // Boxed receivers prove their own GC head; raw module-init words retain
+    // the tracked admission before any header read.
+    let kind = crate::value::addr_class::pointer_value_header(this.bits())
+        .map(|header| header.obj_type)
+        .or_else(|| unsafe {
+            crate::value::addr_class::try_read_tracked_gc_header(addr)
+                .map(|header| header.as_ref().obj_type)
+        });
+    kind.is_some_and(|kind| {
+        crate::gc::is_byte_family_type(kind) || kind == crate::gc::GC_TYPE_SYMBOL
+    })
 }
 
 pub(crate) extern "C" fn array_prototype_slice_thunk(
@@ -721,12 +786,6 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     let this_jsv = JSValue::from_bits(this_bits);
     let arr_ptr = if this_jsv.is_pointer() {
         this_jsv.as_pointer::<crate::array::ArrayHeader>()
-    } else if this_bits >> 48 == 0 && this_bits > 0x10000 {
-        // Tolerate raw-i64-encoded array receivers (some module-init
-        // call sites pass array pointers as `this` without
-        // NaN-boxing). The clean_arr_ptr check inside js_array_slice
-        // re-validates.
-        this_bits as *const crate::array::ArrayHeader
     } else {
         // A primitive or nullish `this`: ToObject, then the generic body
         // reads `length` and the indexed elements off the wrapper.
@@ -745,7 +804,7 @@ pub(crate) extern "C" fn array_prototype_slice_thunk(
     // A typed array / Buffer / DataView receiver is not an Array: its
     // ArraySpeciesCreate is ArrayCreate, so `Array.prototype.slice.call(u8)`
     // yields a plain Array of the element values (not a typed-array copy).
-    if is_byte_family_receiver(arr_ptr as usize) {
+    if slice_uses_generic_engine(this, arr_ptr as usize) {
         return crate::array::js_arraylike_slice(
             f64::from_bits(this_bits),
             start_val,
@@ -800,7 +859,7 @@ pub(crate) extern "C" fn array_prototype_values_thunk(
     this: crate::closure::JsThis,
     _a: f64,
 ) -> f64 {
-    let this = crate::array::array_receiver(this.as_f64());
+    let this = this.as_f64();
     crate::array::array_values_iter(this)
 }
 
@@ -809,7 +868,7 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
     this: crate::closure::JsThis,
     depth: f64,
 ) -> f64 {
-    crate::array::js_arraylike_flat(crate::array::array_receiver(this.as_f64()), depth)
+    crate::array::js_arraylike_flat(this.as_f64(), depth)
 }
 
 /// Real thunks for `Array.prototype.{flatMap,toReversed,toSorted,with,keys,
@@ -822,7 +881,7 @@ pub(crate) extern "C" fn array_prototype_flat_thunk(
 fn array_proto_generic_read(this: crate::closure::JsThis, method: &str, args: &[f64]) -> f64 {
     // Nothing allocates before the generic body roots its receiver and
     // arguments, so the thunk's own values are passed straight through.
-    let this = crate::array::array_receiver(this.as_f64());
+    let this = this.as_f64();
     crate::array::dispatch_arraylike_read_method(this, method, args.as_ptr(), args.len())
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
 }
@@ -850,6 +909,18 @@ pub(crate) extern "C" fn array_prototype_with_thunk(
     value: f64,
 ) -> f64 {
     array_proto_generic_read(this, "with", &[index, value])
+}
+
+/// `Array.prototype.toSpliced(start, skipCount, ...items)` as a value and on
+/// every receiver the call site does not lower to `js_array_to_spliced`.
+pub(crate) extern "C" fn array_prototype_to_spliced_thunk(
+    _c: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+    args: *const f64,
+    argc: usize,
+) -> f64 {
+    let args = unsafe { native_args(args, argc) };
+    array_proto_generic_read(this, "toSpliced", args)
 }
 
 pub(crate) extern "C" fn array_prototype_keys_thunk(
@@ -881,7 +952,7 @@ pub(crate) extern "C" fn array_prototype_pop_thunk(
     if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY
+            if crate::gc_type_is_array!(header.obj_type)
                 && header.gc_flags & crate::gc::GC_FLAG_FORWARDED == 0
             {
                 let array = addr as *mut crate::array::ArrayHeader;
@@ -961,7 +1032,7 @@ pub(crate) extern "C" fn array_prototype_push_thunk(
     if bits & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
         let addr = (bits & crate::value::POINTER_MASK) as usize;
         if let Some(header) = unsafe { crate::value::addr_class::try_read_gc_header(addr) } {
-            if header.obj_type == crate::gc::GC_TYPE_ARRAY {
+            if crate::gc_type_is_array!(header.obj_type) {
                 let array = addr as *mut crate::array::ArrayHeader;
                 // The ordinary dispatcher renders the rejected NEW index
                 // before its spec helper's non-writable length check.

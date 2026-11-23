@@ -50,6 +50,7 @@ fn ir_opts() -> CompileOptions {
         disable_buffer_fast_path: false,
         namespace_imports: Vec::new(),
         namespace_source_prefixes: Default::default(),
+        deferred_namespace_imports: Default::default(),
         namespace_member_nested: Vec::new(),
         cjs_interop_namespaces: Vec::new(),
         constructor_param_counts: Default::default(),
@@ -85,6 +86,10 @@ fn ir_opts() -> CompileOptions {
         dynamic_import_path_to_prefix: std::collections::HashMap::new(),
         deferred_module_prefixes: Default::default(),
         module_init_deps: Vec::new(),
+        module_deferred_init_deps: Vec::new(),
+        module_deferred_readiness: Vec::new(),
+        program_has_tla: false,
+        module_graph_has_tla: false,
         is_dynamic_import_target: false,
         namespace_adopts_cjs_exports: false,
         debug_locations: false,
@@ -138,6 +143,7 @@ fn node_class(extends_name: Option<&str>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     };
@@ -195,6 +201,7 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
         is_strict: true,
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
         is_exported: false,
         captures: Vec::new(),
         decorators: Vec::new(),
@@ -497,6 +504,14 @@ fn fast_clone_slice(ir: &str) -> String {
     let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
     for line in ir.split_inclusive('\n') {
         let trimmed = line.trim_end();
+        // The second copy may also be told apart by its function header: the
+        // specialised and the generic body of one source function number their
+        // blocks differently whenever one of them lowers extra straight-line
+        // blocks ahead of the loop (a guarded `x | 0` on an untyped value), so
+        // equal labels are not a reliable marker.
+        if line.starts_with("define ") && !owned.is_empty() {
+            break;
+        }
         // A block DEFINITION starts at column 0 and ends in `:`; anything else
         // belongs to whichever block was last opened.
         if !line.starts_with(char::is_whitespace) && trimmed.ends_with(':') {
@@ -1736,6 +1751,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }];
     m.init_kind = ModuleInitKind::Eager;
     let ir = emit(&m);

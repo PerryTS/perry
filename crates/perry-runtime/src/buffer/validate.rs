@@ -55,7 +55,7 @@ fn is_array(value: f64) -> bool {
         return false;
     }
     let gc_header = unsafe { &*(ptr.sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader) };
-    gc_header.obj_type == crate::gc::GC_TYPE_ARRAY
+    crate::gc_type_is_array!(gc_header.obj_type)
 }
 
 /// `Buffer.alloc(size)` / `allocUnsafe(size)` / `allocUnsafeSlow(size)` — Node
@@ -75,11 +75,7 @@ pub extern "C" fn js_buffer_validate_size(value: f64) -> i32 {
         );
         crate::fs::validate::throw_type_error_with_code(&msg, "ERR_INVALID_ARG_TYPE");
     }
-    let n = if jv.is_int32() {
-        jv.as_int32() as f64
-    } else {
-        jv.as_number()
-    };
+    let n = jv.as_number();
     if !(0.0..=MAX_LENGTH).contains(&n) {
         let msg = format!(
             "The value of \"size\" is out of range. It must be >= 0 && <= 9007199254740991. Received {}",

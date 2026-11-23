@@ -66,6 +66,16 @@ pub extern "C-unwind" fn js_object_get_field_slow(
         return super::ic_miss::get_field_miss(obj, key);
     }
     unsafe {
+        // A typed array that owns no property: its metadata, `buffer` and
+        // `BYTES_PER_ELEMENT` from structure (`typedarray_named`).
+        let key_bytes =
+            std::slice::from_raw_parts(crate::string::string_data(key), (*key).byte_len as usize);
+        if let Some(value) = crate::typedarray_named::try_get_named(
+            crate::value::JSValue::pointer(obj as *const u8),
+            key_bytes,
+        ) {
+            return value;
+        }
         let key_bits = crate::value::STRING_TAG | key as u64;
         let verify = crate::object::layout_probe::verify::on();
         if verify {
@@ -144,9 +154,20 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
     let bits = obj_bits as u64;
     let tag = bits >> 48;
     let obj_unmasked = bits as usize as *const ObjectHeader;
-    if tag == crate::value::STRING_TAG >> 48 {
-        let masked = (bits & crate::value::POINTER_MASK) as usize as *const ObjectHeader;
-        return super::js_object_get_field_by_name_f64(masked, key);
+    let receiver = crate::value::JSValue::from_bits(bits);
+    let key_value = crate::value::js_nanbox_string(key as i64);
+    if receiver.is_any_string() {
+        return crate::string::string_property_get_canonical(f64::from_bits(bits), key_value);
+    }
+    if receiver.is_number() || receiver.is_bool() || receiver.is_bigint() {
+        let intrinsic = if receiver.is_number() {
+            "Number"
+        } else if receiver.is_bool() {
+            "Boolean"
+        } else {
+            "BigInt"
+        };
+        return super::primitive_canonical_get(f64::from_bits(bits), key_value, intrinsic);
     }
     if tag == crate::value::POINTER_TAG >> 48 {
         // A small native handle (or a Proxy cell) below the heap band.
@@ -173,7 +194,29 @@ pub extern "C-unwind" fn js_object_get_field_nonptr(
         };
         crate::error::js_throw_type_error_property_access(is_null, ptr, len);
     }
+    if tag == 0 {
+        // A value whose top 16 bits are clear is a Number (a denormal, or
+        // +0): an object in value context carries POINTER_TAG. The by-name
+        // entry below takes a receiver HANDLE and reads such a word as a raw
+        // object pointer, so the Number is answered here.
+        return f64::from_bits(super::primitive_number_get(f64::from_bits(bits), key).bits());
+    }
     super::js_object_get_field_by_name_f64(obj_unmasked, key)
+}
+
+/// The by-name read of `key` on a receiver VALUE held by runtime code.
+///
+/// [`js_object_get_field_by_name_f64`](super::js_object_get_field_by_name_f64)
+/// takes a receiver HANDLE: a word with clear top 16 bits is a raw object
+/// pointer there. A value with that shape is a Number (a denormal, or +0), so
+/// it is answered as the Number it is; every other value keeps the handle
+/// entry, which decodes its tag.
+pub(crate) fn get_field_by_name_of_value(receiver: f64, key: *const crate::StringHeader) -> f64 {
+    let bits = receiver.to_bits();
+    if bits >> 48 == 0 {
+        return f64::from_bits(super::primitive_number_get(receiver, key).bits());
+    }
+    super::js_object_get_field_by_name_f64(bits as usize as *const ObjectHeader, key)
 }
 
 /// The complete keyed read `obj[key]` (a string or symbol key the site does
@@ -190,17 +233,6 @@ pub unsafe extern "C-unwind" fn js_object_get_keyed_slow(
     site_id: u64,
     dynamic: u32,
 ) -> f64 {
-    keyed_slow_impl(obj_box, key, site_id, dynamic, None)
-}
-
-#[inline(always)]
-unsafe fn keyed_slow_impl(
-    obj_box: f64,
-    key: f64,
-    site_id: u64,
-    dynamic: u32,
-    memo: Option<&crate::object::layout_probe::site_memo::KeyedSiteMemo>,
-) -> f64 {
     crate::object::layout_probe::verify::check(
         (obj_box.to_bits() & crate::value::POINTER_MASK) as usize,
         key.to_bits(),
@@ -209,33 +241,6 @@ unsafe fn keyed_slow_impl(
     if let Some(recv) = recv {
         if let Some(value) = crate::object::overflow::own_get_key(recv, key.to_bits()) {
             return f64::from_bits(value.bits());
-        }
-        // Share the complete read's receiver classification and own-data
-        // handling. A memo attempt cannot precede or repeat that work.
-        if let Some(memo) = memo {
-            use crate::object::layout_probe::{
-                self,
-                site_memo::{self, Answer},
-            };
-            match site_memo::keyed_answer(
-                crate::object::shapes::ordinary_dir_addr(),
-                obj_box.to_bits(),
-                key.to_bits(),
-                memo,
-            ) {
-                Some(Answer::Data(bits)) => return f64::from_bits(bits),
-                Some(Answer::Getter(pair)) => {
-                    if let Some(acc) = crate::object::accessor_pair::pair_of_value(pair) {
-                        if layout_probe::verify::on() {
-                            layout_probe::verify::accessor(recv as usize, key.to_bits(), &acc);
-                        }
-                        if let Some(value) = call_getter(recv, acc) {
-                            return value;
-                        }
-                    }
-                }
-                None => {}
-            }
         }
     }
     match recv {
@@ -324,47 +329,4 @@ pub unsafe extern "C-unwind" fn js_object_get_field_value_site(
         );
     }
     js_object_get_field_nonptr(obj_bits, key, site_id)
-}
-
-/// Collecting computed-key half. An accessor is read from its holder's
-/// live slot after the same shape proof used by the fixed-name entrance.
-/// # Safety
-/// memo belongs to this computed read site (shared across agents).
-#[no_mangle]
-pub unsafe extern "C-unwind" fn js_object_get_keyed_site_slow(
-    obj_box: f64,
-    key: f64,
-    site_id: u64,
-    dynamic: u32,
-    memo: *mut crate::object::layout_probe::site_memo::KeyedSiteMemo,
-) -> f64 {
-    let bits = key.to_bits();
-    let tag = bits & crate::value::TAG_MASK;
-    let may_fit = if tag == crate::value::SHORT_STRING_TAG {
-        true
-    } else if tag == crate::value::STRING_TAG {
-        let string = (bits & crate::value::POINTER_MASK) as *const crate::StringHeader;
-        crate::string::is_valid_string_ptr(string)
-            && (*string).byte_len as usize <= crate::value::SHORT_STRING_MAX_LEN
-    } else {
-        false
-    };
-    if may_fit {
-        keyed_memo_slow(obj_box, key, site_id, dynamic, memo)
-    } else {
-        js_object_get_keyed_slow(obj_box, key, site_id, dynamic)
-    }
-}
-
-/// Keep the refusal dispatcher frameless: unsupported keys tail-call the
-/// complete read without reserving the memo path's registers or stack.
-#[inline(never)]
-unsafe fn keyed_memo_slow(
-    obj_box: f64,
-    key: f64,
-    site_id: u64,
-    dynamic: u32,
-    memo: *const crate::object::layout_probe::site_memo::KeyedSiteMemo,
-) -> f64 {
-    keyed_slow_impl(obj_box, key, site_id, dynamic, Some(&*memo))
 }

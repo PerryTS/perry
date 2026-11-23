@@ -31,6 +31,7 @@ test_gap_gc_global_scalar_snapshot
 test_gap_gc_ic_leaf_json
 test_gap_gc_locale_options_rooting
 test_gap_gc_protected_poll_reclaim
+test_gap_gc_static_store_barrier
 test_gap_gc_string_method_coerce_receiver
 test_gap_gc_worker_transfer_ownership
 
@@ -1023,3 +1024,8 @@ test_gap_gc_numeric_callback_contract
 # inside the implicit head of res.end(chunk) / res.write(chunk, cb) and allocates
 # enough for a collection; the young chunk string must still be the body.
 test_gap_gc_http_body_chunk_across_write_head
+
+# A generic namespace call's namespace, callee and arguments, and a scalar
+# constructor's arguments, stay rooted across a safepoint (43d4dd579b).
+test_gap_gc_namespace_call_callee_rooting
+test_gap_gc_scalar_ctor_arg_rooting

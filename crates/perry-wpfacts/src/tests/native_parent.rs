@@ -56,14 +56,18 @@ fn the_realms_error_as_parent_gives_the_instance_to_no_one() {
     assert!(proven(&pf, &src), "{}", verdicts(&pf, &src));
 }
 
-/// Control: the program replaced the global `Error`: `super()` may run it.
+/// The program replaced the global `Error` with a program class: `super()`
+/// runs that class on the live edge, which is modeled code (PERFNOW23). Its
+/// constructor puts the instance on the global object, which no unknown
+/// code reads in this closed program: `a` reaches no one. Before, the
+/// program class was given to unknown code with the instance.
 #[test]
 fn a_program_written_global_error_runs_as_the_parent() {
     let src = program(
         "(globalThis as any).Error = class { constructor(m: any) { (globalThis as any).leak = this; } };",
     );
     let pf = facts(&src);
-    assert!(!proven(&pf, &src), "{}", verdicts(&pf, &src));
+    assert!(proven(&pf, &src), "{}", verdicts(&pf, &src));
 }
 
 /// Control: an unseen module may have written the global (rule G): ⊤.

@@ -22,7 +22,7 @@ use crate::fetch::{
 
 // Object URLs: `URL.createObjectURL(blob)` returns a
 // `blob:nodedata:<uuid-shaped-id>` URL and `URL.revokeObjectURL(url)` removes it.
-// `resolveObjectURL(url)` returns the same blob handle (or undefined
+// `resolveObjectURL(url)` returns a new Blob of the same bytes (or undefined
 // after revoke).  The registry is process-global; entries live until
 // `revokeObjectURL` clears them.
 //
@@ -87,7 +87,7 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
                 let gc_header = (arr_ptr as *const u8).sub(perry_runtime::gc::GC_HEADER_SIZE)
                     as *const perry_runtime::gc::GcHeader;
                 let obj_type = (*gc_header).obj_type;
-                if obj_type == perry_runtime::gc::GC_TYPE_ARRAY
+                if perry_runtime::gc_type_is_array!(obj_type)
                     || obj_type == perry_runtime::gc::GC_TYPE_LAZY_ARRAY
                 {
                     let len = perry_runtime::array::js_array_length(arr_ptr);
@@ -113,17 +113,13 @@ unsafe fn append_blob_parts(parts: f64, out: &mut Vec<u8>) {
 unsafe fn append_one_blob_part(part: f64, out: &mut Vec<u8>) {
     let bits = part.to_bits();
     let top16 = bits >> 48;
-    if top16 == (perry_runtime::value::HANDLE_TAG >> 48) {
-        let id = handle_id(part);
-        if let Some(body) = blob_bytes_clone(id) {
+    // A Blob subclass instance keeps its native handle in its backing.
+    let native = perry_runtime::object::js_fetch_unwrap_handle(part);
+    if top16 == (perry_runtime::value::HANDLE_TAG >> 48) || native.to_bits() != bits {
+        if let Some(body) = blob_bytes_clone(handle_id(native)) {
             out.extend_from_slice(&body);
-        } else {
-            let ptr = perry_runtime::value::js_jsvalue_to_string(part);
-            if let Some(text) = string_from_header(ptr) {
-                out.extend_from_slice(text.as_bytes());
-            }
+            return;
         }
-        return;
     }
     if top16 == 0x7FFD {
         let addr = (bits & 0x0000_FFFF_FFFF_FFFF) as usize;
@@ -212,6 +208,37 @@ pub unsafe extern "C" fn js_blob_new(parts: f64, content_type: f64) -> f64 {
     append_blob_parts(parts, &mut body);
     let type_str = normalize_blob_type(&blob_string_option(content_type));
     handle_to_f64(alloc_blob(BlobData::blob(body, type_str)))
+}
+
+/// Build a Blob handle from raw bytes supplied by the SEA asset registry.
+/// This keeps SEA blobs in the same registry as `new Blob()` and
+/// `URL.createObjectURL()`.
+#[no_mangle]
+pub unsafe extern "C" fn js_blob_from_raw_bytes_v1(
+    bytes: *const u8,
+    bytes_len: usize,
+    content_type: *const u8,
+    content_type_len: usize,
+) -> f64 {
+    let body = if bytes_len == 0 {
+        Vec::new()
+    } else if bytes.is_null() {
+        return f64::from_bits(TAG_UNDEFINED);
+    } else {
+        std::slice::from_raw_parts(bytes, bytes_len).to_vec()
+    };
+    let raw_type = if content_type_len == 0 {
+        String::new()
+    } else if content_type.is_null() {
+        String::new()
+    } else {
+        String::from_utf8_lossy(std::slice::from_raw_parts(content_type, content_type_len))
+            .into_owned()
+    };
+    handle_to_f64(alloc_blob(BlobData::blob(
+        body,
+        normalize_blob_type(&raw_type),
+    )))
 }
 
 /// `new File(parts, name, { type, lastModified })` — same registry as
@@ -319,24 +346,42 @@ pub unsafe extern "C" fn js_url_revoke_object_url(url: f64) {
     OBJECT_URL_REGISTRY.lock().unwrap().remove(&s);
 }
 
-/// `import { resolveObjectURL } from "node:buffer"` — return the
-/// registered Blob handle for `url`, or `undefined` after revoke.
+/// `import { resolveObjectURL } from "node:buffer"` (node lib/internal/blob.js
+/// `resolveObjectURL`): `url` goes through ToString (`${url}`, so a program
+/// `toString` runs), then a `blob:nodedata:<id>` URL whose id is registered
+/// gives a NEW Blob of the registered bytes and type each call; anything else
+/// (a revoked or unknown id, another scheme) gives `undefined`. The new Blob
+/// shares no identity and no own properties with the registered one.
 #[no_mangle]
 pub unsafe extern "C" fn js_buffer_resolve_object_url(url: f64) -> f64 {
-    let bits = url.to_bits();
-    if (bits >> 48) != 0x7FFF {
-        return f64::from_bits(TAG_UNDEFINED);
-    }
-    let p = (bits & 0x0000_FFFF_FFFF_FFFF) as *const StringHeader;
-    let s = match string_from_header(p) {
-        Some(s) => s,
-        None => return f64::from_bits(TAG_UNDEFINED),
+    let str_ptr = perry_runtime::value::js_jsvalue_to_string(url) as *const StringHeader;
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let Some(s) = string_from_header(str_ptr) else {
+        return undefined;
     };
-    let id = OBJECT_URL_REGISTRY.lock().unwrap().get(&s).copied();
+    // node parses the URL and splits its pathname at ':' into `nodedata`
+    // and the id: a query or fragment is not part of the pathname.
+    let Some(path) = s.strip_prefix("blob:") else {
+        return undefined;
+    };
+    let path = path.split(['?', '#']).next().unwrap_or("");
+    let mut parts = path.split(':');
+    let (Some("nodedata"), Some(id), None) = (parts.next(), parts.next(), parts.next()) else {
+        return undefined;
+    };
+    let key = format!("blob:nodedata:{id}");
+    let id = OBJECT_URL_REGISTRY.lock().unwrap().get(&key).copied();
     // The id is rooted until revoke, so it cannot have been recycled; check the
-    // kind anyway rather than hand back whatever handle now owns the number.
-    match id {
-        Some(id) if BLOB_REGISTRY.lock().unwrap().contains_key(&id) => handle_to_f64(id),
-        _ => f64::from_bits(TAG_UNDEFINED),
+    // kind anyway rather than copy whatever handle now owns the number.
+    let data = id.and_then(|id| {
+        BLOB_REGISTRY
+            .lock()
+            .unwrap()
+            .get(&id)
+            .map(|b| BlobData::blob(b.body.clone(), b.content_type.clone()))
+    });
+    match data {
+        Some(data) => handle_to_f64(alloc_blob(data)),
+        None => undefined,
     }
 }

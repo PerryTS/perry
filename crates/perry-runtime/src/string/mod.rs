@@ -125,6 +125,7 @@ mod locale;
 pub(crate) mod normalize_hooked;
 mod pad;
 mod provenance;
+pub(crate) mod short_pair;
 use provenance::{combine_string_flags, raw_string_metadata};
 pub(crate) mod literal_replace;
 #[cfg(test)]
@@ -176,6 +177,7 @@ pub use char_ops::{
     js_string_end_index_to_i32, js_string_from_char_code, js_string_from_char_code_array,
     js_string_from_code_point, js_string_from_code_point_array, js_string_index_get,
     js_string_index_get_boxed, js_string_index_to_i32, js_string_to_char_array,
+    js_string_utf16_unit_at_cursor,
 };
 // The one-UTF-16-code-unit string builder `charAt` uses. `split("")` needs the
 // same constructor: both cut a string at code-unit boundaries, so both have to
@@ -184,6 +186,7 @@ pub use char_ops::{
 pub(crate) use char_ops::test_utf16_index_entries;
 pub(crate) use char_ops::{
     prune_dead_utf16_indexes, scan_utf16_index_roots_mut, string_from_code_unit,
+    string_property_get_canonical,
 };
 pub use compare::{
     js_string_compare, js_string_ends_with, js_string_ends_with_at, js_string_equals,
@@ -210,7 +213,6 @@ pub use concat_parts::{
 };
 pub use concat_site::{js_string_concat_site_value, CONCAT_SITE_SLOTS};
 pub(crate) use format::ascii_char_string;
-pub(crate) use format::fix_exponent_format;
 pub(crate) use format::js_format_f64;
 
 /// The canonical `StringHeader` for a runtime-internal constant property name.
@@ -545,7 +547,9 @@ pub struct StringHeader {
     pub byte_len: u32,
     /// Capacity in bytes (allocated space for data)
     pub capacity: u32,
-    /// Reference hint: 0=shared (never mutate in-place), 1=unique (in-place append OK)
+    /// Ownership hint: 0=shared (never mutate in-place), 1=unique (in-place append OK).
+    /// From `intern::KEY_WORD_MIN` up: shared, and the word is the key word of
+    /// this text (its folded FNV-1a hash, `intern::key_word_of_hash`).
     pub refcount: u32,
     /// Bit flags: STRING_FLAG_HAS_LONE_SURROGATES = 1
     pub flags: u32,
@@ -1386,6 +1390,10 @@ pub(crate) use iter_object::dispatch_string_iterator_step;
 pub(crate) use intern::{
     is_program_atom, is_property_atom, property_atom, property_atom_from_value, property_atom_hash,
     prune_property_atoms, scan_property_atoms,
+};
+pub(crate) use intern::{
+    key_first_atom, key_word_atom, key_word_atom_indexed, short_key_atom, short_key_atom_indexed,
+    KEY_WORD_MIN,
 };
 
 pub(crate) mod byte_scan;

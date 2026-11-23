@@ -134,13 +134,44 @@ pub(super) fn compose(
                     let caps: Vec<Option<NodeId>> = (0..m.funcs[g as usize].params.len())
                         .map(|i| m.capture_param(g, i))
                         .collect();
-                    expand(&mut s, *ci, &sg, &obs_of(g, m), &caps);
+                    // `arguments` takes every argument, a rest array those
+                    // after the parameters.
+                    let has_arguments = m.funcs[g as usize].has_arguments;
+                    let first = if has_arguments { 0 } else { sg.params.len() };
+                    let rest_store = (sg.rest != NO_NODE).then(|| (m.anon_store_site(), first));
+                    // With no spread argument, argument `i` is the rest
+                    // array's index `i - n` (`Model::rest_elem_node`).
+                    let call = &s.calls[*ci].1;
+                    let slot_keys: Vec<Key> = match call.spread.is_empty() && !has_arguments {
+                        true => (first..call.args.len().max(first))
+                            .map(|i| Key::Named(m.atom(&format!("[[Index{}]]", i - first))))
+                            .collect(),
+                        false => Vec::new(),
+                    };
+                    let elem = m.elem_key();
+                    // RULE RP (`gen/ret_param.rs`): the expanded call's
+                    // result is its own argument, not `g`'s result.
+                    let rp = m.funcs[g as usize]
+                        .ret_param
+                        .filter(|_| !m.funcs[g as usize].no_summary)
+                        .map(|i| i as usize);
+                    expand(
+                        &mut s,
+                        *ci,
+                        &sg,
+                        &obs_of(g, m),
+                        &caps,
+                        rest_store,
+                        elem,
+                        &slot_keys,
+                        rp,
+                    );
                     any = true;
                     n += 1;
                 }
             }
             if any {
-                compress(&mut s);
+                compress(&mut s, &m.binding_reads);
                 m.sum.of.insert(f, Rc::new(s));
             }
         }
@@ -154,16 +185,30 @@ pub(super) fn compose(
 /// (and into `g`'s observation parameters `gobs`), missing ones undefined,
 /// spread elements into every parameter, `g`'s result into the call's.
 /// A hidden capture parameter (`caps`) takes its class environment slot,
-/// not the call's argument (DECISIONS 117, 127).
+/// not the call's argument (DECISIONS 117, 127). A spread entry is the
+/// List CreateListFromIterable built (13.3.8.1): it is read at its
+/// elements (`elem`), never at a member of a prototype chain; a rest
+/// array stores its arguments at `elem` too. `ret_param`: `g` returns
+/// that parameter at every completion (RULE RP, `Model::ret_param_into`):
+/// the call's result is the call's argument there (`undefined` when it
+/// passes fewer), unless a spread or a capture slot decides the position.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn expand(
     s: &mut Summary,
     ci: usize,
     g: &Summary,
     gobs: &[NodeId],
     caps: &[Option<NodeId>],
+    rest_store: Option<(SiteId, usize)>,
+    elem: Key,
+    slot_keys: &[Key],
+    ret_param: Option<usize>,
 ) {
     let off = s.nslots;
     let coff = s.calls.len() as u32;
+    // Rule M1: what the expansion copies runs where call `ci` does.
+    let reach = s.call_reach.get(ci).copied().unwrap_or(REACH_ALL);
+    let e0 = s.edges.len();
     let tr = |x: NodeId| {
         if is_slot(x) {
             SLOT | (off + (x & !SLOT))
@@ -229,9 +274,29 @@ pub(super) fn expand(
             } else {
                 if undef == NO_NODE {
                     undef = fresh(s);
-                    s.seeds.push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
                 }
                 s.edges.push((undef, d));
+            }
+        }
+    }
+    // The callee run's fresh rest array takes this call's arguments after
+    // the parameters and its spread elements (8.6.3 BindingRestElement).
+    let rest = rest_store.map(|(site, first)| (tr(g.rest), elem, site, first));
+    if let Some((r, key, site, first)) = rest {
+        for i in first..call.args.len() {
+            if call.args[i] != NO_NODE {
+                let key = slot_keys.get(i - first).copied().unwrap_or(key);
+                s.cons.push((
+                    r,
+                    Cons::Store {
+                        key,
+                        src: call.args[i],
+                        site,
+                        region: call.region,
+                    },
+                ));
             }
         }
     }
@@ -240,10 +305,21 @@ pub(super) fn expand(
         s.cons.push((
             sp,
             Cons::Load {
-                key: Key::any(),
+                key: elem,
                 dst: elems,
             },
         ));
+        if let Some((r, key, site, _)) = rest {
+            s.cons.push((
+                r,
+                Cons::Store {
+                    key,
+                    src: elems,
+                    site,
+                    region: call.region,
+                },
+            ));
+        }
         for (i, ds) in dsts.iter().enumerate() {
             if caps.get(i).copied().flatten().is_some() {
                 continue;
@@ -279,7 +355,42 @@ pub(super) fn expand(
         }
     }
     let r = tr(g.ret);
-    if r != NO_NODE && call.ret != NO_NODE {
-        s.edges.push((r, call.ret));
+    let rp =
+        ret_param.filter(|&i| call.spread.is_empty() && caps.get(i).copied().flatten().is_none());
+    if call.ret != NO_NODE {
+        match rp {
+            Some(i) if i < call.args.len() => {
+                if call.args[i] != NO_NODE {
+                    s.edges.push((call.args[i], call.ret));
+                }
+            }
+            Some(_) => {
+                if undef == NO_NODE {
+                    undef = fresh(s);
+                    s.seeds
+                        .push((undef & !SLOT, Vec::new(), prim::UNDEF, false));
+                }
+                s.edges.push((undef, call.ret));
+            }
+            None if r != NO_NODE => s.edges.push((r, call.ret)),
+            None => {}
+        }
+    }
+    if !s.cons_reach.is_empty() || !s.call_reach.is_empty() {
+        s.cons_reach.resize(s.cons.len(), reach);
+        s.call_reach.resize(s.calls.len(), reach);
+        if reach != REACH_ALL {
+            let had: FxHashSet<(NodeId, NodeId)> = s.edges[..e0].iter().copied().collect();
+            for k in e0..s.edges.len() {
+                let e = s.edges[k];
+                match s.edge_reach.get_mut(&e) {
+                    Some(m) => *m |= reach,
+                    None if !had.contains(&e) => {
+                        s.edge_reach.insert(e, reach);
+                    }
+                    None => {}
+                }
+            }
+        }
     }
 }

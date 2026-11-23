@@ -242,7 +242,7 @@ mod cycle;
 /// `malloc_trim` maintenance, split out of `cycle.rs` for the 2000-line cap.
 mod cycle_malloc_trim;
 use cycle::*;
-#[cfg(target_vendor = "apple")]
+#[cfg(any(target_vendor = "apple", windows))]
 pub(crate) use cycle_malloc_trim::purge_allocator_on_region_growth;
 #[cfg(test)]
 pub(crate) use cycle_malloc_trim::{
@@ -261,6 +261,7 @@ pub(crate) use cycle_malloc_trim::{
 pub(crate) mod image_cells;
 mod remembered;
 use remembered::*;
+mod restore_walk;
 mod rewrite;
 pub use rewrite::*;
 mod verify;
@@ -325,6 +326,8 @@ pub(crate) mod census;
 mod census_field_repr;
 mod heap_snapshot;
 mod heap_stats;
+#[cfg(perry_gc_instruments)]
+pub(crate) mod life_why;
 mod regex_census;
 pub use census::{census_poll_signal, gc_census_enabled};
 pub use heap_snapshot::gc_build_v8_heap_snapshot_json;
@@ -431,6 +434,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     escalation: FullEscalation,
     copying: CopyingFastPath,
 ) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // PERRY_GC_SAFEPOINT_ONLY: held for the whole collection so every
     // consumer of the scan decision (root scan, copying eligibility,
     // evacuation pinning, verifier) sees the same healed answer.
@@ -516,6 +520,10 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
     clear_mark_seeds();
     let copying_outcome = match copying {
         CopyingFastPath::Allowed => {
+            #[cfg(perry_gc_instruments)]
+            if DIAGNOSTICS {
+                diagnostic_hooks::life_before_copied_minor();
+            }
             gc_collect_minor_copying_fast_path::<DIAGNOSTICS>(&mut trace, start, trigger.kind)
         }
         // Run the ordinary eligibility preflight — it carries the one-shot
@@ -545,6 +553,10 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
                 .record_collection(freed_bytes, elapsed_us);
         });
         diagnostic_hooks::collection_log(false, trigger.kind, freed_bytes, elapsed_us);
+        #[cfg(perry_gc_instruments)]
+        if DIAGNOSTICS {
+            diagnostic_hooks::life_after_copied_minor();
+        }
         restore_minor_in_alloc(prev_in_alloc);
         if let Some(trace) = trace.as_mut().filter(|_| DIAGNOSTICS) {
             trace.pause_us = elapsed_us;
@@ -901,6 +913,7 @@ pub(crate) fn test_collect_synchronous_full_trace() {
 }
 
 fn gc_collect_full_mark_sweep_with_trigger(trigger: GcTriggerSnapshot) -> GcCollectOutcome {
+    crate::snap_funnel!(Gc);
     // Build the stack-map index if it is still owed. This is the chokepoint:
     // every collection funnels through one of these three entries, and here
     // allocation is still legal — the root scan itself must stay
@@ -1195,7 +1208,6 @@ pub fn gc_init() {
     reg_scanner!(crate::v8::scan_v8_promise_hook_roots_mut);
     reg_scanner!(transition_cache_mutable_root_scanner);
     reg_scanner!(crate::object::scan_object_cache_roots_mut);
-    reg_scanner!(crate::object::scan_arguments_object_roots_mut);
     // bun:ffi (#6562): the cached FFIType enum object.
     reg_scanner!(crate::bun_ffi::scan_bun_ffi_roots_mut);
     // Optional features' scanners, on every thread after the feature's
@@ -1524,6 +1536,12 @@ pub unsafe extern "C" fn js_gc_init_with_layouts(
 /// See `emit_schedule_liveness_verdict`.
 #[no_mangle]
 pub extern "C" fn js_gc_release_current_thread_collection_side_allocations() {
+    // A UI host that runs `main()` on its UI thread and keeps dispatching
+    // callbacks there afterwards (Android) is not exiting: keep the thread's
+    // loop and tapes, which those callbacks still use.
+    if crate::event_pump::host_keeps_thread_after_main() {
+        return;
+    }
     crate::json_tape_store::release_current_thread_lazy_tapes();
     // Every process-exit path funnels through here — the generated exit
     // epilogue, `js_process_exit`, and the fatal-path teardown — and perry's own
@@ -1764,6 +1782,8 @@ pub extern "C" fn js_gc_stats(
     out_freed: *mut u64,
     out_pause_us: *mut u64,
 ) {
+    #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+    crate::snap_census::clock_input("clock.gc_stats", 0);
     GC_STATS.with(|stats| {
         let stats = stats.borrow();
         unsafe {
@@ -1900,3 +1920,17 @@ static KEEP_JS_GC_INIT_WITH_LAYOUTS: unsafe extern "C" fn(
 
 #[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
 pub(crate) use roots::for_each_global_root_slot;
+
+/// LIFE I1: the synchronous full cycle the lifetime measurement runs at the
+/// end of a turn that has old samples (`wpfacts_check/life_measure.rs`).
+#[cfg(perry_gc_instruments)]
+pub(crate) fn life_collect_full() {
+    let _ =
+        gc_collect_full_mark_sweep_with_trigger(GcTriggerSnapshot::capture(GcTriggerKind::Direct));
+}
+
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) use layout_slot_visit::visit_traced_slots;
+
+#[cfg(perry_gc_instruments)]
+pub(crate) use roots::census_visit_roots;

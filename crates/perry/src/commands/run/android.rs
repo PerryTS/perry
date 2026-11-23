@@ -83,7 +83,12 @@ fn build_and_run_android_impl(
     // Without this, the app crashes on launch with `UnsatisfiedLinkError:
     // dlopen failed: library "lib….so" not found`. Static-lib companions link
     // directly into libperry_app.so and have no `.so` here, so nothing to copy.
-    let staging_dir = so_path.parent().unwrap_or(Path::new("."));
+    // A bare relative output name (`perry run android` in the project dir)
+    // has an empty parent; read_dir("") fails and nothing was bundled.
+    let staging_dir = so_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if let Ok(entries) = std::fs::read_dir(staging_dir) {
         let mut bundled = 0usize;
         for entry in entries.flatten() {
@@ -355,7 +360,7 @@ fn apply_wear_overlay(build_dir: &Path, format: OutputFormat) -> Result<()> {
     if gradle_path.exists() {
         let mut gradle = std::fs::read_to_string(&gradle_path)?;
         // Wear OS 3 is the minSdk floor for watch APKs on Google Play.
-        gradle = gradle.replace("minSdk = 24", "minSdk = 30");
+        gradle = gradle.replace("minSdk = 29", "minSdk = 30");
         // Add the Wear support library (BoxInsetLayout, swipe-to-dismiss).
         gradle = inject_gradle_dependencies(&gradle, &["androidx.wear:wear:1.3.0".to_string()]);
         std::fs::write(&gradle_path, gradle)?;
@@ -1002,7 +1007,7 @@ mod tests {
             "androidx.wear dependency not injected"
         );
         assert!(
-            gradle.contains("minSdk = 30") && !gradle.contains("minSdk = 24"),
+            gradle.contains("minSdk = 30") && !gradle.contains("minSdk = 29"),
             "minSdk not raised to 30 for Wear OS"
         );
 

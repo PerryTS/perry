@@ -283,6 +283,20 @@ pub(crate) const RULE3_KINDS: &[(u8, &str, &str, Rule3Word)] = &[
         "ScopeSlots",
         "high half of slot 0's NaN-box payload",
         Rule3Word::NotPointerTagged,
+    ),
+    (
+        gc::GC_TYPE_RECORD_ARRAY,
+        "RecordArrayHeader",
+        "capacity: u32 (records) — `record_array::grown_capacity_or_throw` at the \
+         one growth funnel; `RangeError: Invalid array length`",
+        Rule3Word::BoundedBelowRange,
+    ),
+    // Reached only through its head's raw `elems` edge, never a JavaScript value.
+    (
+        gc::GC_TYPE_RECORD_ELEMS,
+        "record elements",
+        "high half of the first record word (any double or immediate)",
+        Rule3Word::NotPointerTagged,
     ), // #10694: a buffer flavor is `GC_TYPE_BUFFER`'s cell under another brand.
     (
         gc::GC_TYPE_BUFFER_UINT8ARRAY,

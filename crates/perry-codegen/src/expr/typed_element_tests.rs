@@ -68,6 +68,7 @@ fn holder(fields: Vec<ClassField>) -> Class {
         is_exported: false,
         aliases: Vec::new(),
         is_nested: false,
+        decl_stmt: None,
         alloc_width_hint: 0,
         specialized_from: None,
     }
@@ -101,6 +102,7 @@ fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functio
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 

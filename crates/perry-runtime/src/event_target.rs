@@ -705,10 +705,9 @@ extern "C" fn event_target_abort_remove_listener(
     closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
-    let target = crate::closure::js_closure_get_capture_ptr(closure, 0) as *mut ObjectHeader;
-    let event_name_ptr =
-        crate::closure::js_closure_get_capture_ptr(closure, 1) as *const StringHeader;
-    let callback_ptr = crate::closure::js_closure_get_capture_ptr(closure, 2);
+    let target = crate::closure::closure_capture_ref(closure, 0) as *mut ObjectHeader;
+    let event_name_ptr = crate::closure::closure_capture_ref(closure, 1) as *const StringHeader;
+    let callback_ptr = crate::closure::closure_capture_ref(closure, 2);
     let capture =
         crate::value::js_is_truthy(crate::closure::js_closure_get_capture_f64(closure, 3)) != 0;
     unsafe {
@@ -807,9 +806,9 @@ pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
             crate::fn_info!(event_target_abort_remove_listener, 0; with_declared(0)),
             4,
         );
-        crate::closure::js_closure_set_capture_ptr(abort_listener, 0, target as i64);
-        crate::closure::js_closure_set_capture_ptr(abort_listener, 1, event_name_ptr as i64);
-        crate::closure::js_closure_set_capture_ptr(abort_listener, 2, callback_ptr);
+        crate::closure::closure_set_capture_ref(abort_listener, 0, target as i64);
+        crate::closure::closure_set_capture_ref(abort_listener, 1, event_name_ptr as i64);
+        crate::closure::closure_set_capture_ref(abort_listener, 2, callback_ptr);
         crate::closure::js_closure_set_capture_f64(abort_listener, 3, bool_value(capture));
         crate::url::js_abort_signal_add_listener(
             signal,

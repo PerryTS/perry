@@ -17,9 +17,12 @@
 //! the write is a raw double store into an `F64` lane (a non-finite or
 //! non-Number value takes the miss, whose checked store generalizes the
 //! lane), or a barriered store into an `Any` lane. The private brand check
-//! needs nothing more: the entry being in the shape IS the field being
-//! initialized, and a fresh evaluation of the class template clears every
-//! hit through the template bit (`emit_private_template_inert`).
+//! needs one more test: the entry being in the shape is the field being
+//! initialized, except in a class family, which lists the element as
+//! optional and holds the hole in its slot until the definition fills it, so
+//! a word hit takes the miss on a hole slot. A fresh evaluation of the class
+//! template clears every hit through the template bit
+//! (`emit_private_template_inert`).
 //!
 //! The miss is one runtime call that runs the brand check (which throws, or
 //! publishes the word) and then the ordinary by-name access of the field's
@@ -237,6 +240,19 @@ fn emit_slot_ptr(ctx: &mut FnCtx<'_>, hit: &SiteHit, payload: &str) -> String {
     blk.gep(I8, &obj_ptr, &[(I64, &off)])
 }
 
+/// A site word's element is present unless `slot_bits`, the slot's word, is
+/// the hole: a class family lists its private elements as optional, and the
+/// field's definition fills the slot (runtime `private_field_site_word`).
+/// Branches to `miss_l` on the hole; leaves the present block current.
+fn emit_present_check(ctx: &mut FnCtx<'_>, slot_bits: &str, miss_l: &str) {
+    let present_idx = ctx.new_block("pfield.present");
+    let present_l = ctx.block_label(present_idx);
+    let blk = ctx.block();
+    let is_hole = blk.icmp_eq(I64, slot_bits, crate::nanbox::TAG_HOLE_I64);
+    blk.cond_br(&is_hole, miss_l, &present_l);
+    ctx.current_block = present_idx;
+}
+
 /// The brand owner operand of the runtime miss, as the guard arm passes it.
 fn lower_brand_owner(
     ctx: &mut FnCtx<'_>,
@@ -297,11 +313,16 @@ pub(crate) fn lower_get(
     let join_idx = ctx.new_block("pfield.join");
     let join_l = ctx.block_label(join_idx);
 
+    let miss_l = ctx.block_label(probe.miss_idx);
     let mut incoming: Vec<(String, String)> = Vec::new();
     for (hit_idx, hit) in &probe.hits {
         ctx.current_block = *hit_idx;
         let slot_ptr = emit_slot_ptr(ctx, hit, &probe.payload);
         let value = ctx.block().load(DOUBLE, &slot_ptr);
+        if matches!(hit, SiteHit::Word(_)) {
+            let bits = ctx.block().bitcast_double_to_i64(&value);
+            emit_present_check(ctx, &bits, &miss_l);
+        }
         incoming.push((value, ctx.block_label(ctx.current_block)));
         ctx.block().br(&join_l);
     }
@@ -466,6 +487,8 @@ pub(super) fn lower_set_operands(
                 ));
             }
             SiteHit::Word(word) => {
+                let bits = ctx.block().load(I64, &slot_ptr);
+                emit_present_check(ctx, &bits, &miss_l);
                 let raw_idx = ctx.new_block("pfield.set.raw");
                 let boxed_idx = ctx.new_block("pfield.set.boxed");
                 let raw_l = ctx.block_label(raw_idx);

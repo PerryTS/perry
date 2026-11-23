@@ -221,6 +221,7 @@ fn walk_stmts<'a>(stmts: &'a [Stmt], f: &mut impl FnMut(&'a Stmt)) {
                 body,
                 catch,
                 finally,
+                ..
             } => {
                 walk_stmts(body, f);
                 if let Some(c) = catch {
@@ -449,6 +450,7 @@ mod tests {
                 mutable_captures: vec![],
                 captures_this: false,
                 captures_new_target: false,
+                construct_only: false,
                 enclosing_class: None,
                 is_arrow: true,
                 is_async: false,

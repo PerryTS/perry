@@ -55,8 +55,7 @@ const DESTRUCTURE: &str = "const [s] = src; console.log(s);";
 const ARRAY_FROM: &str = "console.log(Array.from(src));";
 const NEW_SET: &str = "console.log(new Set(src));";
 const SPREAD: &str = "console.log([...src]);";
-const YIELD_STAR: &str =
-    "function* G() { yield* src; } for (const s of G()) console.log(s);";
+const YIELD_STAR: &str = "function* G() { yield* src; } for (const s of G()) console.log(s);";
 
 #[test]
 fn for_of_steps_an_array_returned_by_symbol_iterator() {

@@ -216,7 +216,7 @@ pub(super) unsafe fn visit_gc_layout_slot_descriptors_generic<const DIAGNOSTICS:
         // uninitialised padding into the address and hide the edge.
         let descriptor = if matches!(
             (*header).obj_type,
-            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | GC_TYPE_ARRAY
+            crate::gc_object_type_pat!() | GC_TYPE_CLOSURE | crate::gc_array_type_pat!()
         ) {
             pointer_slot(slot.cast())
         } else {
@@ -638,6 +638,11 @@ unsafe fn visit_gc_rewrite_slot_descriptors_with<
             }
         }
         GcRewriteDescriptorKind::Box => visit(fixed_slot(user_ptr as *mut u64)),
+        GcRewriteDescriptorKind::RecordArray => {
+            // The head's only traced edge: its element buffer, a pointer-free
+            // leaf, or null while the capacity is 0.
+            visit(pointer_slot(crate::record_array::elems_slot(user_ptr)));
+        }
         GcRewriteDescriptorKind::Scope => {
             let slots = user_ptr as *mut u64;
             for i in 0..crate::r#box::scope::scope_slot_count(header) {
@@ -678,6 +683,13 @@ pub(super) unsafe fn visit_gc_rewrite_slots<const DIAGNOSTICS: bool>(
     visit_gc_rewrite_slot_descriptors::<DIAGNOSTICS>(header, |descriptor| unsafe {
         descriptor.visit_slots(&mut visit);
     });
+}
+
+/// The slots the collector traces in `header`'s object, by address: the census
+/// reads a holder's words through the collector's own enumeration.
+#[cfg(all(perry_gc_instruments, target_os = "linux", target_arch = "x86_64"))]
+pub(crate) unsafe fn visit_traced_slots(header: *mut GcHeader, mut visit: impl FnMut(usize)) {
+    visit_gc_rewrite_slots::<false>(header, |slot| visit(slot.slot as usize));
 }
 
 /// [`visit_gc_rewrite_slots`] with the whole enumeration instantiated for
@@ -790,7 +802,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
         return;
     };
     let meta = crate::object::gc_object_meta_slot(obj as usize);
-    let arguments = crate::object::arguments_mapping_slot(obj);
     let selection = heap_payload_slot_selection_from(header, payload, shape);
     let full = full_trace_active();
     let prototype = crate::object::gc_shape_prototype_edge_slot(shape, full);
@@ -822,9 +833,6 @@ unsafe fn visit_object_layout_slots<const DIAGNOSTICS: bool, F>(
     }
     if let Some(slot) = meta {
         visit(pointer_slot(slot.cast()).with_layout(HeapChildSlotReadKind::Prefix));
-    }
-    if let Some(slot) = arguments {
-        visit(fixed_slot(slot).with_layout(HeapChildSlotReadKind::Prefix));
     }
     match selection {
         HeapPayloadSlotSelection::Empty => {}

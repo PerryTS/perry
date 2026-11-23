@@ -4,7 +4,7 @@ use crate::realm_manifest::RealmKind;
 macro_rules! entry {
     ($name:literal $(=> $($birth:literal),*)?) => {
         RealmEntry { name: $name, kind: RealmKind::Constructor,
-            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[] }
+            births: &[$($($birth),*)?], module: None, facts: "{}", effects: &[], own: &[], proto: None }
     };
 }
 const CATALOG: &[RealmEntry] = &[
@@ -49,6 +49,8 @@ const CATALOG: &[RealmEntry] = &[
         module: Some("fs"),
         facts: "{}",
         effects: &[],
+        own: &[],
+        proto: None,
     },
 ];
 
@@ -269,6 +271,50 @@ fn lowered_global_values_and_static_member_receivers_are_distinct() {
             assert!(r.names.contains("Map"));
         }
     }
+}
+
+#[test]
+fn a_function_that_synthesizes_arguments_reaches_the_birth_site() {
+    const SITE: &[RealmEntry] = &[RealmEntry {
+        name: "%ArgumentsBirth%",
+        kind: RealmKind::BirthSite,
+        births: &["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"],
+        module: None,
+        facts: "{}",
+        effects: &[],
+        own: &[],
+        proto: None,
+    }];
+    std::thread::Builder::new()
+        .stack_size(32 * 1024 * 1024)
+        .spawn(|| {
+            for (source, reached) in [
+                ("function f() { return arguments.length; } f();", true),
+                (
+                    "const g = function () { return arguments[0]; }; g(1);",
+                    true,
+                ),
+                (
+                    "class C { m() { return arguments.length; } } new C().m();",
+                    true,
+                ),
+                (
+                    "function h(a) { return a; } h(1); const k = () => 1; k();",
+                    false,
+                ),
+            ] {
+                let module = perry_parser::parse_typescript(source, "realm.cjs").unwrap();
+                let lowered = crate::lower_module(&module, "realm", "realm.cjs").unwrap();
+                let mut r = RealmReach::default();
+                scan_lowered(&lowered, SITE, &mut r);
+                for layout in ["%Layout:ARGUMENTS%", "%Layout:ARGUMENTS_STRICT%"] {
+                    assert_eq!(r.names.contains(layout), reached, "{source}: {layout}");
+                }
+            }
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 #[test]
@@ -576,4 +622,28 @@ fn require_used_as_a_value_is_top() {
         assert!(!r.is_full(), "{source}: {r:?}");
         assert!(r.names.contains("node:fs"), "{source}: {r:?}");
     }
+}
+
+#[test]
+fn an_ambient_require_declaration_keeps_require_the_loader() {
+    // HIR lowering erases `declare function require` (#8447) and `declare
+    // var`; the scan must read the same: an ES module still loads node:fs.
+    assert_loads_fs(
+        "declare function require",
+        "declare function require(id: string): any; const fs = require(\"fs\"); export const keep = 1;",
+    );
+    assert_loads_fs(
+        "exported declare function require",
+        "export declare function require(id: string): any; const fs = require(\"fs\");",
+    );
+    assert_loads_fs(
+        "declare var require",
+        "declare var require: any; const fs = require(\"fs\"); export const keep = 1;",
+    );
+    // A require with a body is a program binding: it loads nothing.
+    let r = reach(
+        "function require(id: string): any { return id; } const fs = require(\"fs\"); export const keep = 1;",
+    );
+    assert!(!r.names.contains("node:fs"), "{r:?}");
+    assert!(!r.top.contains(&RealmTop::DynamicModule), "{r:?}");
 }
