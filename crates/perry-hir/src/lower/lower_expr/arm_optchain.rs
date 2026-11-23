@@ -225,7 +225,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // on another regex.
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object: Box::new(obj_expr.clone()),
                         property: prop_name,
                     }
@@ -528,10 +528,13 @@ pub(crate) fn lower_opt_chain_expr(
                     // Build the callee with inner_else as the object (not the full Conditional)
                     let fixed_callee = match callee_expr {
                         Expr::PropertyGet {
-                            property, byte_end, ..
+                            property,
+                            byte_offset,
+                            byte_end,
+                            ..
                         } => Expr::PropertyGet {
                             byte_end,
-                            byte_offset: 0,
+                            byte_offset,
                             object: inner_else,
                             property,
                         },
@@ -672,7 +675,7 @@ pub(crate) fn lower_opt_chain_expr(
                     })
                     .collect();
                 Expr::CallSpread {
-                    byte_offset: 0,
+                    byte_offset: opt_chain.span.lo.0,
                     byte_end: 0,
                     callee: Box::new(callee_expr),
                     args: spread_args,
@@ -740,16 +743,17 @@ pub(crate) fn lower_opt_chain_expr(
             // (`check_expr` is a receiver, or callee is not a member) the
             // plain nullish check is the test: `recv?.method(args)` tests
             // the receiver, and a nullish receiver is never a string.
-            let condition = if let (true, Some(recv)) = (check_is_func_value, opt_call_member_receiver) {
-                opt_call_func_nullish_guard(&recv, check_expr, opt_chain.span.lo.0)
-            } else {
-                Expr::Compare {
-                    byte_offset: opt_chain.span.lo.0,
-                    op: CompareOp::LooseEq,
-                    left: Box::new(check_expr),
-                    right: Box::new(Expr::Null),
-                }
-            };
+            let condition =
+                if let (true, Some(recv)) = (check_is_func_value, opt_call_member_receiver) {
+                    opt_call_func_nullish_guard(&recv, check_expr, opt_chain.span.lo.0)
+                } else {
+                    Expr::Compare {
+                        byte_offset: opt_chain.span.lo.0,
+                        op: CompareOp::LooseEq,
+                        left: Box::new(check_expr),
+                        right: Box::new(Expr::Null),
+                    }
+                };
             Ok(bind_bases(
                 Expr::Conditional {
                     byte_offset: opt_chain.span.lo.0,

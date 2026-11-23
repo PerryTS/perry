@@ -439,7 +439,7 @@ pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offs
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: name.to_string(),
         }),

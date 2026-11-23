@@ -17,6 +17,7 @@
 //! then evaluates the arguments once, in order.
 
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -88,11 +89,12 @@ impl NamespaceGuard {
 /// patching write stores into (and the replacement after
 /// `globalThis.console = {…}`). Read through the real global object, not the
 /// `GlobalGet(0)` sentinel: codegen recognizes `GlobalGet(0).Promise.resolve(…)`
-/// as the intrinsic again and would bind the call straight back to it.
-fn live_namespace(ns: &str) -> Expr {
+/// as the intrinsic again and would bind the call straight back to it. The
+/// read stands at the namespace name it reads (`byte_offset`).
+fn live_namespace(ns: &str, byte_offset: u32) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: 0,
+        byte_offset,
         object: Box::new(Expr::GlobalThisExpr),
         property: ns.to_string(),
     }
@@ -147,7 +149,7 @@ pub(super) fn try_patched_builtin_call(
         return Ok(NamespaceCall::Plain(args));
     };
     if namespace_member_patched(&ns, &method) {
-        let object = live_namespace(&ns);
+        let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
             call, object, method, args,
         )));
@@ -162,12 +164,17 @@ pub(super) fn try_patched_builtin_call(
             return Ok(NamespaceCall::Plain(args));
         }
         // A definition in the arguments: the one dynamic call.
-        let object = live_namespace(&ns);
+        let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
             call, object, method, args,
         )));
     }
-    let generic = dynamic_member_call(call, live_namespace(&ns), method, args.clone());
+    let generic = dynamic_member_call(
+        call,
+        live_namespace(&ns, member.obj.span().lo.0),
+        method,
+        args.clone(),
+    );
     Ok(NamespaceCall::Guarded(args, NamespaceGuard { ns, generic }))
 }
 
@@ -200,7 +207,7 @@ pub(super) fn dynamic_member_call(
             })
             .collect();
         return Expr::CallSpread {
-            byte_offset: 0,
+            byte_offset: call.span.lo.0,
             byte_end: 0,
             callee,
             args,
